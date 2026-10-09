@@ -12098,7 +12098,8 @@ test("accountPermissions validates full rows while explicit projections preserve
 
 test("contract history collections reject retired row fields and preserve block coordinates", async () => {
   const activity = { entrypoint_hash: "tx1", result_ok: true, contract_address: "irohac1router", block_height: 4, block_index: 2 };
-  const event = { event_id: "tx1:0", schema_version: 1, provenance: "derived", tx_hash_hex: "aa".repeat(32), block_height: 4, block_index: 2,
+  // Canonical Iroha hashes end in an odd nibble (the hash marker bit).
+  const event = { event_id: "tx1:0", schema_version: 1, provenance: "derived", tx_hash_hex: `${"aa".repeat(31)}ab`, block_height: 4, block_index: 2,
     block_hash_hex: "deadbeef", result_ok: true, contract_address: "irohac1router", module: "router", event_kind: "route_swap" };
   for (const [property, base] of [["contractActivity", activity], ["contractEvents", event]]) {
     for (const [field, value] of [["gas_asset_id", "xor#universal"], ["fee_sponsor", FIXTURE_ALICE_ID], ["gas_limit", 100000]]) {
@@ -12113,6 +12114,24 @@ test("contract history collections reject retired row fields and preserve block 
     assert.equal(page.items[0].block_index, 2);
     assert.equal(page.nextCursor, "older");
   }
+});
+
+test("contract event rows and stream filters accept only call-derived provenance", async () => {
+  const forged = { event_id: "tx1:0", schema_version: 1, provenance: "emitted", tx_hash_hex: `${"aa".repeat(31)}ab`,
+    block_height: 4, block_index: 2, block_hash_hex: "deadbeef", result_ok: true,
+    contract_address: "irohac1router", module: "swaps", event_kind: "swap_executed" };
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200,
+    jsonData: { items: [forged], next_cursor: null }, headers: { "content-type": "application/json" } }) });
+  await assert.rejects(() => client.contractEvents.list(), /contract event row\.provenance must be derived/u);
+  let calls = 0;
+  const offline = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("should not fetch");
+    },
+  });
+  assert.throws(() => offline.streamContractEvents({ provenance: "emitted" }), /provenance must be derived/u);
+  assert.equal(calls, 0);
 });
 
 test("getGovernanceContract reads one governed binding", async () => {

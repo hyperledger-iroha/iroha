@@ -303,6 +303,10 @@
   ],
   "retired_identifiers": [
     {
+      "identifier": "SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE",
+      "retired": "contract-originated SCCP record operation tag 2; ABI v1 instruction execution admits only SubmitBallot"
+    },
+    {
       "identifier": "BlockHeaderForConsensusLegacy",
       "retired": "second consensus header layout hashed for pre-release Taira blocks"
     },

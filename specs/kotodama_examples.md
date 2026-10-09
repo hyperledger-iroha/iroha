@@ -110,7 +110,6 @@ seiyaku TransferDemo {
             destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
             asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
             amount: 10,
-            dataspace: DataSpaceId::parse("0"),
         );
     }
 }

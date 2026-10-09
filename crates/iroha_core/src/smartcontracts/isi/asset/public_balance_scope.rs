@@ -1,46 +1,12 @@
-fn dataspace_id_for_alias_segment(
-    catalog: &DataSpaceCatalog,
-    dataspace_alias: &str,
-) -> Option<DataSpaceId> {
-    if dataspace_alias.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    catalog.by_alias(dataspace_alias).map(|entry| entry.id)
-}
+/// The definition's immutable namespace home, from the shared home owner.
 fn asset_definition_home_dataspace_id(
     state_transaction: &StateTransaction<'_, '_>,
     definition: &AssetDefinition,
 ) -> Result<Option<DataSpaceId>, Error> {
-    if let Some(dataspace) = state_transaction
-        .world
-        .asset_definition_dataspace(definition.id())
-        .map_err(|error| {
-            InstructionExecutionError::InvariantViolation(
-                format!("invalid asset-definition home: {error}").into(),
-            )
-        })?
-    {
-        return Ok(Some(dataspace));
-    }
-    let dataspace_alias = state_transaction
-        .world
-        .asset_definition_domains
-        .get(definition.id())
-        .map(|domain| domain.dataspace().as_ref().to_owned())
-        .or_else(|| {
-            definition
-                .owning_domain()
-                .as_ref()
-                .map(|domain| domain.dataspace().as_ref().to_owned())
-        });
-    Ok(match dataspace_alias {
-        Some(alias) => {
-            dataspace_id_for_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
-        }
-        None if definition.balance_scope_policy() == AssetBalancePolicy::Global => {
-            Some(DataSpaceId::UNIVERSAL)
-        }
-        None => None,
+    crate::read_scope::home_dataspace(&state_transaction.world, definition).map_err(|error| {
+        InstructionExecutionError::InvariantViolation(
+            format!("invalid asset-definition home: {error}").into(),
+        )
     })
 }
 fn coherent_execution_dataspace(
@@ -87,6 +53,23 @@ pub(crate) fn validate_committed_public_balance_scope(
             if dataspace == DataSpaceId::UNIVERSAL {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "the universal coordinator is not a restricted public balance scope".into(),
+                ));
+            }
+            if let Some(home) = crate::read_scope::confined_home(&state_transaction.world, &definition)
+                .map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("invalid asset-definition home: {error}").into(),
+                    )
+                })?
+                && home != dataspace
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "committed public balance scope {} differs from confined home dataspace {}",
+                        dataspace.as_u64(),
+                        home.as_u64(),
+                    )
+                    .into(),
                 ));
             }
             if let Some(route) = execution_dataspace
@@ -233,8 +216,15 @@ mod direct_dataspace_home_tests {
                 AssetBalanceScope::Dataspace(foreign_bucket),
                 "bilateral settlement",
             )
-            .is_ok(),
-            "definition namespace and explicit settlement bucket are independent"
+            .is_err(),
+            "a confined definition settles only in its home bucket"
         );
+        validate_committed_public_balance_scope(
+            &transaction,
+            &id,
+            AssetBalanceScope::Dataspace(home),
+            "bilateral settlement",
+        )
+        .expect("the home bucket is the only confined public balance scope");
     }
 }

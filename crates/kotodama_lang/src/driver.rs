@@ -232,6 +232,8 @@ struct SourceProjectManifestV1 {
     root: String,
     imports: Vec<SourceProjectImportV1>,
     packages: Vec<SourceProjectPackageV1>,
+    /// Optional lint levels: `{"<lint-slug>": "allow"|"warn"|"deny", "deny-warnings": true}`.
+    lints: Option<json::Value>,
 }
 #[derive(norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -308,6 +310,48 @@ pub struct LoadedSourceProject {
     pub source_paths: BTreeMap<ProjectSourceKey, PathBuf>,
     /// Local manifest edit authority. Graphs supplied without a local manifest cannot edit exports.
     pub manifest: Option<ProjectManifestSource>,
+    /// Lint levels declared by the project manifest's `lints` object; every lint warns when the
+    /// graph has no manifest or the manifest declares none.
+    pub lints: crate::session::LintConfig,
+}
+/// Parse a project manifest `lints` object into a lint configuration.
+///
+/// Keys are lint slugs from [`crate::lint::LINT_REGISTRY`] mapped to `"allow"`, `"warn"` or
+/// `"deny"`, plus the optional boolean `"deny-warnings"`. Unknown slugs and levels fail closed,
+/// naming the closest known slug.
+fn project_lint_config(
+    value: &json::Value,
+    path: &Path,
+) -> Result<crate::session::LintConfig, BuildError> {
+    let invalid = |message: String| BuildError::InvalidProjectManifest {
+        path: path.to_path_buf(),
+        message,
+    };
+    let entries = value.as_object().ok_or_else(|| {
+        invalid("`lints` must be an object of lint slugs and levels".to_owned())
+    })?;
+    let mut config = crate::session::LintConfig::new();
+    for (key, level) in entries {
+        if key == "deny-warnings" {
+            let deny = level
+                .as_bool()
+                .ok_or_else(|| invalid("`lints.deny-warnings` must be `true` or `false`".to_owned()))?;
+            config.set_deny_warnings(deny);
+            continue;
+        }
+        let level = level
+            .as_str()
+            .and_then(crate::lint::LintLevel::parse)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "`lints.{key}` must be \"allow\", \"warn\", or \"deny\""
+                ))
+            })?;
+        config
+            .set_level(key, level)
+            .map_err(|unknown| invalid(format!("`lints`: {unknown}")))?;
+    }
+    Ok(config)
 }
 fn project_source_unit_span(
     source: &SourceModuleUnit,
@@ -1416,6 +1460,12 @@ pub fn load_source_project_manifest_with_text_and_overlays(
             ),
         });
     }
+    let lints = manifest
+        .lints
+        .as_ref()
+        .map(|value| project_lint_config(value, path))
+        .transpose()?
+        .unwrap_or_default();
     let (root, root_path) = load_project_source(project_root, &manifest.root, path, overlays)?;
     let root_key = ProjectSourceKey {
         package_identity: None,
@@ -1572,6 +1622,7 @@ pub fn load_source_project_manifest_with_text_and_overlays(
             text: body.to_owned(),
             exports: export_ranges,
         }),
+        lints,
     })
 }
 fn project_source_key_description(key: &ProjectSourceKey) -> String {
@@ -2423,6 +2474,63 @@ mod tests {
             error.to_string().contains("duplicate field `version`"),
             "{error}"
         );
+        fs::remove_dir_all(root).expect("remove project manifest root");
+    }
+    #[test]
+    fn project_manifest_lints_select_levels_and_reject_unknown_slugs() {
+        let root = temp_root("project-manifest-lints");
+        fs::create_dir_all(root.join("contracts")).expect("create contract source directory");
+        fs::write(
+            root.join("contracts/app.ko"),
+            "seiyaku App { view fn run() -> int { return 1; } }",
+        )
+        .expect("write root source");
+        let manifest = root.join("kotodama.project.json");
+        let with_lints = |lints: &str| {
+            format!(
+                r#"{{"version": 1, "root": "contracts/app.ko", "imports": [], "packages": [], "lints": {lints}}}"#
+            )
+        };
+        fs::write(
+            &manifest,
+            with_lints(r#"{"unused-local": "deny", "dead-store": "allow", "deny-warnings": true}"#),
+        )
+        .expect("write project manifest");
+        let loaded = load_source_project_manifest(&manifest).expect("load linted project");
+        assert_eq!(
+            loaded.lints.level("unused-local"),
+            crate::lint::LintLevel::Deny
+        );
+        assert_eq!(
+            loaded.lints.level("dead-store"),
+            crate::lint::LintLevel::Allow
+        );
+        // deny-warnings promotes every lint that would otherwise warn.
+        assert_eq!(
+            loaded.lints.level("unused-state"),
+            crate::lint::LintLevel::Deny
+        );
+        for (lints, expected) in [
+            (r#"{"unused-locl": "deny"}"#, "did you mean `unused-local`?"),
+            (r#"{"unused-local": "error"}"#, "must be \"allow\", \"warn\", or \"deny\""),
+            (r#"{"deny-warnings": "yes"}"#, "`lints.deny-warnings` must be"),
+            (r#"["unused-local"]"#, "`lints` must be an object"),
+        ] {
+            fs::write(&manifest, with_lints(lints)).expect("write invalid lints");
+            let error = load_source_project_manifest(&manifest).expect_err(lints);
+            assert!(
+                matches!(error, BuildError::InvalidProjectManifest { .. }),
+                "{error}"
+            );
+            assert!(error.to_string().contains(expected), "{lints}: {error}");
+        }
+        fs::write(
+            &manifest,
+            r#"{"version": 1, "root": "contracts/app.ko", "imports": [], "packages": []}"#,
+        )
+        .expect("write manifest without lints");
+        let loaded = load_source_project_manifest(&manifest).expect("load plain project");
+        assert_eq!(loaded.lints, crate::session::LintConfig::default());
         fs::remove_dir_all(root).expect("remove project manifest root");
     }
     #[cfg(unix)]

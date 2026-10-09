@@ -60,7 +60,9 @@ Admission/host guardrails
   surfaces the failure during validation so contracts cannot rely on undefined syscalls. Allowed
   syscall numbers that are not meaningful for a specific host return a metered
   `VMError::NotImplemented` instead.
-- The five extended `0x00FE0001..=0x00FE0005` Kotodama test helpers are not ABI-v1 syscalls and do
+- The ten extended `0x00FE0001..=0x00FE000A` Kotodama test helpers (fixture actors, seiyaku calls
+  and rejection expectations, assertion failure reports, block height and transaction time
+  control, and helper call-site records) are not ABI-v1 syscalls and do
   not contribute to `abi_hash`. A crate-private test-artifact verifier accepts exactly those IDs
   only in unreachable local test bodies, and the VM dispatches them only when the private
   test-suite loader capability is present and the host opts in; the runner supplies
@@ -132,8 +134,9 @@ Gas enforcement (CoreHost)
 - GET_PUBLIC_INPUT charges a base plus a per-byte cost based on the returned TLV length.
 - `JSON_OBJECT` helper — Gas: `G_json + bytes`.
 - `JSON_GET_*` helpers and their direct variants return compiler-owned
-  `Option<T>` sum handles. Missing keys, non-object roots, and type/conversion
-  mismatches are `Option::none`; malformed TLVs remain VM errors. Gas: `G_json_get + input bytes + active payload + sum allocation`.
+  `Option<T>` sum handles. Only a missing key is `Option::none`; a non-object
+  root or a present field of the wrong JSON type traps with `DecodeError`, and
+  malformed TLVs remain VM errors. Gas: `G_json_get + input bytes + active payload + sum allocation`.
 - `JSON_BUILD` converts one compiler-emitted `JsonConstructionSchemaV1` and a
   flattened word table into one canonical `Json` payload. Gas is charged by
   schema bytes, source bytes, words, collection elements, and encoded bytes.
@@ -144,7 +147,7 @@ Lifecycle / Utility
 - 0x00 DEBUG_PRINT — Args: `r10=value:u64` → Return: 0 — Gas: G_debug
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
 - 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort (halts and marks the run failed)
-- 0x03 DEBUG_LOG — Args: `r10=&Json|&Blob|&NoritoBytes` → Return: 0 — Gas: G_debug
+- 0x03 DEBUG_LOG — Args: `r10=&Json|&Blob|&NoritoBytes` → Return: 0 — Gas: G_debug. Diagnostics only: hosts print the payload in development and test builds and otherwise discard it, so the call has no ledger or durable-state effect and Kotodama permits `debug::info` in views.
 - 0x04 CONTRACT_ABORT — Args: `r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12..r15=0` → Return: `u64=0` — Gas: G_abort + descriptor bytes + selected message UTF-8 bytes (halts with an exact signed-CNTR-authenticated nominal rejection; descriptor frame at most 64 KiB)
 - 0xA8 CURRENT_TIME_MS — Args: none → Return: `u64=deterministic_execution_time_ms` — Gas: G_sysvar
 - 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish + bytes (rejects invalid TLV envelopes and disallowed pointer types)
@@ -188,9 +191,11 @@ Lifecycle / Utility
 For the SM4 calls, the host appends the authentication tag to the ciphertext output; callers supply the same layout when invoking the corresponding `OPEN` syscall. `SM4_GCM_*` always uses a 16-byte tag and 12-byte nonce. `SM4_CCM_*` accepts nonce lengths between 7 and 13 bytes and tag sizes {4,6,8,10,12,14,16}; pass the desired tag length in `r14` (use `0` to select 16). Passing `0` in `r12` denotes an empty AAD. Gas charges a fixed SM4 base plus AAD bytes and plaintext/ciphertext bytes inspected, including validation-failure paths after pointer decoding.
 
 Kotodama intrinsics
-- ``sm::hash(msg: Blob) -> Blob`` mirrors `msg` into INPUT with `INPUT_PUBLISH_TLV` and issues `SM3_HASH`, returning a pointer to the digest Blob.
-- ``sm::verify(msg: Blob, sig: Blob, pk: Blob[, distid: Blob]) -> bool`` mirrors each Blob argument into INPUT, invokes `SM2_VERIFY`, and returns `true` for valid signatures. Omitting the fourth argument selects the runtime-configured default (``Sm2PublicKey::default_distid()``, sourced from `crypto.sm2_distid_default`); providing it enforces a custom distinguishing identifier.
-- ``current_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the deterministic logical execution time in milliseconds. `CoreHost` binds transaction contract calls to the signed transaction creation time and trigger calls to the block-header creation time; test/default hosts use an explicitly configured value and default to `0`. No host reads wall-clock time while servicing the syscall.
+- ``crypto::sm3(message: bytes) -> bytes`` mirrors `message` into INPUT with `INPUT_PUBLISH_TLV` and issues `SM3_HASH`, returning a pointer to the digest Blob.
+- ``crypto::sm2::verify(message:, signature:, public_key:[, distid:]) -> bool`` mirrors each Blob argument into INPUT, invokes `SM2_VERIFY`, and returns `true` for valid signatures. Omitting `distid` selects the runtime-configured default (``Sm2PublicKey::default_distid()``, sourced from `crypto.sm2_distid_default`); providing it enforces a custom distinguishing identifier.
+- ``crypto::verify_signature(message:, signature:, public_key:, scheme:) -> bool`` issues `VERIFY_SIGNATURE`. `scheme` is a compile-time `SignatureScheme::Ed25519`, `SignatureScheme::Secp256k1`, or `SignatureScheme::MlDsa`, which the compiler folds into the scheme code `1`, `2`, or `3`; source code cannot pass any other code.
+- ``context::transaction_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the deterministic logical execution time in milliseconds. `CoreHost` binds transaction contract calls to the signed transaction creation time, which the signer chooses within the node's admission tolerance, and trigger calls to the block-header creation time; test/default hosts use an explicitly configured value and default to `0`. No host reads wall-clock time while servicing the syscall. `SYSVAR_BLOCK_TIME_MS` returns the same value on every host and is not a source builtin.
+- ``context::authority() -> AccountId`` issues `GET_AUTHORITY` and returns the immediate caller: the transaction or trigger authority for a top-level call, and the calling seiyaku's subject account for a seiyaku called through `CALL_CONTRACT_QUANTITY2`.
 - ``block_height() -> int`` issues `SYSVAR_BLOCK_HEIGHT` and returns the host-provided committed block height. `CoreHost` binds this to the attached transaction context; test/default hosts default to `0`.
 
 Exact numeric helpers
@@ -250,10 +255,18 @@ Native JSON construction
   values. Typed getters materialize active payloads only. The exact numeric
   getters are exactly `JSON_GET_INT` at `0x010160`, `JSON_GET_DECIMAL` at
   `0x010161`, and `JSON_GET_QUANTITY` at `0x010162`; all three accept canonical
-  JSON strings only. JSON number tokens, exponent forms, alternate spellings,
-  overflow, and negative quantities return `Option::none`. Numbers
+  JSON strings only. A present field holding a JSON number token, an exponent
+  form, an alternate spelling, an overflowing value, or a negative quantity
+  traps with `DecodeError` instead of reading as absent. Numbers
   `0x010163..0x010165` are unassigned and return `UnknownSyscall` before
-  syscall gas charging, allocation, or state mutation. Generic `JSON_SET_I64`
+  syscall gas charging, allocation, or state mutation. `JSON_GET_STRING` at
+  `0x010166` returns a JSON string's UTF-8 bytes as the Kotodama `string`
+  pointer, and `JSON_GET_BOOL` at `0x010167` returns a JSON boolean as one
+  `0`/`1` payload word.
+- Every typed getter returns `Option::none` only when the key is absent from
+  the JSON object. A non-object root, or a present field whose JSON value is
+  not the getter's exact canonical type, traps with `DecodeError`, so
+  malformed input never reads as a missing field. Generic `JSON_SET_I64`
   remains unchanged: it emits a JSON number token and is outside this exact
   numeric surface.
 
@@ -282,7 +295,10 @@ Notes:
   canonical multisig id derived from the spec (signatories must be single-key accounts).
 
 Assets (FT)
-- 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_reg_asset
+- 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId, r11=&Blob(UTF-8 display name), r12=numeric_spec:u64, r13=mintability:u64` → 0 — Gas: G_reg_asset
+  - `r12` is `0` for `NumericSpec::unconstrained()` and `scale + 1` for a scale in `0..=28`.
+  - `r13` carries the `Mintable` tag in its low two bits (`0` infinitely, `1` once, `2` not, `3` limited) and, for limited, the non-zero `u32` token budget in bits 2 and above; the other tags carry no payload. Kotodama writes these as `Mintable::Infinitely`, `Mintable::Once`, `Mintable::Not`, and `Mintable::Limited(tokens)`, and the numeric spec as `NumericSpec::unconstrained()`, `NumericSpec::integer()`, or `NumericSpec::fractional(scale)`.
+  - Both words use `iroha_data_model::asset::definition::ivm_registration`, which the compiler and every host share. A malformed word, display name, or definition id traps with `DecodeError`; the registered definition is exactly the named one, with the global balance policy.
 - 0x21 UNREGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_unreg_asset
 - 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity` → 0 — Gas: G_mint
 - 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity` → 0 — Gas: G_burn
@@ -293,7 +309,7 @@ NFTs
 - 0x26 NFT_TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)` → 0 — Gas: G_nft_transfer_asset
 - 0x27 NFT_SET_METADATA — Args: `r10=&NftId, r11=&Name, r12=&Json` → 0 — Gas: G_nft_set_metadata
 - 0x28 NFT_BURN_ASSET — Args: `r10=&NftId` → 0 — Gas: G_nft_burn_asset
-- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity, r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer using the asset definition's balance-scope policy: global definitions use a global source balance, and dataspace-restricted definitions use `Dataspace(r14)`.
+- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity, r14=&DataSpaceId or 0` → 0 — Gas: G_transfer. Queues a transfer using the asset definition's balance-scope policy: global definitions use a global source balance and ignore `r14`; dataspace-restricted definitions use `Dataspace(r14)`. `r14 = 0` (Kotodama omits `dataspace:`) on a restricted definition traps with `NoritoInvalid`, as any missing `DataSpaceId` pointer does; no host falls back to an ambient or universal dataspace.
 
 Zero‑knowledge (verification/state‑read)
 - 0x60 ZK_VOTE_VERIFY_BALLOT — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
@@ -343,7 +359,7 @@ Triggers
       `filter`, and `metadata` fields (matching `SpecializedAction<EventFilterBox>`).
     - `EventFilterBox::TriggerCompleted` filters are rejected for triggering actions.
 - 0x41 REMOVE_TRIGGER — Args: `r10=&Name` → 0 — Gas: G_remove_trig
-- 0x42 SET_TRIGGER_ENABLED — Args: `r10=&Name, r11=enabled:u64` → 0 — Gas: G_set_trig
+- 0x42 SET_TRIGGER_ENABLED — Args: `r10=&Name, r11=enabled:u64` (`0` or `1`; Kotodama passes a `bool`) → 0 — Gas: G_set_trig
   - Writes trigger metadata key `__enabled` to `true`/`false`; missing key defaults to enabled.
 - 0x43 DEACTIVATE_CONTRACT_INSTANCE — Args: `r10=&NoritoBytes(DeactivateContractInstance)` → 0 — Gas: G_contract_admin + bytes
 - 0x44 REMOVE_SMART_CONTRACT_BYTES — Args: `r10=&NoritoBytes(RemoveSmartContractBytes)` → 0 — Gas: G_contract_admin + bytes
@@ -445,7 +461,7 @@ Canonical instruction bridge
 - 0xA1 EXECUTE_QUERY — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr` — Gas: G_scq
 - 0xA2 CREATE_NFTS_FOR_ALL_USERS — Args: none → `u64=count` — Gas: G_create_nfts_all
 - 0xA3 SET_SMARTCONTRACT_EXECUTION_DEPTH — Args: `r10=depth:u64` → `u64=prev` — Gas: G_sc_depth
-- 0xA4 GET_AUTHORITY — Args: none → host-owned `ptr (&AccountId)` — Gas: G_get_auth
+- 0xA4 GET_AUTHORITY — Args: none → host-owned `ptr (&AccountId)` — Gas: G_get_auth. The immediate caller: the transaction or trigger authority at top level, the calling seiyaku's subject account in a nested seiyaku call.
 - 0xA7 RESOLVE_ACCOUNT_ALIAS — Args: `r10=&Blob(alias literal)` → host-owned `ptr (&AccountId)` — Gas: G_alias_resolve
 
 AXT host flow
@@ -517,7 +533,7 @@ Native asset escrow
 - 0xBD ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenEscrowDispute` for the seller or accepted buyer.
 - 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&Quantity(buyer_amount)`, `r12=&Quantity(seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
 - IDs `0xAA` through `0xAF` and `0xBF` are unassigned holes and must report `UnknownSyscall`.
-- Kotodama escrow names are deterministically mapped to `EscrowId`; native ISIs perform custody movement directly and `TRANSFER_ASSET_SCOPED` resolves the source balance scope from the asset definition policy, using `r14` only for dataspace-restricted definitions.
+- Kotodama escrow names are deterministically mapped to `EscrowId`; native ISIs perform custody movement directly and `TRANSFER_ASSET_SCOPED` resolves the source balance scope from the asset definition policy, using `r14` only for dataspace-restricted definitions and rejecting them when `r14 = 0`.
 
 Soracloud runtime host surface
 - 0xC0 SORACLOUD_READ_COMMITTED_STATE — Args: `r10=&SoracloudRequest(ReadCommittedState)` → `r10=&SoracloudResponse(ReadCommittedState)`. Returns committed service-state metadata for one declared binding/key pair.
@@ -540,7 +556,7 @@ Soracloud runtime host surface
 
 ZK Helpers
 - 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&Quantity)` — Gas: G_get_bal
-- 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig + bytes
+- 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig + bytes. Scheme codes: `1` Ed25519, `2` secp256k1 ECDSA, `3` ML-DSA. Kotodama's `crypto::verify_signature` takes a compile-time `SignatureScheme` value, so compiled seiyaku never pass any other code.
 
 Runtime Summaries / Proof Verification
 - 0xF4 EXECUTION_SUMMARY — Args: none → `r10=&NoritoBytes(ExecutionSummary), r11=status:u64` — Gas: G_execution_summary
@@ -654,7 +670,7 @@ node enforces that policy unconditionally.
 | 0x18 | REMOVE_SIGNATORY | r10=&AccountId, r11=&Json | u64=0 | asset:gas/G_rm_sig@ivm.core/v2 |
 | 0x19 | SET_ACCOUNT_QUORUM | r10=&AccountId, r11=quorum:u64 | u64=0 | asset:gas/G_set_quorum@ivm.core/v2 |
 | 0x1A | SET_ACCOUNT_DETAIL | r10=&AccountId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_set_detail@ivm.core/v2 + bytes(val) |
-| 0x20 | REGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_reg_asset@ivm.core/v2 |
+| 0x20 | REGISTER_ASSET | r10=&AssetDefinitionId, r11=&Blob(name), r12=numeric_spec:u64, r13=mintability:u64 | u64=0 | asset:gas/G_reg_asset@ivm.core/v2 |
 | 0x21 | UNREGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_unreg_asset@ivm.core/v2 |
 | 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity | u64=0 | asset:gas/G_mint@ivm.core/v2 |
 | 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity | u64=0 | asset:gas/G_burn@ivm.core/v2 |
@@ -666,7 +682,7 @@ node enforces that policy unconditionally.
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2A | TRANSFER_V1_BATCH_END | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | r10=&NoritoBytes(TransferAssetBatch) | u64=0 | asset:gas/G_transfer@ivm.core/v2 per entry |
-| 0x2C | TRANSFER_ASSET_SCOPED | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity, r14=&DataSpaceId | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
+| 0x2C | TRANSFER_ASSET_SCOPED | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity, r14=&DataSpaceId or 0 | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
 | 0x30 | CREATE_ROLE | r10=&Name, r11=&Json(perms) | u64=0 | asset:gas/G_create_role@ivm.core/v2 |
 | 0x31 | DELETE_ROLE | r10=&Name | u64=0 | asset:gas/G_delete_role@ivm.core/v2 |
 | 0x32 | GRANT_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_role@ivm.core/v2 |
@@ -772,7 +788,7 @@ node enforces that policy unconditionally.
 | 0x10001 | CORE_QUERY_GET | r10=CoreQueryEntityTagV1:u64, r11=&typed entity id | r10=Option<View> sum handle (typed leaf TLVs) | asset:gas/G_scq@ivm.core/v2 + query items + encoded bytes |
 | 0x10002 | CORE_QUERY_PAGE | r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64 | r10=List<View,64> handle, r11=Option<int> sum handle | asset:gas/G_scq@ivm.core/v2 + offset + query items + encoded bytes |
 | 0x10006 | QUERY_GET_PARAMETER | r10=&NoritoBytes(Name) | r10=ptr (&NoritoBytes(Parameter)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10007 | QUERY_GET_CONTRACT_MANIFEST | r10=&NoritoBytes(ContractAddress | Hash) | r10=ptr (&NoritoBytes(ContractManifest)) | asset:gas/G_scq@ivm.core/v2 |
+| 0x10007 | QUERY_GET_CONTRACT_MANIFEST | r10=&NoritoBytes(ContractArtifactId) | r10=ptr (&NoritoBytes(ContractManifest)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10008 | QUERY_GET_CONTRACT_INSTANCE | r10=&NoritoBytes(ContractAddress | Name) | r10=ptr (&NoritoBytes(ContractInstance)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10020 | SYSVAR_CHAIN_ID | - | r10=ptr (&Blob(chain_id)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10021 | SYSVAR_BLOCK_HEIGHT | - | r10=height:u64 | asset:gas/G_sysvar@ivm.core/v2 |
@@ -857,13 +873,15 @@ node enforces that policy unconditionally.
 | 0x10160 | JSON_GET_INT | r10=&Json(object), r11=&Name(key) | r10=Option<&Int> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10161 | JSON_GET_DECIMAL | r10=&Json(object), r11=&Name(key) | r10=Option<&Decimal> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10162 | JSON_GET_QUANTITY | r10=&Json(object), r11=&Name(key) | r10=Option<&Quantity> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x10166 | JSON_GET_STRING | r10=&Json(object), r11=&Name(key) | r10=Option<&Blob(UTF-8)> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x10167 | JSON_GET_BOOL | r10=&Json(object), r11=&Name(key) | r10=Option<bool> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10200 | SET_ASSET_TRANSFER_AVAILABILITY | r10=&AccountId, r11=&AssetDefinitionId, r12=expected_revision:u64, r13=availability_flags:u64 (bit 0 incoming, bit 1 outgoing; reserved bits zero), r14=&Option<string> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10201 | SET_ASSET_TRANSFER_DAILY_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10202 | SET_ASSET_HOLDING_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement), r12=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 <!-- END GENERATED SYSCALLS -->
 
 

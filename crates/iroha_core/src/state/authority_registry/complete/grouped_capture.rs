@@ -201,7 +201,6 @@ pub(crate) fn capture_assets_once(
     let budget = state.ivm_execution_budget();
     let checked = CheckedAssets::capture(
         &state.world,
-        &budget,
         limits.max_rows.saturating_mul(ASSET_BALANCE_WORK_PER_ROW),
     );
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
@@ -261,7 +260,6 @@ pub(crate) fn capture_asset_definitions_once(
     let budget = state.ivm_execution_budget();
     let checked = CheckedAssetDefinitions::capture(
         &state.world,
-        &budget,
         limits
             .max_rows
             .saturating_mul(ASSET_DEFINITION_WORK_PER_ROW),
@@ -511,11 +509,10 @@ mod direct_home_admission_tests {
         let captures: [Capture; 2] = [capture_assets_once, capture_asset_definitions_once];
         for capture in captures {
             pool.set_limit_bytes(0);
+            // Direct-home rows need no extra backing; the leaf encoder refuses the empty pool.
             assert!(matches!(
                 capture(&state, limits),
-                Err(LeafError::GroupedOwnership(
-                    GroupedOwnershipError::Admission(_)
-                ))
+                Err(LeafError::Admission(_) | LeafError::OrderedRange(_))
             ));
             assert_eq!(pool.reserved_bytes(), baseline);
             assert_eq!(state.state_view_generation(), generation);

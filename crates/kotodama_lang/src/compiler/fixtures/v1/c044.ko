@@ -4,9 +4,9 @@ seiyaku CompilerFixture {
 kotoage fn main() authorize("CompilerFixture") {
   let trigger_id = Name::parse("wake");
   ledger::trigger::unregister(trigger: trigger_id);
-  ledger::trigger::set_enabled(trigger: trigger_id, enabled: 1);
+  ledger::trigger::set_enabled(trigger: trigger_id, enabled: true);
   ledger::trigger::unregister(trigger: trigger_id);
-  ledger::trigger::set_enabled(trigger: trigger_id, enabled: 0);
+  ledger::trigger::set_enabled(trigger: trigger_id, enabled: false);
 }
 
 }

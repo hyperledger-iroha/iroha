@@ -25,9 +25,9 @@ fn kotodama_create_and_grant_role_enables_mint() {
         seiyaku RoleBootstrap {
         kotoage fn main() authorize("ManageRoles") {
           // Bootstrap the asset definition used by the role permission.
-          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", scale: 0, mintable: 1);
+          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
           // Create role with mint permission and grant it to the caller.
-          ledger::role::create(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
+          ledger::role::register(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           ledger::role::grant(account: context::authority(), role: Name::parse("minter"));
           // Mint using role permission
           ledger::asset::mint(account: context::authority(), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1);
@@ -57,7 +57,7 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
         }
 
         kotoage fn main() authorize("ManageRoles") {
-          ledger::role::create(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
+          ledger::role::register(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           let who = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
           grant_it(who: who);
         }
@@ -113,7 +113,7 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
     let src = r#"
         seiyaku RuntimePermissionGrantAfterSyscall {
         fn grant_it(AccountId who) {
-          let _now = context::current_time_ms();
+          let _now = context::transaction_time_ms();
           ledger::permission::grant(account: who, permission: Name::parse("BenefitSpend"));
         }
 

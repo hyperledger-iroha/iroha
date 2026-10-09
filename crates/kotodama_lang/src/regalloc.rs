@@ -1188,26 +1188,13 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         RegisterAsset {
             asset,
-            symbol,
-            quantity,
+            name,
+            spec,
             mintable,
         } => {
             f(*asset);
-            f(*symbol);
-            f(*quantity);
-            f(*mintable);
-        }
-        CreateNewAsset {
-            asset,
-            symbol,
-            quantity,
-            account,
-            mintable,
-        } => {
-            f(*asset);
-            f(*symbol);
-            f(*quantity);
-            f(*account);
+            f(*name);
+            f(*spec);
             f(*mintable);
         }
         TransferAsset {
@@ -1611,7 +1598,9 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | JsonGetAccountId { json, key, .. }
         | JsonGetAssetDefinitionId { json, key, .. }
         | JsonGetNftId { json, key, .. }
-        | JsonGetBlobHex { json, key, .. } => {
+        | JsonGetBlobHex { json, key, .. }
+        | JsonGetString { json, key, .. }
+        | JsonGetBool { json, key, .. } => {
             f(*json);
             f(*key);
         }
@@ -1795,7 +1784,9 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::JsonGetAccountId { dest, .. }
         | Instr::JsonGetAssetDefinitionId { dest, .. }
         | Instr::JsonGetNftId { dest, .. }
-        | Instr::JsonGetBlobHex { dest, .. } => Some(*dest),
+        | Instr::JsonGetBlobHex { dest, .. }
+        | Instr::JsonGetString { dest, .. }
+        | Instr::JsonGetBool { dest, .. } => Some(*dest),
         Instr::NameDecode { dest, .. } => Some(*dest),
         Instr::SchemaEncode { dest, .. } => Some(*dest),
         Instr::SchemaDecode { dest, .. } => Some(*dest),
@@ -1809,7 +1800,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::GrantContractEntrypoint { .. }
         | Instr::RevokeContractEntrypoint { .. }
         | Instr::RegisterAsset { .. }
-        | Instr::CreateNewAsset { .. }
         | Instr::TransferAsset { .. }
         | Instr::TransferBatchAsset { .. }
         | Instr::EscrowOpenOffer { .. }

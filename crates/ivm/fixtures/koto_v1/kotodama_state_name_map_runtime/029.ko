@@ -6,7 +6,7 @@
             state StateMap<int, int> EntryByPosition;
 
             fn next_index() -> int {
-                let value = Counter.ensure(key: 1, default: 0);
+                let value = Counter.get_or_insert(1, 0);
                 Counter[1] = value + 1;
                 return value;
             }

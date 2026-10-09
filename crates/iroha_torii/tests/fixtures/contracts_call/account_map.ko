@@ -1,6 +1,7 @@
 seiyaku ContractCallConfigureAccountMapTest {
     error enum ConfigureError {
-        UnauthorizedExisting = 1, UnauthorizedInitial = 2
+        UnauthorizedExisting = 1,
+        UnauthorizedInitial = 2,
     }
 
     state StateMap<Name, AccountId> ConfigAccount;
@@ -18,16 +19,17 @@ seiyaku ContractCallConfigureAccountMapTest {
     }
 
     fn initialize_config_defaults() {
-        if (!ConfigInt.contains(key_paused())) {
+        if !ConfigInt.contains(key_paused()) {
             ConfigInt[key_paused()] = 0;
         }
     }
 
-    kotoage fn configure(AccountId admin_account, AccountId inori_account) authorize(
-        "CanEnactGovernance"
-    ) {
+    kotoage fn configure(
+        AccountId admin_account,
+        AccountId inori_account,
+    ) authorize("CanEnactGovernance") {
         let has_admin = ConfigAccount.contains(key_admin());
-        if (has_admin) {
+        if has_admin {
             require(
                 context::authority() == ConfigAccount.get(key_admin()).unwrap_or(admin_account),
                 ConfigureError::UnauthorizedExisting,

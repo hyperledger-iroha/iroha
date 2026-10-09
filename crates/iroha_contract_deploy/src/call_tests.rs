@@ -71,7 +71,7 @@ fn refresh_prepared_call(
     prepared: &mut PreparedContractCall,
 ) -> Result<TransactionRecord> {
     bind_operation_metadata(&mut prepared.plan)?;
-    let signed = fixture_builder(&config, &prepared)?
+    let signed = fixture_builder(config, prepared)?
         .with_metadata(prepared.plan.intent.metadata.clone())
         .with_executable(Executable::ContractCall(
             prepared.plan.intent.invocation.clone(),
@@ -126,6 +126,7 @@ impl DeploymentTransport for Transport {
             block_height: 42,
             scope: "global".into(),
             resolved_from: "state".into(),
+            charge: None,
         })
     }
 }
@@ -322,15 +323,30 @@ fn contract_arguments_are_admitted_before_decode_and_bind_local_schema() -> Resu
     );
     assert!(intent.invocation.arguments.is_some());
     assert!(payload.is_some());
+    let unexpected = trusted_contract_intent(
+        &artifact,
+        prepared.contract_address().clone(),
+        "write",
+        norito::json!({"wrong":"7"}),
+        false,
+    )
+    .expect_err("undeclared argument name");
     assert!(
-        trusted_contract_intent(
-            &artifact,
-            prepared.contract_address().clone(),
-            "write",
-            norito::json!({"wrong":"7"}),
-            false
-        )
-        .is_err()
+        unexpected.to_string().contains("argument `next`"),
+        "{unexpected:#}"
+    );
+    let number = trusted_contract_intent(
+        &artifact,
+        prepared.contract_address().clone(),
+        "write",
+        norito::json!({"next": 7}),
+        false,
+    )
+    .expect_err("JSON numbers are not int arguments");
+    assert_eq!(
+        number.to_string(),
+        "arguments do not match the verified entrypoint schema: argument `next` expects int as \
+         a canonical decimal integer string such as \"5\", found JSON number 7"
     );
     assert!(
         trusted_contract_intent(
@@ -699,5 +715,107 @@ fn call_standalone_resolution_uses_configured_discriminant_and_restores_caller()
         .join()
         .map_err(|_| eyre!("resolution fixture panicked"))??;
     assert_eq!(resolved?, expected_address);
+    Ok(())
+}
+#[test]
+fn simulated_gas_gains_bounded_headroom() {
+    assert_eq!(gas_limit_with_headroom(0), 10_000);
+    assert_eq!(gas_limit_with_headroom(100_000), 160_000);
+    assert_eq!(gas_limit_with_headroom(1_000_001), 1_510_001);
+    assert_eq!(gas_limit_with_headroom(9_000_000), MAX_CALL_GAS_LIMIT);
+    assert_eq!(gas_limit_with_headroom(u64::MAX), MAX_CALL_GAS_LIMIT);
+    const { assert!(UNSIMULATED_CALL_GAS_LIMIT <= MAX_CALL_GAS_LIMIT) };
+}
+#[test]
+fn simulation_responses_are_bound_to_the_exact_intent() -> Result<()> {
+    let (_, prepared, _) = fixture()?;
+    let intent = &prepared.plan.intent;
+    let code_hash = hex::encode(intent.invocation.expected_code_hash.as_ref());
+    let executed = norito::json!({
+        "ok": true, "code_hash_hex": (code_hash.clone()), "entrypoint": "run",
+        "gas_used": 1234, "error": null, "vm_diagnostic": null
+    });
+    assert_eq!(
+        interpret_call_simulation(&executed, intent)?,
+        CallSimulation::Executed { gas_used: 1234 }
+    );
+    let rejected = norito::json!({
+        "ok": false, "code_hash_hex": (code_hash.clone()), "entrypoint": "run",
+        "gas_used": 77, "error": "contract rejected: ZeroStep", "vm_diagnostic": null
+    });
+    assert_eq!(
+        interpret_call_simulation(&rejected, intent)?,
+        CallSimulation::Rejected {
+            message: "contract rejected: ZeroStep".to_owned(),
+            gas_used: 77,
+        }
+    );
+    let foreign = norito::json!({
+        "ok": true, "code_hash_hex": ("00".repeat(32)), "entrypoint": "run", "gas_used": 1
+    });
+    assert!(interpret_call_simulation(&foreign, intent).is_err());
+    let other_entrypoint = norito::json!({
+        "ok": true, "code_hash_hex": (code_hash.clone()), "entrypoint": "other", "gas_used": 1
+    });
+    assert!(interpret_call_simulation(&other_entrypoint, intent).is_err());
+    let missing_gas = norito::json!({
+        "ok": true, "code_hash_hex": (code_hash), "entrypoint": "run"
+    });
+    assert!(interpret_call_simulation(&missing_gas, intent).is_err());
+    Ok(())
+}
+#[test]
+fn applied_charge_projects_the_committed_fee_receipt() -> Result<()> {
+    use iroha::data_model::block::consensus::{
+        NexusFeeReceipt, NexusFeeScheduleInputs, NexusFeeSettlementV1,
+    };
+    let (config, _, _) = fixture()?;
+    let asset = AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::parse_fully_qualified("wonderland.universal")?,
+        "xor".parse()?,
+    );
+    let mut result = TransactionResult::new(Ok(Vec::default()));
+    assert_eq!(AppliedCharge::from_result(&result), None);
+    result.set_nexus_fee_receipt(Some(NexusFeeReceipt {
+        version: NexusFeeReceipt::VERSION,
+        source_id: [1; 32],
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_id: iroha_model_base::topology::LaneId::new(0),
+        block_height: 9,
+        debit_source: iroha::data_model::nexus::FeeDebitSource::Account(config.account.clone()),
+        fee_asset_id: asset.clone(),
+        program_revision: None,
+        lease_id: None,
+        fee_amount: Quantity::from(3_u32),
+        settlement: NexusFeeSettlementV1::Burn,
+        schedule: NexusFeeScheduleInputs {
+            tx_bytes_len: 100,
+            instruction_count: 1,
+            gas_used: 4_321,
+            base_fee: Quantity::from(3_u32),
+            per_byte_fee: Quantity::zero(),
+            per_instruction_fee: Quantity::zero(),
+            per_gas_unit_fee: Quantity::zero(),
+        },
+    }));
+    let charge = AppliedCharge::from_result(&result).expect("committed charge");
+    assert_eq!(charge.gas_used, 4_321);
+    assert_eq!(charge.fee_asset, asset);
+    assert_eq!(charge.fee_amount, Quantity::from(3_u32));
+    let evidence = AppliedEvidence {
+        hash: "hash".to_owned(),
+        terminal_kind: "Applied".to_owned(),
+        block_height: 9,
+        scope: "global".to_owned(),
+        resolved_from: "state".to_owned(),
+        charge: Some(charge),
+    };
+    let encoded = norito::json::to_value(&evidence)?;
+    assert_eq!(
+        encoded.pointer("/charge/gas_used").and_then(Value::as_u64),
+        Some(4_321)
+    );
+    let decoded: AppliedEvidence = norito::json::from_value(encoded)?;
+    assert_eq!(decoded, evidence);
     Ok(())
 }

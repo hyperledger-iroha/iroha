@@ -359,7 +359,7 @@ macro_rules! sc {
 }
 
 /// Number of ABI V1 syscalls.
-pub const SYSCALL_COUNT: usize = 226;
+pub const SYSCALL_COUNT: usize = 228;
 
 /// Every ABI V1 syscall in ascending number order.
 pub const SYSCALLS: &[SyscallEntry; SYSCALL_COUNT] = &[
@@ -588,6 +588,8 @@ pub const SYSCALLS: &[SyscallEntry; SYSCALL_COUNT] = &[
     sc!(SYSCALL_JSON_GET_INT, TypedCodec),
     sc!(SYSCALL_JSON_GET_DECIMAL, TypedCodec),
     sc!(SYSCALL_JSON_GET_QUANTITY, TypedCodec),
+    sc!(SYSCALL_JSON_GET_STRING, TypedCodec),
+    sc!(SYSCALL_JSON_GET_BOOL, TypedCodec),
     sc!(SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY, LedgerEffect),
     sc!(SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT, LedgerEffect),
     sc!(SYSCALL_SET_ASSET_HOLDING_LIMIT, LedgerEffect),
@@ -643,4 +645,9 @@ pub const HOST_PRIVATE_SYSCALLS: &[HostPrivateSyscall] = &[
     host_private!(SYSCALL_KOTO_TEST_ACTOR_SIGN),
     host_private!(SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS),
     host_private!(SYSCALL_KOTO_TEST_EXPECT_REJECT_AS),
+    host_private!(SYSCALL_KOTO_TEST_ASSERT_FAILED),
+    host_private!(SYSCALL_KOTO_TEST_SET_BLOCK_HEIGHT),
+    host_private!(SYSCALL_KOTO_TEST_ADVANCE_BLOCKS),
+    host_private!(SYSCALL_KOTO_TEST_SET_TRANSACTION_TIME_MS),
+    host_private!(SYSCALL_KOTO_TEST_CALL_SITE),
 ];

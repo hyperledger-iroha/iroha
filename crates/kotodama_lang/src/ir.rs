@@ -431,19 +431,12 @@ pub enum Instr {
         ciphertext_and_tag: Temp,
         tag_len: Option<Temp>,
     },
-    /// Register an asset definition with additional metadata.
+    /// Register an asset definition with its display name and the
+    /// `ivm_registration` numeric-spec and mintability words.
     RegisterAsset {
         asset: Temp,
-        symbol: Temp,
-        quantity: Temp,
-        mintable: Temp,
-    },
-    /// Helper builtin combining registration and mint into one operation.
-    CreateNewAsset {
-        asset: Temp,
-        symbol: Temp,
-        quantity: Temp,
-        account: Temp,
+        name: Temp,
+        spec: Temp,
         mintable: Temp,
     },
     /// Call the scoped `transfer_asset` syscall with from, to, asset, amount and dataspace parameters.
@@ -1136,6 +1129,18 @@ pub enum Instr {
     },
     /// JSON getter returning one active-only `Option<bytes>` handle.
     JsonGetBlobHex {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+    },
+    /// JSON getter returning one active-only `Option<string>` handle.
+    JsonGetString {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+    },
+    /// JSON getter returning one active-only `Option<bool>` handle.
+    JsonGetBool {
         dest: Temp,
         json: Temp,
         key: Temp,
@@ -2087,6 +2092,67 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(end);
     result
+}
+/// Branch on a local-test assertion; on failure, report the site, the compared values (encoded
+/// as canonical state-value records with their schema), and the message to the test host.
+///
+/// The host-private syscall is emitted only in test projections, never in deployable artifacts.
+/// A host that returns from it still stops at the trailing `Assert`.
+fn emit_test_assertion(
+    ctx: &mut LowerCtx,
+    cond: Temp,
+    site: &TypedExpr,
+    values: Option<(Temp, Temp, &Type)>,
+    message: Option<Temp>,
+    vars: &mut HashMap<String, Temp>,
+) {
+    let failed = ctx.new_label();
+    let passed = ctx.new_label();
+    ctx.finish_current(Terminator::Branch {
+        cond,
+        then_bb: passed,
+        else_bb: failed,
+    });
+    ctx.start_block(failed);
+    let site = lower_expr(ctx, site, vars);
+    let zero = emit_i64_const(ctx, 0);
+    let (actual, expected, schema) = values
+        .and_then(|(actual, expected, ty)| {
+            let schema = emit_state_value_schema_ref(ctx, ty)?;
+            let actual = encode_aggregate_state_value(ctx, actual, ty)?;
+            let expected = encode_aggregate_state_value(ctx, expected, ty)?;
+            Some((actual, expected, schema))
+        })
+        .unwrap_or((zero, zero, zero));
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::DirectHelperSyscall {
+        dest,
+        syscall: ivm_abi::syscalls::SYSCALL_KOTO_TEST_ASSERT_FAILED,
+        args: vec![site, actual, expected, schema, message.unwrap_or(zero)],
+    });
+    ctx.current_instr(Instr::Assert { cond });
+    ctx.finish_current(Terminator::Jump(passed));
+    ctx.start_block(passed);
+}
+/// Hand the compiler-owned call-site record of the next `test::` helper call to the test host.
+///
+/// Emitted after the helper's operands are evaluated, so a helper call nested inside an operand
+/// cannot overwrite the site. The host-private syscall exists only in test projections.
+fn emit_test_call_site(
+    ctx: &mut LowerCtx,
+    site: Option<&TypedExpr>,
+    vars: &mut HashMap<String, Temp>,
+) {
+    let Some(site) = site.filter(|site| matches!(site.kind(), semantic::ExprKind::Bytes(_))) else {
+        return;
+    };
+    let site = lower_expr(ctx, site, vars);
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::DirectHelperSyscall {
+        dest,
+        syscall: ivm_abi::syscalls::SYSCALL_KOTO_TEST_CALL_SITE,
+        args: vec![site],
+    });
 }
 /// Emit canonical value equality shared by operators and List.contains.
 fn emit_typed_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> Temp {
@@ -4367,7 +4433,19 @@ fn lower_signature_builtin_call(
             });
         }
         Builtin::VerifySignature => {
-            let scheme = lower_expr_as_u64(ctx, &args[3], vars);
+            // Semantic analysis folds the `SignatureScheme::*` argument into
+            // its host scheme code, so no runtime value can name another scheme.
+            let scheme = match args.get(3).map(semantic::TypedExpr::kind) {
+                Some(semantic::ExprKind::IntLiteral(code)) => {
+                    emit_i64_const(ctx, code.try_to_i64().unwrap_or(0))
+                }
+                _ => {
+                    ctx.record_error(
+                        "internal error: signature scheme was not folded to its host code".into(),
+                    );
+                    emit_i64_const(ctx, 0)
+                }
+            };
             ctx.current_instr(Instr::VerifySignature {
                 dest,
                 message,
@@ -4593,19 +4671,14 @@ fn lower_transfer_batch_call(
     emit_i64_const(ctx, 0)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MapFallback {
-    Eager,
-    Lazy,
-    Insert,
-}
-
+/// Lower the absent-key fallback of `map.get_or_insert(key, default)`: return
+/// the stored value, or evaluate `default` only when the key is absent, write
+/// it, and return it.
 fn lower_map_fallback(
     ctx: &mut LowerCtx,
     map_expr: &TypedExpr,
     key_expr: &TypedExpr,
     default_expr: &TypedExpr,
-    fallback: MapFallback,
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let key = lower_expr(ctx, key_expr, vars);
@@ -4638,9 +4711,7 @@ fn lower_map_fallback(
 
         ctx.start_block(default_block);
         let default = lower_expr(ctx, default_expr, vars);
-        if fallback == MapFallback::Insert {
-            let _ = lower_state_map_set_value(ctx, &base, key, &spec.key, &spec.value, default);
-        }
+        let _ = lower_state_map_set_value(ctx, &base, key, &spec.key, &spec.value, default);
         copy_runtime_value_words(ctx, default, &spec.value, &result_words);
         ctx.finish_current(Terminator::Jump(end_block));
 
@@ -4649,10 +4720,6 @@ fn lower_map_fallback(
     }
 
     let map = lower_expr(ctx, map_expr, vars);
-    let eager_default = match fallback {
-        MapFallback::Eager => Some(lower_expr(ctx, default_expr, vars)),
-        MapFallback::Lazy | MapFallback::Insert => None,
-    };
     let stored_key = ctx.new_temp();
     let stored_value = ctx.new_temp();
     ctx.current_instr(Instr::MapLoadPair {
@@ -4683,17 +4750,12 @@ fn lower_map_fallback(
     ctx.finish_current(Terminator::Jump(end_block));
 
     ctx.start_block(default_block);
-    let default = match eager_default {
-        Some(default) => default,
-        None => lower_expr(ctx, default_expr, vars),
-    };
-    if fallback == MapFallback::Insert {
-        ctx.current_instr(Instr::MapSet {
-            map,
-            key,
-            value: default,
-        });
-    }
+    let default = lower_expr(ctx, default_expr, vars);
+    ctx.current_instr(Instr::MapSet {
+        map,
+        key,
+        value: default,
+    });
     ctx.current_instr(Instr::Binary {
         dest: result,
         op: BinaryOp::Add,
@@ -4958,7 +5020,7 @@ fn lower_surface_builtin_call(
             });
             d
         }
-        Builtin::GetBlobHex => {
+        Builtin::GetBytesHex => {
             let j = lower_expr(ctx, &args[0], vars);
             let k = lower_expr(ctx, &args[1], vars);
             let d = ctx.new_temp();
@@ -4968,6 +5030,17 @@ fn lower_surface_builtin_call(
                 key: k,
             });
             d
+        }
+        Builtin::GetString | Builtin::GetBool => {
+            let json = lower_expr(ctx, &args[0], vars);
+            let key = lower_expr(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(if builtin == Builtin::GetString {
+                Instr::JsonGetString { dest, json, key }
+            } else {
+                Instr::JsonGetBool { dest, json, key }
+            });
+            dest
         }
         Builtin::TriggerEvent => {
             let dest = ctx.new_temp();
@@ -4984,7 +5057,7 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::SysvarAuthority { dest });
             dest
         }
-        Builtin::CurrentTimeMs => {
+        Builtin::TransactionTimeMs => {
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::CurrentTimeMs { dest: scalar });
             emit_int_from_u64(ctx, scalar)
@@ -5381,11 +5454,11 @@ fn lower_surface_builtin_call(
             emit_i64_const(ctx, 0)
         }
         Builtin::Assert => {
-            let cond = lower_expr(ctx, &args[0], vars);
-            if args.len() > 1 {
-                let _ = lower_expr(ctx, &args[1], vars);
-            }
-            ctx.current_instr(Instr::Assert { cond });
+            // Typed arguments: condition, optional message, compiler-owned assertion site.
+            let (site, values) = args.split_last().expect("typed assertion site");
+            let cond = lower_expr(ctx, &values[0], vars);
+            let message = values.get(1).map(|message| lower_expr(ctx, message, vars));
+            emit_test_assertion(ctx, cond, site, None, message, vars);
             emit_i64_const(ctx, 0)
         }
         Builtin::Require => {
@@ -5425,20 +5498,24 @@ fn lower_surface_builtin_call(
             emit_i64_const(ctx, 0)
         }
         Builtin::AssertEq => {
-            let left = lower_expr(ctx, &args[0], vars);
-            let right = lower_expr(ctx, &args[1], vars);
-            let equal = ctx.new_temp();
-            ctx.current_instr(Instr::NumericCompare {
-                dest: equal,
-                op: BinaryOp::Eq,
-                left,
-                right,
-                kind: WideNumericKind::Int,
-            });
-            ctx.current_instr(Instr::Assert { cond: equal });
+            // Typed arguments: actual, expected, optional message, compiler-owned assertion site.
+            let (site, values) = args.split_last().expect("typed assertion site");
+            let ty = values[0].ty.clone();
+            let actual = lower_expr(ctx, &values[0], vars);
+            let expected = lower_expr(ctx, &values[1], vars);
+            let message = values.get(2).map(|message| lower_expr(ctx, message, vars));
+            let equal = emit_typed_value_eq(ctx, actual, expected, &ty);
+            emit_test_assertion(
+                ctx,
+                equal,
+                site,
+                Some((actual, expected, &ty)),
+                message,
+                vars,
+            );
             emit_i64_const(ctx, 0)
         }
-        Builtin::SetAccountDetail => {
+        Builtin::SetAccountMetadata => {
             let account = lower_expr(ctx, &args[0], vars);
             let key = lower_expr(ctx, &args[1], vars);
             let value = lower_expr(ctx, &args[2], vars);
@@ -5483,7 +5560,13 @@ fn lower_surface_builtin_call(
             let to = lower_expr(ctx, &args[1], vars);
             let asset = lower_expr(ctx, &args[2], vars);
             let amt = lower_expr_as_numeric(ctx, &args[3], vars);
-            let dataspace = lower_expr(ctx, &args[4], vars);
+            // An omitted `dataspace:` is the constant zero word: the host then
+            // applies the definition's global policy and rejects a
+            // dataspace-restricted definition.
+            let dataspace = match args.get(4) {
+                Some(dataspace) => lower_expr(ctx, dataspace, vars),
+                None => emit_i64_const(ctx, 0),
+            };
             ctx.current_instr(Instr::TransferAsset {
                 from,
                 to,
@@ -5545,29 +5628,16 @@ fn lower_surface_builtin_call(
             emit_i64_const(ctx, 0)
         }
         Builtin::RegisterAsset => {
+            // `spec` and `mintable` were folded by semantic analysis into
+            // the `ivm_registration` words every host decodes.
             let asset = lower_expr(ctx, &args[0], vars);
-            let symbol = lower_expr(ctx, &args[1], vars);
-            let quantity = lower_expr_as_u64(ctx, &args[2], vars);
+            let name = lower_expr(ctx, &args[1], vars);
+            let spec = lower_expr_as_u64(ctx, &args[2], vars);
             let mintable = lower_expr_as_u64(ctx, &args[3], vars);
             ctx.current_instr(Instr::RegisterAsset {
                 asset,
-                symbol,
-                quantity,
-                mintable,
-            });
-            emit_i64_const(ctx, 0)
-        }
-        Builtin::CreateNewAsset => {
-            let asset = lower_expr(ctx, &args[0], vars);
-            let symbol = lower_expr(ctx, &args[1], vars);
-            let quantity = lower_expr_as_u64(ctx, &args[2], vars);
-            let account = lower_expr(ctx, &args[3], vars);
-            let mintable = lower_expr_as_u64(ctx, &args[4], vars);
-            ctx.current_instr(Instr::CreateNewAsset {
-                asset,
-                symbol,
-                quantity,
-                account,
+                name,
+                spec,
                 mintable,
             });
             emit_i64_const(ctx, 0)
@@ -5599,17 +5669,17 @@ fn lower_surface_builtin_call(
         }
         Builtin::SetTriggerEnabled => {
             let name = lower_expr(ctx, &args[0], vars);
-            let enabled = lower_expr_as_u64(ctx, &args[1], vars);
+            let enabled = lower_expr(ctx, &args[1], vars);
             ctx.current_instr(Instr::SetTriggerEnabled { name, enabled });
             emit_i64_const(ctx, 0)
         }
-        Builtin::CreateRole => {
+        Builtin::RegisterRole => {
             let name = lower_expr(ctx, &args[0], vars);
             let json = lower_expr(ctx, &args[1], vars);
             ctx.current_instr(Instr::CreateRole { name, json });
             emit_i64_const(ctx, 0)
         }
-        Builtin::DeleteRole => {
+        Builtin::UnregisterRole => {
             let name = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::DeleteRole { name });
             emit_i64_const(ctx, 0)
@@ -5968,15 +6038,7 @@ fn lower_surface_builtin_call(
             });
             lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp)
         }
-        Builtin::GetOrDefault => {
-            lower_map_fallback(ctx, &args[0], &args[1], &args[2], MapFallback::Eager, vars)
-        }
-        Builtin::GetOr => {
-            lower_map_fallback(ctx, &args[0], &args[1], &args[2], MapFallback::Lazy, vars)
-        }
-        Builtin::Ensure => {
-            lower_map_fallback(ctx, &args[0], &args[1], &args[2], MapFallback::Insert, vars)
-        }
+        Builtin::GetOrInsert => lower_map_fallback(ctx, &args[0], &args[1], &args[2], vars),
         Builtin::StateMapRemove => lower_state_map_remove_option(ctx, args, vars),
         Builtin::KeysTake2 | Builtin::ValuesTake2 => {
             let (key, value) = lower_take2_pair(ctx, args, vars);
@@ -5990,6 +6052,20 @@ fn lower_surface_builtin_call(
             let (key, value) = lower_take2_pair(ctx, args, vars);
             emit_tuple_pack(ctx, vec![key, value])
         }
+        Builtin::TestSetBlockHeight
+        | Builtin::TestAdvanceBlocks
+        | Builtin::TestSetTransactionTimeMs => {
+            // Host-private test syscall with one unsigned scalar operand; a negative or
+            // oversized int traps in the checked conversion before the host is reached.
+            let value = lower_expr_as_u64(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::DirectHelperSyscall {
+                dest,
+                syscall: builtin.operation_syscalls()[0],
+                args: vec![value],
+            });
+            emit_i64_const(ctx, 0)
+        }
         Builtin::TestInvokeEntrypoint
         | Builtin::TestInvokeEntrypointAs
         | Builtin::TestExpectRejectAs
@@ -5998,6 +6074,22 @@ fn lower_surface_builtin_call(
         | Builtin::TestActorPublicKey
         | Builtin::TestActorSign => {
             unreachable!("test helpers use their dedicated lowering paths")
+        }
+        Builtin::NumericSpecUnconstrained
+        | Builtin::NumericSpecInteger
+        | Builtin::NumericSpecFractional
+        | Builtin::MintableInfinitely
+        | Builtin::MintableOnce
+        | Builtin::MintableNot
+        | Builtin::MintableLimited
+        | Builtin::SignatureSchemeEd25519
+        | Builtin::SignatureSchemeSecp256k1
+        | Builtin::SignatureSchemeMlDsa => {
+            ctx.record_error(format!(
+                "`{}` is a compile-time argument value and has no runtime lowering",
+                builtin.source_name()
+            ));
+            emit_i64_const(ctx, 0)
         }
     }
 }
@@ -6623,6 +6715,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         _ => panic!("runtime entrypoint must be a literal string"),
                     };
                     let payload = lower_expr(ctx, &args[target_index + 1], vars);
+                    emit_test_call_site(ctx, args.get(target_index + 2), vars);
                     match &expr.ty {
                         semantic::Type::Unit => {
                             ctx.current_instr(Instr::InvokeEntrypointAs {
@@ -6675,6 +6768,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     };
                     let payload = lower_expr(ctx, &args[2], vars);
                     let expectation = lower_expr(ctx, &args[3], vars);
+                    emit_test_call_site(ctx, args.get(4), vars);
                     ctx.current_instr(Instr::ExpectRejectAs {
                         actor,
                         entrypoint,
@@ -6688,6 +6782,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
                         _ => panic!("actor_account actor must be a literal string"),
                     };
+                    emit_test_call_site(ctx, args.get(1), vars);
                     let dest = ctx.new_temp();
                     ctx.current_instr(Instr::ActorAccount { dest, actor });
                     dest
@@ -6697,6 +6792,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
                         _ => panic!("actor_public_key actor must be a literal string"),
                     };
+                    emit_test_call_site(ctx, args.get(1), vars);
                     let dest = ctx.new_temp();
                     ctx.current_instr(Instr::ActorPublicKey { dest, actor });
                     dest
@@ -6707,6 +6803,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         _ => panic!("actor_sign actor must be a literal string"),
                     };
                     let message = lower_expr(ctx, &args[1], vars);
+                    emit_test_call_site(ctx, args.get(2), vars);
                     let dest = ctx.new_temp();
                     ctx.current_instr(Instr::ActorSign {
                         dest,
@@ -8475,16 +8572,15 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(converted.len(), 3);
+        assert_eq!(converted.len(), 2);
         for scalar in instructions
             .iter()
             .filter_map(|instruction| match instruction {
-                Instr::VerifySignature { scheme, .. } => Some(*scheme),
                 Instr::Sm4CcmSeal {
                     tag_len: Some(tag_len),
                     ..
                 } => Some(*tag_len),
-                Instr::SetTriggerEnabled { enabled, .. } => Some(*enabled),
+                Instr::SetAccountQuorum { quorum, .. } => Some(*quorum),
                 _ => None,
             })
         {
@@ -8498,8 +8594,8 @@ mod tests {
     fn scalar_protocol_literals_outside_u64_fail_lowering() {
         for value in ["-1", "18446744073709551616"] {
             let source = format!(
-                "fn verify(bytes payload) {{ let _ok = crypto::verify_signature(\
-                    message: payload, signature: payload, public_key: payload, scheme: {value}); }}"
+                "fn seal(bytes payload) {{ let _sealed = crypto::sm4_ccm::seal(\
+                    key: payload, nonce: payload, aad: payload, payload: payload, tag_length: {value}); }}"
             );
             let typed = analyze(&parse(&source).expect("parse scalar boundary overflow"))
                 .expect("analyze scalar boundary overflow");
@@ -9007,6 +9103,61 @@ mod tests {
         }
         assert!(saw_invoke, "expected InvokeEntrypointAs in lowered test");
         assert!(saw_expect_reject, "expected ExpectRejectAs in lowered test");
+    }
+    #[test]
+    fn test_helper_calls_announce_their_source_site_first() {
+        let src = include_str!("ir/fixtures/v1/i028.ko");
+        let typed = semantic::SemanticContext::with_capabilities(false, true)
+            .analyze(&parse(src).expect("parse invoke_entrypoint_as"))
+            .expect("analyze invoke_entrypoint_as");
+        let ir = lower_with_cap(&typed, 2).expect("lower invoke_entrypoint_as");
+        let test_fn = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "drive_run")
+            .expect("test function");
+        let instructions = test_fn
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        let helper_calls = instructions
+            .iter()
+            .enumerate()
+            .filter(|(_, instruction)| {
+                matches!(
+                    instruction,
+                    Instr::InvokeEntrypointAs { .. } | Instr::ExpectRejectAs { .. }
+                )
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(helper_calls.len(), 2);
+        for index in helper_calls {
+            assert!(
+                instructions[..index]
+                    .iter()
+                    .rev()
+                    .any(|instruction| matches!(
+                        instruction,
+                        Instr::DirectHelperSyscall { syscall, args, .. }
+                            if *syscall == ivm_abi::syscalls::SYSCALL_KOTO_TEST_CALL_SITE
+                                && args.len() == 1
+                    )),
+                "helper call at {index} has no call-site announcement"
+            );
+        }
+        let announcements = instructions
+            .iter()
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::DirectHelperSyscall { syscall, .. }
+                        if *syscall == ivm_abi::syscalls::SYSCALL_KOTO_TEST_CALL_SITE
+                )
+            })
+            .count();
+        assert_eq!(announcements, 2, "one announcement per helper call");
     }
     #[test]
     fn invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic() {
@@ -9733,13 +9884,15 @@ mod tests {
         Some(true),
         Some(false)
     );
-    alias_lowering_case!(
-        lower_account_id_invalid_non_alias_literal_keeps_static_account_dataref,
-        AliasSource::Exact(r#"fn main() { let _acct = AccountId::parse("merchant"); }"#),
-        AliasLiteral::DataRef(DataRefKind::Account, "merchant"),
-        Some(false),
-        Some(true)
-    );
+    #[test]
+    fn account_id_invalid_non_alias_literal_is_rejected_before_lowering() {
+        // A literal that is neither canonical I105 nor alias-shaped never
+        // reaches lowering: semantic analysis rejects it with its span.
+        let program = parse(r#"fn main() { let _acct = AccountId::parse("merchant"); }"#)
+            .expect("parse invalid account literal");
+        let error = analyze(&program).expect_err("non-alias invalid AccountId literal");
+        assert_eq!(error.code, "E_INVALID_ID_LITERAL");
+    }
     alias_lowering_case!(
         lower_account_id_canonical_literal_to_static_account_dataref,
         AliasSource::CanonicalAccount,
@@ -10003,8 +10156,8 @@ mod tests {
         );
     }
     #[test]
-    fn lower_get_or_on_state_map_reads_without_writing() {
-        let src = "state StateMap<int, int> balances; fn f() -> int { return balances.get_or(key: 1, default: 7); }";
+    fn lower_get_unwrap_or_on_state_map_reads_without_writing() {
+        let src = "state StateMap<int, int> balances; fn f() -> int { return balances.get(1).unwrap_or(7); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -10022,9 +10175,87 @@ mod tests {
         }
         assert!(
             state_gets >= 1,
-            "expected get_or durable path to read state"
+            "expected get(...).unwrap_or durable path to read state"
         );
-        assert_eq!(state_sets, 0, "get_or must not mutate durable state");
+        assert_eq!(
+            state_sets, 0,
+            "get(...).unwrap_or must not mutate durable state"
+        );
+    }
+    #[test]
+    fn lower_get_or_insert_writes_the_default_only_on_absence() {
+        let src = "state StateMap<int, int> balances; kotoage fn f() -> int authorize(\"W\") { return balances.get_or_insert(1, 7); }";
+        let typed = analyze(&parse(src).unwrap()).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let (mut state_gets, mut state_sets) = (0, 0);
+        for instr in f.blocks.iter().flat_map(|bb| &bb.instrs) {
+            match instr {
+                Instr::StateGet { .. } => state_gets += 1,
+                Instr::StateSet { .. } => state_sets += 1,
+                _ => {}
+            }
+        }
+        assert!(state_gets >= 1, "get_or_insert reads before writing");
+        assert!(state_sets >= 1, "get_or_insert writes the default");
+    }
+    #[test]
+    fn transfer_without_dataspace_passes_a_null_scope_word() {
+        let src = "fn pay(AccountId from, AccountId to, AssetDefinitionId asset) { ledger::asset::transfer(source: from, destination: to, asset_definition: asset, amount: 1); }";
+        let typed = analyze(&parse(src).unwrap()).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let instrs = ir.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|bb| &bb.instrs)
+            .collect::<Vec<_>>();
+        let dataspace = instrs
+            .iter()
+            .find_map(|instr| match instr {
+                Instr::TransferAsset { dataspace, .. } => Some(*dataspace),
+                _ => None,
+            })
+            .expect("transfer lowers to TransferAsset");
+        assert!(
+            instrs.iter().any(|instr| matches!(
+                instr,
+                Instr::Const { dest, value: 0 } if *dest == dataspace
+            )),
+            "an omitted dataspace must lower to the zero scope word"
+        );
+    }
+    #[test]
+    fn signature_scheme_values_pass_their_host_scheme_code() {
+        for (path, code) in [
+            ("SignatureScheme::Ed25519", 1),
+            ("SignatureScheme::Secp256k1", 2),
+            ("SignatureScheme::MlDsa", 3),
+        ] {
+            let src = format!(
+                "fn check(bytes payload) -> bool {{ return crypto::verify_signature(message: payload, signature: payload, public_key: payload, scheme: {path}); }}"
+            );
+            let typed = analyze(&parse(&src).unwrap()).unwrap();
+            let ir = lower(&typed).expect("lower");
+            let instrs = ir.functions[0]
+                .blocks
+                .iter()
+                .flat_map(|bb| &bb.instrs)
+                .collect::<Vec<_>>();
+            let scheme = instrs
+                .iter()
+                .find_map(|instr| match instr {
+                    Instr::VerifySignature { scheme, .. } => Some(*scheme),
+                    _ => None,
+                })
+                .expect("verification lowers to VerifySignature");
+            assert!(
+                instrs.iter().any(|instr| matches!(
+                    instr,
+                    Instr::Const { dest, value } if *dest == scheme && *value == code
+                )),
+                "{path} must pass scheme code {code}"
+            );
+        }
     }
     #[test]
     fn scalar_state_map_get_reuses_presence_blob() {

@@ -11,11 +11,17 @@ use std::{
 
 /// Load the deterministic client configuration shared by deployment fixtures.
 fn fixture_config() -> Result<Config> {
+    fixture_config_at("http://127.0.0.1:8080/")
+}
+
+/// Load the deterministic fixture configuration bound to one Torii URL.
+fn fixture_config_at(torii_url: &str) -> Result<Config> {
     // Public deterministic SDK test identity; never a runtime deployment account.
-    let source = br#"
+    let source = format!(
+        r#"
 chain = "00000000-0000-0000-0000-000000000000"
 network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-torii_url = "http://127.0.0.1:8080/"
+torii_url = "{torii_url}"
 [account]
 chain_discriminant = 753
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -24,10 +30,13 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
 time_to_live_ms = 100000
 status_timeout_ms = 100000
 nonce = false
-"#;
-    let (config, _) =
-        Config::load_bytes_with_musubi_publication(Path::new("deployment-test.toml"), source)
-            .map_err(|error| eyre!(format!("{error:?}")))?;
+"#
+    );
+    let (config, _) = Config::load_bytes_with_musubi_publication(
+        Path::new("deployment-test.toml"),
+        source.as_bytes(),
+    )
+    .map_err(|error| eyre!(format!("{error:?}")))?;
     Ok(config)
 }
 
@@ -250,6 +259,7 @@ impl DeploymentTransport for MockTransport {
             block_height: 2,
             scope: "global".to_owned(),
             resolved_from: "state".to_owned(),
+            charge: None,
         })
     }
 }
@@ -1054,5 +1064,66 @@ fn fallible_progress_stops_native_work_without_erasing_original_evidence() -> Re
         assert_eq!(transport.submitted.borrow().len(), expected_dispatches);
         assert_eq!(transport.waited.borrow().len(), expected_dispatches);
     }
+    Ok(())
+}
+#[test]
+fn applied_charge_reporting_never_fails_an_applied_transaction() -> Result<()> {
+    // A port with no listener: the transaction-details read fails and reports no charge.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")?
+        .local_addr()?
+        .port();
+    let config = fixture_config_at(&format!("http://127.0.0.1:{port}/"))?;
+    let client = Client::new(config)?;
+    let hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([7; 32]));
+    assert_eq!(read_applied_charge(&client, hash), None);
+    Ok(())
+}
+#[test]
+fn applied_evidence_reconciles_by_finality_and_keeps_the_first_charge() -> Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let journal = Journal::open(&temporary.path().join("journal"), true)?;
+    let unreported = AppliedEvidence {
+        hash: "a".repeat(64),
+        terminal_kind: "Applied".to_owned(),
+        block_height: 9,
+        scope: "global".to_owned(),
+        resolved_from: "state".to_owned(),
+        charge: None,
+    };
+    let charged = AppliedEvidence {
+        charge: Some(AppliedCharge {
+            gas_used: 4_321,
+            fee_asset: AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::parse_fully_qualified("wonderland.universal")?,
+                "xor".parse()?,
+            ),
+            fee_amount: iroha_primitives::numeric::Quantity::from(3_u32),
+        }),
+        ..unreported.clone()
+    };
+    assert!(charged.same_finality(&unreported));
+    assert_ne!(charged, unreported);
+    let later_height = AppliedEvidence {
+        block_height: 10,
+        ..unreported.clone()
+    };
+    assert!(!later_height.same_finality(&unreported));
+    // Nothing retained yet: the read-only reconciliation returns the current observation.
+    assert_eq!(
+        retained_applied_evidence(&journal, 0, unreported.clone())?,
+        unreported
+    );
+    assert!(!journal.exists("applied-0000.json")?);
+    // The first observation is retained; a later one without its charge still recovers it.
+    assert_eq!(
+        retain_applied_evidence(&journal, 0, charged.clone())?,
+        charged
+    );
+    assert_eq!(
+        retain_applied_evidence(&journal, 0, unreported.clone())?,
+        charged
+    );
+    assert_eq!(retained_applied_evidence(&journal, 0, unreported)?, charged);
+    assert!(retain_applied_evidence(&journal, 0, later_height).is_err());
     Ok(())
 }

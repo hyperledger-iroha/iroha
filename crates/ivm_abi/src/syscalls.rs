@@ -167,7 +167,11 @@ pub const SYSCALL_TLV_LEN: u32 = 0x77;
 /// JSON object field getters.
 ///
 /// All JSON_GET_* syscalls return a compiler-owned `Option<T>` sum handle.
-/// Missing keys, non-object roots, and type mismatches return `Option::none`.
+/// Only a key absent from the JSON object returns `Option::none`. A non-object
+/// root, or a present field whose JSON value is not the getter's exact
+/// canonical type (for example a JSON number where `JSON_GET_INT` requires a
+/// canonical decimal string), traps with `DecodeError`, so malformed input never
+/// reads as absent.
 ///
 /// Args: r10 = &Json, r11 = &Name key
 /// Ret:  r10 = `Option<T>` sum handle whose active payload is one ABI word.
@@ -672,6 +676,14 @@ pub const SYSCALL_JSON_GET_INT: u32 = 0x01_0160;
 pub const SYSCALL_JSON_GET_DECIMAL: u32 = 0x01_0161;
 /// Parse a canonical non-negative base-10 JSON string into a `quantity` pointer.
 pub const SYSCALL_JSON_GET_QUANTITY: u32 = 0x01_0162;
+/// Read a JSON string field as a Kotodama `string`.
+///
+/// Active payload: one `&Blob` pointer holding the string's UTF-8 bytes.
+pub const SYSCALL_JSON_GET_STRING: u32 = 0x01_0166;
+/// Read a JSON boolean field as a Kotodama `bool`.
+///
+/// Active payload: one scalar word, `1` for `true` and `0` for `false`.
+pub const SYSCALL_JSON_GET_BOOL: u32 = 0x01_0167;
 /// Return whether `number` belongs to the exact Kotodama V1 numeric surface.
 #[must_use]
 pub const fn is_numeric_v1_syscall(number: u32) -> bool {
@@ -696,6 +708,8 @@ pub const fn is_json_getter_syscall(number: u32) -> bool {
             | SYSCALL_JSON_GET_INT
             | SYSCALL_JSON_GET_DECIMAL
             | SYSCALL_JSON_GET_QUANTITY
+            | SYSCALL_JSON_GET_STRING
+            | SYSCALL_JSON_GET_BOOL
     )
 }
 /// Kotodama test-runner helper: resolve a fixture actor alias to an `AccountId` TLV.
@@ -717,6 +731,23 @@ pub const SYSCALL_KOTO_TEST_ACTOR_SIGN: u32 = 0x00FE_0003;
 pub const SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS: u32 = 0x00FE_0004;
 /// Kotodama test-runner helper: assert that an actor entrypoint invocation rejects.
 pub const SYSCALL_KOTO_TEST_EXPECT_REJECT_AS: u32 = 0x00FE_0005;
+/// Kotodama test-runner helper: report a failed `test::assert`/`test::assert_eq` and stop.
+///
+/// `x10` is a `Blob` with the compiler's canonical assertion-site record; `x11`/`x12` are the
+/// actual/expected values as canonical state-value records (or zero), `x13` their schema (or
+/// zero), and `x14` a dynamic message pointer (or zero). The host never returns success.
+pub const SYSCALL_KOTO_TEST_ASSERT_FAILED: u32 = 0x00FE_0006;
+/// Kotodama test-runner helper: set the block height reported to later seiyaku calls (`x10`).
+pub const SYSCALL_KOTO_TEST_SET_BLOCK_HEIGHT: u32 = 0x00FE_0007;
+/// Kotodama test-runner helper: advance the block height by `x10` blocks.
+pub const SYSCALL_KOTO_TEST_ADVANCE_BLOCKS: u32 = 0x00FE_0008;
+/// Kotodama test-runner helper: set the transaction time in milliseconds (`x10`).
+pub const SYSCALL_KOTO_TEST_SET_TRANSACTION_TIME_MS: u32 = 0x00FE_0009;
+/// Kotodama test-runner helper: record the source location of the next test-helper call.
+///
+/// `x10` is a `Blob` with the compiler's canonical call-site record; the host reports a failure of
+/// the following seiyaku call or actor helper at that location.
+pub const SYSCALL_KOTO_TEST_CALL_SITE: u32 = 0x00FE_000A;
 /// Return whether `number` belongs to the host-private Kotodama test surface.
 pub const fn is_koto_test_syscall(number: u32) -> bool {
     matches!(
@@ -726,6 +757,11 @@ pub const fn is_koto_test_syscall(number: u32) -> bool {
             | SYSCALL_KOTO_TEST_ACTOR_SIGN
             | SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS
             | SYSCALL_KOTO_TEST_EXPECT_REJECT_AS
+            | SYSCALL_KOTO_TEST_ASSERT_FAILED
+            | SYSCALL_KOTO_TEST_SET_BLOCK_HEIGHT
+            | SYSCALL_KOTO_TEST_ADVANCE_BLOCKS
+            | SYSCALL_KOTO_TEST_SET_TRANSACTION_TIME_MS
+            | SYSCALL_KOTO_TEST_CALL_SITE
     )
 }
 /// Returns whether a syscall number is allowed for the given ABI policy.
@@ -977,6 +1013,8 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_JSON_GET_INT
             | SYSCALL_JSON_GET_DECIMAL
             | SYSCALL_JSON_GET_QUANTITY
+            | SYSCALL_JSON_GET_STRING
+            | SYSCALL_JSON_GET_BOOL
             | SYSCALL_JSON_OBJECT
             | SYSCALL_JSON_SET_I64
             | SYSCALL_JSON_SET_ACCOUNT_ID
@@ -1319,6 +1357,8 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_JSON_GET_INT, "JSON_GET_INT"),
     (SYSCALL_JSON_GET_DECIMAL, "JSON_GET_DECIMAL"),
     (SYSCALL_JSON_GET_QUANTITY, "JSON_GET_QUANTITY"),
+    (SYSCALL_JSON_GET_STRING, "JSON_GET_STRING"),
+    (SYSCALL_JSON_GET_BOOL, "JSON_GET_BOOL"),
     (
         SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
         "SET_ASSET_TRANSFER_AVAILABILITY",
@@ -3093,6 +3133,11 @@ mod tests {
             SYSCALL_KOTO_TEST_ACTOR_SIGN,
             SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
             SYSCALL_KOTO_TEST_EXPECT_REJECT_AS,
+            SYSCALL_KOTO_TEST_ASSERT_FAILED,
+            SYSCALL_KOTO_TEST_SET_BLOCK_HEIGHT,
+            SYSCALL_KOTO_TEST_ADVANCE_BLOCKS,
+            SYSCALL_KOTO_TEST_SET_TRANSACTION_TIME_MS,
+            SYSCALL_KOTO_TEST_CALL_SITE,
         ];
         for syscall in private {
             assert!(is_koto_test_syscall(syscall));

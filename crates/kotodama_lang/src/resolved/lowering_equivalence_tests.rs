@@ -270,39 +270,19 @@ impl<'a> RecursiveLowerer<'a> {
         let global = self.globals.all.contains_key(name);
         if name == "_" {
             // A discard owns provenance but never enters the value namespace.
-        } else if reserved || previous.is_some() || global {
-            let message = if reserved {
-                format!("local binding `{name}` uses a compiler-reserved name")
-            } else if previous.is_some() {
-                format!("local binding `{name}` duplicates or shadows an existing binding")
-            } else if self.globals.consts.contains_key(name) {
-                format!("local binding `{name}` shadows a const declaration")
-            } else if self.globals.states.contains_key(name) {
-                format!("local binding `{name}` shadows a state declaration")
-            } else if self.globals.functions.contains_key(name) {
-                format!("local binding `{name}` shadows a function declaration")
-            } else if self.globals.structs.contains_key(name) {
-                format!("local binding `{name}` shadows a struct declaration")
-            } else {
-                format!("local binding `{name}` shadows a source declaration")
-            };
-            let mut diagnostic = Diagnostic::error(
-                if reserved {
-                    "E_RESERVED_DECLARATION"
-                } else {
-                    "E_LOCAL_SHADOWING"
-                },
-                DiagnosticPhase::Resolve,
-                message,
-                self.source_span(source),
-            );
-            if let Some(previous) = previous
-                && let Some(label) = self.binding_source_label(previous)
-            {
-                diagnostic.labels.push(label);
-            }
-            self.diagnostics.push(diagnostic);
         } else {
+            if reserved || previous.is_some() || global {
+                let diagnostic = local_collision_diagnostic(
+                    &self.globals,
+                    self.source,
+                    name,
+                    properties.kind,
+                    reserved,
+                    previous.and_then(|previous| self.binding_source_label(previous)),
+                    self.source_span(source),
+                );
+                self.diagnostics.push(diagnostic);
+            }
             visible.insert(name.to_owned(), id);
         }
         self.arena.bindings.push(ResolvedBinding {
@@ -331,6 +311,8 @@ impl<'a> RecursiveLowerer<'a> {
         } else if let Some(code) = self.globals.error_codes.get(name) {
             Some(ResolvedValueTarget::ErrorCode(*code))
         } else if kotodama_surface::source_policy::V1_ROUNDING_PATHS.contains(&name)
+            || kotodama_surface::builtins::Builtin::nominal_value(name)
+                .is_some_and(kotodama_surface::builtins::Builtin::is_nominal_path)
             || name == "null"
             || crate::testing::REJECTION_SELECTORS.contains(&name)
         {
@@ -352,12 +334,9 @@ impl<'a> RecursiveLowerer<'a> {
                 .map(|code| ResolvedValueTarget::ErrorCode(*code))
         };
         if target.is_none() {
-            self.diagnostics.push(Diagnostic::error(
-                "K2002",
-                DiagnosticPhase::Resolve,
-                format!("unknown value `{name}`"),
-                self.source_span(source),
-            ));
+            let diagnostic =
+                unknown_value_diagnostic(&self.globals, name, visible, self.source_span(source));
+            self.diagnostics.push(diagnostic);
         }
         target
     }
@@ -1091,6 +1070,7 @@ fn targets(ast: &SpannedProgram) -> GlobalTargets {
         external_structs: BTreeSet::from(["External".to_owned()]),
         external_consts: BTreeSet::from(["EXTERNAL_CONST".to_owned()]),
         external_error_codes: BTreeMap::from([("ExternalError::No".to_owned(), 7)]),
+        declarations: BTreeMap::new(),
     };
     for fact in &ast.facts.declarations {
         if fact.kind == DeclarationKind::Parameter {

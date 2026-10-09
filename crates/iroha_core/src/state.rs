@@ -57,8 +57,9 @@ use iroha_data_model::{
         rekey::{AccountAlias, AccountRekeyRecord},
     },
     asset::{
-        Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
-        AssetEntry, AssetValue, Mintable, id::AssetId,
+        Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias,
+        AssetDefinitionDirectHomeV1, AssetDefinitionId, AssetEntry, AssetValue, Mintable,
+        id::AssetId,
     },
     block::{
         BlockHeader, SignedBlock,
@@ -1222,6 +1223,7 @@ macro_rules! with_world_overlay_fields {
             axt_policies,
             axt_handle_counters,
             axt_asset_incarnations,
+            asset_definition_direct_homes,
             axt_replay_ledger,
             axt_spend_nonce_ledger,
             axt_source_transfer_replay_ledger,
@@ -2983,6 +2985,22 @@ pub enum LaneLifecycleError {
         /// Live definition that prevents retirement.
         asset_definition_id: AssetDefinitionId,
     },
+    /// A lifecycle update would change the class of a dataspace that already had lanes.
+    #[error("lane lifecycle cannot change the visibility of existing dataspace {dataspace_id:?}")]
+    DataspaceVisibilityChanged {
+        /// Dataspace whose public or restricted class would change.
+        dataspace_id: DataSpaceId,
+    },
+    /// A lifecycle update would leave a dataspace that homes asset definitions without lanes.
+    #[error(
+        "dataspace {dataspace_id:?} homes asset definition {asset_definition_id} and must keep at least one lane"
+    )]
+    HomedDataspaceWithoutLanes {
+        /// Home dataspace that would be left without lanes.
+        dataspace_id: DataSpaceId,
+        /// Live definition homed in that dataspace.
+        asset_definition_id: AssetDefinitionId,
+    },
     /// A persisted asset alias still occupies a dataspace namespace selected for retirement.
     #[error(
         "dataspace alias `{dataspace_alias}` cannot be retired while asset definition {asset_definition_id} retains alias `{asset_alias}`; clear the asset-definition alias binding first"
@@ -4011,6 +4029,9 @@ pub struct WorldData {
     pub(crate) axt_handle_counters: Storage<DataSpaceId, AxtHandleCounterRecord>,
     /// Consensus-persisted live incarnation of each registered asset definition.
     pub(crate) axt_asset_incarnations: Storage<AssetDefinitionId, AxtAssetIncarnationV1>,
+    /// Immutable direct dataspace home of each live directly homed asset-definition incarnation.
+    pub(crate) asset_definition_direct_homes:
+        Storage<AssetDefinitionId, AssetDefinitionDirectHomeV1>,
     /// Consensus-persisted replay ledger for unexpired AXT handles.
     pub(crate) axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord>,
     // TODO: Consume this permanent nonce authority atomically with verified
@@ -4987,6 +5008,9 @@ pub struct WorldBlockFields<'world> {
     /// Live asset-definition incarnations for this block scope.
     pub(crate) axt_asset_incarnations:
         StorageField<'world, AssetDefinitionId, AxtAssetIncarnationV1>,
+    /// Immutable direct dataspace homes of live definitions for this block scope.
+    pub(crate) asset_definition_direct_homes:
+        StorageField<'world, AssetDefinitionId, AssetDefinitionDirectHomeV1>,
     /// Consensus-persisted replay ledger for unexpired AXT handles.
     pub(crate) axt_replay_ledger: StorageField<'world, AxtHandleReplayKey, AxtReplayRecord>,
     /// Permanent once-only issuer nonces for authenticated source-anchored spends.
@@ -6099,6 +6123,7 @@ impl WorldBlock<'_> {
             axt_policies,
             axt_handle_counters,
             axt_asset_incarnations,
+            asset_definition_direct_homes,
             axt_replay_ledger,
             axt_spend_nonce_ledger,
             axt_source_transfer_replay_ledger,
@@ -6636,6 +6661,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Live asset-definition incarnations for this transaction.
     pub(crate) axt_asset_incarnations:
         StorageTransaction<'block, AssetDefinitionId, AxtAssetIncarnationV1>,
+    /// Immutable direct dataspace homes of live definitions for this transaction.
+    pub(crate) asset_definition_direct_homes:
+        StorageTransaction<'block, AssetDefinitionId, AssetDefinitionDirectHomeV1>,
     /// Bounded replay ledger for AXT handles.
     pub(crate) axt_replay_ledger: StorageTransaction<'block, AxtHandleReplayKey, AxtReplayRecord>,
     /// Permanent once-only issuer nonce ledger for this transaction.
@@ -7688,6 +7716,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let removed = self.remove_quantity_definition(definition_id);
         if let Some(definition) = removed.as_ref() {
             self.axt_asset_incarnations.remove(definition_id.clone());
+            // A direct home exists only while its incarnation is live.
+            self.asset_definition_direct_homes
+                .remove(definition_id.clone());
             if let Some(transition) = definition.confidential_policy().pending_transition() {
                 self.untrack_confidential_policy_transition(
                     definition_id,
@@ -8840,6 +8871,9 @@ pub struct WorldView<'world> {
     /// Live asset-definition incarnations.
     pub(crate) axt_asset_incarnations:
         StorageView<'world, AssetDefinitionId, AxtAssetIncarnationV1>,
+    /// Immutable direct dataspace homes of live definitions.
+    pub(crate) asset_definition_direct_homes:
+        StorageView<'world, AssetDefinitionId, AssetDefinitionDirectHomeV1>,
     /// Bounded replay ledger for AXT handles.
     pub(crate) axt_replay_ledger: StorageView<'world, AxtHandleReplayKey, AxtReplayRecord>,
     /// Permanent once-only issuer nonce ledger view.
@@ -12589,8 +12623,6 @@ pub struct StateBlockFields<'state> {
     pending_da_pin_intents: Option<PendingDaPinIntentBundle>,
     /// Autoscale lane lifecycle prepared by this block and applied during commit.
     pending_autoscale_lifecycle: Option<PendingAutoscaleLaneLifecycle>,
-    /// Protected direct-home parameter transition accepted from native instructions.
-    pending_asset_definition_registry: Option<PendingAssetDefinitionRegistry>,
     /// Block-local canonical autoscale sample history, published only on commit.
     autoscale_sample_history: VecDeque<AutoscaleSampleRecord>,
     /// Whether this block appended a canonical autoscale sample record.
@@ -13782,10 +13814,6 @@ pub struct StateTransaction<'block, 'state> {
     lane_lifecycle_already_staged_in_block: bool,
     /// Lifecycle transition staged by this transaction until atomic apply.
     pending_lane_lifecycle: Option<PendingAutoscaleLaneLifecycle>,
-    /// Parent block protected-home transition, updated only on transaction apply.
-    block_pending_asset_definition_registry: &'block mut Option<PendingAssetDefinitionRegistry>,
-    /// Native protected-home transition retained by this rollback scope.
-    pending_asset_definition_registry: Option<PendingAssetDefinitionRegistry>,
     /// Lane governance manifest registry snapshot for this transaction.
     pub lane_manifests: LaneManifestRegistryHandle,
     /// Lane privacy commitment registry snapshot for this transaction.
@@ -20652,6 +20680,8 @@ macro_rules! world_ro_accessors {
             storage axt_handle_counters: DataSpaceId => AxtHandleCounterRecord;
             /// Live incarnation token for every registered asset definition.
             storage axt_asset_incarnations: AssetDefinitionId => AxtAssetIncarnationV1;
+            /// Immutable direct dataspace home of each live directly homed definition.
+            storage asset_definition_direct_homes: AssetDefinitionId => AssetDefinitionDirectHomeV1;
             /// Bounded replay ledger keyed by handle fingerprint.
             storage axt_replay_ledger: AxtHandleReplayKey => AxtReplayRecord;
             /// Permanent replay ledger keyed by full issuer context and fresh spend nonce.
@@ -21574,17 +21604,15 @@ pub trait WorldReadOnly {
             .flat_map(BTreeSet::iter)
             .filter_map(|definition_id| self.asset_definitions().get(definition_id))
     }
-    /// Read an exact direct dataspace home from its protected native parameter.
+    /// Read an exact direct dataspace home from its canonical direct-home row.
     ///
-    /// Absence remains absence. Malformed, stale-incarnation or contradictory state fails.
+    /// Absence remains absence. An orphan, foreign-incarnation or contradictory row fails.
     fn asset_definition_dataspace(
         &self,
         id: &AssetDefinitionId,
     ) -> Result<Option<DataSpaceId>, ParseError> {
-        let registry = asset_definition_registry_from_parameters(self.parameters())?;
-        asset_definition_dataspace_from_registry(
-            registry.as_ref(),
-            id,
+        direct_home_dataspace(
+            self.asset_definition_direct_homes().get(id),
             self.asset_definitions().get(id),
             self.axt_asset_incarnations().get(id),
         )
@@ -24487,6 +24515,7 @@ impl WorldTransaction<'_, '_> {
             axt_policies: _,
             axt_handle_counters: _,
             axt_asset_incarnations: _,
+            asset_definition_direct_homes: _,
             axt_replay_ledger: _,
             axt_spend_nonce_ledger: _,
             axt_source_transfer_replay_ledger: _,
@@ -24939,6 +24968,7 @@ impl WorldTransaction<'_, '_> {
         self.axt_policies.apply();
         self.axt_handle_counters.apply();
         self.axt_asset_incarnations.apply();
+        self.asset_definition_direct_homes.apply();
         self.axt_replay_ledger.apply();
         self.axt_spend_nonce_ledger.apply();
         self.axt_source_transfer_replay_ledger.apply();
@@ -25104,14 +25134,23 @@ impl WorldTransaction<'_, '_> {
     }
     /// Resolve the balance partition scope for an asset definition in the current execution context.
     ///
+    /// A dataspace-restricted definition homed in a non-universal dataspace H always resolves to
+    /// `Dataspace(H)` and is usable only on route H. Universal-homed restricted definitions keep
+    /// one partition per execution dataspace.
+    ///
     /// # Errors
-    /// Returns an error when the definition is missing or when a dataspace-restricted definition
-    /// is accessed without an execution dataspace context.
+    /// Returns an error when the definition is missing, when a confined definition is accessed
+    /// on another route, or when a universal-homed restricted definition is accessed without an
+    /// execution dataspace context.
     pub fn resolve_asset_balance_scope(
         &self,
         definition_id: &AssetDefinitionId,
     ) -> Result<AssetBalanceScope, Error> {
         let definition = self.asset_definition(definition_id).map_err(Error::from)?;
+        if let Some(home) = self.confined_asset_home(&definition)? {
+            self.ensure_confined_asset_route(home)?;
+            return Ok(AssetBalanceScope::Dataspace(home));
+        }
         match definition.balance_scope_policy() {
             AssetBalancePolicy::Global => Ok(AssetBalanceScope::Global),
             AssetBalancePolicy::DataspaceRestricted => self
@@ -25123,6 +25162,29 @@ impl WorldTransaction<'_, '_> {
                             .into(),
                     )
                 }),
+        }
+    }
+    /// Home that confines every balance of `definition`, if it is confined.
+    fn confined_asset_home(
+        &self,
+        definition: &AssetDefinition,
+    ) -> Result<Option<DataSpaceId>, Error> {
+        crate::read_scope::confined_home(self, definition).map_err(|error| {
+            Error::InvariantViolation(format!("invalid asset-definition home: {error}").into())
+        })
+    }
+    /// A confined definition moves only on its home route.
+    fn ensure_confined_asset_route(&self, home: DataSpaceId) -> Result<(), Error> {
+        match self.current_dataspace_id {
+            Some(route) if route != home => Err(Error::InvariantViolation(
+                format!(
+                    "asset confined to home dataspace {} cannot be accessed on route {}",
+                    home.as_u64(),
+                    route.as_u64()
+                )
+                .into(),
+            )),
+            _ => Ok(()),
         }
     }
     /// Canonicalize an [`AssetId`] into the effective execution scope.
@@ -25147,6 +25209,25 @@ impl WorldTransaction<'_, '_> {
             AssetBalanceScope::Dataspace(dataspace) => Some(*dataspace),
             AssetBalanceScope::Global => None,
         };
+        if let Some(home) = self.confined_asset_home(&definition)? {
+            if requested_dataspace.is_some_and(|requested| requested != home)
+                || dataspace_hint.is_some_and(|hint| hint != home)
+            {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "asset confined to home dataspace {} cannot use another balance scope",
+                        home.as_u64()
+                    )
+                    .into(),
+                ));
+            }
+            self.ensure_confined_asset_route(home)?;
+            return Ok(AssetId::with_scope(
+                id.definition().clone(),
+                id.account().clone(),
+                AssetBalanceScope::Dataspace(home),
+            ));
+        }
         let ambient_dataspace = self.current_dataspace_id;
         let compatible_requested_dataspace =
             requested_dataspace.filter(|requested| match ambient_dataspace {
@@ -32211,17 +32292,12 @@ impl State {
         attempted_aliases: &BTreeSet<String>,
         attempted_ids: &BTreeSet<DataSpaceId>,
     ) -> Result<(), LaneLifecycleError> {
-        if let Some(registry) =
-            asset_definition_registry_from_parameters(&self.world.parameters.view())
-                .map_err(|error| LaneLifecycleError::RuntimeCatalog(error.to_string()))?
-        {
-            for (asset_definition_id, binding) in registry.bindings {
-                if binding.active && !attempted_ids.contains(&binding.dataspace_id) {
-                    return Err(LaneLifecycleError::AssetDefinitionDataspaceInUse {
-                        dataspace_id: binding.dataspace_id,
-                        asset_definition_id,
-                    });
-                }
+        for (asset_definition_id, home) in self.world.asset_definition_direct_homes.view().iter() {
+            if !attempted_ids.contains(&home.dataspace_id) {
+                return Err(LaneLifecycleError::AssetDefinitionDataspaceInUse {
+                    dataspace_id: home.dataspace_id,
+                    asset_definition_id: asset_definition_id.clone(),
+                });
             }
         }
         let retired_aliases = current_catalog
@@ -32969,6 +33045,7 @@ impl State {
                     allow_autoscale_managed_changes,
                 )?;
                 let world = self.world.view_retaining(&mut releases.world);
+                ensure_homed_dataspaces_keep_lanes(&world, &lifecycle_update.updated_catalog)?;
                 let mut prospective_nexus = nexus.clone();
                 prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
                 prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
@@ -33424,6 +33501,10 @@ impl State {
         ensure_runtime_catalog_lanes_preserved(
             &self.world.view_retaining(&mut releases.world),
             &nexus.lane_catalog,
+            &expected_update.updated_catalog,
+        )?;
+        ensure_homed_dataspaces_keep_lanes(
+            &self.world.view_retaining(&mut releases.world),
             &expected_update.updated_catalog,
         )?;
         expected_update.previous_dataspace_catalog = nexus.dataspace_catalog.clone();
@@ -33898,6 +33979,7 @@ fn prepare_lane_lifecycle_update(
     }
     let updated_catalog = nexus.lane_catalog.apply_lifecycle(plan)?;
     validate_lane_authority_geometry(&updated_catalog, &nexus.dataspace_catalog)?;
+    ensure_dataspace_classes_preserved(&nexus.lane_catalog, &updated_catalog)?;
     let added_lane_ids: BTreeSet<_> = plan.additions.iter().map(|lane| lane.id).collect();
     ensure_catalog_autoscale_lanes_consistent(
         nexus,
@@ -37636,8 +37718,6 @@ impl<'state> StateBlock<'state> {
             block_pending_lane_lifecycle: &mut fields.pending_autoscale_lifecycle,
             lane_lifecycle_already_staged_in_block,
             pending_lane_lifecycle: None,
-            block_pending_asset_definition_registry: &mut fields.pending_asset_definition_registry,
-            pending_asset_definition_registry: None,
             lane_manifests,
             lane_privacy_registry,
             lane_compliance: fields.lane_compliance.clone(),
@@ -40751,6 +40831,7 @@ impl StateTransaction<'_, '_> {
             &self.nexus.lane_catalog,
             &lifecycle_update.updated_catalog,
         )?;
+        ensure_homed_dataspaces_keep_lanes(&self.world, &lifecycle_update.updated_catalog)?;
         let mut prospective_nexus = self.nexus.clone();
         prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
         prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
@@ -41523,10 +41604,6 @@ impl StateTransaction<'_, '_> {
             || self.canonical_runtime.touched_value().is_some()
             || !self.fastpq_source_quota.allows_apply()
             || !self.pending_transfer_transcripts.is_empty()
-            || self.pending_asset_definition_registry.is_some()
-            || self
-                .validate_asset_definition_registry_transaction()
-                .is_err()
         {
             *self.block_execution_output_plan =
                 Some(output_capacity::ExecutionOutputPlanState::Poisoned);
@@ -41583,11 +41660,6 @@ impl StateTransaction<'_, '_> {
             Some("transaction FASTPQ source preparation does not authorize application")
         } else if !self.execution_effects_allow_apply() {
             Some("transaction execution-effect owner does not authorize application")
-        } else if self
-            .validate_asset_definition_registry_transaction()
-            .is_err()
-        {
-            Some("protected asset-definition home changed outside its native transaction")
         } else if self.world.execution_deferral.borrow().is_some() {
             Some("transaction execution was locally deferred")
         } else {
@@ -41636,8 +41708,6 @@ impl StateTransaction<'_, '_> {
             block_lane_incarnation_activation_heights,
             block_pending_lane_lifecycle,
             pending_lane_lifecycle,
-            block_pending_asset_definition_registry,
-            pending_asset_definition_registry,
             zk,
             block_zk,
             block_privacy_budget,
@@ -41683,9 +41753,6 @@ impl StateTransaction<'_, '_> {
             public_lane_staking_status_overlay,
             ..
         } = self;
-        if let Some(pending) = pending_asset_definition_registry {
-            *block_pending_asset_definition_registry = Some(pending);
-        }
         if let Some(pending) = pending_lane_lifecycle {
             *block_nexus = nexus.clone();
             *block_lane_manifests = Arc::clone(&pending.updated_lane_manifests);
@@ -43925,908 +43992,7 @@ pub(crate) fn run_empty_network_owner_fixture<'state>(
 #[path = "state/nexus_fee_receipt.rs"]
 mod nexus_fee_receipt;
 
-/// A native instruction's exact protected-parameter predecessor and accepted successor.
-#[derive(Clone)]
-struct PendingAssetDefinitionRegistry {
-    before: Option<iroha_data_model::parameter::CustomParameter>,
-    after: iroha_data_model::parameter::CustomParameter,
-}
-
-/// Borrow the reserved entry without allocating an identifier for absent authority.
-pub(crate) fn asset_definition_registry_parameter(
-    parameters: &Parameters,
-) -> Option<&iroha_data_model::parameter::custom::CustomParameter> {
-    parameters.custom().iter().find_map(|(id, value)| {
-        (id.name().as_ref()
-            == iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1::PARAMETER_ID_STR)
-            .then_some(value)
-    })
-}
-
-/// Decode protected direct-home authority without synthesizing an empty parameter.
-pub(crate) fn asset_definition_registry_from_parameters(
-    parameters: &Parameters,
-) -> Result<Option<iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1>, ParseError> {
-    use iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1;
-    let Some(custom) = asset_definition_registry_parameter(parameters) else {
-        return Ok(None);
-    };
-    AssetDefinitionDataspaceRegistryV1::from_custom_parameter(custom)?
-        .map(Some)
-        .ok_or_else(|| ParseError::new("protected asset-definition registry identity mismatch"))
-}
-
-impl StateTransaction<'_, '_> {
-    fn validate_asset_definition_registry_transaction(&self) -> Result<(), ParseError> {
-        use iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1;
-        let id = AssetDefinitionDataspaceRegistryV1::parameter_id();
-        let current = self.world.parameters.get().custom().get(&id);
-        let original = self
-            .world
-            .parameters
-            .get_before_transaction()
-            .custom()
-            .get(&id);
-        if self
-            .block_pending_asset_definition_registry
-            .as_ref()
-            .is_some_and(|pending| original != Some(&pending.after))
-        {
-            return Err(ParseError::new(
-                "direct-home transaction predecessor differs from the staged block registry",
-            ));
-        }
-        let expected = self
-            .pending_asset_definition_registry
-            .as_ref()
-            .map(|pending| &pending.after)
-            .or_else(|| {
-                self.world
-                    .parameters
-                    .get_before_transaction()
-                    .custom()
-                    .get(&id)
-            });
-        if current != expected {
-            return Err(ParseError::new(
-                "protected direct-home parameter changed without its native transition",
-            ));
-        }
-        asset_definition_registry_from_parameters(self.world.parameters.get())?;
-        Ok(())
-    }
-
-    fn stage_asset_definition_registry(
-        &mut self,
-        registry: iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1,
-    ) -> Result<(), ParseError> {
-        use iroha_data_model::{asset::AssetDefinitionDataspaceRegistryV1, parameter::Parameter};
-        self.validate_asset_definition_registry_transaction()?;
-        let id = AssetDefinitionDataspaceRegistryV1::parameter_id();
-        let after = registry.into_custom_parameter()?;
-        let before = self
-            .pending_asset_definition_registry
-            .as_ref()
-            .or(self.block_pending_asset_definition_registry.as_ref())
-            .map(|pending| pending.before.clone())
-            .unwrap_or_else(|| {
-                self.world
-                    .parameters
-                    .get_before_transaction()
-                    .custom()
-                    .get(&id)
-                    .cloned()
-            });
-        self.world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(after.clone()));
-        self.pending_asset_definition_registry =
-            Some(PendingAssetDefinitionRegistry { before, after });
-        Ok(())
-    }
-
-    /// Bind a newly installed definition incarnation to its explicitly authorized dataspace.
-    pub(crate) fn register_direct_asset_definition_home(
-        &mut self,
-        id: &AssetDefinitionId,
-        incarnation: AxtAssetIncarnationV1,
-        dataspace_id: DataSpaceId,
-    ) -> Result<(), ParseError> {
-        use iroha_data_model::asset::{
-            AssetDefinitionDataspaceBindingV1, AssetDefinitionDataspaceRegistryV1,
-            AssetDefinitionHome,
-        };
-        self.validate_asset_definition_registry_transaction()?;
-        let definition = self.world.asset_definitions.get(id).ok_or_else(|| {
-            ParseError::new("direct-home registration requires its installed definition")
-        })?;
-        if self
-            .world
-            .asset_definitions
-            .get_before_transaction(id)
-            .is_some()
-            && self.world.axt_asset_incarnations.get_before_transaction(id) == Some(&incarnation)
-        {
-            return Err(ParseError::new(
-                "direct-home registration requires a newly installed incarnation",
-            ));
-        }
-        AssetDefinitionHome::from_definition(definition, Some(dataspace_id))?;
-        if self.world.axt_asset_incarnations.get(id) != Some(&incarnation) {
-            return Err(ParseError::new(
-                "direct-home registration requires the exact installed incarnation",
-            ));
-        }
-        let mut registry = asset_definition_registry_from_parameters(self.world.parameters.get())?
-            .unwrap_or_else(|| AssetDefinitionDataspaceRegistryV1 {
-                version: AssetDefinitionDataspaceRegistryV1::VERSION,
-                bindings: BTreeMap::new(),
-            });
-        if let Some(previous) = registry.bindings.get(id) {
-            if previous.active || previous.incarnation == incarnation {
-                return Err(ParseError::new(
-                    "direct-home registration cannot rebind a live or retired incarnation",
-                ));
-            }
-        }
-        registry.bindings.insert(
-            id.clone(),
-            AssetDefinitionDataspaceBindingV1 {
-                asset_definition_id: id.clone(),
-                incarnation,
-                dataspace_id,
-                active: true,
-            },
-        );
-        self.stage_asset_definition_registry(registry)
-    }
-
-    /// Retain a tombstone before the exact registered definition incarnation is removed.
-    pub(crate) fn retire_direct_asset_definition_home(
-        &mut self,
-        id: &AssetDefinitionId,
-    ) -> Result<(), ParseError> {
-        self.validate_asset_definition_registry_transaction()?;
-        let Some(mut registry) =
-            asset_definition_registry_from_parameters(self.world.parameters.get())?
-        else {
-            return Ok(());
-        };
-        let Some(binding) = registry.bindings.get_mut(id) else {
-            return Ok(());
-        };
-        if !binding.active {
-            return Ok(());
-        }
-        if self.world.asset_definitions.get(id).is_none()
-            || self.world.axt_asset_incarnations.get(id) != Some(&binding.incarnation)
-        {
-            return Err(ParseError::new(
-                "direct-home retirement requires its exact live incarnation",
-            ));
-        }
-        binding.active = false;
-        self.stage_asset_definition_registry(registry)
-    }
-}
-
-impl StateBlock<'_> {
-    /// Reject unstaged changes to protected authority against the actual block predecessor.
-    fn validate_owned_asset_definition_registry_overlay(&self) -> Result<(), ParseError> {
-        use iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1;
-        let id = AssetDefinitionDataspaceRegistryV1::parameter_id();
-        let before = self.world.parameters.get_before_block().custom().get(&id);
-        let after = self.world.parameters.get().custom().get(&id);
-        let previous_registry =
-            asset_definition_registry_from_parameters(self.world.parameters.get_before_block())?;
-        let next_registry = asset_definition_registry_from_parameters(self.world.parameters.get())?;
-        validate_asset_definition_registry_transition(
-            previous_registry.as_ref(),
-            next_registry.as_ref(),
-        )?;
-        if let Some(next) = &next_registry {
-            for (id, binding) in &next.bindings {
-                if binding.active
-                    && self.world.asset_definitions.get_before_block(id).is_some()
-                    && self.world.axt_asset_incarnations.get_before_block(id)
-                        == Some(&binding.incarnation)
-                    && previous_registry
-                        .as_ref()
-                        .and_then(|registry| registry.bindings.get(id))
-                        != Some(binding)
-                {
-                    return Err(ParseError::new(
-                        "direct home changed for an existing block-predecessor incarnation",
-                    ));
-                }
-            }
-        }
-        match self.pending_asset_definition_registry.as_ref() {
-            None if before != after => {
-                return Err(ParseError::new(
-                    "unstaged block changed the protected direct-home registry",
-                ));
-            }
-            Some(pending) if pending.before.as_ref() != before || Some(&pending.after) != after => {
-                return Err(ParseError::new(
-                    "direct-home registry differs from its retained predecessor or native successor",
-                ));
-            }
-            _ => {}
-        }
-        validate_asset_definition_registry_world(&self.world)
-    }
-}
-
-fn validate_asset_definition_registry_world(
-    world: &(impl WorldReadOnly + ?Sized),
-) -> Result<(), ParseError> {
-    if let Some(registry) = asset_definition_registry_from_parameters(world.parameters())? {
-        for id in registry.bindings.keys() {
-            asset_definition_dataspace_from_registry(
-                Some(&registry),
-                id,
-                world.asset_definitions().get(id),
-                world.axt_asset_incarnations().get(id),
-            )?;
-        }
-    }
-    Ok(())
-}
-
-/// Check one exact definition/incarnation against already decoded protected authority.
-pub(crate) fn asset_definition_dataspace_from_registry(
-    registry: Option<&iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1>,
-    id: &AssetDefinitionId,
-    definition: Option<&AssetDefinition>,
-    incarnation: Option<&AxtAssetIncarnationV1>,
-) -> Result<Option<DataSpaceId>, ParseError> {
-    asset_definition_dataspace_from_binding(
-        registry.and_then(|registry| registry.bindings.get(id)),
-        definition,
-        incarnation,
-    )
-}
-
-/// Check the same home invariant using an admitted or ordinary registry binding.
-pub(crate) fn asset_definition_dataspace_from_binding(
-    binding: Option<&iroha_data_model::asset::AssetDefinitionDataspaceBindingV1>,
-    definition: Option<&AssetDefinition>,
-    incarnation: Option<&AxtAssetIncarnationV1>,
-) -> Result<Option<DataSpaceId>, ParseError> {
-    let Some(binding) = binding else {
-        return Ok(None);
-    };
-    if !binding.active {
-        if definition.is_some() && incarnation == Some(&binding.incarnation) {
-            return Err(ParseError::new(
-                "retired direct-home incarnation is still live",
-            ));
-        }
-        return Ok(None);
-    }
-    let definition =
-        definition.ok_or_else(|| ParseError::new("active direct home has no definition"))?;
-    if incarnation != Some(&binding.incarnation) {
-        return Err(ParseError::new(
-            "direct home differs from the live definition incarnation",
-        ));
-    }
-    iroha_data_model::asset::AssetDefinitionHome::from_definition(
-        definition,
-        Some(binding.dataspace_id),
-    )?;
-    Ok(Some(binding.dataspace_id))
-}
-
-/// An established incarnation keeps its home, including after retirement.
-pub(crate) fn validate_asset_definition_registry_transition(
-    before: Option<&iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1>,
-    after: Option<&iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1>,
-) -> Result<(), ParseError> {
-    let Some(before) = before else {
-        return Ok(());
-    };
-    let after =
-        after.ok_or_else(|| ParseError::new("protected direct-home registry cannot be deleted"))?;
-    for (id, previous) in &before.bindings {
-        let next = after
-            .bindings
-            .get(id)
-            .ok_or_else(|| ParseError::new("direct-home tombstones cannot be deleted"))?;
-        validate_asset_definition_home_transition(previous, Some(next))?;
-    }
-    Ok(())
-}
-
-/// Preserve the same immutable-incarnation transition for either registry read representation.
-pub(crate) fn validate_asset_definition_home_transition(
-    previous: &iroha_data_model::asset::AssetDefinitionDataspaceBindingV1,
-    next: Option<&iroha_data_model::asset::AssetDefinitionDataspaceBindingV1>,
-) -> Result<(), ParseError> {
-    let next = next.ok_or_else(|| ParseError::new("direct-home tombstones cannot be deleted"))?;
-    if previous.incarnation == next.incarnation
-        && (previous.dataspace_id != next.dataspace_id || (!previous.active && next.active))
-    {
-        return Err(ParseError::new(
-            "direct-home incarnation cannot be rebound or resurrected",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-impl World {
-    /// Atomically seed a direct-dataspace definition and exact balances in an owned test world.
-    ///
-    /// This fixture does not authorize production registration. The instruction executor
-    /// remains responsible for SNS ownership, route and visibility checks. Supplied balance
-    /// buckets stay independent from the definition's immutable home.
-    ///
-    /// # Errors
-    /// Rejects invalid or duplicate homes/definitions/aliases, mismatched balance identities,
-    /// missing balance accounts, invalid quantities and supply overflow without publishing
-    /// any part of the fixture.
-    pub fn insert_direct_asset_definition_with_assets_for_testing(
-        &mut self,
-        mut definition: AssetDefinition,
-        dataspace_id: DataSpaceId,
-        assets: impl IntoIterator<Item = Asset>,
-    ) -> Result<(), Error> {
-        use iroha_data_model::asset::{
-            AssetDefinitionDataspaceBindingV1, AssetDefinitionDataspaceRegistryV1,
-            AssetDefinitionHome,
-        };
-        let fixture_error = |error: ParseError| Error::InvariantViolation(error.to_string().into());
-        let id = definition.id().clone();
-        AssetDefinitionHome::from_definition(&definition, Some(dataspace_id))
-            .map_err(fixture_error)?;
-        if self.asset_definitions.view().get(&id).is_some() {
-            return Err(Error::InvariantViolation(
-                "direct-home fixture cannot replace an existing definition".into(),
-            ));
-        }
-        let incarnation =
-            AxtAssetIncarnationV1::try_from_bytes(*Hash::new(id.aid_bytes()).as_ref())
-                .map_err(|error| Error::InvariantViolation(error.to_string().into()))?;
-        let mut registry = asset_definition_registry_from_parameters(&self.parameters.view())
-            .map_err(fixture_error)?
-            .unwrap_or_else(|| AssetDefinitionDataspaceRegistryV1 {
-                version: AssetDefinitionDataspaceRegistryV1::VERSION,
-                bindings: BTreeMap::new(),
-            });
-        if registry.bindings.contains_key(&id) {
-            return Err(Error::InvariantViolation(
-                "direct-home fixture cannot replace an existing binding".into(),
-            ));
-        }
-        registry.bindings.insert(
-            id.clone(),
-            AssetDefinitionDataspaceBindingV1 {
-                asset_definition_id: id.clone(),
-                incarnation,
-                dataspace_id,
-                active: true,
-            },
-        );
-        let parameter = registry.into_custom_parameter().map_err(fixture_error)?;
-        let alias = definition.alias.take();
-        if let Some(alias) = alias.as_ref()
-            && let Some(domain) = alias.domain_segment()
-        {
-            let domain_id =
-                DomainId::try_new(domain, alias.dataspace_segment()).map_err(fixture_error)?;
-            if self.domains.view().get(&domain_id).is_none() {
-                return Err(Error::InvariantViolation(
-                    format!("fixture alias `{alias}` references missing domain {domain_id}").into(),
-                ));
-            }
-        }
-        definition.total_quantity = Quantity::zero();
-        // Match the ordinary constructor's last supplied balance per exact asset identity.
-        let balances: BTreeMap<_, _> = assets
-            .into_iter()
-            .map(IntoKeyValue::into_key_value)
-            .collect();
-        let mut block = self.block();
-        {
-            let mut transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
-            transaction.insert_asset_definition_entry(id.clone(), definition);
-            transaction
-                .axt_asset_incarnations
-                .insert(id.clone(), incarnation);
-            transaction
-                .parameters
-                .get_mut()
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(parameter));
-            if let Some(alias) = alias {
-                transaction.bind_asset_definition_alias(&id, alias, None, None, 0)?;
-            }
-            for (asset_id, value) in balances {
-                if asset_id.definition() != &id
-                    || transaction.resolve_asset_id_for_scope_hint(&asset_id, None)? != asset_id
-                {
-                    return Err(Error::InvariantViolation(
-                        "direct-home fixture requires its exact original balance identity".into(),
-                    ));
-                }
-                transaction.asset_or_insert_exact(&asset_id, value.as_ref().clone())?;
-                transaction.increase_asset_total_amount(&id, value.as_ref())?;
-            }
-            if transaction.execution_deferral.borrow().is_some() {
-                return Err(Error::InvariantViolation(
-                    "direct-home fixture execution was locally deferred".into(),
-                ));
-            }
-            transaction.apply();
-        }
-        block.commit();
-        Ok(())
-    }
-
-    /// Install a direct home for an existing definition in an owned test world.
-    pub fn set_asset_definition_dataspace_for_testing(
-        &mut self,
-        id: AssetDefinitionId,
-        dataspace_id: DataSpaceId,
-    ) -> Result<(), ParseError> {
-        use iroha_data_model::asset::{
-            AssetDefinitionDataspaceBindingV1, AssetDefinitionDataspaceRegistryV1,
-            AssetDefinitionHome,
-        };
-        let definitions = self.asset_definitions.view();
-        let definition = definitions.get(&id).ok_or_else(|| {
-            ParseError::new("direct-home fixture requires an existing definition")
-        })?;
-        AssetDefinitionHome::from_definition(definition, Some(dataspace_id))?;
-        let incarnation = self
-            .axt_asset_incarnations
-            .view()
-            .get(&id)
-            .copied()
-            .unwrap_or_else(|| {
-                AxtAssetIncarnationV1::try_from_bytes(*Hash::new(id.aid_bytes()).as_ref())
-                    .expect("fixture hash is a valid nonzero incarnation")
-            });
-        let mut registry = asset_definition_registry_from_parameters(&self.parameters.view())?
-            .unwrap_or_else(|| AssetDefinitionDataspaceRegistryV1 {
-                version: AssetDefinitionDataspaceRegistryV1::VERSION,
-                bindings: BTreeMap::new(),
-            });
-        if registry.bindings.contains_key(&id) {
-            return Err(ParseError::new(
-                "direct-home fixture cannot replace an existing binding",
-            ));
-        }
-        registry.bindings.insert(
-            id.clone(),
-            AssetDefinitionDataspaceBindingV1 {
-                asset_definition_id: id.clone(),
-                incarnation,
-                dataspace_id,
-                active: true,
-            },
-        );
-        let parameter = registry.into_custom_parameter()?;
-        drop(definitions);
-        let mut block = self.block();
-        {
-            let mut transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
-            transaction.axt_asset_incarnations.insert(id, incarnation);
-            transaction
-                .parameters
-                .get_mut()
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(parameter));
-            transaction.apply();
-        }
-        block.commit();
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod direct_asset_home_tests {
-    use super::*;
-    use iroha_data_model::{
-        asset::{AssetDefinitionDataspaceRegistryV1, AssetDefinitionHome},
-        prelude::Registrable,
-    };
-    use iroha_test_samples::ALICE_ID;
-
-    fn id() -> AssetDefinitionId {
-        AssetDefinitionId::derive_from_components(
-            DomainId::try_new("homes", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        )
-    }
-
-    fn definition() -> AssetDefinition {
-        AssetDefinition::numeric(id(), "Direct home", AssetBalancePolicy::Global, None)
-            .build(&ALICE_ID)
-    }
-
-    fn world() -> World {
-        World::with(
-            [],
-            [iroha_data_model::account::Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
-            [definition()],
-        )
-    }
-
-    fn incarnation(seed: u8) -> AxtAssetIncarnationV1 {
-        AxtAssetIncarnationV1::try_from_bytes(Hash::new([seed]).into()).unwrap()
-    }
-
-    fn state() -> State {
-        State::new_for_testing(
-            World::default(),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-        )
-    }
-
-    fn add_native(tx: &mut StateTransaction<'_, '_>, ds: DataSpaceId) {
-        tx.world.insert_asset_definition_entry(id(), definition());
-        let incarnation = incarnation(1);
-        tx.world.axt_asset_incarnations.insert(id(), incarnation);
-        tx.register_direct_asset_definition_home(&id(), incarnation, ds)
-            .unwrap();
-    }
-
-    #[test]
-    fn restricted_direct_fixture_preserves_home_bucket_alias_and_supply() {
-        let owner = (*ALICE_ID).clone();
-        let home = DataSpaceId::new(7);
-        let bucket = DataSpaceId::new(8);
-        let mut definition = AssetDefinition::numeric(
-            id(),
-            "Direct home",
-            AssetBalancePolicy::DataspaceRestricted,
-            None,
-        )
-        .build(&owner);
-        let alias: AssetDefinitionAlias = "coin#universal".parse().unwrap();
-        definition.alias = Some(alias.clone());
-        let asset_id =
-            AssetId::with_scope(id(), owner.clone(), AssetBalanceScope::Dataspace(bucket));
-        let mut world = World::with(
-            [],
-            [iroha_data_model::account::Account::new(owner.clone()).build(&owner)],
-            [],
-        );
-        world
-            .insert_direct_asset_definition_with_assets_for_testing(
-                definition.clone(),
-                home,
-                [Asset::new(asset_id.clone(), Quantity::from(3_u32))],
-            )
-            .unwrap();
-        let view = world.view();
-        let stored = view.asset_definition(&id()).unwrap();
-        assert!(stored.owning_domain().is_none());
-        assert_eq!(
-            stored.balance_scope_policy(),
-            AssetBalancePolicy::DataspaceRestricted
-        );
-        assert_eq!(stored.total_quantity(), &Quantity::from(3_u32));
-        assert_eq!(
-            view.asset_definition_home(&id()).unwrap(),
-            Some(AssetDefinitionHome::Dataspace(home))
-        );
-        assert_eq!(view.asset_definition_id_by_alias(&alias), Some(id()));
-        assert_eq!(
-            view.asset(&asset_id).unwrap().value().as_ref(),
-            &Quantity::from(3_u32)
-        );
-        drop(view);
-        world.validate_numeric_asset_invariants().unwrap();
-        world.validate_quantity_ledger_invariants().unwrap();
-        world.rebuild_asset_definition_indexes().unwrap();
-        let before = (*world.parameters.view()).clone();
-        assert!(
-            world
-                .insert_direct_asset_definition_with_assets_for_testing(
-                    definition,
-                    DataSpaceId::new(9),
-                    [],
-                )
-                .is_err()
-        );
-        assert_eq!(*world.parameters.view(), before);
-        assert_eq!(
-            world.view().asset_definition_dataspace(&id()).unwrap(),
-            Some(home)
-        );
-    }
-
-    #[test]
-    fn restricted_direct_fixture_rejects_invalid_home_and_rolls_back_partial_setup() {
-        let owner = (*ALICE_ID).clone();
-        let mut definition = AssetDefinition::numeric(
-            id(),
-            "Direct home",
-            AssetBalancePolicy::DataspaceRestricted,
-            None,
-        )
-        .build(&owner);
-        let alias: AssetDefinitionAlias = "coin#universal".parse().unwrap();
-        definition.alias = Some(alias.clone());
-        let mut world = World::default();
-        let before = (*world.parameters.view()).clone();
-        assert!(
-            world
-                .insert_direct_asset_definition_with_assets_for_testing(
-                    definition.clone(),
-                    DataSpaceId::UNIVERSAL,
-                    [],
-                )
-                .is_err()
-        );
-        // The absent holder fails after the new definition, alias and home are staged.
-        let asset_id = AssetId::with_scope(
-            id(),
-            owner.clone(),
-            AssetBalanceScope::Dataspace(DataSpaceId::new(8)),
-        );
-        assert!(
-            world
-                .insert_direct_asset_definition_with_assets_for_testing(
-                    definition.clone(),
-                    DataSpaceId::new(7),
-                    [Asset::new(asset_id, Quantity::from(1_u32))],
-                )
-                .is_err()
-        );
-        assert!(world.view().asset_definition(&id()).is_err());
-        assert_eq!(world.view().asset_definition_id_by_alias(&alias), None);
-        assert!(world.axt_asset_incarnations.view().get(&id()).is_none());
-        assert_eq!(*world.parameters.view(), before);
-        world
-            .insert_direct_asset_definition_with_assets_for_testing(
-                definition,
-                DataSpaceId::new(7),
-                [],
-            )
-            .unwrap();
-        assert_eq!(
-            world.view().asset_definition_dataspace(&id()).unwrap(),
-            Some(DataSpaceId::new(7))
-        );
-    }
-
-    #[test]
-    fn absent_home_lookup_preserves_parameter_bytes_and_world_root() {
-        use super::world_projection::world_state_accumulator::WorldStateAccumulator;
-        use norito::codec::Encode;
-        let world = world();
-        let parameters = world.parameters.view().encode();
-        let root = WorldStateAccumulator::capture(&world.block())
-            .unwrap()
-            .root()
-            .unwrap();
-        assert_eq!(
-            world.view().asset_definition_dataspace(&id()).unwrap(),
-            None
-        );
-        assert_eq!(
-            world.view().asset_definition_home(&id()).unwrap(),
-            Some(AssetDefinitionHome::Global)
-        );
-        assert_eq!(parameters, world.parameters.view().encode());
-        assert_eq!(
-            root,
-            WorldStateAccumulator::capture(&world.block())
-                .unwrap()
-                .root()
-                .unwrap()
-        );
-    }
-
-    #[test]
-    fn direct_home_is_exact_and_changes_existing_parameter_root() {
-        use super::world_projection::world_state_accumulator::WorldStateAccumulator;
-        let mut world = world();
-        let before = WorldStateAccumulator::capture(&world.block())
-            .unwrap()
-            .root()
-            .unwrap();
-        let ds = DataSpaceId::new((1_u64 << 53) + 7);
-        world
-            .set_asset_definition_dataspace_for_testing(id(), ds)
-            .unwrap();
-        assert_eq!(
-            world.view().asset_definition_dataspace(&id()).unwrap(),
-            Some(ds)
-        );
-        assert_ne!(
-            before,
-            WorldStateAccumulator::capture(&world.block())
-                .unwrap()
-                .root()
-                .unwrap()
-        );
-        world.rebuild_asset_definition_indexes().unwrap();
-        assert_eq!(
-            world.view().asset_definition_home(&id()).unwrap(),
-            Some(AssetDefinitionHome::Dataspace(ds))
-        );
-        assert!(
-            world
-                .set_asset_definition_dataspace_for_testing(id(), DataSpaceId::new(9))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn malformed_registry_never_falls_back_to_global() {
-        let mut world = world();
-        let mut parameters = world.parameters.block();
-        parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                iroha_data_model::parameter::custom::CustomParameter::new(
-                    AssetDefinitionDataspaceRegistryV1::parameter_id(),
-                    iroha_primitives::json::Json::from_norito_value_ref(&norito::json!({}))
-                        .unwrap(),
-                ),
-            ));
-        parameters.commit();
-        assert!(world.view().asset_definition_home(&id()).is_err());
-        assert!(world.rebuild_asset_definition_indexes().is_err());
-    }
-
-    #[test]
-    fn native_home_rolls_back_with_transaction_drop() {
-        let state = state();
-        let mut block = state.block(BlockHeader::new(
-            core::num::NonZeroU64::MIN,
-            None,
-            None,
-            0,
-            0,
-        ));
-        {
-            let mut tx = block.transaction();
-            add_native(&mut tx, DataSpaceId::new(7));
-            assert_eq!(
-                tx.world.asset_definition_dataspace(&id()).unwrap(),
-                Some(DataSpaceId::new(7))
-            );
-        }
-        assert!(block.world.asset_definitions.get(&id()).is_none());
-        assert!(
-            asset_definition_registry_from_parameters(block.world.parameters.get())
-                .unwrap()
-                .is_none()
-        );
-        assert!(block.pending_asset_definition_registry.is_none());
-    }
-
-    #[test]
-    fn native_guard_refuses_raw_parameter_replacement() {
-        let state = state();
-        let mut block = state.block(BlockHeader::new(
-            core::num::NonZeroU64::MIN,
-            None,
-            None,
-            0,
-            0,
-        ));
-        let mut tx = block.transaction();
-        add_native(&mut tx, DataSpaceId::new(7));
-        assert!(tx.validate_asset_definition_registry_transaction().is_ok());
-        *tx.world.parameters.get_mut() = Parameters::default();
-        assert!(tx.validate_asset_definition_registry_transaction().is_err());
-    }
-
-    #[test]
-    fn native_retirement_retains_tombstone_and_requires_matching_incarnation() {
-        let state = state();
-        let mut block = state.block(BlockHeader::new(
-            core::num::NonZeroU64::MIN,
-            None,
-            None,
-            0,
-            0,
-        ));
-        let mut tx = block.transaction();
-        add_native(&mut tx, DataSpaceId::new(7));
-        tx.world.axt_asset_incarnations.insert(id(), incarnation(9));
-        assert!(tx.retire_direct_asset_definition_home(&id()).is_err());
-        tx.world.axt_asset_incarnations.insert(id(), incarnation(1));
-        tx.retire_direct_asset_definition_home(&id()).unwrap();
-        tx.world.asset_definitions.remove(id());
-        tx.world.axt_asset_incarnations.remove(id());
-        let registry = asset_definition_registry_from_parameters(tx.world.parameters.get())
-            .unwrap()
-            .unwrap();
-        assert!(!registry.bindings.get(&id()).unwrap().active);
-        validate_asset_definition_registry_world(&tx.world).unwrap();
-        tx.validate_asset_definition_registry_transaction().unwrap();
-    }
-
-    #[test]
-    fn final_overlay_refuses_forged_predecessor_even_with_a_staged_successor() {
-        let mut world = world();
-        world
-            .set_asset_definition_dataspace_for_testing(id(), DataSpaceId::new(7))
-            .unwrap();
-        let state = State::new_for_testing(
-            world,
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-        );
-        let mut block = state.block(BlockHeader::new(
-            core::num::NonZeroU64::MIN,
-            None,
-            None,
-            0,
-            0,
-        ));
-        assert!(
-            block
-                .validate_owned_asset_definition_registry_overlay()
-                .is_ok()
-        );
-        let after = asset_definition_registry_parameter(block.world.parameters.get())
-            .unwrap()
-            .clone();
-        block.pending_asset_definition_registry = Some(PendingAssetDefinitionRegistry {
-            before: None,
-            after,
-        });
-        assert!(
-            block
-                .validate_owned_asset_definition_registry_overlay()
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn retired_home_cannot_move_or_resurrect_same_incarnation() {
-        let mut world = world();
-        world
-            .set_asset_definition_dataspace_for_testing(id(), DataSpaceId::new(7))
-            .unwrap();
-        let live = asset_definition_registry_from_parameters(&world.parameters.view())
-            .unwrap()
-            .unwrap();
-        let mut retired = live.clone();
-        retired.bindings.get_mut(&id()).unwrap().active = false;
-        validate_asset_definition_registry_transition(Some(&live), Some(&retired)).unwrap();
-        assert!(
-            validate_asset_definition_registry_transition(Some(&retired), Some(&live)).is_err()
-        );
-        let mut moved = live.clone();
-        moved.bindings.get_mut(&id()).unwrap().dataspace_id = DataSpaceId::new(8);
-        assert!(validate_asset_definition_registry_transition(Some(&live), Some(&moved)).is_err());
-        assert!(validate_asset_definition_registry_transition(Some(&retired), None).is_err());
-        moved.bindings.get_mut(&id()).unwrap().incarnation = incarnation(2);
-        validate_asset_definition_registry_transition(Some(&retired), Some(&moved)).unwrap();
-    }
-
-    #[test]
-    fn snapshot_rejects_valid_current_binding_moved_from_same_incarnation() {
-        let mut world = world();
-        world
-            .set_asset_definition_dataspace_for_testing(id(), DataSpaceId::new(7))
-            .unwrap();
-        let mut registry = asset_definition_registry_from_parameters(&world.parameters.view())
-            .unwrap()
-            .unwrap();
-        registry.bindings.get_mut(&id()).unwrap().dataspace_id = DataSpaceId::new(8);
-        let mut parameters = world.parameters.block();
-        parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                registry.into_custom_parameter().unwrap(),
-            ));
-        parameters.commit();
-        assert_eq!(
-            world.view().asset_definition_dataspace(&id()).unwrap(),
-            Some(DataSpaceId::new(8))
-        );
-        assert!(world.rebuild_asset_definition_indexes().is_err());
-    }
-}
+#[path = "state/direct_homes.rs"]
+mod direct_homes;
+use direct_homes::{ensure_dataspace_classes_preserved, ensure_homed_dataspaces_keep_lanes};
+pub(crate) use direct_homes::{direct_home_dataspace, validate_direct_home_transition};

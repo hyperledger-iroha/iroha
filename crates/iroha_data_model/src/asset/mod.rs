@@ -11,11 +11,7 @@ pub mod retail_daily_limit;
 pub mod transfer_control;
 pub mod value;
 pub use alias::{AssetDefinitionAlias, ResolvedAssetDefinitionAliasV1};
-pub use dataspace_definition::{
-    AssetDefinitionDataspaceBindingV1, AssetDefinitionDataspaceRegistryReadPlan,
-    AssetDefinitionDataspaceRegistryV1, AssetDefinitionHome,
-    MAX_ASSET_DEFINITION_DATASPACE_BINDINGS_V1, MAX_ASSET_DEFINITION_DATASPACE_REGISTRY_BYTES_V1,
-};
+pub use dataspace_definition::{AssetDefinitionDirectHomeV1, AssetDefinitionHome};
 pub use definition::{AssetBalancePolicy, AssetDefinition, Mintable, NewAssetDefinition};
 pub use id::{AssetBalanceScope, AssetDefinitionId, AssetId};
 pub use policy::{
@@ -41,10 +37,7 @@ pub type AssetTotalQuantityMap = btree_map::BTreeMap<AssetDefinitionId, Quantity
 pub mod prelude {
     pub use super::{
         alias::{AssetDefinitionAlias, ResolvedAssetDefinitionAliasV1},
-        dataspace_definition::{
-            AssetDefinitionDataspaceBindingV1, AssetDefinitionDataspaceRegistryReadPlan,
-            AssetDefinitionDataspaceRegistryV1, AssetDefinitionHome,
-        },
+        dataspace_definition::{AssetDefinitionDirectHomeV1, AssetDefinitionHome},
         definition::{AssetBalancePolicy, AssetDefinition, Mintable, NewAssetDefinition},
         id::{AssetBalanceScope, AssetDefinitionId, AssetId},
         policy::{

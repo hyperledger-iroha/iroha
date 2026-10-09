@@ -12,19 +12,20 @@ fn test_functions_accept_explicit_unit_and_reject_non_unit_results() {
 
 #[test]
 fn builtin_labels_follow_fixed_signatures_including_keyword_labels() {
-    let source = "fn inspect(Json event) -> int { let Option<int> number = event.get_int(Name::parse(\"n\")); bytes::len(b\"text\") } fn update() { ledger::trigger::set_enabled(trigger: Name::parse(\"wake\"), enabled: 1); } #[test] fn check() { test::assert_eq(expected: 2, actual: 2); }";
+    let source = "fn inspect(Json event) -> int { let Option<int> number = event.get_int(Name::parse(\"n\")); bytes::len(b\"text\") } fn update() { ledger::trigger::set_enabled(trigger: Name::parse(\"wake\"), enabled: true); } #[test] fn check() { test::assert_eq(expected: 2, actual: 2); }";
     analyze_test(&parse(source).expect("keyword labels parse"))
         .expect("fixed builtin policies type check");
+    // Single-argument calls accept a positional argument or the declared label.
     for source in [
-        "fn invalid() { ledger::trigger::unregister(Name::parse(\"wake\")); }",
-        "fn invalid() -> int { bytes::len(value: b\"text\") }",
+        "fn valid() { ledger::trigger::unregister(Name::parse(\"wake\")); }",
+        "fn valid() -> int { bytes::len(value: b\"text\") }",
     ] {
-        let error = analyze_error(source);
-        assert!(matches!(
-            error.code,
-            "E_NAMED_ARGUMENTS_REQUIRED" | "E_POSITIONAL_ARGUMENT_REQUIRED"
-        ));
+        analyze(&parse(source).expect("single-argument call parses"))
+            .expect("single-argument builtins accept either form");
     }
+    let error =
+        analyze_error("fn invalid(Name wake) { ledger::trigger::set_enabled(wake, true); }");
+    assert_eq!(error.code, "E_NAMED_ARGUMENTS_REQUIRED");
 }
 
 #[test]

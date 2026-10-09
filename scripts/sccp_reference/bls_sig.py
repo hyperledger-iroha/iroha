@@ -203,4 +203,3 @@ def consensus_digest(preimage: bytes) -> Optional[bytes]:
         kind = preimage[len(AVAILABILITY_TAG)]
         allowed = (kind == 0x00 and n == 179) or (kind == 0x01 and n == 219)
     return hashlib.sha256(preimage).digest() if allowed else None
-

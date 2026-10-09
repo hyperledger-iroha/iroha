@@ -7208,7 +7208,7 @@ export class ToriiClient {
         params.asset_id = requireExactNonEmptyString(options.assetId, "assetId");
       }
       if (options.provenance !== undefined && options.provenance !== null) {
-        params.provenance = requireNonEmptyString(options.provenance, "provenance");
+        params.provenance = requireContractEventProvenance(options.provenance, "provenance");
       }
       if (options.sinceTimestampMs !== undefined && options.sinceTimestampMs !== null) {
         params.since_timestamp_ms = ToriiClient._normalizeUnsignedInteger(
@@ -27230,6 +27230,19 @@ function normalizeContractActivityListItem(value, context) {
   return normalized;
 }
 
+/**
+ * Torii projects contract-event rows from committed `ContractCall` executables and
+ * the metadata consensus bound to them, so every row is `derived`; a row or filter
+ * claiming contract-emitted provenance is rejected.
+ */
+function requireContractEventProvenance(value, context) {
+  const provenance = requireNonEmptyString(value, context);
+  if (provenance !== "derived") {
+    rejectType(`${context} must be derived`);
+  }
+  return provenance;
+}
+
 function normalizeContractEventListItem(value, context) {
   const record = ensureRecord(value, context);
   rejectAliasField(record, context, "eventId", "event_id");
@@ -27252,7 +27265,7 @@ function normalizeContractEventListItem(value, context) {
     `${context}.schema_version`,
     { allowZero: false },
   );
-  const provenance = requireNonEmptyString(record.provenance, `${context}.provenance`);
+  const provenance = requireContractEventProvenance(record.provenance, `${context}.provenance`);
   const txHashHex = requireCanonicalTransactionHashString(
     record.tx_hash_hex,
     `${context}.tx_hash_hex`,

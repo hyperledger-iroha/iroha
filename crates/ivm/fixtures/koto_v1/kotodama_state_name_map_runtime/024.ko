@@ -5,7 +5,7 @@
             kotoage fn main() -> bool authorize("WriteState") {
                 let ev = Json::parse("{\"value_hex\":\"0x68656c6c6f\"}");
                 let key = Name::parse("alice");
-                if let Option::some(value) = ev.get_blob_hex(Name::parse("value_hex")) {
+                if let Option::some(value) = ev.get_bytes_hex(Name::parse("value_hex")) {
                     Foo[key] = value;
                 } else {
                     return false;

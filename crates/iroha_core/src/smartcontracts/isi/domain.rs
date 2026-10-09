@@ -36,7 +36,7 @@ pub mod isi {
             AssetBalancePolicy,
         },
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
-        nexus::{AxtAssetIncarnationV1, DataSpaceCatalog, LaneVisibility},
+        nexus::{AxtAssetIncarnationV1, DataSpaceCatalog},
     };
     use iroha_logger::prelude::*;
     use iroha_model_base::domain::DomainId;
@@ -486,20 +486,35 @@ pub mod isi {
         validate_alias_for_asset_definition(asset_definition.alias().as_ref(), asset_definition)?;
         Ok(())
     }
+    /// Check an alias's namespace route against the definition's immutable home.
+    ///
+    /// `home_dataspace` is `None` only when the home cannot be resolved; the caller's
+    /// authoritative-route check then refuses the registration.
     fn validate_asset_definition_alias_route(
         state_transaction: &mut StateTransaction<'_, '_>,
         alias: Option<&AssetDefinitionAlias>,
+        home_dataspace: Option<DataSpaceId>,
     ) -> Result<(), InstructionExecutionError> {
         let Some(alias) = alias else {
             return Ok(());
         };
-        if dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())?.is_none() {
+        let Some(alias_dataspace) =
+            dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())?
+        else {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
                     "asset definition alias `{alias}` references an unknown or inactive dataspace"
                 )
                 .into(),
             ));
+        };
+        if let Some(home_dataspace) = home_dataspace {
+            ensure_alias_namespace_matches_home(
+                state_transaction,
+                alias,
+                alias_dataspace,
+                home_dataspace,
+            )?;
         }
         let Some(domain) = alias.domain_segment() else {
             return Ok(());
@@ -2337,14 +2352,12 @@ pub mod isi {
                     .into(),
             ));
         }
-        // The protected Parameters registry is publicly readable. Private homes require
-        // a separately retained storage and disclosure capability before admission.
-        if !dataspace_is_public_or_universal(state_transaction, dataspace_id) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "direct-dataspace registration currently requires a public home dataspace".into(),
-            ));
-        }
-        Ok(())
+        ensure_home_admissible(
+            state_transaction,
+            &instruction.object.id,
+            instruction.object.balance_scope_policy,
+            dataspace_id,
+        )
     }
     /// Register the existing definition payload and its optional direct namespace atomically.
     fn register_asset_definition(
@@ -2359,9 +2372,14 @@ pub mod isi {
             asset_definition.metadata(),
         )?;
         ensure_asset_definition_human_fields(&asset_definition)?;
+        let home_dataspace = match dataspace_id {
+            Some(dataspace_id) => Some(dataspace_id),
+            None => asset_definition_home_dataspace(state_transaction, &asset_definition)?,
+        };
         validate_asset_definition_alias_route(
             state_transaction,
             asset_definition.alias().as_ref(),
+            home_dataspace,
         )?;
         if let Some(alias) = asset_definition.alias().as_ref() {
             ensure_authority_can_manage_asset_definition_alias(
@@ -2377,7 +2395,7 @@ pub mod isi {
                 authority,
                 &asset_definition,
             )?;
-            ensure_global_asset_definition_registered_on_authoritative_route(
+            ensure_asset_definition_registered_on_authoritative_route(
                 state_transaction,
                 &asset_definition,
             )?;
@@ -2883,7 +2901,12 @@ pub mod isi {
                 .into());
             }
             validate_alias_for_asset_definition(alias.as_ref(), &definition)?;
-            validate_asset_definition_alias_route(state_transaction, alias.as_ref())?;
+            let home_dataspace = asset_definition_home_dataspace(state_transaction, &definition)?;
+            validate_asset_definition_alias_route(
+                state_transaction,
+                alias.as_ref(),
+                home_dataspace,
+            )?;
             let existing_alias = state_transaction
                 .world
                 .asset_definition_alias_bindings
@@ -9265,10 +9288,12 @@ mod tests {
                 &authority,
                 &instruction,
             )
-            .expect_err(
-                "publicly readable registry must reject private homes under either balance policy",
-            );
-            assert!(error.to_string().contains("public home dataspace"));
+            .expect_err("a restricted home is refused under either balance policy");
+            let expected = match policy {
+                AssetBalancePolicy::Global => "cannot be registered in restricted dataspace",
+                AssetBalancePolicy::DataspaceRestricted => "public home dataspace",
+            };
+            assert!(error.to_string().contains(expected), "{error}");
         }
         tx.nexus.lane_catalog = public_lanes;
         instruction.object.balance_scope_policy = AssetBalancePolicy::Global;
@@ -9646,9 +9671,21 @@ mod tests {
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         tx.current_dataspace_id = Some(paynet);
         tx.world.current_dataspace_id = Some(paynet);
+        // Restricted homes stay refused on the domain path exactly as on the direct path.
+        let error = Register::asset_definition(new_definition.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("restricted homes are refused until restricted-home confinement ships");
+        assert!(
+            error.to_string().contains("public home dataspace"),
+            "{error}"
+        );
+        assert!(tx.world.asset_definitions.get(&definition_id).is_none());
+        assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
+        // The same definition and alias register in a public home dataspace.
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
-            .expect("restricted-policy definition may use a restricted alias home");
+            .expect("restricted-policy definition may use an alias in its public home");
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
@@ -10074,13 +10111,11 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register global definition");
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
-        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+        let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
-            .expect("an alias does not move the asset's authoritative home");
-        assert_eq!(
-            tx.world.asset_definition_aliases.get(&alias),
-            Some(&definition_id)
-        );
+            .expect_err("a public definition cannot take an alias in a restricted namespace");
+        assert!(error.to_string().contains("restricted dataspace"), "{error}");
+        assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
         assert!(
             tx.world
                 .asset_definition(&definition_id)
@@ -10152,13 +10187,11 @@ mod tests {
             .build(&authority),
         );
         let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
-        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+        let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
-            .expect("universal dataspace may home a global asset alias");
-        assert_eq!(
-            tx.world.asset_definition_aliases.get(&alias),
-            Some(&definition_id)
-        );
+            .expect_err("a restricted-homed definition keeps its aliases in its home namespace");
+        assert!(error.to_string().contains("restricted dataspace"), "{error}");
+        assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
     }
     #[test]
     fn asset_home_extra_coverage_clear_alias_keeps_global_home_universal() {
@@ -10222,10 +10255,10 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
-            .expect("register explicitly owned restricted definition");
+            .expect("register explicitly owned restricted-policy definition");
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
@@ -10264,30 +10297,33 @@ mod tests {
             domain_id.clone(),
             "unit".parse().expect("name"),
         );
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "unit".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata: Metadata::default(),
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            owning_domain: Some(domain_id),
-        };
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let paynet = DataSpaceId::new(7);
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("register restricted definition");
+        // Registration refuses restricted homes, so seed the homed definition directly.
+        tx.world.insert_asset_definition_entry(
+            definition_id.clone(),
+            AssetDefinition::numeric(
+                definition_id.clone(),
+                "unit".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
+            .build(&authority),
+        );
+        let foreign: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
+        assert!(
+            SetAssetDefinitionAlias::bind(definition_id.clone(), foreign, None)
+                .execute(&authority, &mut tx)
+                .is_err(),
+            "a restricted-homed definition cannot alias another namespace"
+        );
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
-            .expect("restricted asset alias may use restricted dataspace");
+            .expect("restricted asset alias may use its own restricted home namespace");
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)

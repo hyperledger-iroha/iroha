@@ -262,14 +262,38 @@ const fn default_parameter_names(arity: usize) -> &'static [&'static str] {
     }
 }
 /// Source argument policy attached to a builtin declaration.
+///
+/// Every builtin follows one published rule:
+///
+/// 1. A label equal to the declared parameter name is always accepted.
+/// 2. Single-argument calls, receiver methods and pure helpers (`math::*`,
+///    `require`) also accept positional arguments.
+/// 3. Every other builtin, including each multi-argument `ledger::*`
+///    mutation, requires its labels. A bare identifier whose name equals the
+///    label of the slot it fills satisfies that label (label punning), so
+///    `ledger::nft::mint(nft, owner)` is the labelled call
+///    `ledger::nft::mint(nft: nft, owner: owner)`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BuiltinCallPolicy {
-    /// All declared source parameters require their names.
+    /// Every declared source parameter requires its label; label punning
+    /// satisfies the requirement.
     #[default]
     Named,
-    /// This many leading declaration parameters are explicitly positional.
-    /// An implicit method receiver consumes the first declaration slot.
+    /// This many leading declaration parameters may be passed positionally or
+    /// with their declared labels; later parameters require labels. An
+    /// implicit method receiver consumes the first declaration slot.
     PositionalPrefix(usize),
+}
+impl BuiltinCallPolicy {
+    /// Whether the declaration slot `index` (counting an implicit receiver as
+    /// slot zero) requires a label or a punned identifier.
+    #[must_use]
+    pub const fn label_required(self, index: usize) -> bool {
+        match self {
+            Self::Named => true,
+            Self::PositionalPrefix(prefix) => index >= prefix,
+        }
+    }
 }
 /// Canonical security and lowering metadata for one builtin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -305,12 +329,8 @@ pub enum Builtin {
     PointerConstructor(PointerConstructor),
     /// Check whether a durable state map contains a key.
     Contains,
-    /// Read a durable state map value, using the supplied default when absent.
-    GetOrDefault,
-    /// Read a durable state map value with an optional default.
-    GetOr,
-    /// Ensure a durable state map entry exists and return its value.
-    Ensure,
+    /// Return a durable state map value, first writing the supplied default when the key is absent.
+    GetOrInsert,
     /// Remove a durable state map entry and return its previous optional value.
     StateMapRemove,
     /// Internal bounded key scan of an integer-keyed state map.
@@ -385,7 +405,7 @@ pub enum Builtin {
     Require,
     /// Emit an informational debug record for a string or integer.
     Info,
-    /// Assert integer equality in a local test build.
+    /// Assert that two values of one equality-comparable type are equal in a local test build.
     AssertEq,
     /// Invoke a runtime kotoage from a test using the current caller.
     TestInvokeEntrypoint,
@@ -401,13 +421,19 @@ pub enum Builtin {
     TestActorPublicKey,
     /// Sign a payload with a fixture actor's test key.
     TestActorSign,
+    /// Set the block height seen by later seiyaku calls in a local test.
+    TestSetBlockHeight,
+    /// Advance the block height seen by later seiyaku calls in a local test.
+    TestAdvanceBlocks,
+    /// Set the transaction time (milliseconds) seen by later seiyaku calls in a local test.
+    TestSetTransactionTimeMs,
     /// Set one JSON metadata entry on an account.
-    SetAccountDetail,
+    SetAccountMetadata,
     /// Mint an asset quantity for an account.
     MintAsset,
     /// Burn an asset quantity held by an account.
     BurnAsset,
-    /// Transfer an asset quantity between accounts in a specified dataspace.
+    /// Transfer an asset quantity between accounts, optionally scoped to a dataspace.
     TransferAsset,
     /// Update an account asset's transfer availability at an expected revision.
     SetAssetTransferAvailability,
@@ -441,10 +467,8 @@ pub enum Builtin {
     RegisterAccount,
     /// Unregister an account.
     UnregisterAccount,
-    /// Register an asset definition with its name, scale and mintability.
+    /// Register an asset definition with its display name, numeric spec and mintability.
     RegisterAsset,
-    /// Create an asset definition with an explicit owner.
-    CreateNewAsset,
     /// Unregister an asset definition.
     UnregisterAsset,
     /// Register a peer described by JSON.
@@ -457,10 +481,10 @@ pub enum Builtin {
     UnregisterTrigger,
     /// Change a named trigger's enabled state.
     SetTriggerEnabled,
-    /// Create a named role with a JSON permission set.
-    CreateRole,
-    /// Delete a named role.
-    DeleteRole,
+    /// Register a named role with a JSON permission set.
+    RegisterRole,
+    /// Unregister a named role.
+    UnregisterRole,
     /// Grant a role to an account.
     GrantRole,
     /// Revoke a role from an account.
@@ -555,7 +579,7 @@ pub enum Builtin {
     IrohaHash,
     /// Verify an SM2 signature with an optional distinguishing identifier.
     Sm2Verify,
-    /// Verify a signature using the selected signature scheme.
+    /// Verify a signature under a compile-time `SignatureScheme` value.
     VerifySignature,
     /// Seal bytes using SM4-GCM with nonce and associated data.
     Sm4GcmSeal,
@@ -728,18 +752,23 @@ pub enum Builtin {
     /// Read an optional NFT identity field from JSON.
     GetNftId,
     /// Read an optional byte field encoded as hexadecimal in JSON.
-    GetBlobHex,
+    GetBytesHex,
+    /// Read an optional string field from JSON.
+    GetString,
+    /// Read an optional boolean field from JSON.
+    GetBool,
     /// Read the current trigger event as JSON.
     TriggerEvent,
     /// Read the current execution authority.
     Authority,
     /// Read the current seiyaku subject account.
     ContractSubject,
-    /// Read the host's current time in milliseconds.
-    CurrentTimeMs,
+    /// Read the signer-supplied transaction creation time in milliseconds.
+    TransactionTimeMs,
     /// Read the current block height.
     BlockHeight,
-    /// Read the current block timestamp in milliseconds.
+    /// Internal `SYSVAR_BLOCK_TIME_MS` read; hosts bind it to the same logical
+    /// time as [`Self::TransactionTimeMs`], so it is not a source clock.
     BlockTimeMs,
     /// Read the encoded chain identity.
     ChainId,
@@ -749,6 +778,26 @@ pub enum Builtin {
     Entrypoint,
     /// Internal system-variable read of the execution authority.
     SysvarAuthority,
+    /// Compile-time `NumericSpec` that accepts any scale.
+    NumericSpecUnconstrained,
+    /// Compile-time `NumericSpec` that accepts integers only.
+    NumericSpecInteger,
+    /// Compile-time `NumericSpec` that accepts at most the given decimal scale.
+    NumericSpecFractional,
+    /// Compile-time `Mintable` value for elastic supply.
+    MintableInfinitely,
+    /// Compile-time `Mintable` value allowing exactly one mint.
+    MintableOnce,
+    /// Compile-time `Mintable` value forbidding mints.
+    MintableNot,
+    /// Compile-time `Mintable` value allowing a limited number of mints.
+    MintableLimited,
+    /// Compile-time `SignatureScheme` value selecting Ed25519.
+    SignatureSchemeEd25519,
+    /// Compile-time `SignatureScheme` value selecting secp256k1 ECDSA.
+    SignatureSchemeSecp256k1,
+    /// Compile-time `SignatureScheme` value selecting ML-DSA.
+    SignatureSchemeMlDsa,
 }
 impl Builtin {
     /// Iterate over every canonical builtin variant.
@@ -779,9 +828,7 @@ impl Builtin {
         }
         Some(match name {
             "contains" => Self::Contains,
-            "get_or_default" => Self::GetOrDefault,
-            "get_or" => Self::GetOr,
-            "ensure" => Self::Ensure,
+            "get_or_insert" => Self::GetOrInsert,
             "remove" => Self::StateMapRemove,
             "keys_take2" => Self::KeysTake2,
             "values_take2" => Self::ValuesTake2,
@@ -827,7 +874,10 @@ impl Builtin {
             "actor_account" => Self::TestActorAccount,
             "actor_public_key" => Self::TestActorPublicKey,
             "actor_sign" => Self::TestActorSign,
-            "set_account_detail" => Self::SetAccountDetail,
+            "set_block_height" => Self::TestSetBlockHeight,
+            "advance_blocks" => Self::TestAdvanceBlocks,
+            "set_transaction_time_ms" => Self::TestSetTransactionTimeMs,
+            "set_account_metadata" => Self::SetAccountMetadata,
             "mint_asset" => Self::MintAsset,
             "burn_asset" => Self::BurnAsset,
             "transfer_asset" => Self::TransferAsset,
@@ -848,15 +898,14 @@ impl Builtin {
             "register_account" => Self::RegisterAccount,
             "unregister_account" => Self::UnregisterAccount,
             "register_asset" => Self::RegisterAsset,
-            "create_new_asset" => Self::CreateNewAsset,
             "unregister_asset" => Self::UnregisterAsset,
             "register_peer" => Self::RegisterPeer,
             "unregister_peer" => Self::UnregisterPeer,
             "register_trigger" => Self::RegisterTrigger,
             "unregister_trigger" => Self::UnregisterTrigger,
             "set_trigger_enabled" => Self::SetTriggerEnabled,
-            "create_role" => Self::CreateRole,
-            "delete_role" => Self::DeleteRole,
+            "register_role" => Self::RegisterRole,
+            "unregister_role" => Self::UnregisterRole,
             "grant_role" => Self::GrantRole,
             "revoke_role" => Self::RevokeRole,
             "grant_permission" => Self::GrantPermission,
@@ -990,17 +1039,29 @@ impl Builtin {
             "get_account_id" => Self::GetAccountId,
             "get_asset_definition_id" => Self::GetAssetDefinitionId,
             "get_nft_id" => Self::GetNftId,
-            "get_blob_hex" => Self::GetBlobHex,
+            "get_bytes_hex" => Self::GetBytesHex,
+            "get_string" => Self::GetString,
+            "get_bool" => Self::GetBool,
             "trigger_event" => Self::TriggerEvent,
             "authority" => Self::Authority,
             "contract_subject" => Self::ContractSubject,
-            "current_time_ms" => Self::CurrentTimeMs,
+            "transaction_time_ms" => Self::TransactionTimeMs,
             "block_height" => Self::BlockHeight,
             "block_time_ms" => Self::BlockTimeMs,
             "chain_id" => Self::ChainId,
             "contract_address" => Self::ContractAddress,
             "entrypoint" => Self::Entrypoint,
             "sysvar_authority" => Self::SysvarAuthority,
+            "numeric_spec_unconstrained" => Self::NumericSpecUnconstrained,
+            "numeric_spec_integer" => Self::NumericSpecInteger,
+            "numeric_spec_fractional" => Self::NumericSpecFractional,
+            "mintable_infinitely" => Self::MintableInfinitely,
+            "mintable_once" => Self::MintableOnce,
+            "mintable_not" => Self::MintableNot,
+            "mintable_limited" => Self::MintableLimited,
+            "signature_scheme_ed25519" => Self::SignatureSchemeEd25519,
+            "signature_scheme_secp256k1" => Self::SignatureSchemeSecp256k1,
+            "signature_scheme_ml_dsa" => Self::SignatureSchemeMlDsa,
             _ => return None,
         })
     }
@@ -1009,9 +1070,7 @@ impl Builtin {
         match self {
             Self::PointerConstructor(constructor) => constructor.name(),
             Self::Contains => "contains",
-            Self::GetOrDefault => "get_or_default",
-            Self::GetOr => "get_or",
-            Self::Ensure => "ensure",
+            Self::GetOrInsert => "get_or_insert",
             Self::StateMapRemove => "remove",
             Self::KeysTake2 => "keys_take2",
             Self::ValuesTake2 => "values_take2",
@@ -1057,7 +1116,10 @@ impl Builtin {
             Self::TestActorAccount => "actor_account",
             Self::TestActorPublicKey => "actor_public_key",
             Self::TestActorSign => "actor_sign",
-            Self::SetAccountDetail => "set_account_detail",
+            Self::TestSetBlockHeight => "set_block_height",
+            Self::TestAdvanceBlocks => "advance_blocks",
+            Self::TestSetTransactionTimeMs => "set_transaction_time_ms",
+            Self::SetAccountMetadata => "set_account_metadata",
             Self::MintAsset => "mint_asset",
             Self::BurnAsset => "burn_asset",
             Self::TransferAsset => "transfer_asset",
@@ -1078,15 +1140,14 @@ impl Builtin {
             Self::RegisterAccount => "register_account",
             Self::UnregisterAccount => "unregister_account",
             Self::RegisterAsset => "register_asset",
-            Self::CreateNewAsset => "create_new_asset",
             Self::UnregisterAsset => "unregister_asset",
             Self::RegisterPeer => "register_peer",
             Self::UnregisterPeer => "unregister_peer",
             Self::RegisterTrigger => "register_trigger",
             Self::UnregisterTrigger => "unregister_trigger",
             Self::SetTriggerEnabled => "set_trigger_enabled",
-            Self::CreateRole => "create_role",
-            Self::DeleteRole => "delete_role",
+            Self::RegisterRole => "register_role",
+            Self::UnregisterRole => "unregister_role",
             Self::GrantRole => "grant_role",
             Self::RevokeRole => "revoke_role",
             Self::GrantPermission => "grant_permission",
@@ -1220,17 +1281,29 @@ impl Builtin {
             Self::GetAccountId => "get_account_id",
             Self::GetAssetDefinitionId => "get_asset_definition_id",
             Self::GetNftId => "get_nft_id",
-            Self::GetBlobHex => "get_blob_hex",
+            Self::GetBytesHex => "get_bytes_hex",
+            Self::GetString => "get_string",
+            Self::GetBool => "get_bool",
             Self::TriggerEvent => "trigger_event",
             Self::Authority => "authority",
             Self::ContractSubject => "contract_subject",
-            Self::CurrentTimeMs => "current_time_ms",
+            Self::TransactionTimeMs => "transaction_time_ms",
             Self::BlockHeight => "block_height",
             Self::BlockTimeMs => "block_time_ms",
             Self::ChainId => "chain_id",
             Self::ContractAddress => "contract_address",
             Self::Entrypoint => "entrypoint",
             Self::SysvarAuthority => "sysvar_authority",
+            Self::NumericSpecUnconstrained => "numeric_spec_unconstrained",
+            Self::NumericSpecInteger => "numeric_spec_integer",
+            Self::NumericSpecFractional => "numeric_spec_fractional",
+            Self::MintableInfinitely => "mintable_infinitely",
+            Self::MintableOnce => "mintable_once",
+            Self::MintableNot => "mintable_not",
+            Self::MintableLimited => "mintable_limited",
+            Self::SignatureSchemeEd25519 => "signature_scheme_ed25519",
+            Self::SignatureSchemeSecp256k1 => "signature_scheme_secp256k1",
+            Self::SignatureSchemeMlDsa => "signature_scheme_ml_dsa",
         }
     }
     /// Canonical V1 source spelling, including the public namespace.
@@ -1258,16 +1331,14 @@ impl Builtin {
                 | PointerConstructor::SoracloudResponse => constructor.name(),
             },
             Self::Contains => "contains",
-            Self::GetOrDefault => "get_or_default",
-            Self::GetOr => "get_or",
-            Self::Ensure => "ensure",
+            Self::GetOrInsert => "get_or_insert",
             Self::StateMapRemove => "remove",
             Self::KeysTake2 => "state::keys_take2",
             Self::ValuesTake2 => "state::values_take2",
             Self::KeysValuesTake2 => "state::entries_take2",
             Self::Authority => "context::authority",
             Self::ContractSubject => "context::seiyaku_subject",
-            Self::CurrentTimeMs => "context::current_time_ms",
+            Self::TransactionTimeMs => "context::transaction_time_ms",
             Self::BlockHeight => "context::block_height",
             Self::BlockTimeMs => "context::block_time_ms",
             Self::ChainId => "context::chain_id",
@@ -1312,6 +1383,9 @@ impl Builtin {
             Self::TestActorAccount => "test::actor_account",
             Self::TestActorPublicKey => "test::actor_public_key",
             Self::TestActorSign => "test::actor_sign",
+            Self::TestSetBlockHeight => "test::set_block_height",
+            Self::TestAdvanceBlocks => "test::advance_blocks",
+            Self::TestSetTransactionTimeMs => "test::set_transaction_time_ms",
             Self::MintAsset => "ledger::asset::mint",
             Self::BurnAsset => "ledger::asset::burn",
             Self::TransferAsset => "ledger::asset::transfer",
@@ -1319,9 +1393,8 @@ impl Builtin {
             Self::SetAssetTransferDailyLimit => "ledger::asset::set_transfer_daily_limit",
             Self::SetAssetHoldingLimit => "ledger::asset::set_holding_limit",
             Self::RegisterAsset => "ledger::asset::register",
-            Self::CreateNewAsset => "ledger::asset::create",
             Self::UnregisterAsset => "ledger::asset::unregister",
-            Self::SetAccountDetail => "ledger::account::set_detail",
+            Self::SetAccountMetadata => "ledger::account::set_metadata",
             Self::RegisterAccount => "ledger::account::register",
             Self::UnregisterAccount => "ledger::account::unregister",
             Self::AddSignatory => "ledger::account::add_signatory",
@@ -1344,8 +1417,8 @@ impl Builtin {
             Self::RegisterTrigger => "ledger::trigger::register",
             Self::UnregisterTrigger => "ledger::trigger::unregister",
             Self::SetTriggerEnabled => "ledger::trigger::set_enabled",
-            Self::CreateRole => "ledger::role::create",
-            Self::DeleteRole => "ledger::role::delete",
+            Self::RegisterRole => "ledger::role::register",
+            Self::UnregisterRole => "ledger::role::unregister",
             Self::GrantRole => "ledger::role::grant",
             Self::RevokeRole => "ledger::role::revoke",
             Self::GrantPermission => "ledger::permission::grant",
@@ -1360,6 +1433,11 @@ impl Builtin {
             Self::EscrowOpenDispute => "ledger::escrow::open_dispute",
             Self::EscrowResolveDispute => "ledger::escrow::resolve_dispute",
             Self::SetExecutionDepth => "ledger::parameters::set_execution_depth",
+            // TODO: make the raw FASTPQ batch boundary (`ledger::asset::batch::*`,
+            // whose `apply` takes an untyped Norito `TransferAssetBatch`) compiler-internal
+            // so typed `ledger::asset::transfer_batch` is the one source batch API; this
+            // needs the c064..c069 compiler fixtures and their tests rewritten as
+            // rejection cases and the editor builtin summaries updated together.
             Self::TransferV1BatchBegin => "ledger::asset::batch::begin",
             Self::TransferV1BatchEnd => "ledger::asset::batch::end",
             Self::TransferV1BatchApply => "ledger::asset::batch::apply",
@@ -1391,15 +1469,19 @@ impl Builtin {
             // which carries the exact pointer-backed value.
             Self::JsonSetInt => self.name(),
             Self::JsonSetAccountId => "json::set_account_id",
-            Self::GetInt => "json::get_int",
-            Self::GetDecimal => "json::get_decimal",
-            Self::GetQuantity => "json::get_quantity",
-            Self::GetJson => "json::get",
-            Self::GetName => "json::get_name",
-            Self::GetAccountId => "json::get_account_id",
-            Self::GetAssetDefinitionId => "json::get_asset_definition_id",
-            Self::GetNftId => "json::get_nft_id",
-            Self::GetBlobHex => "json::get_bytes_hex",
+            // Typed JSON getters are receiver methods (`value.get_int(key)`);
+            // their source spelling is the method name.
+            Self::GetInt
+            | Self::GetDecimal
+            | Self::GetQuantity
+            | Self::GetJson
+            | Self::GetName
+            | Self::GetAccountId
+            | Self::GetAssetDefinitionId
+            | Self::GetNftId
+            | Self::GetBytesHex
+            | Self::GetString
+            | Self::GetBool => self.name(),
             Self::Sha256Hash => "crypto::sha256",
             Self::Sha3Hash => "crypto::sha3",
             Self::Blake2b256Hash => "crypto::blake2b256",
@@ -1465,6 +1547,16 @@ impl Builtin {
             Self::GetPrivateInput => "crypto::private_input",
             Self::CommitOutput => "crypto::commit_output",
             Self::SetVl => "runtime::set_vector_length",
+            Self::NumericSpecUnconstrained => "NumericSpec::unconstrained",
+            Self::NumericSpecInteger => "NumericSpec::integer",
+            Self::NumericSpecFractional => "NumericSpec::fractional",
+            Self::MintableInfinitely => "Mintable::Infinitely",
+            Self::MintableOnce => "Mintable::Once",
+            Self::MintableNot => "Mintable::Not",
+            Self::MintableLimited => "Mintable::Limited",
+            Self::SignatureSchemeEd25519 => "SignatureScheme::Ed25519",
+            Self::SignatureSchemeSecp256k1 => "SignatureScheme::Secp256k1",
+            Self::SignatureSchemeMlDsa => "SignatureScheme::MlDsa",
             Self::Alloc
             | Self::QueryExecuteNorito
             | Self::ExecuteQuery
@@ -1501,12 +1593,10 @@ impl Builtin {
     pub const fn surface(self) -> BuiltinSurface {
         match self {
             Self::Contains
-            | Self::GetOrDefault
-            | Self::GetOr
-            | Self::Ensure
+            | Self::GetOrInsert
             | Self::StateMapRemove
-            | Self::Path => BuiltinSurface::MethodOnly,
-            Self::GetInt
+            | Self::Path
+            | Self::GetInt
             | Self::GetDecimal
             | Self::GetQuantity
             | Self::GetJson
@@ -1514,7 +1604,9 @@ impl Builtin {
             | Self::GetAccountId
             | Self::GetAssetDefinitionId
             | Self::GetNftId
-            | Self::GetBlobHex => BuiltinSurface::FunctionOrMethod,
+            | Self::GetBytesHex
+            | Self::GetString
+            | Self::GetBool => BuiltinSurface::MethodOnly,
             builtin if matches!(builtin.mode(), BuiltinMode::CompilerInternal) => {
                 BuiltinSurface::CompilerInternal
             }
@@ -1525,15 +1617,17 @@ impl Builtin {
     pub const fn effects(self) -> BuiltinEffects {
         match self {
             Self::ScExecuteSubmitBallot => BuiltinEffects::INSTRUCTION,
-            Self::Ensure | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
+            Self::GetOrInsert | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
                 BuiltinEffects::DURABLE_STATE
             }
+            // `debug::info` is diagnostics only: hosts charge gas and the
+            // record never reaches ledger or durable state, so views and
+            // helpers reachable from views may log.
             Self::SubscriptionBill
             | Self::SubscriptionRecordUsage
             | Self::ContractInvokeQuantity2
             | Self::DebugPrint
             | Self::DebugLog
-            | Self::Info
             | Self::TestInvokeEntrypoint
             | Self::TestInvokeEntrypointAs
             | Self::TestExpectRejectAs
@@ -1541,7 +1635,10 @@ impl Builtin {
             | Self::TestActorAccount
             | Self::TestActorPublicKey
             | Self::TestActorSign
-            | Self::SetAccountDetail
+            | Self::TestSetBlockHeight
+            | Self::TestAdvanceBlocks
+            | Self::TestSetTransactionTimeMs
+            | Self::SetAccountMetadata
             | Self::MintAsset
             | Self::BurnAsset
             | Self::TransferAsset
@@ -1562,15 +1659,14 @@ impl Builtin {
             | Self::RegisterAccount
             | Self::UnregisterAccount
             | Self::RegisterAsset
-            | Self::CreateNewAsset
             | Self::UnregisterAsset
             | Self::RegisterPeer
             | Self::UnregisterPeer
             | Self::RegisterTrigger
             | Self::UnregisterTrigger
             | Self::SetTriggerEnabled
-            | Self::CreateRole
-            | Self::DeleteRole
+            | Self::RegisterRole
+            | Self::UnregisterRole
             | Self::GrantRole
             | Self::RevokeRole
             | Self::GrantPermission
@@ -1622,13 +1718,11 @@ impl Builtin {
         match self {
             Self::PointerConstructor(PointerConstructor::AccountId) => BuiltinAccess::LedgerRead,
             Self::Contains
-            | Self::GetOrDefault
-            | Self::GetOr
             | Self::StateGet
             | Self::StateHas
             | Self::StateLen
             | Self::StateCount => BuiltinAccess::StateRead,
-            Self::Ensure | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
+            Self::GetOrInsert | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
                 BuiltinAccess::StateWrite
             }
             Self::QueryExecuteNorito
@@ -1674,7 +1768,10 @@ impl Builtin {
             | Self::Info
             | Self::TestActorAccount
             | Self::TestActorPublicKey
-            | Self::TestActorSign => BuiltinAccess::None,
+            | Self::TestActorSign
+            | Self::TestSetBlockHeight
+            | Self::TestAdvanceBlocks
+            | Self::TestSetTransactionTimeMs => BuiltinAccess::None,
             builtin
                 if builtin.effects().host_side_effects || builtin.effects().emits_instructions =>
             {
@@ -1694,7 +1791,10 @@ impl Builtin {
             | Self::TestExpectAnyRejectAs
             | Self::TestActorAccount
             | Self::TestActorPublicKey
-            | Self::TestActorSign => BuiltinMode::TestFunctionOnly,
+            | Self::TestActorSign
+            | Self::TestSetBlockHeight
+            | Self::TestAdvanceBlocks
+            | Self::TestSetTransactionTimeMs => BuiltinMode::TestFunctionOnly,
             Self::PointerConstructor(
                 PointerConstructor::Domain
                 | PointerConstructor::Blob
@@ -1769,7 +1869,12 @@ impl Builtin {
             | Self::RegisterSmartContractBytes
             | Self::ActivateContractInstance
             | Self::SetVl
-            | Self::SysvarAuthority => BuiltinMode::CompilerInternal,
+            | Self::SysvarAuthority
+            // Every host binds SYSVAR_BLOCK_TIME_MS to the same logical time as
+            // CURRENT_TIME_MS (transaction creation time for transaction calls),
+            // so a second source clock would only suggest a trust difference
+            // that does not exist. `context::transaction_time_ms` is the clock.
+            | Self::BlockTimeMs => BuiltinMode::CompilerInternal,
             _ => BuiltinMode::Any,
         }
     }
@@ -1804,12 +1909,7 @@ impl Builtin {
             }
             Self::PointerConstructor(_) => &[],
             Self::Contains => &[s::SYSCALL_BUILD_PATH_KEY_NORITO, s::SYSCALL_STATE_GET],
-            Self::GetOrDefault | Self::GetOr => &[
-                s::SYSCALL_BUILD_PATH_KEY_NORITO,
-                s::SYSCALL_STATE_GET,
-                s::SYSCALL_STATE_VALUE_DECODE,
-            ],
-            Self::Ensure => &[
+            Self::GetOrInsert => &[
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
@@ -1854,7 +1954,9 @@ impl Builtin {
             Self::DebugPrint => &[s::SYSCALL_DEBUG_PRINT],
             Self::DebugLog => &[s::SYSCALL_DEBUG_LOG],
             Self::Info => &[s::SYSCALL_POINTER_TO_NORITO, s::SYSCALL_DEBUG_LOG],
-            Self::Assert | Self::AssertEq => &[s::SYSCALL_ABORT],
+            Self::Assert | Self::AssertEq => {
+                &[s::SYSCALL_KOTO_TEST_ASSERT_FAILED, s::SYSCALL_ABORT]
+            }
             Self::Require => &[s::SYSCALL_CONTRACT_ABORT],
             Self::TestInvokeEntrypoint | Self::TestInvokeEntrypointAs => {
                 &[s::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS]
@@ -1865,7 +1967,10 @@ impl Builtin {
             Self::TestActorAccount => &[s::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT],
             Self::TestActorPublicKey => &[s::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY],
             Self::TestActorSign => &[s::SYSCALL_KOTO_TEST_ACTOR_SIGN],
-            Self::SetAccountDetail => &[s::SYSCALL_SET_ACCOUNT_DETAIL],
+            Self::TestSetBlockHeight => &[s::SYSCALL_KOTO_TEST_SET_BLOCK_HEIGHT],
+            Self::TestAdvanceBlocks => &[s::SYSCALL_KOTO_TEST_ADVANCE_BLOCKS],
+            Self::TestSetTransactionTimeMs => &[s::SYSCALL_KOTO_TEST_SET_TRANSACTION_TIME_MS],
+            Self::SetAccountMetadata => &[s::SYSCALL_SET_ACCOUNT_DETAIL],
             Self::MintAsset => &[s::SYSCALL_MINT_ASSET],
             Self::BurnAsset => &[s::SYSCALL_BURN_ASSET],
             Self::TransferAsset => &[s::SYSCALL_TRANSFER_ASSET_SCOPED],
@@ -1885,15 +1990,15 @@ impl Builtin {
             Self::TransferDomain => &[s::SYSCALL_TRANSFER_DOMAIN],
             Self::RegisterAccount => &[s::SYSCALL_REGISTER_ACCOUNT],
             Self::UnregisterAccount => &[s::SYSCALL_UNREGISTER_ACCOUNT],
-            Self::RegisterAsset | Self::CreateNewAsset => &[s::SYSCALL_REGISTER_ASSET],
+            Self::RegisterAsset => &[s::SYSCALL_REGISTER_ASSET],
             Self::UnregisterAsset => &[s::SYSCALL_UNREGISTER_ASSET],
             Self::RegisterPeer => &[s::SYSCALL_REGISTER_PEER],
             Self::UnregisterPeer => &[s::SYSCALL_UNREGISTER_PEER],
             Self::RegisterTrigger => &[s::SYSCALL_CREATE_TRIGGER],
             Self::UnregisterTrigger => &[s::SYSCALL_REMOVE_TRIGGER],
             Self::SetTriggerEnabled => &[s::SYSCALL_SET_TRIGGER_ENABLED],
-            Self::CreateRole => &[s::SYSCALL_CREATE_ROLE],
-            Self::DeleteRole => &[s::SYSCALL_DELETE_ROLE],
+            Self::RegisterRole => &[s::SYSCALL_CREATE_ROLE],
+            Self::UnregisterRole => &[s::SYSCALL_DELETE_ROLE],
             Self::GrantRole => &[s::SYSCALL_GRANT_ROLE],
             Self::RevokeRole => &[s::SYSCALL_REVOKE_ROLE],
             Self::GrantPermission => &[s::SYSCALL_GRANT_PERMISSION],
@@ -2071,9 +2176,11 @@ impl Builtin {
             Self::GetAccountId => &[s::SYSCALL_JSON_GET_ACCOUNT_ID],
             Self::GetAssetDefinitionId => &[s::SYSCALL_JSON_GET_ASSET_DEFINITION_ID],
             Self::GetNftId => &[s::SYSCALL_JSON_GET_NFT_ID],
-            Self::GetBlobHex => &[s::SYSCALL_JSON_GET_BLOB_HEX],
+            Self::GetBytesHex => &[s::SYSCALL_JSON_GET_BLOB_HEX],
+            Self::GetString => &[s::SYSCALL_JSON_GET_STRING],
+            Self::GetBool => &[s::SYSCALL_JSON_GET_BOOL],
             Self::Authority => &[s::SYSCALL_GET_AUTHORITY],
-            Self::CurrentTimeMs => &[s::SYSCALL_CURRENT_TIME_MS],
+            Self::TransactionTimeMs => &[s::SYSCALL_CURRENT_TIME_MS],
             Self::ContractSubject => &[s::SYSCALL_SYSVAR_CONTRACT_SUBJECT],
             Self::BlockHeight => &[s::SYSCALL_SYSVAR_BLOCK_HEIGHT],
             Self::BlockTimeMs => &[s::SYSCALL_SYSVAR_BLOCK_TIME_MS],
@@ -2081,6 +2188,16 @@ impl Builtin {
             Self::ContractAddress => &[s::SYSCALL_SYSVAR_CONTRACT_ADDRESS],
             Self::Entrypoint => &[s::SYSCALL_SYSVAR_ENTRYPOINT],
             Self::SysvarAuthority => &[s::SYSCALL_SYSVAR_AUTHORITY],
+            Self::NumericSpecUnconstrained
+            | Self::NumericSpecInteger
+            | Self::NumericSpecFractional
+            | Self::MintableInfinitely
+            | Self::MintableOnce
+            | Self::MintableNot
+            | Self::MintableLimited
+            | Self::SignatureSchemeEd25519
+            | Self::SignatureSchemeSecp256k1
+            | Self::SignatureSchemeMlDsa => &[],
         }
     }
     /// Return whether syscall emission is direct or compiler-derived.
@@ -2093,14 +2210,14 @@ impl Builtin {
             self,
             Self::PointerConstructor(PointerConstructor::AccountId)
                 | Self::Contains
-                | Self::GetOrDefault
-                | Self::GetOr
-                | Self::Ensure
+                | Self::GetOrInsert
                 | Self::StateMapRemove
                 | Self::TransferBatch
                 | Self::Path
                 | Self::Info
                 | Self::Valcom
+                | Self::Assert
+                | Self::AssertEq
                 | Self::TestInvokeEntrypoint
                 | Self::NumericToInt
                 | Self::NumericNeg
@@ -2144,8 +2261,7 @@ impl Builtin {
                 S::new(&["string"], constructor.return_type_name())
             }
             Self::Contains => S::new(&["StateMap<K,V>", "K"], "bool"),
-            Self::GetOrDefault => S::new(&["StateMap<K,V>", "K", "V"], "V"),
-            Self::GetOr | Self::Ensure => S::new(&["StateMap<K,V>", "K", "V?"], "V"),
+            Self::GetOrInsert => S::new(&["StateMap<K,V>", "K", "V"], "V"),
             Self::StateMapRemove => S::new(&["StateMap<K,V>", "K"], "Option<V>"),
             Self::KeysTake2 | Self::ValuesTake2 => {
                 S::new(&["StateMap<int,int>", "int", "int"], "int")
@@ -2197,7 +2313,7 @@ impl Builtin {
             Self::Assert => S::new(&["bool", "string|int?"], "()"),
             Self::Require => S::new(&["bool", "ErrorEnum::Variant"], "()"),
             Self::Info => S::new(&["string|int"], "()"),
-            Self::AssertEq => S::new(&["int", "int"], "()"),
+            Self::AssertEq => S::new(&["T", "T", "string|int?"], "()"),
             Self::TestInvokeEntrypoint => S::new(&["string", "Json"], "T"),
             Self::TestInvokeEntrypointAs => S::new(&["string", "string", "Json"], "T"),
             Self::TestExpectRejectAs => S::new(
@@ -2213,7 +2329,13 @@ impl Builtin {
             Self::TestActorAccount => S::new(&["string"], "AccountId"),
             Self::TestActorPublicKey => S::new(&["string"], "bytes"),
             Self::TestActorSign => S::new(&["string", "bytes"], "bytes"),
-            Self::SetAccountDetail => S::new(&["AccountId", "Name", "Json"], "()"),
+            Self::TestSetBlockHeight | Self::TestAdvanceBlocks | Self::TestSetTransactionTimeMs => {
+                S::new(&["int"], "()")
+            }
+            // TODO: add `ledger::domain::set_metadata` and
+            // `ledger::asset_definition::set_metadata` with the same shape once the
+            // IVM ABI gains domain and asset-definition metadata syscalls.
+            Self::SetAccountMetadata => S::new(&["AccountId", "Name", "Json"], "()"),
             Self::MintAsset | Self::BurnAsset => {
                 S::new(&["AccountId", "AssetDefinitionId", "quantity"], "()")
             }
@@ -2223,7 +2345,7 @@ impl Builtin {
                     "AccountId",
                     "AssetDefinitionId",
                     "quantity",
-                    "DataSpaceId",
+                    "DataSpaceId?",
                 ],
                 "()",
             ),
@@ -2257,18 +2379,20 @@ impl Builtin {
             Self::RegisterDomain | Self::UnregisterDomain => S::new(&["DomainId"], "()"),
             Self::TransferDomain => S::new(&["AccountId", "DomainId|Name", "AccountId"], "()"),
             Self::RegisterAccount | Self::UnregisterAccount => S::new(&["AccountId"], "()"),
-            Self::RegisterAsset => S::new(&["AssetDefinitionId", "string", "int", "int"], "()"),
-            Self::CreateNewAsset => S::new(
-                &["AssetDefinitionId", "string", "int", "AccountId", "int"],
+            Self::RegisterAsset => S::new(
+                &["AssetDefinitionId", "string", "NumericSpec", "Mintable"],
                 "()",
             ),
             Self::UnregisterAsset => S::new(&["AssetDefinitionId"], "()"),
+            // TODO: replace the Json admin payloads of peer, trigger, signatory
+            // and permission builtins with compiler-declared records once their
+            // host decoders accept a typed Norito frame instead of Json.
             Self::RegisterPeer | Self::UnregisterPeer => S::new(&["Json"], "()"),
             Self::RegisterTrigger => S::new(&["Json"], "()"),
             Self::UnregisterTrigger => S::new(&["Name"], "()"),
-            Self::SetTriggerEnabled => S::new(&["Name", "int"], "()"),
-            Self::CreateRole => S::new(&["Name", "Json"], "()"),
-            Self::DeleteRole => S::new(&["Name"], "()"),
+            Self::SetTriggerEnabled => S::new(&["Name", "bool"], "()"),
+            Self::RegisterRole => S::new(&["Name", "Json"], "()"),
+            Self::UnregisterRole => S::new(&["Name"], "()"),
             Self::GrantRole | Self::RevokeRole => S::new(&["AccountId", "Name"], "()"),
             Self::GrantPermission | Self::RevokePermission => {
                 S::new(&["AccountId", "Name|Json"], "()")
@@ -2316,7 +2440,9 @@ impl Builtin {
             | Self::Keccak256Hash
             | Self::IrohaHash => S::new(&["bytes"], "bytes"),
             Self::Sm2Verify => S::new(&["bytes", "bytes", "bytes", "bytes?"], "bool"),
-            Self::VerifySignature => S::new(&["bytes", "bytes", "bytes", "int"], "bool"),
+            Self::VerifySignature => {
+                S::new(&["bytes", "bytes", "bytes", "SignatureScheme"], "bool")
+            }
             Self::Sm4GcmSeal | Self::Sm4GcmOpen => {
                 S::new(&["bytes", "bytes", "bytes", "bytes"], "bytes")
             }
@@ -2360,7 +2486,9 @@ impl Builtin {
             Self::GetAccountId => S::new(&["Json", "Name"], "Option<AccountId>"),
             Self::GetAssetDefinitionId => S::new(&["Json", "Name"], "Option<AssetDefinitionId>"),
             Self::GetNftId => S::new(&["Json", "Name"], "Option<NftId>"),
-            Self::GetBlobHex => S::new(&["Json", "Name"], "Option<bytes>"),
+            Self::GetBytesHex => S::new(&["Json", "Name"], "Option<bytes>"),
+            Self::GetString => S::new(&["Json", "Name"], "Option<string>"),
+            Self::GetBool => S::new(&["Json", "Name"], "Option<bool>"),
             Self::SchemaEncode => S::new(&["Name", "Json"], "bytes"),
             Self::SchemaDecode => S::new(&["Name", "bytes"], "Json"),
             Self::SchemaInfo => S::new(&["Name"], "Json"),
@@ -2409,15 +2537,22 @@ impl Builtin {
             Self::TriggerEvent => S::new(&[], "Json"),
             Self::Authority | Self::SysvarAuthority => S::new(&[], "AccountId"),
             Self::ContractSubject => S::new(&[], "AccountId"),
-            Self::CurrentTimeMs | Self::BlockHeight | Self::BlockTimeMs => S::new(&[], "int"),
+            Self::TransactionTimeMs | Self::BlockHeight | Self::BlockTimeMs => S::new(&[], "int"),
             Self::ChainId | Self::ContractAddress | Self::Entrypoint => S::new(&[], "bytes"),
+            Self::NumericSpecUnconstrained | Self::NumericSpecInteger => S::new(&[], "NumericSpec"),
+            Self::NumericSpecFractional => S::new(&["int"], "NumericSpec"),
+            Self::MintableInfinitely | Self::MintableOnce | Self::MintableNot => {
+                S::new(&[], "Mintable")
+            }
+            Self::MintableLimited => S::new(&["int"], "Mintable"),
+            Self::SignatureSchemeEd25519
+            | Self::SignatureSchemeSecp256k1
+            | Self::SignatureSchemeMlDsa => S::new(&[], "SignatureScheme"),
         };
         match self {
             Self::PointerConstructor(_) => signature.with_names(&["value"]),
             Self::Contains => signature.with_names(&["map", "key"]),
-            Self::GetOrDefault | Self::GetOr | Self::Ensure => {
-                signature.with_names(&["map", "key", "default"])
-            }
+            Self::GetOrInsert => signature.with_names(&["map", "key", "default"]),
             Self::StateMapRemove => signature.with_names(&["map", "key"]),
             Self::KeysTake2 | Self::ValuesTake2 | Self::KeysValuesTake2 => {
                 signature.with_names(&["map", "offset", "limit"])
@@ -2460,7 +2595,7 @@ impl Builtin {
             }
             Self::Assert => signature.with_names(&["condition", "message"]),
             Self::Require => signature.with_names(&["condition", "error"]),
-            Self::AssertEq => signature.with_names(&["actual", "expected"]),
+            Self::AssertEq => signature.with_names(&["actual", "expected", "message"]),
             Self::TestInvokeEntrypoint => signature.with_names(&["kotoage", "arguments"]),
             Self::TestInvokeEntrypointAs | Self::TestExpectAnyRejectAs => {
                 signature.with_names(&["actor", "kotoage", "arguments"])
@@ -2470,7 +2605,10 @@ impl Builtin {
             }
             Self::TestActorAccount | Self::TestActorPublicKey => signature.with_names(&["actor"]),
             Self::TestActorSign => signature.with_names(&["actor", "payload"]),
-            Self::SetAccountDetail => signature.with_names(&["account", "key", "value"]),
+            Self::TestSetBlockHeight => signature.with_names(&["height"]),
+            Self::TestAdvanceBlocks => signature.with_names(&["count"]),
+            Self::TestSetTransactionTimeMs => signature.with_names(&["time_ms"]),
+            Self::SetAccountMetadata => signature.with_names(&["account", "key", "value"]),
             Self::MintAsset | Self::BurnAsset => {
                 signature.with_names(&["account", "asset_definition", "amount"])
             }
@@ -2511,17 +2649,17 @@ impl Builtin {
             Self::TransferDomain => signature.with_names(&["source", "domain", "destination"]),
             Self::RegisterAccount | Self::UnregisterAccount => signature.with_names(&["account"]),
             Self::RegisterAsset => {
-                signature.with_names(&["asset_definition", "name", "scale", "mintable"])
-            }
-            Self::CreateNewAsset => {
-                signature.with_names(&["asset_definition", "name", "scale", "owner", "mintable"])
+                signature.with_names(&["asset_definition", "name", "spec", "mintable"])
             }
             Self::UnregisterAsset => signature.with_names(&["asset_definition"]),
             Self::RegisterPeer | Self::UnregisterPeer => signature.with_names(&["peer"]),
-            Self::RegisterTrigger | Self::UnregisterTrigger => signature.with_names(&["trigger"]),
+            // The Json trigger specification and the Name of a registered
+            // trigger carry different labels so the two cannot be confused.
+            Self::RegisterTrigger => signature.with_names(&["trigger_spec"]),
+            Self::UnregisterTrigger => signature.with_names(&["trigger"]),
             Self::SetTriggerEnabled => signature.with_names(&["trigger", "enabled"]),
-            Self::CreateRole => signature.with_names(&["role", "permissions"]),
-            Self::DeleteRole => signature.with_names(&["role"]),
+            Self::RegisterRole => signature.with_names(&["role", "permissions"]),
+            Self::UnregisterRole => signature.with_names(&["role"]),
             Self::AddSignatory | Self::RemoveSignatory => {
                 signature.with_names(&["account", "signatory"])
             }
@@ -2598,7 +2736,12 @@ impl Builtin {
             | Self::GetAccountId
             | Self::GetAssetDefinitionId
             | Self::GetNftId
-            | Self::GetBlobHex => signature.with_names(&["object", "key"]),
+            | Self::GetBytesHex
+            | Self::GetString
+            | Self::GetBool => signature.with_names(&["object", "key"]),
+            Self::NumericSpecFractional => signature.with_names(&["scale"]),
+            Self::MintableLimited => signature.with_names(&["tokens"]),
+            Self::DivCeil => signature.with_names(&["dividend", "divisor"]),
             Self::NumericAdd
             | Self::NumericSub
             | Self::NumericMul
@@ -2626,7 +2769,6 @@ impl Builtin {
             | Self::WrappingMul
             | Self::Min
             | Self::Max
-            | Self::DivCeil
             | Self::Gcd
             | Self::Mean
             | Self::Poseidon2
@@ -2636,55 +2778,32 @@ impl Builtin {
         }
     }
     /// Return the source argument policy attached to this builtin.
+    ///
+    /// See [`BuiltinCallPolicy`] for the published rule. `test::` entries keep
+    /// the policies the test runner documents.
     pub const fn call_policy(self) -> BuiltinCallPolicy {
         use BuiltinCallPolicy::{Named, PositionalPrefix};
+        let arity = self.signature().parameters.len();
         match self {
-            Self::PointerConstructor(_)
-            | Self::StateGet
-            | Self::StateDel
-            | Self::StateHas
-            | Self::StateLen
-            | Self::StateCount
-            | Self::QueryExecuteNorito
-            | Self::QueryGetContractManifest
-            | Self::QueryGetAccount
-            | Self::QueryGetAsset
-            | Self::QueryGetAssetDefinition
-            | Self::QueryGetDomain
-            | Self::QueryGetNft
-            | Self::QueryGetParameter
-            | Self::QueryGetContractInstance
-            | Self::DebugPrint
-            | Self::DebugLog
-            | Self::Info
-            | Self::TestActorAccount
-            | Self::TestActorPublicKey
-            | Self::BytesLen
-            | Self::GetPrivateInput
-            | Self::Pubkgen
-            | Self::Sm3Hash
-            | Self::Sha256Hash
-            | Self::Sha3Hash
-            | Self::Blake2b256Hash
-            | Self::Keccak256Hash
-            | Self::IrohaHash
-            | Self::WrappingNeg
-            | Self::Isqrt
-            | Self::Abs
-            | Self::Assert => PositionalPrefix(1),
+            Self::Assert => PositionalPrefix(1),
+            Self::AssertEq
+            | Self::TestInvokeEntrypoint
+            | Self::TestInvokeEntrypointAs
+            | Self::TestExpectRejectAs
+            | Self::TestExpectAnyRejectAs
+            | Self::TestActorSign => Named,
+            // Pure helpers whose operands read naturally in order.
             Self::Require
-            | Self::Contains
-            | Self::StateMapRemove
-            | Self::Path
-            | Self::GetInt
-            | Self::GetDecimal
-            | Self::GetQuantity
-            | Self::GetJson
-            | Self::GetName
-            | Self::GetAccountId
-            | Self::GetAssetDefinitionId
-            | Self::GetNftId
-            | Self::GetBlobHex => PositionalPrefix(2),
+            | Self::WrappingAdd
+            | Self::WrappingSub
+            | Self::WrappingMul
+            | Self::Min
+            | Self::Max
+            | Self::DivCeil
+            | Self::Gcd
+            | Self::Mean => PositionalPrefix(arity),
+            _ if arity == 1 => PositionalPrefix(1),
+            _ if matches!(self.surface(), BuiltinSurface::MethodOnly) => PositionalPrefix(arity),
             _ => Named,
         }
     }
@@ -2704,6 +2823,103 @@ impl Builtin {
             call_policy: self.call_policy(),
         }
     }
+    /// Render the Markdown table of production builtins whose call policy
+    /// requires labels, in source-name order.
+    ///
+    /// `specs/kotodama_grammar.md` embeds this table between the
+    /// `kotodama-v1-builtin-call-policy` generated markers; a registry test
+    /// keeps the two identical. Every builtin absent from the table accepts
+    /// positional arguments.
+    pub fn render_label_required_table() -> String {
+        let mut rows = Self::registry()
+            .filter(|(_, spec)| {
+                spec.surface != BuiltinSurface::CompilerInternal
+                    && spec.mode != BuiltinMode::TestFunctionOnly
+                    && spec.mode != BuiltinMode::TestOnly
+            })
+            .filter_map(|(_, spec)| {
+                let labels = spec
+                    .signature
+                    .parameter_names
+                    .iter()
+                    .zip(spec.signature.parameters)
+                    .enumerate()
+                    .filter(|(index, _)| spec.call_policy.label_required(*index))
+                    .map(|(_, (name, parameter))| {
+                        if parameter.ends_with('?') {
+                            format!("`{name}:` (optional)")
+                        } else {
+                            format!("`{name}:`")
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                (!labels.is_empty()).then(|| format!("| `{}` | {} |", spec.name, labels.join(", ")))
+            })
+            .collect::<Vec<_>>();
+        rows.sort();
+        let mut table = String::from("| Builtin | Required labels |\n| --- | --- |\n");
+        for row in rows {
+            table.push_str(&row);
+            table.push('\n');
+        }
+        table
+    }
+    /// Whether the builtin denotes a compile-time `NumericSpec`, `Mintable` or
+    /// `SignatureScheme` value.
+    ///
+    /// These values exist only as arguments to the registry parameters of the
+    /// same type. `Mintable` and `SignatureScheme` are compiler-owned nominal
+    /// enums spelled like `ListError::IndexOutOfBounds`: payloadless variants
+    /// are paths (`Mintable::Once`, `SignatureScheme::Ed25519`) and the payload
+    /// variant is a call (`Mintable::Limited(3)`). `NumericSpec` values are the
+    /// data model's constructor calls (`NumericSpec::integer()`,
+    /// `NumericSpec::fractional(2)`). The compiler folds every one into a
+    /// register word and never materializes a runtime value.
+    pub const fn is_compile_time_nominal(self) -> bool {
+        matches!(
+            self,
+            Self::NumericSpecUnconstrained
+                | Self::NumericSpecInteger
+                | Self::NumericSpecFractional
+                | Self::MintableInfinitely
+                | Self::MintableOnce
+                | Self::MintableNot
+                | Self::MintableLimited
+                | Self::SignatureSchemeEd25519
+                | Self::SignatureSchemeSecp256k1
+                | Self::SignatureSchemeMlDsa
+        )
+    }
+    /// The compile-time nominal value spelled `path`, such as
+    /// `Mintable::Once` or `NumericSpec::fractional`.
+    pub fn nominal_value(path: &str) -> Option<Self> {
+        Self::from_source_name(path).filter(|builtin| builtin.is_compile_time_nominal())
+    }
+    /// Whether this compile-time nominal value is written as a bare path
+    /// (`Mintable::Once`) rather than a call (`NumericSpec::integer()`,
+    /// `Mintable::Limited(3)`).
+    pub const fn is_nominal_path(self) -> bool {
+        matches!(
+            self,
+            Self::MintableInfinitely
+                | Self::MintableOnce
+                | Self::MintableNot
+                | Self::SignatureSchemeEd25519
+                | Self::SignatureSchemeSecp256k1
+                | Self::SignatureSchemeMlDsa
+        )
+    }
+    /// Scheme code a `SignatureScheme` value passes to `VERIFY_SIGNATURE` in
+    /// `r13`; the codes are the IVM host's `1` Ed25519, `2` secp256k1 and
+    /// `3` ML-DSA.
+    pub const fn signature_scheme_code(self) -> Option<u8> {
+        match self {
+            Self::SignatureSchemeEd25519 => Some(1),
+            Self::SignatureSchemeSecp256k1 => Some(2),
+            Self::SignatureSchemeMlDsa => Some(3),
+            _ => None,
+        }
+    }
     /// Whether the builtin is a JSON payload helper that public/view entrypoints
     /// must reject in favor of typed parameters.
     pub const fn is_payload_helper(self) -> bool {
@@ -2717,7 +2933,9 @@ impl Builtin {
                 | Self::GetAccountId
                 | Self::GetAssetDefinitionId
                 | Self::GetNftId
-                | Self::GetBlobHex
+                | Self::GetBytesHex
+                | Self::GetString
+                | Self::GetBool
                 | Self::TriggerEvent
         )
     }
@@ -2733,7 +2951,7 @@ mod tests {
     fn release_mutators_are_effectful_in_canonical_registry() {
         for name in [
             "transfer_asset",
-            "create_new_asset",
+            "register_asset",
             "create_nfts_for_all_users",
             "transfer_batch",
             "axt_begin",
@@ -2776,6 +2994,9 @@ mod tests {
             Builtin::TestActorAccount,
             Builtin::TestActorPublicKey,
             Builtin::TestActorSign,
+            Builtin::TestSetBlockHeight,
+            Builtin::TestAdvanceBlocks,
+            Builtin::TestSetTransactionTimeMs,
         ] {
             assert_eq!(builtin.mode(), BuiltinMode::TestFunctionOnly, "{builtin:?}");
             assert!(builtin.source_name().starts_with("test::"), "{builtin:?}");
@@ -2975,6 +3196,10 @@ mod tests {
             ]
         );
         assert_eq!(Builtin::StateSet.call_policy(), BuiltinCallPolicy::Named);
+        assert_eq!(
+            Builtin::TransferAsset.signature().parameters.last(),
+            Some(&"DataSpaceId?")
+        );
         for builtin in Builtin::all() {
             if builtin.source_name().starts_with("ledger::")
                 && builtin.call_policy() == BuiltinCallPolicy::Named
@@ -2992,12 +3217,21 @@ mod tests {
         for (builtin, names) in [
             (Builtin::AddSignatory, &["account", "signatory"][..]),
             (Builtin::SetAccountQuorum, &["account", "quorum"][..]),
-            (Builtin::RegisterTrigger, &["trigger"][..]),
-            (Builtin::DeleteRole, &["role"][..]),
-            (Builtin::RegisterPeer, &["peer"][..]),
         ] {
             assert_eq!(builtin.signature().parameter_names, names);
             assert_eq!(builtin.call_policy(), BuiltinCallPolicy::Named);
+        }
+        for (builtin, names) in [
+            (Builtin::RegisterTrigger, &["trigger_spec"][..]),
+            (Builtin::UnregisterTrigger, &["trigger"][..]),
+            (Builtin::UnregisterRole, &["role"][..]),
+            (Builtin::RegisterPeer, &["peer"][..]),
+        ] {
+            assert_eq!(builtin.signature().parameter_names, names);
+            assert_eq!(
+                builtin.call_policy(),
+                BuiltinCallPolicy::PositionalPrefix(1)
+            );
         }
         assert_eq!(
             Builtin::BytesLen.call_policy(),
@@ -3007,7 +3241,10 @@ mod tests {
             Builtin::GetInt.call_policy(),
             BuiltinCallPolicy::PositionalPrefix(2)
         );
-        assert_eq!(Builtin::GetOr.call_policy(), BuiltinCallPolicy::Named);
+        assert_eq!(
+            Builtin::GetOrInsert.call_policy(),
+            BuiltinCallPolicy::PositionalPrefix(3)
+        );
         assert_eq!(Builtin::AssertEq.call_policy(), BuiltinCallPolicy::Named);
     }
     #[test]
@@ -3233,12 +3470,26 @@ mod tests {
             (Builtin::GetAccountId, "AccountId"),
             (Builtin::GetAssetDefinitionId, "AssetDefinitionId"),
             (Builtin::GetNftId, "NftId"),
-            (Builtin::GetBlobHex, "bytes"),
+            (Builtin::GetBytesHex, "bytes"),
+            (Builtin::GetString, "string"),
+            (Builtin::GetBool, "bool"),
         ] {
             let expected = format!("Option<{payload}>");
             assert_eq!(getter.signature().return_type, expected);
+            assert_eq!(getter.surface(), BuiltinSurface::MethodOnly, "{getter:?}");
+            assert_eq!(getter.source_name(), getter.name(), "{getter:?}");
+            assert_eq!(
+                getter.call_policy(),
+                BuiltinCallPolicy::PositionalPrefix(2),
+                "{getter:?}"
+            );
         }
-        assert_eq!(Builtin::GetQuantity.source_name(), "json::get_quantity");
+        assert_eq!(Builtin::GetQuantity.source_name(), "get_quantity");
+        assert_eq!(Builtin::GetBytesHex.name(), "get_bytes_hex");
+        for retired in ["json::get_int", "json::get_bytes_hex", "get_blob_hex"] {
+            assert_eq!(Builtin::from_source_name(retired), None, "{retired}");
+            assert_eq!(Builtin::from_name(retired), None, "{retired}");
+        }
     }
     #[test]
     fn source_visible_helpers_are_namespaced_except_language_intrinsics() {
@@ -3316,9 +3567,7 @@ mod tests {
     fn state_map_and_path_helpers_are_method_only() {
         for builtin in [
             Builtin::Contains,
-            Builtin::GetOrDefault,
-            Builtin::GetOr,
-            Builtin::Ensure,
+            Builtin::GetOrInsert,
             Builtin::StateMapRemove,
             Builtin::Path,
         ] {
@@ -3329,6 +3578,20 @@ mod tests {
                 "{builtin:?}"
             );
         }
+        // The documented StateMap read surface is `get(key)` returning
+        // `Option<V>`; the implicit-default helpers are not builtins.
+        for retired in ["get_or", "get_or_default", "ensure"] {
+            assert_eq!(Builtin::from_name(retired), None, "{retired}");
+        }
+        assert_eq!(
+            Builtin::GetOrInsert.effects(),
+            BuiltinEffects::DURABLE_STATE
+        );
+        assert_eq!(Builtin::GetOrInsert.access(), BuiltinAccess::StateWrite);
+        assert_eq!(
+            Builtin::GetOrInsert.signature().parameters,
+            &["StateMap<K,V>", "K", "V"]
+        );
     }
     #[test]
     fn public_input_registry_matches_the_typed_bytes_surface() {
@@ -3545,6 +3808,232 @@ mod tests {
             Builtin::TestExpectRejectAs.signature().parameter_names,
             &["actor", "kotoage", "arguments", "expected"]
         );
+    }
+    #[test]
+    fn call_policy_follows_the_published_label_rule() {
+        for (builtin, spec) in Builtin::registry() {
+            if spec.surface == BuiltinSurface::CompilerInternal || spec.name.starts_with("test::") {
+                continue;
+            }
+            let arity = spec.signature.parameters.len();
+            let label_optional = (0..arity).all(|index| !spec.call_policy.label_required(index));
+            if arity == 1 || spec.surface == BuiltinSurface::MethodOnly {
+                assert!(
+                    label_optional,
+                    "{builtin:?} must accept positional arguments"
+                );
+            }
+            if spec.name.starts_with("math::") || spec.name == "require" {
+                assert!(
+                    label_optional,
+                    "pure helper {builtin:?} must accept positional arguments"
+                );
+            }
+            if arity > 1
+                && spec.name.starts_with("ledger::")
+                && spec.access == BuiltinAccess::LedgerWrite
+            {
+                assert_eq!(
+                    spec.call_policy,
+                    BuiltinCallPolicy::Named,
+                    "multi-argument ledger mutation {builtin:?} must require labels"
+                );
+            }
+        }
+        assert!(BuiltinCallPolicy::Named.label_required(0));
+        assert!(!BuiltinCallPolicy::PositionalPrefix(2).label_required(1));
+        assert!(BuiltinCallPolicy::PositionalPrefix(2).label_required(2));
+        assert_eq!(
+            Builtin::DivCeil.signature().parameter_names,
+            &["dividend", "divisor"]
+        );
+    }
+    #[test]
+    fn asset_registration_takes_typed_spec_and_mintability() {
+        let spec = Builtin::RegisterAsset.spec();
+        assert_eq!(
+            spec.signature.parameters,
+            &["AssetDefinitionId", "string", "NumericSpec", "Mintable"]
+        );
+        assert_eq!(
+            spec.signature.parameter_names,
+            &["asset_definition", "name", "spec", "mintable"]
+        );
+        assert_eq!(
+            spec.operation_syscalls,
+            &[ivm_abi::syscalls::SYSCALL_REGISTER_ASSET]
+        );
+        assert_eq!(Builtin::from_source_name("ledger::asset::create"), None);
+        assert_eq!(Builtin::from_name("create_new_asset"), None);
+        for (builtin, source_name, parameters, return_type) in [
+            (
+                Builtin::NumericSpecUnconstrained,
+                "NumericSpec::unconstrained",
+                &[][..],
+                "NumericSpec",
+            ),
+            (
+                Builtin::NumericSpecInteger,
+                "NumericSpec::integer",
+                &[][..],
+                "NumericSpec",
+            ),
+            (
+                Builtin::NumericSpecFractional,
+                "NumericSpec::fractional",
+                &["int"][..],
+                "NumericSpec",
+            ),
+            (
+                Builtin::MintableInfinitely,
+                "Mintable::Infinitely",
+                &[][..],
+                "Mintable",
+            ),
+            (Builtin::MintableOnce, "Mintable::Once", &[][..], "Mintable"),
+            (Builtin::MintableNot, "Mintable::Not", &[][..], "Mintable"),
+            (
+                Builtin::MintableLimited,
+                "Mintable::Limited",
+                &["int"][..],
+                "Mintable",
+            ),
+        ] {
+            assert_eq!(builtin.source_name(), source_name);
+            assert_eq!(Builtin::from_source_name(source_name), Some(builtin));
+            assert_eq!(Builtin::nominal_value(source_name), Some(builtin));
+            assert_eq!(builtin.signature().parameters, parameters);
+            assert_eq!(builtin.signature().return_type, return_type);
+            assert_eq!(builtin.effects(), BuiltinEffects::NONE);
+            assert_eq!(builtin.access(), BuiltinAccess::None);
+            assert_eq!(builtin.lowering(), BuiltinLowering::Instructions);
+            assert!(builtin.is_compile_time_nominal());
+        }
+        assert!(!Builtin::RegisterAsset.is_compile_time_nominal());
+        assert!(Builtin::MintableOnce.is_nominal_path());
+        assert!(!Builtin::MintableLimited.is_nominal_path());
+        assert!(!Builtin::NumericSpecInteger.is_nominal_path());
+    }
+    #[test]
+    fn signature_verification_takes_a_compile_time_scheme() {
+        let verify = Builtin::VerifySignature.spec();
+        assert_eq!(verify.name, "crypto::verify_signature");
+        assert_eq!(
+            verify.signature.parameters,
+            &["bytes", "bytes", "bytes", "SignatureScheme"]
+        );
+        assert_eq!(
+            verify.signature.parameter_names,
+            &["message", "signature", "public_key", "scheme"]
+        );
+        assert_eq!(verify.call_policy, BuiltinCallPolicy::Named);
+        assert_eq!(
+            verify.operation_syscalls,
+            &[ivm_abi::syscalls::SYSCALL_VERIFY_SIGNATURE]
+        );
+        for (builtin, path, code) in [
+            (
+                Builtin::SignatureSchemeEd25519,
+                "SignatureScheme::Ed25519",
+                1,
+            ),
+            (
+                Builtin::SignatureSchemeSecp256k1,
+                "SignatureScheme::Secp256k1",
+                2,
+            ),
+            (Builtin::SignatureSchemeMlDsa, "SignatureScheme::MlDsa", 3),
+        ] {
+            assert_eq!(builtin.source_name(), path);
+            assert_eq!(Builtin::nominal_value(path), Some(builtin));
+            assert_eq!(builtin.signature_scheme_code(), Some(code));
+            assert!(builtin.is_nominal_path());
+            assert!(builtin.signature().parameters.is_empty());
+            assert_eq!(builtin.signature().return_type, "SignatureScheme");
+            assert_eq!(builtin.effects(), BuiltinEffects::NONE);
+            assert!(builtin.is_compile_time_nominal());
+        }
+        assert_eq!(Builtin::Sm2Verify.signature_scheme_code(), None);
+        assert_eq!(Builtin::VerifySignature.signature_scheme_code(), None);
+        assert_eq!(Builtin::nominal_value("crypto::verify_signature"), None);
+        for retired in [
+            "crypto::ed25519::verify",
+            "crypto::secp256k1::verify",
+            "crypto::ml_dsa::verify",
+        ] {
+            assert_eq!(Builtin::from_source_name(retired), None, "{retired}");
+        }
+    }
+    #[test]
+    fn ledger_vocabulary_uses_register_unregister_and_metadata() {
+        for (builtin, source_name) in [
+            (Builtin::RegisterRole, "ledger::role::register"),
+            (Builtin::UnregisterRole, "ledger::role::unregister"),
+            (Builtin::SetAccountMetadata, "ledger::account::set_metadata"),
+            (Builtin::NftSetMetadata, "ledger::nft::set_metadata"),
+        ] {
+            assert_eq!(builtin.source_name(), source_name);
+            assert_eq!(Builtin::from_source_name(source_name), Some(builtin));
+        }
+        for retired in [
+            "ledger::role::create",
+            "ledger::role::delete",
+            "ledger::account::set_detail",
+        ] {
+            assert_eq!(Builtin::from_source_name(retired), None, "{retired}");
+        }
+        assert_eq!(
+            Builtin::SetTriggerEnabled.signature().parameters,
+            &["Name", "bool"]
+        );
+    }
+    #[test]
+    fn clock_accessors_name_their_trust_source() {
+        assert_eq!(
+            Builtin::TransactionTimeMs.source_name(),
+            "context::transaction_time_ms"
+        );
+        assert_eq!(
+            Builtin::TransactionTimeMs.operation_syscalls(),
+            &[ivm_abi::syscalls::SYSCALL_CURRENT_TIME_MS]
+        );
+        assert_eq!(
+            Builtin::BlockTimeMs.surface(),
+            BuiltinSurface::CompilerInternal
+        );
+        assert_eq!(Builtin::from_source_name("context::block_time_ms"), None);
+        assert_eq!(Builtin::from_source_name("context::current_time_ms"), None);
+        assert_eq!(Builtin::from_name("current_time_ms"), None);
+    }
+    #[test]
+    fn debug_info_is_diagnostics_only() {
+        let spec = Builtin::Info.spec();
+        assert_eq!(spec.effects, BuiltinEffects::NONE);
+        assert_eq!(spec.access, BuiltinAccess::None);
+        assert_eq!(spec.mode, BuiltinMode::Any);
+        assert_eq!(
+            spec.operation_syscalls,
+            &[
+                ivm_abi::syscalls::SYSCALL_POINTER_TO_NORITO,
+                ivm_abi::syscalls::SYSCALL_DEBUG_LOG
+            ]
+        );
+    }
+    #[test]
+    fn spec_label_table_is_generated_from_the_call_policy() {
+        let spec = include_str!("../../../specs/kotodama_grammar.md");
+        let start = "<!-- BEGIN GENERATED: kotodama-v1-builtin-call-policy -->\n";
+        let end = "<!-- END GENERATED: kotodama-v1-builtin-call-policy -->";
+        let begin = spec.find(start).expect("call-policy start marker") + start.len();
+        let finish = spec[begin..].find(end).expect("call-policy end marker") + begin;
+        let expected = Builtin::render_label_required_table();
+        assert_eq!(
+            &spec[begin..finish],
+            expected,
+            "regenerate the spec's builtin label table:\n{expected}"
+        );
+        assert!(expected.contains("| `ledger::asset::transfer` | `source:`"));
+        assert!(!expected.contains("`math::min`"));
     }
     #[test]
     fn forbidden_raw_surfaces_do_not_resolve() {

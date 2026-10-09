@@ -2,7 +2,15 @@
 // The payer is bound to context::authority() when the escrow is opened.
 seiyaku ThresholdEscrow {
     error enum EscrowError {
-        AlreadyOpen = 1, AlreadyReleased = 2, AlreadyRefunded = 3, NotOpen = 4, UnauthorizedPayer = 5, NonPositiveTarget = 6, NonPositiveAmount = 7, TargetExceeded = 8, NotFullyFunded = 9,
+        AlreadyOpen = 1,
+        AlreadyReleased = 2,
+        AlreadyRefunded = 3,
+        NotOpen = 4,
+        UnauthorizedPayer = 5,
+        NonPositiveTarget = 6,
+        NonPositiveAmount = 7,
+        TargetExceeded = 8,
+        NotFullyFunded = 9,
     }
 
     const string recipient_account_literal = "sorauﾛ1PｽNgｿﾘ9ﾏﾕ2ﾕ9ﾄZﾀﾃﾌWwNｸｾヰﾄﾂT3WｺTxｶｵﾎKﾓﾛmｷ4Y6PLN";
@@ -77,7 +85,6 @@ seiyaku ThresholdEscrow {
             destination: AccountId::parse(escrow_account_literal),
             asset_definition: AssetDefinitionId::parse(escrow_asset_definition_literal),
             amount: amount,
-            dataspace: DataSpaceId::parse("0"),
         );
         funded_amount_value = next_funded;
     }
@@ -90,7 +97,6 @@ seiyaku ThresholdEscrow {
             destination: AccountId::parse(recipient_account_literal),
             asset_definition: AssetDefinitionId::parse(escrow_asset_definition_literal),
             amount: funded_amount_value,
-            dataspace: DataSpaceId::parse("0"),
         );
         is_open = false;
         is_released = true;
@@ -100,13 +106,12 @@ seiyaku ThresholdEscrow {
         assert_open();
         assert_payer();
         let funded = funded_amount_value;
-        if (funded > 0) {
+        if funded > 0 {
             ledger::asset::transfer(
                 source: AccountId::parse(escrow_account_literal),
                 destination: context::authority(),
                 asset_definition: AssetDefinitionId::parse(escrow_asset_definition_literal),
                 amount: funded,
-                dataspace: DataSpaceId::parse("0"),
             );
         }
         is_open = false;

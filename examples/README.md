@@ -33,14 +33,15 @@ iroha --config defaults/client.toml \
 Kotodama V1 has no implicit entrypoint or source-order dispatch. Always select
 the public `kotoage fn`/`言挙げ fn` or `view fn` by name. The local debugger reports gas,
 cycles, syscalls, queued instructions, durable-state changes, and source-aware
-traps.
+traps. `koto test` reports the gas and cycles of every test, and
+`koto test run --gas-report` adds a per-kotoage gas table.
 
 ## Files
 
 - `coffee-club/` packages a small rewards contract with Musubi and includes four
   Kotodama VM tests; see its README for the local workflow.
 - `hello/hello.ko` logs a greeting and calls
-  `ledger::account::set_detail` for `context::authority()`.
+  `ledger::account::set_metadata` for `context::authority()`.
 - `transfer/transfer.ko` uses typed pointer constructors and
   `ledger::asset::transfer`.
 - `nft/nft.ko` uses `ledger::nft::mint` and `ledger::nft::transfer`.

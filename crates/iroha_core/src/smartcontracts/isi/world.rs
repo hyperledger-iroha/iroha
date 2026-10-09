@@ -18079,15 +18079,6 @@ pub mod isi {
                         ));
                     }
                 }
-                if custom.id()
-                    == &iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1::parameter_id()
-                {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "direct asset namespace bindings can only be changed by native registration or retirement".to_owned(),
-                        ),
-                    ));
-                }
                 if custom.id() == &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id() {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -18590,31 +18581,6 @@ pub mod isi {
         const TEST_NATIVE_CIRCUIT_ID: &str =
             crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         const TEST_OTHER_NATIVE_CIRCUIT_ID: &str = "pipa-r/pasta/kaigi-authorization-v1";
-
-        #[test]
-        fn generic_parameter_cannot_create_or_replace_direct_asset_home_authority() {
-            use iroha_data_model::parameter::CustomParameter;
-            let state = blank_test_state();
-            let mut block = state.block(first_test_block_header());
-            let mut tx = block.transaction();
-            let id = iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1::parameter_id();
-            for payload in [
-                iroha_primitives::json::Json::new(0_u32),
-                iroha_primitives::json::Json::new("malformed"),
-            ] {
-                let instruction =
-                    SetParameter::new(Parameter::Custom(CustomParameter::new(id.clone(), payload)));
-                let error = instruction
-                    .execute(&ALICE_ID, &mut tx)
-                    .expect_err("reserved native authority");
-                assert!(
-                    error
-                        .to_string()
-                        .contains("native registration or retirement")
-                );
-                assert!(tx.world.parameters.get().custom().get(&id).is_none());
-            }
-        }
 
         #[test]
         fn proposal_status_mirrors_every_parliament_attempt_outcome() {

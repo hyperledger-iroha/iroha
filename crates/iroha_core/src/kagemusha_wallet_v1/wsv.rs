@@ -286,16 +286,29 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
         {
             return Err(Error::Binding);
         }
-        match (
-            definition.balance_scope_policy(),
-            registration.balance_scope,
-        ) {
-            (AssetBalancePolicy::Global, AssetBalanceScope::Global) => {}
-            (AssetBalancePolicy::DataspaceRestricted, AssetBalanceScope::Dataspace(id))
-                if id != iroha_model_base::topology::DataSpaceId::UNIVERSAL => {}
-            _ => return Err(Error::Binding),
+        if !registration_scope_matches_home(&self.state.world, definition, registration.balance_scope)
+        {
+            return Err(Error::Binding);
         }
         Ok(())
+    }
+}
+
+/// A registration's balance scope must be exactly the definition's balance home.
+///
+/// Global definitions register the global scope. A dataspace-restricted definition registers
+/// `Dataspace(H)` for its non-universal home H, never a foreign or universal bucket.
+pub(crate) fn registration_scope_matches_home(
+    world: &(impl crate::state::WorldReadOnly + ?Sized),
+    definition: &iroha_data_model::asset::AssetDefinition,
+    scope: AssetBalanceScope,
+) -> bool {
+    match (definition.balance_scope_policy(), scope) {
+        (AssetBalancePolicy::Global, AssetBalanceScope::Global) => true,
+        (AssetBalancePolicy::DataspaceRestricted, AssetBalanceScope::Dataspace(dataspace)) => {
+            crate::read_scope::confined_home(world, definition).ok().flatten() == Some(dataspace)
+        }
+        _ => false,
     }
 }
 

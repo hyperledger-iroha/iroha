@@ -62,6 +62,11 @@ fn resolve_unit(
         }
     }
     if !failures.is_empty() {
+        // TODO: adopt `crate::resolved::resolve_recovering` here and type check
+        // the reduced units during linking, as `CompilerSession::check` does,
+        // so project checks also report type errors from functions that
+        // resolved cleanly. The graph path needs the reduced units threaded
+        // through `TypedLinker::link` with their failures filtered by function.
         let mut diagnostics = DiagnosticBundle::new(failures);
         for file in &unit.files {
             diagnostics.capture_source(&file.file);

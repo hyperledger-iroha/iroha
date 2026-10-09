@@ -616,35 +616,26 @@ fn exact_asset_definition_binding_absence_requires_complete_certified_native_cut
 }
 
 #[test]
-fn certified_direct_home_requires_exact_parameters_current_incarnation_and_active_binding() {
+fn certified_direct_home_requires_exact_row_current_incarnation_and_domainless_definition() {
     use crate::{
         Registrable,
         account::AccountId,
-        asset::{
-            AssetBalancePolicy, AssetDefinition, AssetDefinitionDataspaceBindingV1,
-            AssetDefinitionDataspaceRegistryV1,
-        },
-        parameter::Parameters,
+        asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionDirectHomeV1},
     };
-    use iroha_model_base::topology::DataSpaceId;
+    use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
     use iroha_primitives::numeric::NumericSpec;
-    use std::collections::BTreeMap;
     let (_, asset, incarnation, _) = snapshot();
     let key = iroha_crypto::KeyPair::from_seed(vec![27; 32], iroha_crypto::Algorithm::Ed25519);
     let owner = AccountId::new(key.public_key().clone());
     let home = DataSpaceId::new(7);
-    let mut registry = AssetDefinitionDataspaceRegistryV1 {
-        version: 1,
-        bindings: BTreeMap::from([(
-            asset.clone(),
-            AssetDefinitionDataspaceBindingV1 {
-                asset_definition_id: asset.clone(),
-                incarnation,
-                dataspace_id: home,
-                active: true,
-            },
-        )]),
+    let row = AssetDefinitionDirectHomeV1 {
+        incarnation,
+        dataspace_id: home,
     };
+    let other = AxtAssetIncarnationV1::try_from_bytes(
+        *Hash::new(b"another actual registration").as_ref(),
+    )
+    .unwrap();
     for policy in [
         AssetBalancePolicy::Global,
         AssetBalancePolicy::DataspaceRestricted,
@@ -657,83 +648,101 @@ fn certified_direct_home_requires_exact_parameters_current_incarnation_and_activ
             None,
         )
         .build(&owner);
-        let parameters_for = |registry: &AssetDefinitionDataspaceRegistryV1| {
-            let mut p = Parameters::default();
-            p.custom.insert(
-                AssetDefinitionDataspaceRegistryV1::parameter_id(),
-                registry.clone().into_custom_parameter().unwrap(),
-            );
-            p
-        };
-        let make_world = |parameters: &Parameters,
+        let make_world = |definition: &AssetDefinition,
+                          stored_row: Option<&AssetDefinitionDirectHomeV1>,
                           registered_incarnation: AxtAssetIncarnationV1| {
+            let mut entries = vec![
+                WorldStateSnapshotEntryV1 {
+                    field_id: "world.asset_definitions".into(),
+                    kind: WorldStateElementKindV1::Table,
+                    key_hash: Some(world_state_value_hash_v1(&asset).unwrap()),
+                    value_hash: world_state_value_hash_v1(definition).unwrap(),
+                },
+                WorldStateSnapshotEntryV1 {
+                    field_id: "world.axt_asset_incarnations".into(),
+                    kind: WorldStateElementKindV1::Table,
+                    key_hash: Some(world_state_value_hash_v1(&asset).unwrap()),
+                    value_hash: world_state_value_hash_v1(&registered_incarnation).unwrap(),
+                },
+            ];
+            if let Some(stored_row) = stored_row {
+                entries.push(WorldStateSnapshotEntryV1 {
+                    field_id: "world.asset_definition_direct_homes".into(),
+                    kind: WorldStateElementKindV1::Table,
+                    key_hash: Some(world_state_value_hash_v1(&asset).unwrap()),
+                    value_hash: world_state_value_hash_v1(stored_row).unwrap(),
+                });
+            }
             let mut snapshot = WorldStateSnapshotV1 {
                 schema_hash: Hash::new(b"synthetic complete direct home schema"),
-                entries: vec![
-                    WorldStateSnapshotEntryV1 {
-                        field_id: "world.asset_definitions".into(),
-                        kind: WorldStateElementKindV1::Table,
-                        key_hash: Some(world_state_value_hash_v1(&asset).unwrap()),
-                        value_hash: world_state_value_hash_v1(&definition).unwrap(),
-                    },
-                    WorldStateSnapshotEntryV1 {
-                        field_id: "world.axt_asset_incarnations".into(),
-                        kind: WorldStateElementKindV1::Table,
-                        key_hash: Some(world_state_value_hash_v1(&asset).unwrap()),
-                        value_hash: world_state_value_hash_v1(&registered_incarnation).unwrap(),
-                    },
-                    WorldStateSnapshotEntryV1 {
-                        field_id: "world.parameters".into(),
-                        kind: WorldStateElementKindV1::Cell,
-                        key_hash: None,
-                        value_hash: world_state_value_hash_v1(parameters).unwrap(),
-                    },
-                ],
+                entries,
             };
             snapshot.entries.sort_by(|a, b| {
                 (&a.field_id, a.kind, a.key_hash).cmp(&(&b.field_id, b.kind, b.key_hash))
             });
             snapshot.authenticate(&certify(&snapshot)).unwrap()
         };
-        let params = parameters_for(&registry);
-        let world = make_world(&params, incarnation);
+        let world = make_world(&definition, Some(&row), incarnation);
         world
-            .verify_asset_definition_direct_dataspace_home(&definition, &params, home)
+            .verify_asset_definition_direct_home(&definition, &row, home)
             .unwrap();
+        // Wrong expected dataspace, including the reserved universal dataspace.
         assert!(
             world
-                .verify_asset_definition_direct_dataspace_home(
+                .verify_asset_definition_direct_home(&definition, &row, DataSpaceId::new(8))
+                .is_err()
+        );
+        let universal = AssetDefinitionDirectHomeV1 {
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            ..row
+        };
+        assert!(
+            world
+                .verify_asset_definition_direct_home(
                     &definition,
-                    &params,
-                    DataSpaceId::new(8)
+                    &universal,
+                    DataSpaceId::UNIVERSAL
                 )
                 .is_err()
         );
+        // A tampered row (other dataspace) differs from the certified row value.
+        let moved = AssetDefinitionDirectHomeV1 {
+            dataspace_id: DataSpaceId::new(8),
+            ..row
+        };
         assert!(
             world
-                .verify_asset_definition_direct_dataspace_home(
-                    &definition,
-                    &Parameters::default(),
-                    home
-                )
+                .verify_asset_definition_direct_home(&definition, &moved, DataSpaceId::new(8))
                 .is_err()
         );
-        let other = AxtAssetIncarnationV1::try_from_bytes(
-            *Hash::new(b"another actual registration").as_ref(),
-        )
-        .unwrap();
+        // Foreign incarnation: the row and the live incarnation disagree.
         assert!(
-            make_world(&params, other)
-                .verify_asset_definition_direct_dataspace_home(&definition, &params, home)
+            make_world(&definition, Some(&row), other)
+                .verify_asset_definition_direct_home(&definition, &row, home)
                 .is_err()
         );
-        registry.bindings.get_mut(&asset).unwrap().active = false;
-        let retired = parameters_for(&registry);
+        let foreign = AssetDefinitionDirectHomeV1 {
+            incarnation: other,
+            ..row
+        };
         assert!(
-            make_world(&retired, incarnation)
-                .verify_asset_definition_direct_dataspace_home(&definition, &retired, home)
+            world
+                .verify_asset_definition_direct_home(&definition, &foreign, home)
                 .is_err()
         );
-        registry.bindings.get_mut(&asset).unwrap().active = true;
+        // Missing row.
+        assert!(
+            make_world(&definition, None, incarnation)
+                .verify_asset_definition_direct_home(&definition, &row, home)
+                .is_err()
+        );
+        // A domain-owned definition never has a direct home.
+        let mut domain_owned = definition.clone();
+        domain_owned.owning_domain = Some(DomainId::try_new("issuer", "public").unwrap());
+        assert!(
+            make_world(&domain_owned, Some(&row), incarnation)
+                .verify_asset_definition_direct_home(&domain_owned, &row, home)
+                .is_err()
+        );
     }
 }

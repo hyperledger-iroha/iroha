@@ -8028,6 +8028,35 @@ fn decode_world_fields(
             .into());
         }
     }
+    let asset_definition_direct_homes: Storage<AssetDefinitionId, AssetDefinitionDirectHomeV1> =
+        take_required(&mut map, "asset_definition_direct_homes")?;
+    let direct_homes = asset_definition_direct_homes.view();
+    for (asset_definition_id, home) in direct_homes.iter() {
+        crate::state::direct_home_dataspace(
+            Some(home),
+            definitions.get(asset_definition_id),
+            incarnations.get(asset_definition_id),
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.asset_definition_direct_homes".to_owned(),
+            message: format!("direct home of asset definition {asset_definition_id}: {error}"),
+        })?;
+    }
+    for (asset_definition_id, definition) in definitions.iter() {
+        if definition.owning_domain().is_none()
+            && definition.balance_scope_policy() == AssetBalancePolicy::DataspaceRestricted
+            && direct_homes.get(asset_definition_id).is_none()
+        {
+            return Err(json::Error::InvalidField {
+                field: "world.asset_definition_direct_homes".to_owned(),
+                message: format!(
+                    "domainless dataspace-restricted asset definition {asset_definition_id} has no direct home"
+                ),
+            }
+            .into());
+        }
+    }
+    drop(direct_homes);
     let axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord> =
         take_required(&mut map, "axt_replay_ledger")?;
     let axt_spend_nonce_ledger: Storage<AxtAnchoredSpendReplayKeyV1, u64> =
@@ -8715,6 +8744,7 @@ fn decode_world_fields(
         axt_policies,
         axt_handle_counters,
         axt_asset_incarnations,
+        asset_definition_direct_homes,
         axt_replay_ledger,
         axt_spend_nonce_ledger,
         axt_source_transfer_replay_ledger,

@@ -71,7 +71,6 @@ seiyaku AutonomousValidationFeePayout {
             destination: reward_pool(),
             asset_definition: xor,
             amount: amount_out,
-            dataspace: DataSpaceId::parse("0"),
         );
         return amount_out;
     }

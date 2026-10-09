@@ -573,7 +573,7 @@ fn private_dataspace_profiles_match_their_exact_routing_contract() {
             "routing identity and order must be exact"
         );
         assert_eq!(
-            localnet_public_validator_lanes(profile),
+            localnet_public_validator_lanes(profile, false),
             vec![LaneId::SINGLE],
             "only the canonical owner of the shared universal physical dataspace may receive mutable NPoS staking state"
         );
@@ -2254,7 +2254,7 @@ fn validate_localnet_options_rejects_zero_block_cadence() {
         block_cadence_ms: Some(0),
         consensus_mode: SumeragiConsensusMode::Npos,
     };
-    let err = validate_localnet_options(&opts, false).expect_err("zero block cadence should fail");
+    let err = validate_localnet_options(&opts).expect_err("zero block cadence should fail");
     assert!(
         err.to_string().contains("--block-cadence-ms"),
         "unexpected error: {err}"
@@ -2280,7 +2280,7 @@ fn validate_localnet_options_rejects_roster_above_protocol_maximum() {
         block_cadence_ms: None,
         consensus_mode: SumeragiConsensusMode::Npos,
     };
-    let error = validate_localnet_options(&opts, false)
+    let error = validate_localnet_options(&opts)
         .expect_err("the CLI must reject a roster above the wire-protocol limit");
     let expected = format!(
         "`--peers` ({oversized}) exceeds the Sumeragi protocol maximum validator roster of {MAX_VALIDATORS_PER_HEIGHT}"
@@ -2308,7 +2308,7 @@ fn validate_localnet_options_rejects_non_three_f_plus_one_roster() {
         block_cadence_ms: None,
         consensus_mode: SumeragiConsensusMode::Npos,
     };
-    let error = validate_localnet_options(&opts, false)
+    let error = validate_localnet_options(&opts)
         .expect_err("the CLI must reject a non-3f+1 validator roster");
     assert!(
         error.to_string().contains("exact Sumeragi 3f+1"),
@@ -2333,7 +2333,7 @@ fn validate_localnet_options_rejects_every_profile_with_too_few_peers() {
         block_cadence_ms: None,
         consensus_mode: SumeragiConsensusMode::Npos,
     };
-    let err = validate_localnet_options(&opts, false)
+    let err = validate_localnet_options(&opts)
         .expect_err("every generated localnet should enforce the minimum peer count");
     assert!(
         err.to_string().contains("`--peers` must be at least 4"),
@@ -2358,7 +2358,7 @@ fn validate_localnet_options_rejects_permissioned_on_sora_nexus() {
         block_cadence_ms: None,
         consensus_mode: SumeragiConsensusMode::Permissioned,
     };
-    let err = validate_localnet_options(&opts, false).expect_err("sora nexus should require NPoS");
+    let err = validate_localnet_options(&opts).expect_err("sora nexus should require NPoS");
     assert!(
         err.to_string().contains("sora-profile"),
         "unexpected error: {err}"
@@ -2382,8 +2382,7 @@ fn validate_localnet_options_rejects_permissioned_on_sora_dataspace() {
         block_cadence_ms: None,
         consensus_mode: SumeragiConsensusMode::Permissioned,
     };
-    let err =
-        validate_localnet_options(&opts, false).expect_err("sora profile should require NPoS");
+    let err = validate_localnet_options(&opts).expect_err("sora profile should require NPoS");
     assert!(
         err.to_string().contains("sora-profile"),
         "unexpected error: {err}"
@@ -2407,7 +2406,7 @@ fn validate_localnet_options_allows_permissioned_localnet() {
         block_cadence_ms: None,
         consensus_mode: SumeragiConsensusMode::Permissioned,
     };
-    validate_localnet_options(&opts, false).expect("permissioned localnet should be allowed");
+    validate_localnet_options(&opts).expect("permissioned localnet should be allowed");
 }
 #[test]
 fn permissioned_localnet_uses_mandatory_nexus_default() {

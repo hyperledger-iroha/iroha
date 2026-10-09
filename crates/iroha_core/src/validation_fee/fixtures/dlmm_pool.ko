@@ -5,7 +5,46 @@
 // initialized liquidity rather than scanning the numeric bin-id space.
 seiyaku DlmmPool {
     error enum DlmmPoolError {
-        IdenticalAssets = 1, InvalidFeePips = 2, InvalidBinStep = 3, InvalidBinId = 4, InvalidImpactCap = 5, InvalidMaxBinsPerSwap = 6, BinCapBelowBaseFloor = 7, BinCapBelowQuoteFloor = 8, PoolOwnerMismatch = 9, VaultOperatorMismatch = 10, TooManyBins = 11, BinIndexCorrupt = 12, NoExecutableLiquidity = 13, ZeroLiquidity = 14, BaseReserveCap = 15, QuoteReserveCap = 16, PositionNotFound = 17, PositionOwnerMismatch = 18, PositionBinMismatch = 19, InvalidShares = 20, InsufficientPositionShares = 21, InsufficientSharesOut = 22, ZeroRemoval = 23, CollectBaseFeesFirst = 24, CollectQuoteFeesFirst = 25, NothingToCollect = 26, FeeGrowthRegression = 27, AssetNotInPool = 28, InsufficientInputUsed = 29, PartialFill = 30, Slippage = 31, InvalidCadence = 32, InvalidDrift = 33, InvalidEnabled = 34, UnexpectedRecipient = 35, InvalidAmount = 36, AdminAlreadyRenounced = 37, AdminRenounced = 38, AssetDefinitionMissing = 39, InvalidAssetPrecision = 40,
+        IdenticalAssets = 1,
+        InvalidFeePips = 2,
+        InvalidBinStep = 3,
+        InvalidBinId = 4,
+        InvalidImpactCap = 5,
+        InvalidMaxBinsPerSwap = 6,
+        BinCapBelowBaseFloor = 7,
+        BinCapBelowQuoteFloor = 8,
+        PoolOwnerMismatch = 9,
+        VaultOperatorMismatch = 10,
+        TooManyBins = 11,
+        BinIndexCorrupt = 12,
+        NoExecutableLiquidity = 13,
+        ZeroLiquidity = 14,
+        BaseReserveCap = 15,
+        QuoteReserveCap = 16,
+        PositionNotFound = 17,
+        PositionOwnerMismatch = 18,
+        PositionBinMismatch = 19,
+        InvalidShares = 20,
+        InsufficientPositionShares = 21,
+        InsufficientSharesOut = 22,
+        ZeroRemoval = 23,
+        CollectBaseFeesFirst = 24,
+        CollectQuoteFeesFirst = 25,
+        NothingToCollect = 26,
+        FeeGrowthRegression = 27,
+        AssetNotInPool = 28,
+        InsufficientInputUsed = 29,
+        PartialFill = 30,
+        Slippage = 31,
+        InvalidCadence = 32,
+        InvalidDrift = 33,
+        InvalidEnabled = 34,
+        UnexpectedRecipient = 35,
+        InvalidAmount = 36,
+        AdminAlreadyRenounced = 37,
+        AdminRenounced = 38,
+        AssetDefinitionMissing = 39,
+        InvalidAssetPrecision = 40,
     }
 
     state int PoolInitialized;
@@ -89,11 +128,6 @@ seiyaku DlmmPool {
     fn zero_decimal() -> decimal {
         let decimal zero = 0;
         return zero;
-    }
-
-    fn universal_dataspace() -> DataSpaceId {
-        let dataspace = DataSpaceId::parse("0");
-        return dataspace;
     }
 
     fn abs_int(int _ value) -> int {
@@ -251,7 +285,6 @@ seiyaku DlmmPool {
                 destination: destination,
                 asset_definition: asset,
                 amount: amount,
-                dataspace: universal_dataspace(),
             );
         }
     }
@@ -368,8 +401,10 @@ seiyaku DlmmPool {
         require(growth_base >= debt_base, DlmmPoolError::FeeGrowthRegression);
         require(growth_quote >= debt_quote, DlmmPoolError::FeeGrowthRegression);
         if shares > zero_quantity() {
-            PositionCreditBase[position_id] = position_credit_base_value(position_id) + shares * (growth_base - debt_base);
-            PositionCreditQuote[position_id] = position_credit_quote_value(position_id) + shares * (growth_quote - debt_quote);
+            PositionCreditBase[position_id] = position_credit_base_value(position_id)
+                + shares * (growth_base - debt_base);
+            PositionCreditQuote[position_id] = position_credit_quote_value(position_id)
+                + shares * (growth_quote - debt_quote);
         }
         PositionFeeDebtBase[position_id] = growth_base;
         PositionFeeDebtQuote[position_id] = growth_quote;
@@ -505,9 +540,12 @@ seiyaku DlmmPool {
 
     // Bootstrap and launchpad seeding is represented by an owned position so
     // shares and earned fees can never become anonymous or permanently trapped.
-    kotoage fn seed_bin(Name position_id, int bin_id, quantity base_amount, quantity quote_amount) -> quantity authorize(
-        "CanInvokeContractEntrypoint"
-    ) {
+    kotoage fn seed_bin(
+        Name position_id,
+        int bin_id,
+        quantity base_amount,
+        quantity quote_amount,
+    ) -> quantity authorize("CanInvokeContractEntrypoint") {
         return add_position_liquidity_impl(
             position_id: position_id,
             provider: context::authority(),
@@ -547,7 +585,10 @@ seiyaku DlmmPool {
         let reserve_quote = bin_reserve_quote_value(bin_id);
         if BinLiquidityCap > zero_quantity() {
             require(reserve_base + base_amount <= BinLiquidityCap, DlmmPoolError::BaseReserveCap);
-            require(reserve_quote + quote_amount <= BinLiquidityCap, DlmmPoolError::QuoteReserveCap);
+            require(
+                reserve_quote + quote_amount <= BinLiquidityCap,
+                DlmmPoolError::QuoteReserveCap,
+            );
         }
         let minted = share_mint_for_deposit(
             bin_id: bin_id,
@@ -590,9 +631,10 @@ seiyaku DlmmPool {
         return minted;
     }
 
-    kotoage fn remove_position_liquidity(Name position_id, quantity shares) -> quantity authorize(
-        "AssetOps"
-    ) {
+    kotoage fn remove_position_liquidity(
+        Name position_id,
+        quantity shares,
+    ) -> quantity authorize("AssetOps") {
         let recipient = context::authority();
         require(recipient == position_owner_value(position_id), DlmmPoolError::UnexpectedRecipient);
         accrue_position_fees(position_id);
@@ -647,10 +689,12 @@ seiyaku DlmmPool {
         let bin_id = position_bin_value(position_id);
         let reserve_base = bin_reserve_base_value(bin_id);
         let reserve_quote = bin_reserve_quote_value(bin_id);
-        let available_base = (reserve_base > MinReserveBase) ? reserve_base - MinReserveBase : zero_quantity(
-        );
-        let available_quote = (reserve_quote > MinReserveQuote) ? reserve_quote - MinReserveQuote : zero_quantity(
-        );
+        let available_base = (reserve_base > MinReserveBase)
+            ? reserve_base - MinReserveBase
+            : zero_quantity();
+        let available_quote = (reserve_quote > MinReserveQuote)
+            ? reserve_quote - MinReserveQuote
+            : zero_quantity();
         let payout_base = min_quantity(
             left: position_credit_base_value(position_id),
             right: available_base,
@@ -732,8 +776,9 @@ seiyaku DlmmPool {
             DlmmPoolError::InvalidAmount,
         );
         let fee_pips = FeePips;
-        let start_bin = base_input == 1 ? find_quote_liquidity_from_active() : find_base_liquidity_from_active(
-        );
+        let start_bin = base_input == 1
+            ? find_quote_liquidity_from_active()
+            : find_base_liquidity_from_active();
         let start_price = bin_price(bin_id: start_bin, bin_step: BinStep);
         var current_bin = start_bin;
         var amount_remaining = amount_in;
@@ -746,7 +791,9 @@ seiyaku DlmmPool {
             }
             require(BinIndexed.contains(current_bin), DlmmPoolError::BinIndexCorrupt);
             let price = bin_price(bin_id: current_bin, bin_step: BinStep);
-            if ImpactCapBps > 0 && price_impact_bps(start_price: start_price, current_price: price) > ImpactCapBps {
+            if ImpactCapBps > 0
+                && price_impact_bps(start_price: start_price, current_price: price) > ImpactCapBps
+            {
                 break;
             }
             let reserve_base = bin_reserve_base_value(current_bin);
@@ -931,9 +978,11 @@ seiyaku DlmmPool {
         );
     }
 
-    kotoage fn swap_exact_in(AssetDefinitionId input_asset, quantity amount_in, quantity min_out) -> quantity authorize(
-        "AssetOps"
-    ) {
+    kotoage fn swap_exact_in(
+        AssetDefinitionId input_asset,
+        quantity amount_in,
+        quantity min_out,
+    ) -> quantity authorize("AssetOps") {
         return swap_exact_in_impl(
             trader: context::authority(),
             recipient: context::authority(),
@@ -944,9 +993,10 @@ seiyaku DlmmPool {
         );
     }
 
-    kotoage fn swap_exact_in_base(quantity amount_in, quantity min_out) -> quantity authorize(
-        "AssetOps"
-    ) {
+    kotoage fn swap_exact_in_base(
+        quantity amount_in,
+        quantity min_out,
+    ) -> quantity authorize("AssetOps") {
         return swap_exact_in_impl(
             trader: context::authority(),
             recipient: context::authority(),
@@ -957,9 +1007,10 @@ seiyaku DlmmPool {
         );
     }
 
-    kotoage fn swap_exact_in_quote(quantity amount_in, quantity min_out) -> quantity authorize(
-        "AssetOps"
-    ) {
+    kotoage fn swap_exact_in_quote(
+        quantity amount_in,
+        quantity min_out,
+    ) -> quantity authorize("AssetOps") {
         return swap_exact_in_impl(
             trader: context::authority(),
             recipient: context::authority(),
@@ -974,9 +1025,10 @@ seiyaku DlmmPool {
     // `CanInvokeContractEntrypoint` token. The surface deliberately has no
     // trader or recipient parameter: the caller funds the complete quote-asset
     // input and receives the base-asset output.
-    kotoage fn swap_exact_in_quote_public(quantity amount_in, quantity min_out) -> quantity authorize(
-        "CanInvokeContractEntrypoint"
-    ) {
+    kotoage fn swap_exact_in_quote_public(
+        quantity amount_in,
+        quantity min_out,
+    ) -> quantity authorize("CanInvokeContractEntrypoint") {
         require(amount_in > zero_quantity(), DlmmPoolError::InvalidAmount);
         return swap_exact_in_impl(
             trader: context::authority(),
@@ -988,9 +1040,11 @@ seiyaku DlmmPool {
         );
     }
 
-    kotoage fn swap_exact_in_base_for(AccountId recipient, quantity amount_in, quantity min_out) -> quantity authorize(
-        "AssetOps"
-    ) {
+    kotoage fn swap_exact_in_base_for(
+        AccountId recipient,
+        quantity amount_in,
+        quantity min_out,
+    ) -> quantity authorize("AssetOps") {
         return swap_exact_in_impl(
             trader: context::authority(),
             recipient: recipient,
@@ -1001,9 +1055,11 @@ seiyaku DlmmPool {
         );
     }
 
-    kotoage fn swap_exact_in_quote_for(AccountId recipient, quantity amount_in, quantity min_out) -> quantity authorize(
-        "AssetOps"
-    ) {
+    kotoage fn swap_exact_in_quote_for(
+        AccountId recipient,
+        quantity amount_in,
+        quantity min_out,
+    ) -> quantity authorize("AssetOps") {
         return swap_exact_in_impl(
             trader: context::authority(),
             recipient: recipient,
@@ -1047,7 +1103,7 @@ seiyaku DlmmPool {
         RangeGovernorNextSlot = context::block_height() + cadence_slots;
         ledger::trigger::set_enabled(
             trigger: Name::parse("soraswap_range_governor_tick"),
-            enabled: enabled,
+            enabled: enabled == 1,
         );
     }
 
@@ -1076,12 +1132,38 @@ seiyaku DlmmPool {
         RangeGovernorNextSlot = current_slot + RangeGovernorCadenceSlots;
     }
 
-    view fn mirror_state() -> (int, int, int, int, quantity, quantity, quantity, quantity, int, quantity, quantity, int, quantity) {
+    view fn mirror_state() -> (
+        int,
+        int,
+        int,
+        int,
+        quantity,
+        quantity,
+        quantity,
+        quantity,
+        int,
+        quantity,
+        quantity,
+        int,
+        quantity
+    ) {
         let reserve_base = bin_reserve_base_value(ActiveBin);
         let reserve_quote = bin_reserve_quote_value(ActiveBin);
-        return (PoolInitialized, ActiveBin, FeePips, BinStep, reserve_base, reserve_quote, reserve_base + reserve_quote, bin_share_supply_value(
+        return (
+            PoolInitialized,
             ActiveBin,
-        ), ImpactCapBps, MinReserveBase, MinReserveQuote, MaxBinsPerSwap, BinLiquidityCap);
+            FeePips,
+            BinStep,
+            reserve_base,
+            reserve_quote,
+            reserve_base + reserve_quote,
+            bin_share_supply_value(ActiveBin),
+            ImpactCapBps,
+            MinReserveBase,
+            MinReserveQuote,
+            MaxBinsPerSwap,
+            BinLiquidityCap
+        );
     }
 
     view fn pool_config() -> (AssetDefinitionId, AssetDefinitionId, AccountId, int, int, int) {
@@ -1110,26 +1192,39 @@ seiyaku DlmmPool {
 
     view fn mirror_bin(int bin_id) -> (quantity, quantity, quantity, decimal, decimal) {
         assert_valid_bin_id(bin_id);
-        return (bin_reserve_base_value(bin_id), bin_reserve_quote_value(bin_id), bin_share_supply_value(
-            bin_id,
-        ), bin_fee_growth_base_value(bin_id), bin_fee_growth_quote_value(bin_id));
+        return (
+            bin_reserve_base_value(bin_id),
+            bin_reserve_quote_value(bin_id),
+            bin_share_supply_value(bin_id),
+            bin_fee_growth_base_value(bin_id),
+            bin_fee_growth_quote_value(bin_id)
+        );
     }
 
     view fn mirror_bin_index(int bin_id) -> (int, int, int, int) {
         assert_valid_bin_id(bin_id);
         let registered = BinIndexed.contains(bin_id) ? 1 : 0;
-        return (registered, PreviousIndexedBin.get(bin_id).unwrap_or(bin_id), NextIndexedBin.get(
-            bin_id,
-        ).unwrap_or(bin_id), IndexedBinCount);
+        return (
+            registered,
+            PreviousIndexedBin.get(bin_id).unwrap_or(bin_id),
+            NextIndexedBin.get(bin_id).unwrap_or(bin_id),
+            IndexedBinCount
+        );
     }
 
-    view fn mirror_position(Name position_id) -> (int, int, quantity, decimal, decimal, quantity, quantity) {
+    view fn mirror_position(
+        Name position_id,
+    ) -> (int, int, quantity, decimal, decimal, quantity, quantity) {
         let registered = PositionOwner.contains(position_id) ? 1 : 0;
-        return (registered, PositionBinId.get(position_id).unwrap_or(ActiveBin), position_shares_value(
-            position_id,
-        ), position_fee_debt_base_value(position_id), position_fee_debt_quote_value(position_id), position_credit_base_value(
-            position_id,
-        ), position_credit_quote_value(position_id));
+        return (
+            registered,
+            PositionBinId.get(position_id).unwrap_or(ActiveBin),
+            position_shares_value(position_id),
+            position_fee_debt_base_value(position_id),
+            position_fee_debt_quote_value(position_id),
+            position_credit_base_value(position_id),
+            position_credit_quote_value(position_id)
+        );
     }
 
     view fn quote_position_fees(Name position_id) -> (quantity, quantity) {
@@ -1141,13 +1236,23 @@ seiyaku DlmmPool {
         let debt_quote = position_fee_debt_quote_value(position_id);
         require(growth_base >= debt_base, DlmmPoolError::FeeGrowthRegression);
         require(growth_quote >= debt_quote, DlmmPoolError::FeeGrowthRegression);
-        return (position_credit_base_value(position_id) + shares * (growth_base - debt_base), position_credit_quote_value(
-            position_id,
-        ) + shares * (growth_quote - debt_quote));
+        return (
+            position_credit_base_value(position_id) + shares * (growth_base - debt_base),
+            position_credit_quote_value(position_id) + shares * (growth_quote - debt_quote)
+        );
     }
 
     view fn range_governor_state() -> (int, int, int, int, int, int, int, int) {
-        return (RangeGovernorEnabled, RangeGovernorCadenceSlots, RangeGovernorNextSlot, RangeGovernorMaxFeePips, RangeGovernorTargetActiveBin, RangeGovernorMaxActiveBinDrift, RangeGovernorLastSlot, RangeGovernorLastAction);
+        return (
+            RangeGovernorEnabled,
+            RangeGovernorCadenceSlots,
+            RangeGovernorNextSlot,
+            RangeGovernorMaxFeePips,
+            RangeGovernorTargetActiveBin,
+            RangeGovernorMaxActiveBinDrift,
+            RangeGovernorLastSlot,
+            RangeGovernorLastAction
+        );
     }
 
     view fn admin_state() -> (AccountId, int) {

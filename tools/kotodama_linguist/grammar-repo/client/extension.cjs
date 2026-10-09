@@ -3,7 +3,7 @@ const vscode = require("vscode");
 const fs = require("node:fs");
 const path = require("node:path");
 const { LanguageClient } = require("vscode-languageclient/node");
-const { serverConfiguration, isProjectManifest } = require("./config.cjs");
+const { serverConfiguration, isProjectManifest, testRunConfiguration } = require("./config.cjs");
 const clients = new Map();
 let restartPromise = Promise.resolve();
 
@@ -83,6 +83,20 @@ async function activate(context) {
     return restartPromise;
   };
   context.subscriptions.push(vscode.commands.registerCommand("kotodama.restart", restart));
+  // `koto lsp` attaches a "Run test" code lens to every `#[test]` function.
+  context.subscriptions.push(vscode.commands.registerCommand("kotodama.runTest", async lens => {
+    const folder = lens && lens.uri ? vscode.workspace.getWorkspaceFolder(vscode.Uri.parse(lens.uri)) : undefined;
+    const settings = vscode.workspace.getConfiguration("kotodama", folder?.uri);
+    const run = testRunConfiguration(settings.get("serverPath"), lens);
+    const task = new vscode.Task(
+      { type: "kotodama", test: lens.name },
+      folder ?? vscode.TaskScope.Workspace,
+      `test ${lens.name}`,
+      "kotodama",
+      new vscode.ProcessExecution(run.command, run.args, { cwd: folder?.uri.fsPath }),
+    );
+    await vscode.tasks.executeTask(task);
+  }));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
     if (event.affectsConfiguration("kotodama")) void restart();
   }));

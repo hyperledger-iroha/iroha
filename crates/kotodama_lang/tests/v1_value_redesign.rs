@@ -206,7 +206,7 @@ fn exact_rejection_requires_expected_while_catch_all_stays_explicit() {
     assert_eq!(error.code(), "E_NAMED_ARGUMENTS_REQUIRED");
     assert_eq!(
         error.message(),
-        "parameter `actor` of `test::expect_reject_as` requires its declared name"
+        "parameter `actor` of `test::expect_reject_as` requires its label; write `actor: ...` or pass a variable named `actor`"
     );
 
     let catch_all = program(
@@ -343,7 +343,9 @@ fn call_tables_preserve_8192_word_bound_without_a_register_fast_path() {
             source_name: Some("inclusive.ko"),
         })
         .expect("exactly 8192 argument words remain valid");
-    let source = "seiyaku Small { fn echo(bool value) -> bool { value } view fn main() -> bool { echo(value: true) } }";
+    // Two call sites keep `echo` out of single-use private-call inlining, so
+    // the artifact really contains a small call through the call table.
+    let source = "seiyaku Small { fn echo(bool value) -> bool { value } view fn main() -> bool { echo(value: true) || echo(value: false) } }";
     let bytes = Compiler::new()
         .compile_source(source)
         .expect("small calls use the same descriptor");

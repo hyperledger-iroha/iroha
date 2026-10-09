@@ -3,7 +3,7 @@
   "generator": "ivm_fixture_export from the metadata-validated defaults/executor.to artifact",
   "artifact": "defaults/executor.to",
   "artifact_length": 145,
-  "code_hash_hex": "624506551e9fbab4263ff84a0ac705013a1965eee34fa9d88062c73950e099db",
-  "abi_hash_hex": "32a1fc6e3ca277e857d4aed4c12c8fd47f76ee9fb4c3f4bbdca13e702d0a32bd",
+  "code_hash_hex": "498394ad09f5f53e6be1d7650c43e47a40a5096929c0a2b46d5d07c86274d58b",
+  "abi_hash_hex": "088f6764587d10239e2ad2731ddeedcd7cd75834e014ee8540bf8f585b446547",
   "abi_version": 1
 }

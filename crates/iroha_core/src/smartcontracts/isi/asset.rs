@@ -44,7 +44,7 @@ pub mod isi {
             SetAssetTransferAvailability, SetAssetTransferBlacklist, SetAssetTransferControl,
             error::MintabilityError,
         },
-        nexus::{CapabilityRequest, DataSpaceCatalog, ManifestVerdict},
+        nexus::{CapabilityRequest, ManifestVerdict},
         privacy::{PrivacyStatementDigestV1, PrivacyValueBalanceDirectionV1},
     };
     use iroha_model_base::metadata::Metadata;

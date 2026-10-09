@@ -6694,6 +6694,7 @@ dependencies = [
 name = "kotodama_toolchain"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "clap",
  "ed25519-dalek",
  "hex",
  "iroha_allocation",

@@ -1466,8 +1466,10 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
     #[test]
     fn missing_retained_slot_cannot_hide_an_active_deployment() -> Result<()> {
         let temp = TempDir::new()?;
-        let path = temp.path().join("private/slot");
-        let moved = temp.path().join("private/original-slot");
+        // Slots report canonical journal paths; temporary roots may sit behind a symlink.
+        let root = fs::canonicalize(temp.path())?;
+        let path = root.join("private/slot");
+        let moved = root.join("private/original-slot");
         let session = DeploymentSlot::open(&path)?;
         assert!(session.current_journal()?.is_none());
         let id = hex::encode(iroha::crypto::Hash::new(b"retained active deployment").as_ref());

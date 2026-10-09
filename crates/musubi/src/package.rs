@@ -3885,11 +3885,11 @@ mod platform_tests {
             ("Musubi.toml", manifest),
             (
                 "contracts/coffee-club.ko",
-                include_str!("../templates/contract.ko"),
+                include_str!("../../../examples/coffee-club/contracts/coffee-club.ko"),
             ),
             (
                 "tests/coffee-club.test.ko",
-                include_str!("../templates/contract.test.ko"),
+                include_str!("../../../examples/coffee-club/tests/coffee-club.test.ko"),
             ),
             ("unselected.txt", "not in the package"),
         ] {

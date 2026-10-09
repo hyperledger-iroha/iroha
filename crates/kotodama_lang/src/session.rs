@@ -212,6 +212,115 @@ pub struct TestSourceUnit {
     /// Complete bounded Kotodama source text.
     pub source: String,
 }
+/// Per-project lint levels.
+///
+/// Every lint defaults to [`crate::lint::LintLevel::Warn`]. A level set for a
+/// slug applies to that lint; `deny_warnings` promotes every lint still at
+/// `warn` to `deny`, which makes the check fail. Front ends source these
+/// settings from project configuration (a `[lints]` table) so CI and editors
+/// agree on the result.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LintConfig {
+    levels: BTreeMap<&'static str, crate::lint::LintLevel>,
+    deny_warnings: bool,
+}
+/// A lint configuration entry named no known lint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownLint {
+    /// The unrecognized slug.
+    pub slug: String,
+    /// The closest known slug, when one is similar.
+    pub suggestion: Option<&'static str>,
+}
+impl std::fmt::Display for UnknownLint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "unknown lint `{}`", self.slug)?;
+        if let Some(suggestion) = self.suggestion {
+            write!(formatter, "; did you mean `{suggestion}`?")?;
+        }
+        Ok(())
+    }
+}
+impl std::error::Error for UnknownLint {}
+impl LintConfig {
+    /// Configuration where every lint warns.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Set the level of one lint by slug, such as `unused-local`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnknownLint`] when the slug names no lint in
+    /// [`crate::lint::LINT_REGISTRY`].
+    pub fn set_level(
+        &mut self,
+        slug: &str,
+        level: crate::lint::LintLevel,
+    ) -> Result<&mut Self, UnknownLint> {
+        let Some((known, _, _)) = crate::lint::lint_by_slug(slug) else {
+            return Err(UnknownLint {
+                slug: slug.to_owned(),
+                suggestion: crate::diagnostic::suggest::closest(
+                    slug,
+                    crate::lint::LINT_REGISTRY.iter().map(|(slug, _, _)| *slug),
+                ),
+            });
+        };
+        self.levels.insert(known, level);
+        Ok(self)
+    }
+    /// Layer `overrides` (for example command-line flags) over this configuration (for example a
+    /// project manifest): a level set in `overrides` replaces this one for the same lint, and
+    /// deny-warnings holds when either enables it.
+    #[must_use]
+    pub fn merged_with(&self, overrides: &Self) -> Self {
+        let mut levels = self.levels.clone();
+        levels.extend(overrides.levels.iter().map(|(slug, level)| (*slug, *level)));
+        Self {
+            levels,
+            deny_warnings: self.deny_warnings || overrides.deny_warnings,
+        }
+    }
+    /// Promote every lint that would warn to an error.
+    pub fn set_deny_warnings(&mut self, deny: bool) -> &mut Self {
+        self.deny_warnings = deny;
+        self
+    }
+    /// Effective level of the lint with `slug`.
+    #[must_use]
+    pub fn level(&self, slug: &str) -> crate::lint::LintLevel {
+        let level = self
+            .levels
+            .get(slug)
+            .copied()
+            .unwrap_or(crate::lint::LintLevel::Warn);
+        if self.deny_warnings && level == crate::lint::LintLevel::Warn {
+            crate::lint::LintLevel::Deny
+        } else {
+            level
+        }
+    }
+    /// Drop allowed findings and mark denied ones as errors, preserving order.
+    #[must_use]
+    pub fn apply(&self, warnings: Vec<crate::lint::LintWarning>) -> Vec<crate::lint::LintWarning> {
+        warnings
+            .into_iter()
+            .filter_map(|warning| match self.level(warning.code) {
+                crate::lint::LintLevel::Allow => None,
+                level => Some(warning.with_level(level)),
+            })
+            .collect()
+    }
+    /// Whether any finding in `warnings` is denied and must fail the check.
+    #[must_use]
+    pub fn denies_any(&self, warnings: &[crate::lint::LintWarning]) -> bool {
+        warnings
+            .iter()
+            .any(|warning| self.level(warning.code) == crate::lint::LintLevel::Deny)
+    }
+}
 /// Explicit reusable compiler context used by CLIs, SDK bindings, and language tools.
 #[derive(Clone, Debug)]
 pub struct CompilerSession {
@@ -385,6 +494,33 @@ impl CompilerSession {
         run_with_compiler_stack(move || self.check_with_lints_inner(request))
             .map_err(|_| compiler_worker_unavailable_diagnostic(request.source_name))?
     }
+    /// Run the check pipeline and apply `config` to its lint findings.
+    ///
+    /// Allowed lints are dropped. When any remaining finding is denied, the
+    /// whole result is an error bundle containing every finding (denied ones as
+    /// errors, the rest as warnings) so callers can fail CI deterministically.
+    pub fn check_with_lint_config(
+        &self,
+        request: CompileRequest<'_>,
+        config: &LintConfig,
+    ) -> Result<Vec<crate::lint::LintWarning>, DiagnosticBundle> {
+        let warnings = config.apply(self.check_with_lints(request)?);
+        if !warnings
+            .iter()
+            .any(|warning| warning.severity == crate::lint::LintSeverity::Error)
+        {
+            return Ok(warnings);
+        }
+        let source_name = request.source_name.unwrap_or("<source>");
+        Err(DiagnosticBundle::new(
+            warnings
+                .iter()
+                .map(|warning| {
+                    warning.to_diagnostic(source_name, None, crate::i18n::Language::English)
+                })
+                .collect(),
+        ))
+    }
     fn check_with_lints_inner(
         &self,
         request: CompileRequest<'_>,
@@ -482,12 +618,85 @@ impl CompilerSession {
         enforce_call_table_bounds(&typed, resolved.program.get())?;
         Ok(typed)
     }
+    /// Report resolution failures together with type errors from functions
+    /// that resolved cleanly.
+    ///
+    /// Failing function bodies are emptied in a reduced copy that is analyzed
+    /// only to find independent errors; nothing from it is ever lowered.
+    fn recovered_resolution_diagnostics(
+        &self,
+        source: &SourceFile,
+        source_name: Option<&str>,
+        recovered: crate::resolved::RecoveredResolution,
+    ) -> DiagnosticBundle {
+        let crate::resolved::RecoveredResolution {
+            mut diagnostics,
+            reduced,
+            emptied,
+        } = recovered;
+        let Some(reduced) = reduced.map(IterativeResolvedGuard::new) else {
+            return diagnostics;
+        };
+        let independent = reduced
+            .get()
+            .program()
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) if !emptied.contains(&function.name) => {
+                    Some(function.location)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let semantic = crate::semantic::SemanticContext::with_capabilities(
+            self.options.force_zk,
+            self.options.mode == crate::compiler::CompilerMode::Test,
+        );
+        if let Err(mut failures) = semantic.analyze_resolved(reduced.get()) {
+            failures.failures.retain(|failure| {
+                failure.error.code != "K0004"
+                    && failure
+                        .location
+                        .is_some_and(|location| independent.contains(&location))
+            });
+            if !failures.failures.is_empty() {
+                diagnostics.diagnostics.extend(
+                    crate::semantic_diagnostics::from_semantic_failures(
+                        failures,
+                        source_name,
+                        Some(source),
+                        Some(reduced.get()),
+                    )
+                    .diagnostics,
+                );
+            }
+        }
+        diagnostics
+    }
     fn checked_program(
         &self,
         request: CompileRequest<'_>,
     ) -> Result<ResolvedCompilationUnit, DiagnosticBundle> {
-        let parsed = self.parse_compilation_unit(request)?;
-        let resolved = self.resolve_compilation_unit(parsed)?;
+        let ParsedCompilationUnit {
+            source,
+            program,
+            source_name,
+        } = self.parse_compilation_unit(request)?;
+        let resolved = match crate::resolved::resolve_recovering(program.take(), &source) {
+            Ok(program) => ResolvedCompilationUnit {
+                source,
+                program: IterativeResolvedGuard::new(program),
+                source_name,
+            },
+            Err(recovered) => {
+                return Err(self.recovered_resolution_diagnostics(
+                    &source,
+                    source_name.as_deref(),
+                    *recovered,
+                ));
+            }
+        };
         let typed = self.type_effect_compilation_unit_ref(&resolved)?;
         crate::semantic::validate_linked_program(&typed, self.options.force_zk).map_err(
             |error| {
@@ -1088,10 +1297,14 @@ impl ProductionTestSurface {
     fn message(self) -> &'static str {
         match self {
             Self::TestTarget => {
-                "`koto_test` target declarations require explicit compiler test mode"
+                "this file is a `koto_test` module; run it with `koto test`, which compiles it against its target in test mode (deployable builds never include test modules)"
             }
-            Self::Fixture => "fixture declarations require explicit compiler test mode",
-            Self::TestFunction => "`#[test]` functions require explicit compiler test mode",
+            Self::Fixture => {
+                "fixture declarations belong in a `*.test.ko` module that declares `koto_test { target: \"...\" }`, not in a deployable seiyaku"
+            }
+            Self::TestFunction => {
+                "`#[test]` functions belong in a `*.test.ko` module that declares `koto_test { target: \"...\" }`, not in a deployable seiyaku"
+            }
         }
     }
 }
@@ -1157,12 +1370,17 @@ fn reject_production_test_surface(
             )
         }
     });
-    Err(DiagnosticBundle::single(Diagnostic::error(
+    let mut diagnostic = Diagnostic::error(
         "E_TEST_ONLY_PRODUCTION",
         DiagnosticPhase::Semantic,
         surface.message(),
         span,
-    )))
+    );
+    diagnostic.help = Some(
+        "`koto check` and `koto build` reject test code instead of stripping it, so the artifact always matches the reviewed source. Move the tests into `<name>.test.ko` and run them with `koto test`."
+            .to_owned(),
+    );
+    Err(DiagnosticBundle::single(diagnostic))
 }
 fn first_test_surface_token(
     tokens: &[Token],
@@ -1278,6 +1496,90 @@ impl Default for CompilerSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lint_config_allows_denies_and_rejects_unknown_slugs() {
+        let source = "seiyaku Cfg {\n    view fn f(int x) -> int {\n        let unused = 3;\n        return x;\n    }\n}";
+        let request = CompileRequest {
+            source,
+            source_name: Some("cfg.ko"),
+        };
+        let session = CompilerSession::default();
+        let warnings = session
+            .check_with_lint_config(request, &LintConfig::new())
+            .expect("warnings do not fail by default");
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.code == "unused-local")
+        );
+
+        let mut allow = LintConfig::new();
+        allow
+            .set_level("unused-local", crate::lint::LintLevel::Allow)
+            .expect("known lint");
+        assert!(
+            session
+                .check_with_lint_config(request, &allow)
+                .expect("allowed")
+                .iter()
+                .all(|warning| warning.code != "unused-local")
+        );
+
+        let mut deny = LintConfig::new();
+        deny.set_deny_warnings(true);
+        let denied = session
+            .check_with_lint_config(request, &deny)
+            .expect_err("deny-warnings fails the check");
+        assert!(denied.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "K5013" && diagnostic.severity == crate::diagnostic::Severity::Error
+        }));
+        let mut allow_over_deny = deny.clone();
+        allow_over_deny
+            .set_level("unused-local", crate::lint::LintLevel::Allow)
+            .expect("known lint");
+        assert_eq!(
+            allow_over_deny.level("unused-local"),
+            crate::lint::LintLevel::Allow
+        );
+        assert_eq!(
+            allow_over_deny.level("dead-store"),
+            crate::lint::LintLevel::Deny
+        );
+
+        let unknown = LintConfig::new()
+            .set_level("unused-locals", crate::lint::LintLevel::Deny)
+            .map(|_| ())
+            .expect_err("unknown slug");
+        assert_eq!(unknown.suggestion, Some("unused-local"));
+        assert_eq!(
+            unknown.to_string(),
+            "unknown lint `unused-locals`; did you mean `unused-local`?"
+        );
+    }
+
+    #[test]
+    fn merged_lint_config_lets_overrides_win_per_lint() {
+        use crate::lint::LintLevel;
+        let mut manifest = LintConfig::new();
+        manifest
+            .set_level("unused-local", LintLevel::Deny)
+            .and_then(|config| config.set_level("dead-store", LintLevel::Allow))
+            .expect("known lints");
+        let mut flags = LintConfig::new();
+        flags
+            .set_level("unused-local", LintLevel::Allow)
+            .expect("known lint");
+        let merged = manifest.merged_with(&flags);
+        assert_eq!(merged.level("unused-local"), LintLevel::Allow);
+        assert_eq!(merged.level("dead-store"), LintLevel::Allow);
+        assert_eq!(merged.level("unused-state"), LintLevel::Warn);
+        flags.set_deny_warnings(true);
+        let merged = manifest.merged_with(&flags);
+        assert_eq!(merged.level("unused-state"), LintLevel::Deny);
+        assert_eq!(merged.level("dead-store"), LintLevel::Allow);
+        assert_eq!(LintConfig::new().merged_with(&LintConfig::new()), LintConfig::new());
+    }
 
     fn source_fixture(source: &'static str) -> &'static str {
         source
@@ -1399,10 +1701,20 @@ mod tests {
                 source_name: Some("taira_literal.ko"),
             })
             .expect_err("the Taira literal must fail under Sora discriminant 753");
-        assert!(
-            diagnostics
-                .render_human()
-                .contains("ERR_UNEXPECTED_NETWORK_PREFIX")
+        let mismatch = &diagnostics.diagnostics[0];
+        assert_eq!(mismatch.code, "E_INVALID_ID_LITERAL");
+        assert_eq!(
+            mismatch.message,
+            "AccountId literal is encoded for chain discriminant 369 but this build targets 753 (ERR_UNEXPECTED_NETWORK_PREFIX)"
+        );
+        let span = mismatch
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.byte_range)
+            .expect("the mismatch is reported on the literal");
+        assert_eq!(
+            &source[span.start as usize..span.end as usize],
+            format!("\"{TAIRA_RECIPIENT}\"")
         );
         assert_ne!(
             taira.policy_fingerprint(),

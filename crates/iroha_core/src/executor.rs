@@ -277,6 +277,7 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindContractManifestByArtifactId(_)
         | SingularQueryBox::FindAbiVersion(_)
         | SingularQueryBox::FindAssetDefinitionById(_)
+        | SingularQueryBox::FindAssetDefinitionDirectHome(_)
         | SingularQueryBox::FindOracleFeedById(_)
         | SingularQueryBox::FindDomainEndorsementPolicy(_)
         | SingularQueryBox::FindDomainCommittee(_)
@@ -441,7 +442,8 @@ fn native_iterable_query_access(
         AssetDefinition
     ) {
         if any_exact!(payload; data_model_query::asset::prelude::FindAssetDefinitions) {
-            return Ok(NativeQueryAccess::Registered);
+            // Listing every definition would disclose privately homed definitions.
+            return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
     }
@@ -3617,14 +3619,21 @@ pub(crate) fn ensure_contract_invocation_code_hash(
 /// Wallets can validate canonical JSON metadata without embedding a Kotodama ABI
 /// encoder. Consensus therefore reconstructs the schema-bound argument record
 /// from that metadata and refuses any executable whose opaque argument bytes
-/// encode a different payload.
+/// encode a different payload. A `contract_alias` entry must name the address's
+/// `live_alias`, so indexers can attribute the call to that alias.
+///
+/// Metadata that carries any of these keys must carry the full identity binding
+/// (address, code hash, entrypoint). Other keys, such as `contract_module` or
+/// `contract_event_*`, are never checked and must not be trusted by readers.
 fn ensure_contract_invocation_metadata_binding(
     invocation: &ContractInvocation,
     metadata: &Metadata,
     contract: &ivm::PreparedContract,
+    live_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
 ) -> Result<(), ValidationFail> {
     let carries_reviewable_binding = [
         "contract_address",
+        "contract_alias",
         "contract_code_hash",
         "contract_entrypoint",
         "contract_payload",
@@ -3643,6 +3652,14 @@ fn ensure_contract_invocation_metadata_binding(
         return Err(ValidationFail::NotPermitted(
             "top-level ContractCall address differs from contract_address metadata".to_owned(),
         ));
+    }
+    if let Some(metadata_alias) = requested_contract_alias(metadata)?
+        && live_alias != Some(&metadata_alias)
+    {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract_alias metadata `{metadata_alias}` is not the live alias of `{}`",
+            invocation.contract_address
+        )));
     }
     let code_hash_literal = metadata
         .get("contract_code_hash")
@@ -22834,22 +22851,74 @@ seiyaku ReviewedValue {
                 .expect("bounded reviewed arguments"),
             ),
         };
+        let live_alias: iroha_data_model::smart_contract::ContractAlias =
+            "reviewed_value::apps.universal"
+                .parse()
+                .expect("live contract alias");
         super::ensure_contract_invocation_metadata_binding(
-            &invocation(reviewed_arguments),
+            &invocation(reviewed_arguments.clone()),
             &metadata,
             &prepared,
+            Some(&live_alias),
         )
         .expect("matching reviewed metadata and arguments");
         let error = super::ensure_contract_invocation_metadata_binding(
             &invocation(swapped_arguments),
             &metadata,
             &prepared,
+            Some(&live_alias),
         )
         .expect_err("swapped argument bytes must be rejected");
         assert!(
             matches!(error, ValidationFail::NotPermitted(ref message)
                 if message.contains("arguments differ from the canonical contract_payload")),
             "unexpected swapped-arguments error: {error}"
+        );
+        // Indexers attribute a call to its `contract_alias`, so the claim must
+        // name the address's live alias.
+        let alias_key: Name = "contract_alias"
+            .parse()
+            .expect("static contract alias metadata key");
+        let mut aliased = metadata.clone();
+        aliased.insert(alias_key.clone(), Json::new(live_alias.to_string()));
+        super::ensure_contract_invocation_metadata_binding(
+            &invocation(reviewed_arguments.clone()),
+            &aliased,
+            &prepared,
+            Some(&live_alias),
+        )
+        .expect("the live alias binds");
+        let other_alias: iroha_data_model::smart_contract::ContractAlias =
+            "forged_router::apps.universal"
+                .parse()
+                .expect("other contract alias");
+        for live in [None, Some(&other_alias)] {
+            let error = super::ensure_contract_invocation_metadata_binding(
+                &invocation(reviewed_arguments.clone()),
+                &aliased,
+                &prepared,
+                live,
+            )
+            .expect_err("an alias claim must name the live alias");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(ref message)
+                    if message.contains("is not the live alias")),
+                "unexpected alias error: {error}"
+            );
+        }
+        let mut alias_only = Metadata::default();
+        alias_only.insert(alias_key, Json::new(live_alias.to_string()));
+        let error = super::ensure_contract_invocation_metadata_binding(
+            &invocation(reviewed_arguments),
+            &alias_only,
+            &prepared,
+            Some(&live_alias),
+        )
+        .expect_err("an alias claim requires the full identity binding");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("requires contract_address metadata")),
+            "unexpected alias-only error: {error}"
         );
     }
     #[test]

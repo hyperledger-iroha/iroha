@@ -5,9 +5,11 @@ seiyaku NativeEscrowAitai {
         NonPositiveAmount = 1,
     }
 
-    kotoage fn open_offer(Name offer, AssetDefinitionId asset_definition, quantity amount) authorize(
-        "Admin"
-    ) {
+    kotoage fn open_offer(
+        Name offer,
+        AssetDefinitionId asset_definition,
+        quantity amount,
+    ) authorize("Admin") {
         require(amount > 0, EscrowError::NonPositiveAmount);
         ledger::escrow::open_offer(
             offer: offer,
@@ -36,9 +38,11 @@ seiyaku NativeEscrowAitai {
         ledger::escrow::open_dispute(offer: offer);
     }
 
-    kotoage fn resolve_dispute(Name offer, quantity buyer_amount, quantity seller_amount) authorize(
-        "Admin"
-    ) {
+    kotoage fn resolve_dispute(
+        Name offer,
+        quantity buyer_amount,
+        quantity seller_amount,
+    ) authorize("Admin") {
         ledger::escrow::resolve_dispute(
             offer: offer,
             buyer_amount: buyer_amount,

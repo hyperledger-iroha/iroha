@@ -1191,12 +1191,13 @@ fn full_width_math_helpers_match_constant_folding_and_runtime() {
         ("gcd", IntBinaryOperation::Gcd, &minimum, &maximum),
         ("mean", IntBinaryOperation::Mean, &maximum, &maximum),
     ] {
+        let (first, second) = binary_math_labels(name);
         let source = format!(
-            "seiyaku Math {{ view fn run(int left, int right) -> int {{ return math::{name}(left: left, right: right); }} }}"
+            "seiyaku Math {{ view fn run(int left, int right) -> int {{ return math::{name}({first}: left, {second}: right); }} }}"
         );
         let runtime = compile(&source);
         let folded = compile(&format!(
-            "seiyaku Math {{ view fn run(int left, int right) -> int {{ return math::{name}(left: {left}, right: {right}); }} }}"
+            "seiyaku Math {{ view fn run(int left, int right) -> int {{ return math::{name}({first}: {left}, {second}: {right}); }} }}"
         ));
         let expected = operation.evaluate(left, right).unwrap();
         assert_eq!(
@@ -1216,7 +1217,7 @@ fn full_width_math_helpers_match_constant_folding_and_runtime() {
         ("math::isqrt(-1)".to_owned(), "E_NEGATIVE_SQUARE_ROOT"),
         (format!("math::abs({MIN_INT})"), "E_INT_OVERFLOW"),
         (
-            "math::div_ceil(left: 1, right: 0)".to_owned(),
+            "math::div_ceil(dividend: 1, divisor: 0)".to_owned(),
             "E_DIVISION_BY_ZERO",
         ),
         (
@@ -1492,6 +1493,21 @@ fn borrowed_numeric_literal_and_host_results_keep_decimal_and_quantity_faults() 
     }
 }
 
+/// Parameter labels of a two-operand `math::` helper, in declaration order.
+fn binary_math_labels(name: &str) -> (&'static str, &'static str) {
+    if name == "div_ceil" {
+        ("dividend", "divisor")
+    } else {
+        ("left", "right")
+    }
+}
+
+#[test]
+fn binary_math_labels_follow_the_builtin_signatures() {
+    assert_eq!(binary_math_labels("div_ceil"), ("dividend", "divisor"));
+    assert_eq!(binary_math_labels("mean"), ("left", "right"));
+}
+
 #[test]
 fn reversed_named_helpers_preserve_noncommutative_results_and_odd_signed_means() {
     for (name, syscall, cases) in [
@@ -1528,13 +1544,14 @@ fn reversed_named_helpers_preserve_noncommutative_results_and_odd_signed_means()
             ][..],
         ),
     ] {
+        let (first, second) = binary_math_labels(name);
         let runtime = compile(&format!(
-            "seiyaku NamedMath {{ view fn run(int left, int right) -> int {{ return math::{name}(right: right, left: left); }} }}"
+            "seiyaku NamedMath {{ view fn run(int left, int right) -> int {{ return math::{name}({second}: right, {first}: left); }} }}"
         ));
         assert!(contains_extended_syscall(&runtime, syscall));
         for &(left, right, expected) in cases {
             let folded = compile(&format!(
-                "seiyaku NamedMath {{ view fn run(int left, int right) -> int {{ return math::{name}(right: {right}, left: {left}); }} }}"
+                "seiyaku NamedMath {{ view fn run(int left, int right) -> int {{ return math::{name}({second}: {right}, {first}: {left}); }} }}"
             ));
             assert!(!contains_extended_syscall(&folded, syscall));
             let expected = bigint(expected);
@@ -1543,14 +1560,14 @@ fn reversed_named_helpers_preserve_noncommutative_results_and_odd_signed_means()
         }
     }
     let reversed_division = compile(
-        "seiyaku NamedMath { view fn run(int left, int right) -> int { return math::div_ceil(right: right, left: left); } }",
+        "seiyaku NamedMath { view fn run(int left, int right) -> int { return math::div_ceil(divisor: right, dividend: left); } }",
     );
     assert_eq!(
         classify_runtime(run_binary(&reversed_division, MIN_INT, "-1")),
         ArithmeticOutcome::MantissaOverflow
     );
     assert_eq!(
-        folded_outcome(&format!("math::div_ceil(right: -1, left: {MIN_INT})")),
+        folded_outcome(&format!("math::div_ceil(divisor: -1, dividend: {MIN_INT})")),
         ArithmeticOutcome::MantissaOverflow
     );
 }

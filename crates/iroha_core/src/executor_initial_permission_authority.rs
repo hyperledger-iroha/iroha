@@ -2522,6 +2522,7 @@ where
                 call,
                 transaction.metadata(),
                 summary.prepared_contract(),
+                identity.contract_alias.as_ref(),
             )?;
             validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
             let manifest = state

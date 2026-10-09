@@ -268,6 +268,105 @@ pub struct AppliedEvidence {
     pub scope: String,
     /// Fixed durable state resolution source.
     pub resolved_from: String,
+    /// Gas and fee actually settled, read from the transaction's committed fee receipt.
+    /// `None` when the node reported no committed fee receipt for the transaction or the
+    /// receipt could not be read. It is reporting evidence only and never gates Applied
+    /// validation or recovery.
+    pub charge: Option<AppliedCharge>,
+}
+/// Gas and fee one Applied transaction actually settled, from its committed fee receipt.
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AppliedCharge {
+    /// IVM gas units the transaction consumed, as metered for its fee.
+    pub gas_used: u64,
+    /// Fee asset the settlement charged.
+    pub fee_asset: AssetDefinitionId,
+    /// Exact fee amount settled.
+    pub fee_amount: iroha_primitives::numeric::Quantity,
+}
+impl AppliedCharge {
+    /// Project the committed fee receipt of one transaction result.
+    #[must_use]
+    pub fn from_result(result: &TransactionResult) -> Option<Self> {
+        result.nexus_fee_receipt().map(|receipt| Self {
+            gas_used: receipt.schedule.gas_used,
+            fee_asset: receipt.fee_asset_id.clone(),
+            fee_amount: receipt.fee_amount.clone(),
+        })
+    }
+}
+impl AppliedEvidence {
+    /// Whether two observations describe the same exact-hash Applied finality.
+    ///
+    /// The reporting-only [`Self::charge`] is excluded: it is read on a best-effort basis, so a
+    /// later observation may lack a charge that the first one retained.
+    #[must_use]
+    pub fn same_finality(&self, other: &Self) -> bool {
+        self.hash == other.hash
+            && self.terminal_kind == other.terminal_kind
+            && self.block_height == other.block_height
+            && self.scope == other.scope
+            && self.resolved_from == other.resolved_from
+    }
+}
+/// Return the retained Applied observation of journal step `index`, or `current` when none is
+/// retained. Nothing is written.
+///
+/// A retained observation must describe the same finality as `current`; it stays authoritative,
+/// including its reporting-only charge, so recovery never rewrites immutable Applied evidence.
+///
+/// # Errors
+/// Returns journal failures or a retained observation with different finality.
+pub(crate) fn retained_applied_evidence(
+    journal: &Journal,
+    index: usize,
+    current: AppliedEvidence,
+) -> Result<AppliedEvidence> {
+    let path = format!("applied-{index:04}.json");
+    if !journal.exists(&path)? {
+        return Ok(current);
+    }
+    let retained: AppliedEvidence = journal.read(&path)?;
+    if !retained.same_finality(&current) {
+        return Err(eyre!(
+            "retained Applied evidence differs from current exact-hash evidence"
+        ));
+    }
+    Ok(retained)
+}
+/// Durably retain the first Applied observation of journal step `index` and return the
+/// authoritative one, as [`retained_applied_evidence`] selects it.
+///
+/// # Errors
+/// Returns journal failures or a retained observation with different finality.
+pub(crate) fn retain_applied_evidence(
+    journal: &Journal,
+    index: usize,
+    current: AppliedEvidence,
+) -> Result<AppliedEvidence> {
+    let evidence = retained_applied_evidence(journal, index, current)?;
+    journal.put_exact(&format!("applied-{index:04}.json"), &evidence)?;
+    Ok(evidence)
+}
+/// Read the committed gas and fee of one Applied transaction through the authenticated
+/// transaction-details query.
+///
+/// Finality was already established by the transaction-status wait, so the charge is
+/// best-effort reporting: a node that does not answer the details query, or answers without a
+/// committed fee receipt, yields `None` instead of failing the Applied operation.
+pub(crate) fn read_applied_charge(
+    client: &Client,
+    hash: HashOf<SignedTransaction>,
+) -> Option<AppliedCharge> {
+    let entrypoint = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::from(hash));
+    let details = client
+        .client()
+        .get_successful_transaction_details(entrypoint)
+        .ok()?;
+    AppliedCharge::from_result(details.transaction.result())
 }
 /// Public receipt emitted only after atomic commit reaches `Applied` and contract readback agrees.
 #[derive(Clone, Debug, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
@@ -913,12 +1012,14 @@ impl DeploymentTransport for LiveTransport<'_> {
                 ..TransactionWaitOptions::default()
             },
         )?;
-        applied_evidence(hash, outcome)
+        let charge = read_applied_charge(&self.service.client, hash);
+        applied_evidence(hash, outcome, charge)
     }
 }
 fn applied_evidence(
     hash: HashOf<SignedTransaction>,
     outcome: TransactionWaitOutcome,
+    charge: Option<AppliedCharge>,
 ) -> Result<AppliedEvidence> {
     let evidence = AppliedEvidence {
         hash: outcome.hash,
@@ -928,6 +1029,7 @@ fn applied_evidence(
             .ok_or_else(|| eyre!("Applied deployment has no ledger height"))?,
         scope: outcome.scope,
         resolved_from: outcome.resolved_from,
+        charge,
     };
     validate_applied(hash, &evidence)?;
     Ok(evidence)
@@ -1007,9 +1109,8 @@ fn execute_transactions<T: DeploymentTransport>(
                 "transaction has conflicting retained failure and current Applied evidence"
             )));
         }
-        journal
-            .put_exact(&format!("applied-{index:04}.json"), &evidence)
-            .map_err(DeploymentError::Journal)?;
+        let evidence =
+            retain_applied_evidence(journal, index, evidence).map_err(DeploymentError::Journal)?;
         progress(DeploymentProgress::Applied {
             stage: progress::stage(record, index),
             evidence: evidence.clone(),
@@ -1151,8 +1252,7 @@ fn inspect_transactions<T: DeploymentTransport>(
                         "retained terminal failure disagrees with current Applied evidence"
                     )));
                 }
-                journal
-                    .put_exact(&format!("applied-{index:04}.json"), &evidence)
+                retain_applied_evidence(journal, index, evidence)
                     .map_err(DeploymentError::Journal)?;
             }
             Err(source) => {
@@ -1229,7 +1329,7 @@ fn verify_completed_record<T: DeploymentTransport>(
             source,
         })?;
     validate_applied(transaction.hash(), &actual).map_err(DeploymentError::Readback)?;
-    if actual != receipt.commit {
+    if !actual.same_finality(&receipt.commit) {
         return Err(DeploymentError::Readback(eyre!(
             "retained completion disagrees with current exact-hash Applied evidence"
         )));

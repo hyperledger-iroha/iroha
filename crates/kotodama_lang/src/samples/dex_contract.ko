@@ -43,14 +43,12 @@ seiyaku DexContract {
             destination: pool,
             asset_definition: input_asset,
             amount: amount_in,
-            dataspace: DataSpaceId::parse("0"),
         );
         ledger::asset::transfer(
             source: pool,
             destination: trader,
             asset_definition: output_asset,
             amount: out,
-            dataspace: DataSpaceId::parse("0"),
         );
         return out;
     }

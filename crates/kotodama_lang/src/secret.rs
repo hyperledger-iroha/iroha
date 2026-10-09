@@ -142,9 +142,7 @@ pub(crate) fn validate_builtin_call(
         | Builtin::StateLen
         | Builtin::StateCount
         | Builtin::Contains
-        | Builtin::GetOrDefault
-        | Builtin::GetOr
-        | Builtin::Ensure
+        | Builtin::GetOrInsert
         | Builtin::StateMapRemove
         | Builtin::KeysTake2
         | Builtin::ValuesTake2
