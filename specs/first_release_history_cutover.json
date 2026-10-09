@@ -987,13 +987,6 @@
   },
   "open_findings": [
     {
-      "id": "T1-A01",
-      "owner": "I.3",
-      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-      "anchor": "TODO(ws45): drop 2=RecordSccpMessage from the ivm_abi 0xA0 args text",
-      "summary": "stale operation tag 2 of the generic instruction syscall still described by the ABI text; removing it changes abi_hash"
-    },
-    {
       "id": "T1-A02",
       "owner": "I.5",
       "path": "crates/iroha_core/src/executor.rs",

@@ -1428,7 +1428,13 @@ async fn execute_rotation_preparation(
     );
     read_on_dedicated_thread({
         let admin = admin.clone();
-        move || admin.submit_all(finalize, FeePaymentIntent::authority(Vec::new(), None))
+        let observer = admin.clone();
+        let deadline = Instant::now() + WAIT;
+        move || {
+            committee_status::submit_and_observe_until(admin, observer, deadline, |bounded| {
+                bounded.submit_all(finalize, FeePaymentIntent::authority(Vec::new(), None))
+            })
+        }
     })
     .await
     .wrap_err("rotation finalization worker failed")?;
@@ -1458,11 +1464,17 @@ async fn execute_rotation_preparation(
         .ok_or_else(|| eyre!("first target seat lacks an owning operator"))?
         .client
         .clone();
-    read_on_dedicated_thread(move || {
-        owner.submit(
-            SetParameter::new(Parameter::Custom(prepare.into_custom_parameter())),
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
+    read_on_dedicated_thread({
+        let observer = admin.clone();
+        let deadline = Instant::now() + WAIT;
+        move || {
+            committee_status::submit_and_observe_until(owner, observer, deadline, |bounded| {
+                bounded.submit(
+                    SetParameter::new(Parameter::Custom(prepare.into_custom_parameter())),
+                    FeePaymentIntent::authority(Vec::new(), None),
+                )
+            })
+        }
     })
     .await
     .wrap_err("rotation credential preparation worker failed")?;
@@ -1593,13 +1605,20 @@ async fn execute_rotation_preparation(
             .ok_or_else(|| eyre!("prepared seat lacks a real owning operator"))?
             .client
             .clone();
-        read_on_dedicated_thread(move || {
-            owner.submit(
-                SetParameter::new(Parameter::Custom(
-                    ValidatorCommitteeOperationV1::AdmitSeat(admission).into_custom_parameter(),
-                )),
-                FeePaymentIntent::authority(Vec::new(), None),
-            )
+        read_on_dedicated_thread({
+            let observer = admin.clone();
+            let deadline = Instant::now() + WAIT;
+            move || {
+                committee_status::submit_and_observe_until(owner, observer, deadline, |bounded| {
+                    bounded.submit(
+                        SetParameter::new(Parameter::Custom(
+                            ValidatorCommitteeOperationV1::AdmitSeat(admission)
+                                .into_custom_parameter(),
+                        )),
+                        FeePaymentIntent::authority(Vec::new(), None),
+                    )
+                })
+            }
         })
         .await
         .wrap_err("target seat readiness admission worker failed")?;
@@ -1614,7 +1633,13 @@ async fn execute_rotation_preparation(
             selected.transition.readiness.len()
                 == target.len() - usize::from(missing_custody.is_some())
         }),
-        "on-chain seat readiness does not match actual provisioned target custody"
+        "on-chain seat readiness does not match actual provisioned target custody: epoch {target_epoch}, observer {}, expected {}, observed {:?}",
+        admin.client().endpoint(),
+        target.len() - usize::from(missing_custody.is_some()),
+        readiness
+            .selected
+            .as_ref()
+            .map(|selected| selected.transition.readiness.len()),
     );
     Ok(PreparedRotation {
         target,

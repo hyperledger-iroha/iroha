@@ -39,6 +39,32 @@ pub(super) fn submit_until<T>(
     Ok(result)
 }
 
+/// Submit once and establish read-after-write visibility on the exact observation peer.
+/// Global finality can be resolved by another coordinator; it does not fence a local read.
+/// Submission and local application consume the same original phase deadline.
+pub(super) fn submit_and_observe_until(
+    client: iroha::blocking::Client,
+    observer: iroha::blocking::Client,
+    deadline: Instant,
+    submit: impl FnOnce(
+        iroha::blocking::Client,
+    ) -> Result<
+        iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+    >,
+) -> Result<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>> {
+    let hash = submit_until(client, deadline, submit)?;
+    submit_until(observer, deadline, |bounded| {
+        bounded.wait_for_transaction_applied_local(
+            hash,
+            iroha::client::TransactionWaitOptions {
+                timeout: deadline.saturating_duration_since(Instant::now()),
+                poll_interval: RETRY_DELAY,
+            },
+        )
+    })?;
+    Ok(hash)
+}
+
 /// Submit once asynchronously under the original phase deadline.
 /// Preserve the SDK's unresolved transaction identity when its finality wait expires.
 pub(super) async fn submit_async_until<T, F, Fut>(
@@ -254,6 +280,167 @@ mod status_observation_tests {
             request_budgets: Mutex::new(Vec::new()),
             consume_request_deadline: false,
         })
+    }
+
+    #[derive(Debug)]
+    struct ApplicationTransport {
+        responses: Mutex<VecDeque<(u16, Vec<u8>)>>,
+        requests: Mutex<Vec<(String, Duration)>>,
+    }
+
+    impl HttpTransport for ApplicationTransport {
+        fn send_blocking(&self, _: TransportRequest) -> Result<Response<Vec<u8>>> {
+            panic!("local application uses the blocking client's asynchronous transport")
+        }
+
+        fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+            Box::pin(async move {
+                assert_eq!(request.method, iroha::http::Method::GET);
+                assert_eq!(request.url.host_str(), Some("committee-observer.invalid"));
+                assert_eq!(request.url.path(), "/v1/pipeline/transactions/status");
+                assert!(
+                    request.body.is_empty(),
+                    "a visibility barrier must never resubmit"
+                );
+                assert!(
+                    request
+                        .url
+                        .query_pairs()
+                        .any(|(k, v)| k == "scope" && v == "local")
+                );
+                self.requests.lock().unwrap().push((
+                    request
+                        .url
+                        .query_pairs()
+                        .find(|(k, _)| k == "hash")
+                        .unwrap()
+                        .1
+                        .into_owned(),
+                    request
+                        .timeout
+                        .expect("local observation must retain the phase deadline"),
+                ));
+                let (status, body) = self
+                    .responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("unexpected visibility poll");
+                Ok(Response::builder()
+                    .status(status)
+                    .header("content-type", "application/json")
+                    .body(body)?)
+            })
+        }
+    }
+
+    fn application_observer(
+        hash: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        statuses: &[(&str, &str, &str)],
+    ) -> (iroha::blocking::Client, Arc<ApplicationTransport>) {
+        let transport = Arc::new(ApplicationTransport {
+            responses: Mutex::new(
+                statuses
+                    .iter()
+                    .map(|(kind, scope, source)| {
+                        (
+                            200,
+                            json::to_vec(&json!({
+                                "hash": (hash.to_string()),
+                                "status": {"kind": (*kind), "block_height": 143},
+                                "scope": (*scope),
+                                "resolved_from": (*source),
+                            }))
+                            .unwrap(),
+                        )
+                    })
+                    .collect(),
+            ),
+            requests: Mutex::new(Vec::new()),
+        });
+        let mut builder = client(transport.clone()).to_builder();
+        builder.torii_url = "http://committee-observer.invalid/".parse().unwrap();
+        (
+            iroha::blocking::Client::from_client(builder.build().unwrap()).unwrap(),
+            transport,
+        )
+    }
+
+    #[test]
+    fn committee_read_visibility_requires_exact_observer_application_after_global_submit() {
+        use iroha_crypto::{Hash, HashOf};
+        let hash = HashOf::from_untyped_unchecked(Hash::prehashed([0x73; Hash::LENGTH]));
+        let submitter = iroha::blocking::Client::from_client(client(transport([]))).unwrap();
+        let (observer, observations) = application_observer(
+            hash,
+            &[
+                ("Queued", "local", "queue"),
+                ("Applied", "local", "cache"),
+                ("Applied", "local", "state"),
+            ],
+        );
+        let budget = Duration::from_secs(2);
+        let mut submitted = 0;
+        let observed =
+            submit_and_observe_until(submitter, observer, Instant::now() + budget, |client| {
+                submitted += 1;
+                assert_eq!(
+                    client.client().endpoint().host_str(),
+                    Some("status-observation.invalid")
+                );
+                // A successful global submission on the ingress does not publish the read peer's State.
+                Ok(hash)
+            })
+            .unwrap();
+        assert_eq!(
+            submitted, 1,
+            "visibility must not replay the signed submission"
+        );
+        assert_eq!(observed, hash);
+        let requests = observations.requests.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            3,
+            "committee reads require exact observer State application, not ingress global success"
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|(actual, remaining)| actual == &hash.to_string() && *remaining <= budget)
+        );
+        assert!(requests.windows(2).all(|pair| pair[1].1 < pair[0].1));
+        assert!(observations.responses.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn committee_read_visibility_rejects_global_response_and_preserves_submission_failure() {
+        use iroha_crypto::{Hash, HashOf};
+        let hash = HashOf::from_untyped_unchecked(Hash::prehashed([0x74; Hash::LENGTH]));
+        let submitter = iroha::blocking::Client::from_client(client(transport([]))).unwrap();
+        let (observer, observations) =
+            application_observer(hash, &[("Applied", "global", "state")]);
+        let error = submit_and_observe_until(
+            submitter.clone(),
+            observer,
+            Instant::now() + Duration::from_secs(2),
+            |_| Ok(hash),
+        )
+        .expect_err("global application cannot establish exact observer visibility");
+        assert!(format!("{error:#}").contains("scope"), "{error:#}");
+        assert_eq!(observations.requests.lock().unwrap().len(), 1);
+        let (observer, observations) = application_observer(hash, &[]);
+        let error = submit_and_observe_until(
+            submitter,
+            observer,
+            Instant::now() + Duration::from_secs(2),
+            |_| Err(eyre::eyre!("original unresolved submission {hash}")),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("original unresolved submission {hash}")
+        );
+        assert!(observations.requests.lock().unwrap().is_empty());
     }
 
     #[derive(Debug)]

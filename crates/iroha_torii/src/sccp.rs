@@ -213,7 +213,8 @@ where
         // Let the shared encoder report the serialization failure.
         return crate::utils::respond_with_format(value, format);
     };
-    let etag = crate::strong_etag_for_representation(&body);
+    // SCCP owns the validator for the exact negotiated response bytes.
+    let etag = format!("\"{}\"", blake3::hash(&body).to_hex());
     let mut response = if crate::utils::if_none_match_matches(headers, &etag) {
         StatusCode::NOT_MODIFIED.into_response()
     } else {

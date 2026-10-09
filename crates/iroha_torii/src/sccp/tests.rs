@@ -383,7 +383,7 @@ async fn immutable_responses_carry_validators_per_representation() {
     let bytes = body(json).await;
     assert_eq!(
         json_tag.to_str().expect("ascii"),
-        crate::strong_etag_for_representation(&bytes)
+        format!("\"{}\"", blake3::hash(&bytes).to_hex())
     );
     let mut conditional = HeaderMap::new();
     conditional.insert(header::IF_NONE_MATCH, json_tag.clone());
@@ -392,6 +392,34 @@ async fn immutable_responses_carry_validators_per_representation() {
     assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
     assert_eq!(not_modified.headers()[header::ETAG], json_tag);
     assert!(body(not_modified).await.is_empty());
+}
+
+#[tokio::test]
+async fn immutable_response_validator_refuses_changed_representation_or_body() {
+    let original = respond_immutable(
+        Some(&json_accept()),
+        &HeaderMap::new(),
+        SccpReadLimitsV1::v1(),
+    );
+    assert_eq!(original.status(), StatusCode::OK);
+    let original_tag = original.headers()[header::ETAG].clone();
+    let mut conditional = HeaderMap::new();
+    conditional.insert(header::IF_NONE_MATCH, original_tag.clone());
+
+    let norito = respond_immutable(Some(&norito_accept()), &conditional, SccpReadLimitsV1::v1());
+    assert_eq!(norito.status(), StatusCode::OK);
+    assert_ne!(norito.headers()[header::ETAG], original_tag);
+    assert_eq!(norito.headers()[header::VARY], "Accept");
+    assert!(!body(norito).await.is_empty());
+
+    let mut changed = SccpReadLimitsV1::v1();
+    changed.recent_messages += 1;
+    let expected = norito::json::to_vec(&changed).expect("changed representation");
+    let json = respond_immutable(Some(&json_accept()), &conditional, changed);
+    assert_eq!(json.status(), StatusCode::OK);
+    assert_ne!(json.headers()[header::ETAG], original_tag);
+    assert_eq!(json.headers()[header::VARY], "Accept");
+    assert_eq!(body(json).await, expected);
 }
 
 #[tokio::test]
