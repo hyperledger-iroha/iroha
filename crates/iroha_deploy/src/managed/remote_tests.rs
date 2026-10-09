@@ -1326,3 +1326,79 @@ fn cancelled_relay_turn_refuses_before_runtime_discovery_or_new_custody() {
         ManagedAttachmentPhase::Connecting
     );
 }
+
+#[test]
+fn administrative_amx_managed_busy_is_before_origin_signing_and_source_repair() {
+    let _resources = super::super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let store = ManagedStore::open(&temporary.path().join("managed")).unwrap();
+    let selected = profile(81, 4, "https://fixture.example/checkpoint");
+    let runtime = runtime(
+        &temporary.path().join("installed"),
+        InstalledNetworkProfiles::new(vec![selected.clone()]).unwrap(),
+    );
+    let directory = store
+        .publish_attachment(
+            "private",
+            &[("request.lock", b""), ("unchanged", b"original source")],
+        )
+        .unwrap();
+    let network = PrivateDirectory::open(store.root())
+        .unwrap()
+        .open_child("networks")
+        .unwrap()
+        .create_child("private")
+        .unwrap();
+    let key = KeyPair::from_seed(vec![155; 32], Algorithm::Ed25519);
+    let configuration = iroha::config::Config::load_table(
+        "admin-fixture.toml",
+        toml::toml! {
+            chain = "fixture"
+            network_id = (super::super::tests::private_spec().parent_network_id.to_string())
+            torii_url = "https://fixture.example/"
+            [account]
+            chain_discriminant = 753
+            public_key = (key.public_key().to_string())
+            private_key = (iroha_crypto::ExposedPrivateKey(key.private_key().clone()).to_string())
+        },
+    )
+    .unwrap();
+    let options = ManagedAmxRegistrationOptions {
+        fee_asset: iroha_wallet::operations::XOR_ASSET_DEFINITION
+            .parse()
+            .unwrap(),
+        max_fee: iroha_primitives::numeric::Quantity::from(1_u32),
+        deadline_unix_ms: now_ms().unwrap() + 60_000,
+        timeout: Duration::from_secs(1),
+    };
+    // The runtime lease is the existing inactive-generation boundary; it is never bypassed.
+    let lease = store::acquire(&network, "runtime.lock", "private").unwrap();
+    assert!(
+        matches!(store.register_amx_dataspace(&runtime, "private", &configuration, &options), Err(Error::Busy(name)) if name == "private")
+    );
+    assert_eq!(
+        directory
+            .read("unchanged", MAX_METADATA)
+            .unwrap()
+            .as_slice(),
+        b"original source"
+    );
+    assert!(!directory.path().join("provisioning").exists());
+    assert!(!directory.path().join("amx-registration").exists());
+    assert!(!release_path(&store, "private").exists());
+    drop(lease);
+    // Releasing the real runtime lease does not manufacture a missing original binding.
+    assert!(
+        store
+            .register_amx_dataspace(&runtime, "private", &configuration, &options)
+            .is_err()
+    );
+    assert_eq!(
+        directory
+            .read("unchanged", MAX_METADATA)
+            .unwrap()
+            .as_slice(),
+        b"original source"
+    );
+    assert!(!directory.path().join("amx-registration").exists());
+}

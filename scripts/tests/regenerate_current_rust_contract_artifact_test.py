@@ -857,9 +857,11 @@ def test_source_closure_authentication_rejects_relevant_index_drift(
         MODULE._authenticate_source_closure(closure, object(), {})
 
 
-def test_koto_receives_the_authenticated_source_through_an_inherited_fd(
+@pytest.mark.parametrize("source_mutation", [None, "replace", "mutate"])
+def test_koto_selects_the_authenticated_sealed_ko_source(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    source_mutation: str | None,
 ) -> None:
     cache, _root = _cache(tmp_path)
     stage = MODULE._create_work_stage(cache)
@@ -886,11 +888,24 @@ def test_koto_receives_the_authenticated_source_through_an_inherited_fd(
         inherited_fds: object = (),
     ) -> tuple[subprocess.CompletedProcess[str], str]:
         del executable, environment
-        descriptors = tuple(inherited_fds)
-        assert len(descriptors) == 1
-        observed_sources.append(os.pread(descriptors[0], source.size, 0))
+        assert tuple(inherited_fds) == ()
         arguments = tuple(arguments)
-        assert str(arguments[-1]).startswith(("/dev/fd/", "/proc/self/fd/"))
+        selected_source = Path(arguments[-1])
+        assert selected_source == source.path
+        assert selected_source.parent == sealed.path
+        assert selected_source.suffix == ".ko"
+        assert not selected_source.is_symlink()
+        observed_sources.append(selected_source.read_bytes())
+        if source_mutation == "replace":
+            sealed_path.chmod(0o700)
+            source_path.rename(sealed_path / "replaced.ko")
+            source_path.write_bytes(source.data)
+            source_path.chmod(0o400)
+            sealed_path.chmod(0o500)
+        elif source_mutation == "mutate":
+            source_path.chmod(0o600)
+            source_path.write_bytes(b"seiyaku B {}\n")
+            source_path.chmod(0o400)
         if arguments[0] == "build":
             artifact_path = Path(arguments[arguments.index("--out") + 1])
             manifest_path = Path(arguments[arguments.index("--manifest-out") + 1])
@@ -900,6 +915,11 @@ def test_koto_receives_the_authenticated_source_through_an_inherited_fd(
 
     monkeypatch.setattr(MODULE, "_run_bound_executable", run_koto)
     try:
+        if source_mutation is not None:
+            with pytest.raises(MODULE.FixtureError, match="changed"):
+                MODULE._build_artifact(koto, source, sealed, stage, {})
+            assert observed_sources == [source.data]
+            return
         generated, generated_manifest, binding = MODULE._build_artifact(
             koto,
             source,

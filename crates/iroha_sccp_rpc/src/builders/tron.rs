@@ -1,32 +1,48 @@
-//! TRON evidence builders (spec §4.13.3, §7.2).
+//! TRON evidence builders (spec §4.13.3, §4.13.5, §7.2, §7.3).
 //!
 //! Self-authenticating header segments (one per maintenance boundary, then the newest blocks),
-//! bootstraps and transaction proofs, built from the java-tron HTTP API. Headers are re-encoded
-//! from the printed `raw_data` fields and checked against the reported block id; transactions
-//! are re-encoded from `raw_data_hex`, their signatures and their `ret` objects and checked
-//! against `txTrieRoot`, so a lying or lossy endpoint is caught before submission. Everything
-//! built is untrusted until `iroha_sccp` verifies it.
+//! bootstraps and transaction proofs, built from the java-tron HTTP API ([`TronBuilder`]).
+//! Headers are re-encoded from the printed `raw_data` fields and checked against the reported
+//! block id; transactions are re-encoded from `raw_data_hex`, their signatures and their `ret`
+//! objects and checked against `txTrieRoot`, so a lying or lossy endpoint is caught before
+//! submission. Everything built is untrusted until `iroha_sccp` verifies it.
 //!
-//! TODO(ws39): checkpoint-anchored proofs and `Backfill` segments for burns that are no longer
-//! solid under a fresh set.
+//! **Evidence.** The event block `B` is proven from the first anchor that works:
+//!
+//! 1. a signed segment from `B` in which it is solid, when the light client stores the witness
+//!    set of `B`'s maintenance period and that set is still fresh
+//!    [`super::FRESHNESS_MARGIN_MS`] from now: until `ws_bound_ms` (7 d) after the period ends;
+//! 2. the unsigned `raw_data` headers `B ..= C` up to the nearest retained checkpoint `C ≥ B`
+//!    (`C − B ≤ 1 199`);
+//! 3. otherwise `Backfill` segments of `max_backfill_headers` (256) `raw_data` headers from `C`
+//!    down to within 1 199 blocks of `B`, then the headers up to the last backfilled checkpoint.
 
-use iroha_data_model::sccp::{
-    inbound::SccpSourceProofBytesV1,
-    light_client::{SccpLcAdvanceBytesV1, SccpLcBootstrapV1},
+use iroha_data_model::{
+    bridge::SccpNetworkV1,
+    sccp::{
+        inbound::SccpSourceProofBytesV1,
+        light_client::{SccpLcAdvanceBytesV1, SccpLcBootstrapV1, SccpLcConsensusSetV1},
+    },
 };
 use iroha_sccp::light_client::{
-    profile::{SccpChainProfilesV1, TRON_MAX_SEGMENT_HEADERS, TronChainProfileV1},
-    proof::{SccpLcAdvanceV1, SccpLcBootstrapDataV1, SccpSourceProofV1},
+    profile::{
+        SccpChainProfilesV1, TRON_MAX_ANCESTRY_HEADERS, TRON_MAX_SEGMENT_HEADERS,
+        TronChainProfileV1,
+    },
+    proof::{SccpLcAdvanceV1, SccpLcBootstrapDataV1, SccpLcSegmentV1, SccpSourceProofV1},
     tron::{
-        TronLcAdvanceV1, TronLcBootstrapV1, TronProofAnchorV1, TronSegmentV1, TronSignedHeaderV1,
-        TronSourceProofV1, TronTransactionProofV1, TronWitnessSetV1, TronWitnessV1, header_signer,
-        merkle_root_and_branch,
+        TronLcAdvanceV1, TronLcBootstrapV1, TronProofAnchorV1, TronRawSegmentV1, TronSegmentV1,
+        TronSignedHeaderV1, TronSourceProofV1, TronTransactionProofV1, TronWitnessSetV1,
+        TronWitnessV1, header_signer, header_summary, merkle_root_and_branch,
     },
 };
 use norito::json::Value;
 use sha2::{Digest as _, Sha256};
 
-use super::ethereum::BuildError;
+use super::{
+    AdvanceBudgetV1, BuildError, SourceChainBuilder, SourceEventRefV1, SourceEvidenceV1,
+    TairaLightClientView, backfill_bytes, fit_advance, fresh_with_margin, plan_backfill,
+};
 use crate::{
     TronClient,
     tron::{MAX_BLOCKS_PER_RANGE, TronBlock, TronBlockHeader, TronTransaction},
@@ -230,6 +246,184 @@ pub fn encode_transaction(transaction: &TronTransaction) -> Result<Vec<u8>, Buil
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Source
+// ---------------------------------------------------------------------------------------------
+
+/// TRON data an evidence builder reads. [`TronBuilder`] serves it from the java-tron HTTP API.
+pub trait TronSource {
+    /// The height of the block holding the solidified transaction `tx_id`, and the transaction's
+    /// inclusion under the block's `txTrieRoot`.
+    ///
+    /// # Errors
+    ///
+    /// Any endpoint failure, a transaction that is not solidified, or an inconsistent response.
+    fn transaction(&self, tx_id: &[u8; 32]) -> Result<(u64, TronTransactionProofV1), BuildError>;
+
+    /// Height of the newest block.
+    ///
+    /// # Errors
+    ///
+    /// Any endpoint failure.
+    fn head_number(&self) -> Result<u64, BuildError>;
+
+    /// Id-checked signed headers `first..=last`.
+    ///
+    /// # Errors
+    ///
+    /// Any endpoint failure or a block that is not served.
+    fn segment(&self, first: u64, last: u64) -> Result<TronSegmentV1, BuildError>;
+
+    /// Id-checked unsigned `raw_data` headers `first..=last`.
+    ///
+    /// # Errors
+    ///
+    /// Any endpoint failure or a block that is not served.
+    fn raw_headers(&self, first: u64, last: u64) -> Result<Vec<Vec<u8>>, BuildError>;
+}
+
+/// Check that `raw` headers are parent-linked one height at a time; returns the last block id.
+fn check_raw_chain(raw: &[Vec<u8>]) -> Result<[u8; 32], BuildError> {
+    let summary = |header: &[u8]| {
+        header_summary(header)
+            .map_err(|error| BuildError::Inconsistent(format!("TRON header: {error}")))
+    };
+    let first = raw
+        .first()
+        .ok_or_else(|| BuildError::Inconsistent("an empty TRON header chain".into()))?;
+    let mut previous = summary(first)?;
+    for header in &raw[1..] {
+        let next = summary(header)?;
+        if next.parent_id != previous.id || previous.number.checked_add(1) != Some(next.number) {
+            return Err(BuildError::Inconsistent(format!(
+                "TRON block {} does not follow block {}",
+                next.number, previous.number
+            )));
+        }
+        previous = next;
+    }
+    Ok(previous.id)
+}
+
+/// Whether the light client stores the witness set of `period` and it is still fresh
+/// [`super::FRESHNESS_MARGIN_MS`] after `now_ms`: until `ws_bound_ms` after the period ends
+/// (§4.13.3).
+#[must_use]
+pub fn period_set_fresh_with_margin(
+    profile: &TronChainProfileV1,
+    sets: &[SccpLcConsensusSetV1],
+    period: u64,
+    ws_bound_ms: u64,
+    now_ms: u64,
+) -> bool {
+    sets.iter().any(|set| set.set_id == period)
+        && profile
+            .period_end_ms(period)
+            .is_some_and(|end| fresh_with_margin(Some(end), ws_bound_ms, now_ms))
+}
+
+fn proof_bytes(
+    anchor: TronProofAnchorV1,
+    transaction: TronTransactionProofV1,
+) -> Result<SccpSourceProofBytesV1, BuildError> {
+    SccpSourceProofV1::Tron(TronSourceProofV1 {
+        anchor,
+        transaction,
+    })
+    .to_bytes()
+    .map_err(|error| BuildError::Inconsistent(format!("proof frame: {error}")))
+}
+
+/// Build the evidence of the transaction `tx_id` against the light client `taira` stores (see
+/// the module documentation for the anchor order), with sets fresh at `now_ms`.
+///
+/// # Errors
+///
+/// Any source failure, or a block that neither a fresh witness set nor a retained checkpoint
+/// (with at most [`super::MAX_BACKFILL_SEGMENTS`] backfills) reaches.
+pub fn build_evidence<S: TronSource + ?Sized>(
+    source: &S,
+    profile: &TronChainProfileV1,
+    tx_id: &[u8; 32],
+    taira: &dyn TairaLightClientView,
+    now_ms: u64,
+) -> Result<SourceEvidenceV1, BuildError> {
+    let light_client = taira.light_client()?;
+    let params = light_client.params;
+    let bound = |param: u32| u64::from(param).min(TRON_MAX_ANCESTRY_HEADERS as u64);
+    let max_headers = bound(params.max_ancestry_headers);
+    let max_backfill = bound(params.max_backfill_headers);
+    let (number, transaction) = source.transaction(tx_id)?;
+    let event = source
+        .raw_headers(number, number)?
+        .first()
+        .map(Vec::as_slice)
+        .map(header_summary)
+        .ok_or_else(|| BuildError::Unavailable(format!("TRON block {number} is not served")))?
+        .map_err(|error| BuildError::Inconsistent(format!("TRON header: {error}")))?;
+    let period = profile.period_at(event.time_ms);
+    // 1. A solid segment under the fresh set of the block's period.
+    let sets = taira.sets()?;
+    let solid_failure = if period > light_client.head.latest_set_id {
+        format!("the light client has not learned TRON period {period} yet; advance it first")
+    } else if period_set_fresh_with_margin(profile, &sets, period, params.ws_bound_ms, now_ms) {
+        let last = number
+            .saturating_add(SOLIDITY_TAIL)
+            .min(source.head_number()?);
+        if last <= number {
+            return Err(BuildError::Unavailable(format!(
+                "TRON block {number} has no descendants yet"
+            )));
+        }
+        return Ok(SourceEvidenceV1 {
+            backfills: Vec::new(),
+            proof: proof_bytes(
+                TronProofAnchorV1::Solid(source.segment(number, last)?),
+                transaction,
+            )?,
+        });
+    } else {
+        format!("the witness set of TRON period {period} is not stored or no longer fresh")
+    };
+    // 2. Raw headers up to the nearest retained checkpoint, backfilled when it is far.
+    let Some(checkpoint) = taira.checkpoint_covering(number)? else {
+        return Err(BuildError::Unavailable(format!(
+            "{solid_failure}; Taira retains no checkpoint at or above TRON block {number}"
+        )));
+    };
+    let top = checkpoint.data.source_height;
+    let plan = plan_backfill(number, top, max_headers.saturating_sub(1), max_backfill)?;
+    let raw = source.raw_headers(number, top)?;
+    if check_raw_chain(&raw)? != checkpoint.data.block_hash {
+        return Err(BuildError::Inconsistent(format!(
+            "the served TRON block {top} is not the stored checkpoint"
+        )));
+    }
+    let index = |height: u64| usize::try_from(height - number).unwrap_or(usize::MAX);
+    let backfills = plan
+        .segments
+        .iter()
+        .map(|(first, last)| {
+            backfill_bytes(SccpLcSegmentV1::Tron(TronRawSegmentV1 {
+                headers: raw[index(*first)..=index(*last)].to_vec(),
+            }))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SourceEvidenceV1 {
+        backfills,
+        proof: proof_bytes(
+            TronProofAnchorV1::Checkpoint(TronRawSegmentV1 {
+                headers: raw[..=index(plan.anchor)].to_vec(),
+            }),
+            transaction,
+        )?,
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Public-RPC builder
+// ---------------------------------------------------------------------------------------------
+
 /// TRON evidence builder over one java-tron HTTP API endpoint.
 pub struct TronBuilder {
     api: TronClient,
@@ -237,13 +431,22 @@ pub struct TronBuilder {
 }
 
 impl TronBuilder {
-    /// A builder over `api` under the compiled TRON profile.
+    /// A builder over `api` under the newest compiled TRON profile version.
+    ///
+    /// TODO(B11): build under the version active on the target Taira (Torii capabilities)
+    /// rather than the newest compiled one.
     #[must_use]
     pub fn new(api: TronClient) -> Self {
         Self {
             api,
-            profile: SccpChainProfilesV1::compiled().tron,
+            profile: SccpChainProfilesV1::latest().tron,
         }
+    }
+
+    /// Moves the HTTP API client to its next endpoint, for a caller whose build failed on the
+    /// data it was served or whose verification rejected what was built.
+    pub fn rotate_endpoints(&self) {
+        self.api.transport().rotate_preferred();
     }
 
     /// Fail unless the endpoint's next maintenance time lies on the compiled grid.
@@ -299,16 +502,6 @@ impl TronBuilder {
         Ok(blocks)
     }
 
-    fn segment(&self, first: u64, last: u64) -> Result<TronSegmentV1, BuildError> {
-        Ok(TronSegmentV1 {
-            headers: self
-                .blocks(first, last)?
-                .iter()
-                .map(Self::signed)
-                .collect::<Result<_, _>>()?,
-        })
-    }
-
     /// The maintenance block of `period`: the first block timestamped at or after its start.
     fn maintenance_block(&self, period: u64, head: &TronBlock) -> Result<u64, BuildError> {
         let start = self
@@ -334,10 +527,20 @@ impl TronBuilder {
         })
     }
 
+    /// Slots of the witness-learning window after a maintenance block (two production rounds
+    /// plus the skipped slots); a block at most this many heights after the maintenance block can
+    /// lie in the window.
+    fn window_blocks(&self) -> u64 {
+        self.profile
+            .learning_window_ms()
+            .checked_div(self.profile.block_interval_ms)
+            .unwrap_or(0)
+    }
+
     /// The witness set of `period` learned from its window, as the light client learns it.
     fn learned_set(&self, period: u64, maintenance: u64) -> Result<TronWitnessSetV1, BuildError> {
         let window = self.profile.learning_window_ms();
-        let blocks = self.blocks(maintenance, maintenance + 40)?;
+        let blocks = self.blocks(maintenance, maintenance + self.window_blocks() + 1)?;
         let end = blocks[0].header.timestamp + window;
         let mut witnesses = std::collections::BTreeMap::new();
         for block in blocks
@@ -361,79 +564,10 @@ impl TronBuilder {
                 .collect(),
         })
     }
+}
 
-    /// Build the `InitializeLightClient` bootstrap of the newest solidified block's period.
-    ///
-    /// # Errors
-    ///
-    /// Any endpoint failure, an off-grid endpoint, or a period whose window is not produced.
-    pub fn bootstrap(&self) -> Result<SccpLcBootstrapV1, BuildError> {
-        self.check_maintenance_grid()?;
-        let solid = self.api.solidity_now_block()?;
-        let head = self.api.now_block()?;
-        let period = self.profile.period_at(solid.header.timestamp);
-        let maintenance = self.maintenance_block(period, &head)?;
-        if solid.header.number <= maintenance + 30 {
-            return Err(BuildError::Unavailable(
-                "the current TRON period has just begun; retry in two minutes".into(),
-            ));
-        }
-        SccpLcBootstrapDataV1::Tron(TronLcBootstrapV1 {
-            set: self.learned_set(period, maintenance)?,
-            checkpoint_header: Self::signed(&solid)?.raw_data,
-        })
-        .to_bootstrap()
-        .map_err(|error| BuildError::Inconsistent(format!("bootstrap frame: {error}")))
-    }
-
-    /// Build an advance from the newest stored set `latest_set_id` (a period): one segment per
-    /// later maintenance boundary, or one segment of the newest blocks, at most `max_segments`.
-    ///
-    /// # Errors
-    ///
-    /// Any endpoint failure, or nothing to advance yet.
-    pub fn advance(
-        &self,
-        latest_set_id: u64,
-        max_segments: usize,
-    ) -> Result<SccpLcAdvanceBytesV1, BuildError> {
-        self.check_maintenance_grid()?;
-        let head = self.api.now_block()?;
-        let current = self.profile.period_at(head.header.timestamp);
-        let mut segments = Vec::new();
-        let span = TRON_MAX_SEGMENT_HEADERS as u64 - 1;
-        for period in latest_set_id + 1..=current {
-            if segments.len() == max_segments {
-                break;
-            }
-            let maintenance = self.maintenance_block(period, &head)?;
-            let last = (maintenance + 30 + SOLIDITY_TAIL).min(maintenance - 1 + span);
-            if last > head.header.number {
-                break;
-            }
-            segments.push(self.segment(maintenance - 1, last)?);
-        }
-        if segments.is_empty() && current == latest_set_id {
-            let last = head.header.number;
-            segments.push(self.segment(last - SOLIDITY_TAIL - 15, last)?);
-        }
-        if segments.is_empty() {
-            return Err(BuildError::Unavailable(
-                "the next TRON maintenance window is not produced yet".into(),
-            ));
-        }
-        SccpLcAdvanceV1::Tron(TronLcAdvanceV1 { segments })
-            .to_bytes()
-            .map_err(|error| BuildError::Inconsistent(format!("advance frame: {error}")))
-    }
-
-    /// Build the inbound or void proof of the transaction `tx_id`: its inclusion under the
-    /// block's `txTrieRoot` and a segment in which the block is solid.
-    ///
-    /// # Errors
-    ///
-    /// Any endpoint failure, an inconsistent response, or a block that is not solid yet.
-    pub fn source_proof(&self, tx_id: &[u8; 32]) -> Result<SccpSourceProofBytesV1, BuildError> {
+impl TronSource for TronBuilder {
+    fn transaction(&self, tx_id: &[u8; 32]) -> Result<(u64, TronTransactionProofV1), BuildError> {
         let info = self
             .api
             .solidity_transaction_info(tx_id)?
@@ -468,12 +602,9 @@ impl TronBuilder {
                 "the re-encoded transactions do not rebuild txTrieRoot".into(),
             ));
         }
-        let head = self.api.now_block()?;
-        let last = (number + SOLIDITY_TAIL).min(head.header.number);
-        let anchor = TronProofAnchorV1::Solid(self.segment(number, last)?);
-        SccpSourceProofV1::Tron(TronSourceProofV1 {
-            anchor,
-            transaction: TronTransactionProofV1 {
+        Ok((
+            number,
+            TronTransactionProofV1 {
                 transaction_index: u32::try_from(index)
                     .map_err(|_| BuildError::Inconsistent("transaction index overflows".into()))?,
                 transaction_count: u32::try_from(leaves.len())
@@ -481,15 +612,129 @@ impl TronBuilder {
                 transaction: encoded[index].clone(),
                 merkle_branch,
             },
+        ))
+    }
+
+    fn head_number(&self) -> Result<u64, BuildError> {
+        Ok(self.api.now_block()?.header.number)
+    }
+
+    fn segment(&self, first: u64, last: u64) -> Result<TronSegmentV1, BuildError> {
+        Ok(TronSegmentV1 {
+            headers: self
+                .blocks(first, last)?
+                .iter()
+                .map(Self::signed)
+                .collect::<Result<_, _>>()?,
         })
-        .to_bytes()
-        .map_err(|error| BuildError::Inconsistent(format!("proof frame: {error}")))
+    }
+
+    fn raw_headers(&self, first: u64, last: u64) -> Result<Vec<Vec<u8>>, BuildError> {
+        self.blocks(first, last)?
+            .iter()
+            .map(|block| Self::signed(block).map(|signed| signed.raw_data))
+            .collect()
+    }
+}
+
+impl SourceChainBuilder for TronBuilder {
+    fn network(&self) -> SccpNetworkV1 {
+        SccpNetworkV1::TronMainnet
+    }
+
+    /// The bootstrap of the newest solidified block's period.
+    fn bootstrap(&self) -> Result<SccpLcBootstrapV1, BuildError> {
+        self.check_maintenance_grid()?;
+        let solid = self.api.solidity_now_block()?;
+        let head = self.api.now_block()?;
+        let period = self.profile.period_at(solid.header.timestamp);
+        let maintenance = self.maintenance_block(period, &head)?;
+        if solid.header.number <= maintenance + self.window_blocks() {
+            return Err(BuildError::Unavailable(
+                "the current TRON period has just begun; retry in four minutes".into(),
+            ));
+        }
+        SccpLcBootstrapDataV1::Tron(TronLcBootstrapV1 {
+            set: self.learned_set(period, maintenance)?,
+            checkpoint_header: Self::signed(&solid)?.raw_data,
+        })
+        .to_bootstrap()
+        .map_err(|error| BuildError::Inconsistent(format!("bootstrap frame: {error}")))
+    }
+
+    /// One segment per later maintenance boundary, or one segment of the newest blocks, stepped
+    /// to `budget`.
+    fn advance(
+        &self,
+        latest_set_id: u64,
+        budget: AdvanceBudgetV1,
+    ) -> Result<SccpLcAdvanceBytesV1, BuildError> {
+        self.check_maintenance_grid()?;
+        let head = self.api.now_block()?;
+        let current = self.profile.period_at(head.header.timestamp);
+        let mut segments = Vec::new();
+        let span = TRON_MAX_SEGMENT_HEADERS as u64 - 1;
+        for period in latest_set_id + 1..=current {
+            if segments.len() == budget.max_items {
+                break;
+            }
+            let maintenance = self.maintenance_block(period, &head)?;
+            let last =
+                (maintenance + self.window_blocks() + SOLIDITY_TAIL).min(maintenance - 1 + span);
+            if last > head.header.number {
+                break;
+            }
+            segments.push(self.segment(maintenance - 1, last)?);
+        }
+        if segments.is_empty() && current == latest_set_id {
+            let last = head.header.number;
+            segments.push(self.segment(last - SOLIDITY_TAIL - 15, last)?);
+        }
+        if segments.is_empty() {
+            return Err(BuildError::Unavailable(
+                "the next TRON maintenance window is not produced yet".into(),
+            ));
+        }
+        fit_advance(segments, budget, |segments| {
+            SccpLcAdvanceV1::Tron(TronLcAdvanceV1 { segments })
+        })
+    }
+
+    fn evidence(
+        &self,
+        event: &SourceEventRefV1,
+        light_client: &dyn TairaLightClientView,
+        now_ms: u64,
+    ) -> Result<SourceEvidenceV1, BuildError> {
+        match event {
+            SourceEventRefV1::Tron { tx_id } => {
+                build_evidence(self, &self.profile, tx_id, light_client, now_ms)
+            }
+            SourceEventRefV1::Evm { .. } | SourceEventRefV1::Ton { .. } => {
+                Err(BuildError::Inconsistent("not a TRON event".into()))
+            }
+        }
     }
 }
 
 #[cfg(test)]
+mod evidence_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotating_moves_the_client_to_its_next_endpoint() {
+        let builder = TronBuilder::new(TronClient::new(
+            crate::builders::test_support::two_endpoint_transport(),
+        ));
+        assert_eq!(builder.api.transport().endpoints().preferred(), 0);
+        builder.rotate_endpoints();
+        assert_eq!(builder.api.transport().endpoints().preferred(), 1);
+        builder.rotate_endpoints();
+        assert_eq!(builder.api.transport().endpoints().preferred(), 0);
+    }
 
     /// Blocks `1..` on a 3 s slot grid from `origin_ms`, skipping every slot in `missed`.
     fn chain(origin_ms: u64, slots: u64, missed: &[u64]) -> Vec<(u64, u64)> {

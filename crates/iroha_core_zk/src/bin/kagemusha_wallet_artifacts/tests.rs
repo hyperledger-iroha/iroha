@@ -15,8 +15,8 @@ fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
 }
 
 fn request_bytes() -> Vec<u8> {
-    format!(r#"{{"schema":"iroha.kagemusha.wallet-artifact-production.v1","chain_id":"test-only","network_id_hex":"{}","genesis_public_key":"{}","signed_genesis":{{"path":"/private/test/genesis","sha256":"{}"}},"finality_inventory":{{"path":"/private/test/inventory","sha256":"{}"}},"finality_originals_directory":"/private/test/finality","custody_directory":"/private/test/custody","scheme_root_public_key_hex":"{}","enrollment_public_key_hex":"{}","artifact_public_key_hex":"{}","output_parent":"/private/test/output","output_name":"test-only-output","maximum_total_bytes":1048576}}"#,
-        "01".repeat(32), iroha_crypto::KeyPair::random().public_key(), "02".repeat(32), "03".repeat(32),
+    format!(r#"{{"schema":"iroha.kagemusha.wallet-artifact-production.v1","chain_id":"test-only","network_id_hex":"{}","genesis_public_key":"{}","signed_genesis":{{"path":"/private/test/genesis","sha256":"{}"}},"custody_directory":"/private/test/custody","scheme_root_public_key_hex":"{}","enrollment_public_key_hex":"{}","artifact_public_key_hex":"{}","output_parent":"/private/test/output","output_name":"test-only-output","maximum_total_bytes":1048576}}"#,
+        "01".repeat(32), iroha_crypto::KeyPair::random().public_key(), "02".repeat(32),
         hex::encode(public(&test_key(1)).as_sec1_bytes()), hex::encode(public(&test_key(2)).as_sec1_bytes()), hex::encode(public(&test_key(3)).as_sec1_bytes())).into_bytes()
 }
 
@@ -26,6 +26,8 @@ fn public_request_refuses_unknown_fields_aliased_roles_and_unbounded_resources()
     let request = parse_request(&bytes).unwrap();
     assert_eq!(request.output_name, "test-only-output");
     let text = String::from_utf8(bytes).unwrap();
+    let retired = text.replacen('{', "{\"finality_inventory\":{},", 1);
+    assert!(parse_request(retired.as_bytes()).is_err());
     let unknown = text.replacen('{', "{\"readiness\":true,", 1);
     assert!(parse_request(unknown.as_bytes()).is_err());
     let aliased = text.replace(
@@ -142,10 +144,7 @@ fn actual_private_key_intake_and_protocol_signatures_are_role_and_scheme_bound()
 }
 
 #[test]
-fn absent_finality_inventory_and_malformed_genesis_never_reach_compiler_or_signer() {
-    let empty: Vec<ArtifactRecord> = Vec::new();
-    assert!(records(&norito::encode_canonical(&empty).unwrap()).is_err());
-    assert!(records(b"not a canonical inventory").is_err());
+fn malformed_genesis_never_reaches_compiler_or_signer() {
     let request = parse_request(&request_bytes()).unwrap();
     assert!(
         native_finality(
@@ -162,37 +161,6 @@ fn absent_finality_inventory_and_malformed_genesis_never_reach_compiler_or_signe
     publish(&root, "request.json", &request_bytes()).unwrap();
     assert!(run(root.path().join("request.json").to_str().unwrap()).is_err());
     assert_eq!(root.entries(10).unwrap().len(), 1);
-}
-
-#[test]
-fn finality_source_exposes_only_explicit_descriptor_and_verifier_blobs() {
-    let temp = tempfile::tempdir().unwrap();
-    let root =
-        PrivateDirectory::open_or_create(temp.path().canonicalize().unwrap().join("sources"))
-            .unwrap();
-    let mut source = DirectoryOriginalsV1::open_existing(root.path(), 1_024).unwrap();
-    let descriptor = BlobV1::of(b"bounded descriptor DATA");
-    let server_key = BlobV1::of(b"server PK DATA must remain unselected");
-    source
-        .store_original(descriptor, b"bounded descriptor DATA")
-        .unwrap();
-    source
-        .store_original(server_key, b"server PK DATA must remain unselected")
-        .unwrap();
-    let selected = BTreeMap::from([(descriptor.sha256, descriptor)]);
-    let mut finality = FinalitySource {
-        source: &source,
-        blobs: &selected,
-    };
-    let mut original = Vec::new();
-    finality
-        .open(&descriptor.sha256)
-        .unwrap()
-        .read_to_end(&mut original)
-        .unwrap();
-    assert_eq!(original, b"bounded descriptor DATA");
-    assert!(finality.open(&server_key.sha256).is_err());
-    assert!(finality.open(&[0; 32]).is_err());
 }
 
 #[test]
@@ -243,38 +211,25 @@ fn completed_carrier_excludes_provisional_cache_and_refuses_changed_identities()
 }
 
 #[test]
-fn complete_reader_selects_closed_wallet_and_finality_rosters_only() {
+fn complete_reader_selects_closed_wallet_roster_only() {
     let temp = tempfile::tempdir().unwrap();
     let root =
         PrivateDirectory::open_or_create(temp.path().canonicalize().unwrap().join("source-test"))
             .unwrap();
     let wallet_dir = root.create_child("wallet").unwrap();
-    let finality_dir = root.create_child("finality").unwrap();
     let mut wallet = DirectoryOriginalsV1::open_existing(wallet_dir.path(), 1024).unwrap();
-    let mut finality = DirectoryOriginalsV1::open_existing(finality_dir.path(), 1024).unwrap();
     let wallet_bytes = b"selected wallet PK DATA";
-    let finality_bytes = b"selected finality VK DATA";
-    let excluded_bytes = b"unselected finality server PK DATA";
+    let excluded_bytes = b"unselected provisional wallet DATA";
     let wallet_blob = BlobV1::of(wallet_bytes);
-    let finality_blob = BlobV1::of(finality_bytes);
     let excluded = BlobV1::of(excluded_bytes);
     wallet.store_original(wallet_blob, wallet_bytes).unwrap();
-    finality
-        .store_original(finality_blob, finality_bytes)
-        .unwrap();
-    finality.store_original(excluded, excluded_bytes).unwrap();
+    wallet.store_original(excluded, excluded_bytes).unwrap();
     let wallet_blobs = BTreeMap::from([(wallet_blob.sha256, wallet_blob)]);
-    let finality_blobs = BTreeMap::from([(finality_blob.sha256, finality_blob)]);
     let mut source = CompleteSource {
         wallet: &wallet,
-        finality: &finality,
         wallet_blobs: &wallet_blobs,
-        finality_blobs: &finality_blobs,
     };
-    for (blob, expected) in [
-        (wallet_blob, wallet_bytes.as_slice()),
-        (finality_blob, finality_bytes.as_slice()),
-    ] {
+    for (blob, expected) in [(wallet_blob, wallet_bytes.as_slice())] {
         let mut bytes = Vec::new();
         source
             .open(blob.sha256)

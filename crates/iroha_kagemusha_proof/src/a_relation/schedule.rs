@@ -149,8 +149,6 @@ pub enum OperationTask {
     RefreshQuotaWindowRoot = 39,
     /// Authenticate all64 successor usage leaves aligned with the new windows.
     RefreshQuotaUsageRoot = 40,
-    /// Complete genesis-rooted ordinary receipt proof and both source claims.
-    LoadFinality = 41,
     /// Exact retained Omega/sigma tapes and their unconditional joint bound.
     ArchiveRetainedProofs = 42,
     /// Unconditional removal of the exact retained descriptor from the core map.
@@ -172,7 +170,6 @@ impl OperationTask {
                 Self::LoadRecovery,
                 Self::LoadReceipt,
                 Self::LoadCurrentAuthorization,
-                Self::LoadFinality,
             ],
             Variant::Send => &[
                 Self::SendObjects,

@@ -561,7 +561,7 @@ impl FinalizedExecutionCarrier {
     pub fn block(&self) -> &iroha_data_model::block::SharedSignedBlock {
         &self.block
     }
-    /// Aggregate native source bytes charged before body I/O, including genesis and H2.
+    /// Aggregate native source bytes charged before I/O, including every read ancestor.
     pub fn wire_bytes(&self) -> u64 {
         self.wire_bytes
     }
@@ -592,6 +592,39 @@ impl FinalizedExecutionCarrier {
             Ok(())
         })
     }
+    /// Visit the exact borrowed Network results of this already authenticated carrier.
+    ///
+    /// The independently selected header must match before any result reaches the visitor.
+    /// Both full-prefix and off-chain checkpoint readers use this same projection; no
+    /// additional source read, DTO clone or output-authentication path is introduced.
+    /// # Errors
+    /// Rejects a foreign carrier or a missing input/output in the complete validated join.
+    pub fn visit_network_transactions(
+        &self,
+        expected_hash: HashOf<BlockHeader>,
+        mut visitor: impl FnMut(&TransactionEntrypoint, &TransactionResult),
+    ) -> Result<BlockHeader, QueryExecutionFail> {
+        if self.block().hash() != expected_hash {
+            return Err(canonical_transaction_history_error(
+                "native carrier differs from the caller's exact committed binding",
+            ));
+        }
+        let block = self.block();
+        for index in 0..block.network_entrypoint_count() {
+            let entrypoint = block.network_entrypoint_at(index).ok_or_else(|| {
+                canonical_transaction_history_error("validated source disappeared")
+            })?;
+            let index = u32::try_from(index).map_err(|_| {
+                canonical_transaction_history_error("Network count exceeds index space")
+            })?;
+            let (_, output) = block.network_output_at(index).ok_or_else(|| {
+                canonical_transaction_history_error("validated output disappeared")
+            })?;
+            visitor(entrypoint, &output.result);
+        }
+        Ok(block.header())
+    }
+
     /// Consume the read result and retain its immutable authenticated body.
     pub fn into_block(self) -> iroha_data_model::block::SharedSignedBlock {
         self.block
@@ -718,7 +751,7 @@ pub(crate) fn read_finalized_execution_carrier(
 /// Rejects zero/exceeded bounds, unavailable or contradicted history, retired
 /// carriers and inconsistent outputs.
 pub(crate) fn read_executed_carrier_from_checkpoints(
-    state_ro: &impl StateReadOnly,
+    source: crate::state::CanonicalHistorySource<'_>,
     height: NonZeroUsize,
     max_work: u64,
     max_bytes: u64,
@@ -736,8 +769,7 @@ pub(crate) fn read_executed_carrier_from_checkpoints(
     let mut wire_bytes = 0_u64;
     let mut carrier = None;
     read_budget.with(|| {
-        state_ro
-            .canonical_history()
+        source
             .with_read_budget(read_budget)
             .visit_executed_backwards_from_checkpoints(
                 height,
@@ -808,26 +840,9 @@ pub fn visit_finalized_network_transactions(
     mut visitor: impl FnMut(&TransactionEntrypoint, &TransactionResult),
 ) -> Result<BlockHeader, crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>> {
     let carrier = state.read_finalized_execution_carrier(height, max_work, max_bytes)?;
-    if carrier.block().hash() != expected_hash {
-        return Err(canonical_transaction_history_error(
-            "native carrier differs from the caller's exact committed binding",
-        )
-        .into());
-    }
-    let block = carrier.block();
-    for index in 0..block.network_entrypoint_count() {
-        let entrypoint = block
-            .network_entrypoint_at(index)
-            .ok_or_else(|| canonical_transaction_history_error("validated source disappeared"))?;
-        let index = u32::try_from(index).map_err(|_| {
-            canonical_transaction_history_error("Network count exceeds index space")
-        })?;
-        let (_, output) = block
-            .network_output_at(index)
-            .ok_or_else(|| canonical_transaction_history_error("validated output disappeared"))?;
-        visitor(entrypoint, &output.result);
-    }
-    Ok(block.header())
+    carrier
+        .visit_network_transactions(expected_hash, &mut visitor)
+        .map_err(Into::into)
 }
 
 #[cfg(test)]

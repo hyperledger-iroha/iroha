@@ -96,7 +96,9 @@ mod fee_sponsor_multisig;
 pub(crate) mod private_fees;
 /// Authenticated root scope for native and contract-generated instruction effects.
 pub(crate) mod root_scope;
-pub(crate) use execution_fee::{ExecutionFeeMeter, ExecutionFeeSettlementError};
+pub(crate) use execution_fee::{
+    ExecutionFeeExemption, ExecutionFeeMeter, ExecutionFeeSettlementError,
+};
 #[path = "executor_execution_effects.rs"]
 mod execution_effects;
 pub(crate) use execution_effects::ExecutionEffects;
@@ -275,6 +277,7 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindContractManifestByArtifactId(_)
         | SingularQueryBox::FindAbiVersion(_)
         | SingularQueryBox::FindAssetDefinitionById(_)
+        | SingularQueryBox::FindAssetDefinitionDirectHome(_)
         | SingularQueryBox::FindOracleFeedById(_)
         | SingularQueryBox::FindDomainEndorsementPolicy(_)
         | SingularQueryBox::FindDomainCommittee(_)
@@ -439,7 +442,8 @@ fn native_iterable_query_access(
         AssetDefinition
     ) {
         if any_exact!(payload; data_model_query::asset::prelude::FindAssetDefinitions) {
-            return Ok(NativeQueryAccess::Registered);
+            // Listing every definition would disclose privately homed definitions.
+            return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
     }
@@ -1550,14 +1554,16 @@ fn fee_exempt_payload(
             || successful_claim_fee_exempt_payload(world, nexus, payload, observation_time_ms)?
             || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, payload)))
 }
+/// Return whether `transaction` skips the Nexus fee when it succeeds, judged against the
+/// committed `world` the next block executes on (queue admission). Execution uses
+/// [`transaction_fee_exemption`], which also says whether a failure is charged.
 fn fee_exempt_transaction(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
     transaction: &SignedTransaction,
     observation_time_ms: u64,
 ) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
-    // SCCP exemptions hold on success only (`specs/sccp.md` §4.19).
-    // TODO(ws31): charge the ordinary Nexus fee when an SCCP-exempt transaction fails.
+    // `world` is the committed parent World, the one SCCP eligibility is judged against.
     Ok(private_fees::permits_public_exemption(world)?
         && (nexus_fee_exempt_transaction(transaction)
             || successful_claim_fee_exempt_transaction(
@@ -1570,6 +1576,47 @@ fn fee_exempt_transaction(
                 world,
                 transaction.payload(),
             )))
+}
+/// Return how the Nexus fee applies to `transaction` executing in `state_transaction`, with
+/// its SCCP exempt class when it has one.
+///
+/// Protocol and successful-claim exemptions are judged against the executing World and hold
+/// whatever the outcome. SCCP exemptions are judged against the committed parent World of the
+/// executing block, exactly like queue admission, fee quoting and the per-block exempt cap,
+/// and hold on success only: a failure is charged the ordinary fee (`specs/sccp.md` §4.19).
+fn transaction_fee_exemption(
+    state_transaction: &StateTransaction<'_, '_>,
+    transaction: &SignedTransaction,
+) -> Result<
+    (
+        ExecutionFeeExemption,
+        Option<crate::smartcontracts::isi::sccp::admission::SccpExemptClassV1>,
+    ),
+    crate::execution_attempt::ExecutionDeferred,
+> {
+    let world = &state_transaction.world;
+    if !private_fees::permits_public_exemption(world)? {
+        return Ok((ExecutionFeeExemption::Charged, None));
+    }
+    if nexus_fee_exempt_transaction(transaction)
+        || successful_claim_fee_exempt_transaction(
+            world,
+            &state_transaction.nexus,
+            transaction,
+            state_transaction.block_unix_timestamp_ms(),
+        )?
+    {
+        return Ok((ExecutionFeeExemption::Exempt, None));
+    }
+    Ok(
+        match crate::smartcontracts::isi::sccp::fees::exempt_class_in_block(
+            state_transaction,
+            transaction.payload(),
+        ) {
+            Some(class) => (ExecutionFeeExemption::ExemptOnSuccess, Some(class)),
+            None => (ExecutionFeeExemption::Charged, None),
+        },
+    )
 }
 #[derive(Clone, Copy)]
 enum PermissionOrRoleMutation<'a> {
@@ -3572,14 +3619,21 @@ pub(crate) fn ensure_contract_invocation_code_hash(
 /// Wallets can validate canonical JSON metadata without embedding a Kotodama ABI
 /// encoder. Consensus therefore reconstructs the schema-bound argument record
 /// from that metadata and refuses any executable whose opaque argument bytes
-/// encode a different payload.
+/// encode a different payload. A `contract_alias` entry must name the address's
+/// `live_alias`, so indexers can attribute the call to that alias.
+///
+/// Metadata that carries any of these keys must carry the full identity binding
+/// (address, code hash, entrypoint). Other keys, such as `contract_module` or
+/// `contract_event_*`, are never checked and must not be trusted by readers.
 fn ensure_contract_invocation_metadata_binding(
     invocation: &ContractInvocation,
     metadata: &Metadata,
     contract: &ivm::PreparedContract,
+    live_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
 ) -> Result<(), ValidationFail> {
     let carries_reviewable_binding = [
         "contract_address",
+        "contract_alias",
         "contract_code_hash",
         "contract_entrypoint",
         "contract_payload",
@@ -3598,6 +3652,14 @@ fn ensure_contract_invocation_metadata_binding(
         return Err(ValidationFail::NotPermitted(
             "top-level ContractCall address differs from contract_address metadata".to_owned(),
         ));
+    }
+    if let Some(metadata_alias) = requested_contract_alias(metadata)?
+        && live_alias != Some(&metadata_alias)
+    {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract_alias metadata `{metadata_alias}` is not the live alias of `{}`",
+            invocation.contract_address
+        )));
     }
     let code_hash_literal = metadata
         .get("contract_code_hash")
@@ -4536,6 +4598,10 @@ pub fn quote_nexus_fee_admission_draft(
     if fee_exempt_payload(world, nexus, payload, observation_time_ms)
         .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
     {
+        // TODO(ws31): an SCCP payload is exempt on success only, and a failure is charged
+        // only within its signed limits (`specs/sccp.md` §4.19). Recommend the ordinary
+        // limits for such payloads (without requiring the payer to hold the fee asset now),
+        // so a funded signer of an eligible SCCP transaction makes its failure chargeable.
         return Ok(FeeAdmissionDraftQuote {
             quote: fee_exempt_admission_quote(payload),
             recommended_intent: fee_intent_with_exact_bounds(&payload.fee_payment, &[]),
@@ -4686,13 +4752,10 @@ pub(crate) fn validate_transaction_fee_admission(
     transaction: &SignedTransaction,
 ) -> Result<(), ValidationFail> {
     if is_initial_genesis_context(state_transaction)
-        || fee_exempt_transaction(
-            &state_transaction.world,
-            &state_transaction.nexus,
-            transaction,
-            state_transaction.block_unix_timestamp_ms(),
-        )
-        .map_err(|reason| state_transaction.defer_execution(reason))?
+        || transaction_fee_exemption(state_transaction, transaction)
+            .map_err(|reason| state_transaction.defer_execution(reason))?
+            .0
+            .skips_fee_on_success()
     {
         return Ok(());
     }
@@ -4800,13 +4863,10 @@ fn charge_fees_for_applied_overlay_inner(
         .fee_payment_intent()
         .sponsor_program()
         .map(|(program_id, _)| program_id.clone());
-    let skip_nexus_fee = fee_exempt_transaction(
-        &state_transaction.world,
-        &state_transaction.nexus,
-        transaction,
-        state_transaction.block_unix_timestamp_ms(),
-    )
-    .map_err(|reason| state_transaction.defer_execution(reason))?;
+    let skip_nexus_fee = transaction_fee_exemption(state_transaction, transaction)
+        .map_err(|reason| state_transaction.defer_execution(reason))?
+        .0
+        .skips_fee_on_success();
     // Admission captured the governed gas policy before business effects were applied.
     // Keep that immutable snapshot for settlement so this transaction cannot alter its
     // own fee asset, rate, or destination account through the overlay.
@@ -6916,6 +6976,8 @@ impl Executor {
         }
         let result =
             self.execute_transaction_body(state_transaction, authority, transaction, ivm_cache);
+        // The self-claim marker belongs to the signed body only, never to later callbacks.
+        state_transaction.sccp_exempt_self_claim = None;
         state_transaction.bind_kagemusha_load_entrypoint_v1(None);
         // A local refusal has no completed execution, fee, gas, or effect result.
         // The transaction overlay remains poisoned until its owner drops it.
@@ -6973,14 +7035,17 @@ impl Executor {
             .fee_payment_intent()
             .sponsor_program()
             .map(|(program_id, _)| program_id.clone());
-        let skip_nexus_fee = is_initial_genesis_context(state_transaction)
-            || fee_exempt_transaction(
-                &state_transaction.world,
-                &state_transaction.nexus,
-                &transaction,
-                state_transaction.block_unix_timestamp_ms(),
-            )
-            .map_err(|reason| state_transaction.defer_execution(reason))?;
+        let (fee_exemption, sccp_class) = if is_initial_genesis_context(state_transaction) {
+            (ExecutionFeeExemption::Exempt, None)
+        } else {
+            transaction_fee_exemption(state_transaction, &transaction)
+                .map_err(|reason| state_transaction.defer_execution(reason))?
+        };
+        let skip_nexus_fee = fee_exemption.skips_fee_on_success();
+        // Only an exempt self-claim makes the self-claim fee due at release (§4.12.4).
+        state_transaction.sccp_exempt_self_claim = (sccp_class
+            == Some(crate::smartcontracts::isi::sccp::admission::SccpExemptClassV1::SelfClaim))
+        .then(|| authority.clone());
         // Quote against the exact governed gas snapshot execution will charge.
         Self::refresh_gas_from_parameters(state_transaction)?;
         let fee_quote = if !skip_nexus_fee {
@@ -7012,7 +7077,7 @@ impl Executor {
         )?;
         state_transaction.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
         state_transaction.bind_kagemusha_load_entrypoint_v1(Some(&transaction));
-        state_transaction.begin_execution_fee_meter(&transaction, tx_bytes_len, skip_nexus_fee)?;
+        state_transaction.begin_execution_fee_meter(&transaction, tx_bytes_len, fee_exemption)?;
         state_transaction.begin_execution_effect_budget(&transaction)?;
         // Disallow direct signing with multisig accounts; only explicit multisig
         // proposal/approval envelopes with bundled multisig signatures are allowed.
@@ -9258,6 +9323,10 @@ mod public_pin_admission_tests;
 #[cfg(test)]
 #[path = "executor_opaque_monetary_tests.rs"]
 mod opaque_monetary_tests;
+
+#[cfg(test)]
+#[path = "executor_opaque_sccp_record_tests.rs"]
+mod opaque_sccp_record_tests;
 
 #[cfg(test)]
 fn executor_test_budget() -> iroha_allocation::AllocationBudget {
@@ -22782,22 +22851,74 @@ seiyaku ReviewedValue {
                 .expect("bounded reviewed arguments"),
             ),
         };
+        let live_alias: iroha_data_model::smart_contract::ContractAlias =
+            "reviewed_value::apps.universal"
+                .parse()
+                .expect("live contract alias");
         super::ensure_contract_invocation_metadata_binding(
-            &invocation(reviewed_arguments),
+            &invocation(reviewed_arguments.clone()),
             &metadata,
             &prepared,
+            Some(&live_alias),
         )
         .expect("matching reviewed metadata and arguments");
         let error = super::ensure_contract_invocation_metadata_binding(
             &invocation(swapped_arguments),
             &metadata,
             &prepared,
+            Some(&live_alias),
         )
         .expect_err("swapped argument bytes must be rejected");
         assert!(
             matches!(error, ValidationFail::NotPermitted(ref message)
                 if message.contains("arguments differ from the canonical contract_payload")),
             "unexpected swapped-arguments error: {error}"
+        );
+        // Indexers attribute a call to its `contract_alias`, so the claim must
+        // name the address's live alias.
+        let alias_key: Name = "contract_alias"
+            .parse()
+            .expect("static contract alias metadata key");
+        let mut aliased = metadata.clone();
+        aliased.insert(alias_key.clone(), Json::new(live_alias.to_string()));
+        super::ensure_contract_invocation_metadata_binding(
+            &invocation(reviewed_arguments.clone()),
+            &aliased,
+            &prepared,
+            Some(&live_alias),
+        )
+        .expect("the live alias binds");
+        let other_alias: iroha_data_model::smart_contract::ContractAlias =
+            "forged_router::apps.universal"
+                .parse()
+                .expect("other contract alias");
+        for live in [None, Some(&other_alias)] {
+            let error = super::ensure_contract_invocation_metadata_binding(
+                &invocation(reviewed_arguments.clone()),
+                &aliased,
+                &prepared,
+                live,
+            )
+            .expect_err("an alias claim must name the live alias");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(ref message)
+                    if message.contains("is not the live alias")),
+                "unexpected alias error: {error}"
+            );
+        }
+        let mut alias_only = Metadata::default();
+        alias_only.insert(alias_key, Json::new(live_alias.to_string()));
+        let error = super::ensure_contract_invocation_metadata_binding(
+            &invocation(reviewed_arguments),
+            &alias_only,
+            &prepared,
+            Some(&live_alias),
+        )
+        .expect_err("an alias claim requires the full identity binding");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("requires contract_address metadata")),
+            "unexpected alias-only error: {error}"
         );
     }
     #[test]

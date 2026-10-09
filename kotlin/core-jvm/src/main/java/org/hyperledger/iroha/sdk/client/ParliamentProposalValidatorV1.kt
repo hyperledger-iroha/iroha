@@ -25,6 +25,7 @@ internal object ParliamentProposalValidatorV1 {
         "retire_revision", "remove_staged", "release_stranded", "set_taira_paused",
         "set_destination_paused", "initialize_light_client", "install_trusted_checkpoint",
         "freeze_light_client", "set_parameters", "clear_bridge_key_fault",
+        "activate_light_client_profile",
     )
     private val BLS_VALIDATOR_ID = Regex("ea0130[0-9A-F]{96}")
     private val KEBAB = Regex("[a-z0-9]+(?:-[a-z0-9]+)*")

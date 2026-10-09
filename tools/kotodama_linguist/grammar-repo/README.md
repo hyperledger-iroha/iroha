@@ -1,36 +1,91 @@
 # Kotodama for Visual Studio Code
 
-Kotodama language support for `.ko` contracts and test modules. The client starts
-`koto lsp` and uses the compiler's explicit `kotodama.project.json` source graph.
-The extension also ships the canonical TextMate grammar for highlighting.
+Kotodama is the smart-contract language of the Iroha Virtual Machine: `.ko`
+sources compile to IVM bytecode (`.to`). This extension starts the `koto`
+language server (`koto lsp`) and ships the canonical TextMate grammar.
 
-Install the repository's `koto` executable and put it on `PATH`, or set
-`kotodama.serverPath` to its absolute path. Open a workspace containing an explicit `kotodama.project.json` source graph.
-Musubi owns package scaffolding and builds; this extension currently consumes
-the compiler source graph configured below.
+Editor features come from the compiler itself:
 
-To build this extension from source:
+- diagnostics, including standalone `*.test.ko` modules checked in test mode
+  against their `koto_test { target: ... }` seiyaku;
+- completion that follows the cursor position (source-unit keywords at the top
+  level, declarations inside a seiyaku or module, statements and values inside
+  function bodies, members after `.`, paths after `::`);
+- hover and signature help rendered in Kotodama syntax, with the documentation
+  of every builtin;
+- definition, references, highlights and rename, including the
+  `kotoage: "name"` selector strings that tests use to call entrypoints;
+- document outline, workspace symbols, folding and semantic highlighting;
+- a **Run test** code lens on every `#[test]` function;
+- formatting with `koto fmt` rules and quick fixes.
 
-```sh
-npm ci --ignore-scripts
-npm test
-npm run package
-code --install-extension kotodama.vsix
-```
+The branded keywords have two equal spellings: `seiyaku`/`誓約`,
+`kotoage`/`言挙げ`, `hajimari`/`始まり` and `kaizen`/`改善`. Both spellings are the
+same keyword, may be mixed freely, highlight identically and are both offered
+by completion; hover echoes the spelling you wrote.
 
-The extension starts one language server per workspace folder. Set
-`kotodama.project` to the explicit project manifest (the default is
-`kotodama.project.json`). `${workspaceFolder}` expands to that folder. A missing
-manifest selects single-file analysis; imports are never inferred from disk.
-Source overlays and source/manifest change notifications reach the compiler.
-Configuration changes restart clients. Use **Kotodama: Restart Language Server**
-after replacing the compiler executable.
+## Install
 
-`kotodama.zk` enables the compiler's ZK checks. The client requires a trusted
-workspace before starting a configured executable, and passes arguments without
-a shell. Formatting, diagnostics, and semantic editor operations use the installed
-compiler; use the compiler and extension from the same checkout or release.
+The extension and the `koto` executable must come from the same Iroha checkout
+or release. The language server reports its version in the `serverInfo` of
+its LSP `initialize` response.
 
-[Language documentation](https://docs.iroha.tech/blockchain/smart-contracts#first-project).
-The grammar mirrors `specs/kotodama_grammar.md` and
-`crates/kotodama_lang/grammar/v1.lex` and remains usable by GitHub Linguist.
+1. Build `koto` from the Iroha workspace:
+
+   ```sh
+   cargo build --release -p kotodama_toolchain --bin koto
+   ```
+
+   Put `target/release/koto` on `PATH`, or note its absolute path for
+   `kotodama.serverPath`.
+
+2. Package and install the extension from this directory (Node.js 22 or newer):
+
+   ```sh
+   npm ci --ignore-scripts
+   npm test
+   npm run package          # runs `vsce package --out kotodama.vsix`
+   code --install-extension kotodama.vsix
+   ```
+
+   `npm test` checks the client configuration and tokenizes the grammar
+   samples with the same TextMate engine VS Code uses. After an intentional
+   grammar change, review and refresh the snapshot with
+   `KOTODAMA_UPDATE_SNAPSHOT=1 npm test`. The extension is not published to a
+   marketplace; install the packaged `.vsix`.
+
+## Configure
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `kotodama.serverPath` | `koto` | Path to the `koto` executable. |
+| `kotodama.project` | `kotodama.project.json` | Exact project graph, relative to the workspace folder; `${workspaceFolder}` expands. |
+| `kotodama.zk` | `false` | Enable the explicit ZK compilation capability. |
+
+The client starts one server per workspace folder as
+`koto lsp [--project <kotodama.project.json>] [--zk]`. With a project manifest
+the server analyzes exactly that source and package graph. Without one, each
+open seiyaku is analyzed with the sources its `include`/`import` directives
+name, read relative to its own directory; imports are never inferred from
+other files. Standalone test modules are attached to the seiyaku named by their
+`koto_test` target, so renaming an entrypoint also updates the test selectors.
+
+**Kotodama: Restart Language Server** restarts every client, for example after
+replacing the `koto` executable. Configuration changes restart clients
+automatically. The client requires a trusted workspace before starting a
+configured executable and passes arguments without a shell. The **Run test**
+code lens runs `koto test run --filter <name> --exact <source>` as a task.
+
+## Other editors
+
+Any editor with a Language Server Protocol client can run the same server over
+stdio. Configure the command `koto lsp` (add `--project <manifest>` and `--zk`
+as needed) for files with the `.ko` extension. The server uses UTF-16 positions
+and full-document synchronization.
+
+The TextMate grammar in `syntaxes/` is generated by
+`scripts/regenerate_kotodama_syntax.py` from
+`crates/kotodama_lang/grammar/v1.lex`; edit the generator, not the generated
+regions. It is also the grammar proposed to GitHub Linguist.
+
+[Kotodama smart contracts](https://docs.iroha.tech/blockchain/smart-contracts)

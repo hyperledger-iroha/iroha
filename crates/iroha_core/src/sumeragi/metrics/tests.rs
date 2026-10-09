@@ -367,6 +367,7 @@ fn latency_uses_first_execute_and_consumes_commit_and_apply_timestamps() {
     let execute = Action::Execute {
         block: body.clone(),
         req: 1,
+        certified: false,
     };
     recorder.action(10, &execute);
     recorder.action(25, &execute);
@@ -543,6 +544,7 @@ fn live_writers_move_every_exported_sumeragi_family() {
         &Action::Execute {
             block: body.clone(),
             req: 1,
+            certified: false,
         },
     );
     recorder.action(5, &commit(&body));

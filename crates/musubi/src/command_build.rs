@@ -10,6 +10,15 @@ pub(super) fn run_build(
     command: &'static str,
     args: &BuildArgs,
 ) -> CommandResult {
+    run_build_with_warnings(explicit_manifest, command, args).map(|(success, _)| success)
+}
+
+/// Run `check`, `build` or `test`, also returning canonical lint warnings for SARIF output.
+pub(super) fn run_build_with_warnings(
+    explicit_manifest: Option<&Path>,
+    command: &'static str,
+    args: &BuildArgs,
+) -> Result<(Success, kotodama_lang::diagnostic::DiagnosticBundle), Diagnostic> {
     let PreparedBuild {
         workspace,
         selected_names,
@@ -26,8 +35,11 @@ pub(super) fn run_build(
         } else {
             CompilerActionV1::Check
         },
+        network::NetworkPurpose::LocalCompilation,
     )?;
     let chain_discriminant = graph.account_chain_discriminant()?;
+    let warnings = leveled_warnings(execution.warnings.clone(), args.deny_warnings)
+        .map_err(compiler_bundle_diagnostic)?;
     let mut data = Map::from_iter([
         ("network".to_owned(), network.json()),
         (
@@ -40,37 +52,51 @@ pub(super) fn run_build(
         ),
         (
             "warnings".to_owned(),
-            Value::from(execution.warnings as u64),
+            Value::from(execution.warnings.len() as u64),
         ),
+        (
+            "diagnostics".to_owned(),
+            Value::Array(
+                warnings
+                    .diagnostics
+                    .iter()
+                    .map(kotodama_lang::diagnostic::Diagnostic::to_json_value)
+                    .collect(),
+            ),
+        ),
+        ("zk".to_owned(), Value::Bool(args.zk)),
         ("archives".to_owned(), Value::Array(archives)),
         ("lock".to_owned(), lockfile_json(&graph.lock)),
     ]);
-    let mut human = format!(
-        "Network: {} (address profile {chain_discriminant})\n",
-        network.name
-    );
-    if let Some(id) = network.network_id {
-        let _ = writeln!(human, "Network identity: {id}");
-    } else {
-        human.push_str("Local compilation; deployment network is not configured.\n");
+    let mut human = network_header(&network, chain_discriminant);
+    if !warnings.diagnostics.is_empty() {
+        human.push_str(&warnings.render_human());
+        human.push('\n');
     }
     if command == "test" {
+        let mut options = WorkspaceTestOptionsV1::new(chain_discriminant);
+        options.zk_enabled = args.zk;
         let report = execute_workspace_tests_v1(
             cache.as_ref(),
             &workspace,
             &selected_names,
             &graph.lock,
-            &WorkspaceTestOptionsV1::new(chain_discriminant),
+            &options,
         )
         .map_err(|error| graph_mode_test_diagnostic(&error, args.mode))?;
         let (summary, tests) = render_test_report(&report);
         human.push_str(&summary);
         data.extend(tests);
         if !report.is_success() {
-            return Err(
-                Diagnostic::new(ErrorCode::Compiler, "Kotodama tests failed")
-                    .with_details(human, &Value::Object(data)),
-            );
+            let failed = report.failed();
+            return Err(Diagnostic::new(
+                ErrorCode::TestFailed,
+                format!(
+                    "Kotodama tests failed: {failed} of {} failed",
+                    report.passed() + failed
+                ),
+            )
+            .with_details(human, &Value::Object(data)));
         }
     } else {
         append_build_completion(
@@ -82,10 +108,57 @@ pub(super) fn run_build(
             &network,
         );
     }
-    Ok(Success {
-        message: human,
-        data: Value::Object(data),
-    })
+    Ok((
+        Success {
+            message: human,
+            data: Value::Object(data),
+        },
+        warnings,
+    ))
+}
+
+/// Apply `--deny-warnings` to the lint findings of a check. Findings denied by `[lints]` or by
+/// the flag are errors and fail the command with the complete set of findings.
+fn leveled_warnings(
+    mut warnings: Vec<kotodama_lang::diagnostic::Diagnostic>,
+    deny_warnings: bool,
+) -> Result<
+    kotodama_lang::diagnostic::DiagnosticBundle,
+    kotodama_lang::diagnostic::DiagnosticBundle,
+> {
+    use kotodama_lang::diagnostic::{DiagnosticBundle, Severity};
+    if deny_warnings {
+        for warning in &mut warnings {
+            warning.severity = Severity::Error;
+        }
+    }
+    let bundle = DiagnosticBundle::new(warnings);
+    if bundle
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        Err(bundle)
+    } else {
+        Ok(bundle)
+    }
+}
+
+/// Describe which address profile the selected sources were compiled for.
+fn network_header(network: &network::SelectedNetwork, chain_discriminant: u16) -> String {
+    match network.network_id {
+        Some(id) => format!(
+            "Network: {} (address profile {chain_discriminant})\nNetwork identity: {id}\n",
+            network.name
+        ),
+        None if network.name == network::LOCAL_NETWORK_NAME => format!(
+            "Local compilation for address profile {chain_discriminant}; no deployment network is selected.\n"
+        ),
+        None => format!(
+            "Network: {} (address profile {chain_discriminant})\nLocal compilation; the deployment network is not configured.\n",
+            network.name
+        ),
+    }
 }
 
 /// Append the build/check completion summary, artifacts and package interfaces.
@@ -100,7 +173,9 @@ fn append_build_completion(
     let _ = writeln!(
         human,
         "{command} completed: {} package(s), {} contract target(s), {} warning(s)",
-        execution.validated_packages, execution.contract_targets, execution.warnings
+        execution.validated_packages,
+        execution.contract_targets,
+        execution.warnings.len()
     );
     for artifact in &execution.artifacts {
         human.push_str(&render_artifact(artifact));
@@ -160,12 +235,18 @@ fn deployment_next_step(
             quote_cli_argument(&artifact.target)
         )
     } else {
+        let target = if network.network_id.is_none() && network.name == network::LOCAL_NETWORK_NAME
+        {
+            "taira"
+        } else {
+            network.name.as_str()
+        };
         let (setup, client) = match client {
             Some(client) => (
                 "Bind an alias in a domain owned by the selected account; the existing fee policy is retained.\n".to_owned(),
                 client,
             ),
-            None if network.name == "taira" => (
+            None if target == "taira" => (
                 "For a new Taira account, run `musubi wallet create`, `musubi wallet fund`, and `musubi wallet namespace <your-domain>`.\n".to_owned(),
                 " --wallet default".to_owned(),
             ),
@@ -175,8 +256,7 @@ fn deployment_next_step(
             ),
         };
         format!(
-            "{setup}Next: {invocation} network configure {}{client} --package {} --contract {} --alias <name::your-domain>\n",
-            network.name,
+            "{setup}Next: {invocation} network configure {target}{client} --package {} --contract {} --alias <name::your-domain>\n",
             quote_cli_argument(&artifact.package.to_string()),
             quote_cli_argument(&artifact.target)
         )
@@ -197,6 +277,7 @@ pub(super) fn prepare_build(
     explicit_manifest: Option<&Path>,
     args: &BuildArgs,
     action: CompilerActionV1,
+    purpose: network::NetworkPurpose,
 ) -> Result<PreparedBuild, Diagnostic> {
     let (workspace, selected_names) = load_selected_workspace(explicit_manifest, &args.selection)?;
     let network = network::select_network(
@@ -204,6 +285,7 @@ pub(super) fn prepare_build(
         args.network.as_deref(),
         args.registry.config.as_deref(),
         args.chain_discriminant,
+        purpose,
     )?;
     let previous = read_optional_workspace_lock(&workspace)?;
     let graph = resolve_and_persist_graph(
@@ -240,6 +322,7 @@ pub(super) fn prepare_build(
         &graph.lock,
         action,
         chain_discriminant,
+        args.zk,
     )
     .map_err(|error| graph_mode_compiler_diagnostic(&error, args.mode))?;
     Ok(PreparedBuild {
@@ -461,6 +544,7 @@ pub(super) fn build_runtime_package(
         &graph.lock,
         CompilerActionV1::Build,
         config.account_chain_discriminant,
+        false,
     )
     .map_err(|error| graph_mode_compiler_diagnostic(&error, mode))?;
     let artifact = deploy::select_artifact(&execution.artifacts, contract)?;
@@ -587,6 +671,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn deny_warnings_turns_every_lint_finding_into_a_failure() {
+        use kotodama_lang::diagnostic::{Diagnostic, DiagnosticPhase, Severity};
+        let warning = Diagnostic::warning("K5013", DiagnosticPhase::Semantic, "unused", None);
+        let kept = leveled_warnings(vec![warning.clone()], false).expect("warnings do not fail");
+        assert_eq!(kept.diagnostics[0].severity, Severity::Warning);
+        let denied = leveled_warnings(vec![warning.clone()], true).expect_err("denied");
+        assert_eq!(denied.diagnostics[0].severity, Severity::Error);
+        let mut by_manifest = warning;
+        by_manifest.severity = Severity::Error;
+        assert!(leveled_warnings(vec![by_manifest], false).is_err());
+        assert!(
+            leveled_warnings(Vec::new(), true)
+                .expect("nothing to deny")
+                .diagnostics
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn copyable_commands_quote_shell_syntax_in_package_paths_and_target_names() {
         for (input, expected) in [
             ("demo/coffee::target", "demo/coffee::target"),
@@ -695,7 +798,19 @@ mod tests {
             Some("quote")
         );
         let dir = tempfile::tempdir().expect("workspace");
-        let mut network = network::select_network(dir.path(), None, None, None).expect("network");
+        let mut network = network::select_network(
+            dir.path(),
+            None,
+            None,
+            None,
+            network::NetworkPurpose::LocalCompilation,
+        )
+        .expect("network");
+        assert_eq!(network.name, network::LOCAL_NETWORK_NAME);
+        assert!(
+            network_header(&network, network.chain_discriminant)
+                .starts_with("Local compilation for address profile 753;")
+        );
         let manifest = dir.path().join("Musubi.toml");
         let unbound = deployment_next_step(&manifest, &network, &artifact);
         for expected in [
@@ -759,7 +874,15 @@ mod tests {
         let mut execution = CompilerExecutionV1 {
             validated_packages: 2,
             contract_targets: 1,
-            warnings: 3,
+            warnings: vec![
+                kotodama_lang::diagnostic::Diagnostic::warning(
+                    "K5001",
+                    kotodama_lang::diagnostic::DiagnosticPhase::Semantic,
+                    "unused binding",
+                    None,
+                );
+                3
+            ],
             artifacts: vec![artifact.clone()],
             package_interfaces: vec![crate::compiler::CompilerPackageInterfaceV1 {
                 package: "demo/library".parse().expect("library package"),
@@ -767,7 +890,14 @@ mod tests {
             }],
         };
         let dir = tempfile::tempdir().expect("workspace");
-        let network = network::select_network(dir.path(), None, None, None).expect("network");
+        let network = network::select_network(
+            dir.path(),
+            None,
+            None,
+            None,
+            network::NetworkPurpose::LocalCompilation,
+        )
+        .expect("network");
         let manifest = dir.path().join("Musubi.toml");
         let mut human = String::new();
         let mut data = Map::new();

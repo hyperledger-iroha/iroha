@@ -92,7 +92,6 @@ pub mod circuit;
 pub mod consumer;
 mod control_circuit;
 pub mod controls;
-pub mod finality;
 pub mod omega;
 pub mod operation_relation;
 pub mod proof;

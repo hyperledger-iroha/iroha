@@ -194,13 +194,6 @@ impl SplitPlan {
         if stage + 1 == context.stage_count() && context.operation().frame().has_incoming() {
             sources.extend([FoldSource::Incoming(16); 2]);
         }
-        if context
-            .operation_tasks(stage)
-            .ok_or(Error::Synthesis)?
-            .contains(&super::schedule::OperationTask::LoadFinality)
-        {
-            sources.extend([FoldSource::Fixed(16); 2]);
-        }
         sources.extend(vec![
             FoldSource::Fixed(16);
             context
@@ -239,7 +232,6 @@ pub struct ContinuationCells {
     digest: Word<Fp>,
     pallas: FoldInputCells<Ep>,
     part: VestaClaimCells,
-    source_vesta: Option<VestaClaimCells>,
 }
 impl ContinuationCells {
     /// The internal context digest, using `kgwlink1` rather than `kgwomg_1`.
@@ -267,7 +259,7 @@ impl ContinuationCells {
         ];
         words.extend(self.part.words());
         let trivial = VestaClaimCells::trivial(chip, region)?;
-        words.extend(self.source_vesta.as_ref().unwrap_or(&trivial).words());
+        words.extend(trivial.words());
         words.extend(trivial.words());
         for value in [Fp::ZERO, Fp::ONE, Fp::ZERO] {
             words.push(chip.uint().glue().constant(region, value)?);
@@ -367,7 +359,6 @@ pub fn close_first(
         digest,
         pallas,
         part: sigma.part,
-        source_vesta: None,
     })
 }
 #[derive(Clone, Debug)]
@@ -638,70 +629,6 @@ pub fn close_stage(
     q: &[VerifiedQCells],
     fold: &ProofMessageCells,
 ) -> Result<StageOutput, Error> {
-    close_stage_inner(
-        chip,
-        region,
-        plan,
-        resumed,
-        predecessor,
-        incoming,
-        incoming_vesta,
-        q,
-        fold,
-        None,
-    )
-}
-/// Close Load's unique finality stage with both authenticated source obligations.
-/// Its Vesta carry enters the next mandatory W fold; it is never an incoming Omega.
-/// # Errors
-/// Wrong task/stage or any missing, invalid or reordered proof obligation.
-pub(crate) fn close_load_finality_stage(
-    chip: &mut VerifierChip<Ep>,
-    region: &mut Region<'_, Fp>,
-    plan: &SplitPlan,
-    resumed: &ResumedContextCells,
-    source: &crate::finality::continuity::single::VerifiedSourceCells,
-    fold: &ProofMessageCells,
-) -> Result<StageOutput, Error> {
-    close_stage_inner(
-        chip,
-        region,
-        plan,
-        resumed,
-        None,
-        None,
-        None,
-        &[],
-        fold,
-        Some(source),
-    )
-}
-#[allow(clippy::too_many_arguments)]
-fn close_stage_inner(
-    chip: &mut VerifierChip<Ep>,
-    region: &mut Region<'_, Fp>,
-    plan: &SplitPlan,
-    resumed: &ResumedContextCells,
-    predecessor: Option<&PredecessorCells>,
-    incoming: Option<&SelectedPallasCells>,
-    incoming_vesta: Option<&IncomingVestaCells>,
-    q: &[VerifiedQCells],
-    fold: &ProofMessageCells,
-    source: Option<&crate::finality::continuity::single::VerifiedSourceCells>,
-) -> Result<StageOutput, Error> {
-    let owns_source = plan
-        .context
-        .operation_tasks(plan.stage)
-        .ok_or(Error::Synthesis)?
-        .contains(&super::schedule::OperationTask::LoadFinality);
-    if owns_source != source.is_some()
-        || (owns_source
-            && (plan.is_terminal()
-                || plan.context.operation().frame().variant()
-                    != iroha_plonk_recursion::obligation::ledger::Variant::Load))
-    {
-        return Err(Error::Synthesis);
-    }
     let operation = plan.context.operation();
     if resumed.schema != plan.context.schema()
         || resumed.stage != plan.stage
@@ -828,9 +755,6 @@ fn close_stage_inner(
     if let Some(incoming) = incoming {
         claims.extend([incoming.pallas.clone(), incoming.opening.clone()]);
     }
-    if let Some(source) = source {
-        claims.extend([source.pallas().clone(), source.opening().clone()]);
-    }
     claims.extend(q.iter().map(|q| q.opening.clone()));
     let result = chip.verify_fold(
         region,
@@ -858,7 +782,6 @@ fn close_stage_inner(
             digest,
             pallas,
             part: resumed.vesta.clone(),
-            source_vesta: source.map(|value| value.vesta().clone()),
         })))
     }
 }

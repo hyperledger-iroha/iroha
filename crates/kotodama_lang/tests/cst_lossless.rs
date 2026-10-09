@@ -40,9 +40,9 @@ fn non_ascii_identifier_characters_are_lossless_errors() {
     }));
     assert!(output.diagnostics.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "K0100"
-            && diagnostic
-                .message
-                .contains("non-ASCII identifier outside the branded Japanese keyword set")
+            && diagnostic.message == "non-ASCII identifier `Café`: identifiers are ASCII"
+            // Japanese keyword guidance is reserved for Japanese text.
+            && !diagnostic.help.as_deref().unwrap_or("").contains("誓約")
     }));
 }
 #[test]

@@ -17,15 +17,18 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use iroha_config::parameters::actual::SccpSecretHeader;
 use iroha_sccp_rpc::{
     beacon::{BeaconBlockId, BeaconClient},
-    endpoints::{Backoff, EndpointSet, FailoverPolicy, SecretFileProblem, Sleeper},
+    endpoints::{
+        Backoff, EndpointSet, FailoverPolicy, PollBudget, SecretFileProblem, Sleeper, start_index,
+    },
     evm::{BlockId, BlockTag, EvmCallRequest, EvmClient, U256},
     http::{HttpConfig, HttpTransport, JsonRpcCall, RpcError},
+    limits::{JsonLimits, SMALL_RESPONSE_BYTES},
     tron::TronClient,
 };
 use norito::json::Value;
@@ -49,6 +52,9 @@ enum Reply {
     },
     /// Read the request, then stay silent for the duration and close.
     Stall(Duration),
+    /// Answer 200 with the headers at once (`Content-Length` included), then
+    /// write the body one byte per interval.
+    Drip { body: Vec<u8>, interval: Duration },
 }
 
 impl Reply {
@@ -252,6 +258,21 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>) {
     };
     match reply {
         Reply::Stall(duration) => thread::sleep(duration),
+        Reply::Drip { body, interval } => {
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            if stream.write_all(head.as_bytes()).is_err() {
+                return;
+            }
+            for byte in body {
+                if stream.write_all(&[byte]).is_err() || stream.flush().is_err() {
+                    return;
+                }
+                thread::sleep(interval);
+            }
+        }
         Reply::Respond {
             status,
             headers,
@@ -663,7 +684,7 @@ fn transport_pair(a: &MockServer, b: &MockServer) -> HttpTransport {
 }
 
 #[test]
-fn responses_above_the_size_limit_are_rejected() {
+fn responses_above_the_size_limit_fail_over() {
     let big = vec![b'x'; 2_000];
     let server = MockServer::start(vec![
         Reply::status(200, "application/octet-stream", &big),
@@ -672,21 +693,249 @@ fn responses_above_the_size_limit_are_rejected() {
     ]);
     let set = EndpointSet::parse(&[&server.url()], &[]).expect("endpoints");
     let limits = config(Duration::from_secs(5)).with_max_response_bytes(1_000);
-    let (transport, _) = transport_with(set, limits, 3);
+    let (transport, _) = transport_with(set, limits, 1);
+    // Announced (`Content-Length`) or counted while reading, an oversized
+    // body is a failover error; the only endpoint exhausts the request.
     for _ in 0..2 {
         let error = transport
             .get("/blob", "application/octet-stream")
             .expect_err("too large");
         assert!(
-            matches!(error, RpcError::ResponseTooLarge { limit: 1_000, .. }),
+            matches!(
+                error.last_failure(),
+                RpcError::ResponseTooLarge { limit: 1_000, .. }
+            ),
             "{error:?}"
         );
+        assert!(matches!(error, RpcError::Exhausted { .. }), "{error:?}");
     }
     let response = transport
         .get("/blob", "application/octet-stream")
         .expect("at the limit");
     assert_eq!(response.body.len(), 1_000);
+    assert_eq!(response.cap, 1_000);
     assert_eq!(server.request_count(), 3);
+
+    // An oversized answer moves the request to the next endpoint. The cap of
+    // `eth_chainId` is its route's, far below the transport ceiling.
+    let padded = format!(
+        r#"{{"jsonrpc":"2.0","id":0,"result":"0x1","pad":"{}"}}"#,
+        "x".repeat(SMALL_RESPONSE_BYTES)
+    );
+    let oversized = MockServer::start(vec![Reply::rpc_errors(&padded)]);
+    let answering = MockServer::start(vec![recorded("evm/eth_chainId")]);
+    let client = EvmClient::new(transport_pair(&oversized, &answering));
+    assert_eq!(client.chain_id().expect("second endpoint"), 1);
+    assert_eq!(
+        (oversized.request_count(), answering.request_count()),
+        (1, 1)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Decode limits, deadlines, budgets, rotation and seeding
+// ---------------------------------------------------------------------------
+
+#[test]
+fn element_heavy_bodies_fail_over_instead_of_allocating() {
+    // Within the 64 KiB byte cap of `eth_chainId`, but at 2 bytes per value
+    // against a floor of 8: refused by the allocation-free preflight.
+    let zeros = format!("[{}0]", "0,".repeat(20_000));
+    assert!(zeros.len() < SMALL_RESPONSE_BYTES);
+    // Within the value floor (17 bytes per object), but every object
+    // allocates a B-tree leaf of several hundred bytes: refused by the decode
+    // budget before the tree outgrows 6 × 64 KiB.
+    let objects = format!(
+        "[{}{{\"aaaaaaaaaa\":0}}]",
+        "{\"aaaaaaaaaa\":0},".repeat(3_000)
+    );
+    assert!(objects.len() < SMALL_RESPONSE_BYTES);
+    let limits = JsonLimits::for_cap(SMALL_RESPONSE_BYTES);
+    assert!(3_000 * 2 + 3 < limits.values);
+    assert!(3_000 * 600 > limits.allocated_bytes);
+
+    for heavy_result in [zeros, objects] {
+        let heavy = MockServer::start(vec![Reply::rpc_result(&heavy_result)]);
+        let answering = MockServer::start(vec![recorded("evm/eth_chainId")]);
+        let (single, sleeper) = transport(&[&heavy, &answering], 2);
+        let client = EvmClient::new(single);
+        assert_eq!(client.chain_id().expect("second endpoint"), 1);
+        assert_eq!((heavy.request_count(), answering.request_count()), (1, 1));
+        assert!(sleeper.delays().is_empty(), "no backoff inside a round");
+        assert_eq!(client.transport().endpoints().preferred(), 1);
+
+        let lonely = MockServer::start(vec![Reply::rpc_result(&heavy_result)]);
+        let error = evm(&lonely).chain_id().expect_err("only a heavy body");
+        assert!(
+            matches!(error.last_failure(), RpcError::ResponseTooComplex { .. }),
+            "{error:?}"
+        );
+        assert!(error.last_failure().is_failover());
+    }
+}
+
+#[test]
+fn slow_drip_bodies_hit_the_total_deadline() {
+    // Every read returns within 50 ms, but the whole body would take 10 s:
+    // the attempt ends at its 500 ms total deadline and fails over.
+    let drip = || Reply::Drip {
+        body: format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":"0x1","pad":"{}"}}"#,
+            "x".repeat(150)
+        )
+        .into_bytes(),
+        interval: Duration::from_millis(50),
+    };
+    let dripping = MockServer::start(vec![drip()]);
+    let answering = MockServer::start(vec![recorded("evm/eth_chainId")]);
+    let set = EndpointSet::parse(&[&dripping.url(), &answering.url()], &[]).expect("endpoints");
+    let (transport, _) = transport_with(set, config(Duration::from_millis(500)), 1);
+    let started = Instant::now();
+    assert_eq!(
+        EvmClient::new(transport)
+            .chain_id()
+            .expect("second endpoint"),
+        1
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(answering.request_count(), 1);
+
+    let lonely = MockServer::start(vec![drip()]);
+    let set = EndpointSet::parse(&[&lonely.url()], &[]).expect("endpoints");
+    let (transport, _) = transport_with(set, config(Duration::from_millis(500)), 1);
+    let started = Instant::now();
+    let error = EvmClient::new(transport)
+        .chain_id()
+        .expect_err("dripping body");
+    assert!(
+        matches!(error.last_failure(), RpcError::Timeout { .. }),
+        "{error:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
+fn poll_budgets_bound_the_whole_request() {
+    let stalled = MockServer::start(vec![Reply::Stall(Duration::from_secs(3))]);
+    let answering = MockServer::start(vec![recorded("evm/eth_chainId")]);
+    let set = EndpointSet::parse(&[&stalled.url(), &answering.url()], &[]).expect("endpoints");
+    let budget = PollBudget::new();
+    let (transport, sleeper) = transport_with(set, config(Duration::from_secs(5)), 3);
+    let client = EvmClient::new(transport.with_budget(budget.clone()));
+    {
+        let _poll = budget.start(Duration::from_millis(300));
+        let started = Instant::now();
+        let error = client.chain_id().expect_err("budget runs out");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        let RpcError::BudgetExhausted { failures } = &error else {
+            panic!("unexpected {error:?}");
+        };
+        assert_eq!(failures.len(), 1);
+        assert!(matches!(failures[0].error, RpcError::Timeout { .. }));
+        assert!(!error.is_failover());
+        assert_eq!(answering.request_count(), 0, "no attempt past the budget");
+        assert!(sleeper.delays().is_empty());
+    }
+    // The next poll has no deadline until it starts one.
+    assert_eq!(client.transport().budget().deadline(), None);
+    assert_eq!(client.chain_id().expect("unscripted 500 fails over"), 1);
+    assert_eq!(answering.request_count(), 1);
+}
+
+#[test]
+fn not_found_and_bad_data_rotate_the_next_request() {
+    // A 404 is an answer about the request: returned at once, and the next
+    // request starts at the next endpoint.
+    let a = MockServer::start(vec![Reply::status(
+        404,
+        "application/json",
+        br#"{"code":404,"message":"No block found for id '42'"}"#,
+    )]);
+    let b = MockServer::start(vec![recorded("beacon/headers_finalized")]);
+    let client = BeaconClient::new(transport_pair(&a, &b));
+    let error = client
+        .header(&BeaconBlockId::slot(42))
+        .expect_err("unknown slot");
+    assert!(
+        matches!(error, RpcError::Status { status: 404, .. }),
+        "{error:?}"
+    );
+    assert_eq!(b.request_count(), 0);
+    assert_eq!(client.transport().endpoints().preferred(), 1);
+    assert_eq!(
+        client.finalized_header().expect("next endpoint").slot,
+        15_301_120
+    );
+    assert_eq!((a.request_count(), b.request_count()), (1, 1));
+
+    // Malformed data decoded inside the attempt discredits its endpoint too.
+    let a = MockServer::start(vec![Reply::rpc_result(r#""0x01""#)]);
+    let b = MockServer::start(vec![recorded("evm/eth_chainId")]);
+    let client = EvmClient::new(transport_pair(&a, &b));
+    let error = client.chain_id().expect_err("non-canonical quantity");
+    assert!(
+        matches!(error, RpcError::InvalidResponse { .. }),
+        "{error:?}"
+    );
+    assert_eq!(b.request_count(), 0);
+    assert_eq!(client.chain_id().expect("next endpoint"), 1);
+    assert_eq!((a.request_count(), b.request_count()), (1, 1));
+
+    // So does a TRON API error; callers whose verification rejects data
+    // rotate explicitly.
+    let a = MockServer::start(vec![
+        recorded("tron/wallet_getblockbynum_api_error"),
+        recorded("tron/wallet_getnowblock"),
+    ]);
+    let b = MockServer::start(vec![recorded("tron/wallet_getnowblock")]);
+    let client = TronClient::new(transport_pair(&a, &b));
+    assert!(matches!(
+        client.block_by_num(1).expect_err("API error"),
+        RpcError::Api { .. }
+    ));
+    assert_eq!(
+        client.now_block().expect("next endpoint").header.number,
+        86_588_679
+    );
+    assert_eq!(client.transport().endpoints().preferred(), 1);
+    client.transport().rotate_preferred();
+    assert_eq!(
+        client.now_block().expect("rotated back").header.number,
+        86_588_679
+    );
+    assert_eq!((a.request_count(), b.request_count()), (2, 1));
+}
+
+#[test]
+fn seeded_lists_spread_the_first_request() {
+    let servers: Vec<MockServer> = (0..4)
+        .map(|_| MockServer::start(vec![recorded("evm/eth_chainId")]))
+        .collect();
+    let urls: Vec<String> = servers.iter().map(MockServer::url).collect();
+    let urls: Vec<&str> = urls.iter().map(String::as_str).collect();
+    // One seed per start index (the seeds spread over every index).
+    let mut seeds = [None; 4];
+    for seed in 0_u64..256 {
+        seeds[start_index(seed, 4)].get_or_insert(seed);
+    }
+    for (index, seed) in seeds.into_iter().enumerate() {
+        let seed = seed.expect("every index is some seed's start");
+        let set = EndpointSet::parse(&urls, &[])
+            .expect("endpoints")
+            .with_seeded_start(seed);
+        let (transport, _) = transport_with(set, config(Duration::from_secs(5)), 1);
+        assert_eq!(EvmClient::new(transport).chain_id().expect("chain id"), 1);
+        assert_eq!(servers[index].request_count(), 1, "seed {seed}");
+    }
+    assert!(servers.iter().all(|server| server.request_count() == 1));
 }
 
 #[test]

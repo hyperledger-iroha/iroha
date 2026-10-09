@@ -23,11 +23,6 @@ use std::{
 
 mod builder;
 pub use builder::{RegistrationSelectionV1, publish_registration_source_v1};
-mod compact;
-pub use compact::{
-    COMPACT_REGISTRATION_MAX_BYTES_V1, CompactRegistrationOriginalV1,
-    verify_compact_registration_v1,
-};
 mod finalized;
 pub use finalized::{
     FinalizedKagemushaWalletRegistrationV1, verify_finalized_kagemusha_wallet_registration_v1,

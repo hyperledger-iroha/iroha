@@ -46,6 +46,10 @@ pub trait AnchorSource: AnchorView + Send + Sync {
 
 /// Transactions the lane's payload builder may propose.
 pub trait LaneTransactions: Send + Sync {
+    /// Observe only the completed actual EMPTY selection in native unit controls.
+    #[cfg(test)]
+    fn empty_payload_answer(&self) {}
+
     /// Queued transactions routed to the lane at global height `height`, oldest first, at most
     /// `max_bytes` of encoded transactions, skipping `skip`.
     fn candidates(
@@ -619,6 +623,8 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
             }
         };
         if selected.is_empty() {
+            #[cfg(test)]
+            transactions.empty_payload_answer();
             return Ok(None);
         }
         // Canonical framing is part of the payload limit. Trim the selected source before

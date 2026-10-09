@@ -5600,11 +5600,13 @@ pub(crate) mod valid {
                 .map(|entrypoint| transactions.get(&entrypoint.hash()))
                 .collect()
         }
-        /// Reject a block that carries more exempt-shaped SCCP transactions than the per-block
-        /// caps allow (`specs/sccp.md` §4.19). The shapes are a pure function of the entry
-        /// points and the caps are the committed parent's parameters, exactly what the
-        /// proposer's queue selection counts (`Queue::bounded_pending_snapshot`), so a block
-        /// its proposer built always passes. Without SCCP nothing is capped.
+        /// Reject a block that carries more fee-exempt SCCP transactions than the per-block
+        /// caps allow (`specs/sccp.md` §4.19). Eligibility is a pure function of the entry
+        /// points and the committed parent World, and the caps are the parent's parameters,
+        /// exactly what the proposer's queue selection counts
+        /// (`Queue::bounded_pending_snapshot`), so a block its proposer built always passes.
+        /// Execution exempts with the same predicate against the same World, so every exempt
+        /// transaction is counted. Without SCCP nothing is capped.
         fn validate_sccp_exempt_cap(
             block: &SignedBlock,
             state_block: &StateBlock<'_>,
@@ -5627,13 +5629,13 @@ pub(crate) mod valid {
             }
             let classes = block
                 .network_entrypoints()
-                .filter_map(admission::exempt_shape_of_entrypoint)
+                .filter_map(|entrypoint| admission::exempt_class_of_entrypoint(parent, entrypoint))
                 .collect::<Vec<_>>();
             if admission::block_exempt_cap_ok(parent, &classes) {
                 Ok(())
             } else {
                 Err(Self::execution_context_error(format!(
-                    "block carries {} exempt-shaped SCCP transactions beyond the per-block caps",
+                    "block carries {} fee-exempt SCCP transactions beyond the per-block caps",
                     classes.len()
                 )))
             }

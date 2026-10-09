@@ -456,6 +456,106 @@ fn authenticate_parent(
         .map_err(|error| Error::Invalid(error.to_string()))
 }
 
+/// Explicit administrative authorization, separate from config-free SNS attachment.
+#[derive(Clone, Debug)]
+pub struct ManagedAmxRegistrationOptions {
+    /// Exact parent fee asset selected by the administrator.
+    pub fee_asset: iroha_data_model::asset::AssetDefinitionId,
+    /// Positive aggregate ceiling for this sole retained transaction.
+    pub max_fee: iroha_primitives::numeric::Quantity,
+    /// Original finite exclusive UTC signing authorization, unchanged on recovery.
+    pub deadline_unix_ms: u64,
+    /// This turn's positive I/O budget, at most sixty seconds; never renews signing authority.
+    pub timeout: Duration,
+}
+
+impl ManagedStore {
+    /// Register the original private AMX instance with an explicitly selected parent administrator.
+    /// This action needs exclusive original provisioning custody (for example after an explicit
+    /// stop); it never stops the running supervisor, grants permissions or replaces a generation.
+    /// Only independently certified original Network execution establishes a final result.
+    ///
+    /// # Errors
+    /// Rejects missing/incomplete original sources, competing ownership, changed installed parent,
+    /// unsafe signing context, fee/time changes, exhausted deadline or invalid native inclusion.
+    pub fn register_amx_dataspace(
+        &self,
+        runtime: &InstalledRuntime,
+        name: &str,
+        administrator: &iroha::config::Config,
+        options: &ManagedAmxRegistrationOptions,
+    ) -> Result<crate::attachment::AmxRegistrationProgress> {
+        validate_name(name)?;
+        if options.timeout.is_zero() || options.timeout > MAX_ATTACH || options.max_fee.is_zero() {
+            return Err(Error::Invalid(
+                "AMX registration needs a positive fee ceiling and at most sixty seconds".into(),
+            ));
+        }
+        let deadline = Instant::now()
+            .checked_add(options.timeout)
+            .ok_or_else(|| Error::Invalid("AMX registration I/O deadline overflow".into()))?;
+        let directory = existing_outer(self, name)?
+            .ok_or_else(|| Error::Invalid("original private attachment is missing".into()))?;
+        let gate = directory.open_existing_lock("request.lock")?;
+        gate.try_lock().map_err(|_| Error::Busy(name.into()))?;
+        let network = self.directory(name)?;
+        let _generation = store::acquire(&network, "operation.lock", name)?;
+        let _inactive = store::acquire(&network, "runtime.lock", name)?;
+        let mut binding = read_binding(&directory)?;
+        let profiles = runtime.network_profiles()?;
+        let profile = profiles
+            .select(&binding.profile.name)
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        advance_profile(&directory, &mut binding, profile)?;
+        let prepared = self.prepared(name)?;
+        verify_generation_binding(self, name, &binding, &prepared)?;
+        if directory.open_child_optional("provisioning")?.is_none() {
+            return Err(Error::Invalid(
+                "original namespace provisioning is missing".into(),
+            ));
+        }
+        let bootstrap = authenticate_parent(&release_path(self, name), profile, deadline, false)?;
+        // Published source capsules are existing-only here: no HTTP repair or new G1/H2 pair.
+        let selection = crate::bootstrap::AmxSourceSelection {
+            bootstrap: &bootstrap,
+            attachment: &directory,
+            deadline,
+        };
+        let sources = selection
+            .retain(&binding.spec, false)
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        sources
+            .require_signed_generation(&prepared)
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        let mut provisioning = RemoteProvisioning::open(
+            &directory.path().join("provisioning"),
+            &bootstrap,
+            &prepared,
+            &binding.account_alias,
+        )
+        .map_err(|error| Error::Invalid(error.to_string()))?;
+        let spending = iroha_wallet::operations::BoundedTransactionOptions {
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                None,
+            ),
+            max_total_fees: std::collections::BTreeMap::from([(
+                options.fee_asset.clone(),
+                options.max_fee.clone(),
+            )]),
+            deadline,
+        };
+        provisioning
+            .register_amx_once(
+                &bootstrap,
+                administrator,
+                options.deadline_unix_ms,
+                &spending,
+            )
+            .map_err(|error| Error::Invalid(error.to_string()))
+    }
+}
+
 impl ManagedStore {
     /// Prepare four private validators and activate their sole outbound attachment owner.
     ///

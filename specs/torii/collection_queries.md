@@ -264,7 +264,7 @@ absent.
 | UAID manifests | `dataspace_id` (number, *sort*), `dataspace_alias`, `manifest_hash`, `status` (strings, *sort*), `manifest`, `lifecycle` (JSON), `accounts` (list of strings) | `dataspace_id` |
 | account movements | `id`, `source`, `type`, `status`, `direction`, `account_id`, `counterparty_account_id`, `asset_id`, `asset_definition_id`, `tx_hash` (strings), `timestamp_ms`, `block_height`, `block_index`, `movement_index`, `expires_at_ms`, `finalized_at_ms` (numbers), `operation_id`, `requesting_fi_id` (strings), `amount` (decimal), `result_ok` (bool) | newest chain position first, then descending movement index |
 | contract activity | `authority`, `entrypoint_hash`, `contract_address`, `contract_alias`, `contract_entrypoint` (strings), `timestamp_ms`, `block_height`, `block_index` (numbers), `result_ok` (bool), `contract_payload`, `fee_payment` (JSON) | newest first |
-| contract events | `event_id`, `provenance`, `authority`, `tx_hash_hex`, `block_hash_hex`, `contract_address`, `contract_alias`, `module`, `event_kind` (strings), `schema_version`, `timestamp_ms`, `block_height`, `block_index` (numbers), `result_ok` (bool), `participants`, `asset_ids` (lists of strings), `numeric_fields`, `payload`, `fee_payment` (JSON) | newest first |
+| contract events | `event_id`, `provenance` (always `derived`), `authority`, `tx_hash_hex`, `block_hash_hex`, `contract_address`, `contract_alias`, `module`, `event_kind` (strings), `schema_version`, `timestamp_ms`, `block_height`, `block_index` (numbers), `result_ok` (bool), `participants`, `asset_ids` (lists of strings), `numeric_fields`, `payload`, `fee_payment` (JSON) | newest first |
 
 Subscription status is a lower-case string (`active`, `paused`, `past_due`,
 `canceled`, `suspended`). Manifest status is `Pending`, `Active`, `Expired` or
@@ -312,6 +312,34 @@ raw-row budget. These pages do not build a full-history process cache.
   page examines: `block_height >= 1200` ends the walk below height 1200, and
   `block_height <= 1500` starts the walk just above height 1500. `filter=block_height >= 1200 and result_ok = true`
   examines only that range.
+
+### Call-derived contract activity and events
+
+Contract activity and contract event rows are derived from committed
+by-reference contract calls; contracts do not emit them. Each committed
+transaction whose executable is a top-level `ContractCall` yields one activity
+row and one event row (`event_id` = `<tx_hash_hex>:0`). Every other
+transaction, including instruction batches, raw IVM bytecode and multisig
+proposals that carry contract metadata, yields none.
+
+- `contract_address` and the entrypoint (`contract_entrypoint`, and the
+  fallback `event_kind`) come from the signed `ContractInvocation`.
+- `contract_alias` and the payload (`contract_payload`, `payload`) are reported
+  only when the call committed successfully and its `contract_address`,
+  `contract_code_hash` and `contract_entrypoint` metadata name the invoked
+  call. Consensus admits such a call only after binding that metadata to the
+  invocation: `contract_payload` to the canonical argument record and
+  `contract_alias` to the address's live alias. A rejected call reports
+  neither, because its metadata may be why it was rejected.
+- `module` is the canonical module for the bound alias (or the address),
+  `event_kind` is the canonical event kind for that module and entrypoint
+  (otherwise the entrypoint itself), and `payload` is the canonical
+  normalization of the bound `contract_payload`. `participants`, `asset_ids`
+  and `numeric_fields` come from that payload, the authority and the fee
+  payment.
+- `provenance` is always `derived` and `schema_version` is `1`. Transaction
+  metadata keys such as `contract_module` and `contract_event_*` are ignored:
+  consensus never checks them, so any signer could write them.
 
 ## Aggregates
 

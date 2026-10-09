@@ -76,6 +76,7 @@ fn receipt(target: &ManagedDeploymentTarget) -> DeploymentReceipt {
         block_height: 8,
         scope: "global".into(),
         resolved_from: "state".into(),
+        charge: None,
     };
     DeploymentReceipt {
         version: 1,

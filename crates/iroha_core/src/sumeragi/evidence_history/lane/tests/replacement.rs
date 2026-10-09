@@ -21,9 +21,7 @@ use iroha_data_model::sumeragi::epoch::{InstalledBeaconEpochBindingV1, Validator
 use iroha_data_model::{
     account::{Account, AccountId},
     asset::AssetId,
-    block::consensus::{
-        EvidencePenaltyStatus, EvidenceRecord, EvidenceScope, NexusFeeSettlementV1,
-    },
+    block::consensus::{EvidencePenaltyStatus, EvidenceScope, NexusFeeSettlementV1},
     consensus::{
         GlobalThresholdBeaconChainAnchorV1, GlobalThresholdBeaconDkgSessionV1,
         GlobalThresholdBeaconPulseContextV1, NposPenaltyAction,
@@ -498,7 +496,7 @@ pub(super) fn finish_after_real_detector_penalty(
     request_id: Hash,
     release_at_ms: u64,
     evidence_key: &Hash,
-    expected_evidence: &EvidenceRecord,
+    expected_evidence: &crate::state::RetainedEvidenceRecord,
 ) {
     let validator = AccountId::new(offender.public_key().clone());
     let stake_key = (LaneId::SINGLE, validator.clone());

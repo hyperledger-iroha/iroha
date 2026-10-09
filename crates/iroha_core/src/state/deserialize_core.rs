@@ -37,6 +37,9 @@ pub(crate) enum StateRestoreError {
     /// Original finite resources refused the complete native participant graph.
     #[error("snapshot native AMX admission deferred: {0}")]
     NativeAmx(#[source] crate::sumeragi::amx::NativeAmxAdmissionError),
+    /// Original resources refused canonical immutable evidence graph restoration.
+    #[error("snapshot native evidence admission deferred: {0}")]
+    Evidence(#[source] crate::sumeragi::evidence::record::EvidenceRecordRestoreError),
     /// The local VM image could not be constructed before restoring State.
     #[error("snapshot State VM initialization deferred: {0}")]
     VmInitialization(#[source] ivm::VMError),
@@ -152,6 +155,45 @@ impl<'a> SnapshotJsonField<'a> {
         decoded.map_err(|error| match error {
             StateRestoreError::Serialization(error) => json::Error::InvalidField {
                 field: "transactions".to_owned(),
+                message: error.to_string(),
+            }
+            .into(),
+            local => local,
+        })
+    }
+    fn decode_evidence(
+        self,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Storage<iroha_crypto::Hash, RetainedEvidenceRecord>, StateRestoreError> {
+        let decoded: Result<
+            Storage<iroha_crypto::Hash, RetainedEvidenceRecord>,
+            StateRestoreError,
+        > = (|| {
+            let raw = match &self {
+                Self::Borrowed { raw } => std::borrow::Cow::Borrowed(*raw),
+                #[cfg(test)]
+                Self::Owned(value) => std::borrow::Cow::Owned(json::to_json(value)?),
+            };
+            let value = crate::sumeragi::evidence::record::restore_storage(&raw, budget).map_err(
+                |error| match error {
+                    crate::sumeragi::evidence::record::EvidenceRecordRestoreError::Json(error) => {
+                        StateRestoreError::Serialization(error)
+                    }
+                    local => StateRestoreError::Evidence(local),
+                },
+            )?;
+            // Preserve existing canonical snapshot byte comparison and its explicit
+            // source/String ownership TODO; it grants no authority to restored claims.
+            if json::to_json(&value)?.as_bytes() != raw.as_bytes() {
+                return Err(StateRestoreError::Serialization(json::Error::Message(
+                    "snapshot field is not canonically encoded".into(),
+                )));
+            }
+            Ok(value)
+        })();
+        decoded.map_err(|error| match error {
+            StateRestoreError::Serialization(error) => json::Error::InvalidField {
+                field: "consensus_evidence".into(),
                 message: error.to_string(),
             }
             .into(),
@@ -2705,3 +2747,73 @@ fn validate_musubi_resolver_checkpoint_anchors(
 
 #[cfg(test)]
 include!("deserialize_transaction_history_tests.rs");
+
+#[cfg(test)]
+mod evidence_record_restore_adapter_tests {
+    use super::*;
+    use crate::snapshot::TryReadError;
+    use crate::state::EvidencePreparationError;
+    use crate::sumeragi::evidence::record::EvidenceRecordRestoreError;
+    use iroha_allocation::{AllocationBudget, AllocationRefusal};
+
+    fn partial_original_record() -> String {
+        let key =
+            json::to_json(&iroha_crypto::Hash::new(b"original partial restore claim")).unwrap();
+        // The native byte destination is reached before this later unknown field.
+        // No native certificate or attribution authority is manufactured by the fixture.
+        format!(
+            "{{\"revert\":{{}},\"blocks\":{{{key}:{{\"evidence\":{{\"native\":[1],\"later_unknown\":null}}}}}}}}"
+        )
+    }
+
+    #[test]
+    fn borrowed_evidence_restore_adapter_preserves_original_capacity_before_late_syntax() {
+        let source = partial_original_record();
+        let budget = AllocationBudget::new(64);
+        let occupied = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
+        let layout = std::alloc::Layout::array::<u8>(1).unwrap();
+        let expected = budget.try_reserve(layout).unwrap_err();
+        assert!(matches!(&expected, AllocationRefusal::Capacity { .. }));
+        let Err(error) = SnapshotJsonField::Borrowed { raw: &source }.decode_evidence(&budget)
+        else {
+            panic!("the actual snapshot adapter must preserve original physical refusal");
+        };
+        let TryReadError::StateEvidence(EvidenceRecordRestoreError::Preparation(
+            EvidencePreparationError::Admission(actual),
+        )) = TryReadError::from(error)
+        else {
+            panic!("actual adapter must not erase original Capacity into snapshot syntax");
+        };
+        assert_eq!(actual, expected);
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        drop(occupied);
+        let Err(error) = SnapshotJsonField::Borrowed { raw: &source }.decode_evidence(&budget)
+        else {
+            panic!("after original credit returns the later canonical syntax error is reached");
+        };
+        assert!(
+            matches!(error, StateRestoreError::Serialization(json::Error::InvalidField {ref field, ref message})
+            if field == "consensus_evidence" && message.contains("later_unknown"))
+        );
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn borrowed_evidence_restore_adapter_preserves_actual_active_logical_refusal() {
+        let source = partial_original_record();
+        let budget = AllocationBudget::new(64);
+        let limits = norito::core::DecodeLimits::new(1024, 1024, 1024, 0, 32);
+        let Err(error) = norito::core::with_decode_limits_scope(limits, || {
+            SnapshotJsonField::Borrowed { raw: &source }.decode_evidence(&budget)
+        }) else {
+            panic!("active original logical scope must refuse through the real adapter");
+        };
+        let TryReadError::StateEvidence(EvidenceRecordRestoreError::Logical(original)) =
+            TryReadError::from(error)
+        else {
+            panic!("actual logical origin must not become generic snapshot syntax");
+        };
+        assert!(original.is_decode_resource_limit());
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}

@@ -148,7 +148,6 @@ pub(crate) struct LoadFoldFieldsV1 {
     pub(crate) sigma: Vec<u8>,
     pub(crate) receipt: [u8; 282],
     pub(crate) objects: [Vec<u8>; 3],
-    pub(crate) finality: iroha_kagemusha_proof::finality::continuity::SourceNodeEvidence,
     pub(crate) insertion: IndexedInsert<Fp>,
     pub(crate) predecessor: load::PredecessorInput,
 }
@@ -159,7 +158,6 @@ impl LoadFoldFieldsV1 {
             sigma: self.sigma,
             receipt: self.receipt,
             objects: self.objects,
-            finality: self.finality,
             insertion: self.insertion,
             predecessor: self.predecessor,
             q,
@@ -194,7 +192,7 @@ impl PreparationV1<'_> {
     /// Build complete native Load input from the retained ordinary receipt/finality
     /// and the capsule's authenticated low-leaf/empty-slot insertion. Original Qs
     /// and both predecessor claims are moved unchanged into the mandatory native
-    /// plan, which verifies the installed finality source and all five A owners.
+    /// plan, which verifies the receipt-bound Advance and all four A owners.
     /// This method grants no funding or catalog authority by itself.
     ///
     /// # Errors
@@ -207,11 +205,10 @@ impl PreparationV1<'_> {
         step: &ReleasedStep,
         predecessor: &FoldedStateV1,
         public: &KagemushaWalletLineagePublicV1,
-        plan: &load::Plan,
         q: [load::QInput; 3],
         budget: MemoryBudget,
     ) -> Result<load::Inputs, Error> {
-        self.load_fold_fields(owner, step, predecessor, public, plan, budget)
+        self.load_fold_fields(owner, step, predecessor, public, budget)
             .map(|fields| fields.with_q(q))
     }
 
@@ -223,11 +220,10 @@ impl PreparationV1<'_> {
         step: &ReleasedStep,
         predecessor: &FoldedStateV1,
         public: &KagemushaWalletLineagePublicV1,
-        plan: &load::Plan,
         budget: MemoryBudget,
     ) -> Result<LoadFoldFieldsV1, Error> {
         let capsule = &step.frozen.capsule;
-        let fields = self.load_fields(owner, step, predecessor, public, plan, budget)?;
+        let fields = self.load_fields(owner, step, predecessor, public, budget)?;
         let insertion = load_recovery(
             &capsule.statement.effect,
             &capsule.map_openings,
@@ -239,7 +235,6 @@ impl PreparationV1<'_> {
             sigma: fields.sigma,
             receipt: fields.receipt,
             objects: fields.objects,
-            finality: fields.finality,
             insertion,
             predecessor: load::PredecessorInput {
                 proof: predecessor.proof.clone(),

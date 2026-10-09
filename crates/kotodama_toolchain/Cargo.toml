@@ -29,6 +29,7 @@ required-features = ["dev-tools"]
 dev-tools = []
 
 [dependencies]
+clap = { workspace = true, features = ["derive"] }
 iroha_allocation = { workspace = true }
 ivm = { workspace = true }
 ivm_abi = { path = "../ivm_abi" }

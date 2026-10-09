@@ -30,8 +30,9 @@ use kotodama_lang::{
     linker::{ImportBinding, MAX_MODULE_GRAPH_SOURCE_BYTES, SourceModuleUnit, SourcePackageUnit},
 };
 use kotodama_toolchain::koto_test_driver::{
-    KotoTestModuleGraphV1, KotoTestRunReportV1, KotoTestRunRequestV1,
-    declared_test_target_source_v1, run_tests_structured_source_set_with_modules_v1,
+    KotoTestModuleGraphV1, KotoTestRunErrorV1, KotoTestRunPhaseV1, KotoTestRunReportV1,
+    KotoTestRunRequestV1, declared_test_target_source_v1,
+    run_tests_structured_source_set_with_modules_v1,
 };
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
@@ -128,8 +129,27 @@ pub enum WorkspaceTestErrorV1 {
     ExternalModules(String),
     /// A declared test target was not a safe regular Kotodama source file.
     Target(String),
-    /// Structured IVM discovery, compilation, or execution failed.
+    /// The structured runner rejected the request or found no matching tests.
     Runner(String),
+    /// Kotodama rejected the test sources; carries the compiler's rendered diagnostics.
+    // TODO: carry the canonical `DiagnosticBundle` once `KotoTestRunErrorV1` exposes the
+    // compilation-phase bundle it currently renders, so `musubi test` JSON and SARIF embed
+    // structured test-source diagnostics the way `check` and `build` do.
+    Compilation(String),
+    /// Test fixtures or VM preparation failed while executing compiled tests.
+    Execution(String),
+}
+impl WorkspaceTestErrorV1 {
+    /// Classify a structured runner failure by its stable phase.
+    fn from_runner(error: KotoTestRunErrorV1) -> Self {
+        match error.phase {
+            KotoTestRunPhaseV1::Execution => Self::Execution(error.message),
+            KotoTestRunPhaseV1::Compilation => Self::Compilation(error.message),
+            KotoTestRunPhaseV1::Request | KotoTestRunPhaseV1::Discovery => {
+                Self::Runner(error.message)
+            }
+        }
+    }
 }
 impl fmt::Display for WorkspaceTestErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -145,6 +165,12 @@ impl fmt::Display for WorkspaceTestErrorV1 {
             }
             Self::Target(reason) => write!(formatter, "invalid test target: {reason}"),
             Self::Runner(reason) => write!(formatter, "Kotodama test runner failed: {reason}"),
+            Self::Compilation(rendered) => {
+                write!(formatter, "Kotodama rejected the selected test sources\n{rendered}")
+            }
+            Self::Execution(reason) => {
+                write!(formatter, "Kotodama test execution failed: {reason}")
+            }
         }
     }
 }
@@ -342,7 +368,12 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
                     &member.package_root,
                     &BTreeMap::new(),
                 )
-                .map_err(|error| WorkspaceTestErrorV1::Runner(error.to_string()))?;
+                .map_err(|error| match error.into_diagnostics() {
+                    Ok(diagnostics) => {
+                        WorkspaceTestErrorV1::Compilation(diagnostics.render_human())
+                    }
+                    Err(other) => WorkspaceTestErrorV1::Runner(other.to_string()),
+                })?;
                 if let Some(filter) = options.filter.as_deref() {
                     let names =
                         kotodama_toolchain::koto_test_driver::discover_declared_test_names_source_set_with_sources_v1(&source.unit, contract.as_ref(), &module_graph.sources)
@@ -372,7 +403,7 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
                     contract.as_ref(),
                     &module_graph,
                 )
-                .map_err(|error| WorkspaceTestErrorV1::Runner(error.to_string()))?;
+                .map_err(WorkspaceTestErrorV1::from_runner)?;
                 targets.push(WorkspaceTestTargetReportV1 {
                     package: member.package.selector.clone(),
                     target: target.name.to_string(),
@@ -1595,7 +1626,7 @@ path = "tests/unit.ko"
             r#"module Tests { koto_test { target: "../contracts/app.ko" } #[test] fn wrong_import() { test::assert(missing::value() == 7); } }"#,
         );
         assert!(
-            matches!(execute_workspace_tests_v1(None, &workspace, &selected, &lock, &WorkspaceTestOptionsV1::new(753)), Err(WorkspaceTestErrorV1::Runner(reason)) if reason.contains("missing"))
+            matches!(execute_workspace_tests_v1(None, &workspace, &selected, &lock, &WorkspaceTestOptionsV1::new(753)), Err(WorkspaceTestErrorV1::Compilation(rendered)) if rendered.contains("missing"))
         );
     }
     #[test]

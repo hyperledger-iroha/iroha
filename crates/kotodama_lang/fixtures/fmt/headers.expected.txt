@@ -1,0 +1,26 @@
+seiyaku Headers {
+    kotoage fn quote_or_deposit(
+        AccountId trader,
+        Name pool,
+        quantity amount_a,
+        quantity amount_b,
+    ) -> quantity authorize("Admin") {
+        return amount_a;
+    }
+
+    view fn helper_with_a_long_name(AccountId first_account, AccountId second_account) -> bool {
+        return first_account == second_account;
+    }
+
+    view fn funding_rate(
+        quantity long_open_interest,
+        quantity short_open_interest,
+        int window,
+    ) -> decimal {
+        return 0.0;
+    }
+
+    kotoage fn settle() authorize("ThisRoleNameIsDeliberatelyLongEnoughThatTheHeaderCannotFitOnOneLineAtAll") {}
+
+    kotoage fn short(int value) authorize("Short") {}
+}

@@ -820,6 +820,7 @@ impl ExecuteSingularQuery for SingularQueryBox {
             FindAbiVersion,
             FindAssetById,
             FindAssetDefinitionById,
+            FindAssetDefinitionDirectHome,
             FindNftSaleOfferById,
             FindGameSessionById,
             FindExecutionProofVerificationById,

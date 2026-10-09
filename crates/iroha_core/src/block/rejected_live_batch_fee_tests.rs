@@ -206,7 +206,7 @@ fn rejected_contract_only_batch_vm_error_still_charges_nexus_fee() {
             r#"
 seiyaku MeteredFailure {
   kotoage fn run() authorize("CanInvokeContractEntrypoint") {
-ledger::account::set_detail(
+ledger::account::set_metadata(
   account: context::authority(),
   key: Name::parse("must_not_be_written"),
   value: Json::parse("true")

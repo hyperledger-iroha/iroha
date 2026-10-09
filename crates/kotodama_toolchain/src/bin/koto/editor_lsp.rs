@@ -1,9 +1,21 @@
 //! LSP projection of the compiler-owned semantic editor snapshot.
+//!
+//! Besides navigation and completion this module owns the language-server view of standalone
+//! test modules: a module with `koto_test { target: ... }` (conventionally `*.test.ko`) is
+//! checked in compiler test mode against its target, and its `kotoage:` selector strings are
+//! references to the target's public entrypoints.
 use super::*;
 use kotodama_lang::{
-    editor::EditorSnapshot,
+    editor::{
+        EditorSnapshot, SEMANTIC_TOKEN_MODIFIERS, SEMANTIC_TOKEN_TYPES, declared_test_target,
+    },
     source::{SourceId, SourceRange},
 };
+
+/// Upper bound on standalone test modules attached to one target.
+const MAX_LSP_TEST_MODULES: usize = 64;
+/// Upper bound on files inspected while discovering test modules on disk.
+const MAX_LSP_TEST_SCAN: usize = 512;
 
 pub(super) struct Workspace {
     snapshot: EditorSnapshot,
@@ -13,6 +25,244 @@ pub(super) struct Workspace {
     versions: HashMap<String, i64>,
     rename_error: Option<String>,
 }
+/// Lexically normalize a path that may not exist yet.
+fn normalize_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                std::path::Component::CurDir => {}
+                component => normalized.push(component.as_os_str()),
+            }
+        }
+        normalized
+    })
+}
+/// The physical target named by a standalone test module, relative to the test file.
+fn resolve_test_target(test_path: &Path, target: &str) -> Option<PathBuf> {
+    Some(normalize_path(&test_path.parent()?.join(target)))
+}
+/// Whether an open document is a standalone test module, checked in compiler test mode.
+pub(super) fn is_test_module(uri: &str, source: &str) -> bool {
+    uri.ends_with(".test.ko") || declared_test_target(source).is_some()
+}
+fn collect_test_candidates(directory: &Path, recursive: bool, found: &mut BTreeSet<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let mut entries = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect::<Vec<_>>();
+    entries.sort();
+    for path in entries {
+        if found.len() >= MAX_LSP_TEST_SCAN {
+            return;
+        }
+        if path.is_dir() {
+            if recursive {
+                collect_test_candidates(&path, true, found);
+            }
+        } else if path.extension().is_some_and(|extension| extension == "ko")
+            && (recursive
+                || path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(".test.ko")))
+        {
+            found.insert(normalize_path(&path));
+        }
+    }
+}
+/// Standalone test modules whose `koto_test` target is `target`: open documents first, then
+/// `*.test.ko` beside the target and every source under `tests/` beside it or at the nearest
+/// enclosing Musubi package root. Discovery is bounded and deterministic.
+fn discover_test_modules(
+    documents: &HashMap<String, String>,
+    target: &Path,
+) -> Vec<(String, SourceModuleUnit)> {
+    let mut sources = BTreeMap::<PathBuf, String>::new();
+    for (uri, source) in documents {
+        if let Some(path) = lsp_file_uri_path(uri)
+            && path != target
+            && declared_test_target(source).is_some()
+        {
+            sources.insert(path, source.clone());
+        }
+    }
+    let mut paths = BTreeSet::new();
+    if let Some(directory) = target.parent() {
+        collect_test_candidates(directory, false, &mut paths);
+        collect_test_candidates(&directory.join("tests"), true, &mut paths);
+        if let Some(package) = directory
+            .ancestors()
+            .take(8)
+            .find(|ancestor| ancestor.join("Musubi.toml").is_file())
+        {
+            collect_test_candidates(&package.join("tests"), true, &mut paths);
+        }
+    }
+    for path in paths {
+        if path != target
+            && !sources.contains_key(&path)
+            && let Ok(source) = read_source_file(&path)
+        {
+            sources.insert(path, source);
+        }
+    }
+    sources
+        .into_iter()
+        .filter(|(path, source)| {
+            declared_test_target(source)
+                .and_then(|declared| resolve_test_target(path, &declared))
+                .is_some_and(|declared| declared == target)
+        })
+        .take(MAX_LSP_TEST_MODULES)
+        .filter_map(|(path, source)| {
+            Some((
+                lsp_path_file_uri(&path)?,
+                SourceModuleUnit {
+                    source_name: path.to_str()?.to_owned(),
+                    source,
+                },
+            ))
+        })
+        .collect()
+}
+fn test_target_span(source: &SourceFile) -> Option<SourceSpan> {
+    let target = declared_test_target(source.text())?;
+    let literal = format!("{target:?}");
+    let start = source.text().find(&literal)?;
+    Some(SourceSpan::from_range(
+        source,
+        kotodama_lang::source::TextRange::new(
+            u32::try_from(start).ok()?,
+            u32::try_from(start + literal.len()).ok()?,
+        ),
+    ))
+}
+/// Diagnostics for one standalone test module, compiled in test mode against its target as
+/// `koto test` does. Diagnostics located in the target belong to the target's own check.
+fn test_module_diagnostics(
+    documents: &HashMap<String, String>,
+    uri: &str,
+    source: &str,
+    zk_enabled: bool,
+) -> DiagnosticBundle {
+    let file = SourceFile::new(SourceId(0), uri, source);
+    let Some(target) = declared_test_target(source) else {
+        return DiagnosticBundle::single(
+            Diagnostic::error(
+                "E_TEST_TARGET_REQUIRED",
+                DiagnosticPhase::Semantic,
+                "standalone Kotodama tests require a `koto_test { target: \"...\" }` declaration",
+                Some(SourceSpan::from_range(
+                    &file,
+                    kotodama_lang::source::TextRange::empty(0),
+                )),
+            )
+            .with_source(&file),
+        );
+    };
+    let Some(test_path) = lsp_file_uri_path(uri) else {
+        return DiagnosticBundle::new(Vec::new());
+    };
+    let Some(target_path) = resolve_test_target(&test_path, &target) else {
+        return DiagnosticBundle::new(Vec::new());
+    };
+    let target_source = lsp_path_file_uri(&target_path)
+        .and_then(|target_uri| documents.get(&target_uri).cloned())
+        .map_or_else(|| read_source_file(&target_path), Ok);
+    let target_source = match target_source {
+        Ok(target_source) => target_source,
+        Err(error) => {
+            let mut span = test_target_span(&file);
+            if let Some(span) = &mut span {
+                span.source = Some(uri.to_owned());
+            }
+            return DiagnosticBundle::single(Diagnostic::error(
+                "E_SOURCE_NOT_FOUND",
+                DiagnosticPhase::Resolve,
+                format!("test target `{target}` cannot be read: {error}"),
+                span,
+            ));
+        }
+    };
+    let (Some(test_name), Some(target_name)) = (test_path.to_str(), target_path.to_str()) else {
+        return DiagnosticBundle::new(Vec::new());
+    };
+    let session = CompilerSession::new(CompilerOptions {
+        force_zk: zk_enabled,
+        mode: kotodama_lang::compiler::CompilerMode::Test,
+        ..CompilerOptions::default()
+    });
+    let Err(bundle) = session.build_test_sources(
+        &kotodama_lang::session::TestSourceUnit {
+            source_name: target_name.to_owned(),
+            source: target_source,
+        },
+        &[kotodama_lang::session::TestSourceUnit {
+            source_name: test_name.to_owned(),
+            source: source.to_owned(),
+        }],
+    ) else {
+        return DiagnosticBundle::new(Vec::new());
+    };
+    let diagnostics = bundle
+        .diagnostics
+        .into_iter()
+        .filter(|diagnostic| {
+            diagnostic
+                .primary_span
+                .as_ref()
+                .and_then(|span| span.source.as_deref())
+                .is_none_or(|name| name == test_name)
+        })
+        .map(|mut diagnostic| {
+            let remap = |span: &mut SourceSpan| {
+                if span.source.as_deref().is_none_or(|name| name == test_name) {
+                    span.source = Some(uri.to_owned());
+                }
+            };
+            if let Some(span) = &mut diagnostic.primary_span {
+                remap(span);
+            }
+            for label in &mut diagnostic.labels {
+                remap(&mut label.span);
+            }
+            for fix in diagnostic
+                .fix
+                .iter_mut()
+                .chain(&mut diagnostic.alternative_fixes)
+            {
+                remap(&mut fix.span);
+            }
+            diagnostic
+        })
+        .collect();
+    DiagnosticBundle::new(diagnostics)
+}
+/// Replace production-mode diagnostics of open standalone test modules with their test-mode
+/// diagnostics.
+pub(super) fn apply_test_module_diagnostics(
+    diagnostics: &mut HashMap<String, DiagnosticBundle>,
+    documents: &HashMap<String, String>,
+    zk_enabled: bool,
+) {
+    let mut tests = documents
+        .iter()
+        .filter(|(uri, source)| is_test_module(uri, source))
+        .collect::<Vec<_>>();
+    tests.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (uri, source) in tests {
+        diagnostics.insert(
+            uri.clone(),
+            test_module_diagnostics(documents, uri, source, zk_enabled),
+        );
+    }
+}
 impl Workspace {
     pub(super) fn new(
         documents: &HashMap<String, String>,
@@ -20,35 +270,21 @@ impl Workspace {
         uri: &str,
         zk: bool,
     ) -> Self {
+        if let Some(source) = documents.get(uri)
+            && declared_test_target(source).is_some()
+            && let Some(workspace) = Self::for_test_module(documents, project, uri, source, zk)
+        {
+            return workspace;
+        }
         let local_project = project
             .is_none()
             .then(|| lsp_local_source_project(documents, Some(uri)))
             .flatten();
         let project = project.or(local_project.as_ref());
         if let Some(project) = project
-            && let Ok((graph, source_uris, _, manifest)) =
-                lsp_project_with_open_overlays(project, documents)
-            && source_uris.values().any(|candidate| candidate == uri)
+            && let Some(workspace) = Self::for_project(documents, project, uri, zk)
         {
-            let snapshot = EditorSnapshot::project(&graph, zk);
-            let uris = snapshot
-                .sources()
-                .filter_map(|source| {
-                    let key = ProjectSourceKey {
-                        package_identity: source.package_identity().map(ToOwned::to_owned),
-                        source_name: source.name().to_owned(),
-                    };
-                    source_uris.get(&key).map(|uri| (source.id(), uri.clone()))
-                })
-                .collect();
-            return Self {
-                snapshot,
-                uris,
-                manifest,
-                open_uris: documents.keys().cloned().collect(),
-                versions: HashMap::new(),
-                rename_error: None,
-            };
+            return workspace;
         }
         let snapshot =
             EditorSnapshot::single(uri, documents.get(uri).map_or("", String::as_str), zk);
@@ -70,6 +306,99 @@ impl Workspace {
                 }),
         }
     }
+    /// The project graph containing `uri`, with the standalone tests that target its root.
+    fn for_project(
+        documents: &HashMap<String, String>,
+        project: &LoadedSourceProject,
+        uri: &str,
+        zk: bool,
+    ) -> Option<Self> {
+        let root_key = ProjectSourceKey {
+            package_identity: None,
+            source_name: project.graph.root.source_name.clone(),
+        };
+        let tests = project
+            .source_paths
+            .get(&root_key)
+            .map(|root| discover_test_modules(documents, root))
+            .unwrap_or_default();
+        Self::for_project_with_tests(documents, project, uri, &tests, zk)
+    }
+    /// A standalone test module analyzed together with its declared target's graph.
+    fn for_test_module(
+        documents: &HashMap<String, String>,
+        project: Option<&LoadedSourceProject>,
+        uri: &str,
+        source: &str,
+        zk: bool,
+    ) -> Option<Self> {
+        let test_path = lsp_file_uri_path(uri)?;
+        let target_path = resolve_test_target(&test_path, &declared_test_target(source)?)?;
+        let target_uri = lsp_path_file_uri(&target_path)?;
+        let overlays = documents
+            .iter()
+            .filter_map(|(uri, source)| lsp_file_uri_path(uri).map(|path| (path, source.clone())))
+            .collect::<BTreeMap<_, _>>();
+        let loaded = project
+            .filter(|project| {
+                project
+                    .source_paths
+                    .values()
+                    .any(|path| *path == target_path)
+            })
+            .cloned()
+            .or_else(|| load_source_project(&target_path, target_path.parent()?, &overlays).ok())?;
+        let mut tests = discover_test_modules(documents, &target_path);
+        if !tests.iter().any(|(test_uri, _)| test_uri == uri) {
+            tests.push((
+                uri.to_owned(),
+                SourceModuleUnit {
+                    source_name: test_path.to_str()?.to_owned(),
+                    source: source.to_owned(),
+                },
+            ));
+        }
+        Self::for_project_with_tests(documents, &loaded, &target_uri, &tests, zk)
+    }
+    fn for_project_with_tests(
+        documents: &HashMap<String, String>,
+        project: &LoadedSourceProject,
+        uri: &str,
+        tests: &[(String, SourceModuleUnit)],
+        zk: bool,
+    ) -> Option<Self> {
+        let (graph, source_uris, _, manifest) =
+            lsp_project_with_open_overlays(project, documents).ok()?;
+        if !source_uris.values().any(|candidate| candidate == uri) {
+            return None;
+        }
+        let modules = tests
+            .iter()
+            .map(|(_, module)| module.clone())
+            .collect::<Vec<_>>();
+        let snapshot = EditorSnapshot::project_with_tests(&graph, &modules, zk);
+        let mut uris = snapshot
+            .sources()
+            .filter_map(|source| {
+                let key = ProjectSourceKey {
+                    package_identity: source.package_identity().map(ToOwned::to_owned),
+                    source_name: source.name().to_owned(),
+                };
+                source_uris.get(&key).map(|uri| (source.id(), uri.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (id, (test_uri, _)) in snapshot.test_module_sources().zip(tests) {
+            uris.insert(id, test_uri.clone());
+        }
+        Some(Self {
+            snapshot,
+            uris,
+            manifest,
+            open_uris: documents.keys().cloned().collect(),
+            versions: HashMap::new(),
+            rename_error: None,
+        })
+    }
     pub(super) fn with_versions(mut self, versions: &HashMap<String, i64>) -> Self {
         self.versions = versions
             .iter()
@@ -77,6 +406,10 @@ impl Workspace {
             .map(|(uri, version)| (uri.clone(), *version))
             .collect();
         self
+    }
+    /// Source identities and URIs covered by this workspace.
+    pub(super) fn covered_uris(&self) -> impl Iterator<Item = &str> {
+        self.uris.values().map(String::as_str)
     }
     fn manifest_uri(&self) -> Option<String> {
         let path = self.manifest.as_ref()?.path();
@@ -159,13 +492,18 @@ impl Workspace {
             ),
         ]))
     }
-    fn position(&self, message: &norito::json::Value) -> Option<(SourceId, u32)> {
+    fn document(&self, message: &norito::json::Value) -> Option<SourceId> {
         let uri = message.pointer("/params/textDocument/uri")?.as_str()?;
-        let source = *self
-            .uris
-            .iter()
-            .find(|(_, candidate)| candidate.as_str() == uri)?
-            .0;
+        Some(
+            *self
+                .uris
+                .iter()
+                .find(|(_, candidate)| candidate.as_str() == uri)?
+                .0,
+        )
+    }
+    fn position(&self, message: &norito::json::Value) -> Option<(SourceId, u32)> {
+        let source = self.document(message)?;
         let line = message.pointer("/params/position/line")?.as_u64()?;
         let character = message.pointer("/params/position/character")?.as_u64()?;
         Some((
@@ -173,11 +511,185 @@ impl Workspace {
             utf16_offset(self.snapshot.source(source)?.text(), line, character)?,
         ))
     }
+    fn document_symbol_value(
+        text: &str,
+        symbol: kotodama_lang::editor::EditorSymbol,
+    ) -> norito::json::Value {
+        json_object(vec![
+            ("name", symbol.name.into()),
+            ("detail", symbol.detail.into()),
+            ("kind", symbol.kind.into()),
+            ("range", lsp_text_range(text, symbol.range)),
+            ("selectionRange", lsp_text_range(text, symbol.selection)),
+            (
+                "children",
+                norito::json::Value::Array(
+                    symbol
+                        .children
+                        .into_iter()
+                        .map(|child| Self::document_symbol_value(text, child))
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+    /// Responses that need only a document, not a cursor position.
+    fn document_response(&self, method: &str, source: SourceId) -> Option<norito::json::Value> {
+        let text = self.snapshot.source(source)?.text();
+        Some(match method {
+            "textDocument/documentSymbol" => norito::json::Value::Array(
+                self.snapshot
+                    .document_symbols(source)
+                    .into_iter()
+                    .map(|symbol| Self::document_symbol_value(text, symbol))
+                    .collect(),
+            ),
+            "textDocument/foldingRange" => norito::json::Value::Array(
+                self.snapshot
+                    .folding_ranges(source)
+                    .into_iter()
+                    .filter_map(|fold| {
+                        let (start, _) = lsp_offset_position(text, fold.range.start);
+                        let (end, _) = lsp_offset_position(text, fold.range.end);
+                        // Keep a closing delimiter visible on its own line.
+                        let end = if fold.comment {
+                            end
+                        } else {
+                            end.checked_sub(1)?
+                        };
+                        (end > start).then(|| {
+                            let mut fields =
+                                vec![("startLine", start.into()), ("endLine", end.into())];
+                            if fold.comment {
+                                fields.push(("kind", "comment".into()));
+                            }
+                            json_object(fields)
+                        })
+                    })
+                    .collect(),
+            ),
+            "textDocument/semanticTokens/full" => {
+                let mut data = Vec::new();
+                let (mut previous_line, mut previous_start) = (0_u64, 0_u64);
+                for token in self.snapshot.semantic_tokens(source) {
+                    let (line, start) = lsp_offset_position(text, token.range.start);
+                    let length = text
+                        .get(token.range.start as usize..token.range.end as usize)
+                        .map_or(0, |slice| slice.encode_utf16().count() as u64);
+                    let delta_start = if line == previous_line {
+                        start - previous_start
+                    } else {
+                        start
+                    };
+                    data.extend([
+                        line - previous_line,
+                        delta_start,
+                        length,
+                        u64::from(token.token_type),
+                        u64::from(token.modifiers),
+                    ]);
+                    (previous_line, previous_start) = (line, start);
+                }
+                json_object(vec![(
+                    "data",
+                    norito::json::Value::Array(data.into_iter().map(Into::into).collect()),
+                )])
+            }
+            "textDocument/codeLens" => {
+                let uri = self.uris.get(&source)?;
+                // `koto test run` needs a file on disk; unsaved buffers get no lens.
+                let Some(path) =
+                    lsp_file_uri_path(uri).and_then(|path| path.to_str().map(ToOwned::to_owned))
+                else {
+                    return Some(norito::json::Value::Array(Vec::new()));
+                };
+                norito::json::Value::Array(
+                    self.snapshot
+                        .test_lenses(source)
+                        .into_iter()
+                        .map(|lens| {
+                            let arguments = [
+                                "test",
+                                "run",
+                                "--filter",
+                                lens.name.as_str(),
+                                "--exact",
+                                path.as_str(),
+                            ]
+                            .into_iter()
+                            .map(norito::json::Value::from)
+                            .collect();
+                            json_object(vec![
+                                ("range", lsp_text_range(text, lens.range)),
+                                (
+                                    "command",
+                                    json_object(vec![
+                                        ("title", "Run test".into()),
+                                        ("command", "kotodama.runTest".into()),
+                                        (
+                                            "arguments",
+                                            norito::json::Value::Array(vec![json_object(vec![
+                                                ("uri", uri.as_str().into()),
+                                                ("name", lens.name.into()),
+                                                ("args", norito::json::Value::Array(arguments)),
+                                            ])]),
+                                        ),
+                                    ]),
+                                ),
+                            ])
+                        })
+                        .collect(),
+                )
+            }
+            _ => return None,
+        })
+    }
+    /// Workspace symbols matching `query` in this snapshot, skipping already reported URIs.
+    pub(super) fn workspace_symbols(
+        &self,
+        query: &str,
+        reported: &mut BTreeSet<String>,
+    ) -> Vec<norito::json::Value> {
+        let mut symbols = Vec::new();
+        let mut covered = BTreeSet::new();
+        for (source, symbol, container) in self.snapshot.workspace_symbols(query) {
+            let (Some(uri), Some(file)) = (self.uris.get(&source), self.snapshot.source(source))
+            else {
+                continue;
+            };
+            if reported.contains(uri) {
+                continue;
+            }
+            covered.insert(uri.clone());
+            let mut fields = vec![
+                ("name", symbol.name.into()),
+                ("kind", symbol.kind.into()),
+                (
+                    "location",
+                    json_object(vec![
+                        ("uri", uri.as_str().into()),
+                        ("range", lsp_text_range(file.text(), symbol.selection)),
+                    ]),
+                ),
+            ];
+            if let Some(container) = container {
+                fields.push(("containerName", container.into()));
+            }
+            symbols.push(json_object(fields));
+        }
+        reported.extend(covered);
+        symbols
+    }
     pub(super) fn response(
         &self,
         method: &str,
         message: &norito::json::Value,
     ) -> Result<norito::json::Value, String> {
+        if let Some(source) = self.document(message)
+            && let Some(response) = self.document_response(method, source)
+        {
+            return Ok(response);
+        }
         let Some((source, offset)) = self.position(message) else {
             return Ok(norito::json::Value::Null);
         };
@@ -188,7 +700,7 @@ impl Workspace {
                     .completions(source, offset)
                     .into_iter()
                     .map(|completion| {
-                        json_object(vec![
+                        let mut fields = vec![
                             ("label", completion.label.into()),
                             ("kind", completion.kind.into()),
                             ("detail", completion.detail.into()),
@@ -208,11 +720,20 @@ impl Workspace {
                                     ("value", completion.documentation.into()),
                                 ]),
                             ),
-                        ])
+                        ];
+                        if let Some(filter) = completion.filter_text {
+                            fields.push(("filterText", filter.into()));
+                        }
+                        if let Some(sort) = completion.sort_text {
+                            fields.push(("sortText", sort.into()));
+                        }
+                        json_object(fields)
                     })
                     .collect();
+                // Candidates never depend on the partially typed word, so clients filter
+                // locally instead of re-requesting on every keystroke.
                 json_object(vec![
-                    ("isIncomplete", (!self.snapshot.is_complete()).into()),
+                    ("isIncomplete", false.into()),
                     ("items", norito::json::Value::Array(items)),
                 ])
             }
@@ -235,6 +756,21 @@ impl Workspace {
                     .filter_map(|source| self.location(source))
                     .collect(),
             ),
+            "textDocument/documentHighlight" => {
+                let text = self.snapshot.source(source).map_or("", SourceFile::text);
+                norito::json::Value::Array(
+                    self.snapshot
+                        .highlights(source, offset)
+                        .into_iter()
+                        .map(|highlight| {
+                            json_object(vec![
+                                ("range", lsp_text_range(text, highlight.range)),
+                                ("kind", highlight.kind.into()),
+                            ])
+                        })
+                        .collect(),
+                )
+            }
             "textDocument/hover" => self
                 .snapshot
                 .hover(source, offset)
@@ -261,7 +797,13 @@ impl Workspace {
                             "signatures",
                             norito::json::Value::Array(vec![json_object(vec![
                                 ("label", signature.label().into()),
-                                ("documentation", signature.documentation.clone().into()),
+                                (
+                                    "documentation",
+                                    json_object(vec![
+                                        ("kind", "markdown".into()),
+                                        ("value", signature.documentation.clone().into()),
+                                    ]),
+                                ),
                                 (
                                     "parameters",
                                     norito::json::Value::Array(
@@ -395,6 +937,50 @@ impl Workspace {
             _ => norito::json::Value::Null,
         })
     }
+}
+/// `workspace/symbol` over the project graphs of every open document.
+pub(super) fn workspace_symbol_response(
+    documents: &HashMap<String, String>,
+    project: Option<&LoadedSourceProject>,
+    zk: bool,
+    query: &str,
+) -> norito::json::Value {
+    let mut reported = BTreeSet::new();
+    let mut symbols = Vec::new();
+    let mut uris = documents.keys().cloned().collect::<Vec<_>>();
+    uris.sort();
+    for uri in uris {
+        if reported.contains(&uri) {
+            continue;
+        }
+        let workspace = Workspace::new(documents, project, &uri, zk);
+        symbols.extend(workspace.workspace_symbols(query, &mut reported));
+        reported.extend(workspace.covered_uris().map(ToOwned::to_owned));
+    }
+    norito::json::Value::Array(symbols)
+}
+/// Legend advertised for `textDocument/semanticTokens`.
+pub(super) fn semantic_tokens_legend() -> norito::json::Value {
+    json_object(vec![
+        (
+            "tokenTypes",
+            norito::json::Value::Array(
+                SEMANTIC_TOKEN_TYPES
+                    .iter()
+                    .map(|name| (*name).into())
+                    .collect(),
+            ),
+        ),
+        (
+            "tokenModifiers",
+            norito::json::Value::Array(
+                SEMANTIC_TOKEN_MODIFIERS
+                    .iter()
+                    .map(|name| (*name).into())
+                    .collect(),
+            ),
+        ),
+    ])
 }
 fn utf16_offset(source: &str, line: u64, character: u64) -> Option<u32> {
     let line = usize::try_from(line).ok()?;
@@ -787,5 +1373,545 @@ mod tests {
         let workspace = Workspace::new(&documents, Some(&project), &app, false);
         assert!(workspace.snapshot.is_complete());
         assert_eq!(workspace.snapshot.sources().count(), 2);
+    }
+    fn request_at(uri: &str, text: &str, needle: &str, delta: usize) -> norito::json::Value {
+        let offset = text.find(needle).expect("cursor needle") + delta;
+        let line = text[..offset].matches('\n').count();
+        let line_start = text[..offset].rfind('\n').map_or(0, |index| index + 1);
+        let character = text[line_start..offset].encode_utf16().count();
+        norito::json!({"params": {"textDocument": {"uri": uri}, "position": {"line": line, "character": character}, "context": {"includeDeclaration": true}}})
+    }
+    fn document_request(uri: &str) -> norito::json::Value {
+        norito::json!({"params": {"textDocument": {"uri": uri}}})
+    }
+    fn labels(response: &norito::json::Value) -> Vec<String> {
+        response
+            .pointer("/items")
+            .and_then(norito::json::Value::as_array)
+            .expect("completion items")
+            .iter()
+            .filter_map(|item| item.get("label").and_then(norito::json::Value::as_str))
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+    #[test]
+    fn member_completion_works_mid_statement_and_lets_clients_filter() {
+        let uri = "file:///scores.ko";
+        let prefix = "seiyaku Scoreboard {\n    state StateMap<int, int> Scores;\n    kotoage fn bump(int who) authorize(\"CanBump\") {\n        ";
+        for (statement, members) in [
+            ("let x = Scores.", vec!["get", "contains"]),
+            ("let x = Scores.g", vec!["get", "contains"]),
+            ("var x = Scores.", vec!["get", "contains"]),
+            ("let x = Scores.\n        return;", vec!["get", "contains"]),
+            ("let v = Scores.get(who).", vec!["unwrap_or", "is_some"]),
+            ("require(Scores.", vec!["get", "contains"]),
+            ("require(Scores.)", vec!["get", "contains"]),
+            ("require(Scores.);", vec!["get", "contains"]),
+            ("return Scores.", vec!["get", "contains"]),
+            (
+                "Scores.get(who).\n        return;",
+                vec!["unwrap_or", "is_some"],
+            ),
+            ("if (Scores.) {}", vec!["get", "contains"]),
+            ("if Scores.", vec!["get", "contains"]),
+            ("if Scores.c", vec!["get", "contains"]),
+            ("for entry in Scores.", vec!["take", "page"]),
+            ("helper(value: Scores.", vec!["get", "contains"]),
+            (
+                "helper(value: Scores.get(who).",
+                vec!["unwrap_or", "is_some"],
+            ),
+            ("let x = Scores.;", vec!["get", "contains"]),
+        ] {
+            let text = format!(
+                "{prefix}{statement}\n    }}\n    fn helper(int value) -> int {{ value }}\n}}\n"
+            );
+            let documents = HashMap::from([(uri.to_owned(), text.clone())]);
+            let workspace = Workspace::new(&documents, None, uri, false);
+            let dot = statement.rfind('.').expect("member access") + 1;
+            let partial = statement[dot..]
+                .chars()
+                .take_while(char::is_ascii_alphanumeric)
+                .count();
+            let request = request_at(uri, &text, statement, dot + partial);
+            let response = workspace
+                .response("textDocument/completion", &request)
+                .unwrap();
+            assert_eq!(
+                response.pointer("/isIncomplete"),
+                Some(&norito::json::Value::from(false))
+            );
+            let found = labels(&response);
+            for member in members {
+                assert!(
+                    found.iter().any(|label| label == member),
+                    "`{statement}` offered {found:?}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn completion_follows_position_and_offers_both_branded_spellings() {
+        let uri = "file:///mixed.ko";
+        let text = "誓約 Mixed {\n    state int value;\n    始まり() {\n        value = 0;\n    }\n    \n    kotoage fn bump() authorize(\"CanBump\") {\n        value = 1;\n        \n    }\n}\n";
+        let documents = HashMap::from([(uri.to_owned(), text.to_owned())]);
+        let workspace = Workspace::new(&documents, None, uri, false);
+        let item_position = workspace
+            .response(
+                "textDocument/completion",
+                &request_at(uri, text, "    \n    kotoage", 4),
+            )
+            .unwrap();
+        let items = labels(&item_position);
+        for expected in [
+            "kotoage fn",
+            "言挙げ fn",
+            "hajimari",
+            "始まり",
+            "kaizen",
+            "改善",
+            "state",
+            "view fn",
+        ] {
+            assert!(items.iter().any(|label| label == expected), "{items:?}");
+        }
+        for unexpected in ["return", "let", "seiyaku", "誓約", "crypto::sha256"] {
+            assert!(!items.iter().any(|label| label == unexpected), "{items:?}");
+        }
+        let kanji = item_position
+            .pointer("/items")
+            .and_then(norito::json::Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|item| {
+                item.get("label").and_then(norito::json::Value::as_str) == Some("言挙げ fn")
+            })
+            .unwrap();
+        assert!(
+            kanji
+                .get("filterText")
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|filter| filter.contains("kotoage"))
+        );
+        assert!(
+            kanji
+                .pointer("/documentation/value")
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|text| text.contains("**kotoage**") && text.contains("**言挙げ**"))
+        );
+        let body = labels(
+            &workspace
+                .response(
+                    "textDocument/completion",
+                    &request_at(uri, text, "        \n    }\n}", 8),
+                )
+                .unwrap(),
+        );
+        for expected in ["let", "return", "value", "require", "int"] {
+            assert!(body.iter().any(|label| label == expected), "{body:?}");
+        }
+        for unexpected in [
+            "seiyaku", "誓約", "module", "import", "state", "bump", "hajimari",
+        ] {
+            assert!(!body.iter().any(|label| label == unexpected), "{body:?}");
+        }
+        let empty_uri = "file:///empty.ko";
+        let empty = HashMap::from([(empty_uri.to_owned(), String::new())]);
+        let top = labels(
+            &Workspace::new(&empty, None, empty_uri, false)
+                .response("textDocument/completion", &request_at(empty_uri, "", "", 0))
+                .unwrap(),
+        );
+        assert_eq!(top, vec!["seiyaku", "誓約", "module"]);
+    }
+    #[test]
+    fn hover_explains_branded_keywords_and_echoes_declaration_spellings() {
+        let uri = "file:///counter.ko";
+        let text = "誓約 Counter {\n    state int value;\n    始まり() {\n        value = 0;\n    }\n    言挙げ fn bump(int delta) -> int authorize(\"CanBump\") {\n        value = value + delta;\n        value\n    }\n    kotoage fn reset() authorize(\"CanReset\") {\n        value = 0;\n    }\n    view fn read() -> int { value }\n}\n";
+        let documents = HashMap::from([(uri.to_owned(), text.to_owned())]);
+        let workspace = Workspace::new(&documents, None, uri, false);
+        let hover = |needle: &str, delta: usize| {
+            workspace
+                .response("textDocument/hover", &request_at(uri, text, needle, delta))
+                .unwrap()
+                .pointer("/contents/value")
+                .and_then(norito::json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_default()
+        };
+        let seiyaku = hover("誓約", 0);
+        assert!(seiyaku.contains("**seiyaku** / **誓約**"), "{seiyaku}");
+        let documentation =
+            |hover: String| hover.split_once("\n```\n").map(|(_, rest)| rest.to_owned());
+        assert!(hover("言挙げ", 0).starts_with("```kotodama\n言挙げ\n```"));
+        assert!(hover("kotoage", 0).starts_with("```kotodama\nkotoage\n```"));
+        assert_eq!(
+            documentation(hover("言挙げ", 0)),
+            documentation(hover("kotoage", 0))
+        );
+        let bump = hover("bump", 0);
+        assert!(
+            bump.contains("言挙げ fn bump(int delta) -> int authorize(\"CanBump\")"),
+            "{bump}"
+        );
+        assert!(bump.contains("Authorization: callers need `CanBump`."));
+        let reset = hover("reset", 0);
+        assert!(reset.contains("kotoage fn reset()"), "{reset}");
+        let hook = hover("始まり", 0);
+        assert!(hook.contains("```kotodama\n始まり()\n```"), "{hook}");
+        assert!(hook.contains("CanInvokeContractEntrypoint"));
+        assert!(hover("view", 0).contains("read-only"));
+        assert!(hover("Counter", 0).contains("誓約 Counter"));
+        for text in [seiyaku, bump, reset, hook] {
+            assert!(!text.contains("Some(") && !text.contains("authorization: None"));
+        }
+    }
+    #[test]
+    fn document_features_cover_outline_folding_tokens_highlights_and_lenses() {
+        let uri = "file:///features.ko";
+        let text = "// Features.\n// Second line.\nseiyaku Features {\n    state int value;\n    hajimari() {\n        value = 0;\n    }\n    言挙げ fn set(int next) authorize(\"CanSet\") {\n        value = next;\n    }\n    #[test]\n    fn sets_value() {\n        test::assert(condition: true);\n    }\n}\n";
+        let documents = HashMap::from([(uri.to_owned(), text.to_owned())]);
+        let workspace = Workspace::new(&documents, None, uri, false);
+        let symbols = workspace
+            .response("textDocument/documentSymbol", &document_request(uri))
+            .unwrap();
+        let children = symbols
+            .pointer("/0/children")
+            .and_then(norito::json::Value::as_array)
+            .expect("seiyaku children");
+        assert!(children.iter().any(|child| {
+            child.get("name").and_then(norito::json::Value::as_str) == Some("set")
+                && child.get("detail").and_then(norito::json::Value::as_str)
+                    == Some("言挙げ fn authorize(\"CanSet\")")
+        }));
+        let folds = workspace
+            .response("textDocument/foldingRange", &document_request(uri))
+            .unwrap();
+        let folds = folds.as_array().unwrap();
+        assert!(folds.iter().any(|fold| {
+            fold.get("kind").and_then(norito::json::Value::as_str) == Some("comment")
+                && fold.get("startLine").and_then(norito::json::Value::as_u64) == Some(0)
+        }));
+        assert!(folds.iter().any(|fold| {
+            fold.get("startLine").and_then(norito::json::Value::as_u64) == Some(2)
+                && fold.get("endLine").and_then(norito::json::Value::as_u64) == Some(13)
+        }));
+        let tokens = workspace
+            .response("textDocument/semanticTokens/full", &document_request(uri))
+            .unwrap();
+        let data = tokens
+            .get("data")
+            .and_then(norito::json::Value::as_array)
+            .unwrap();
+        assert_eq!(data.len() % 5, 0);
+        let branded = SEMANTIC_TOKEN_TYPES
+            .iter()
+            .position(|name| *name == "brandedKeyword")
+            .unwrap() as u64;
+        // `seiyaku`, `hajimari` and `言挙げ` all use the one branded token type.
+        assert_eq!(
+            data.chunks(5)
+                .filter(|token| token[3].as_u64() == Some(branded))
+                .count(),
+            3
+        );
+        let highlights = workspace
+            .response(
+                "textDocument/documentHighlight",
+                &request_at(uri, text, "value;", 0),
+            )
+            .unwrap();
+        assert_eq!(highlights.as_array().unwrap().len(), 3);
+        let lenses = workspace
+            .response("textDocument/codeLens", &document_request(uri))
+            .unwrap();
+        let lens = &lenses.as_array().unwrap()[0];
+        assert_eq!(
+            lens.pointer("/command/command")
+                .and_then(norito::json::Value::as_str),
+            Some("kotodama.runTest")
+        );
+        let arguments = lens
+            .pointer("/command/arguments/0/args")
+            .and_then(norito::json::Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(norito::json::Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            arguments[..5],
+            ["test", "run", "--filter", "sets_value", "--exact"]
+        );
+        let workspace_symbols = workspace_symbol_response(&documents, None, false, "set");
+        assert_eq!(
+            workspace_symbols
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|symbol| symbol.get("name").and_then(norito::json::Value::as_str))
+                .collect::<Vec<_>>(),
+            vec!["set", "sets_value"]
+        );
+    }
+    #[test]
+    fn rename_refusals_name_the_blocking_diagnostic_and_ascii_rule() {
+        let uri = "file:///blocked.ko";
+        let text =
+            "seiyaku Blocked {\n    state int value;\n    view fn read() -> int { value }\n}\n";
+        let documents = HashMap::from([(uri.to_owned(), text.to_owned())]);
+        let workspace = Workspace::new(&documents, None, uri, false);
+        let mut request = request_at(uri, text, "read", 0);
+        let error = workspace
+            .response("textDocument/prepareRename", &request)
+            .unwrap_err();
+        assert!(error.contains("Rename is unavailable until"), "{error}");
+        assert!(error.contains("hajimari"), "{error}");
+        let fixed = text.replace(
+            "    view fn",
+            "    hajimari() {\n        value = 0;\n    }\n    view fn",
+        );
+        let documents = HashMap::from([(uri.to_owned(), fixed.clone())]);
+        let workspace = Workspace::new(&documents, None, uri, false);
+        request = request_at(uri, &fixed, "read", 0);
+        if let Some(params) = request
+            .get_mut("params")
+            .and_then(norito::json::Value::as_object_mut)
+        {
+            params.insert("newName".into(), "読む".into());
+        }
+        let error = workspace
+            .response("textDocument/rename", &request)
+            .unwrap_err();
+        assert!(error.contains("ASCII"), "{error}");
+    }
+    #[test]
+    fn standalone_test_modules_check_in_test_mode_and_navigate_selectors() {
+        let directory = SourceDirectory::new();
+        std::fs::create_dir_all(directory.0.join("contracts")).unwrap();
+        std::fs::create_dir_all(directory.0.join("tests")).unwrap();
+        std::fs::write(directory.0.join("Musubi.toml"), "manifest-version = 1\n").unwrap();
+        let contract_text = "seiyaku Club {\n    fn points(int coffees) -> int {\n        return coffees * 10;\n    }\n    view fn quote(int coffees) -> int {\n        return points(coffees: coffees);\n    }\n}\n";
+        let test_text = "module ClubTests {\n    koto_test {\n        target: \"../contracts/club.ko\"\n    }\n\n    #[test]\n    fn quotes_points() {\n        let quoted = test::invoke_kotoage(\n            kotoage: \"quote\",\n            arguments: Json::parse(\"{\\\"coffees\\\":\\\"1\\\"}\"),\n        );\n        test::assert_eq(actual: quoted, expected: 10);\n    }\n}\n";
+        std::fs::write(directory.0.join("contracts/club.ko"), contract_text).unwrap();
+        std::fs::write(directory.0.join("tests/club.test.ko"), test_text).unwrap();
+        let contract = directory.uri("contracts/club.ko");
+        let test = directory.uri("tests/club.test.ko");
+        let documents = HashMap::from([(test.clone(), test_text.to_owned())]);
+        let driver = BuildDriver::new(
+            CompilerSession::new(CompilerOptions::default()),
+            "lsp-test-mode",
+        );
+        let mut diagnostics = collect_lsp_workspace_diagnostics(&driver, &documents, None);
+        apply_test_module_diagnostics(&mut diagnostics, &documents, false);
+        assert!(
+            diagnostics[&test].diagnostics.is_empty(),
+            "{:?}",
+            diagnostics[&test].diagnostics
+        );
+        let workspace = Workspace::new(&documents, None, &test, false);
+        let definition = workspace
+            .response(
+                "textDocument/definition",
+                &request_at(&test, test_text, "quote\"", 1),
+            )
+            .unwrap();
+        assert_eq!(
+            definition
+                .pointer("/uri")
+                .and_then(norito::json::Value::as_str),
+            Some(contract.as_str())
+        );
+        let documents = HashMap::from([(contract.clone(), contract_text.to_owned())]);
+        let workspace = Workspace::new(&documents, None, &contract, false);
+        let references = workspace
+            .response(
+                "textDocument/references",
+                &request_at(&contract, contract_text, "quote(", 0),
+            )
+            .unwrap();
+        assert!(references.as_array().unwrap().iter().any(|location| {
+            location.get("uri").and_then(norito::json::Value::as_str) == Some(test.as_str())
+        }));
+        let mut rename = request_at(&contract, contract_text, "quote(", 0);
+        if let Some(params) = rename
+            .get_mut("params")
+            .and_then(norito::json::Value::as_object_mut)
+        {
+            params.insert("newName".into(), "estimate".into());
+        }
+        let edits = workspace.response("textDocument/rename", &rename).unwrap();
+        assert!(
+            edits
+                .pointer("/documentChanges")
+                .and_then(norito::json::Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|change| change
+                    .pointer("/textDocument/uri")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(test.as_str()))
+        );
+        // A broken test reports its own error in test mode, never E_TEST_ONLY_PRODUCTION.
+        let broken = test_text.replace("expected: 10", "expected: missing");
+        let documents = HashMap::from([(test.clone(), broken)]);
+        let mut diagnostics = collect_lsp_workspace_diagnostics(&driver, &documents, None);
+        apply_test_module_diagnostics(&mut diagnostics, &documents, false);
+        assert!(!diagnostics[&test].diagnostics.is_empty());
+        assert!(
+            diagnostics[&test]
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "E_TEST_ONLY_PRODUCTION")
+        );
+        // Quick fixes of test-mode diagnostics edit the test document itself.
+        let suffixed = test_text.replace("expected: 10", "expected: 10amt");
+        let documents = HashMap::from([(test.clone(), suffixed)]);
+        let mut diagnostics = collect_lsp_workspace_diagnostics(&driver, &documents, None);
+        apply_test_module_diagnostics(&mut diagnostics, &documents, false);
+        let fixes = diagnostics[&test]
+            .diagnostics
+            .iter()
+            .flat_map(|diagnostic| diagnostic.fix.iter().chain(&diagnostic.alternative_fixes))
+            .collect::<Vec<_>>();
+        assert!(!fixes.is_empty(), "{:?}", diagnostics[&test].diagnostics);
+        assert!(
+            fixes
+                .iter()
+                .all(|fix| fix.span.source.as_deref() == Some(test.as_str()))
+        );
+    }
+    #[test]
+    fn code_actions_follow_the_requested_range_and_offer_both_spellings() {
+        let session = CompilerSession::default();
+        let uri = "file:///english.ko";
+        let source = "contract Counter {\n    state int value;\n}\n";
+        let actions = |range| {
+            lsp_code_actions_from_bundle(
+                collect_lsp_diagnostics(&session, uri, source),
+                uri,
+                source,
+                range,
+            )
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        };
+        let all = actions(None);
+        let summary = all
+            .iter()
+            .map(|action| {
+                (
+                    action
+                        .get("title")
+                        .and_then(norito::json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    action
+                        .get("isPreferred")
+                        .and_then(norito::json::Value::as_bool)
+                        .unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            summary.contains(&("Replace `contract` with `seiyaku`".to_owned(), true)),
+            "{summary:?}"
+        );
+        assert!(
+            summary.contains(&("Replace `contract` with `誓約`".to_owned(), false)),
+            "{summary:?}"
+        );
+        let second_line = lsp_byte_range(
+            source,
+            &norito::json!({"start": {"line": 1, "character": 4}, "end": {"line": 1, "character": 9}}),
+        )
+        .expect("range");
+        assert_eq!(
+            &source[second_line.start as usize..second_line.end as usize],
+            "state"
+        );
+        assert!(actions(Some(second_line)).is_empty());
+        let first_line = lsp_byte_range(
+            source,
+            &norito::json!({"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}),
+        );
+        assert_eq!(actions(first_line).len(), all.len());
+    }
+    #[test]
+    fn served_code_actions_offer_both_branded_spellings_for_english_words() {
+        // The server path: open documents are checked through the build driver, not the
+        // single-source session used by `koto check`.
+        let driver = BuildDriver::new(
+            CompilerSession::new(CompilerOptions::default()),
+            "lsp-code-actions",
+        );
+        let uri = "file:///english-entry.ko";
+        let source = "seiyaku Counter {\n    state int value;\n    hajimari() { value = 0; }\n    entry fn bump() authorize(\"CanBump\") {\n        value = value + 1;\n    }\n}\n";
+        let documents = HashMap::from([(uri.to_owned(), source.to_owned())]);
+        let titles = |range: norito::json::Value| {
+            lsp_project_code_action_items(&driver, &documents, None, uri, Some(&range), false)
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .map(|action| {
+                    (
+                        action
+                            .get("title")
+                            .and_then(norito::json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        action
+                            .get("isPreferred")
+                            .and_then(norito::json::Value::as_bool)
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let on_entry = titles(
+            norito::json!({"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 9}}),
+        );
+        // `authorize(...)` is present, so the branded entrypoint keyword is preferred and both
+        // of its spellings are offered.
+        assert!(
+            on_entry.contains(&("Replace `entry` with `kotoage`".to_owned(), true)),
+            "{on_entry:?}"
+        );
+        assert!(
+            on_entry.contains(&("Replace `entry` with `言挙げ`".to_owned(), false)),
+            "{on_entry:?}"
+        );
+        assert!(
+            titles(norito::json!({"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 3}}))
+                .is_empty()
+        );
+    }
+    #[test]
+    fn lsp_messages_drop_rendered_excerpts_but_keep_prose_notes() {
+        assert!(is_rendered_source_excerpt("contract Counter {\n^"));
+        assert!(is_rendered_source_excerpt("    ledger::\n    ^~~~"));
+        assert!(!is_rendered_source_excerpt("the hook runs once"));
+        assert!(!is_rendered_source_excerpt("first line\nsecond line"));
+        let mut diagnostic = Diagnostic::error(
+            "K1001",
+            DiagnosticPhase::Parse,
+            "expected `;`, found identifier `ledger`",
+            None,
+        );
+        diagnostic.notes = vec![
+            "        ledger::\n        ^".to_owned(),
+            "statements end with `;`".to_owned(),
+        ];
+        diagnostic.help = Some("insert `;`".to_owned());
+        let message = lsp_diagnostic_value(&diagnostic, "")
+            .get("message")
+            .and_then(norito::json::Value::as_str)
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            message,
+            "expected `;`, found identifier `ledger`\n\nnote: statements end with `;`\n\nhelp: insert `;`"
+        );
     }
 }

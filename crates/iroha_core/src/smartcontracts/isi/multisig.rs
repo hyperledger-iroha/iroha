@@ -3488,6 +3488,7 @@ fn map_validation_fail(err: ValidationFail) -> InstructionExecutionError {
 mod tests {
     mod cancellation;
     mod proposal_attempt;
+    mod sccp_record;
     use super::*;
     use crate::{
         executor::Executor,
@@ -7390,11 +7391,11 @@ mod tests {
                 r#"
 seiyaku TriggerDispatch {
   kotoage fn main() authorize("Admin") {
-    ledger::account::set_detail(account: context::authority(), key: Name::parse("entrypoint"), value: Json::parse("1"));
+    ledger::account::set_metadata(account: context::authority(), key: Name::parse("entrypoint"), value: Json::parse("1"));
   }
 
   kotoage fn alternate() authorize("Admin") {
-    ledger::account::set_detail(account: context::authority(), key: Name::parse("entrypoint"), value: Json::parse("2"));
+    ledger::account::set_metadata(account: context::authority(), key: Name::parse("entrypoint"), value: Json::parse("2"));
   }
 }
 "#,
@@ -7971,7 +7972,7 @@ seiyaku TriggerDispatch {
                   StagedMintError::DestinationAccountMismatch,
                 );
                 let amount = ev.get_quantity(Name::parse("amount"))?;
-                let requested_by_actor = ev.get_blob_hex(Name::parse("requested_by_actor_hex"))?;
+                let requested_by_actor = ev.get_bytes_hex(Name::parse("requested_by_actor_hex"))?;
                 let created_at_ms = ev.get_int(Name::parse("created_at_ms"))?;
                 let expires_at_ms = ev.get_int(Name::parse("expires_at_ms"))?;
                 require(amount > 0, StagedMintError::InvalidAmount);

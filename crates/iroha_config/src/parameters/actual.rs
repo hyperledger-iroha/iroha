@@ -84,8 +84,6 @@ pub use kagemusha_enrollment::{
     KagemushaEnrollmentGoogle, KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider,
     KagemushaEnrollmentWorker,
 };
-mod kagemusha_load_finality;
-pub use kagemusha_load_finality::KagemushaLoadFinality;
 mod sccp;
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
@@ -7485,8 +7483,6 @@ pub struct Torii {
     pub recipient_lookup: ToriiRecipientLookup,
     /// Optional current bank-selected KAGEMUSHA issuer dependencies; absent disables serving.
     pub kagemusha_enrollment: Option<KagemushaEnrollmentIssuer>,
-    /// Optional bounded terminal Load proof service over committed native history.
-    pub kagemusha_load_finality: Option<KagemushaLoadFinality>,
     /// Explicit Torii origins used for public-dataspace routed reads.
     pub public_dataspace_upstreams: Vec<ToriiPublicDataspaceUpstream>,
     /// App-facing query/backpressure limits.
@@ -7546,7 +7542,6 @@ impl fmt::Debug for Torii {
             .field("tx_history", &self.tx_history)
             .field("recipient_lookup", &self.recipient_lookup)
             .field("kagemusha_enrollment", &self.kagemusha_enrollment)
-            .field("kagemusha_load_finality", &self.kagemusha_load_finality)
             .field("da_ingest", &self.da_ingest)
             .field("push", &self.push)
             .finish_non_exhaustive()

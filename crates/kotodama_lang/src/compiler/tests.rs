@@ -120,7 +120,8 @@ fn assert_internal_source_names_rejected(names: &[&str]) {
         .compile_source(&source)
         .expect_err("compiler-internal operations must not resolve from source");
     let internal_diagnostics = error.matches("E_INTERNAL_BUILTIN").count();
-    let unknown_diagnostics = error.matches("K2002").count();
+    let unknown_diagnostics =
+        error.matches("K2002").count() + error.matches("E_UNKNOWN_BUILTIN").count();
     assert!(
         internal_diagnostics + unknown_diagnostics >= names.len(),
         "compiler-internal calls were rejected for the wrong reason: {error}"
@@ -1513,7 +1514,7 @@ fn unknown_ledger_argument_before_literal_keeps_helper_hints_conservative() {
     let source = r#"
 seiyaku CompilerFixture {
   fn remove_role(Name _ role) {
-    ledger::role::delete(role: role);
+    ledger::role::unregister(role: role);
   }
 
   kotoage fn main(Name dynamic_role) authorize("CompilerFixture") {
@@ -2234,12 +2235,12 @@ fn set_account_detail_builtin_emits_syscall_and_exact_access() {
 seiyaku CompilerFixture {{
 
 kotoage fn main() authorize("CompilerFixture") {{
-  ledger::account::set_detail(
+  ledger::account::set_metadata(
     account: AccountId::parse("{account}"),
     key: Name::parse("status"),
     value: Json::parse("{{}}"),
   );
-  ledger::account::set_detail(
+  ledger::account::set_metadata(
     account: AccountId::parse("{account}"),
     key: Name::parse("mirror"),
     value: Json::parse("{{}}"),
@@ -2292,11 +2293,11 @@ fn set_account_detail_builtin_rejects_invalid_arguments() {
     for (src, expected) in [
         (
             include_str!("fixtures/v1/c028.ko"),
-            "ledger::account::set_detail expects (AccountId, Name, Json)",
+            "ledger::account::set_metadata expects (AccountId, Name, Json)",
         ),
         (
             include_str!("fixtures/v1/c029.ko"),
-            "ledger::account::set_detail expects (AccountId, Name, Json)",
+            "ledger::account::set_metadata expects (AccountId, Name, Json)",
         ),
     ] {
         let parsed = parse(src).expect("parse source");
@@ -2429,7 +2430,7 @@ fn native_asset_operation_builtins_reject_invalid_arguments() {
     for (src, expected) in [
         (
             include_str!("fixtures/v1/c030.ko"),
-            "ledger::asset::transfer expects (AccountId, AccountId, AssetDefinitionId, quantity, DataSpaceId)",
+            "ledger::asset::transfer expects (AccountId, AccountId, AssetDefinitionId, quantity[, DataSpaceId])",
         ),
         (
             include_str!("fixtures/v1/c031.ko"),
@@ -2592,16 +2593,16 @@ kotoage fn main() authorize("CompilerFixture") {{
   ledger::domain::transfer(source: owner, domain: domain_id, destination: recipient);
   ledger::account::register(account: owner);
   ledger::account::unregister(account: recipient);
-  ledger::asset::register(asset_definition: asset, name: "ROSE", scale: 0, mintable: 1);
-  ledger::asset::create(asset_definition: asset, name: "ROSE", scale: 7, owner: owner, mintable: 1);
+  ledger::asset::register(asset_definition: asset, name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
+  ledger::asset::mint(account: owner, asset_definition: asset, amount: 7);
   ledger::asset::unregister(asset_definition: asset);
   ledger::domain::register(domain: domain_id);
   ledger::domain::unregister(domain: domain_id);
   ledger::domain::transfer(source: owner, domain: domain_id, destination: recipient);
   ledger::account::register(account: recipient);
   ledger::account::unregister(account: owner);
-  ledger::asset::register(asset_definition: asset, name: "ROSE", scale: 0, mintable: 1);
-  ledger::asset::create(asset_definition: asset, name: "ROSE", scale: 3, owner: owner, mintable: 1);
+  ledger::asset::register(asset_definition: asset, name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
+  ledger::asset::mint(account: owner, asset_definition: asset, amount: 3);
   ledger::asset::unregister(asset_definition: asset);
 }}
 
@@ -2693,11 +2694,11 @@ fn lifecycle_builtins_reject_invalid_arguments() {
         ),
         (
             include_str!("fixtures/v1/c040.ko"),
-            "ledger::asset::register expects (AssetDefinitionId, string, int, int)",
+            "ledger::asset::register expects (asset_definition: AssetDefinitionId, name: string",
         ),
         (
             include_str!("fixtures/v1/c041.ko"),
-            "ledger::asset::create expects (AssetDefinitionId, string, int, AccountId, int)",
+            "ledger::asset::register expects (asset_definition: AssetDefinitionId, name: string",
         ),
         (
             include_str!("fixtures/v1/c042.ko"),
@@ -2775,18 +2776,18 @@ kotoage fn main() authorize("CompilerFixture") {{
   let account = AccountId::parse("{account_literal}");
   let role = Name::parse("auditor");
   let perm = Name::parse("read_blocks");
-  ledger::role::create(role: role, permissions: Json::parse("{{}}"));
+  ledger::role::register(role: role, permissions: Json::parse("{{}}"));
   ledger::role::grant(account: account, role: role);
   ledger::role::revoke(account: account, role: role);
   ledger::permission::grant(account: account, permission: perm);
   ledger::permission::revoke(account: account, permission: perm);
-  ledger::role::delete(role: role);
-  ledger::role::create(role: role, permissions: Json::parse("{{}}"));
+  ledger::role::unregister(role: role);
+  ledger::role::register(role: role, permissions: Json::parse("{{}}"));
   ledger::role::grant(account: account, role: role);
   ledger::role::revoke(account: account, role: role);
   ledger::permission::grant(account: account, permission: perm);
   ledger::permission::revoke(account: account, permission: perm);
-  ledger::role::delete(role: role);
+  ledger::role::unregister(role: role);
 }}
 
 }}
@@ -2856,15 +2857,15 @@ fn role_permission_peer_trigger_builtins_reject_invalid_arguments() {
         ),
         (
             include_str!("fixtures/v1/c048.ko"),
-            "ledger::trigger::set_enabled expects (Name, int)",
+            "ledger::trigger::set_enabled expects (Name, bool)",
         ),
         (
             include_str!("fixtures/v1/c049.ko"),
-            "ledger::role::create expects (Name, Json)",
+            "ledger::role::register expects (Name, Json)",
         ),
         (
             include_str!("fixtures/v1/c050.ko"),
-            "ledger::role::delete expects (Name)",
+            "ledger::role::unregister expects (Name)",
         ),
         (
             include_str!("fixtures/v1/c051.ko"),
@@ -3051,6 +3052,7 @@ fn debug_surface_rejects_raw_variants_and_invalid_info_arguments() {
             .expect_err("non-canonical debug call must fail");
         assert!(
             err.contains("unknown function or builtin")
+                || err.contains("E_UNKNOWN_BUILTIN")
                 || err.contains("compiler-internal")
                 || err.contains("debug::info expects (string|int)"),
             "unexpected diagnostic for `{call}`: {err}"
@@ -3095,7 +3097,7 @@ fn assertion_logging_builtins_reject_invalid_arguments() {
     for (src, expected) in [
         (
             include_str!("fixtures/v1/c057.ko"),
-            "test::assert expects (bool) or (bool, string|int)",
+            "test::assert expects a bool condition, found `int`",
         ),
         (
             include_str!("fixtures/v1/c058.ko"),
@@ -3107,7 +3109,7 @@ fn assertion_logging_builtins_reject_invalid_arguments() {
         ),
         (
             include_str!("fixtures/v1/c060.ko"),
-            "test::assert_eq expects two int args",
+            "test::assert_eq compares `actual` and `expected` of one type, found `bool` and `int`",
         ),
     ] {
         let parsed = parse(src).expect("parse source");
@@ -3209,6 +3211,7 @@ fn compiler_internal_seiyaku_lifecycle_operations_are_not_source_apis() {
         assert!(
             error.contains("K1001")
                 || error.contains("K2002")
+                || error.contains("E_UNKNOWN_BUILTIN")
                 || error.contains("E_INTERNAL_BUILTIN"),
             "lifecycle operation `{name}` was rejected for the wrong reason: {error}"
         );
@@ -4160,6 +4163,7 @@ fn raw_contract_calls_are_not_a_source_api() {
         assert!(
             error.contains("K1001")
                 || error.contains("unknown function or builtin")
+                || error.contains("E_UNKNOWN_BUILTIN")
                 || error.contains("compiler-internal"),
             "unexpected raw-call error: {error}"
         );
@@ -4287,7 +4291,7 @@ fn crypto_builtins_reject_invalid_arguments() {
         ),
         (
             include_str!("fixtures/v1/c094.ko"),
-            "crypto::verify_signature expects scheme code as int",
+            "crypto::verify_signature expects (message: bytes, signature: bytes, public_key: bytes, scheme: SignatureScheme)",
         ),
         (
             include_str!("fixtures/v1/c095.ko"),
@@ -4591,10 +4595,6 @@ fn public_context_builtins_emit_syscalls() {
         (
             ivm_abi::syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT,
             "SYSVAR_BLOCK_HEIGHT",
-        ),
-        (
-            ivm_abi::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS,
-            "SYSVAR_BLOCK_TIME_MS",
         ),
         (
             ivm_abi::syscalls::SYSCALL_SYSVAR_CHAIN_ID,
@@ -5553,7 +5553,9 @@ fn manifest_compilation_rejects_raw_call_contract() {
         .compile_source_with_manifest(src)
         .expect_err("raw contract-call bridge must be rejected before manifest generation");
     assert!(
-        error.contains("K1001") || error.contains("unknown function or builtin"),
+        error.contains("K1001")
+            || error.contains("unknown function or builtin")
+            || error.contains("E_UNKNOWN_BUILTIN"),
         "{error}"
     );
 }
@@ -5703,15 +5705,13 @@ kotoage fn main() authorize("AssetAdmin") {{
   ledger::asset::register(
     asset_definition: AssetDefinitionId::parse("{asset_literal}"),
     name: "ROSE",
-    scale: 0,
-    mintable: 1,
+    spec: NumericSpec::integer(),
+    mintable: Mintable::Once,
   );
-  ledger::asset::create(
+  ledger::asset::mint(
+    account: AccountId::parse("{account_literal}"),
     asset_definition: AssetDefinitionId::parse("{asset_literal}"),
-    name: "ROSE",
-    scale: 1,
-    owner: AccountId::parse("{account_literal}"),
-    mintable: 1,
+    amount: 1,
   );
 }}
 
@@ -5751,10 +5751,10 @@ kotoage fn main() authorize("AssetAdmin") {{
   ledger::asset::register(
     asset_definition: AssetDefinitionId::parse("{asset_literal}"),
     name: "ROSE",
-    scale: 0,
-    mintable: 1,
+    spec: NumericSpec::integer(),
+    mintable: Mintable::Once,
   );
-  ledger::role::create(role: Name::parse("minter"), permissions: Json::parse("{{\"perms\":[\"mint_asset:{asset_literal}\"]}}"));
+  ledger::role::register(role: Name::parse("minter"), permissions: Json::parse("{{\"perms\":[\"mint_asset:{asset_literal}\"]}}"));
   ledger::role::grant(account: context::authority(), role: Name::parse("minter"));
   ledger::asset::mint(
     account: context::authority(),
@@ -5817,7 +5817,7 @@ kotoage fn main() authorize("AssetAdmin") {{
     amount: 1,
     dataspace: DataSpaceId::parse("0"),
   );
-  ledger::account::set_detail(
+  ledger::account::set_metadata(
     account: caller,
     key: Name::parse("status"),
     value: Json::parse("{{}}"),
@@ -6221,7 +6221,8 @@ fn ephemeral_u64_nullifier_helper_is_rejected_from_source() {
         .compile_source_with_manifest(src)
         .expect_err("invocation-local u64 nullifiers must not be deployable source APIs");
     assert!(
-        error.contains("crypto::use_nullifier") && error.contains("K2002"),
+        error.contains("crypto::use_nullifier")
+            && (error.contains("K2002") || error.contains("E_UNKNOWN_BUILTIN")),
         "unexpected nullifier rejection: {error}"
     );
     assert!(
@@ -6850,7 +6851,9 @@ fn production_rejects_raw_call_contract_surface() {
         .compile_source_with_manifest(src)
         .expect_err("raw contract-call bridge must not reach production admission");
     assert!(
-        error.contains("K1001") || error.contains("unknown function or builtin"),
+        error.contains("K1001")
+            || error.contains("unknown function or builtin")
+            || error.contains("E_UNKNOWN_BUILTIN"),
         "{error}"
     );
 }
@@ -7209,7 +7212,7 @@ fn manifest_access_set_hints_include_create_trigger() {
     let raw_json = norito::json::to_string(&json_value).expect("trigger json");
     let escaped = raw_json.replace('\\', "\\\\").replace('"', "\\\"");
     let src = format!(
-        r#"seiyaku Test {{ kotoage fn main() authorize("Admin") {{ ledger::trigger::register(trigger: Json::parse("{escaped}")); }} }}"#
+        r#"seiyaku Test {{ kotoage fn main() authorize("Admin") {{ ledger::trigger::register(trigger_spec: Json::parse("{escaped}")); }} }}"#
     );
     let compiler = Compiler::new();
     let (_bytes, manifest) = compiler
@@ -7287,4 +7290,547 @@ fn entry_spills_use_stack_frame() {
         .expect("spawn large-stack test thread")
         .join()
         .expect("test thread panicked");
+}
+/// Every syscall word emitted in an artifact's code section, in program order.
+fn emitted_syscalls(bytes: &[u8]) -> Vec<u32> {
+    let parsed = ProgramMetadata::parse(bytes).expect("parse metadata");
+    bytes[parsed.code_offset..]
+        .chunks_exact(4)
+        .filter_map(|word| {
+            let word = u32::from_le_bytes(word.try_into().expect("four-byte word"));
+            match instruction::wide::opcode(word) {
+                instruction::wide::system::SCALL => {
+                    Some(u32::from(encoding::wide::decode_sys(word).1))
+                }
+                instruction::wide::system::SYSTEM => Some(encoding::wide::decode_syscallx(word)),
+                _ => None,
+            }
+        })
+        .collect()
+}
+#[test]
+fn json_string_and_bool_getters_emit_their_extended_syscalls() {
+    let source = r#"
+seiyaku JsonFields {
+    view fn flags() -> bool {
+        return read_flag(json { label: "rose", flag: true });
+    }
+    fn read_flag(Json value) -> bool {
+        let label = value.get_string("label");
+        return label.is_some() && value.get_bool("flag").unwrap_or(false);
+    }
+}
+"#;
+    let bytes = Compiler::new()
+        .compile_source(source)
+        .expect("compile string and bool getters");
+    let emitted = emitted_syscalls(&bytes);
+    for builtin in [
+        kotodama_surface::builtins::Builtin::GetString,
+        kotodama_surface::builtins::Builtin::GetBool,
+    ] {
+        for syscall in builtin.operation_syscalls() {
+            assert!(
+                emitted.contains(syscall),
+                "{builtin:?} must emit {syscall:#x}; emitted {emitted:x?}"
+            );
+        }
+    }
+}
+#[test]
+fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
+    use kotodama_surface::builtins::{Builtin, BuiltinLowering, BuiltinMode, BuiltinSurface};
+    const PARAMS: &str = "AccountId account, AccountId source, AccountId destination, \
+        AssetDefinitionId asset_definition, quantity amount, NftId nft, AccountId owner, \
+        Name key, Json value, DomainId domain, Name role, Json permissions, Name permission, \
+        Json peer, Json trigger_spec, Name trigger_id, bool enabled, Json signatory, int quorum, \
+        string alias, int request_generation, Name offer, bytes evidence, string name, \
+        DataSpaceId dataspace, Option<quantity> cap, Option<quantity> limit, bytes ballot";
+    // One representative call per production ledger mutation. Label punning keeps
+    // most calls short; every other argument is named explicitly.
+    let cases: &[(Builtin, &str)] = &[
+        (
+            Builtin::SetAccountMetadata,
+            "ledger::account::set_metadata(account, key, value)",
+        ),
+        (
+            Builtin::RegisterAccount,
+            "ledger::account::register(account)",
+        ),
+        (
+            Builtin::UnregisterAccount,
+            "ledger::account::unregister(account)",
+        ),
+        (
+            Builtin::AddSignatory,
+            "ledger::account::add_signatory(account, signatory)",
+        ),
+        (
+            Builtin::RemoveSignatory,
+            "ledger::account::remove_signatory(account, signatory)",
+        ),
+        (
+            Builtin::SetAccountQuorum,
+            "ledger::account::set_quorum(account, quorum)",
+        ),
+        (
+            Builtin::AccountRecoveryPropose,
+            "ledger::account::recovery::propose(alias, replacement: account, request_generation: request_generation)",
+        ),
+        (
+            Builtin::AccountRecoveryApprove,
+            "ledger::account::recovery::approve(alias, request_generation)",
+        ),
+        (
+            Builtin::AccountRecoveryCancel,
+            "ledger::account::recovery::cancel(alias, request_generation)",
+        ),
+        (
+            Builtin::AccountRecoveryFinalize,
+            "ledger::account::recovery::finalize(alias, request_generation)",
+        ),
+        (
+            Builtin::RegisterAsset,
+            "ledger::asset::register(asset_definition, name, spec: NumericSpec::fractional(2), mintable: Mintable::Limited(3))",
+        ),
+        (
+            Builtin::UnregisterAsset,
+            "ledger::asset::unregister(asset_definition)",
+        ),
+        (
+            Builtin::MintAsset,
+            "ledger::asset::mint(account, asset_definition, amount)",
+        ),
+        (
+            Builtin::BurnAsset,
+            "ledger::asset::burn(account, asset_definition, amount)",
+        ),
+        (
+            Builtin::TransferAsset,
+            "ledger::asset::transfer(source, destination, asset_definition, amount)",
+        ),
+        (
+            Builtin::SetAssetTransferDailyLimit,
+            "ledger::asset::set_transfer_daily_limit(account, asset_definition, cap)",
+        ),
+        (
+            Builtin::SetAssetHoldingLimit,
+            "ledger::asset::set_holding_limit(account, asset_definition, limit)",
+        ),
+        (Builtin::NftMintAsset, "ledger::nft::mint(nft, owner)"),
+        (
+            Builtin::NftSetMetadata,
+            "ledger::nft::set_metadata(nft, key, value)",
+        ),
+        (Builtin::NftBurnAsset, "ledger::nft::burn(nft)"),
+        (
+            Builtin::NftTransferAsset,
+            "ledger::nft::transfer(source, nft, destination)",
+        ),
+        (Builtin::RegisterDomain, "ledger::domain::register(domain)"),
+        (
+            Builtin::UnregisterDomain,
+            "ledger::domain::unregister(domain)",
+        ),
+        (
+            Builtin::TransferDomain,
+            "ledger::domain::transfer(source, domain, destination)",
+        ),
+        (Builtin::RegisterPeer, "ledger::peer::register(peer)"),
+        (Builtin::UnregisterPeer, "ledger::peer::unregister(peer)"),
+        (
+            Builtin::RegisterTrigger,
+            "ledger::trigger::register(trigger_spec: trigger_spec)",
+        ),
+        (
+            Builtin::UnregisterTrigger,
+            "ledger::trigger::unregister(trigger_id)",
+        ),
+        (
+            Builtin::SetTriggerEnabled,
+            "ledger::trigger::set_enabled(trigger: trigger_id, enabled: enabled)",
+        ),
+        (
+            Builtin::RegisterRole,
+            "ledger::role::register(role, permissions)",
+        ),
+        (Builtin::UnregisterRole, "ledger::role::unregister(role)"),
+        (Builtin::GrantRole, "ledger::role::grant(account, role)"),
+        (Builtin::RevokeRole, "ledger::role::revoke(account, role)"),
+        (
+            Builtin::GrantPermission,
+            "ledger::permission::grant(account, permission)",
+        ),
+        (
+            Builtin::RevokePermission,
+            "ledger::permission::revoke(account, permission)",
+        ),
+        (
+            Builtin::GrantContractEntrypoint,
+            "ledger::seiyaku::grant_kotoage(account, kotoage: \"probe\")",
+        ),
+        (
+            Builtin::RevokeContractEntrypoint,
+            "ledger::seiyaku::revoke_kotoage(account, kotoage: \"probe\")",
+        ),
+        (
+            Builtin::EscrowOpenOffer,
+            "ledger::escrow::open_offer(offer, asset_definition, amount)",
+        ),
+        (Builtin::EscrowAccept, "ledger::escrow::accept(offer)"),
+        (
+            Builtin::EscrowMarkPaymentSent,
+            "ledger::escrow::mark_payment_sent(offer)",
+        ),
+        (Builtin::EscrowRelease, "ledger::escrow::release(offer)"),
+        (Builtin::EscrowCancel, "ledger::escrow::cancel(offer)"),
+        (
+            Builtin::EscrowOpenDispute,
+            "ledger::escrow::open_dispute(offer, evidence)",
+        ),
+        (
+            Builtin::ScExecuteSubmitBallot,
+            "ledger::governance::submit_ballot(ballot)",
+        ),
+        (
+            Builtin::EscrowResolveDispute,
+            "ledger::escrow::resolve_dispute(offer, buyer_amount: amount, seller_amount: amount)",
+        ),
+        // Non-ledger builtins whose registry set must also match codegen.
+        (
+            Builtin::VerifySignature,
+            "let _verified = crypto::verify_signature(message: evidence, signature: evidence, public_key: evidence, scheme: SignatureScheme::MlDsa)",
+        ),
+        (
+            Builtin::TransactionTimeMs,
+            "let _now = context::transaction_time_ms()",
+        ),
+        (
+            Builtin::Sha256Hash,
+            "let _digest = crypto::sha256(evidence)",
+        ),
+    ];
+    let compile = |body: &str| {
+        let source = format!(
+            "seiyaku Probe {{ kotoage fn probe({PARAMS}) authorize(\"Probe\") {{ {body} }} }}"
+        );
+        let bytes = Compiler::new()
+            .compile_source(&source)
+            .unwrap_or_else(|error| panic!("`{body}` must compile: {error}"));
+        emitted_syscalls(&bytes)
+    };
+    let baseline = compile("").into_iter().collect::<HashSet<_>>();
+    let mut covered = HashSet::new();
+    for (builtin, call) in cases {
+        covered.insert(*builtin);
+        let spec = builtin.spec();
+        let emitted = compile(&format!("{call};"))
+            .into_iter()
+            // Pointer publication, checked `int` narrowing and its trap are
+            // compiler-owned plumbing, not ledger operations.
+            .filter(|syscall| {
+                !baseline.contains(syscall)
+                    && *syscall != syscalls::SYSCALL_INPUT_PUBLISH_TLV
+                    && *syscall != syscalls::SYSCALL_ABORT
+                    && !syscalls::is_numeric_v1_syscall(*syscall)
+            })
+            .collect::<HashSet<_>>();
+        let declared = spec
+            .operation_syscalls
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        match spec.lowering {
+            BuiltinLowering::DirectSyscall => assert_eq!(
+                emitted, declared,
+                "{builtin:?} must emit exactly its registry operation syscall"
+            ),
+            BuiltinLowering::DerivedSyscalls => {
+                assert!(!emitted.is_empty(), "{builtin:?} emitted no operation");
+                assert!(
+                    emitted.is_subset(&declared),
+                    "{builtin:?} emitted {emitted:x?} outside its registry set {declared:x?}"
+                );
+            }
+            BuiltinLowering::Instructions => {
+                assert!(emitted.is_empty(), "{builtin:?} must not reach the host")
+            }
+        }
+    }
+    for (builtin, spec) in Builtin::registry() {
+        if spec.name.starts_with("ledger::")
+            && spec.surface == BuiltinSurface::Function
+            && spec.mode == BuiltinMode::Any
+            && spec.access == BuiltinAccess::LedgerWrite
+            && !matches!(
+                builtin,
+                Builtin::TransferBatch
+                    | Builtin::TransferV1BatchBegin
+                    | Builtin::TransferV1BatchEnd
+                    | Builtin::TransferV1BatchApply
+                    | Builtin::SetAssetTransferAvailability
+                    | Builtin::CreateNftsForAllUsers
+                    | Builtin::SubscriptionBill
+                    | Builtin::SubscriptionRecordUsage
+            )
+        {
+            assert!(
+                covered.contains(&builtin),
+                "add a codegen/registry syscall case for {builtin:?}"
+            );
+        }
+    }
+}
+/// Probe-call argument for one registry parameter descriptor, or `None` when
+/// the descriptor needs a bespoke call shape (generic, aggregate, ZK, AXT or
+/// state-handle arguments).
+fn registry_probe_argument(descriptor: &str) -> Option<&'static str> {
+    Some(match descriptor.strip_suffix('?').unwrap_or(descriptor) {
+        "AccountId" => "account",
+        "AssetDefinitionId" => "asset_definition",
+        "AssetId" => "asset",
+        "DataSpaceId" => "dataspace",
+        "DomainId" | "DomainId|Name" => "domain",
+        "Json" => "value",
+        "Name" | "Name|Json" => "key",
+        "Name|bytes" | "bytes" => "evidence",
+        "NftId" => "nft",
+        "Option<quantity>" => "cap",
+        "Option<string>" => "note",
+        "bool" => "enabled",
+        "int" | "int|bytes" | "int|decimal" => "quorum",
+        "quantity" => "amount",
+        "string" | "string|bytes" | "string|int" => "name",
+        "NumericSpec" => "NumericSpec::integer()",
+        "Mintable" => "Mintable::Once",
+        "SignatureScheme" => "SignatureScheme::Ed25519",
+        "ErrorEnum::Variant" => "ProbeError::Rejected",
+        "List<(AccountId,AccountId,AssetDefinitionId,quantity),N>" => {
+            "[(account, account, asset_definition, amount)]"
+        }
+        _ => return None,
+    })
+}
+#[test]
+fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
+    use kotodama_surface::builtins::{Builtin, BuiltinLowering, BuiltinMode, BuiltinSurface};
+    const PARAMS: &str = "AccountId account, AssetDefinitionId asset_definition, AssetId asset, \
+        DataSpaceId dataspace, DomainId domain, Json value, Name key, bytes evidence, NftId nft, \
+        Option<quantity> cap, Option<string> note, bool enabled, int quorum, quantity amount, \
+        string name";
+    let compile = |body: &str| {
+        let source = format!(
+            "seiyaku Probe {{ error enum ProbeError {{ Rejected = 1 }} \
+             kotoage fn probe({PARAMS}) authorize(\"Probe\") {{ {body} }} }}"
+        );
+        Compiler::new()
+            .compile_source(&source)
+            .map(|bytes| emitted_syscalls(&bytes))
+    };
+    let baseline = compile("")
+        .expect("empty probe compiles")
+        .into_iter()
+        .collect::<HashSet<_>>();
+    // Pointer publication, normalization and encoding, heap allocation,
+    // checked `int` narrowing and its trap are compiler-owned plumbing unless
+    // the builtin declares them as its operation.
+    let plumbing = |syscall: u32| {
+        syscall == syscalls::SYSCALL_INPUT_PUBLISH_TLV
+            || syscall == syscalls::SYSCALL_ALLOC
+            || syscall == syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
+            || syscall == syscalls::SYSCALL_POINTER_TO_NORITO
+            || syscall == syscalls::SYSCALL_ABORT
+            || syscalls::is_numeric_v1_syscall(syscall)
+    };
+    let mut checked = 0_usize;
+    let mut unprobed = Vec::new();
+    let mut failures = Vec::new();
+    for (builtin, spec) in Builtin::registry() {
+        if spec.surface != BuiltinSurface::Function
+            || spec.mode != BuiltinMode::Any
+            || matches!(builtin, Builtin::PointerConstructor(_))
+            || builtin.is_compile_time_nominal()
+        {
+            continue;
+        }
+        if builtin == Builtin::TriggerEvent {
+            // Readable only from a trigger body; `trigger_event` codegen is
+            // covered by the trigger lowering tests.
+            unprobed.push(spec.name);
+            continue;
+        }
+        // Arguments that must be compile-time literals at the call.
+        let literal = |label: &str| match (builtin, label) {
+            (Builtin::ContractInvokeQuantity2, "entrypoint")
+            | (Builtin::GrantContractEntrypoint | Builtin::RevokeContractEntrypoint, "kotoage") => {
+                Some("\"probe\"")
+            }
+            (Builtin::ContractInvokeQuantity2, "returns") => Some("\"quantity\""),
+            (Builtin::BuildSubmitBallotInline, "election_id" | "backend") => Some("\"probe\""),
+            (Builtin::BuildSubmitBallotInline, "ciphertext") => Some("b\"ciphertext\""),
+            (Builtin::BuildSubmitBallotInline, "nullifier") => {
+                Some("b\"0123456789abcdef0123456789abcdef\"")
+            }
+            (Builtin::BuildSubmitBallotInline, "proof") => Some("b\"proof\""),
+            (Builtin::BuildSubmitBallotInline, "verification_key") => Some("b\"vk\""),
+            _ => None,
+        };
+        let arguments = spec
+            .signature
+            .parameters
+            .iter()
+            .zip(spec.signature.parameter_names)
+            .map(|(descriptor, label)| {
+                literal(label)
+                    .or_else(|| registry_probe_argument(descriptor))
+                    .map(|argument| format!("{label}: {argument}"))
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(arguments) = arguments else {
+            unprobed.push(spec.name);
+            continue;
+        };
+        // Rule (a) of the label policy: a label equal to the declared
+        // parameter name is accepted by every builtin.
+        let call = format!("{}({})", spec.name, arguments.join(", "));
+        let statement = if spec.signature.return_type == "()" {
+            format!("{call};")
+        } else {
+            format!("let _probe = {call};")
+        };
+        let emitted = match compile(&statement) {
+            Ok(emitted) => emitted,
+            Err(error) => {
+                failures.push(format!(
+                    "{builtin:?}: `{statement}` failed to compile: {error}"
+                ));
+                continue;
+            }
+        };
+        let declared = spec
+            .operation_syscalls
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let emitted = emitted
+            .into_iter()
+            .filter(|syscall| {
+                !baseline.contains(syscall) && (declared.contains(syscall) || !plumbing(*syscall))
+            })
+            .collect::<HashSet<_>>();
+        let consistent = match spec.lowering {
+            BuiltinLowering::DirectSyscall => emitted == declared,
+            BuiltinLowering::DerivedSyscalls => !emitted.is_empty() && emitted.is_subset(&declared),
+            BuiltinLowering::Instructions => emitted.is_empty(),
+        };
+        if !consistent {
+            failures.push(format!(
+                "{builtin:?} ({:?}): `{statement}` emitted {emitted:x?}, registry declares {declared:x?}",
+                spec.lowering
+            ));
+        }
+        checked += 1;
+    }
+    // Receiver methods (StateMap helpers, JSON getters, `Name.path`) run in a
+    // private helper, where JSON payload getters are permitted.
+    const ARGS: &str = "account, asset_definition, asset, dataspace, domain, value, key, \
+        evidence, nft, cap, note, enabled, quorum, amount, name";
+    let compile_method = |body: &str| {
+        let source = format!(
+            "seiyaku Probe {{ state StateMap<int, int> Balances; fn run({PARAMS}) {{ {body} }} \
+             kotoage fn probe({PARAMS}) authorize(\"Probe\") {{ run({ARGS}); }} }}"
+        );
+        Compiler::new()
+            .compile_source(&source)
+            .map(|bytes| emitted_syscalls(&bytes))
+    };
+    let method_baseline = compile_method("")
+        .expect("empty method probe compiles")
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let mut methods = 0_usize;
+    for (builtin, spec) in Builtin::registry() {
+        if spec.surface != BuiltinSurface::MethodOnly || spec.mode != BuiltinMode::Any {
+            continue;
+        }
+        let parameters = spec
+            .signature
+            .parameters
+            .iter()
+            .zip(spec.signature.parameter_names);
+        let mut receiver = None;
+        let mut arguments = Vec::new();
+        for (index, (descriptor, label)) in parameters.enumerate() {
+            let argument = match *descriptor {
+                "StateMap<K,V>" => "Balances",
+                "K" | "V" => "quorum",
+                other => registry_probe_argument(other)
+                    .unwrap_or_else(|| panic!("{builtin:?}: no probe for `{other}`")),
+            };
+            if index == 0 {
+                receiver = Some(argument);
+            } else {
+                arguments.push(format!("{label}: {argument}"));
+            }
+        }
+        let receiver = receiver.unwrap_or_else(|| panic!("{builtin:?} has no receiver"));
+        let statement = format!(
+            "let _probe = {receiver}.{}({});",
+            spec.name,
+            arguments.join(", ")
+        );
+        let declared = spec
+            .operation_syscalls
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        match compile_method(&statement) {
+            Ok(emitted) => {
+                let emitted = emitted
+                    .into_iter()
+                    .filter(|syscall| {
+                        !method_baseline.contains(syscall)
+                            && (declared.contains(syscall) || !plumbing(*syscall))
+                    })
+                    .collect::<HashSet<_>>();
+                let consistent = match spec.lowering {
+                    BuiltinLowering::DirectSyscall => emitted == declared,
+                    BuiltinLowering::DerivedSyscalls => {
+                        !emitted.is_empty() && emitted.is_subset(&declared)
+                    }
+                    BuiltinLowering::Instructions => emitted.is_empty(),
+                };
+                if !consistent {
+                    failures.push(format!(
+                        "{builtin:?} ({:?}): `{statement}` emitted {emitted:x?}, registry declares {declared:x?}",
+                        spec.lowering
+                    ));
+                }
+            }
+            Err(error) => failures.push(format!(
+                "{builtin:?}: `{statement}` failed to compile: {error}"
+            )),
+        }
+        methods += 1;
+    }
+    assert!(methods >= 15, "only {methods} receiver methods were probed");
+    unprobed.sort_unstable();
+    assert!(
+        failures.is_empty(),
+        "{}\nunprobed: {unprobed:?}",
+        failures.join("\n")
+    );
+    // Builtins whose arguments need bespoke shapes (AXT descriptors) or a
+    // trigger body; each is covered by a dedicated codegen test. Adding a
+    // builtin with plain arguments extends the sweep automatically.
+    assert_eq!(
+        unprobed,
+        [
+            "axt::begin",
+            "axt::stage_anchored_spend",
+            "context::trigger_event"
+        ],
+        "registry builtins the sweep cannot synthesize a call for"
+    );
+    assert!(checked > 100, "only {checked} builtins were probed");
 }

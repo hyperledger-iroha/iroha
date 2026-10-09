@@ -80,7 +80,7 @@ fn renewed_receive_first_source_from_retained_metadata() {
         incoming: Some(2),
     };
     let operation::Plan::Receive(plan) =
-        operation::plan(route, scope, &recipe, &omega, None).unwrap()
+        operation::plan(route, scope, &recipe, &omega).unwrap()
     else {
         panic!("fixed Receive route");
     };

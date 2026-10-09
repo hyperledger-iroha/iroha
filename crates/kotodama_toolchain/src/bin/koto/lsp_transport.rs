@@ -54,6 +54,12 @@ fn is_analysis_request(message: &norito::json::Value) -> bool {
                 | "textDocument/signatureHelp"
                 | "textDocument/definition"
                 | "textDocument/references"
+                | "textDocument/documentHighlight"
+                | "textDocument/documentSymbol"
+                | "textDocument/foldingRange"
+                | "textDocument/semanticTokens/full"
+                | "textDocument/codeLens"
+                | "workspace/symbol"
                 | "textDocument/prepareRename"
                 | "textDocument/rename"
                 | "textDocument/codeAction"
@@ -442,6 +448,56 @@ mod tests {
     }
 
     #[test]
+    fn initialize_reports_server_version_and_editor_capabilities() {
+        let result = lsp_initialize_result();
+        assert_eq!(
+            result
+                .pointer("/serverInfo/name")
+                .and_then(norito::json::Value::as_str),
+            Some("koto")
+        );
+        assert_eq!(
+            result
+                .pointer("/serverInfo/version")
+                .and_then(norito::json::Value::as_str),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        for capability in [
+            "documentSymbolProvider",
+            "workspaceSymbolProvider",
+            "documentHighlightProvider",
+            "foldingRangeProvider",
+        ] {
+            assert_eq!(
+                result
+                    .pointer(&format!("/capabilities/{capability}"))
+                    .and_then(norito::json::Value::as_bool),
+                Some(true),
+                "{capability}"
+            );
+        }
+        assert!(result.pointer("/capabilities/codeLensProvider").is_some());
+        let types = result
+            .pointer("/capabilities/semanticTokensProvider/legend/tokenTypes")
+            .and_then(norito::json::Value::as_array)
+            .expect("semantic token legend");
+        assert!(
+            types
+                .iter()
+                .any(|kind| kind.as_str() == Some("brandedKeyword"))
+        );
+        for method in [
+            "textDocument/documentSymbol",
+            "textDocument/semanticTokens/full",
+            "workspace/symbol",
+        ] {
+            assert!(is_analysis_request(&json_object(vec![(
+                "method",
+                method.into()
+            )])));
+        }
+    }
+    #[test]
     fn wire_shutdown_drains_prior_replies_and_exit_stops_input() {
         let mut input = Vec::new();
         for (id, method) in [
@@ -742,6 +798,7 @@ mod tests {
             None,
             &HashMap::new(),
             &previous,
+            false,
         )
         .expect("clear diagnostics");
         assert!(current.is_empty());

@@ -355,6 +355,31 @@ pub(crate) fn current_axt_slot_for_state(state: &(impl StateReadOnly + ?Sized)) 
         .authenticated_query_ledger_time_ms()
         .map(|ledger_time_ms| ledger_time_ms / slot_length.get())
 }
+/// Resolve the balance scope of a contract `TRANSFER_ASSET_SCOPED` call.
+///
+/// Global definitions always move the global balance and ignore a supplied
+/// dataspace. A dataspace-restricted definition needs the caller's explicit
+/// `dataspace:` argument; without one (`r14 = 0`) the call traps exactly as a
+/// missing `DataSpaceId` pointer would, instead of falling back to an ambient
+/// or universal dataspace.
+///
+/// # Errors
+/// Returns `NoritoInvalid` for a restricted definition without a dataspace
+/// pointer.
+// TODO: report a dedicated `VMError` variant naming the missing dataspace scope
+// once `ivm_abi::error::VMError` and the proof-coverage producer inventory gain one.
+fn transfer_scope_for_policy(
+    policy: AssetBalancePolicy,
+    dataspace: Option<DataSpaceId>,
+) -> Result<AssetBalanceScope, ivm::VMError> {
+    match (policy, dataspace) {
+        (AssetBalancePolicy::Global, _) => Ok(AssetBalanceScope::Global),
+        (AssetBalancePolicy::DataspaceRestricted, Some(dataspace)) => {
+            Ok(AssetBalanceScope::Dataspace(dataspace))
+        }
+        (AssetBalancePolicy::DataspaceRestricted, None) => Err(ivm::VMError::NoritoInvalid),
+    }
+}
 /// Convert a registered definition policy and exact AXT intent dataspace into
 /// the public balance scope that the remote proof is claiming.
 #[cfg(test)]
@@ -8904,9 +8929,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.queued.extend(staged);
         Ok(gas)
     }
-    fn asset_definition_name_for_syscall(id: &AssetDefinitionId) -> String {
-        id.canonical_address()
-    }
     #[cfg(test)]
     fn queue_instructions<I>(&mut self, instrs: I) -> u64
     where
@@ -9655,6 +9677,8 @@ impl<QS> CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_JSON_GET_INT
                 | ivm::syscalls::SYSCALL_JSON_GET_DECIMAL
                 | ivm::syscalls::SYSCALL_JSON_GET_QUANTITY
+                | ivm::syscalls::SYSCALL_JSON_GET_STRING
+                | ivm::syscalls::SYSCALL_JSON_GET_BOOL
                 | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
                 | ivm::syscalls::SYSCALL_SCHEMA_DECODE
                 | ivm::syscalls::SYSCALL_POINTER_TO_NORITO
@@ -9905,6 +9929,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     (14, PointerType::DataSpaceId),
                 ] {
                     vm.ensure_public_register(register)?;
+                    // r14 = 0 means the call named no dataspace scope.
+                    if register == 14 && vm.register(register) == 0 {
+                        continue;
+                    }
                     quote_tlv_payload_len_at(vm, vm.register(register), pointer_type)?;
                 }
                 // Either balance policy queues one native asset transfer. It has
@@ -10099,19 +10127,31 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 // ----------------- Asset quantity ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_REGISTER_ASSET => {
-                    let ptr = vm.register(10);
-                    let id: AssetDefinitionId =
-                        Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
-                    let name = Self::asset_definition_name_for_syscall(&id);
-                    let isi = Register::asset_definition({
-                        let __asset_definition_id = id;
-                        AssetDefinition::numeric(
-                            __asset_definition_id.clone(),
-                            name,
-                            iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                    // r10 = &AssetDefinitionId, r11 = &Blob UTF-8 display name,
+                    // r12 = numeric-spec word, r13 = mintability word. The data-model
+                    // `ivm_registration::decode_registration` decoder is shared with
+                    // every host.
+                    let id: AssetDefinitionId = Self::decode_tlv_typed(
+                        vm,
+                        vm.register(10),
+                        PointerType::AssetDefinitionId,
+                    )?;
+                    let registration =
+                        iroha_data_model::asset::definition::ivm_registration::decode_registration(
+                            &Self::decode_tlv_blob(vm, vm.register(11))?,
+                            vm.register(12),
+                            vm.register(13),
                         )
-                    });
+                        .map_err(|_| ivm::VMError::DecodeError)?;
+                    let definition = AssetDefinition::new(
+                        id,
+                        registration.name,
+                        registration.spec,
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
+                    .with_mintable(registration.mintable);
+                    let isi = Register::asset_definition(definition);
                     let instr = InstructionBox::from(RegisterBox::from(isi));
                     Ok(self.queue_instruction(instr))
                 }
@@ -10172,19 +10212,24 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let asset_def: AssetDefinitionId =
                         Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
                     let amount = Self::decode_quantity(vm, amount_ptr)?;
-                    let dataspace: DataSpaceId =
-                        Self::decode_tlv_typed(vm, dataspace_ptr, PointerType::DataSpaceId)?;
+                    // r14 = 0 means the call named no `dataspace:`.
+                    let dataspace: Option<DataSpaceId> = match dataspace_ptr {
+                        0 => None,
+                        _ => Some(Self::decode_tlv_typed(
+                            vm,
+                            dataspace_ptr,
+                            PointerType::DataSpaceId,
+                        )?),
+                    };
                     let scope = {
                         let state_ref = self
                             .query_state
                             .get()
                             .ok_or(ivm::VMError::PermissionDenied)?;
-                        match state_ref.asset_balance_policy(&asset_def)? {
-                            AssetBalancePolicy::Global => AssetBalanceScope::Global,
-                            AssetBalancePolicy::DataspaceRestricted => {
-                                AssetBalanceScope::Dataspace(dataspace)
-                            }
-                        }
+                        transfer_scope_for_policy(
+                            state_ref.asset_balance_policy(&asset_def)?,
+                            dataspace,
+                        )?
                     };
                     let asset_id = AssetId::with_scope(asset_def, from, scope);
                     let isi = Transfer::asset_quantity(asset_id, amount, to);
@@ -10522,6 +10567,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         }
                         Trigger::new(id, action)
                     };
+                    // A contract-registered trigger is an opaque deferred executable: it may
+                    // not carry the signed-only outbound SCCP record (specs/sccp.md §4.4).
+                    // Applying the queue re-checks every effect, including multisig approvals.
+                    if crate::deferred_authority::trigger_executable_derives_sccp_outbound_record(
+                        trigger.action().executable(),
+                    ) {
+                        return Err(ivm::VMError::PermissionDenied);
+                    }
                     let instr = InstructionBox::from(Register::trigger(trigger));
                     Ok(self.queue_instruction(instr))
                 }
@@ -10709,7 +10762,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             debug_assert_eq!(queued_gas, gas);
                             Ok(gas)
                         }
-                        // TODO(ws45): drop 2=RecordSccpMessage from the ivm_abi 0xA0 args text (ABI hash change)
+                        // ABI v1 defines only `1=SubmitBallot`. Contracts record no SCCP
+                        // messages (specs/sccp.md §4.4): an encoded `RecordSccpMessage` fails
+                        // under every tag, like every other instruction type.
                         _ => Err(ivm::VMError::PermissionDenied),
                     }
                 }
@@ -13942,17 +13997,90 @@ seiyaku PrivilegedBinding {
             norito::decode_from_bytes(&payload).expect("decode canonical asset definition id");
         let ptr = store_tlv(&mut vm, PointerType::AssetDefinitionId, &payload);
         vm.set_register(10, ptr);
+        let name = store_tlv(&mut vm, PointerType::Blob, b"Rose");
+        vm.set_register(11, name);
+        let spec = iroha_primitives::numeric::NumericSpec::fractional(2);
+        let mintable = iroha_data_model::asset::Mintable::limited_from_u32(3).unwrap();
+        vm.set_register(
+            12,
+            iroha_data_model::asset::definition::ivm_registration::numeric_spec_word(spec),
+        );
+        vm.set_register(
+            13,
+            iroha_data_model::asset::definition::ivm_registration::mintable_word(mintable),
+        );
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm);
-        let expected_name = CoreHost::asset_definition_name_for_syscall(&expected_asset_def);
-        let expected = InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
-            expected_asset_def.clone(),
-            expected_name,
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )));
+        let expected = InstructionBox::from(Register::asset_definition(
+            AssetDefinition::new(
+                expected_asset_def.clone(),
+                "Rose",
+                spec,
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_mintable(mintable),
+        ));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
+    }
+    #[test]
+    fn register_asset_syscall_rejects_malformed_registration_words() {
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+        for (name, spec_word, mintable_word) in [
+            // Scale 29 exceeds the numeric domain.
+            (&b"Rose"[..], 30, 0),
+            // `Infinitely` tag carrying stray payload bits.
+            (&b"Rose"[..], 0, 0b100),
+            // `Limited` tag with a zero token budget.
+            (&b"Rose"[..], 0, 0b011),
+            (&b""[..], 0, 0),
+            (&b"ro#se"[..], 0, 0),
+            // Display names must be UTF-8.
+            (&b"\xff"[..], 0, 0),
+        ] {
+            let mut vm = ivm::IVM::new(1_000);
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let ptr = store_tlv(
+                &mut vm,
+                PointerType::AssetDefinitionId,
+                &norito_blob(&asset_def),
+            );
+            vm.set_register(10, ptr);
+            let name = store_tlv(&mut vm, PointerType::Blob, name);
+            vm.set_register(11, name);
+            vm.set_register(12, spec_word);
+            vm.set_register(13, mintable_word);
+            assert_eq!(
+                host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm),
+                Err(ivm::VMError::DecodeError)
+            );
+            assert!(host.queued.is_empty());
+        }
+    }
+    #[test]
+    fn transfer_scope_requires_dataspace_only_for_restricted_definitions() {
+        let dataspace = DataSpaceId::new(7);
+        assert_eq!(
+            transfer_scope_for_policy(AssetBalancePolicy::Global, None),
+            Ok(AssetBalanceScope::Global)
+        );
+        assert_eq!(
+            transfer_scope_for_policy(AssetBalancePolicy::Global, Some(dataspace)),
+            Ok(AssetBalanceScope::Global)
+        );
+        assert_eq!(
+            transfer_scope_for_policy(AssetBalancePolicy::DataspaceRestricted, Some(dataspace)),
+            Ok(AssetBalanceScope::Dataspace(dataspace))
+        );
+        assert_eq!(
+            transfer_scope_for_policy(AssetBalancePolicy::DataspaceRestricted, None),
+            Err(ivm::VMError::NoritoInvalid)
+        );
     }
     #[test]
     fn unregister_asset_syscall_queues_instruction() {
@@ -14638,6 +14766,80 @@ seiyaku PrivilegedBinding {
             host.queued.is_empty(),
             "an invalid trigger action must not leave queued effects"
         );
+    }
+    #[test]
+    fn create_trigger_syscall_rejects_sccp_outbound_record_before_queueing() {
+        // specs/sccp.md §4.4: a contract-registered trigger is an opaque deferred
+        // executable, so it can carry `RecordSccpMessage` neither directly nor nested in a
+        // batch, a registered trigger or a multisig proposal.
+        let authority = ALICE_ID.clone();
+        let record = || {
+            InstructionBox::from(
+                crate::smartcontracts::isi::sccp::test_support::SampleInstructions::record(),
+            )
+        };
+        let action = |executable: Executable| {
+            Action::new(
+                executable,
+                Repeats::Exactly(1),
+                authority.clone(),
+                DataEventFilter::Any,
+            )
+            .expect("trigger action fixture satisfies validation invariants")
+        };
+        let inner = Trigger::new(
+            "inner_record".parse().unwrap(),
+            action(Executable::Instructions(vec![record()].into())),
+        );
+        let executables = [
+            Executable::Instructions(vec![record()].into()),
+            Executable::Batch(
+                vec![
+                    iroha_data_model::transaction::ExecutableBatchItem::Instruction(
+                        InstructionBox::from(Log::new(Level::INFO, "first".to_owned())),
+                    ),
+                    iroha_data_model::transaction::ExecutableBatchItem::Instruction(record()),
+                ]
+                .into(),
+            ),
+            Executable::Instructions(vec![InstructionBox::from(Register::trigger(inner))].into()),
+            Executable::Instructions(
+                vec![InstructionBox::from(
+                    iroha_executor_data_model::isi::multisig::MultisigPropose::new(
+                        authority.clone(),
+                        vec![record()],
+                        None,
+                    ),
+                )]
+                .into(),
+            ),
+        ];
+        for (index, executable) in executables.into_iter().enumerate() {
+            let trigger = Trigger::new(
+                format!("record_trigger_{index}").parse().unwrap(),
+                action(executable),
+            );
+            let json = Json::new(trigger);
+            for contract_frame in [false, true] {
+                let mut host = if contract_frame {
+                    local_contract_host(authority.clone())
+                } else {
+                    CoreHost::new(authority.clone())
+                };
+                let mut vm = ivm::IVM::new(1_000);
+                let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
+                vm.set_register(10, ptr);
+                assert_eq!(
+                    host.syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER, &mut vm),
+                    Err(ivm::VMError::PermissionDenied),
+                    "executable {index} (contract frame: {contract_frame})"
+                );
+                assert!(
+                    host.queued.is_empty(),
+                    "a refused trigger registration must not leave queued effects"
+                );
+            }
+        }
     }
     #[test]
     fn remove_trigger_syscall_queues_instruction() {
@@ -17188,10 +17390,11 @@ seiyaku OuterCaller {
             "mismatched opaque instruction".to_owned(),
         ));
         let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        // Tag 2 is not part of ABI v1 (the retired contract-originated SCCP send).
         for operation_tag in [
             0,
             ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
-            ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
+            2,
             u64::MAX,
         ] {
             let mut host = local_contract_host(authority.clone());
@@ -17207,6 +17410,53 @@ seiyaku OuterCaller {
                 host.queued.is_empty(),
                 "rejected tag must not enqueue an ISI"
             );
+        }
+    }
+    #[test]
+    fn execute_instruction_syscall_rejects_record_sccp_message_under_every_tag() {
+        // specs/sccp.md §4.4: contracts record no SCCP messages. In a contract frame the
+        // canonical encoded instruction decodes (a decode failure would be `NoritoInvalid`)
+        // and then fails under the only v1 tag, under tag 2 and under every other tag. A
+        // generic frame may not call `0xA0` at all. Nothing is queued in either frame.
+        let authority = (*ALICE_ID).clone();
+        let instruction = InstructionBox::from(
+            crate::smartcontracts::isi::sccp::test_support::SampleInstructions::record(),
+        );
+        let payload = norito::to_bytes(&instruction).expect("encode RecordSccpMessage");
+        for contract_frame in [false, true] {
+            for operation_tag in [
+                0,
+                ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
+                2,
+                3,
+                u64::MAX,
+            ] {
+                let mut host = if contract_frame {
+                    local_contract_host(authority.clone())
+                } else {
+                    CoreHost::new(authority.clone())
+                };
+                let mut vm = ivm::IVM::new(1_000_000);
+                let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+                vm.set_register(10, ptr);
+                vm.set_register(11, operation_tag);
+                let expected = if contract_frame {
+                    ivm::VMError::PermissionDenied
+                } else {
+                    ivm::VMError::GenericSyscallNotAllowed {
+                        syscall: ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+                    }
+                };
+                assert_eq!(
+                    host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
+                    Err(expected),
+                    "tag {operation_tag} (contract frame: {contract_frame}) must not execute RecordSccpMessage"
+                );
+                assert!(
+                    host.queued.is_empty(),
+                    "a refused SCCP record must not enqueue an ISI"
+                );
+            }
         }
     }
     #[test]
@@ -23704,15 +23954,10 @@ seiyaku DurableOwner {
             let key_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&key));
             vm.set_register(10, token_json_ptr);
             vm.set_register(11, key_ptr);
-            host.syscall(syscall, &mut vm)
-                .expect("numeric token is Option::none");
+            // A present JSON number token is malformed input, never an absent field.
             assert_eq!(
-                ivm::sum::read_words(
-                    &vm,
-                    vm.register(10),
-                    ivm::sum::SumLayoutV1::option(1).expect("exact-number option layout"),
-                ),
-                Ok((false, vec![])),
+                host.syscall(syscall, &mut vm),
+                Err(ivm::VMError::DecodeError),
                 "{key} must reject a JSON number token",
             );
         }

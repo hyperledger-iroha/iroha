@@ -74,6 +74,8 @@ pub enum ExecOp {
         block: Arc<AvailableBody>,
         /// Its hash.
         block_hash: Hash32,
+        /// The core already holds a certificate for this block; application clock guards exempt it.
+        certified: bool,
     },
     /// Drop the post-states at `height` other than `keep`.
     Discard {
@@ -174,6 +176,7 @@ struct Job {
     req: u64,
     block_hash: Hash32,
     block: Arc<AvailableBody>,
+    certified: bool,
     cancelled: bool,
 }
 
@@ -559,9 +562,9 @@ impl ExecSched {
         });
     }
 
-    /// `Execute{block, req}`: queued (most recent first); answered `Cancelled` at once if its
+    /// `Execute{block, req, certified}`: queued (most recent first); answered `Cancelled` at once if its
     /// height is already applied.
-    pub fn execute(&mut self, req: u64, block_hash: Hash32, block: AvailableBody) {
+    pub fn execute(&mut self, req: u64, block_hash: Hash32, block: AvailableBody, certified: bool) {
         if self.halted.is_some() {
             self.events.push(Event::Executed {
                 req,
@@ -574,6 +577,7 @@ impl ExecSched {
             req,
             block_hash,
             block: Arc::new(block),
+            certified,
             cancelled: false,
         };
         if job.height() <= self.applied {
@@ -1017,9 +1021,20 @@ impl ExecSched {
         let op = ExecOp::Execute {
             block: Arc::clone(&job.block),
             block_hash: job.block_hash,
+            certified: job.certified,
         };
         self.running = Some(Running::Execute(job));
         Some(op)
+    }
+
+    /// Test observation of the original completed EMPTY request. It grants no protocol event.
+    #[cfg(test)]
+    pub(super) fn waiting_empty_request_for_test(&self) -> Option<u64> {
+        if self.running.is_none() && self.build.is_none() && !self.arrived_during_build {
+            self.pending_ready
+        } else {
+            None
+        }
     }
 
     /// Bind the production loop's original charged wake control before dispatch.

@@ -163,7 +163,7 @@ fn assert_opaque_rejection(error: ValidationFail) {
 
 // Real generic VM bytecode uses a canonical literal directory and hashed Json TLV.
 // No pre-populated host queue or VM-register injection supplies the trigger.
-fn create_trigger_program(trigger: &Trigger) -> Vec<u8> {
+pub(super) fn create_trigger_program(trigger: &Trigger) -> Vec<u8> {
     use ivm::{encoding::wide, instruction::wide as opcode, pointer_abi::PointerType};
     let payload = norito::to_bytes(&Json::new(trigger.clone())).unwrap();
     let mut tlv = (PointerType::Json as u16).to_be_bytes().to_vec();

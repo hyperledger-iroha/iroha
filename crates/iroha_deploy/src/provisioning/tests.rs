@@ -1046,3 +1046,41 @@ fn cancellation_owner_cannot_change_and_native_adapters_refuse_new_journals() {
         ))
     ));
 }
+
+#[test]
+fn administrative_amx_provisioning_requires_original_attachment_without_signing() {
+    let fixture = Fixture::new();
+    let mut provisioning = fixture.open().unwrap();
+    assert!(provisioning.attachment.is_none());
+    let administrator = fixture.child.clone();
+    let options = BoundedTransactionOptions {
+        fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        max_total_fees: std::collections::BTreeMap::from([(
+            iroha_wallet::operations::XOR_ASSET_DEFINITION
+                .parse()
+                .unwrap(),
+            iroha_primitives::numeric::Quantity::from(1_u32),
+        )]),
+        deadline: Instant::now() + Duration::from_secs(1),
+    };
+    assert!(matches!(
+        provisioning.register_amx_once(
+            &fixture.bootstrap,
+            &administrator,
+            unix_ms().unwrap() + 60_000,
+            &options
+        ),
+        Err(ProvisioningError::Invalid(
+            "namespace provisioning is incomplete; administrative AMX registration is separate"
+        ))
+    ));
+    assert!(provisioning.attachment.is_none());
+    assert!(
+        !provisioning
+            .directory
+            .path()
+            .join("attachment")
+            .join("amx-registration")
+            .exists()
+    );
+}

@@ -3,7 +3,16 @@
 //! A result obligation follows a local binding until the value is read, passed,
 //! matched, propagated, returned, or explicitly discarded. Branch joins retain
 //! obligations from every reachable path; a read on only one path is insufficient.
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
+
+use crate::{
+    semantic_diagnostics::{SemanticDiagnostic, SemanticFix},
+    source::SourceRange,
+};
 
 use crate::semantic::{
     ExprKind, LIST_CONTAINS_INTRINSIC, LIST_ENUMERATE_INTRINSIC, LIST_GET_INTRINSIC,
@@ -237,6 +246,22 @@ struct Flow {
     durable: BTreeSet<String>,
     returned: bool,
     exits: Vec<LoopExit>,
+    /// Diagnostic-only source sites shared by every fork of one check.
+    sites: Rc<RefCell<MustUseSites>>,
+}
+/// Source locations observed while checking one function body.
+#[derive(Default)]
+struct MustUseSites {
+    /// Innermost statement currently being checked.
+    current: Option<SourceRange>,
+    /// Innermost statement that observed the first failure.
+    failure: Option<SourceRange>,
+    /// Whether that statement discarded the value of an expression statement.
+    expression_statement: bool,
+    /// Statement that declared each tracked Result binding.
+    bindings: BTreeMap<String, SourceRange>,
+    /// Binding named by the first failure, when it names one.
+    failed_binding: Option<String>,
 }
 struct LoopExit {
     pending: BTreeSet<Place>,
@@ -244,7 +269,7 @@ struct LoopExit {
     list_epoch: u64,
     continuing: bool,
 }
-fn failure(name: &str, reason: &str) -> SemanticError {
+fn failure_message(name: &str, reason: &str) -> SemanticError {
     SemanticError {
         code: "E_RESULT_MUST_USE",
         message: format!(
@@ -321,7 +346,16 @@ impl Flow {
             durable: self.durable.clone(),
             returned: self.returned,
             exits: Vec::new(),
+            sites: Rc::clone(&self.sites),
         }
+    }
+    /// Report that the obligation of binding `name` was not met.
+    fn failure(&self, name: &str, reason: &str) -> SemanticError {
+        let mut sites = self.sites.borrow_mut();
+        if sites.failed_binding.is_none() && sites.failure.is_none() {
+            sites.failed_binding = Some(name.to_owned());
+        }
+        failure_message(name, reason)
     }
     fn bind(&mut self, name: &str, shape: Shape) -> Result<(), SemanticError> {
         let (_, path, capture) = aggregate_binding_origin(name);
@@ -332,7 +366,13 @@ impl Flow {
         // correspond to explicit `_` or `..`; selected fields get source Lets.
         if !capture {
             if let Some(old) = self.pending.iter().find(|old| old.name == name) {
-                return Err(failure(&old.name, "overwritten before being consumed"));
+                return Err(self.failure(&old.name, "overwritten before being consumed"));
+            }
+            if !shape.results.is_empty() {
+                let mut sites = self.sites.borrow_mut();
+                if let Some(current) = sites.current {
+                    sites.bindings.entry(name.to_owned()).or_insert(current);
+                }
             }
             self.names.insert(name.to_owned());
             self.pending
@@ -648,7 +688,7 @@ impl Flow {
                         .iter()
                         .find(|old| old.path.iter().any(|part| matches!(part, Part::Slots(_))))
                 {
-                    return Err(failure(
+                    return Err(self.failure(
                         &old.name,
                         "possibly overwritten through a shared List handle before being consumed",
                     ));
@@ -661,7 +701,7 @@ impl Flow {
                         .iter()
                         .find(|old| old.name == selected.name && under(&old.path, &selected.path))
                     {
-                        return Err(failure(&old.name, "overwritten before being consumed"));
+                        return Err(self.failure(&old.name, "overwritten before being consumed"));
                     }
                 }
             }
@@ -695,7 +735,7 @@ impl Flow {
     }
     fn check_exit(&self) -> Result<(), SemanticError> {
         if let Some(name) = self.pending.first() {
-            return Err(failure(&name.name, "unread when this path exits"));
+            return Err(self.failure(&name.name, "unread when this path exits"));
         }
         Ok(())
     }
@@ -740,26 +780,40 @@ impl Flow {
     fn block(&mut self, block: &TypedBlock, tail_used: bool) -> Result<Shape, SemanticError> {
         let outer = self.names.clone();
         let mut tail_shape = Shape::default();
-        for statement in &block.statements {
+        for (index, statement) in block.statements.iter().enumerate() {
             if self.returned {
                 break;
             }
-            self.statement(statement)?;
+            let source = block.statement_source(index);
+            let enclosing = std::mem::replace(&mut self.sites.borrow_mut().current, source);
+            let result = self.statement(statement);
+            let mut sites = self.sites.borrow_mut();
+            sites.current = enclosing;
+            if result.is_err() && sites.failure.is_none() {
+                sites.failure = source;
+                sites.expression_statement = matches!(statement, TypedStatement::Expr(_));
+            }
+            drop(sites);
+            result?;
         }
         if !self.returned {
             if let Some(tail) = &block.tail {
                 tail_shape = self.expression(tail)?;
                 if !tail_used && !tail_shape.results.is_empty() {
+                    let mut sites = self.sites.borrow_mut();
+                    if sites.failure.is_none() {
+                        sites.failure = block.tail_source();
+                    }
                     return Err(discarded());
                 }
             }
             if let Some(name) = self.pending.iter().find(|name| !outer.contains(&name.name)) {
-                return Err(failure(&name.name, "unread at the end of its scope"));
+                return Err(self.failure(&name.name, "unread at the end of its scope"));
             }
         }
         for exit in &self.exits {
             if let Some(name) = exit.pending.iter().find(|name| !outer.contains(&name.name)) {
-                return Err(failure(&name.name, "unread before leaving its scope"));
+                return Err(self.failure(&name.name, "unread before leaving its scope"));
             }
         }
         self.names = outer;
@@ -781,6 +835,7 @@ impl Flow {
                 durable: self.durable.clone(),
                 returned: false,
                 exits: Vec::new(),
+                sites: Rc::clone(&self.sites),
             };
             if exit.continuing {
                 let mut repeated = path.fork();
@@ -809,7 +864,7 @@ impl Flow {
             if !a.returned
                 && let Some(name) = a.pending.iter().find(|name| !outer.contains(&name.name))
             {
-                return Err(failure(&name.name, "unread in this pattern arm"));
+                return Err(self.failure(&name.name, "unread in this pattern arm"));
             }
             a.names = outer;
         } else {
@@ -992,6 +1047,7 @@ impl Flow {
                         durable: self.durable.clone(),
                         returned: false,
                         exits: Vec::new(),
+                        sites: Rc::clone(&self.sites),
                     };
                     if exit.continuing {
                         let mut repeat = path.fork();
@@ -1134,7 +1190,7 @@ impl Flow {
                             .iter()
                             .find(|name| !self.names.contains(&name.name))
                         {
-                            return Err(failure(&name.name, "unread in this match arm"));
+                            return Err(self.failure(&name.name, "unread in this match arm"));
                         }
                     }
                     paths.push(path);
@@ -1222,7 +1278,7 @@ impl Flow {
                     item.expression(condition)?;
                     if let Some(pending) = item.pending.iter().find(|pending| pending.name == *name)
                     {
-                        return Err(failure(
+                        return Err(self.failure(
                             &pending.name,
                             "unread when the comprehension filter excludes it",
                         ));
@@ -1230,7 +1286,7 @@ impl Flow {
                 }
                 item.expression(expression)?;
                 if let Some(pending) = item.pending.iter().find(|pending| pending.name == *name) {
-                    return Err(failure(&pending.name, "unread by the comprehension"));
+                    return Err(self.failure(&pending.name, "unread by the comprehension"));
                 }
                 if item.list_epoch == entry_epoch {
                     item.consume(&selected);
@@ -1288,22 +1344,58 @@ impl Flow {
         Ok(Shape::typed(&value.ty))
     }
 }
-pub(crate) fn check(
+/// Check result obligations and locate the first failure in source.
+///
+/// A failure that names a binding points at the statement that declared the
+/// binding. A discarded value points at the innermost statement that dropped
+/// it; a discarded expression statement also receives a `let _ = ...;` fix.
+pub(crate) fn check_with_diagnostic(
     parameters: &[TypedParam],
     body: &TypedBlock,
     durable: BTreeSet<String>,
-) -> Result<(), SemanticError> {
+) -> Result<(), Box<(SemanticError, Option<SemanticDiagnostic>)>> {
     // Publishing a Result to durable state consumes the local value. State
     // names cannot be shadowed, so these resolver-owned names are unambiguous.
     let mut flow = Flow {
         durable,
         ..Flow::default()
     };
-    for parameter in parameters {
-        flow.bind(&parameter.name, Shape::typed(&parameter.ty))?;
-    }
-    flow.block(body, true)?;
-    flow.check_exit()
+    let result = (|| {
+        for parameter in parameters {
+            flow.bind(&parameter.name, Shape::typed(&parameter.ty))?;
+        }
+        flow.block(body, true)?;
+        flow.check_exit()
+    })();
+    result.map_err(|error| {
+        let sites = flow.sites.borrow();
+        let diagnostic = if let Some(name) = &sites.failed_binding {
+            sites.bindings.get(name).map(|binding| {
+                SemanticDiagnostic::at(*binding, None)
+                    .with_label(
+                        sites.failure.filter(|failure| failure != binding),
+                        format!("`{name}` is still unhandled here"),
+                    )
+                    .with_help(format!(
+                        "Read `{name}` with `match`, `if let`, or `?`, pass or return it, or discard it explicitly with `let _ = {name};`."
+                    ))
+            })
+        } else {
+            sites.failure.map(|failure| {
+                SemanticDiagnostic::at(
+                    failure,
+                    sites
+                        .expression_statement
+                        .then_some(SemanticFix::DiscardStatement),
+                )
+                .with_help(
+                    "This expression produces a Result whose failure would be silently lost. \
+                     Handle it with `match`, `if let`, or `?`, or discard it explicitly with `let _ = ...;`.",
+                )
+            })
+        };
+        Box::new((error, diagnostic))
+    })
 }
 
 #[cfg(test)]
@@ -1501,10 +1593,7 @@ mod tests {
         }
     }
     fn statements(statements: Vec<TypedStatement>) -> TypedBlock {
-        TypedBlock {
-            statements,
-            tail: None,
-        }
+        TypedBlock::new(statements, None)
     }
     #[test]
     fn sequential_forks_retain_each_loop_exit_once() {

@@ -272,6 +272,11 @@ capture_world_table_once!(
     "world.axt_asset_incarnations"
 );
 capture_world_table_once!(
+    capture_asset_definition_direct_homes_once,
+    asset_definition_direct_homes,
+    "world.asset_definition_direct_homes"
+);
+capture_world_table_once!(
     capture_axt_replay_ledger_once,
     axt_replay_ledger,
     "world.axt_replay_ledger"
@@ -743,6 +748,11 @@ capture_world_table_once!(
     sccp_light_client_stride_index,
     "world.sccp_light_client_stride_index"
 );
+capture_world_table_once!(
+    capture_sccp_light_client_profiles_once,
+    sccp_light_client_profiles,
+    "world.sccp_light_client_profiles"
+);
 
 const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     TableMaterializer::Single {
@@ -819,6 +829,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_space_directory_manifests_once::MATERIALIZER,
     capture_axt_handle_counters_once::MATERIALIZER,
     capture_axt_asset_incarnations_once::MATERIALIZER,
+    capture_asset_definition_direct_homes_once::MATERIALIZER,
     capture_axt_replay_ledger_once::MATERIALIZER,
     capture_axt_spend_nonce_ledger_once::MATERIALIZER,
     capture_axt_source_transfer_replay_ledger_once::MATERIALIZER,
@@ -1011,6 +1022,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_sccp_light_client_sets_once::MATERIALIZER,
     capture_sccp_light_client_checkpoints_once::MATERIALIZER,
     capture_sccp_light_client_stride_index_once::MATERIALIZER,
+    capture_sccp_light_client_profiles_once::MATERIALIZER,
     TableMaterializer::TransactionMembership,
 ];
 
@@ -1250,6 +1262,7 @@ mod tests {
             "world.space_directory_manifests",
             "world.axt_handle_counters",
             "world.axt_asset_incarnations",
+            "world.asset_definition_direct_homes",
             "world.axt_replay_ledger",
             "world.axt_spend_nonce_ledger",
             "world.axt_source_transfer_replay_ledger",
@@ -1412,6 +1425,7 @@ mod tests {
             "world.sccp_light_client_sets",
             "world.sccp_light_client_checkpoints",
             "world.sccp_light_client_stride_index",
+            "world.sccp_light_client_profiles",
             "state.transactions.current",
             "state.transactions.rollback",
         ];

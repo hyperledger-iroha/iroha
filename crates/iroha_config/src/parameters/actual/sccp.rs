@@ -132,12 +132,19 @@ pub struct SccpLightClientKeeper {
     /// Staleness after which a light client is advanced; `None` means `ws_bound_ms / 4` of
     /// each light client. Use [`Self::advance_after_for`].
     pub advance_after: Option<Duration>,
-    /// Cadence of checking local light-client state (nonzero).
+    /// Cadence at which each network's local light-client state is checked (nonzero). The
+    /// keeper adds up to a quarter of jitter, and doubles the wait after each consecutive failed
+    /// poll of a network up to 64 × this interval.
     pub poll_interval: Duration,
-    /// Timeout of one RPC request before failing over to the next endpoint (nonzero).
+    /// Total wall-clock time of one RPC attempt (connecting, sending and reading the whole
+    /// answer) before failing over to the next endpoint (nonzero).
     pub request_timeout: Duration,
-    /// Largest encoded advance the keeper submits; a larger built advance is dropped with a
-    /// warning. The on-chain per-instruction bounds still apply.
+    /// Wall-clock budget of one network's poll, covering every RPC request of one advance build
+    /// (nonzero). No request starts and no failover backoff sleeps past it.
+    pub poll_budget: Duration,
+    /// Largest encoded advance the keeper submits. Advances are stepped to fit it; one that
+    /// still does not fit is dropped with a warning. The on-chain per-instruction bounds still
+    /// apply.
     pub max_advance_bytes: NonZeroUsize,
     /// Effective endpoint lists per chain (configured lists, or the compiled defaults).
     pub endpoints: SccpLightClientKeeperEndpoints,
@@ -167,6 +174,7 @@ impl Default for SccpLightClientKeeper {
             request_timeout: Duration::from_millis(
                 defaults::sccp::light_client_keeper::REQUEST_TIMEOUT_MS,
             ),
+            poll_budget: Duration::from_millis(defaults::sccp::light_client_keeper::POLL_BUDGET_MS),
             max_advance_bytes: NonZeroUsize::new(
                 defaults::sccp::light_client_keeper::MAX_ADVANCE_BYTES,
             )
@@ -727,6 +735,7 @@ mod tests {
         assert!(keeper.enabled);
         assert_eq!(keeper.poll_interval, Duration::from_secs(60));
         assert_eq!(keeper.request_timeout, Duration::from_secs(10));
+        assert_eq!(keeper.poll_budget, Duration::from_secs(120));
         assert_eq!(keeper.max_advance_bytes.get(), 262_144);
         assert!(keeper.secret_headers.is_empty());
         assert_eq!(

@@ -31,7 +31,7 @@ fn literal_heavy_set_account_detail_compiles_under_spill_pressure() {
     let mut src = String::from("seiyaku SpillLiterals { kotoage fn main() authorize(\"Test\") {\n");
     for i in 0..COUNT {
         src.push_str(&format!(
-            "  ledger::account::set_detail(account: context::authority(), key: Name::parse(\"literal{i}\"), value: Json::parse(\"{{\\\"value\\\":{i}}}\"));\n"
+            "  ledger::account::set_metadata(account: context::authority(), key: Name::parse(\"literal{i}\"), value: Json::parse(\"{{\\\"value\\\":{i}}}\"));\n"
         ));
     }
     src.push_str("}\n}\n");

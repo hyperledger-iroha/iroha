@@ -375,7 +375,7 @@ impl AttachmentStore {
     }
 }
 
-fn require_deadline(deadline: Instant) -> Result<()> {
+pub(super) fn require_deadline(deadline: Instant) -> Result<()> {
     if deadline <= Instant::now() {
         return Err(AttachmentError::Operation(
             "attachment deadline elapsed; retained work remains resumable",
@@ -384,7 +384,7 @@ fn require_deadline(deadline: Instant) -> Result<()> {
     Ok(())
 }
 
-fn carrier_height(report: &OperationReport) -> Result<NonZeroU64> {
+pub(super) fn carrier_height(report: &OperationReport) -> Result<NonZeroU64> {
     report
         .data
         .get("evidence")

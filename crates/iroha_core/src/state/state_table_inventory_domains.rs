@@ -55,6 +55,94 @@ pub(super) struct OtherDomains {
 /// Every discovered domain literal that no commitment and no application accumulator owns.
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
+        usage: Use::Name,
+        reason: "Exact RegisterDataspaceAssetDefinition instruction wire identifier, used both by the instruction and the built-in dispatch registry; it names one instruction layout and computes no digest",
+        literals: &[r"iroha.asset_definition.dataspace.register.v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Norito schema names for eligibility authority/policy/request/observation/response records and pre-key permit records. They describe bounded DTO layouts; decoding or naming them establishes no authenticated provider, signing or State authority",
+        literals: &[
+            r"iroha.kagemusha.eligibility.authority.v1",
+            r"iroha.kagemusha.eligibility.decision.v1",
+            r"iroha.kagemusha.eligibility.observation.v1",
+            r"iroha.kagemusha.eligibility.policy.v1",
+            r"iroha.kagemusha.eligibility.policy_template.v1",
+            r"iroha.kagemusha.eligibility.purpose.v1",
+            r"iroha.kagemusha.eligibility.request.v1",
+            r"iroha.kagemusha.eligibility.response.v1",
+            r"iroha.kagemusha.eligibility.response_body.v1",
+            r"iroha.kagemusha.enrollment.permit.body.v1",
+            r"iroha.kagemusha.enrollment.permit.platform.v1",
+            r"iroha.kagemusha.enrollment.permit.purpose.v1",
+            r"iroha.kagemusha.enrollment.permit.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Norito schema names of the node-local enrollment journal scope, immutable selection, progress record, eligibility exchange, permit and worker preparation originals. The exclusive filesystem journal provides local custody and ordering, not a State commitment or independent authorization",
+        literals: &[
+            r"iroha_core.kagemusha.enrollment.eligibility_record.v1",
+            r"iroha_core.kagemusha.enrollment.journal_permit.v1",
+            r"iroha_core.kagemusha.enrollment.journal_scope.v1",
+            r"iroha_core.kagemusha.enrollment.phase.v1",
+            r"iroha_core.kagemusha.enrollment.record.v1",
+            r"iroha_core.kagemusha.enrollment.selection.v1",
+            r"iroha_core.kagemusha.enrollment.worker_preparation.v1",
+            r"iroha_core.kagemusha.enrollment.worker_prepared.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Enrollment eligibility policy/request identities, signed response preimage and exact operation-original binding; pre-key permit signing preimage, selected scope data and seven original input frames. Each hashes one supplied record or message, with independent current provider, registration, role and original-journal checks still required",
+        literals: &[
+            r"iroha:kagemusha:eligibility:policy:v1\0",
+            r"iroha:kagemusha:eligibility:request:v1\0",
+            r"iroha:kagemusha:eligibility:response:v1\0",
+            r"iroha:kagemusha:issuer-eligibility-operation:v1\0",
+            r"iroha:kagemusha:pre-key-originals:v1\0",
+            r"iroha:kagemusha:pre-key-permit:v1\0",
+            r"iroha:kagemusha:pre-key-scope:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Authenticated-owner PRF request transcript tag, nonce-bound private-input commitment and explicit no-evaluation-key receipt metadata bound to one policy/public-parameter record. These bind private request or receipt data and do not commit State tables or grant program/owner authority",
+        literals: &[
+            r"iroha:identifier:v1:authenticated-owner-prf",
+            r"iroha:identifier:v1:hkdf-no-evaluation-key\0",
+            r"iroha:identifier:v1:private-input-commitment\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::LocalArtifact,
+        reason: "Exact installed issuer journal scope original, its local digest and the local attempt cursor over one durable operation record excluding its eligibility exchange index. These fence original filesystem custody and phase ordering; no journal digest is a certified State root or an eligibility/signing grant",
+        literals: &[
+            r"iroha:kagemusha:eligibility:attempt-cursor:v1\0",
+            r"iroha:kagemusha:enrollment-issuer:v1\0",
+            r"iroha:kagemusha:issuer-journal-scope:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Seed,
+        reason: "Exact local enrollment retry and permit filename indices, derived from the installed journal scope/account/request or the retained attempt key/dispatch nonce. They address original local records, not State contents or authority",
+        literals: &[
+            r"iroha:kagemusha:issuer-journal-request:v1\0",
+            r"iroha:kagemusha:issuer-permit-dispatch:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Test,
+        reason: "CertifiedTestChain KAGEMUSHA monetary acceptance chain identity and executed setup/registration/load-target/settlement fixture receipt schemas. The containing setup module is cfg(test); fixture certificates are component evidence and these literals are neither State roots nor deployed-network or device qualification",
+        literals: &[
+            r"iroha.kagemusha.executed-ledger-setup.v1",
+            r"iroha.kagemusha.executed-terminal-registration.v1",
+            r"iroha.kagemusha.executed-unload-settlement.v1",
+            r"iroha.kagemusha.native-load-target.v1",
+            r"kagemusha-native-monetary-acceptance-v1",
+        ],
+    },
+    OtherDomains {
         usage: Use::Seed,
         reason: "KAGEMUSHA ledger lookup identifiers: a fixed custody-index key, receipt-indexed ordinary Load event paths, and derived reserve-asset and reserve-definition keys. They address exact identities in the committed ledger; they neither commit State contents nor establish finality, signing authority or completion",
         literals: &[

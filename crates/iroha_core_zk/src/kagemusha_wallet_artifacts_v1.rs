@@ -313,11 +313,6 @@ pub fn native_profile_transcript_v1() -> Result<Vec<u8>, Error> {
         &iroha_kagemusha_proof::a_relation::schedule::compiled::compiled_schedule_transcript()
             .map_err(|_| Error::Profile)?,
     )?;
-    put_frame(
-        &mut bytes,
-        &iroha_kagemusha_proof::finality::native::compiled_leaf_schedule_transcript()
-            .map_err(|_| Error::Profile)?,
-    )?;
     put_frame(&mut bytes, &producer_inventory::compiled_sigma_policy()?)?;
     put_frame(
         &mut bytes,

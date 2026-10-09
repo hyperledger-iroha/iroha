@@ -596,8 +596,8 @@ const ROOTS: &[Root] = &[
         class: RootClass::ProtocolFingerprint,
         carrier: "BlockHeader.confidential_features of every block, and the confidential capabilities of the peer handshake",
         keyed: false,
-        scope: "the effective verifying-key projection, selected parameter identifiers and their registry-effectiveness checks, and ZK policy. Source fields: world.verifying_keys, world.poseidon_params, world.pedersen_params and state.zk",
-        construction: "composite summary: an undomained flat hash of the sorted effective entries of the complete verifying-key table, the Poseidon and Pedersen parameter identifiers that state.zk selects while their registry rows are effective, the confidential rules version, and a SHA-256 digest of the ZK consensus policy combined with the constant SCCP policy hash",
+        scope: "the effective verifying-key projection, selected parameter identifiers and their registry-effectiveness checks, ZK policy, and the SCCP light-client profile versions and hashes active at the block height. Source fields: world.verifying_keys, world.poseidon_params, world.pedersen_params, world.sccp_light_client_profiles and state.zk",
+        construction: "composite summary: an undomained flat hash of the sorted effective entries of the complete verifying-key table, the Poseidon and Pedersen parameter identifiers that state.zk selects while their registry rows are effective, the confidential rules version, and a SHA-256 digest of the ZK consensus policy combined with the SCCP policy hash of the active profile selection; absent profile activations select the compiled version-1 genesis profiles",
         witnesses: "none",
         owner: "G.3",
         disposition: "Removed, or retained solely as an inventoried comparison value recomputed at the specified height from committed registry entries and committed policy. All canonical source entries are committed under the keyed State root. It authenticates no State read; consumers requiring State reads use keyed State witnesses. Policy hashes, parameter selectors and transition limits follow G1-D3/F.4",
@@ -1648,6 +1648,14 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         owner: UseOwner::Accumulator("sccp_message_accumulator"),
     },
     ConstructionUse {
+        path: "crates/iroha_core/src/smartcontracts/isi/sccp/read/history.rs",
+        uses: &[("HistoryAccumulator", 2)],
+        owner: UseOwner::Other(
+            Use::Test,
+            "Reference history accumulator for the inline cached-history root and path parity tests",
+        ),
+    },
+    ConstructionUse {
         path: "crates/iroha_core/src/smartcontracts/isi/sccp/witness.rs",
         uses: &[("smt::", 1)],
         owner: UseOwner::Roots(&["sccp_state_delta_digest"]),
@@ -2527,8 +2535,168 @@ fn item_end(code: &[u8], from: usize) -> usize {
     }
 }
 
-/// The ranges of the items that are compiled for tests only: every item under
-/// `#[cfg(test)]` or `#[test]`, with its further attributes.
+/// The end of a literal braced control expression, including the original `else` chain.
+/// Balanced call/index groups belong to its header. A header operand that is itself a
+/// block is consumed before the final body, rather than mistaken for that body.
+fn test_only_control_end(code: &[u8], from: usize) -> Option<usize> {
+    let mut at = from;
+    // Labels on loops are part of the attributed expression, not its enclosing owner.
+    if code.get(at) == Some(&b'\'') {
+        at += 1;
+        while at < code.len()
+            && (code[at].is_ascii_alphanumeric() || code[at] == b'_' || !code[at].is_ascii())
+        {
+            at += 1;
+        }
+        if code.get(at) != Some(&b':') {
+            return None;
+        }
+        at += 1;
+        while at < code.len() && code[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        if code.get(at) == Some(&b'{') {
+            return Some(closing(code, at));
+        }
+    }
+    let word = [b"if".as_slice(), b"while", b"for", b"match", b"loop"]
+        .into_iter()
+        .find(|word| keyword_at(code, at, word))?;
+    let has_else = word == b"if";
+    let loop_body = word == b"loop";
+    let for_header = word == b"for";
+    at += word.len();
+    loop {
+        let mut operand_block_seen = false;
+        let body_end = loop {
+            let open = header_end(code, at);
+            if code.get(open) != Some(&b'{') {
+                return Some(open);
+            }
+            let header = &code[at..open];
+            let last = header.iter().rposition(|byte| !byte.is_ascii_whitespace());
+            let needs_operand = last.is_some_and(|index| {
+                matches!(
+                    header[index],
+                    b'=' | b'!'
+                        | b'&'
+                        | b'|'
+                        | b'+'
+                        | b'-'
+                        | b'*'
+                        | b'/'
+                        | b'%'
+                        | b'^'
+                        | b'<'
+                        | b'>'
+                ) || (for_header
+                    && index >= 1
+                    && keyword_at(header, index - 1, b"in")
+                    && index.checked_sub(2).and_then(|before| header.get(before)) != Some(&b'#'))
+            });
+            let end = closing(code, open);
+            if !loop_body && ((!operand_block_seen && last.is_none()) || needs_operand) {
+                // The condition/iterator/matched value owns this block; the control
+                // expression still requires its own body after it.
+                operand_block_seen = true;
+                at = end;
+            } else {
+                break end;
+            }
+        };
+        at = body_end;
+        while at < code.len() && code[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        if !has_else || !keyword_at(code, at, b"else") {
+            return Some(body_end);
+        }
+        at += 4;
+        while at < code.len() && code[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        if keyword_at(code, at, b"if") {
+            at += 2;
+        } else {
+            return Some(if code.get(at) == Some(&b'{') {
+                closing(code, at)
+            } else {
+                body_end
+            });
+        }
+    }
+}
+
+/// The end of an attributed item, argument, field, statement or expression. Only a
+/// literal item keyword uses the item-header scan: non-items stop at their own separator
+/// or enclosing close, so an attribute on a call argument cannot consume a later item.
+fn test_only_target_end(code: &[u8], from: usize) -> usize {
+    let mut at = from;
+    loop {
+        while at < code.len() && code[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        if keyword_at(code, at, b"pub") {
+            at += 3;
+            while at < code.len() && code[at].is_ascii_whitespace() {
+                at += 1;
+            }
+            if code.get(at) == Some(&b'(') {
+                at = closing(code, at);
+            }
+        } else if let Some(modifier) = [b"async".as_slice(), b"unsafe", b"default", b"move"]
+            .into_iter()
+            .find(|word| keyword_at(code, at, word))
+        {
+            at += modifier.len();
+        } else {
+            break;
+        }
+    }
+    if [
+        b"fn".as_slice(),
+        b"mod",
+        b"impl",
+        b"trait",
+        b"struct",
+        b"enum",
+        b"union",
+        b"type",
+        b"const",
+        b"static",
+        b"use",
+        b"extern",
+        b"macro_rules",
+    ]
+    .into_iter()
+    .any(|word| keyword_at(code, at, word))
+    {
+        return item_end(code, from);
+    }
+    if let Some(end) = test_only_control_end(code, at) {
+        return end;
+    }
+    // A bare, async or unsafe block is itself the attributed expression/statement;
+    // Rust permits a following local item without a semicolon after this block.
+    if code.get(at) == Some(&b'{') {
+        return closing(code, at);
+    }
+    // Keep nested groups inside the same target. At this level a close belongs to its
+    // enclosing owner; it must never be crossed in search of the next item's body.
+    at = from;
+    while at < code.len() {
+        match code[at] {
+            b'(' | b'[' | b'{' => at = closing(code, at),
+            b',' | b';' => return at + 1,
+            b')' | b']' | b'}' => return at,
+            _ => at += 1,
+        }
+    }
+    at
+}
+
+/// The ranges compiled for tests only under `#[cfg(test)]` or `#[test]`,
+/// including attributed local targets without crossing into later items.
 fn test_only_ranges(code: &str) -> Vec<(usize, usize)> {
     let bytes = code.as_bytes();
     let mut ranges = Vec::new();
@@ -2547,7 +2715,7 @@ fn test_only_ranges(code: &str) -> Vec<(usize, usize)> {
                     break;
                 }
             }
-            ranges.push((start, item_end(bytes, at)));
+            ranges.push((start, test_only_target_end(bytes, at)));
             from = start + marker.len();
         }
     }
@@ -5557,7 +5725,7 @@ const DEFECTS: &[Defect] = &[
         title: "Confidential-feature registry comparisons are not backed by the keyed State commitment",
         assigned: "G.3",
         related: &["F.4", "G1-D3"],
-        required: "Every block header carries a flat, undomained digest of the effective verifying-key registry and the selected parameter identifiers, and block validation rejects a block whose digest differs from the value recomputed from State. Remove the digest, or retain it solely as an inventoried comparison value recomputed at the specified height from committed registry entries and committed policy. The registry rows are committed under the keyed State root, the digest authenticates no State read, and consumers requiring State reads use keyed State witnesses. The policy hashes, parameter selectors and transition limits that enter the digest follow G1-D3 and F.4.",
+        required: "Every block header carries a confidential-feature summary of the effective verifying-key registry, selected parameter identifiers, ZK policy, and SCCP light-client profile versions and hashes active at its height; block validation rejects a summary that differs from the value recomputed from State. Remove the summary, or retain it solely as an inventoried comparison value recomputed at the specified height from committed registry entries and committed policy. The registry rows, including active SCCP profile activations, are committed under the keyed State root, the summary authenticates no State read, and consumers requiring State reads use keyed State witnesses. Node-configured policy hashes, parameter selectors and transition limits that enter the summary follow G1-D3 and F.4.",
         evidence: &[
             (
                 "crates/iroha_core/src/state.rs",
@@ -5636,6 +5804,7 @@ fn defect_fields(id: &str, rows: &[Row]) -> Vec<String> {
             "world.verifying_keys",
             "world.poseidon_params",
             "world.pedersen_params",
+            "world.sccp_light_client_profiles",
         ]),
         "G1-D11" => named(&["world.axt_policies", "world.axt_handle_counters"]),
         other => panic!("defect {other} has no field rule"),
@@ -7226,6 +7395,9 @@ fn source_scan_classifies_every_domain_literal_and_construction_use() {
         "iroha.toml",
         "iroha.mint",
         "iroha::logger",
+        // Norito Rust schema identities name layouts, not scanned hash domains.
+        "iroha_core::amx::PreparedIntentCoordinatesV1",
+        "iroha_core::amx::PreparedIntentRowV1",
         "plain text v1 here",
         "retail_fee_head_tree_v1",
         "../fixtures/a/b_v1.json",
@@ -7759,6 +7931,331 @@ fn state_hash_function_scan_lists_every_state_reader_that_returns_a_hash() {
     assert!(names_state_reader("x: &crate::state::State") && !names_state_reader("LaneState"));
 }
 
+/// A test-only argument cannot hide the next original AMX State-reader method.
+#[test]
+fn state_hash_scan_cfg_arguments_preserve_original_amx_complete() {
+    let text = r#"
+        impl<V: StateReadOnly> NativeAmxRecordProofReadV1<'_, V> {
+            pub fn poll(&mut self) -> Result<NativeAmxRecordProofPollV1, Error> {
+                self.source.as_mut().expect("source").poll(
+                    #[cfg(test)]
+                    &mut self.portable_probe,
+                )
+            }
+            pub fn complete(&mut self) -> Result<Option<AllocatedAmxRecordProofV1>, Error> {
+                loop { match self.poll()? { Poll::Pending => {}, Poll::Complete(p) => return Ok(p) } }
+            }
+        }
+    "#;
+    let (_, code) = split_source(text);
+    assert_eq!(
+        fn_signatures(&code),
+        [
+            FnSignature {
+                name: "poll".to_owned(),
+                reads_state: true,
+                returns_hash: false
+            },
+            FnSignature {
+                name: "complete".to_owned(),
+                reads_state: true,
+                returns_hash: true
+            },
+        ],
+        "test-only AMX call argument must not hide original complete State-reader"
+    );
+}
+
+/// Local attributes end at their original field, argument, statement or block boundary.
+#[test]
+fn state_hash_scan_cfg_nonitems_preserve_later_production_functions() {
+    for text in [
+        "struct Holder { #[cfg(test)] pub(crate) probe: Option<(A, B)>, other: A } fn visible(s: &State) -> Hash { todo!() }",
+        "enum Holder { #[cfg(test)] Probe(A, B), Other } fn visible(s: &State) -> Hash { todo!() }",
+        "fn outer() { call(#[cfg(test)] nested([a, b], (c, d)), { fn visible(s: &State) -> Hash { todo!() } }); }",
+        "fn outer() { #[cfg(test)] let probe = { fn hidden(s: &State) -> Hash { todo!() } (a, b) }; fn visible(s: &State) -> Hash { todo!() } }",
+        "fn outer() { call(#[cfg(test)] { fn hidden(s: &State) -> Hash { todo!() } [a, b] }); fn visible(s: &State) -> Hash { todo!() } }",
+        "fn outer() { #[cfg(test)] { fn hidden(s: &State) -> Hash { todo!() } } } fn visible(s: &State) -> Hash { todo!() }",
+        "fn outer() { #[cfg(test)] { fn hidden(s: &State) -> Hash { todo!() } } fn visible(s: &State) -> Hash { todo!() } }",
+        "fn outer() { #[cfg(test)] async { fn hidden(s: &State) -> Hash { todo!() } } fn visible(s: &State) -> Hash { todo!() } }",
+        "fn outer() { #[cfg(test)] unsafe { fn hidden(s: &State) -> Hash { todo!() } } fn visible(s: &State) -> Hash { todo!() } }",
+        "fn outer() { #[cfg(test)] if flag { fn hidden(s: &State) -> Hash { todo!() } } else { fn hidden_else(s: &State) -> Hash { todo!() } } fn visible(s: &State) -> Hash { todo!() } }",
+        "fn outer() { #[cfg(test)] loop { fn hidden(s: &State) -> Hash { todo!() } } impl World { fn visible(&self) -> Hash { todo!() } } }",
+        "struct Holder { #[cfg(test)] callback: fn() -> [u8; { fn hidden(s: &State) -> Hash { todo!() } 1 }], other: [u8; { fn visible(s: &State) -> Hash { todo!() } 1 }] }",
+        "struct Holder { #[cfg(test)] probe: [u8; { fn hidden(s: &State) -> Hash { todo!() } 1 }], other: [u8; { fn visible(s: &State) -> Hash { todo!() } 1 }] }",
+        "fn outer() { call(#[cfg(test)] (a, [b, c], { fn hidden(s: &State) -> Hash { todo!() } 0 }), { fn visible(s: &State) -> Hash { todo!() } }); }",
+    ] {
+        let (_, code) = split_source(text);
+        let matched: Vec<_> = fn_signatures(&code)
+            .into_iter()
+            .filter(|signature| signature.reads_state && signature.returns_hash)
+            .map(|signature| signature.name)
+            .collect();
+        assert_eq!(
+            matched,
+            ["visible"],
+            "local cfg target swallowed another owner: {text}"
+        );
+    }
+    assert_eq!(
+        test_only_ranges("#[cfg(test)] probe) fn visible() {}"),
+        [(0, 18)]
+    );
+    assert_eq!(
+        test_only_ranges("#[cfg(test)] probe] fn visible() {}"),
+        [(0, 18)]
+    );
+    assert_eq!(
+        test_only_ranges("#[cfg(test)] probe} fn visible() {}"),
+        [(0, 18)]
+    );
+}
+
+/// Real test-only items remain excluded, including associated items and generic headers.
+#[test]
+fn state_hash_scan_cfg_items_preserve_exact_item_exclusion() {
+    for item in [
+        "#[cfg(test)] #[inline] pub(in crate::state) async unsafe fn hidden<T: Trait<A, B>, U>(s: &State, f: fn(A, B)) -> Hash where T: Other<U, A> { fn nested(s: &State) -> Hash { todo!() } todo!() }",
+        "#[cfg(test)] pub(crate) const fn hidden(s: &State) -> Hash { todo!() }",
+        "#[cfg(test)] pub unsafe extern \"C\" fn hidden(s: &State) -> Hash { todo!() }",
+        "#[test] #[ignore] fn hidden() { fn nested(s: &State) -> Hash { todo!() } }",
+        "#[cfg(test)] pub mod test_module { fn hidden(s: &State) -> Hash { todo!() } }",
+        "#[cfg(test)] unsafe impl<T: Trait<A, B>> WorldReadOnly for Holder<T> { fn hidden(&self) -> Hash { todo!() } }",
+        "#[cfg(test)] pub trait TestTrait: StateReadOnly { fn hidden(&self) -> Hash; }",
+        "impl World { #[cfg(test)] pub(crate) fn hidden<T: Trait<A, B>>(&self) -> Hash { todo!() } }",
+        "impl World { #[cfg(test)] const HIDDEN: Hash = { fn nested(s: &State) -> Hash { todo!() } todo!() }; }",
+        "#[cfg(test)] macro_rules! hidden { () => { fn nested(s: &State) -> Hash { todo!() } }; }",
+    ] {
+        let text = format!("{item}\nfn visible(s: &State) -> Hash {{ todo!() }}");
+        let (_, code) = split_source(&text);
+        let matched: Vec<_> = fn_signatures(&code)
+            .into_iter()
+            .filter(|signature| signature.reads_state && signature.returns_hash)
+            .map(|signature| signature.name)
+            .collect();
+        assert_eq!(
+            matched,
+            ["visible"],
+            "test-only item boundary changed: {item}"
+        );
+    }
+    assert_eq!(
+        test_only_ranges("#[cfg(test)] mod tests; fn visible() {}"),
+        [(0, 23)]
+    );
+}
+
+/// Existing delimiter and generic signature rules remain unchanged by local cfg ranges.
+#[test]
+fn state_hash_scan_cfg_boundary_helpers_preserve_existing_rules() {
+    assert_eq!(closing(b"<A<B>, fn() -> C>x", 0), 17);
+    assert_eq!(closing(b"(a(b)", 0), 5);
+    assert_eq!(header_end(b"-> [u8; 32] where T: X { }", 0), 23);
+    assert_eq!(item_end(b"fn f() { { } } x", 0), 14);
+    assert_eq!(item_end(b"use a::b; x", 0), 9);
+    assert_eq!(
+        test_only_ranges("#[cfg(test)] #[allow(x)] fn t() -> [u8; 2] { {} } fn u() {}"),
+        [(0, 49)]
+    );
+    assert!(keyword_at(b"x fn y", 2, b"fn") && !keyword_at(b"x fnord", 2, b"fn"));
+    assert!(!keyword_at(b"xfn y", 1, b"fn"));
+    let signatures = fn_signatures(
+        "impl World { pub(crate) fn raw<T: Trait<A, B>>(&self, pair: (A, B)) -> Result<[u8; 32], E> where E: Other<A, B> { todo!() } }",
+    );
+    assert_eq!(
+        signatures,
+        [FnSignature {
+            name: "raw".to_owned(),
+            reads_state: true,
+            returns_hash: true
+        }]
+    );
+}
+
+/// The actual AMX source still supplies its exact listed production State-hash method.
+#[test]
+fn state_hash_scan_actual_amx_complete_keeps_its_original_listing() {
+    let path = "crates/iroha_core/src/query/native_receipts/amx_read.rs";
+    let text = source(path);
+    let (_, code) = split_source(&text);
+    let matched: Vec<_> = fn_signatures(&code)
+        .into_iter()
+        .filter(|signature| {
+            signature.name == "complete" && signature.reads_state && signature.returns_hash
+        })
+        .collect();
+    assert_eq!(
+        matched.len(),
+        1,
+        "original AMX complete State-reader must remain scanned"
+    );
+    let listed: Vec<_> = STATE_HASH_FUNCTIONS
+        .iter()
+        .filter(|listed| listed.path == path && listed.name == "complete")
+        .collect();
+    assert_eq!(
+        listed.len(),
+        1,
+        "original AMX complete must retain its exact registry entry"
+    );
+}
+
+/// Current execution proofs serve an existing certified identity and result.
+#[test]
+fn state_hash_scan_current_execution_proof_classifies_certified_identity() {
+    let path = "crates/iroha_core/src/sumeragi/finality.rs";
+    let (_, code) = split_source(&source(path));
+    let name = "current_execution_proof";
+    assert_eq!(
+        fn_signatures(&code)
+            .iter()
+            .filter(|entry| entry.name == name && entry.reads_state && entry.returns_hash)
+            .count(),
+        1,
+        "the actual current execution proof producer must remain scanned"
+    );
+    let listed: Vec<_> = STATE_HASH_FUNCTIONS
+        .iter()
+        .filter(|entry| entry.path == path && entry.name == name)
+        .collect();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].count, 1);
+    assert!(matches!(
+        listed[0].owner,
+        UseOwner::Other(Use::ResultBinding, _)
+    ));
+}
+
+/// A test-only enum variant cannot hide the production World-root producers after it.
+#[test]
+fn state_hash_scan_cfg_variant_preserves_world_accumulator_owners() {
+    let path = "crates/iroha_core/src/state/world_state_accumulator.rs";
+    let (_, code) = split_source(&source(path));
+    let signatures = fn_signatures(&code);
+    for name in ["apply_block", "capture"] {
+        assert_eq!(
+            signatures
+                .iter()
+                .filter(|entry| entry.name == name && entry.reads_state && entry.returns_hash)
+                .count(),
+            1,
+            "test-only Direction variant must not hide World-root producer {name}"
+        );
+        let listed: Vec<_> = STATE_HASH_FUNCTIONS
+            .iter()
+            .filter(|entry| entry.path == path && entry.name == name)
+            .collect();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].count, 1);
+        assert!(matches!(
+            listed[0].owner,
+            UseOwner::Roots(["world_state_root"])
+        ));
+    }
+    assert!(
+        !signatures
+            .iter()
+            .any(|entry| entry.name == "capture_predecessor"),
+        "the actual test-only reverse capture must remain excluded"
+    );
+}
+
+/// An attributed control statement cannot consume a following production struct.
+#[test]
+fn state_hash_scan_cfg_controls_preserve_next_struct() {
+    for text in [
+        "fn outer() { #[cfg(test)] if flag {} struct Holder { x: [u8; { fn visible(s: &State) -> Hash { todo!() } 1 }] } }",
+        "fn outer() { #[cfg(test)] while flag {} struct Holder { x: [u8; { fn visible(s: &State) -> Hash { todo!() } 1 }] } }",
+        "fn outer() { #[cfg(test)] match flag { _ => {} } struct Holder { x: [u8; { fn visible(s: &State) -> Hash { todo!() } 1 }] } }",
+        "fn outer() { #[cfg(test)] for value in r#in {} struct Holder { x: [u8; { fn visible(s: &State) -> Hash { todo!() } 1 }] } }",
+    ] {
+        let (_, code) = split_source(text);
+        let matched: Vec<_> = fn_signatures(&code)
+            .into_iter()
+            .filter(|signature| signature.reads_state && signature.returns_hash)
+            .map(|signature| signature.name)
+            .collect();
+        assert_eq!(
+            matched,
+            ["visible"],
+            "cfg control must end before the next production statement: {text}"
+        );
+    }
+}
+
+/// An attributed control statement cannot consume a following production let initializer.
+#[test]
+fn state_hash_scan_cfg_controls_preserve_next_let() {
+    for text in [
+        "fn outer() { #[cfg(test)] if flag {} let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+        "fn outer() { #[cfg(test)] for value in values {} let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+        "fn outer() { #[cfg(test)] 'retry: loop {} let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+        "fn outer() { #[cfg(test)] 'rétry: loop {} let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+        "fn outer() { #[cfg(test)] 'local: { fn hidden(s: &State) -> Hash { todo!() } } let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+        "fn outer() { #[cfg(test)] async move { fn hidden(s: &State) -> Hash { todo!() } } let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+    ] {
+        let (_, code) = split_source(text);
+        let matched: Vec<_> = fn_signatures(&code)
+            .into_iter()
+            .filter(|signature| signature.reads_state && signature.returns_hash)
+            .map(|signature| signature.name)
+            .collect();
+        assert_eq!(
+            matched,
+            ["visible"],
+            "cfg control must end before the next production let: {text}"
+        );
+    }
+}
+
+/// The original if/else chain is excluded, while the following independent block remains.
+#[test]
+fn state_hash_scan_cfg_else_chains_end_at_their_original_final_block() {
+    for text in [
+        "fn outer() { #[cfg(test)] if flag { fn hidden(s: &State) -> Hash { todo!() } } else if other([a, b], (c, d)) { fn hidden_else_if(s: &State) -> Hash { todo!() } } else { fn hidden_else(s: &State) -> Hash { todo!() } } { fn visible(s: &State) -> Hash { todo!() } } }",
+        "fn outer() { #[cfg(test)] if flag {} else if other {} else if last {} struct Holder { x: [u8; { fn visible(s: &State) -> Hash { todo!() } 1 }] } }",
+        "fn outer() { #[cfg(test)] if flag {} { fn visible(s: &State) -> Hash { todo!() } } }",
+        "fn outer() { #[cfg(test)] if flag { if inner {} else {} } else { if inner {} else {} } let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+    ] {
+        let (_, code) = split_source(text);
+        let matched: Vec<_> = fn_signatures(&code)
+            .into_iter()
+            .filter(|signature| signature.reads_state && signature.returns_hash)
+            .map(|signature| signature.name)
+            .collect();
+        assert_eq!(
+            matched,
+            ["visible"],
+            "cfg else chain crossed its original final block: {text}"
+        );
+    }
+}
+
+/// Original header operand blocks precede the final body; balanced nested groups stay owned.
+#[test]
+fn state_hash_scan_cfg_control_headers_keep_original_operand_and_body_blocks() {
+    for text in [
+        "fn outer() { #[cfg(test)] if { fn hidden_operand(s: &State) -> Hash { todo!() } true } { fn hidden_body(s: &State) -> Hash { todo!() } } else { fn hidden_else(s: &State) -> Hash { todo!() } } let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+        "fn outer() { #[cfg(test)] if flag && { fn hidden_operand(s: &State) -> Hash { todo!() } true } { fn hidden_body(s: &State) -> Hash { todo!() } } struct Holder { x: [u8; { fn visible(s: &State) -> Hash { todo!() } 1 }] } }",
+        "fn outer() { #[cfg(test)] if let Some(value) = { fn hidden_operand(s: &State) -> Hash { todo!() } input } { fn hidden_body(s: &State) -> Hash { todo!() } } let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+        "fn outer() { #[cfg(test)] for value in { fn hidden_operand(s: &State) -> Hash { todo!() } values } { fn hidden_body(s: &State) -> Hash { todo!() } } let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+        "fn outer() { #[cfg(test)] match { fn hidden_operand(s: &State) -> Hash { todo!() } value } { _ => { fn hidden_body(s: &State) -> Hash { todo!() } } } let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+        "fn outer() { #[cfg(test)] if ({ fn hidden_operand(s: &State) -> Hash { todo!() } true }) { fn hidden_body(s: &State) -> Hash { todo!() } } else if ({ true }) { fn hidden_else(s: &State) -> Hash { todo!() } } let value = { fn visible(s: &State) -> Hash { todo!() } 1 }; }",
+    ] {
+        let (_, code) = split_source(text);
+        let matched: Vec<_> = fn_signatures(&code)
+            .into_iter()
+            .filter(|signature| signature.reads_state && signature.returns_hash)
+            .map(|signature| signature.name)
+            .collect();
+        assert_eq!(
+            matched,
+            ["visible"],
+            "cfg header lost its original operand/body boundary: {text}"
+        );
+    }
+}
+
 /// The exact tables are well formed: every exemption has a reviewed reason, every
 /// application accumulator names existing canonical State fields, and every construction
 /// owner exists.
@@ -8106,10 +8603,14 @@ fn every_listed_commitment_has_one_owner_and_disposition() {
         defect_fields("G1-D11", &rows()),
         ["world.axt_policies", "world.axt_handle_counters"]
     );
-    assert!(listed("confidential_feature_digest").scope.starts_with(
+    assert_eq!(
+        listed("confidential_feature_digest").scope,
         "the effective verifying-key projection, selected parameter identifiers and their \
-             registry-effectiveness checks, and ZK policy."
-    ));
+         registry-effectiveness checks, ZK policy, and the SCCP light-client profile versions \
+         and hashes active at the block height. Source fields: world.verifying_keys, \
+         world.poseidon_params, world.pedersen_params, world.sccp_light_client_profiles and \
+         state.zk"
+    );
     assert!(listed("execution_policy_digest").scope.ends_with(
         "The Nexus policy digest also incorporates `state.lane_manifests` and \
          `state.lane_compliance` through their policy digests"
@@ -9383,7 +9884,8 @@ fn inventory_text_helpers_escape_and_cite_exactly() {
         [
             "world.verifying_keys",
             "world.poseidon_params",
-            "world.pedersen_params"
+            "world.pedersen_params",
+            "world.sccp_light_client_profiles"
         ]
     );
     assert_eq!(DEFECTS.last().map(|defect| defect.id), Some("G1-D11"));

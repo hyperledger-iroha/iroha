@@ -2414,7 +2414,11 @@ pub mod streaming {
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "SSE transport endpoint; stream contract is not an ordinary resource",
     });
-    /// Contract-event SSE stream.
+    /// Call-derived contract-event SSE stream.
+    ///
+    /// Rows are projected from committed top-level `ContractCall` transactions and
+    /// the metadata consensus bound to them; contracts emit none of them, and
+    /// `provenance` is always `derived`.
     pub const CONTRACT_EVENTS_SSE: RouteDescriptor = RouteDescriptor::new(
         "contracts.events_stream_sse",
         HttpMethod::Get,
@@ -3981,9 +3985,13 @@ pub mod application_api {
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
     macro_rules! declare_routes {
-        ($($name:ident => $factory:ident($id:literal, $path:literal);)+) => {
+        ($(
+            $(#[doc = $doc:literal])*
+            $name:ident => $factory:ident($id:literal, $path:literal);
+        )+) => {
             $(
                 #[doc = concat!("Descriptor for `", $path, "`.")]
+                $(#[doc = $doc])*
                 pub const $name: RouteDescriptor = $factory($id, $path);
             )+
             /// Complete application API route family.
@@ -4006,9 +4014,21 @@ pub mod application_api {
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => internal_get("application.internal_accounts_by_account_id_assets_by_asset_definition_id_get", "/v1/internal/accounts/{account_id}/assets/{asset_definition_id}");
         ACCOUNTS_BY_ACCOUNT_ID_HISTORY_QUERY_POST => dataspace_post("application.accounts_by_account_id_history_query_post", "/v1/accounts/{account_id}/history/query");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST => dataspace_post("application.accounts_by_account_id_transactions_query_post", "/v1/accounts/{account_id}/transactions/query");
+        ///
+        /// Call-derived: one row per committed top-level `ContractCall`, projected from the
+        /// signed invocation and its consensus-bound metadata; contracts emit no rows here.
         CONTRACTS_ACTIVITY_QUERY_POST => dataspace_post("application.contracts_activity_query_post", "/v1/contracts/activity/query");
+        ///
+        /// Call-derived: one row per committed top-level `ContractCall`, projected from the
+        /// signed invocation and its consensus-bound metadata; contracts emit no rows here.
         CONTRACTS_EVENTS_QUERY_POST => dataspace_post("application.contracts_events_query_post", "/v1/contracts/events/query");
+        ///
+        /// Call-derived: one row per committed top-level `ContractCall`, projected from the
+        /// signed invocation and its consensus-bound metadata; contracts emit no rows here.
         CONTRACTS_ACTIVITY_GET => dataspace_get("application.contracts_activity_get", "/v1/contracts/activity");
+        ///
+        /// Call-derived: one row per committed top-level `ContractCall`, projected from the
+        /// signed invocation and its consensus-bound metadata; contracts emit no rows here.
         CONTRACTS_EVENTS_GET => dataspace_get("application.contracts_events_get", "/v1/contracts/events");
         CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => dataspace_get("application.contracts_rollups_swaps_fills_get", "/v1/contracts/rollups/swaps/fills");
         CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET => dataspace_get("application.contracts_rollups_swaps_candles_get", "/v1/contracts/rollups/swaps/candles");
@@ -4614,9 +4634,22 @@ pub mod sccp {
         public_get("sccp.capabilities.read", "/v1/sccp/capabilities");
     /// Read every route with its escrow, stranded balance and revisions.
     pub const REGISTRY: RouteDescriptor = public_get("sccp.registry.read", "/v1/sccp/registry");
-    /// Read one outbound message record.
+    /// Read the status union of one message id (outbound, inbound or unknown).
     pub const MESSAGE: RouteDescriptor =
         public_get("sccp.message.read", "/v1/sccp/messages/{message_id}");
+    /// Read the newest outbound or inbound records.
+    pub const MESSAGES_RECENT: RouteDescriptor =
+        public_get("sccp.messages.recent", "/v1/sccp/messages/recent");
+    /// Read the outbound records of one route revision by nonce.
+    pub const OUTBOUND_BY_NONCE: RouteDescriptor = public_get(
+        "sccp.outbound.by_nonce",
+        "/v1/sccp/outbound/{network}/{revision}",
+    );
+    /// Read the destination controls of one route revision.
+    pub const CONTROLS: RouteDescriptor = public_get(
+        "sccp.controls.list",
+        "/v1/sccp/controls/{network}/{revision}",
+    );
     /// Assemble the attestation proof bundle of one outbound message.
     pub const MESSAGE_PROOF: RouteDescriptor =
         public_get("sccp.message.proof", "/v1/sccp/messages/{message_id}/proof");
@@ -4637,27 +4670,50 @@ pub mod sccp {
     /// Read every installed inbound light client.
     pub const LIGHT_CLIENTS: RouteDescriptor =
         public_get("sccp.light_client.list", "/v1/sccp/light-clients");
+    /// Read one inbound light client with its freshness and stored data.
+    pub const LIGHT_CLIENT: RouteDescriptor =
+        public_get("sccp.light_client.read", "/v1/sccp/light-clients/{network}");
     /// Read the stored consensus sets of one inbound light client.
     pub const LIGHT_CLIENT_SETS: RouteDescriptor = public_get(
         "sccp.light_client.sets",
         "/v1/sccp/light-clients/{network}/sets",
     );
+    /// Read the stored checkpoints anchoring a proof of one source height.
+    pub const LIGHT_CLIENT_CHECKPOINTS: RouteDescriptor = public_get(
+        "sccp.light_client.checkpoints",
+        "/v1/sccp/light-clients/{network}/checkpoints",
+    );
+    /// Read the history path of one SCCP block.
+    pub const HISTORY: RouteDescriptor =
+        public_get("sccp.history.proof", "/v1/sccp/history/{height}");
     /// Read the per-subject SCCP governance revisions.
     pub const GOVERNANCE: RouteDescriptor =
         public_get("sccp.governance.read", "/v1/sccp/governance");
     /// Read every open SCCP governance proposal with its newest Parliament attempt.
     pub const GOVERNANCE_PROPOSALS: RouteDescriptor =
         public_get("sccp.governance.proposals", "/v1/sccp/governance/proposals");
+    /// Read one SCCP governance proposal in any phase.
+    pub const GOVERNANCE_PROPOSAL: RouteDescriptor = public_get(
+        "sccp.governance.proposal",
+        "/v1/sccp/governance/proposals/{proposal_id}",
+    );
     /// Complete SCCP read route set.
     pub const ROUTES: &[RouteDescriptor] = &[
         CAPABILITIES,
         GOVERNANCE,
         GOVERNANCE_PROPOSALS,
+        GOVERNANCE_PROPOSAL,
+        HISTORY,
         LIGHT_CLIENTS,
+        LIGHT_CLIENT,
         LIGHT_CLIENT_SETS,
+        LIGHT_CLIENT_CHECKPOINTS,
         REGISTRY,
+        MESSAGES_RECENT,
         MESSAGE,
         MESSAGE_PROOF,
+        OUTBOUND_BY_NONCE,
+        CONTROLS,
         CONTROL_PROOF,
         ROSTER_CURRENT,
         ROSTER_ROTATIONS,

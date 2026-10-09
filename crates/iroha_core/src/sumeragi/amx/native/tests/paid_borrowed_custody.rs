@@ -849,3 +849,93 @@ pub(super) fn with_paid_prepare_retry_fixture(
         .unwrap();
     test(&roots.participants[0], instruction, payer());
 }
+
+/// Genuine paid begins and expiry Decision settle/prune a No vote in one private block.
+pub(super) fn with_paid_prepare_pruning_fixture(
+    test: impl FnOnce(&CertifiedTestChain, [InstructionBox; 3], KeyPair, [[u8; 32]; 2]),
+) {
+    let mut roots = paid_roots();
+    let mut expired = roots.transaction(2_000, 0x65);
+    expired.deadline = 5;
+    let expired_tx = expired.id().unwrap();
+    let signed = paid_global_sign(
+        &roots.global,
+        [BeginAmxV1 {
+            transaction: expired.clone(),
+        }
+        .into()],
+        2_999,
+    );
+    assert_eq!(roots.global.commit_at(3_000, vec![signed]), vec![true]);
+    let begin = super::super::super::amx_record_proof(
+        &roots.global.state().view(),
+        4,
+        AmxRecordKind::Begin,
+        expired_tx,
+    )
+    .complete()
+    .unwrap()
+    .unwrap();
+    let expired_instruction = begin
+        .into_prepare(FIRST, &expired)
+        .complete(&roots.global.state().ivm_execution_budget())
+        .unwrap();
+    let clock = paid_global_sign(
+        &roots.global,
+        [iroha_data_model::isi::Log::new(
+            iroha_logger::Level::INFO,
+            "actual paid AMX deadline horizon".into(),
+        )
+        .into()],
+        3_999,
+    );
+    assert_eq!(roots.global.commit_at(4_000, vec![clock]), vec![true]);
+    let next = roots.transaction(100, 0x66);
+    let next_tx = next.id().unwrap();
+    let signed = paid_global_sign(
+        &roots.global,
+        [BeginAmxV1 {
+            transaction: next.clone(),
+        }
+        .into()],
+        4_999,
+    );
+    assert_eq!(roots.global.commit_at(5_000, vec![signed]), vec![true]);
+    global_paid_images(&roots.global, 5);
+    assert_eq!(roots.global.height(), 6);
+    let begin = super::super::super::amx_record_proof(
+        &roots.global.state().view(),
+        6,
+        AmxRecordKind::Begin,
+        next_tx,
+    )
+    .complete()
+    .unwrap()
+    .unwrap();
+    let next_instruction = begin
+        .into_prepare(FIRST, &next)
+        .complete(&roots.global.state().ivm_execution_budget())
+        .unwrap();
+    let decision = super::super::super::amx_record_proof(
+        &roots.global.state().view(),
+        6,
+        AmxRecordKind::Decision,
+        expired_tx,
+    )
+    .complete()
+    .unwrap()
+    .unwrap();
+    assert!(matches!(decision.canonical().record,
+        iroha_data_model::sumeragi_amx::AmxRecordV1::Decision(value)
+        if value.outcome == iroha_data_model::sumeragi_amx::AmxOutcomeV1::Abort));
+    let settle = decision
+        .into_settle(FIRST)
+        .complete(&roots.global.state().ivm_execution_budget())
+        .unwrap();
+    test(
+        &roots.participants[0],
+        [expired_instruction, settle, next_instruction],
+        payer(),
+        [expired_tx, next_tx],
+    );
+}

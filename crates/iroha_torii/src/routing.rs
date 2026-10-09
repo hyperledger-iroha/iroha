@@ -123,10 +123,7 @@ use iroha_data_model::soranet::privacy_metrics::{
 };
 use iroha_data_model::{
     self,
-    block::{
-        BlockHeader, SharedSignedBlock, SignedBlock,
-        consensus::{EvidencePenaltyStatus, EvidenceRecord},
-    },
+    block::{BlockHeader, SharedSignedBlock, SignedBlock, consensus::EvidencePenaltyStatus},
     consensus::ConsensusKeyRecord,
     nexus::{
         DataSpaceCatalog, LaneLifecycleStatusV1, PublicLaneRewardRecord, PublicLaneStakeShare,
@@ -7556,7 +7553,7 @@ mod evidence_list_query_contract_tests {
             vote
         };
         // Transport projection only; original history remains responsible for attribution.
-        let mut record = EvidenceRecord {
+        let mut record = iroha_data_model::block::consensus::EvidenceRecord {
             evidence: Evidence::from_native(&NativeEvidence::VoteEquivocation(vote(4), vote(5)))
                 .unwrap(),
             attribution: EvidenceAttribution {
@@ -7797,7 +7794,10 @@ pub async fn handle_v1_sumeragi_evidence_list(
         // count-first encoder makes its exact destination allocation.
         let wire = SumeragiEvidenceListWireResponse {
             total,
-            items: records.iter().map(|record| (**record).clone()).collect(),
+            items: records
+                .iter()
+                .map(|record| record.canonical_projection())
+                .collect(),
         };
         return bounded_sumeragi_evidence_list_norito_response(
             &wire,
@@ -7807,7 +7807,16 @@ pub async fn handle_v1_sumeragi_evidence_list(
     // Map to Norito-JSON response
     let items: Vec<norito::json::Value> = records
         .iter()
-        .map(|record| evidence_to_json(record))
+        .map(|record| {
+            evidence_fields_to_json(
+                &record.evidence,
+                &record.attribution,
+                record.recorded_at_height,
+                record.recorded_at_view,
+                record.recorded_at_ms,
+                record.penalty_status,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     let payload = json_object(vec![json_entry("total", total), json_entry("items", items)]);
     bounded_sumeragi_evidence_list_json_response(
@@ -8980,9 +8989,27 @@ fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
     lifecycle.insert("details".into(), details);
     Value::Object(lifecycle)
 }
-fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
+#[cfg(test)]
+fn evidence_to_json(rec: &iroha_data_model::block::consensus::EvidenceRecord) -> Result<Value> {
+    evidence_fields_to_json(
+        &rec.evidence,
+        &rec.attribution,
+        rec.recorded_at_height,
+        rec.recorded_at_view,
+        rec.recorded_at_ms,
+        rec.penalty_status,
+    )
+}
+fn evidence_fields_to_json(
+    evidence: &iroha_data_model::block::consensus::Evidence,
+    attribution: &iroha_data_model::block::consensus::EvidenceAttribution,
+    recorded_at_height: u64,
+    recorded_at_view: u64,
+    recorded_at_ms: u64,
+    penalty_status: EvidencePenaltyStatus,
+) -> Result<Value> {
     use iroha_sumeragi::message::Evidence as NativeEvidence;
-    let native = rec.evidence.decode_native().map_err(|error| match error {
+    let native = evidence.decode_native().map_err(|error| match error {
         iroha_sumeragi::message::CodecError::Resource(_) => {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
@@ -8997,7 +9024,6 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
         NativeEvidence::InvalidProposal { .. } => "invalid_proposal",
         NativeEvidence::ConflictingCertificates(..) => "conflicting_certificates",
     };
-    let attribution = &rec.attribution;
     let offenders = attribution
         .offenders
         .iter()
@@ -9013,10 +9039,10 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
         "epoch": (attribution.epoch), "context_id": (hex::encode(attribution.context_id)),
         "authority_generation": (hex::encode(attribution.authority_generation)),
         "offenders": offenders, "safety_violation": (attribution.safety_violation),
-        "native_frame_hash": (hash_to_hex(iroha_crypto::Hash::new(rec.evidence.native_frame()))),
-        "recorded_height": (rec.recorded_at_height), "recorded_view": (rec.recorded_at_view),
-        "recorded_ms": (rec.recorded_at_ms), "consensus_admitted_height": (rec.recorded_at_height),
-        "penalty_status": (evidence_penalty_status_to_json(rec.penalty_status))
+        "native_frame_hash": (hash_to_hex(iroha_crypto::Hash::new(evidence.native_frame()))),
+        "recorded_height": (recorded_at_height), "recorded_view": (recorded_at_view),
+        "recorded_ms": (recorded_at_ms), "consensus_admitted_height": (recorded_at_height),
+        "penalty_status": (evidence_penalty_status_to_json(penalty_status))
     }))
 }
 fn reject_direct_multisig_signing(
@@ -13204,9 +13230,11 @@ fn encode_contract_argument_record(
         (None, None) => Ok(None),
         (None, Some(_)) => Err("zero-parameter entrypoint must not receive a payload".to_owned()),
         (Some(_), None) => Err("parameterized entrypoint requires a payload".to_owned()),
-        (Some(schema), Some(payload)) => ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
-            .map(Some)
-            .map_err(|error| format!("payload does not match entrypoint schema: {error}")),
+        (Some(schema), Some(payload)) => {
+            ivm_abi::arguments::encode_argument_record_from_json_detailed(schema, payload)
+                .map(Some)
+                .map_err(|error| format!("payload does not match entrypoint schema: {error}"))
+        }
     }
 }
 fn prepare_contract_argument_record(
@@ -16567,6 +16595,13 @@ fn execute_contract_call_simulation(
         result,
     })
 }
+/// Build the contract-call metadata that consensus binds to a top-level `ContractCall`.
+///
+/// Admission rejects a call whose `contract_address`, `contract_code_hash`,
+/// `contract_entrypoint`, `contract_alias` (live alias) or `contract_payload`
+/// (canonical argument record) differs from the signed invocation. Contract feeds
+/// derive module, event kind and normalized payload from these keys when they
+/// project the committed call, so no unbound event metadata is written here.
 fn build_contract_call_metadata(
     _manifest: &manifest::ContractManifest,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -16602,34 +16637,6 @@ fn build_contract_call_metadata(
         let payload_key =
             Name::from_str("contract_payload").expect("static metadata key `contract_payload`");
         metadata.insert(payload_key, payload.clone());
-    }
-    if let Some(module) = canonical_contract_module(
-        contract_alias.map(ToString::to_string).as_deref(),
-        &contract_address.to_string(),
-    ) {
-        let module_key =
-            Name::from_str("contract_module").expect("static metadata key `contract_module`");
-        metadata.insert(module_key, IrohaJson::new(module.to_owned()));
-        if let Some(entrypoint) = entrypoint {
-            if let Some(event_kind) = canonical_contract_event_kind(module, entrypoint) {
-                let event_kind_key = Name::from_str("contract_event_kind")
-                    .expect("static metadata key `contract_event_kind`");
-                metadata.insert(event_kind_key, IrohaJson::new(event_kind.to_owned()));
-                let schema_version_key = Name::from_str("contract_event_schema_version")
-                    .expect("static metadata key `contract_event_schema_version`");
-                metadata.insert(schema_version_key, IrohaJson::new(1_u64));
-                let provenance_key = Name::from_str("contract_event_provenance")
-                    .expect("static metadata key `contract_event_provenance`");
-                metadata.insert(provenance_key, IrohaJson::new("emitted"));
-                if let Some(event_payload) =
-                    canonical_contract_event_payload(module, entrypoint, payload)
-                {
-                    let payload_key = Name::from_str("contract_event_payload")
-                        .expect("static metadata key `contract_event_payload`");
-                    metadata.insert(payload_key, event_payload);
-                }
-            }
-        }
     }
     metadata
 }
@@ -31030,7 +31037,7 @@ struct ContractActivityProjection {
     result_ok: bool,
     contract_address: String,
     contract_alias: Option<String>,
-    contract_entrypoint: Option<String>,
+    contract_entrypoint: String,
     contract_payload: Option<norito::json::Value>,
     fee_payment: Option<iroha_data_model::transaction::FeePaymentIntent>,
 }
@@ -31752,19 +31759,17 @@ fn canonical_contract_event_kind(module: &str, entrypoint: &str) -> Option<&'sta
         _ => None,
     }
 }
-fn canonical_contract_event_payload(
-    module: &str,
-    entrypoint: &str,
-    payload: Option<&IrohaJson>,
-) -> Option<IrohaJson> {
-    fn payload_object(payload: &IrohaJson) -> Option<Map> {
-        let parsed = json::parse_value(payload.get()).ok()?;
-        match parsed {
-            Value::Object(object) => Some(object),
+/// Normalize a consensus-bound call payload into the canonical event payload for
+/// `module`/`entrypoint`: copy well-known amount and identifier aliases and redact
+/// private proofs. A non-object payload is wrapped as `{"value": ...}`.
+fn canonical_contract_event_payload(module: &str, entrypoint: &str, payload: &Value) -> Value {
+    fn payload_object(payload: &Value) -> Map {
+        match payload {
+            Value::Object(object) => object.clone(),
             other => {
                 let mut object = Map::new();
-                object.insert("value".into(), other);
-                Some(object)
+                object.insert("value".into(), other.clone());
+                object
             }
         }
     }
@@ -31822,7 +31827,7 @@ fn canonical_contract_event_payload(
             })
         })
     }
-    let mut normalized = payload_object(payload?)?;
+    let mut normalized = payload_object(payload);
     let normalized_entrypoint = entrypoint.trim().to_ascii_lowercase();
     match (module, normalized_entrypoint.as_str()) {
         ("uranai", _) => {
@@ -32085,7 +32090,7 @@ fn canonical_contract_event_payload(
         }
         _ => {}
     }
-    Some(IrohaJson::new(Value::Object(normalized)))
+    Value::Object(normalized)
 }
 fn participant_hint_key(key: &str) -> bool {
     matches!(
@@ -32187,23 +32192,92 @@ fn collect_contract_event_payload_fields(
         numeric_fields,
     )
 }
+/// Provenance of every contract-event row: Torii derives rows from committed calls,
+/// contracts do not emit them.
+const CONTRACT_EVENT_PROVENANCE: &str = "derived";
+/// Version of the call-derived contract-event row.
+const CONTRACT_EVENT_SCHEMA_VERSION: u64 = 1;
+/// The part of a committed transaction that consensus bound to a contract call.
+struct BoundContractCall {
+    /// Address from the signed invocation.
+    contract_address: String,
+    /// Entrypoint from the signed invocation.
+    entrypoint: String,
+    /// Live alias of the address; present only when consensus bound the metadata.
+    contract_alias: Option<String>,
+    /// Canonical argument payload; present only when consensus bound the metadata.
+    payload: Option<Value>,
+}
+/// Return the contract call a committed transaction executed, if any.
+///
+/// Only a top-level [`Executable::ContractCall`] is a contract call, and its
+/// signed invocation supplies the address and entrypoint. Admission binds a
+/// call's `contract_alias` and `contract_payload` metadata to the invocation
+/// before executing it, so those two keys are read only from a call that
+/// committed successfully and whose metadata names that very invocation. No other
+/// key is read: `contract_module` and `contract_event_*` are never checked by
+/// consensus, so any signer could write them.
+fn bound_contract_call(tx: &impl HistoryTransaction) -> Option<BoundContractCall> {
+    let signed = match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => signed,
+        TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+        TransactionEntrypoint::SealedCommitment(_) => return None,
+    };
+    let Executable::ContractCall(invocation) = signed.instructions() else {
+        return None;
+    };
+    let metadata_bound =
+        tx.result().as_ref().is_ok() && contract_call_metadata_names_invocation(tx, invocation);
+    Some(BoundContractCall {
+        contract_address: invocation.contract_address.to_string(),
+        entrypoint: invocation.entrypoint.clone(),
+        contract_alias: metadata_bound
+            .then(|| tx_metadata_string(tx, "contract_alias"))
+            .flatten(),
+        payload: metadata_bound
+            .then(|| tx_metadata_json_value(tx, "contract_payload"))
+            .flatten(),
+    })
+}
+/// Mirror admission's identity check: the metadata names exactly `invocation`.
+fn contract_call_metadata_names_invocation(
+    tx: &impl HistoryTransaction,
+    invocation: &iroha_data_model::transaction::executable::ContractInvocation,
+) -> bool {
+    let address = tx_metadata_string(tx, "contract_address").and_then(|address| {
+        address
+            .trim()
+            .parse::<iroha_data_model::smart_contract::ContractAddress>()
+            .ok()
+    });
+    let code_hash =
+        tx_metadata_string(tx, "contract_code_hash").and_then(|hash| hash.parse::<Hash>().ok());
+    let entrypoint = tx_metadata_string(tx, "contract_entrypoint");
+    address.as_ref() == Some(&invocation.contract_address)
+        && code_hash == Some(invocation.expected_code_hash)
+        && entrypoint.as_deref().map(str::trim) == Some(invocation.entrypoint.as_str())
+}
+/// Project one committed contract call into a call-derived contract-event row.
+///
+/// The module comes from the bound alias (or the address), the event kind from
+/// the module and the invoked entrypoint, and the payload from the bound
+/// `contract_payload`; see [`bound_contract_call`].
 fn contract_event_projection_from_tx(
     height: usize,
     tx: &impl HistoryTransaction,
 ) -> Option<ContractEventProjection> {
+    let call = bound_contract_call(tx)?;
     let base = project_tx(tx);
-    let contract_address = tx_metadata_string(tx, "contract_address")?;
-    let contract_alias = tx_metadata_string(tx, "contract_alias");
-    let payload = tx_metadata_json_value(tx, "contract_event_payload")
-        .or_else(|| tx_metadata_json_value(tx, "contract_payload"));
-    let event_kind = tx_metadata_string(tx, "contract_event_kind")
-        .or_else(|| tx_metadata_string(tx, "contract_entrypoint"))
-        .unwrap_or_else(|| "contract_call".to_owned());
-    let schema_version = tx_metadata_u64(tx, "contract_event_schema_version").unwrap_or(1);
-    let provenance =
-        tx_metadata_string(tx, "contract_event_provenance").unwrap_or_else(|| "derived".to_owned());
-    let module = tx_metadata_string(tx, "contract_module")
-        .unwrap_or_else(|| contract_event_module(contract_alias.as_deref(), &contract_address));
+    let module = contract_event_module(call.contract_alias.as_deref(), &call.contract_address);
+    let canonical_kind = canonical_contract_event_kind(&module, &call.entrypoint);
+    let payload = match canonical_kind {
+        Some(_) => call
+            .payload
+            .as_ref()
+            .map(|payload| canonical_contract_event_payload(&module, &call.entrypoint, payload)),
+        None => call.payload,
+    };
+    let event_kind = canonical_kind.map_or(call.entrypoint, str::to_owned);
     let fee_payment = tx_fee_projection(tx);
     let (mut participants, mut asset_ids, numeric_fields) = payload
         .as_ref()
@@ -32229,16 +32303,16 @@ fn contract_event_projection_from_tx(
     asset_ids.dedup();
     Some(ContractEventProjection {
         event_id: format!("{}:0", tx.entrypoint_hash()),
-        schema_version,
-        provenance,
+        schema_version: CONTRACT_EVENT_SCHEMA_VERSION,
+        provenance: CONTRACT_EVENT_PROVENANCE.to_owned(),
         authority: base.authority,
         timestamp_ms: base.timestamp_ms,
         tx_hash_hex: format!("{}", tx.entrypoint_hash()),
         block_height: height as u64,
         block_hash_hex: format!("{}", tx.block_hash()),
         result_ok: base.result_ok,
-        contract_address,
-        contract_alias,
+        contract_address: call.contract_address,
+        contract_alias: call.contract_alias,
         module,
         event_kind,
         participants,
@@ -32718,15 +32792,6 @@ fn tx_metadata_string(
         value => norito::json::to_json(&value).ok(),
     }
 }
-fn tx_metadata_u64(tx: &impl HistoryTransaction, key: &str) -> Option<u64> {
-    match tx_metadata_json_value(tx, key)? {
-        norito::json::Value::Number(value) => value
-            .as_u64()
-            .or_else(|| value.as_i64().and_then(|v| u64::try_from(v).ok())),
-        norito::json::Value::String(value) => value.parse::<u64>().ok(),
-        _ => None,
-    }
-}
 fn append_asset_ids_from_instruction(
     out: &mut Vec<iroha_data_model::asset::AssetId>,
     instr: &iroha_data_model::isi::InstructionBox,
@@ -32993,24 +33058,25 @@ fn project_tx(tx: &impl HistoryTransaction) -> TxProjection {
             .filter(|value| !value.is_empty()),
     }
 }
+/// Project one committed contract call into a contract-activity row; see
+/// [`bound_contract_call`] for which fields are trusted.
 fn contract_activity_projection_from_tx(
     height: usize,
     tx: &impl HistoryTransaction,
 ) -> Option<ContractActivityProjection> {
+    let call = bound_contract_call(tx)?;
     let base = project_tx(tx);
-    let contract_address = tx_metadata_string(tx, "contract_address")?;
-    let fee_payment = tx_fee_projection(tx);
     Some(ContractActivityProjection {
         authority: base.authority,
         timestamp_ms: base.timestamp_ms,
         entrypoint_hash: base.entrypoint_hash,
         block_height: height as u64,
         result_ok: base.result_ok,
-        contract_address,
-        contract_alias: tx_metadata_string(tx, "contract_alias"),
-        contract_entrypoint: tx_metadata_string(tx, "contract_entrypoint"),
-        contract_payload: tx_metadata_json_value(tx, "contract_payload"),
-        fee_payment,
+        contract_address: call.contract_address,
+        contract_alias: call.contract_alias,
+        contract_entrypoint: call.entrypoint,
+        contract_payload: call.payload,
+        fee_payment: tx_fee_projection(tx),
     })
 }
 fn tx_fee_projection(
@@ -36600,42 +36666,6 @@ mod explorer_lookup_tests {
         assert_eq!(page.items[0]["quantity"].as_str(), Some("10"));
     }
 
-    routing_test! { sync definition_visibility_rejects_a_restricted_definition_without_a_home
-        let (owner, _) = checked_explorer_lookup_account(0x37, "invalid restricted definition owner");
-        let definition_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").unwrap(), "invalid".parse().unwrap(),
-        );
-        let definition = dm::AssetDefinition::numeric(
-            definition_id.clone(), "Invalid", iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted, None,
-        ).build(&owner);
-        let home = DataSpaceId::new(7);
-        let mut world = World::with([], [dm::Account::new(owner.clone()).build(&owner)], []);
-        world
-            .insert_direct_asset_definition_with_assets_for_testing(definition, home, [])
-            .expect("admitted direct-home fixture");
-        let visibility = DataspaceReadVisibility::new(BTreeSet::from([home, DataSpaceId::UNIVERSAL]), false);
-        assert!(visibility.allows_asset_definition(&world.view(), &definition_id));
-        {
-            // Seed corruption only inside an uncommitted test checkpoint. The
-            // production constructor correctly rejects this malformed home.
-            let mut block = world.block();
-            let mut tx = block.transaction_without_telemetry(
-                iroha_config::parameters::actual::LaneConfig::default(), 0,
-            );
-            let empty_registry = iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1 {
-                version: iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1::VERSION,
-                bindings: BTreeMap::new(),
-            };
-            tx.parameters_mut_for_testing().get_mut().set_parameter(
-                iroha_data_model::parameter::Parameter::Custom(empty_registry.into_custom_parameter().unwrap()),
-            );
-            assert!(tx.asset_definitions().get(&definition_id).is_some());
-            assert!(tx.asset_definition_home(&definition_id).is_err());
-            assert!(!visibility.allows_asset_definition(&*tx, &definition_id));
-        }
-        assert!(visibility.allows_asset_definition(&world.view(), &definition_id));
-    }
-
     routing_test! { sync direct_dataspace_definition_visibility_uses_immutable_home
         let (owner, _) = checked_explorer_lookup_account(0x33, "direct definition visibility owner");
         let home = DataSpaceId::new(8_648_377_547_929_788_715);
@@ -38720,7 +38750,7 @@ pub struct ContractEventsSseParams {
     pub participant: Option<String>,
     /// Filter by asset identifier references.
     pub asset_id: Option<String>,
-    /// Filter by event provenance.
+    /// Filter by event provenance; rows are call-derived, so only `derived` matches.
     pub provenance: Option<String>,
     /// Filter items whose timestamp is greater than or equal to this value.
     pub since_timestamp_ms: Option<u64>,
@@ -38831,7 +38861,7 @@ pub fn stream_resume_unsupported_response() -> Response {
         .insert(crate::ReviewedProtocolNativeError::StreamResumeUnsupported);
     response
 }
-/// GET /v1/contracts/events/sse – Server-Sent Events stream of generic contract events.
+/// GET /v1/contracts/events/sse – Server-Sent Events stream of call-derived contract events.
 pub fn handle_v1_contracts_events_sse(
     events: EventsSender,
     state: Arc<CoreState>,
@@ -44176,7 +44206,7 @@ pub struct ContractEventGetParams {
     pub participant: Option<String>,
     /// Filter by asset identifier references.
     pub asset_id: Option<String>,
-    /// Filter by event provenance (`emitted` or `derived`).
+    /// Filter by event provenance; rows are call-derived, so only `derived` matches.
     pub provenance: Option<String>,
     /// Filter items whose timestamp is greater than or equal to this value.
     pub since_timestamp_ms: Option<u64>,
@@ -44687,12 +44717,10 @@ fn contract_activity_projections_to_json(
                     norito::json::Value::from(alias.clone()),
                 );
             }
-            if let Some(entrypoint) = it.contract_entrypoint.as_ref() {
-                m.insert(
-                    "contract_entrypoint".into(),
-                    norito::json::Value::from(entrypoint.clone()),
-                );
-            }
+            m.insert(
+                "contract_entrypoint".into(),
+                norito::json::Value::from(it.contract_entrypoint.clone()),
+            );
             if let Some(payload) = it.contract_payload.as_ref() {
                 m.insert("contract_payload".into(), payload.clone());
             }
@@ -47202,6 +47230,276 @@ pub async fn handle_v1_contracts_rollups_dlmm_hooks_get(
     .await
 }
 #[cfg(all(test, feature = "app_api"))]
+mod contract_feed_binding_tests {
+    //! Contract feeds trust only what consensus bound to an executed call.
+    use super::*;
+    use iroha_data_model::{
+        smart_contract::ContractAddress,
+        transaction::{
+            FeePaymentIntent, TransactionBuilder,
+            error::TransactionRejectionReason,
+            executable::{ContractArgumentRecord, ContractInvocation},
+        },
+    };
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+    const ROUTER_ALIAS: &str = "dlmm_router::soraswap.universal";
+    fn network() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"contract feed binding fixture",
+        )))
+    }
+    fn router_address() -> ContractAddress {
+        ContractAddress::derive(&network(), &ALICE_ID, 3, DataSpaceId::UNIVERSAL)
+            .expect("derive router address")
+    }
+    fn router_code_hash() -> Hash {
+        Hash::new(b"dlmm router code")
+    }
+    fn router_call() -> ContractInvocation {
+        ContractInvocation {
+            contract_address: router_address(),
+            expected_code_hash: router_code_hash(),
+            entrypoint: "route_swap".to_owned(),
+            arguments: Some(
+                ContractArgumentRecord::try_new(vec![1, 2, 3]).expect("bounded argument record"),
+            ),
+        }
+    }
+    fn insert(metadata: &mut Metadata, key: &str, value: IrohaJson) {
+        metadata.insert(Name::from_str(key).expect("static metadata key"), value);
+    }
+    /// The keys consensus binds to `router_call()`, as Torii's call route writes them.
+    fn bound_router_metadata() -> Metadata {
+        let mut metadata = Metadata::default();
+        insert(
+            &mut metadata,
+            "contract_address",
+            IrohaJson::new(router_address().to_string()),
+        );
+        insert(
+            &mut metadata,
+            "contract_code_hash",
+            IrohaJson::new(router_code_hash().to_string()),
+        );
+        insert(
+            &mut metadata,
+            "contract_alias",
+            IrohaJson::new(ROUTER_ALIAS),
+        );
+        insert(
+            &mut metadata,
+            "contract_entrypoint",
+            IrohaJson::new("route_swap"),
+        );
+        insert(
+            &mut metadata,
+            "contract_payload",
+            IrohaJson::new(norito::json!({
+                "amount_in": "100",
+                "min_out": "95",
+                "receiver": "bob@universal"
+            })),
+        );
+        metadata
+    }
+    /// Claims no consensus rule checks, written by the signer.
+    fn with_forged_event_claims(mut metadata: Metadata) -> Metadata {
+        insert(&mut metadata, "contract_module", IrohaJson::new("perps"));
+        insert(
+            &mut metadata,
+            "contract_event_kind",
+            IrohaJson::new("perps_position_liquidated"),
+        );
+        insert(
+            &mut metadata,
+            "contract_event_provenance",
+            IrohaJson::new("emitted"),
+        );
+        insert(
+            &mut metadata,
+            "contract_event_schema_version",
+            IrohaJson::new(9_u64),
+        );
+        insert(
+            &mut metadata,
+            "contract_event_payload",
+            IrohaJson::new(norito::json!({ "trader": "mallory@universal", "amount": 1_000_000 })),
+        );
+        metadata
+    }
+    fn signed(metadata: Metadata, executable: Executable) -> TransactionEntrypoint {
+        TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                network(),
+                ALICE_ID.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_metadata(metadata)
+            .with_executable(executable)
+            .sign(ALICE_KEYPAIR.private_key()),
+        )
+    }
+    fn committed(ok: bool) -> TransactionResult {
+        TransactionResult::new(if ok {
+            Ok(Vec::new())
+        } else {
+            Err(TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted("fixture rejection".into()),
+            ))
+        })
+    }
+    fn history<'a>(
+        entrypoint: &'a TransactionEntrypoint,
+        result: &'a TransactionResult,
+    ) -> BorrowedNetworkTransaction<'a> {
+        BorrowedNetworkTransaction {
+            entrypoint,
+            entrypoint_hash: entrypoint.hash(),
+            result,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"contract feed block")),
+        }
+    }
+    routing_test! { sync non_contract_transactions_never_reach_contract_feeds
+        let ok = committed(true);
+        for executable in [
+            Executable::Instructions(iroha_primitives::const_vec::ConstVec::new_empty()),
+            Executable::Batch(iroha_primitives::const_vec::ConstVec::new_empty()),
+        ] {
+            let entrypoint = signed(with_forged_event_claims(bound_router_metadata()), executable);
+            let tx = history(&entrypoint, &ok);
+            assert!(
+                contract_event_projection_from_tx(4, &tx).is_none(),
+                "metadata alone must not create a contract event"
+            );
+            assert!(
+                contract_activity_projection_from_tx(4, &tx).is_none(),
+                "metadata alone must not create contract activity"
+            );
+        }
+    }
+    routing_test! { sync committed_call_event_is_derived_from_its_bound_call
+        let entrypoint = signed(
+            with_forged_event_claims(bound_router_metadata()),
+            Executable::ContractCall(router_call()),
+        );
+        let ok = committed(true);
+        let tx = history(&entrypoint, &ok);
+        let event = contract_event_projection_from_tx(4, &tx).expect("committed call event");
+        assert_eq!(event.provenance, CONTRACT_EVENT_PROVENANCE);
+        assert_eq!(event.provenance, "derived");
+        assert_eq!(event.schema_version, CONTRACT_EVENT_SCHEMA_VERSION);
+        assert_eq!(event.contract_address, router_address().to_string());
+        assert_eq!(event.contract_alias.as_deref(), Some(ROUTER_ALIAS));
+        assert_eq!(event.module, "swaps");
+        assert_eq!(event.event_kind, "swap_executed");
+        let payload = event.payload.as_ref().expect("bound payload");
+        assert_eq!(payload["amount"].as_str(), Some("100"), "canonical swap normalization");
+        assert_eq!(payload["receiver"].as_str(), Some("bob@universal"));
+        assert!(payload.get("trader").is_none(), "forged event payload ignored");
+        assert!(event.participants.contains(&"bob@universal".to_owned()));
+        assert!(!event.participants.iter().any(|participant| participant.contains("mallory")));
+        let activity = contract_activity_projection_from_tx(4, &tx).expect("committed call");
+        assert_eq!(activity.contract_address, router_address().to_string());
+        assert_eq!(activity.contract_alias.as_deref(), Some(ROUTER_ALIAS));
+        assert_eq!(activity.contract_entrypoint, "route_swap");
+        assert_eq!(
+            activity.contract_payload.as_ref().expect("bound payload")["amount_in"].as_str(),
+            Some("100")
+        );
+    }
+    routing_test! { sync rejected_call_withholds_unbound_metadata
+        let entrypoint = signed(
+            with_forged_event_claims(bound_router_metadata()),
+            Executable::ContractCall(router_call()),
+        );
+        let rejected = committed(false);
+        let tx = history(&entrypoint, &rejected);
+        let event = contract_event_projection_from_tx(4, &tx).expect("rejected call event");
+        let address = router_address().to_string();
+        assert!(!event.result_ok);
+        assert_eq!(event.provenance, "derived");
+        assert_eq!(event.contract_address, address);
+        assert_eq!(event.contract_alias, None, "a rejected call proves no alias binding");
+        assert_eq!(event.module, address);
+        assert_eq!(event.event_kind, "route_swap");
+        assert_eq!(event.payload, None);
+        assert!(event.numeric_fields.is_empty());
+        assert_eq!(event.participants, vec![event.authority.clone().expect("authority")]);
+        let activity = contract_activity_projection_from_tx(4, &tx).expect("rejected call");
+        assert_eq!(activity.contract_address, address);
+        assert_eq!(activity.contract_entrypoint, "route_swap");
+        assert_eq!(activity.contract_alias, None);
+        assert_eq!(activity.contract_payload, None);
+    }
+    routing_test! { sync committed_call_ignores_metadata_naming_another_call
+        let other_address =
+            ContractAddress::derive(&network(), &ALICE_ID, 4, DataSpaceId::UNIVERSAL)
+                .expect("derive another address")
+                .to_string();
+        let ok = committed(true);
+        for (key, value) in [
+            ("contract_address", IrohaJson::new(other_address)),
+            (
+                "contract_code_hash",
+                IrohaJson::new(Hash::new(b"other code").to_string()),
+            ),
+            ("contract_entrypoint", IrohaJson::new("close_position")),
+        ] {
+            let mut metadata = bound_router_metadata();
+            insert(&mut metadata, key, value);
+            let entrypoint = signed(metadata, Executable::ContractCall(router_call()));
+            let tx = history(&entrypoint, &ok);
+            let event = contract_event_projection_from_tx(4, &tx).expect("committed call event");
+            assert_eq!(event.contract_address, router_address().to_string(), "{key}");
+            assert_eq!(event.event_kind, "route_swap", "{key}");
+            assert_eq!(event.contract_alias, None, "{key}");
+            assert_eq!(event.payload, None, "{key}");
+            let activity = contract_activity_projection_from_tx(4, &tx).expect("committed call");
+            assert_eq!(activity.contract_entrypoint, "route_swap", "{key}");
+            assert_eq!(activity.contract_alias, None, "{key}");
+            assert_eq!(activity.contract_payload, None, "{key}");
+        }
+    }
+    routing_test! { sync contract_call_metadata_carries_only_consensus_bound_keys
+        let manifest = manifest::ContractManifest {
+            seiyaku_name: None,
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            kotoba: None,
+            error_messages: None,
+            error_types: None,
+            provenance: None,
+        };
+        let alias: iroha_data_model::smart_contract::ContractAlias =
+            ROUTER_ALIAS.parse().expect("router alias");
+        let metadata = build_contract_call_metadata(
+            &manifest,
+            &router_address(),
+            &router_code_hash(),
+            Some(&alias),
+            Some("route_swap"),
+            Some(&IrohaJson::new(norito::json!({ "amount_in": "100" }))),
+        );
+        let keys = metadata
+            .iter()
+            .map(|(key, _)| key.as_ref().to_owned())
+            .collect::<BTreeSet<_>>();
+        let bound = [
+            "contract_address",
+            "contract_alias",
+            "contract_code_hash",
+            "contract_entrypoint",
+            "contract_payload",
+        ];
+        assert_eq!(keys, bound.iter().map(|key| (*key).to_owned()).collect::<BTreeSet<_>>());
+    }
+}
+#[cfg(all(test, feature = "app_api"))]
 mod tx_projection_display_tests {
     use super::*;
     use iroha_data_model::account::AccountId;
@@ -47231,7 +47529,7 @@ mod tx_projection_display_tests {
             result_ok: true,
             contract_address: "irohac1router".into(),
             contract_alias: Some("dlmm_router".into()),
-            contract_entrypoint: Some("route_swap".into()),
+            contract_entrypoint: "route_swap".into(),
             contract_payload: Some(norito::json!({
                 "amount_in": 10,
                 "min_out": 9
@@ -47464,7 +47762,7 @@ mod tx_projection_display_tests {
             canonical_contract_event_kind("uranai", "private_buy"),
             Some("private_shares_bought")
         );
-        let payload = IrohaJson::new(norito::json!({
+        let payload = norito::json!({
             "market_id": "mkt-1",
             "outcome_index": 1,
             "collateral_in": 25,
@@ -47483,10 +47781,8 @@ mod tx_projection_display_tests {
             "wallet": {
                 "private_key": "nested-private-key"
             }
-        }));
-        let normalized = canonical_contract_event_payload("uranai", "private_buy", Some(&payload))
-            .expect("normalized payload");
-        let value = json::parse_value(normalized.get()).expect("json payload");
+        });
+        let value = canonical_contract_event_payload("uranai", "private_buy", &payload);
         assert_eq!(value["market_id"].as_str(), Some("mkt-1"));
         assert_eq!(value["private_proof_redacted"].as_bool(), Some(true));
         assert!(value.get("proof_env").is_none());
@@ -47505,8 +47801,8 @@ mod tx_projection_display_tests {
     ) -> ContractEventProjection {
         ContractEventProjection {
             event_id: format!("uranai-{block_height}:0"),
-            schema_version: 1,
-            provenance: "emitted".into(),
+            schema_version: CONTRACT_EVENT_SCHEMA_VERSION,
+            provenance: CONTRACT_EVENT_PROVENANCE.into(),
             authority: Some(ALICE_ID.to_string()),
             timestamp_ms: Some(timestamp_ms),
             tx_hash_hex: format!("hash-{block_height}"),
@@ -51212,8 +51508,10 @@ pub(crate) fn prepared_submit_outcome(
             })?;
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
-    // A queue/cache observation reports Pending only; it never proves application.
-    if let Some(status) = app.pipeline_status_cache.lookup(&transaction_hash) {
+    // Local queue/admission/expiry hints never replace a missing canonical block outcome.
+    if let Some(status) =
+        crate::pipeline_status_cached_entry_without_canonical(app, &transaction_hash)?
+    {
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
     if app

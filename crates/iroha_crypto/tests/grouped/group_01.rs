@@ -1,5 +1,4 @@
 //! Grouped Iroha crypto integration tests.
-#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../bls_batch.rs"]
 mod bls_batch;
 #[path = "../bls_keys_match.rs"]

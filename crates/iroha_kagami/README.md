@@ -359,10 +359,26 @@ the parent's canonical signed genesis and its genuine committed H2. Core's
 certified-prefix verifier authenticates them before one participant instruction
 is appended and the private genesis is staged and signed. Existing transactions
 remain intact; duplicate participant registration and outputs that alias either
-source are rejected. Managed source acquisition, parent registration and durable
-validator relaying remain separate work. `--config` uses the node configuration
+source are rejected. Managed private preparation acquires and retains the selected
+parent's original G1/H2 under its authenticated release; reopening uses the same
+complete capsule and signed generation. Durable validator relaying remains open. `--config` uses the node configuration
 loader, including compiled profiles and the generated `data_dir` layout; its
 claimed genesis identity must still pass runtime validation.
+
+AMX registration on the parent is a separate administrative action. After explicit
+`kagami localnet down NAME`, run `kagami dataspace register-amx NAME --admin-config
+PARENT_ADMIN_CONFIG --fee-asset ASSET_ID --max-fee AMOUNT --deadline-unix-ms
+ORIGINAL_UTC_DEADLINE`. The retained inactive generation supplies the child;
+`PARENT_ADMIN_CONFIG` supplies a separately selected parent signer whose native
+execution must hold `CanSetParameters`. No SNS permission implies this authority.
+`--timeout` bounds this turn's I/O to 1–60 seconds. Retry with the same signer,
+source, fees and original UTC deadline: the create-only journal preserves one
+signed transaction and authenticated successful or rejected carrier. A rejected
+original is terminal and never re-signed after a grant. Authorizing a distinct new
+attempt needs a separate owner/API that is not implemented here. Only the certified successful result is
+registration evidence; status alone is insufficient. Ordinary `kagami localnet up
+NAME` restarts the retained generation. Signing material stays runtime-only.
+This action does not implement Prepared/Decision relaying or qualify full H2.
 
 The one-line `genesis.expected_hash` output is the deployment trust root. It
 carries the exact signed header hash as one canonical checked NetworkId literal.

@@ -49,7 +49,6 @@ seiyaku LendingSimple {
             destination: vault_account,
             asset_definition: debt_asset,
             amount: amount,
-            dataspace: DataSpaceId::parse("0"),
         );
         ledger::asset::burn(account: vault_account, asset_definition: debt_asset, amount: amount);
     }

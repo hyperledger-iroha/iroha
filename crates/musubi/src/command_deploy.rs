@@ -37,6 +37,36 @@ pub(super) struct DeployArgs {
     /// Cancel an unattempted local plan; attempted transactions still require exact-hash recovery.
     #[arg(long, value_name = "JOURNAL", conflicts_with_all = ["contract", "locked", "workspace", "packages", "exclude"])]
     cancel: Option<PathBuf>,
+    /// Deploy this prebuilt `.to` after verifying that the locked package source reproduces it.
+    #[arg(long, value_name = "PATH", requires = "artifact_manifest", conflicts_with_all = ["resume", "cancel"])]
+    artifact: Option<PathBuf>,
+    /// Compiler manifest written beside the prebuilt artifact (`<name>.manifest.json`).
+    #[arg(long, value_name = "PATH", requires = "artifact")]
+    artifact_manifest: Option<PathBuf>,
+    /// Run the seiyaku's hajimari/始まり hook after the deployment is Applied, as one recoverable
+    /// call operation; the instance rejects every other call and view until it runs.
+    #[arg(long, conflicts_with_all = ["prepare", "resume", "cancel"])]
+    activate: bool,
+    /// Named JSON arguments for the activating hook; omitted or {} when it takes none.
+    #[arg(long, value_name = "JSON", requires = "activate")]
+    args: Option<String>,
+    /// Read the activating hook's named JSON arguments from this file instead of `--args`.
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "activate",
+        conflicts_with = "args"
+    )]
+    args_file: Option<PathBuf>,
+    /// Signature-bound VM budget for the activating hook.
+    #[arg(long, requires = "activate", value_parser = clap::value_parser!(u64).range(1..=iroha_contract_deploy::call::MAX_CALL_GAS_LIMIT))]
+    gas_limit: Option<u64>,
+    /// Fee asset for an explicit activation fee cap when the network has no finite maxima.
+    #[arg(long, requires_all = ["activate", "max_fee"])]
+    max_fee_asset: Option<iroha_data_model::asset::AssetDefinitionId>,
+    /// Positive aggregate activation cap across its self-grant and hook call, in --max-fee-asset.
+    #[arg(long, requires_all = ["activate", "max_fee_asset"])]
+    max_fee: Option<iroha_primitives::numeric::Quantity>,
 }
 
 #[derive(Args, Debug)]
@@ -55,6 +85,9 @@ pub(super) struct ViewArgs {
     /// Named JSON arguments; omitted or {} for a zero-parameter view.
     #[arg(long, default_value = "{}", value_name = "JSON")]
     args: String,
+    /// Read the named JSON arguments from this file instead of `--args`.
+    #[arg(long, value_name = "PATH", conflicts_with = "args")]
+    args_file: Option<PathBuf>,
     /// VM execution budget for the read-only view.
     #[arg(long, default_value_t = 1_000_000, value_parser = clap::value_parser!(u64).range(1..=10_000_000))]
     gas_limit: u64,
@@ -75,10 +108,21 @@ pub(super) fn run_deploy(
     if let Some(journal) = args.resume.as_ref().or(args.cancel.as_ref()) {
         return recover_deployment(manifest, args, journal, progress);
     }
+    let activation_payload = if args.args.is_some() || args.args_file.is_some() {
+        Some(
+            iroha_contract_deploy::call::parse_contract_arguments(&call::argument_source(
+                args.args.as_deref(),
+                args.args_file.as_deref(),
+            )?)
+            .map_err(|error| Diagnostic::new(ErrorCode::Usage, error.to_string()))?,
+        )
+    } else {
+        None
+    };
     let build_args = BuildArgs {
         selection: args.selection.clone(),
         mode: GraphModeArgs {
-            locked: args.locked,
+            locked: args.locked || args.artifact.is_some(),
             offline: false,
             frozen: false,
         },
@@ -87,11 +131,25 @@ pub(super) fn run_deploy(
         },
         network: args.network.clone(),
         chain_discriminant: None,
+        zk: false,
+        deny_warnings: false,
     };
-    let build = build::prepare_build(manifest, &build_args, CompilerActionV1::Build)?;
+    let build = build::prepare_build(
+        manifest,
+        &build_args,
+        CompilerActionV1::Build,
+        network::NetworkPurpose::Deployment,
+    )?;
     let artifact = select_artifact(&build.execution.artifacts, args.contract.as_deref())?;
     let alias = bound_alias(&build.network, &artifact.package, &artifact.target)?;
-    let artifact_bytes = read_selected_artifact(artifact)?;
+    let artifact_bytes = match (&args.artifact, &args.artifact_manifest) {
+        (Some(prebuilt), Some(prebuilt_manifest)) => {
+            read_reproduced_prebuilt_artifact(artifact, prebuilt, prebuilt_manifest)?
+        }
+        _ => read_selected_artifact(artifact)?,
+    };
+    let hook = lifecycle_hook(&artifact_bytes);
+    let activation_artifact = (args.activate && hook.is_some()).then(|| artifact_bytes.clone());
     let fee_payment = selected_fee_payment(&build.network)?;
     let _profile = ChainDiscriminantGuard::enter(build.network.chain_discriminant);
     let service = DeploymentService::new(build.network.load_client()?)
@@ -118,8 +176,111 @@ pub(super) fn run_deploy(
     )
     .map_err(|error| runtime_diagnostic(&error))?;
     let journal = retained.journal;
+    // A deployment completed by this command has not run its hook yet; one completed by an
+    // earlier command may have been activated since.
+    let known_pending = !retained.completed_earlier;
     if let Some(receipt) = retained.receipt {
-        return receipt_output(&receipt, &journal);
+        let mut deployed = receipt_output(&receipt, &journal)?;
+        if !args.activate {
+            if let Some(hook) = &hook {
+                deployed.message.push_str(&activation_hint(
+                    hook,
+                    known_pending,
+                    build.workspace.root_manifest_path(),
+                    &build.network,
+                    &artifact.package,
+                    &artifact.target,
+                ));
+                if let Value::Object(data) = &mut deployed.data {
+                    data.insert(
+                        "activation".to_owned(),
+                        object([
+                            (
+                                "status",
+                                Value::from(if known_pending {
+                                    "pending"
+                                } else {
+                                    "unverified"
+                                }),
+                            ),
+                            ("entrypoint", Value::from(hook.clone())),
+                            (
+                                "command",
+                                Value::from(activation_command(
+                                    build.workspace.root_manifest_path(),
+                                    &build.network,
+                                    &artifact.package,
+                                    &artifact.target,
+                                    hook,
+                                )),
+                            ),
+                        ]),
+                    );
+                }
+            }
+            return Ok(deployed);
+        }
+        let (Some(hook), Some(activation_artifact)) = (hook, activation_artifact) else {
+            let _ = write!(
+                deployed.message,
+                "\nThis seiyaku declares no {}; the instance is already active.",
+                hajimari_label()
+            );
+            return Ok(deployed);
+        };
+        progress(&format!(
+            "Activating the deployed instance with its {} hook...",
+            hajimari_label()
+        ));
+        let activation = call::execute_mutable_call(
+            call::CallTarget {
+                manifest: build.workspace.root_manifest_path(),
+                root: build.workspace.root(),
+                network: &build.network,
+                package: &artifact.package,
+                target: &artifact.target,
+                artifact: activation_artifact,
+                alias: receipt.contract_alias.clone(),
+            },
+            call::CallInput {
+                entrypoint: &hook,
+                payload: activation_payload
+                    .unwrap_or_else(|| Value::Object(norito::json::Map::new())),
+                gas_limit: args.gas_limit,
+                max_fee: args.max_fee_asset.as_ref().zip(args.max_fee.as_ref()),
+                prepare: false,
+            },
+            progress,
+        )
+        .map_err(|diagnostic| {
+            diagnostic
+                .with_context(
+                    "deployment_receipt",
+                    iroha_contract_deploy::receipt_path(&journal)
+                        .display()
+                        .to_string(),
+                )
+                .with_context(
+                    "activate_with",
+                    activation_command(
+                        build.workspace.root_manifest_path(),
+                        &build.network,
+                        &artifact.package,
+                        &artifact.target,
+                        &hook,
+                    ),
+                )
+        })?;
+        return Ok(Success {
+            message: format!(
+                "{}\nActivated with {hook}:\n{}",
+                deployed.message, activation.message
+            ),
+            data: object([
+                ("deployment", deployed.data),
+                ("activation", activation.data),
+            ]),
+        });
     }
     if args.prepare {
         return Ok(Success {
@@ -185,6 +346,7 @@ fn prepare_or_resume_deployment(
         preflight: prepared.preflight().clone(),
         journal,
         receipt,
+        completed_earlier: false,
     })
 }
 
@@ -202,6 +364,7 @@ fn recover_deployment(
         args.network.as_deref(),
         args.config.as_deref(),
         None,
+        network::NetworkPurpose::Deployment,
     )?;
     let _profile = ChainDiscriminantGuard::enter(network.chain_discriminant);
     let service = DeploymentService::new(network.load_client()?)
@@ -212,14 +375,13 @@ fn recover_deployment(
         .file_name()
         .and_then(|name| name.to_str())
         .expect("admitted slot digest");
-    let mut aliases = network
+    let mut bindings = network
         .contracts
         .iter()
-        .filter(|(key, _)| blake3::hash(key.as_bytes()).to_hex().as_str() == slot_name)
-        .map(|(_, alias)| alias);
-    let alias = aliases
+        .filter(|(key, _)| blake3::hash(key.as_bytes()).to_hex().as_str() == slot_name);
+    let (contract_key, alias) = bindings
         .next()
-        .filter(|_| aliases.next().is_none())
+        .filter(|_| bindings.next().is_none())
         .ok_or_else(|| {
             Diagnostic::new(
                 ErrorCode::Usage,
@@ -251,7 +413,165 @@ fn recover_deployment(
         .map_err(|error| {
             runtime_diagnostic(&error).with_context("journal", journal.display().to_string())
         })?;
-    receipt_output(&receipt, &journal)
+    let mut resumed = receipt_output(&receipt, &journal)?;
+    // The hint is presentation only; a failed artifact read leaves the Applied receipt intact.
+    if let Ok(completed) = service.current_completed_contract(&journal)
+        && let Some(hook) = lifecycle_hook(completed.artifact())
+        && let Some((package, target)) = contract_key
+            .split_once("::")
+            .and_then(|(package, target)| Some((package.parse().ok()?, target)))
+    {
+        resumed.message.push_str(&activation_hint(
+            &hook,
+            false,
+            workspace.root_manifest_path(),
+            &network,
+            &package,
+            target,
+        ));
+    }
+    Ok(resumed)
+}
+
+/// Label naming both spellings of the activation hook, from the shared keyword glossary.
+fn hajimari_label() -> String {
+    kotodama_lang::glossary::by_spelling("hajimari").map_or_else(
+        || "hajimari".to_owned(),
+        kotodama_lang::glossary::BrandedKeyword::label,
+    )
+}
+
+/// Return the selector of the artifact's activation hook, when it declares one.
+pub(super) fn lifecycle_hook(artifact: &[u8]) -> Option<String> {
+    ivm::verify_contract_artifact(artifact)
+        .ok()?
+        .contract_interface
+        .entrypoints
+        .into_iter()
+        .find(|entrypoint| {
+            entrypoint.kind == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
+        })
+        .map(|entrypoint| entrypoint.name)
+}
+
+/// Exact command that activates a deployed seiyaku through its hook.
+fn activation_command(
+    manifest: &Path,
+    network: &network::SelectedNetwork,
+    package: &MusubiPackageSelectorV1,
+    target: &str,
+    hook: &str,
+) -> String {
+    let mut command = format!(
+        "musubi --manifest-path {} call --network {}",
+        quote_cli_argument(&manifest.display().to_string()),
+        quote_cli_argument(&network.name),
+    );
+    if let Some(config) = &network.config {
+        let _ = write!(
+            command,
+            " --config {}",
+            quote_cli_argument(&config.display().to_string())
+        );
+    }
+    let _ = write!(
+        command,
+        " --package {} --contract {} --entrypoint {} --args '{{}}'",
+        quote_cli_argument(&package.to_string()),
+        quote_cli_argument(target),
+        quote_cli_argument(hook),
+    );
+    command
+}
+
+/// Explain that a deployed instance stays inactive until its hook runs, with the exact command.
+///
+/// `known_pending` is true only when this command itself completed the deployment; a deployment
+/// that completed earlier may already have been activated, so the hint is then conditional.
+fn activation_hint(
+    hook: &str,
+    known_pending: bool,
+    manifest: &Path,
+    network: &network::SelectedNetwork,
+    package: &MusubiPackageSelectorV1,
+    target: &str,
+) -> String {
+    let command = activation_command(manifest, network, package, target, hook);
+    if known_pending {
+        format!(
+            "\nThis seiyaku declares {}; the deployed instance rejects every other call and view \
+             until it runs.\nNext: {command}\n(`musubi deploy --activate` deploys and activates in \
+             one step; pass the hook's arguments with --args.)",
+            hajimari_label(),
+        )
+    } else {
+        format!(
+            "\nThis seiyaku declares {}; until it has run once, the instance rejects every other \
+             call and view.\nIf it has not run yet: {command}",
+            hajimari_label(),
+        )
+    }
+}
+
+/// Read a prebuilt artifact and require that the locked package build reproduces it exactly.
+///
+/// The compiler manifest written beside the artifact must name the same code and ABI hashes, so an
+/// audited `.to` is deployed only when it is the reproducible output of the declared source.
+pub(super) fn read_reproduced_prebuilt_artifact(
+    built: &CompilerArtifactV1,
+    prebuilt: &Path,
+    prebuilt_manifest: &Path,
+) -> Result<Vec<u8>, Diagnostic> {
+    let bytes = read_bounded_single_link_regular_file_v1(
+        prebuilt,
+        iroha_contract_deploy::MAX_DEPLOYMENT_ARTIFACT_BYTES as u64,
+    )
+    .map_err(|error| io_diagnostic("read prebuilt contract", prebuilt, &error))?;
+    let verified = ivm::verify_contract_artifact(&bytes)
+        .map_err(|error| Diagnostic::new(ErrorCode::PackageInvalid, error.to_string()))?;
+    let manifest_bytes =
+        read_bounded_single_link_regular_file_v1(prebuilt_manifest, 4 * 1024 * 1024).map_err(
+            |error| io_diagnostic("read prebuilt contract manifest", prebuilt_manifest, &error),
+        )?;
+    let manifest: iroha_data_model::smart_contract::manifest::ContractManifest =
+        std::str::from_utf8(&manifest_bytes)
+            .ok()
+            .and_then(|text| norito::json::from_str(text).ok())
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::PackageInvalid,
+                    "the prebuilt contract manifest is not a valid compiler manifest",
+                )
+                .with_context("path", prebuilt_manifest.display().to_string())
+            })?;
+    let code_hash = verified.code_hash.to_string();
+    let abi_hash = verified.abi_hash.to_string();
+    if manifest.code_hash.as_ref() != Some(&verified.code_hash)
+        || manifest.abi_hash.as_ref() != Some(&verified.abi_hash)
+    {
+        return Err(Diagnostic::new(
+            ErrorCode::PackageInvalid,
+            "the prebuilt artifact and its compiler manifest name different code or ABI hashes",
+        )
+        .with_context("artifact_code_hash", code_hash)
+        .with_context(
+            "manifest_code_hash",
+            manifest
+                .code_hash
+                .map_or_else(|| "missing".to_owned(), |hash| hash.to_string()),
+        ));
+    }
+    if code_hash != built.artifact_hash || abi_hash != built.abi_hash {
+        return Err(Diagnostic::new(
+            ErrorCode::PackageInvalid,
+            "the prebuilt artifact is not reproduced by the locked package source",
+        )
+        .with_context("contract", &built.target)
+        .with_context("prebuilt_code_hash", code_hash)
+        .with_context("reproduced_code_hash", &built.artifact_hash)
+        .with_help("build the artifact from this package's locked source with the same address profile, or deploy the reproduced build without --artifact"));
+    }
+    Ok(bytes)
 }
 
 /// Retain the exact selected workspace/network slot; the candidate itself may be absent
@@ -407,14 +727,23 @@ pub(super) fn run_view(manifest: Option<&Path>, args: &ViewArgs) -> CommandResul
     let (workspace, _) = load_selected_workspace(manifest, &args.selection)?;
     let selected = select_members(&workspace, &args.selection)?;
     let package = network::select_contract_package(&selected, &args.contract)?;
-    let payload = parse_view_payload(&args.args)?;
+    let payload = parse_view_payload(&call::argument_source(
+        Some(&args.args),
+        args.args_file.as_deref(),
+    )?)?;
     if args.entrypoint.is_empty() || args.entrypoint.trim() != args.entrypoint {
         return Err(Diagnostic::new(
             ErrorCode::Usage,
             "view entrypoint must be a non-empty canonical selector",
         ));
     }
-    let network = network::select_network(workspace.root(), args.network.as_deref(), None, None)?;
+    let network = network::select_network(
+        workspace.root(),
+        args.network.as_deref(),
+        None,
+        None,
+        network::NetworkPurpose::Deployment,
+    )?;
     let alias = bound_alias(&network, package, &args.contract)?;
     let _profile = ChainDiscriminantGuard::enter(network.chain_discriminant);
     let config = network.load_client()?;
@@ -675,9 +1004,15 @@ pub(super) fn contract_resume_command(
 }
 
 fn receipt_output(receipt: &DeploymentReceipt, journal: &Path) -> CommandResult {
+    let charges = receipt
+        .stages
+        .iter()
+        .enumerate()
+        .map(|(index, stage)| call::charge_line(&format!("Stage {}", index + 1), stage))
+        .collect::<String>();
     Ok(Success {
         message: format!(
-            "Applied: {}\nNetwork identity: {}\nAuthority: {}\nContract: {}\nAlias: {}\nCode hash: {}\nABI hash: {}\nHeight: {} ({}, {})\nStored artifact verified: {}\nReceipt: {}",
+            "Applied: {}\nNetwork identity: {}\nAuthority: {}\nContract: {}\nAlias: {}\nCode hash: {}\nABI hash: {}\nHeight: {} ({}, {})\n{charges}Stored artifact verified: {}\nReceipt: {}",
             receipt.commit.hash,
             receipt.network_id,
             receipt.authority,
@@ -807,6 +1142,184 @@ mod tests {
             report.root_cause().to_string(),
             "journal descriptor was replaced"
         );
+    }
+
+    fn compiled(source: &str) -> Vec<u8> {
+        kotodama_lang::compiler::Compiler::new()
+            .compile_source(source)
+            .expect("compile fixture contract")
+    }
+
+    #[test]
+    fn lifecycle_hook_is_found_in_either_keyword_spelling() {
+        assert_eq!(
+            lifecycle_hook(&compiled(
+                "seiyaku Counter { state int value; hajimari() { value = 0; } view fn current() -> int { return value; } }"
+            ))
+            .as_deref(),
+            Some("hajimari")
+        );
+        assert_eq!(
+            lifecycle_hook(&compiled(
+                "誓約 Counter { state int value; 始まり() { value = 1; } view fn current() -> int { return value; } }"
+            ))
+            .as_deref(),
+            Some("hajimari")
+        );
+        assert_eq!(
+            lifecycle_hook(&compiled(
+                "seiyaku Quote { view fn quote() -> int { return 30; } }"
+            )),
+            None
+        );
+        assert_eq!(lifecycle_hook(b"not an artifact"), None);
+    }
+
+    #[test]
+    fn deployment_hint_names_both_spellings_and_the_exact_activation_command() {
+        let network = network::SelectedNetwork {
+            name: "taira".to_owned(),
+            config: Some(PathBuf::from("/runtime/owner wallet/client.toml")),
+            config_image: None,
+            chain_discriminant: 369,
+            network_id: None,
+            fee_payment: None,
+            contracts: BTreeMap::new(),
+        };
+        let command = "musubi --manifest-path /projects/counter/Musubi.toml call --network taira --config '/runtime/owner wallet/client.toml' --package demo/counter --contract counter --entrypoint hajimari --args '{}'";
+        let hint = |known_pending| {
+            activation_hint(
+                "hajimari",
+                known_pending,
+                Path::new("/projects/counter/Musubi.toml"),
+                &network,
+                &"demo/counter".parse().expect("package"),
+                "counter",
+            )
+        };
+        let fresh = hint(true);
+        assert!(fresh.contains("hajimari (始まり)"), "{fresh}");
+        assert!(
+            fresh.contains("the deployed instance rejects every other call and view until it runs"),
+            "{fresh}"
+        );
+        assert!(fresh.contains(&format!("Next: {command}")), "{fresh}");
+        assert!(fresh.contains("musubi deploy --activate"), "{fresh}");
+        let earlier = hint(false);
+        assert!(earlier.contains("hajimari (始まり)"), "{earlier}");
+        assert!(
+            earlier.contains(&format!("If it has not run yet: {command}")),
+            "{earlier}"
+        );
+        assert!(!earlier.contains("Next:"), "{earlier}");
+    }
+
+    #[test]
+    fn deploy_grammar_shares_args_and_guards_activation_and_prebuilt_artifacts() {
+        let parse =
+            |arguments: &[&str]| Cli::try_parse_from(["musubi", "deploy"].iter().chain(arguments));
+        let Command::Deploy(args) = parse(&["--activate", "--args", "{\"limit\":\"5\"}"])
+            .expect("activation with hook arguments")
+            .command
+        else {
+            panic!("deploy command");
+        };
+        assert!(args.activate);
+        assert_eq!(args.args.as_deref(), Some("{\"limit\":\"5\"}"));
+        assert!(
+            parse(&["--args", "{}"]).is_err(),
+            "--args requires --activate"
+        );
+        assert!(
+            parse(&["--gas-limit", "10"]).is_err(),
+            "--gas-limit requires --activate"
+        );
+        assert!(parse(&["--activate", "--prepare"]).is_err());
+        assert!(parse(&["--activate", "--resume", "/journal"]).is_err());
+        assert!(
+            parse(&["--artifact", "app.to"]).is_err(),
+            "artifact needs its manifest"
+        );
+        assert!(parse(&["--artifact-manifest", "app.manifest.json"]).is_err());
+        assert!(
+            parse(&[
+                "--artifact",
+                "app.to",
+                "--artifact-manifest",
+                "app.manifest.json",
+                "--activate",
+            ])
+            .is_ok()
+        );
+        assert!(
+            parse(&[
+                "--artifact",
+                "app.to",
+                "--artifact-manifest",
+                "m.json",
+                "--cancel",
+                "/j"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn prebuilt_artifacts_deploy_only_when_the_locked_build_reproduces_them() {
+        let root = tempfile::tempdir().expect("artifact directory");
+        let original = compiled("seiyaku Quote { view fn quote() -> int { return 30; } }");
+        let other = compiled("seiyaku Quote { view fn quote() -> int { return 31; } }");
+        let verified = ivm::verify_contract_artifact(&original).expect("admitted original");
+        let artifact_path = root.path().join("quote.to");
+        let manifest_path = root.path().join("quote.manifest.json");
+        fs::write(&artifact_path, &original).expect("prebuilt artifact");
+        let manifest_for = |artifact: &[u8]| {
+            let verified = ivm::verify_contract_artifact(artifact).expect("admitted");
+            norito::json::to_string(&object([
+                (
+                    "code_hash",
+                    norito::json::to_value(&verified.code_hash).expect("code hash"),
+                ),
+                (
+                    "abi_hash",
+                    norito::json::to_value(&verified.abi_hash).expect("abi hash"),
+                ),
+            ]))
+            .expect("manifest")
+        };
+        fs::write(&manifest_path, manifest_for(&original)).expect("prebuilt manifest");
+        let built = CompilerArtifactV1 {
+            package: "demo/quote".parse().expect("package"),
+            target: "quote".to_owned(),
+            source: "contracts/quote.ko".to_owned(),
+            artifact: root.path().join("reproduced.to"),
+            manifest: PathBuf::new(),
+            interface: PathBuf::new(),
+            entrypoints: vec!["quote".to_owned()],
+            artifact_hash: verified.code_hash.to_string(),
+            abi_hash: verified.abi_hash.to_string(),
+            fresh: false,
+        };
+        assert_eq!(
+            read_reproduced_prebuilt_artifact(&built, &artifact_path, &manifest_path)
+                .expect("reproduced prebuilt artifact"),
+            original
+        );
+        fs::write(&manifest_path, manifest_for(&other)).expect("foreign manifest");
+        let mismatch = read_reproduced_prebuilt_artifact(&built, &artifact_path, &manifest_path)
+            .expect_err("manifest names other code");
+        assert_eq!(mismatch.code(), ErrorCode::PackageInvalid);
+        fs::write(&artifact_path, &other).expect("unreproducible artifact");
+        let unreproduced =
+            read_reproduced_prebuilt_artifact(&built, &artifact_path, &manifest_path)
+                .expect_err("locked source builds different code");
+        assert!(
+            unreproduced
+                .render_human()
+                .contains("not reproduced by the locked package source")
+        );
+        fs::write(&manifest_path, "{").expect("malformed manifest");
+        assert!(read_reproduced_prebuilt_artifact(&built, &artifact_path, &manifest_path).is_err());
     }
 
     #[test]
@@ -1032,6 +1545,7 @@ mod tests {
                 block_height: 42,
                 scope: "global".to_owned(),
                 resolved_from: "state".to_owned(),
+                charge: None,
             },
         });
         assert!(applied.contains("Stage 2/3 — Applied at height 42 (global, state)"));
@@ -1212,7 +1726,14 @@ mod tests {
     #[test]
     fn deployment_never_invents_a_fee_payer() {
         let dir = tempfile::tempdir().expect("workspace");
-        let mut network = network::select_network(dir.path(), None, None, None).expect("network");
+        let mut network = network::select_network(
+            dir.path(),
+            None,
+            None,
+            None,
+            network::NetworkPurpose::Deployment,
+        )
+        .expect("network");
         assert!(selected_fee_payment(&network).is_err());
         let intent = FeePaymentIntent::authority(Vec::new(), None);
         network.fee_payment = Some(intent.clone());

@@ -937,26 +937,128 @@ def _regex_escape(value: str) -> str:
     return re.sub(r"([\\.^$|?*+()[\]{}])", r"\\\1", value)
 
 
-def _keyword_pattern(grammar: LexicalGrammar) -> str:
-    alternatives = "|".join(_regex_escape(value) for value, _ in grammar.keywords)
+def _keyword_alternation(spellings: Sequence[str]) -> str:
+    alternatives = "|".join(_regex_escape(value) for value in spellings)
     return rf"(?<![\p{{L}}\p{{N}}_])(?:{alternatives})(?![\p{{L}}\p{{N}}_])"
 
 
-def _operator_pattern(grammar: LexicalGrammar) -> str:
-    sorted_operators = sorted(
-        (value for value, _ in grammar.operators),
-        key=lambda value: (-len(value), value),
+# TextMate scope for each keyword token variant, chosen by role. Both spellings of a
+# branded keyword share their token variant and therefore always share one scope.
+TEXTMATE_KEYWORD_SCOPES = {
+    "Seiyaku": "keyword.declaration.contract.kotodama",
+    "Module": "keyword.declaration.module.kotodama",
+    "Hajimari": "keyword.declaration.lifecycle.kotodama",
+    "Kaizen": "keyword.declaration.lifecycle.kotodama",
+    "Kotoage": "storage.modifier.kotodama",
+    "View": "storage.modifier.kotodama",
+    "Export": "storage.modifier.kotodama",
+    "Authorize": "storage.modifier.authorization.kotodama",
+    "Fn": "keyword.declaration.function.kotodama",
+    "Struct": "keyword.declaration.struct.kotodama",
+    "Error": "keyword.declaration.error.kotodama",
+    "Enum": "keyword.declaration.error.kotodama",
+    "Trigger": "keyword.declaration.trigger.kotodama",
+    "State": "storage.type.kotodama",
+    "Const": "storage.type.kotodama",
+    "Let": "storage.type.kotodama",
+    "Var": "storage.type.kotodama",
+    "If": "keyword.control.kotodama",
+    "Else": "keyword.control.kotodama",
+    "For": "keyword.control.kotodama",
+    "In": "keyword.control.kotodama",
+    "Match": "keyword.control.kotodama",
+    "Return": "keyword.control.kotodama",
+    "Break": "keyword.control.kotodama",
+    "Continue": "keyword.control.kotodama",
+    "Include": "keyword.control.import.kotodama",
+    "Import": "keyword.control.import.kotodama",
+    "As": "keyword.control.import.kotodama",
+    "True": "constant.language.boolean.kotodama",
+    "False": "constant.language.boolean.kotodama",
+}
+
+# Delimiters and separators are punctuation, never operators.
+TEXTMATE_PUNCTUATION_SCOPES = {
+    "LBrace": "punctuation.section.braces.kotodama",
+    "RBrace": "punctuation.section.braces.kotodama",
+    "LParen": "punctuation.section.parens.kotodama",
+    "RParen": "punctuation.section.parens.kotodama",
+    "LBracket": "punctuation.section.brackets.kotodama",
+    "RBracket": "punctuation.section.brackets.kotodama",
+    "Semicolon": "punctuation.terminator.statement.kotodama",
+    "Comma": "punctuation.separator.comma.kotodama",
+    "ColonColon": "punctuation.separator.namespace.kotodama",
+    "Colon": "punctuation.separator.colon.kotodama",
+    "Dot": "punctuation.accessor.kotodama",
+    "Hash": "punctuation.definition.annotation.kotodama",
+}
+
+
+def _scoped_groups(
+    records: Sequence[tuple[str, str]], scopes: Mapping[str, str]
+) -> list[tuple[str, list[str]]]:
+    """Group spellings by scope, preserving first-appearance order of each scope."""
+
+    groups: dict[str, list[str]] = {}
+    for spelling, variant in records:
+        groups.setdefault(scopes[variant], []).append(spelling)
+    return list(groups.items())
+
+
+def _keyword_patterns(grammar: LexicalGrammar) -> list[tuple[str, str]]:
+    unknown = sorted(
+        {variant for _, variant in grammar.keywords} - TEXTMATE_KEYWORD_SCOPES.keys()
     )
-    return "(?:" + "|".join(_regex_escape(value) for value in sorted_operators) + ")"
+    if unknown:
+        raise GenerationError(
+            f"keyword variants without a TextMate scope: {', '.join(unknown)}"
+        )
+    return [
+        (_keyword_alternation(spellings), scope)
+        for scope, spellings in _scoped_groups(grammar.keywords, TEXTMATE_KEYWORD_SCOPES)
+    ]
+
+
+def _symbol_alternation(spellings: Sequence[str]) -> str:
+    ordered = sorted(spellings, key=lambda value: (-len(value), value))
+    return "(?:" + "|".join(_regex_escape(value) for value in ordered) + ")"
+
+
+def _operator_patterns(grammar: LexicalGrammar) -> list[tuple[str, str]]:
+    operators = [
+        spelling
+        for spelling, variant in grammar.operators
+        if variant not in TEXTMATE_PUNCTUATION_SCOPES
+    ]
+    punctuation = [
+        (spelling, variant)
+        for spelling, variant in grammar.operators
+        if variant in TEXTMATE_PUNCTUATION_SCOPES
+    ]
+    missing = sorted(
+        TEXTMATE_PUNCTUATION_SCOPES.keys() - {variant for _, variant in punctuation}
+    )
+    if missing:
+        raise GenerationError(f"punctuation variants absent from v1.lex: {', '.join(missing)}")
+    # Operators come first: TextMate takes the first pattern at a position, so `..`
+    # must win over the `.` accessor.
+    # Longer punctuation first, so `::` is never read as two `:` separators.
+    groups = sorted(
+        _scoped_groups(punctuation, TEXTMATE_PUNCTUATION_SCOPES),
+        key=lambda group: (-max(map(len, group[1])), group[0]),
+    )
+    return [(_symbol_alternation(operators), "keyword.operator.kotodama")] + [
+        (_symbol_alternation(spellings), scope) for scope, spellings in groups
+    ]
 
 
 def _alternation(values: Sequence[str]) -> str:
     return r"\b(?:" + "|".join(_regex_escape(value) for value in values) + r")\b"
 
 
-def _textmate_entry(name: str, match: str, scope: str) -> str:
+def _textmate_entry(name: str, patterns: Sequence[tuple[str, str]]) -> str:
     raw = json.dumps(
-        {name: {"patterns": [{"match": match, "name": scope}]}},
+        {name: {"patterns": [{"match": match, "name": scope} for match, scope in patterns]}},
         ensure_ascii=False,
         indent=2,
     )
@@ -989,55 +1091,60 @@ def render_textmate(
     entries = [
         (
             "sumVariants",
-            _alternation(policy.sum_paths),
-            "support.constant.variant.kotodama",
+            [(_alternation(policy.sum_paths), "support.constant.variant.kotodama")],
             False,
         ),
         (
             "roundingVariants",
-            _alternation(policy.rounding_paths),
-            "support.constant.variant.rounding.kotodama",
+            [
+                (
+                    _alternation(policy.rounding_paths),
+                    "support.constant.variant.rounding.kotodama",
+                )
+            ],
             False,
         ),
         (
             "memberCalls",
-            rf"(?<=\.)(?:{'|'.join(map(_regex_escape, policy.editor_member_calls))})(?=\s*\()",
-            "support.function.method.kotodama",
+            [
+                (
+                    rf"(?<=\.)(?:{'|'.join(map(_regex_escape, policy.editor_member_calls))})(?=\s*\()",
+                    "support.function.method.kotodama",
+                )
+            ],
             False,
         ),
         (
             "retiredNumericSuffixes",
-            _retired_suffix_pattern(policy),
-            "invalid.deprecated.numeric.suffix.kotodama",
+            [
+                (
+                    _retired_suffix_pattern(policy),
+                    "invalid.deprecated.numeric.suffix.kotodama",
+                )
+            ],
             False,
         ),
         (
             "types",
-            _alternation((*policy.active_source_types, "Rounding")),
-            "storage.type.kotodama",
+            [
+                (
+                    _alternation((*policy.active_source_types, "Rounding")),
+                    "support.type.kotodama",
+                )
+            ],
             False,
         ),
-        (
-            "keywords",
-            _keyword_pattern(grammar),
-            "keyword.control.kotodama",
-            False,
-        ),
-        (
-            "operators",
-            _operator_pattern(grammar),
-            "keyword.operator.kotodama",
-            True,
-        ),
+        ("keywords", _keyword_patterns(grammar), False),
+        ("operators", _operator_patterns(grammar), True),
     ]
     rendered = text
-    for name, match, scope, final in entries:
+    for name, patterns, final in entries:
         start, end = _textmate_markers(name, final=final)
         rendered = _replace_generated(
             rendered,
             start,
             end,
-            _textmate_entry(name, match, scope),
+            _textmate_entry(name, patterns),
             path=path,
         )
     try:
@@ -1055,6 +1162,18 @@ def render_textmate(
         raise GenerationError(
             f"{path}: top-level patterns must include #retiredNumericSuffixes exactly once"
         )
+    # Named labels must not capture `Type::` and `namespace::` path heads, and `..` must not
+    # be split into two accessors.
+    order = {include: index for index, include in enumerate(includes)}
+    for earlier, later in (
+        ("#sumVariants", "#namedFields"),
+        ("#roundingVariants", "#namedFields"),
+        ("#namedFields", "#types"),
+        ("#types", "#keywords"),
+        ("#keywords", "#operators"),
+    ):
+        if order.get(earlier, -1) >= order.get(later, -1):
+            raise GenerationError(f"{path}: top-level {earlier} must precede {later}")
     return rendered
 
 

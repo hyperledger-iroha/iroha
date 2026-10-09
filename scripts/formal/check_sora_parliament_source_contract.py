@@ -5717,7 +5717,7 @@ def main() -> int:
             "parliament_public_finding_phase_blocks",
             "FailPublicFindingNoResult",
             "ParliamentNoResultKindV1",
-            "not yet an operationally automatic",
+            "parliament_private_ballot_design.md",
         ):
             if required.casefold() not in folded:
                 raise RuntimeError(

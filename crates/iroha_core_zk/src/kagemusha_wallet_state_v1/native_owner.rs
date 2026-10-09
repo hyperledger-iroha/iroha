@@ -25,7 +25,6 @@ use crate::{
         InstalledVerifierPackV1,
         producer_inventory::{OriginalSourceV1, QualifiedWalletSourcesV1},
     },
-    kagemusha_wallet_finality_v1::derive_history_anchor,
     kagemusha_wallet_intake_v1::AdmittedWalletV1,
     kagemusha_wallet_preparation_v1::{
         NativeAdvanceCheckV1, NativeChoicesV1, PreparationV1, PreparedOperationV1,
@@ -101,9 +100,11 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
             asset_original,
         ) = self.into_parts();
         let verified = (|| {
-            let anchor = derive_history_anchor(native_genesis)
-                .map_err(|_| Error::Proof("native Global root"))?;
-            if &anchor != sources.finality().anchor() {
+            let selected = sources.finality().verifier();
+            if native_genesis.instance() != selected.instance()
+                || native_genesis.chain_id() != selected.chain_id()
+                || native_genesis.initial_epoch() != selected.initial_epoch()
+            {
                 return Err(Error::Proof("native finality source binding"));
             }
             NativeFoldWorkerV1::new(Arc::clone(&installed), Arc::clone(&sources), read, budget)

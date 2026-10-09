@@ -39,12 +39,14 @@ fn refused_archive_read_never_reopens_the_original_selected_inode() {
     let budget = AllocationBudget::new(original.len());
     let blocker = ChargedBuffer::<u8>::new(1, &budget).unwrap();
     let (directory, mut read) = fixture(&original, budget.clone());
+    assert!(!read.has_pinned_source());
     assert!(matches!(
         read.poll(),
         Err(NativeContextArchiveError::Allocation(
             ChargedBufferError::Admission(AllocationRefusal::Capacity { .. })
         ))
     ));
+    assert!(read.has_pinned_source());
     assert!(read.read.file.is_some());
     assert_eq!(read.read.length, Some(original.len()));
     assert!(read.read.bytes.is_none());
@@ -53,6 +55,7 @@ fn refused_archive_read_never_reopens_the_original_selected_inode() {
     fs::write(&path, vec![9; original.len()]).unwrap();
     drop(blocker);
     let bytes = complete(&mut read);
+    assert!(read.has_pinned_source());
     assert_eq!(bytes.as_slice(), original);
     assert!(bytes.belongs_to(&budget));
     assert_eq!(budget.reserved_bytes(), original.len());

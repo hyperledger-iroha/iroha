@@ -269,12 +269,11 @@ fn json_get_blob_hex_rejects_noncanonical_and_malformed_spellings() {
         vm.set_register(10, p_json);
         vm.set_register(11, p_key);
         vm.load_program(&program).expect("load blob getter");
-        vm.run().expect("noncanonical values return Option::none");
-        let layout = ivm::sum::SumLayoutV1::option(1).expect("Option layout");
-        let (is_some, words) =
-            ivm::sum::read_words(&vm, vm.register(10), layout).expect("read blob getter Option");
-        assert!(!is_some, "`{invalid}` must not decode as canonical bytes");
-        assert!(words.is_empty());
+        assert_eq!(
+            vm.run(),
+            Err(ivm::VMError::DecodeError),
+            "`{invalid}` must not decode as canonical bytes or read as absent"
+        );
     }
 }
 #[test]
@@ -853,13 +852,7 @@ fn json_get_account_id_rejects_noncanonical_contract_address_literal() {
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).unwrap();
-    vm.run().unwrap();
-    assert_eq!(
-        ivm::sum::read_words(
-            &vm,
-            vm.register(10),
-            ivm::sum::SumLayoutV1::option(1).expect("AccountId Option layout"),
-        ),
-        Ok((false, vec![]))
-    );
+    // A present field that is not a canonical AccountId literal traps instead
+    // of reading as an absent field.
+    assert_eq!(vm.run(), Err(ivm::VMError::DecodeError));
 }

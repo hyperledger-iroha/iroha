@@ -327,23 +327,27 @@ fn pending_original_evidence_delays_reclamation_without_native_height_arithmetic
     let key = Hash::new(b"original pending custody fixture");
     world.consensus_evidence.insert(
         key,
-        EvidenceRecord {
-            evidence: Evidence { native: vec![] },
-            attribution: EvidenceAttribution {
-                scope: iroha_data_model::block::consensus::EvidenceScope::Root,
-                instance: row.instance,
-                height: u64::MAX,
-                epoch: 0,
-                context_id: [3; 32],
-                authority_generation: [3; 32],
-                offenders: vec![],
-                safety_violation: false,
+        crate::state::RetainedEvidenceRecord::from_fixture(
+            EvidenceRecord {
+                evidence: Evidence { native: vec![] },
+                attribution: EvidenceAttribution {
+                    scope: iroha_data_model::block::consensus::EvidenceScope::Root,
+                    instance: row.instance,
+                    height: u64::MAX,
+                    epoch: 0,
+                    context_id: [3; 32],
+                    authority_generation: [3; 32],
+                    offenders: vec![],
+                    safety_violation: false,
+                },
+                recorded_at_height: 27,
+                recorded_at_view: 0,
+                recorded_at_ms: 0,
+                penalty_status: EvidencePenaltyStatus::Pending,
             },
-            recorded_at_height: 27,
-            recorded_at_view: 0,
-            recorded_at_ms: 0,
-            penalty_status: EvidencePenaltyStatus::Pending,
-        },
+            &iroha_allocation::AllocationBudget::new(1 << 20),
+        )
+        .unwrap(),
     );
     world.sumeragi_lanes.get_mut().custody = state.custody.clone();
     assert!(retains_registration(&world, &original, 30).unwrap());

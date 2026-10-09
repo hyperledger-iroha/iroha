@@ -1,10 +1,8 @@
-//! Pre-Advance Load preparation from an exact source-qualified ordinary receipt.
+//! Pre-Advance Load preparation from a native BLS-authenticated ordinary receipt.
 //!
 //! Local preparation can extend an unfolded head. It verifies ordinary finality
-//! before deriving the state and preserves the exact receipt/proof bytes for A.
+//! before deriving the state and preserves the exact receipt/certificate originals.
 //! It creates no folded state or permission to spend before the required fold.
-//! TODO: qualify the public preparation path with the complete first ordinary
-//! receipt proof and installed producer catalog; local derivation tests do not do so.
 
 use crate::kagemusha_wallet_artifacts_v1::producer_inventory::QualifiedReceiptSourceV1;
 
@@ -15,7 +13,7 @@ use super::*;
 pub struct LoadOriginalsV1<'a> {
     /// Canonical original ordinary receipt, including its original online charge.
     pub receipt: &'a [u8],
-    /// Canonical compact proof under the independently installed global root.
+    /// Canonical native BLS evidence under the independently installed global root.
     pub finality: &'a [u8],
     /// Actual low-leaf and intermediate empty-slot openings for this receipt.
     pub insertion: &'a KagemushaWalletIndexedInsertV1,
@@ -142,10 +140,10 @@ fn derive(
 
 impl PreparationV1<'_> {
     /// Verify ordinary receipt finality, then derive a local Load from the released head.
-    /// A current-head Omega is not required. The qualified receipt source must belong
-    /// to this exact installation; the caller cannot replace its root, key or endpoints.
-    /// Both transported curves and the complete receipt proof must verify before any
-    /// prepared result is returned. Native still rechecks the source under its commit lock.
+    /// A current-head Omega is not required. The native receipt authority must belong
+    /// to this exact installation; the caller cannot replace its signed genesis.
+    /// Every required epoch transition, receipt-block BLS certificate and event inclusion
+    /// must verify before any prepared result or signed Advance can be produced.
     ///
     /// # Errors
     /// Foreign installation, invalid source/receipt/finality, wrong wallet or ordinal,
@@ -183,9 +181,9 @@ impl PreparationV1<'_> {
             },
         ];
         let digest = authority(receipt.receipt_digest())?;
-        let (_, evidence) = retained_load_source(&retained, finality.anchor().digest(), digest)?;
+        let (_, evidence) = retained_load_source(&retained, digest)?;
         finality
-            .verify_receipt_evidence(fields::<1>(vec![digest])?[0], &evidence, budget)
+            .verify_receipt_evidence(&receipt, &evidence)
             .map_err(|_| Error::Proof)?;
         let capsule = &source.frozen.capsule;
         let (state, statement, witness) = derive(

@@ -781,10 +781,10 @@ def default_base(root: Path = ROOT) -> str | None:
 
 
 # These owning features select spec §13.4 mutations and are deliberately rejected
-# by ordinary non-test Model/Core/daemon/SDK/Deploy compilation (Sumeragi isolates its cfg
+# by ordinary non-test Model/Core/daemon/SDK/Deploy/Torii compilation (Sumeragi isolates its cfg
 # through build.rs). Dedicated nightly mutation jobs own their valid libtests.
 MUTATION_FEATURE_OWNERS = frozenset(
-    {"iroha_data_model", "iroha_core", "irohad_lib", "iroha_sumeragi", "iroha", "iroha_deploy"}
+    {"iroha_data_model", "iroha_core", "irohad_lib", "iroha_sumeragi", "iroha", "iroha_deploy", "iroha_torii"}
 )
 
 
@@ -835,6 +835,7 @@ def workspace_check_features(root: Path = ROOT) -> dict[str, tuple[str, ...]]:
                     for alias, spec in table.get(kind, {}).items():
                         if not isinstance(spec, dict):
                             continue
+                        inherited = {}
                         if spec.get("workspace", False):
                             inherited = workspace_dependencies.get(alias)
                             if isinstance(inherited, str):
@@ -844,6 +845,12 @@ def workspace_check_features(root: Path = ROOT) -> dict[str, tuple[str, ...]]:
                             selected_features = (*inherited.get("features", ()), *spec.get("features", ()))
                         else:
                             selected_features = spec.get("features", ())
+                        dependency_owner = spec.get("package", inherited.get("package", alias))
+                        if (kind == "dev-dependencies" and dependency_owner == package
+                                and package in MUTATION_FEATURE_OWNERS):
+                            raise ClassificationError(
+                                f"self dev-dependency defeats owning mutation libtests: {package}/{alias}"
+                            )
                         if "mutation-testing" in selected_features:
                             raise ClassificationError(
                                 f"dependency forwards a test-only mutation: {package}/{alias}"
@@ -924,8 +931,12 @@ def commands_for_checks(
         elif check == "build":
             commands.append(["cargo", "build", "--locked", *package_args])
         elif check == "test":
+            # Torii integration targets explicitly opt into fixture entry points. A self
+            # dev-dependency would also compile its owning mutation feature as a library.
+            test_features = (["--features", "iroha_torii/test-fixtures"]
+                             if "iroha_torii" in packages else [])
             commands.append(
-                ["cargo", "test", "--locked", "--no-fail-fast", *package_args]
+                ["cargo", "test", "--locked", "--no-fail-fast", *test_features, *package_args]
             )
         elif check == "doc":
             commands.append(

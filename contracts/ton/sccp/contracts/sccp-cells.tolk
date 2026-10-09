@@ -1,12 +1,12 @@
 // Canonical variable-shape cells of §5.3.2: standard snake bytes, hash
-// chunks, member chunks and signature cells.
+// chunks and committee key chunks.
 //
 // Every parser here rejects any shape other than the single canonical one
 // (`SccpErrors.BadSnake`), so one byte string or list has exactly one cell
 // encoding and golden BoCs pin it. Every cell of a canonical shape is an
 // ordinary cell: `CTOS` would resolve a library reference transparently, so a
 // relayer could otherwise smuggle an exotic cell with canonical content into
-// the stored roster (§5.3.2).
+// the stored committee keys (§5.3.2).
 
 import "@stdlib/exotic-cells"
 import "sccp-constants"
@@ -176,53 +176,60 @@ fun sccpBuildHashPath(hashes: array<int>): cell? {
 }
 
 // ---------------------------------------------------------------------------
-// MemberChunk lists.
+// KeyChunk lists (§5.3.1).
 
-/// Parses a `^MemberChunk` list of exactly `n` 160-bit members, 6 per chunk
-/// except the last. Returns the members and the data-only slices of the
-/// member bits of every chunk (the §3.7 preimage tail). Throws `BadSnake` for
-/// any non-canonical shape. Every chunk must be an ordinary cell: `sccp_init`
-/// and `sccp_rotate` store a list only after this check, so the stored roster
+/// A parsed `^KeyChunk` list: the `n` keys as 384-bit slices and the
+/// data-only key bits of every chunk, in order (the §3.7 root preimage tail).
+struct ParsedKeys {
+    keys: array<slice>
+    parts: array<slice>
+}
+
+/// Parses a `^KeyChunk` list of exactly `n` compressed keys, 2 per chunk
+/// except the last (which holds 1 or 2). Every chunk must be an ordinary
+/// cell of exactly `384k + 1` bits with the Maybe bit set iff a next chunk
+/// follows; anything else throws `BadSnake`. `sccp_init` and key-changing
+/// rotations store a list only after this check, so the stored committee
 /// never depends on a masterchain library that could later be unpublished.
-fun sccpLoadMembers(members: cell, n: int): (array<int>, array<slice>) {
-    var values: array<int> = [];
+fun sccpLoadKeys(list: cell, n: int): ParsedKeys {
+    var keys: array<slice> = [];
     var parts: array<slice> = [];
     var remaining = n;
-    var cs = sccpBeginParseOrdinary(members);
+    var cs = sccpBeginParseOrdinary(list);
     while (true) {
-        val k = min(remaining, SCCP_MEMBERS_PER_CHUNK);
+        val k = min(remaining, SCCP_KEYS_PER_CHUNK);
         remaining -= k;
         val more = remaining > 0 ? 1 : 0;
-        assert (cs.remainingBitsCount() == k * 160 + 1) throw SccpErrors.BadSnake;
+        assert (cs.remainingBitsCount() == k * SCCP_KEY_BITS + 1) throw SccpErrors.BadSnake;
         assert (cs.remainingRefsCount() == more) throw SccpErrors.BadSnake;
-        parts.push(cs.preloadBits(k * 160));
+        parts.push(cs.preloadBits(k * SCCP_KEY_BITS));
         repeat (k) {
-            values.push(cs.loadUint(160));
+            keys.push(cs.loadBits(SCCP_KEY_BITS));
         }
         assert (cs.loadUint(1) == more) throw SccpErrors.BadSnake;
         if (more == 0) {
-            return (values, parts);
+            return { keys, parts };
         }
         cs = sccpBeginParseOrdinary(cs.preloadRef());
     }
 }
 
-/// Builds the canonical `^MemberChunk` list for `members` (at least one).
-fun sccpBuildMembers(members: array<int>): cell {
-    val count = members.size();
-    var start = ((count - 1) / SCCP_MEMBERS_PER_CHUNK) * SCCP_MEMBERS_PER_CHUNK;
+/// Builds the canonical `^KeyChunk` list for `keys` (at least one 384-bit slice).
+fun sccpBuildKeys(keys: array<slice>): cell {
+    val count = keys.size();
+    var start = ((count - 1) / SCCP_KEYS_PER_CHUNK) * SCCP_KEYS_PER_CHUNK;
     var next: cell? = null;
     while (start >= 0) {
         var b = beginCell();
-        val end = min(start + SCCP_MEMBERS_PER_CHUNK, count);
+        val end = min(start + SCCP_KEYS_PER_CHUNK, count);
         var i = start;
         while (i < end) {
-            b.storeUint(members.get(i), 160);
+            b.storeSlice(keys.get(i));
             i += 1;
         }
         b.storeMaybeRef(next);
         next = b.endCell();
-        start -= SCCP_MEMBERS_PER_CHUNK;
+        start -= SCCP_KEYS_PER_CHUNK;
     }
     return next!;
 }

@@ -8,6 +8,11 @@ fn koto_test_syscalls_are_host_private() {
         SYSCALL_KOTO_TEST_ACTOR_SIGN,
         SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
         SYSCALL_KOTO_TEST_EXPECT_REJECT_AS,
+        SYSCALL_KOTO_TEST_ASSERT_FAILED,
+        SYSCALL_KOTO_TEST_SET_BLOCK_HEIGHT,
+        SYSCALL_KOTO_TEST_ADVANCE_BLOCKS,
+        SYSCALL_KOTO_TEST_SET_TRANSACTION_TIME_MS,
+        SYSCALL_KOTO_TEST_CALL_SITE,
     ];
     for syscall in private {
         assert!(is_koto_test_syscall(syscall));

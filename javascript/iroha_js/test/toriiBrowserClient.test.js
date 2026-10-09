@@ -1134,6 +1134,22 @@ test("ToriiBrowserClient treats contract stream EOF as a terminal non-replayable
   assert.equal(fetchCalls, 1);
 });
 
+test("ToriiBrowserClient contract event stream accepts only call-derived provenance", () => {
+  let fetchCalls = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return sseResponse([]);
+    },
+  });
+
+  assert.throws(
+    () => client.streamContractEvents({ provenance: "emitted" }),
+    /streamContractEvents options\.provenance must be derived/u,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
 test("ToriiBrowserClient rejects adversarial query options before fetch", async () => {
   const fetchImpl = async () => {
     throw new Error("fetch should not be called for invalid local options");

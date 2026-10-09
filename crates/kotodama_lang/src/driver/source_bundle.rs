@@ -274,6 +274,7 @@ pub fn load_source_project(
         },
         source_paths,
         manifest: None,
+        lints: crate::session::LintConfig::default(),
     })
 }
 

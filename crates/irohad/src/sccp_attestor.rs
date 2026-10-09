@@ -18,6 +18,10 @@
 //! recorded, at most `shutdown_grace`. The node never aborts because of SCCP: an unusable key
 //! directory leaves the attestor inert (`sccp_attestor_unconfigured`).
 //!
+//! The inbound light-client keeper ([`keeper`], §4.13.4) is started next to the attestor as its
+//! own supervised task. It shares only the key directory (which it reads) and the submission
+//! path, so its public-RPC calls never run inside, or delay, an attestor tick.
+//!
 //! TODO(ws34): export the health states as telemetry gauges; they are logged today.
 
 #[path = "sccp_attestor/keeper.rs"]
@@ -50,6 +54,7 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_model_base::peer::PeerId;
 use iroha_sccp::v1::key_file::SccpBridgeKeyFileV1;
+use iroha_sccp_rpc::endpoints::endpoint_seed;
 use parking_lot::Mutex;
 
 use self::{key_store::KeyStore, plan::Duty};
@@ -59,7 +64,10 @@ const KEY_RETENTION_AFTER_EXPIRY_MS: u64 = 86_400_000;
 /// Tick interval of the attestor loop.
 const TICK: Duration = Duration::from_millis(500);
 
-/// Start the attestor, or return `None` when it is disabled or its key directory is unusable.
+/// Start the attestor and, next to it, the light-client keeper as separate supervised tasks.
+///
+/// Returns no task when the attestor is disabled or its key directory is unusable, and only the
+/// attestor's when the keeper is disabled.
 pub(crate) fn start(
     state: Arc<State>,
     queue: Arc<Queue>,
@@ -67,10 +75,10 @@ pub(crate) fn start(
     config: iroha_config::parameters::actual::SccpAttestor,
     keeper_config: iroha_config::parameters::actual::SccpLightClientKeeper,
     shutdown_signal: ShutdownSignal,
-) -> Option<Child> {
+) -> Vec<Child> {
     if !config.enabled {
         iroha_logger::info!("SCCP attestor disabled by configuration");
-        return None;
+        return Vec::new();
     }
     let dir = config.key_dir_path();
     let store = match KeyStore::open(&dir) {
@@ -81,25 +89,38 @@ pub(crate) fn start(
                 health = "sccp_attestor_unconfigured",
                 "SCCP attestor is inert: the bridge-key directory is unusable"
             );
-            return None;
+            return Vec::new();
         }
     };
+    let me = PeerId::new(peer_key_pair.public_key().clone());
+    // Seeds the keeper's starting endpoints and jitter per node, so validators sharing the
+    // compiled endpoint lists spread over them.
+    let seed = endpoint_seed(me.to_string().as_bytes());
+    let keeper = keeper::start(
+        Arc::new(keeper::NodeHost {
+            state: Arc::clone(&state),
+            queue: Arc::clone(&queue),
+            store: store.clone(),
+            me,
+        }),
+        keeper_config,
+        seed,
+        shutdown_signal.clone(),
+    );
+    let attestor = Arc::new(Attestor {
+        state,
+        queue,
+        peer_key_pair,
+        config,
+        store,
+        memory: Mutex::new(Memory::default()),
+    });
     let task = tokio::task::spawn(async move {
-        // The keeper's blocking HTTP clients are built on a blocking worker, never on the
-        // async worker that runs this task.
-        let keeper = keeper::Keeper::build(keeper_config).await;
-        let attestor = Arc::new(Attestor {
-            state,
-            queue,
-            peer_key_pair,
-            config,
-            store,
-            memory: Mutex::new(Memory::default()),
-            keeper: Mutex::new(keeper),
-        });
         attestor.run(shutdown_signal).await;
     });
-    Some(Child::new(task, OnShutdown::Wait(Duration::from_secs(1))))
+    let mut children = vec![Child::new(task, OnShutdown::Wait(Duration::from_secs(1)))];
+    children.extend(keeper);
+    children
 }
 
 /// Mutable bookkeeping between ticks.
@@ -126,7 +147,6 @@ struct Attestor {
     config: iroha_config::parameters::actual::SccpAttestor,
     store: KeyStore,
     memory: Mutex<Memory>,
-    keeper: Mutex<keeper::Keeper>,
 }
 
 fn wall_clock_ms() -> u64 {
@@ -244,41 +264,7 @@ impl Attestor {
             params.max_attestation_entries_per_instruction,
         )?;
         self.cleanup(world, now_ms, &owned, &key_state);
-        self.keep_light_clients(world, now_ms, &owned, &key_state);
         Ok(())
-    }
-
-    /// Advance stale inbound light clients from a live bridge key's account (§4.13.4).
-    fn keep_light_clients(
-        &self,
-        world: &impl WorldReadOnly,
-        now_ms: u64,
-        owned: &BTreeMap<[u8; 20], &SccpBridgeKeyFileV1>,
-        key_state: &iroha_data_model::sccp::keys::SccpBridgeKeyStateV1,
-    ) {
-        let live = plan::live_addresses(key_state);
-        let Some(key) = owned
-            .iter()
-            .find(|(address, _)| live.contains(*address))
-            .map(|(_, key)| *key)
-        else {
-            return;
-        };
-        let advances = {
-            let mut keeper = self.keeper.lock();
-            if !keeper.due() {
-                return;
-            }
-            let light_clients: Vec<_> = store::light_clients::iter(world)
-                .map(|(_, light_client)| *light_client)
-                .collect();
-            keeper.advances(&light_clients, now_ms)
-        };
-        for advance in advances {
-            if let Err(error) = self.submit(key, InstructionBox::from(advance)) {
-                iroha_logger::warn!(?error, "SCCP keeper: submitting an advance failed");
-            }
-        }
     }
 
     fn load_keys(&self) -> eyre::Result<Vec<SccpBridgeKeyFileV1>> {
@@ -505,70 +491,248 @@ impl Attestor {
 
     /// Quote, sign with `key` as `account_of(key)` and enqueue one transaction.
     fn submit(&self, key: &SccpBridgeKeyFileV1, instruction: InstructionBox) -> eyre::Result<()> {
-        let public_key = key
-            .public_key()
-            .map_err(|error| eyre::eyre!("bridge key public key: {error}"))?;
-        let authority = bridge_keys::account_of(&public_key)
-            .map_err(|error| eyre::eyre!("bridge key account: {error}"))?;
-        let mut payload = TransactionBuilder::new(
-            *self.state.network_id_ref(),
-            authority,
-            FeePaymentIntent::authority(Vec::new(), None),
+        submit_transaction(&self.state, &self.queue, key, instruction)
+    }
+}
+
+/// Quote, sign with `key` as `account_of(key)` and enqueue one transaction carrying
+/// `instruction`: the submission path of the attestor and the keeper.
+fn submit_transaction(
+    state: &State,
+    queue: &Queue,
+    key: &SccpBridgeKeyFileV1,
+    instruction: InstructionBox,
+) -> eyre::Result<()> {
+    let public_key = key
+        .public_key()
+        .map_err(|error| eyre::eyre!("bridge key public key: {error}"))?;
+    let authority = bridge_keys::account_of(&public_key)
+        .map_err(|error| eyre::eyre!("bridge key account: {error}"))?;
+    let mut payload = TransactionBuilder::new(
+        *state.network_id_ref(),
+        authority,
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction])
+    .into_payload()
+    .wrap_err("build SCCP transaction")?;
+    let route = queue
+        .route_payload_plan_with_state(&payload, state)
+        .wrap_err("route SCCP transaction")?;
+    let iroha_core::queue::RoutingPlan::Single(route) = route else {
+        eyre::bail!("SCCP submission requires one resolved route");
+    };
+    let latest_header = state.latest_block_header_fast();
+    let observation_time_ms = latest_header
+        .as_ref()
+        .map_or(0, |header| header.creation_time_ms);
+    let next_block_height = latest_header
+        .as_ref()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let quote = {
+        let world = state.world_view();
+        quote_nexus_fee_admission_draft(
+            &world,
+            &state.nexus_snapshot(),
+            &state.pipeline_snapshot(),
+            &payload,
+            observation_time_ms,
+            next_block_height,
+            Some(route.route.dataspace_id),
         )
-        .with_instructions([instruction])
-        .into_payload()
-        .wrap_err("build SCCP transaction")?;
-        let route = self
-            .queue
-            .route_payload_plan_with_state(&payload, self.state.as_ref())
-            .wrap_err("route SCCP transaction")?;
-        let iroha_core::queue::RoutingPlan::Single(route) = route else {
-            eyre::bail!("SCCP submission requires one resolved route");
-        };
-        let latest_header = self.state.latest_block_header_fast();
-        let observation_time_ms = latest_header
-            .as_ref()
-            .map_or(0, |header| header.creation_time_ms);
-        let next_block_height = latest_header
-            .as_ref()
-            .map_or(1, |header| header.height().get().saturating_add(1));
-        let quote = {
-            let world = self.state.world_view();
-            quote_nexus_fee_admission_draft(
-                &world,
-                &self.state.nexus_snapshot(),
-                &self.state.pipeline_snapshot(),
-                &payload,
-                observation_time_ms,
-                next_block_height,
-                Some(route.route.dataspace_id),
-            )
+    }
+    .map_err(|error| eyre::eyre!("quote SCCP transaction: {error:?}"))?;
+    payload.fee_payment = quote.recommended_intent;
+    let private_key = PrivateKey::from_bytes(Algorithm::Secp256k1, key.secret())
+        .map_err(|error| eyre::eyre!("bridge key private key: {error}"))?;
+    let transaction = TransactionBuilder::from_payload(payload)
+        .wrap_err("rebuild quoted SCCP transaction")?
+        .try_sign(&private_key)
+        .map_err(|error| eyre::eyre!("sign SCCP transaction: {error:?}"))?;
+    let (max_clock_drift, transaction_params) = {
+        let world = state.world_view();
+        let params = world.parameters();
+        (params.sumeragi().max_clock_drift(), params.transaction())
+    };
+    let crypto = state.crypto();
+    let accepted = AcceptedTransaction::accept(
+        transaction,
+        state.network_id_ref(),
+        max_clock_drift,
+        transaction_params,
+        crypto.as_ref(),
+    )
+    .wrap_err("accept SCCP transaction")?;
+    queue
+        .push_with_lane_with_state(accepted, state)
+        .map(|_| ())
+        .map_err(|failure| eyre::eyre!("enqueue SCCP transaction: {}", failure.err))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use iroha_config::parameters::actual::{
+        Queue as QueueConfig, SccpAttestor, SccpLightClientKeeper,
+    };
+    use iroha_config_base::WithOrigin;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use iroha_data_model::bridge::SccpNetworkV1;
+    use iroha_sccp_rpc::PollBudget;
+
+    use super::{
+        keeper::{Cadence, Lane, fakes},
+        *,
+    };
+
+    /// An empty node: committed state without SCCP and a local queue.
+    fn node() -> (Arc<State>, Arc<Queue>) {
+        let state = Arc::new(State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let (events, _) = tokio::sync::broadcast::channel(1);
+        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events));
+        (state, queue)
+    }
+
+    fn attestor_config(dir: &Path) -> SccpAttestor {
+        let mut config =
+            SccpAttestor::defaults_for_kura_store_dir(&WithOrigin::inline(dir.to_path_buf()));
+        config.key_dir = WithOrigin::inline(dir.join("bridge-keys"));
+        config
+    }
+
+    fn attestor(dir: &Path) -> Arc<Attestor> {
+        let (state, queue) = node();
+        let config = attestor_config(dir);
+        Arc::new(Attestor {
+            state,
+            queue,
+            peer_key_pair: KeyPair::random(),
+            store: KeyStore::open(&config.key_dir_path()).expect("key directory"),
+            config,
+            memory: Mutex::new(Memory::default()),
+        })
+    }
+
+    /// Waits (asynchronously, so a current-thread runtime keeps running) until `ready`.
+    async fn eventually(what: &str, ready: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !ready() {
+            assert!(Instant::now() < deadline, "timed out waiting until {what}");
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        .map_err(|error| eyre::eyre!("quote SCCP transaction: {error:?}"))?;
-        payload.fee_payment = quote.recommended_intent;
-        let private_key = PrivateKey::from_bytes(Algorithm::Secp256k1, key.secret())
-            .map_err(|error| eyre::eyre!("bridge key private key: {error}"))?;
-        let transaction = TransactionBuilder::from_payload(payload)
-            .wrap_err("rebuild quoted SCCP transaction")?
-            .try_sign(&private_key)
-            .map_err(|error| eyre::eyre!("sign SCCP transaction: {error:?}"))?;
-        let (max_clock_drift, transaction_params) = {
-            let world = self.state.world_view();
-            let params = world.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
+    }
+
+    /// The keeper's network I/O hangs on a blocking worker while the attestor keeps ticking on
+    /// the only async worker of a current-thread runtime.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_blocked_keeper_does_not_delay_attestor_ticks() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let attestor = attestor(dir.path());
+        let shutdown = ShutdownSignal::new();
+        let host = Arc::new(fakes::FakeHost::default());
+        let config = Arc::new(fakes::fast_config(10, 50));
+        let hung = Arc::new(fakes::GatedSource::default());
+        let lane = Lane::new(
+            SccpNetworkV1::EthereumMainnet,
+            fakes::shared(&hung),
+            PollBudget::new(),
+            Cadence::new(config.poll_interval, 1),
+        );
+        let keeper = tokio::spawn(keeper::run(
+            vec![lane],
+            Arc::clone(&host),
+            config,
+            shutdown.clone(),
+        ));
+        eventually("the keeper's build hung", || hung.entered() == 1).await;
+        let attestor_run = tokio::spawn(Arc::clone(&attestor).run(shutdown.clone()));
+        for _ in 0..6 {
+            let started = Instant::now();
+            tokio::time::timeout(Duration::from_secs(5), attestor.tick_blocking())
+                .await
+                .expect("an attestor tick finishes while the keeper is blocked");
+            assert!(started.elapsed() < Duration::from_secs(5));
+        }
+        // The run loop ticks on its own schedule meanwhile.
+        tokio::time::sleep(TICK * 3).await;
+        assert!(!attestor_run.is_finished());
+        assert_eq!(
+            hung.entered(),
+            1,
+            "the keeper is still blocked in its first build"
+        );
+        assert_eq!(host.submissions(SccpNetworkV1::EthereumMainnet), 0);
+        hung.open();
+        eventually("the keeper submitted after the endpoint answered", || {
+            host.submissions(SccpNetworkV1::EthereumMainnet) >= 1
+        })
+        .await;
+        shutdown.send();
+        tokio::time::timeout(Duration::from_secs(10), keeper)
+            .await
+            .expect("the keeper stops on shutdown")
+            .expect("the keeper does not panic");
+        tokio::time::timeout(Duration::from_secs(10), attestor_run)
+            .await
+            .expect("the attestor stops on shutdown")
+            .expect("the attestor does not panic");
+    }
+
+    #[tokio::test]
+    async fn the_attestor_and_the_keeper_start_as_separate_tasks() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let shutdown = ShutdownSignal::new();
+        let started = |attestor: SccpAttestor, keeper: SccpLightClientKeeper| {
+            let (state, queue) = node();
+            start(
+                state,
+                queue,
+                KeyPair::random(),
+                attestor,
+                keeper,
+                shutdown.clone(),
+            )
+            .len()
         };
-        let crypto = self.state.crypto();
-        let accepted = AcceptedTransaction::accept(
-            transaction,
-            self.state.network_id_ref(),
-            max_clock_drift,
-            transaction_params,
-            crypto.as_ref(),
-        )
-        .wrap_err("accept SCCP transaction")?;
-        self.queue
-            .push_with_lane_with_state(accepted, self.state.as_ref())
-            .map(|_| ())
-            .map_err(|failure| eyre::eyre!("enqueue SCCP transaction: {}", failure.err))
+        let enabled = attestor_config(dir.path());
+        assert_eq!(
+            started(enabled.clone(), SccpLightClientKeeper::default()),
+            2
+        );
+        let idle_keeper = SccpLightClientKeeper {
+            enabled: false,
+            ..SccpLightClientKeeper::default()
+        };
+        assert_eq!(started(enabled.clone(), idle_keeper), 1);
+        let mut disabled = enabled.clone();
+        disabled.enabled = false;
+        assert_eq!(started(disabled, SccpLightClientKeeper::default()), 0);
+        let mut unusable = enabled;
+        let not_a_directory = dir.path().join("file");
+        std::fs::write(&not_a_directory, b"x").expect("write file");
+        unusable.key_dir = WithOrigin::inline(not_a_directory);
+        assert_eq!(started(unusable, SccpLightClientKeeper::default()), 0);
+        shutdown.send();
+    }
+
+    #[tokio::test]
+    async fn submissions_on_a_node_without_sccp_fail_without_panicking() {
+        let (state, queue) = node();
+        let key = fakes::key();
+        let advance = iroha_data_model::isi::sccp::AdvanceSccpLightClientV1 {
+            network: SccpNetworkV1::BscMainnet,
+            expected_state_hash: None,
+            advance: iroha_data_model::sccp::light_client::SccpLcAdvanceBytesV1::new(vec![1])
+                .expect("advance bytes"),
+        };
+        assert!(
+            submit_transaction(&state, &queue, &key, InstructionBox::from(advance)).is_err(),
+            "an advance on a node without SCCP is refused"
+        );
     }
 }

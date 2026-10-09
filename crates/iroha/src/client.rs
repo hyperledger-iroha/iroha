@@ -27985,7 +27985,7 @@ mod tests {
         let artifact = include_bytes!("../tests/fixtures/contract_code_readback/code_readback.to");
         assert_eq!(
             hex::encode(iroha_data_model::smart_contract::contract_code_hash(artifact).as_ref()),
-            "8ea032a639a92b0c46b366b93a8207699e3253bf4c14fd159c6f1f5261b928a9",
+            "c6005c844c0414f55939dc48b9ecf6e550f967db06f5af4f422b4cf1bb64c5bb",
             "checked-in fixture must retain its native artifact identity"
         );
         artifact

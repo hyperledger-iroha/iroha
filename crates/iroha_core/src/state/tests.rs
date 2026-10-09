@@ -20517,16 +20517,23 @@ state_test! { sync compute_confidential_digest_uses_config_defaults
         digest.zk_policy_hash,
         Some(combine_zk_and_sccp_policy_hashes(
             compute_zk_consensus_policy_hash(&view.zk),
-            sccp_policy_hash_v1(),
+            sccp_policy_hash_v1(view.world(), height),
         ))
     );
+}
+state_test! { sync default_test_identities_do_not_require_runtime_publisher_custody
+    assert_eq!(DEFAULT_TEST_CHAIN_ID.as_str(), "00000000-0000-0000-0000-000000000000");
+    let expected = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        .parse::<iroha_data_model::NetworkId>()
+        .expect("fixture's canonical network identity");
+    assert_eq!(*DEFAULT_TEST_NETWORK_ID, expected);
 }
 state_test! { sync default_genesis_confidential_policy_hash_uses_default_zk_and_sccp_v1_policy
     assert_eq!(
         default_genesis_confidential_policy_hash(),
         combine_zk_and_sccp_policy_hashes(
             compute_zk_consensus_policy_hash(&default_zk_config()),
-            sccp_policy_hash_v1(),
+            sccp_genesis_policy_hash_v1(),
         )
     );
     assert_eq!(
@@ -20541,7 +20548,7 @@ state_test! { sync pure_zk_and_sccp_policy_hashes_are_independent_and_domain_sep
         compute_genesis_confidential_policy_hash(&base),
         combine_zk_and_sccp_policy_hashes(
             compute_zk_consensus_policy_hash(&base),
-            sccp_policy_hash_v1(),
+            sccp_genesis_policy_hash_v1(),
         ),
         "genesis policy must bind the fixed SCCP v1 policy input"
     );
@@ -20558,7 +20565,7 @@ state_test! { sync pure_zk_and_sccp_policy_hashes_are_independent_and_domain_sep
     assert_ne!(
         combine_zk_and_sccp_policy_hashes(
             compute_zk_consensus_policy_hash(&base),
-            sccp_policy_hash_v1(),
+            sccp_genesis_policy_hash_v1(),
         ),
         combine_zk_and_sccp_policy_hashes(compute_zk_consensus_policy_hash(&base), [0; 32]),
         "effective policy must bind the SCCP policy input"
@@ -20570,19 +20577,22 @@ state_test! { sync pure_zk_and_sccp_policy_hashes_are_independent_and_domain_sep
         "ZK consensus configuration must remain bound into genesis"
     );
 }
-state_test! { sync sccp_policy_hash_v1_binds_the_compiled_light_client_profiles
+state_test! { sync sccp_policy_hash_v1_binds_the_active_light_client_profiles
+    let catalog = iroha_sccp::light_client::profile::SccpLcProfileCatalogV1::compiled();
     let expected: [u8; 32] = {
         let mut hasher = Sha256::new();
         zk_policy_put_bytes(&mut hasher, b"iroha:sccp:policy:v1");
-        zk_policy_put_bytes(
-            &mut hasher,
-            &iroha_sccp::light_client::profile::policy_hash_contribution(),
-        );
+        zk_policy_put_bytes(&mut hasher, &catalog.genesis().policy_hash());
         Sha2Digest::finalize(hasher).into()
     };
-    assert_eq!(sccp_policy_hash_v1(), expected);
-    assert_eq!(sccp_policy_hash_v1(), sccp_policy_hash_v1());
-    assert_ne!(sccp_policy_hash_v1(), [0; 32]);
+    assert_eq!(sccp_genesis_policy_hash_v1(), expected);
+    assert_ne!(sccp_genesis_policy_hash_v1(), [0; 32]);
+    // A state without activations runs version 1 at every height.
+    let world = World::default();
+    let view = world.view();
+    for height in [0, 1, u64::MAX] {
+        assert_eq!(sccp_policy_hash_v1(&view, height), expected);
+    }
 }
 state_test! { sync zk_policy_hash_ignores_operator_only_timing_and_workers
     let base = default_zk();
@@ -26945,7 +26955,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
         seiyaku ProtectedRawTrigger {
           kotoage fn main(int marker, Json event) authorize("raw_trigger_run") {
             let _marker = marker;
-            ledger::account::set_detail(
+            ledger::account::set_metadata(
               account: context::seiyaku_subject(),
               key: Name::parse("raw_trigger_marker"),
               value: event
@@ -27413,7 +27423,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
         seiyaku ProtectedContractCallTrigger {
           kotoage fn run(int marker) authorize("contract_trigger_run") {
             let _marker = marker;
-            ledger::account::set_detail(
+            ledger::account::set_metadata(
               account: context::seiyaku_subject(),
               key: Name::parse("contract_trigger_marker"),
               value: Json::parse("{\"authorized\":true}")

@@ -6,6 +6,15 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 static TEMP_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// Fixture environment with no constants and the default chain discriminant.
+fn fixture_environment() -> FixtureEnvironment<'static> {
+    static NO_CONSTS: std::sync::LazyLock<HashMap<String, Expr>> =
+        std::sync::LazyLock::new(HashMap::new);
+    FixtureEnvironment {
+        consts: &NO_CONSTS,
+        chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+    }
+}
 fn decode_i64_word(vm: &IVM, pointer: u64) -> i64 {
     let tlv = vm.validate_tlv(pointer).expect("validate returned int TLV");
     assert_eq!(tlv.type_id, PointerType::Int);
@@ -102,9 +111,13 @@ fn compiled_suite_with_fixtures(fixtures: Vec<FixtureDecl>) -> CompiledSuite {
         tests: vec![TestCase {
             name: "smoke".to_string(),
             fixture: None,
+            path: PathBuf::from("demo.test.ko"),
             line: 1,
+            column: 1,
         }],
         fixtures: build_fixture_map(&fixtures).expect("build fixture map"),
+        fixture_sites: HashMap::new(),
+        fixture_consts: HashMap::new(),
     };
     compile_suite(&suite, false).expect("compile fixture suite")
 }
@@ -122,6 +135,12 @@ fn pure_unit_test_suite_executes_without_runtime_artifact() {
         "unexpected failure: {:?}",
         results[0].failure
     );
+    assert!(results[0].calls.is_empty());
+    assert!(
+        results[0].own_gas > 0,
+        "a pure unit test is charged for its own execution"
+    );
+    assert_eq!(results[0].gas(), results[0].own_gas);
 }
 #[test]
 fn helper_preserves_u64_max_json_int_through_option_match() {
@@ -187,46 +206,6 @@ fn compiler_owned_test_callables_preserve_artifact_verification() {
 }
 
 #[test]
-fn parse_args_accepts_supported_subcommands() {
-    let options = parse_args(vec![
-        "coverage".to_string(),
-        "contracts/demo.ko".to_string(),
-        "--filter".to_string(),
-        "smoke".to_string(),
-        "--jobs".to_string(),
-        "2".to_string(),
-        "--chain-discriminant".to_string(),
-        "369".to_string(),
-        "--zk".to_string(),
-    ])
-    .expect("parse args");
-    assert_eq!(options.command, Command::Coverage);
-    assert_eq!(options.path, PathBuf::from("contracts/demo.ko"));
-    assert_eq!(options.filter.as_deref(), Some("smoke"));
-    assert_eq!(options.jobs, 2);
-    assert_eq!(options.chain_discriminant, 369);
-    assert!(options.zk_enabled);
-}
-#[test]
-fn parse_args_rejects_invalid_or_duplicate_chain_discriminants() {
-    for invalid in ["", "0", "0369", "+369", "-1", "369x", "65536"] {
-        assert!(
-            parse_chain_discriminant(invalid).is_err(),
-            "accepted invalid discriminant {invalid:?}"
-        );
-    }
-    let duplicate = parse_args(vec![
-        "run".to_owned(),
-        "--chain-discriminant".to_owned(),
-        "369".to_owned(),
-        "--chain-discriminant".to_owned(),
-        "753".to_owned(),
-        "demo.ko".to_owned(),
-    ])
-    .expect_err("duplicate discriminants must fail closed");
-    assert!(duplicate.contains("only once"));
-}
-#[test]
 fn test_runner_uses_exact_taira_chain_discriminant() {
     const TAIRA_RECIPIENT: &str =
         "testﾜヰ8ｽuimdh9FﾂｦUｸﾈbﾕﾆヱMUYｴGｷﾙｹﾐRヱbﾐｷwﾄ6ﾃdDLPQﾋW496uﾙﾜFpﾈtHd4Hﾙﾎ45M1L5";
@@ -260,7 +239,11 @@ fn test_runner_uses_exact_taira_chain_discriminant() {
         Ok(_) => panic!("Taira literal must fail under Sora discriminant 753"),
         Err(error) => error,
     };
-    assert!(mismatch.contains("ERR_UNEXPECTED_NETWORK_PREFIX"));
+    assert!(
+        mismatch
+            .to_string()
+            .contains("ERR_UNEXPECTED_NETWORK_PREFIX")
+    );
 }
 #[test]
 fn zk_test_option_marks_both_test_and_runtime_artifacts() {
@@ -276,9 +259,13 @@ fn zk_test_option_marks_both_test_and_runtime_artifacts() {
         tests: vec![TestCase {
             name: "smoke".to_owned(),
             fixture: None,
+            path: PathBuf::from("demo.test.ko"),
             line: 1,
+            column: 1,
         }],
         fixtures: HashMap::new(),
+        fixture_sites: HashMap::new(),
+        fixture_consts: HashMap::new(),
     };
     let compiled = compile_suite(&suite, true).expect("compile ZK test suite");
     for artifact in [
@@ -295,44 +282,36 @@ fn zk_test_option_marks_both_test_and_runtime_artifacts() {
     }
 }
 #[test]
-fn parse_args_rejects_extra_argument_and_missing_path() {
-    let err = parse_args(vec!["wat".to_string(), "demo.ko".to_string()])
-        .expect_err("extra path should fail");
-    assert!(err.contains("unexpected test argument"));
-    let err = parse_args(vec!["run".to_string()]).expect_err("missing path should fail");
-    assert!(err.contains("usage: koto test"));
-}
-#[test]
 fn filtering_exact_and_seeded_order_are_deterministic() {
     let mut tests = vec![
         TestCase {
             name: "beta".to_owned(),
             fixture: None,
+            path: PathBuf::from("demo.test.ko"),
             line: 2,
+            column: 1,
         },
         TestCase {
             name: "alpha".to_owned(),
             fixture: None,
+            path: PathBuf::from("demo.test.ko"),
             line: 1,
+            column: 1,
         },
         TestCase {
             name: "alphabet".to_owned(),
             fixture: None,
+            path: PathBuf::from("demo.test.ko"),
             line: 3,
+            column: 1,
         },
     ];
-    let options = TestOptions {
-        command: Command::Run,
-        path: PathBuf::from("demo.ko"),
-        filter: Some("alpha".to_owned()),
-        exact: false,
-        jobs: 1,
-        seed: 7,
-        chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
-        zk_enabled: false,
-        output: TestOutputFormat::Text,
-        output_path: None,
-    };
+    let mut options = KotoTestCliOptions::new(
+        KotoTestAction::Run,
+        iroha_data_model::account::address::chain_discriminant(),
+    );
+    options.filter = Some("alpha".to_owned());
+    options.seed = 7;
     filter_and_order_tests(&mut tests, &options);
     let first = tests
         .iter()
@@ -342,17 +321,23 @@ fn filtering_exact_and_seeded_order_are_deterministic() {
         TestCase {
             name: "beta".to_owned(),
             fixture: None,
+            path: PathBuf::from("demo.test.ko"),
             line: 2,
+            column: 1,
         },
         TestCase {
             name: "alpha".to_owned(),
             fixture: None,
+            path: PathBuf::from("demo.test.ko"),
             line: 1,
+            column: 1,
         },
         TestCase {
             name: "alphabet".to_owned(),
             fixture: None,
+            path: PathBuf::from("demo.test.ko"),
             line: 3,
+            column: 1,
         },
     ];
     filter_and_order_tests(&mut repeated, &options);
@@ -397,7 +382,9 @@ fn structured_filter_order_is_independent_of_discovery_order() {
     let case = |name: &str, line| TestCase {
         name: name.to_owned(),
         fixture: None,
+        path: PathBuf::from("demo.test.ko"),
         line,
+        column: 1,
     };
     let mut forward = vec![case("case_z", 3), case("ignored", 2), case("case_a", 1)];
     let mut reverse = forward.iter().cloned().rev().collect::<Vec<_>>();
@@ -613,22 +600,131 @@ fn structured_standalone_sources_reject_missing_mismatched_and_escaping_targets(
         );
     }
 }
+/// A discovered suite and results for report-rendering tests: a seiyaku in `contracts/` whose
+/// tests live in `tests/vault.test.ko`.
+fn report_fixture() -> (DiscoveredSuite, Vec<TestRunResult>) {
+    let target_source = "seiyaku Vault { view fn value() -> int { return 1; } }";
+    let suite = DiscoveredSuite {
+        sources: Vec::new(),
+        source_root: None,
+        target_path: PathBuf::from("/work/contracts/vault.ko"),
+        target_source: target_source.to_owned(),
+        target_program: parser::parse(target_source).expect("parse report target"),
+        test_modules: Vec::new(),
+        tests: Vec::new(),
+        fixtures: HashMap::new(),
+        fixture_sites: HashMap::new(),
+        fixture_consts: HashMap::new(),
+    };
+    let call = |entrypoint: &str, gas| EntrypointCall {
+        entrypoint: entrypoint.to_owned(),
+        gas,
+        cycles: gas / 2,
+        trace_steps: 0,
+    };
+    let results = vec![
+        TestRunResult {
+            name: "rejects_bad_input".to_owned(),
+            path: PathBuf::from("/work/tests/vault.test.ko"),
+            line: 9,
+            column: 5,
+            elapsed: Duration::from_millis(2),
+            passed: false,
+            failure: Some(
+                TestFailure::new(FailureKind::Assertion, "")
+                    .at(Some("/work/tests/vault.test.ko:12:9".to_owned()))
+                    .detail("test::assert_eq(actual: left, expected: 71)")
+                    .detail("actual:   70")
+                    .detail("expected: 71"),
+            ),
+            harness_cycles: 10,
+            own_gas: 0,
+            calls: vec![call("withdraw", 1_200), call("withdraw", 1_400)],
+            trace: trace_capture::TestTrace::default(),
+        },
+        TestRunResult {
+            name: "reads_value".to_owned(),
+            path: PathBuf::from("/work/tests/vault.test.ko"),
+            line: 20,
+            column: 5,
+            elapsed: Duration::from_millis(1),
+            passed: true,
+            failure: None,
+            harness_cycles: 5,
+            own_gas: 0,
+            calls: vec![call("value", 300)],
+            trace: trace_capture::TestTrace::default(),
+        },
+    ];
+    (suite, results)
+}
 #[test]
 fn machine_reports_preserve_failure_details() {
-    let results = vec![TestRunResult {
-        name: "rejects_bad_input".to_owned(),
-        line: 9,
-        elapsed: Duration::from_millis(2),
-        passed: false,
-        failure: Some("expected rejection".to_owned()),
-        trace: None,
-    }];
-    let json = render_test_json(Path::new("demo.ko"), &results, 42).expect("JSON report");
-    let junit = render_test_junit(Path::new("demo.ko"), &results, 42);
+    let (suite, results) = report_fixture();
+    let json = render_test_json(&suite, &results, 42).expect("JSON report");
+    let junit = render_test_junit(&suite, &results, 42);
     for report in [&json, &junit] {
         assert!(report.contains("rejects_bad_input"));
-        assert!(report.contains("expected rejection"));
+        assert!(report.contains("actual:   70"));
+        assert!(report.contains("/work/tests/vault.test.ko"), "{report}");
     }
+    let value: Value = json::from_str(&json).expect("one JSON document");
+    let failed = &value.get("tests").and_then(Value::as_array).expect("tests")[0];
+    assert_eq!(
+        failed.get("file").and_then(Value::as_str),
+        Some("/work/tests/vault.test.ko")
+    );
+    assert_eq!(failed.get("line").and_then(Value::as_u64), Some(9));
+    assert_eq!(failed.get("column").and_then(Value::as_u64), Some(5));
+    assert_eq!(failed.get("gas").and_then(Value::as_u64), Some(2_600));
+    assert_eq!(failed.get("cycles").and_then(Value::as_u64), Some(1_310));
+    assert_eq!(
+        failed.pointer("/failure/kind").and_then(Value::as_str),
+        Some("assertion")
+    );
+    assert_eq!(
+        failed.pointer("/failure/location").and_then(Value::as_str),
+        Some("/work/tests/vault.test.ko:12:9")
+    );
+    assert!(junit.contains("file=\"/work/tests/vault.test.ko\" line=\"9\""));
+    assert!(junit.contains("<property name=\"gas\" value=\"2600\"/>"));
+    assert!(junit.contains("type=\"assertion\""));
+    assert!(!junit.contains("contracts/vault.ko\" line"));
+}
+#[test]
+fn human_report_names_the_test_file_and_failure_details() {
+    let (suite, results) = report_fixture();
+    let summary = render_run_summary(&suite, &results);
+    assert!(
+        summary.contains("running 2 tests for seiyaku `Vault`"),
+        "{summary}"
+    );
+    // Locations are padded to one width so test names line up.
+    assert!(
+        summary.contains("FAILED  /work/tests/vault.test.ko:9:5   rejects_bad_input"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("    ok  /work/tests/vault.test.ko:20:5  reads_value"),
+        "{summary}"
+    );
+    assert!(summary.contains("gas 2,600, cycles 1,310"), "{summary}");
+    assert!(summary.contains("---- rejects_bad_input (/work/tests/vault.test.ko:9:5) ----"));
+    assert!(summary.contains(
+        "assertion failed at /work/tests/vault.test.ko:12:9\n  test::assert_eq(actual: left, expected: 71)\n  actual:   70\n  expected: 71"
+    ));
+    assert!(summary.contains("result: FAILED. 1 passed; 1 failed; gas 2,900"));
+    assert!(!summary.contains("contracts/vault.ko:9"));
+    let gas = render_gas_report(&results);
+    assert!(gas.contains("transaction admission fees excluded"));
+    let withdraw = gas
+        .lines()
+        .find(|line| line.trim_start().starts_with("withdraw"))
+        .expect("withdraw row");
+    let columns = withdraw.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(columns, ["withdraw", "2", "1,200", "1,300", "1,400"]);
+    assert_eq!(group_digits(0), "0");
+    assert_eq!(group_digits(1_234_567), "1,234,567");
 }
 #[test]
 fn discover_suite_links_inline_and_matching_standalone_tests() {
@@ -894,6 +990,7 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
         error enum RejectionError { First = 1, Second = 2, }
         state int counter;
         hajimari() { counter = 7; }
+        kotoage fn reset() authorize("CanInvokeContractEntrypoint") { counter = 7; }
         kotoage fn reject(int value) authorize("CanInvokeContractEntrypoint") {
             counter = value;
             require(false, RejectionError::First);
@@ -929,6 +1026,7 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
             actor("app", AccountId::parse("{DEFAULT_CALLER}"));
             grant_seiyaku_kotoage_permission("app", "reject");
             grant_seiyaku_kotoage_permission("app", "succeed");
+            grant_seiyaku_kotoage_permission("app", "reset");
             grant_permission("app", "CanEnactGovernance");
             grant_permission("app", "CanCustomProbe");
             grant_permission("app", Json::parse("{{\"name\":\"manage_roles\",\"type\":\"custom\"}}"));
@@ -999,7 +1097,14 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
         decode_int_state_value(&host.inner.wsv.sc_get("counter").expect("state")),
         99
     );
-    call(&mut host, &mut vm, "hajimari", "{}", None).expect("reset control state");
+    call(&mut host, &mut vm, "reset", "{}", None).expect("reset control state");
+    call(&mut host, &mut vm, "hajimari", "{}", None)
+        .expect_err("a consumed hajimari cannot be replayed");
+    assert!(
+        host.last_test_error()
+            .expect("replay diagnostic")
+            .contains("cannot be replayed")
+    );
     let descriptor = ContractErrorTypeDescriptor {
         identity: "Rejections::RejectionError".to_owned(),
         variants: vec![
@@ -1078,7 +1183,7 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
         assert!(
             host.last_test_error()
                 .expect("success diagnostic")
-                .contains("but it succeeded")
+                .contains("but the call succeeded")
         );
         assert_eq!(
             decode_int_state_value(&host.inner.wsv.sc_get("counter").expect("state")),
@@ -1109,7 +1214,7 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
             assert!(
                 host.last_test_error()
                     .expect("argument stage diagnostic")
-                    .contains("argument-schema InvalidArguments before")
+                    .contains("observed: invalid arguments")
             );
         }
         assert_eq!(
@@ -1158,7 +1263,7 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
                 denied
                     .last_test_error()
                     .expect("authorization stage diagnostic")
-                    .contains("invocation PermissionDenied before")
+                    .contains("observed: permission denied")
             );
         }
         assert_eq!(
@@ -1239,13 +1344,18 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
         }
     }
     call(&mut host, &mut vm, "succeed", valid_payload, None).expect("normal mutation control");
-    call(&mut host, &mut vm, "hajimari", "[]", None)
+    call(&mut host, &mut vm, "reset", "[]", None)
         .expect_err("normal zero-parameter calls reject nonempty arguments too");
+    assert!(
+        host.last_test_error()
+            .expect("argument diagnostic")
+            .contains("takes no arguments, so its argument object must be `{}`")
+    );
     assert_eq!(
         decode_int_state_value(&host.inner.wsv.sc_get("counter").unwrap()),
         99
     );
-    call(&mut host, &mut vm, "hajimari", "{}", None).expect("canonical empty arguments execute");
+    call(&mut host, &mut vm, "reset", "{}", None).expect("canonical empty arguments execute");
     assert_eq!(
         decode_int_state_value(&host.inner.wsv.sc_get("counter").unwrap()),
         7
@@ -1309,7 +1419,16 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
 
                 #[test(fixture="actors")]
                 fn expect_reject_as_captures_seiyaku_rejection() {{
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
                     test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: Json::parse("{{}}"), expected: DemoError::Rejected);
+                }}
+
+                #[test(fixture="actors")]
+                fn calls_before_hajimari_are_lifecycle_rejections() {{
+                    test::expect_any_reject_as(actor: "issuer", kotoage: "increment", arguments: Json::parse("{{}}"));
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
+                    test::expect_any_reject_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
+                    test::assert_eq(actual: counter, expected: 1);
                 }}
 
                 #[test(fixture="actors")]
@@ -1386,7 +1505,10 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
             format!(
                 "{}: {}",
                 result.name,
-                result.failure.as_deref().unwrap_or("missing failure")
+                result
+                    .failure
+                    .as_ref()
+                    .map_or_else(|| "missing failure".to_owned(), TestFailure::render)
             )
         })
         .collect::<Vec<_>>();
@@ -1396,9 +1518,12 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
         failures.join("; ")
     );
     assert!(
-        results
-            .iter()
-            .any(|result| result.trace.as_ref().is_some_and(|trace| !trace.is_empty())),
+        results.iter().any(|result| result
+            .trace
+            .runtime
+            .as_ref()
+            .or(result.trace.harness.as_ref())
+            .is_some_and(|trace| !trace.is_empty())),
         "expected compiled helpers to emit execution traces"
     );
 }
@@ -1414,7 +1539,10 @@ fn standalone_test_source_parser_rejects_public_functions() {
     );
     let error = parse_program_file(&test_file)
         .expect_err("a module cannot contain a public seiyaku function");
-    assert!(error.contains("module"), "unexpected error: {error}");
+    assert!(
+        error.to_string().contains("module"),
+        "unexpected error: {error}"
+    );
 }
 #[test]
 fn finalize_suite_rejects_program_without_tests() {
@@ -1465,9 +1593,13 @@ fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
         tests: vec![TestCase {
             name: "smoke".to_string(),
             fixture: None,
+            path: PathBuf::from("demo.test.ko"),
             line: 6,
+            column: 1,
         }],
         fixtures: HashMap::new(),
+        fixture_sites: HashMap::new(),
+        fixture_consts: HashMap::new(),
     };
     let compiled = compile_suite(&suite, false).expect("compile suite");
     assert_eq!(compiled.tests.len(), 1);
@@ -1608,7 +1740,8 @@ fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
             result.name,
             result
                 .failure
-                .unwrap_or_else(|| "unknown failure".to_owned()),
+                .as_ref()
+                .map_or_else(|| "unknown failure".to_owned(), TestFailure::render),
         );
     }
 }
@@ -1634,6 +1767,7 @@ fn apply_fixture_action_rejects_unknown_action() {
         WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         None,
         HashMap::new(),
+        Arc::new(SourceContext::empty("FixtureDemo")),
     );
     let mut public_inputs = BTreeMap::new();
     let err = apply_fixture_action(
@@ -1643,6 +1777,7 @@ fn apply_fixture_action_rejects_unknown_action() {
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect_err("unknown fixture action should fail");
     assert!(err.contains("unknown fixture action"));
@@ -1654,6 +1789,7 @@ fn apply_fixture_action_populates_state_and_public_inputs() {
         WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         None,
         HashMap::new(),
+        Arc::new(SourceContext::empty("FixtureDemo")),
     );
     let mut public_inputs = BTreeMap::new();
     apply_fixture_action(
@@ -1666,6 +1802,7 @@ fn apply_fixture_action_populates_state_and_public_inputs() {
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("apply state_set");
     apply_fixture_action(
@@ -1688,6 +1825,7 @@ fn apply_fixture_action_populates_state_and_public_inputs() {
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("apply public_input");
     let seeded_counter = host.inner.wsv.sc_get("demo/counter").expect("seeded state");
@@ -1705,7 +1843,12 @@ fn build_host_for_fixture_rejects_unknown_fixture() {
     let err = build_host_for_fixture(&compiled, Some("missing"))
         .err()
         .expect("unknown fixture should fail");
-    assert!(err.contains("unknown fixture"));
+    assert_eq!(err.kind, FailureKind::Harness);
+    assert!(
+        err.render().contains("unknown fixture `missing`"),
+        "{}",
+        err.render()
+    );
 }
 #[test]
 fn build_host_for_fixture_uses_canonical_default_caller() {
@@ -1753,6 +1896,7 @@ fn apply_fixture_action_registers_actor_seed() {
         WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         None,
         HashMap::new(),
+        Arc::new(SourceContext::empty("FixtureDemo")),
     );
     let mut public_inputs = BTreeMap::new();
     let actor_seed = [7_u8; 32];
@@ -1774,6 +1918,7 @@ fn apply_fixture_action_registers_actor_seed() {
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("register actor");
     assert!(public_inputs.is_empty());
@@ -1794,6 +1939,7 @@ fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
         WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         None,
         HashMap::new(),
+        Arc::new(SourceContext::empty("FixtureDemo")),
     );
     host.register_actor("operator".to_owned(), actor.clone())
         .expect("register fixture actor");
@@ -1808,6 +1954,7 @@ fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("grant exact fixture permission");
     let exact = PermissionToken::ContractEntrypoint {
@@ -1836,6 +1983,7 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
         WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         None,
         HashMap::new(),
+        Arc::new(SourceContext::empty("FixtureDemo")),
     );
     let mut public_inputs = BTreeMap::new();
     for retired in [
@@ -1850,9 +1998,15 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
             },
             &mut host,
             &mut public_inputs,
+            &fixture_environment(),
         )
         .expect_err("English feature action must not remain compatible");
-        assert_eq!(error, format!("unknown fixture action `{retired}`"));
+        assert!(
+            error.starts_with(&format!(
+                "unknown fixture action `{retired}`; the fixture actions are `actor`"
+            )),
+            "{error}"
+        );
     }
     for (branded, arity) in [
         ("grant_seiyaku_kotoage_permission", 2),
@@ -1866,6 +2020,7 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
             },
             &mut host,
             &mut public_inputs,
+            &fixture_environment(),
         )
         .expect_err("recognized branded action still requires its arguments");
         assert_eq!(
@@ -1890,6 +2045,7 @@ fn fixture_contract_effect_grant_targets_only_the_immutable_contract_subject() {
         WsvHost::new_with_subject(MockWorldStateView::default(), caller.clone()),
         None,
         HashMap::new(),
+        Arc::new(SourceContext::empty("FixtureDemo")),
     );
     host.register_actor("app".to_owned(), caller.clone())
         .expect("register app actor");
@@ -1906,6 +2062,7 @@ fn fixture_contract_effect_grant_targets_only_the_immutable_contract_subject() {
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("grant contract effect permission");
     assert!(
@@ -1935,6 +2092,7 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         WsvHost::new_with_subject(MockWorldStateView::default(), controller.clone()),
         None,
         HashMap::new(),
+        Arc::new(SourceContext::empty("FixtureDemo")),
     );
     host.register_actor("controller".to_owned(), controller.clone())
         .expect("register controller");
@@ -1953,6 +2111,7 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("register control asset");
     apply_fixture_action(
@@ -1966,6 +2125,7 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("register exact target alias scope");
     let availability_permission_expr = |account: &AccountId| Expr::Call {
@@ -2002,6 +2162,7 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("grant exact availability permission to app only");
     apply_fixture_action(
@@ -2011,6 +2172,7 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("grant wrong-account availability permission to subject");
     host.inner
@@ -2060,6 +2222,7 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("grant exact availability permission to contract subject");
     call_availability(&mut host).expect("exact contract-subject availability effect succeeds");
@@ -2087,6 +2250,7 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("grant exact daily-limit permission to contract subject");
     let mut limit_vm = IVM::new(u64::MAX);
@@ -2132,6 +2296,7 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect("grant exact holding-limit permission to contract subject");
     let mut holding_vm = IVM::new(u64::MAX);
@@ -2177,6 +2342,7 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
         WsvHost::new_with_subject(MockWorldStateView::default(), caller.clone()),
         None,
         HashMap::new(),
+        Arc::new(SourceContext::empty("FixtureDemo")),
     );
     host.register_actor("merchant".to_owned(), caller.clone())
         .expect("register merchant actor");
@@ -2190,8 +2356,13 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
             Expr::String("merchant".to_owned()),
         ],
     };
-    apply_fixture_action(&registration, &mut host, &mut public_inputs)
-        .expect("register canonical domain-scoped account alias");
+    apply_fixture_action(
+        &registration,
+        &mut host,
+        &mut public_inputs,
+        &fixture_environment(),
+    )
+    .expect("register canonical domain-scoped account alias");
     let mut vm = IVM::new(u64::MAX);
     let pointer = vm
         .alloc_input_tlv(&make_tlv(PointerType::Blob, b"merchant@hbl.sbp"))
@@ -2207,8 +2378,13 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
     let resolved: AccountId =
         norito::decode_from_bytes(resolved_tlv.payload).expect("decode resolved account");
     assert_eq!(resolved, caller);
-    let duplicate = apply_fixture_action(&registration, &mut host, &mut public_inputs)
-        .expect_err("duplicate alias registration must fail");
+    let duplicate = apply_fixture_action(
+        &registration,
+        &mut host,
+        &mut public_inputs,
+        &fixture_environment(),
+    )
+    .expect_err("duplicate alias registration must fail");
     assert!(duplicate.contains("duplicate account alias registration"));
     let conflict = apply_fixture_action(
         &FixtureAction {
@@ -2220,6 +2396,7 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
         },
         &mut host,
         &mut public_inputs,
+        &fixture_environment(),
     )
     .expect_err("conflicting alias registration must fail");
     assert!(conflict.contains("conflicting account alias registration"));
@@ -2242,6 +2419,7 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
             },
             &mut host,
             &mut public_inputs,
+            &fixture_environment(),
         )
         .expect_err("noncanonical alias registration must fail");
         assert!(!error.is_empty(), "missing rejection for `{alias}`");
@@ -2249,12 +2427,13 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
 }
 #[test]
 fn helper_parsers_reject_invalid_numeric_and_mintability() {
-    let err = eval_numeric_expr(&Expr::IntLiteral((-1_i64).into()))
+    let environment = fixture_environment();
+    let err = eval_numeric_expr(&Expr::IntLiteral((-1_i64).into()), &environment)
         .expect_err("negative quantity should fail");
     assert!(err.contains("negative balances are not allowed"));
-    let err = eval_quantity_expr(&Expr::String("-1".to_owned()))
-        .expect_err("negative decimal quantity should fail at the nominal boundary");
-    assert!(err.contains("balance must be a non-negative quantity"));
+    let err = eval_quantity_expr(&Expr::String("-1".to_owned()), &environment)
+        .expect_err("negative decimal quantity should fail");
+    assert!(err.contains("negative balances are not allowed"), "{err}");
     let err = eval_mintable_expr(&Expr::String("sometimes".to_string()))
         .expect_err("invalid mintability should fail");
     assert!(err.contains("unsupported mintability"));
@@ -2272,13 +2451,16 @@ fn helper_parsers_reject_invalid_numeric_and_mintability() {
 fn parse_permission_helpers_cover_targeted_and_json_forms() {
     let domain = DomainId::try_new("wonderland", "universal").expect("domain");
     let asset = AssetDefinitionId::derive_from_components(domain, "rose".parse().expect("name"));
-    let token = parse_permission_token_name(&format!("mint_asset:{asset}"))
+    let token = parse_permission_token_name(&format!("mint_asset:{asset}"), &parse_account_literal)
         .expect("parse mint asset token");
     assert!(matches!(token, PermissionToken::MintAsset(id) if id == asset));
-    let token = parse_permission_token_json(r#"{"type":"custom","name":"demo.permission"}"#)
-        .expect("parse custom permission json");
+    let token = parse_permission_token_json(
+        r#"{"type":"custom","name":"demo.permission"}"#,
+        &parse_account_literal,
+    )
+    .expect("parse custom permission json");
     assert!(matches!(token, PermissionToken::Custom(name) if name == "demo.permission"));
-    let err = parse_permission_token_json(r#"{"target":"missing-type"}"#)
+    let err = parse_permission_token_json(r#"{"target":"missing-type"}"#, &parse_account_literal)
         .expect_err("missing type should fail");
     assert!(err.contains("missing `type`"));
     let owner = parse_account_literal(DEFAULT_CALLER).expect("asset owner");
@@ -2287,10 +2469,13 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
         owner,
         AssetBalanceScope::Dataspace(DataSpaceId::new(10)),
     );
-    let token = parse_permission_token_json(&format!(
-        r#"{{"type":"CanTransferAsset","asset":"{}"}}"#,
-        bucket.canonical_literal(),
-    ))
+    let token = parse_permission_token_json(
+        &format!(
+            r#"{{"type":"CanTransferAsset","asset":"{}"}}"#,
+            bucket.canonical_literal(),
+        ),
+        &parse_account_literal,
+    )
     .expect("parse exact transfer bucket permission");
     assert!(matches!(token, PermissionToken::TransferAssetBucket(id) if id == bucket));
     for invalid in [
@@ -2308,14 +2493,14 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
             .canonical_literal(),
         ),
     ] {
-        parse_permission_token_json(&invalid)
+        parse_permission_token_json(&invalid, &parse_account_literal)
             .expect_err("ambiguous or non-canonical transfer bucket must fail");
     }
     let availability_account = parse_account_literal(DEFAULT_CALLER).expect("account");
     let availability = parse_permission_token_json(&format!(
             r#"{{"type":"CanSetAssetTransferAvailability","account":"{availability_account}","asset_definition":"{}"}}"#,
             asset.canonical_address(),
-        ))
+        ), &parse_account_literal)
         .expect("parse exact availability permission");
     assert!(matches!(
         availability,
@@ -2327,7 +2512,7 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
     let daily_limit = parse_permission_token_json(&format!(
             r#"{{"type":"CanSetAssetTransferDailyLimit","asset_definition":"{}","account_domain":"hbl","account_dataspace":10}}"#,
             asset.canonical_address(),
-        ))
+        ), &parse_account_literal)
         .expect("parse scoped daily-limit permission");
     assert!(matches!(
         daily_limit,
@@ -2342,7 +2527,7 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
     let holding_limit = parse_permission_token_json(&format!(
             r#"{{"type":"CanSetAssetHoldingLimit","account":"{availability_account}","asset_definition":"{}"}}"#,
             asset.canonical_address(),
-        ))
+        ), &parse_account_literal)
         .expect("parse exact holding-limit permission");
     assert!(matches!(
         holding_limit,
@@ -2365,18 +2550,18 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
             asset.canonical_address(),
         ),
     ] {
-        parse_permission_token_json(&invalid)
+        parse_permission_token_json(&invalid, &parse_account_literal)
             .expect_err("legacy, ambiguous, or extra transfer-control scope must fail");
     }
 }
 #[test]
 fn permission_and_json_helpers_reject_invalid_inputs() {
-    let err = parse_permission_token_name("mint_asset:not-an-asset")
+    let err = parse_permission_token_name("mint_asset:not-an-asset", &parse_account_literal)
         .expect_err("invalid targeted permission should fail");
     assert!(err.contains("invalid asset definition id"));
     let err = eval_json_payload(&[Expr::IntLiteral(7_i64.into())])
         .expect_err("non-string json should fail");
-    assert!(err.contains("expects a string payload"));
+    assert!(err.contains("expects a string literal"), "{err}");
 }
 #[test]
 fn eval_envelope_expr_encodes_pointer_variants() {
@@ -2427,10 +2612,74 @@ fn fixture_evaluators_reject_retired_flat_constructor_aliases() {
     assert!(eval_seed_expr(&call("blob", &format!("0x{}", "00".repeat(32)))).is_err());
 }
 #[test]
-fn render_failure_without_diagnostic_falls_back_to_debug_error() {
-    let vm = IVM::new(u64::MAX);
-    let rendered = render_failure(&vm, None, &ivm::VMError::DecodeError);
-    assert!(rendered.contains("DecodeError"));
+fn vm_errors_classify_into_distinct_failure_kinds_without_debug_formatting() {
+    use ivm_abi::error::VmTrapKind as Trap;
+    for (trap, kind) in [
+        (Trap::PermissionDenied, FailureKind::PermissionDenied),
+        (Trap::NumericFault, FailureKind::NumericFault),
+        (Trap::OutOfGas, FailureKind::GasExhausted),
+        (Trap::ExceededMaxCycles, FailureKind::GasExhausted),
+        (Trap::DecodeError, FailureKind::Decode),
+        (Trap::AssertionFailed, FailureKind::Assertion),
+        (Trap::InvalidOpcode, FailureKind::Trap),
+    ] {
+        let failure = classify_vm_error(&ivm::VMError::DecodeError, Some(trap));
+        assert_eq!(failure.kind, kind, "{trap:?}");
+        assert!(
+            !failure.render().contains("DecodeError"),
+            "{}",
+            failure.render()
+        );
+    }
+    let descriptor = ivm_abi::error_types::list_error_type();
+    let abort = ivm::VMError::ContractAbort {
+        contract: "Vault".into(),
+        name: descriptor.variants[0].name.clone(),
+        message: None,
+        error_type: descriptor.identity.clone(),
+        schema_hash: descriptor.schema_hash(),
+        code: descriptor.variants[0].code,
+    };
+    let failure = classify_vm_error(&abort, Some(Trap::ContractAbort));
+    assert_eq!(failure.kind, FailureKind::Rejected);
+    assert!(failure.message.contains(&format!(
+        "`{}::{}`",
+        descriptor.identity, descriptor.variants[0].name
+    )));
+    assert!(!failure.render().contains("schema_hash"));
+}
+#[test]
+fn failure_rendering_has_kind_location_and_details() {
+    let failure = TestFailure::new(FailureKind::Lifecycle, "pending hajimari")
+        .at(Some("tests/a.test.ko:3:5".to_owned()))
+        .at(Some("ignored".to_owned()))
+        .detail("help: invoke it first");
+    assert_eq!(
+        failure.render(),
+        "lifecycle violation at tests/a.test.ko:3:5: pending hajimari\n  help: invoke it first"
+    );
+    // Help lines follow the context lines attached after them.
+    let failure = failure.detail("while the current caller called `current`");
+    assert_eq!(
+        failure.render(),
+        "lifecycle violation at tests/a.test.ko:3:5: pending hajimari\n  while the current caller called `current`\n  help: invoke it first"
+    );
+    assert_eq!(FailureKind::Lifecycle.slug(), "lifecycle");
+    for kind in [
+        FailureKind::Assertion,
+        FailureKind::Rejected,
+        FailureKind::PermissionDenied,
+        FailureKind::NumericFault,
+        FailureKind::GasExhausted,
+        FailureKind::Arguments,
+        FailureKind::Decode,
+        FailureKind::Lifecycle,
+        FailureKind::Expectation,
+        FailureKind::Harness,
+        FailureKind::Trap,
+    ] {
+        assert!(!kind.label().is_empty() && !kind.slug().contains(' '));
+    }
 }
 #[test]
 fn coverage_helper_functions_handle_internal_and_boundary_cases() {
@@ -2466,7 +2715,7 @@ fn collect_tests_rejects_duplicate_test_names() {
     };
     let mut names = HashSet::new();
     let mut tests = Vec::new();
-    let err = collect_tests_into(&program, &mut names, &mut tests)
+    let err = collect_tests_into(&program, Path::new("demo.ko"), &mut names, &mut tests)
         .expect_err("duplicate test names should fail");
     assert!(err.contains("duplicate test function"));
 }
@@ -2516,11 +2765,12 @@ fn current_caller_public_invocation_enforces_arguments_and_declared_permissions(
             "arguments.ko",
             r#"seiyaku Arguments {
                 view fn quote(int count) -> int { return count; }
+                fn missing_count() -> Json { return json { other: 1 }; }
                 #[test] fn malformed() {
-                    test::invoke_kotoage(kotoage: "quote", arguments: Json::parse("{}"));
+                    test::invoke_kotoage(kotoage: "quote", arguments: missing_count());
                 }
             }"#,
-            "arguments that do not match the kotoage schema",
+            "calling `quote`: argument `count`",
         ),
         (
             "permissions.ko",
@@ -2530,7 +2780,7 @@ fn current_caller_public_invocation_enforces_arguments_and_declared_permissions(
                     test::invoke_kotoage(kotoage: "restricted", arguments: Json::parse("{}"));
                 }
             }"#,
-            "lacks declared `UnrequestedBoundaryPermission` permission",
+            "lacks the `UnrequestedBoundaryPermission` permission",
         ),
     ] {
         let temp = TestTempDir::new();
@@ -2541,7 +2791,12 @@ fn current_caller_public_invocation_enforces_arguments_and_declared_permissions(
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed);
         assert!(
-            results[0].failure.as_deref().unwrap().contains(expected),
+            results[0]
+                .failure
+                .as_ref()
+                .unwrap()
+                .render()
+                .contains(expected),
             "{:?}",
             results[0].failure
         );
@@ -2613,6 +2868,7 @@ fn invocation_alias_decoding_preserves_read_deferral_before_test_failure() {
             WsvHost::new_with_subject(MockWorldStateView::default(), caller),
             None,
             HashMap::new(),
+            Arc::new(SourceContext::empty("FixtureDemo")),
         );
         let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         let mut vm = IVM::try_new_with_memory_budget(u64::MAX, &budget).unwrap();
@@ -2694,4 +2950,695 @@ fn immutable_source_suite_uses_supplied_include_and_never_loads_ambient_file() {
     .expect("immutable included test");
     assert!(report.is_success());
     assert_eq!(report.cases.len(), 1);
+}
+/// A seiyaku in `contracts/` and its standalone tests in `tests/`, the layout `musubi new` uses.
+fn write_ledger_package(temp: &TestTempDir, tests: &str) -> PathBuf {
+    temp.write(
+        "contracts/ledger.ko",
+        r#"seiyaku Ledger {
+    error enum LedgerError { Expired = 1, }
+    struct Pair { int left, string right }
+    state int balance;
+    hajimari() { balance = 100; }
+    kaizen() {}
+    kotoage fn renew(int until) authorize("Renew") {
+        require(context::block_height() <= until, LedgerError::Expired);
+        balance = balance + 1;
+    }
+    view fn height() -> int { return context::block_height(); }
+    view fn time() -> int { return context::transaction_time_ms(); }
+    view fn pair() -> Pair { return Pair { left: 1, right: "two" }; }
+}
+"#,
+    );
+    temp.write(
+        "tests/ledger.test.ko",
+        &format!(
+            r#"module LedgerTests {{
+    koto_test {{ target: "../contracts/ledger.ko" }}
+    fixture people {{
+        actor("alice");
+        actor("bob");
+        grant_permission("alice", "Renew");
+    }}
+    fn activate() {{
+        test::invoke_kotoage(kotoage: "hajimari", arguments: Json::parse("{{}}"));
+    }}
+{tests}
+}}
+"#
+        ),
+    )
+}
+fn run_ledger_tests(tests: &str) -> Vec<TestRunResult> {
+    let temp = TestTempDir::new();
+    let path = write_ledger_package(&temp, tests);
+    let suite = discover_suite(&path).expect("discover ledger package without --source-root");
+    let compiled = compile_suite(&suite, false).expect("compile ledger tests");
+    execute_suite(&compiled, TraceMode::Off, 1).expect("execute ledger tests")
+}
+fn failure_of<'a>(results: &'a [TestRunResult], name: &str) -> &'a TestFailure {
+    results
+        .iter()
+        .find(|result| result.name == name)
+        .and_then(|result| result.failure.as_ref())
+        .unwrap_or_else(|| panic!("`{name}` must fail"))
+}
+#[test]
+fn block_height_and_time_are_test_controlled_and_helpers_may_use_test_builtins() {
+    let results = run_ledger_tests(
+        r#"
+    #[test(fixture = "people")]
+    fn block_height_controls_renewal() {
+        activate();
+        test::set_block_height(height: 10);
+        test::invoke_kotoage_as(actor: "alice", kotoage: "renew", arguments: Json::parse("{\"until\":\"12\"}"));
+        test::advance_blocks(count: 5);
+        let observed_height = test::invoke_kotoage(kotoage: "height", arguments: Json::parse("{}"));
+        test::assert_eq(actual: observed_height, expected: 15);
+        test::expect_reject_as(actor: "alice", kotoage: "renew", arguments: Json::parse("{\"until\":\"12\"}"), expected: LedgerError::Expired);
+        test::set_transaction_time_ms(time_ms: 1234);
+        let observed_time = test::invoke_kotoage(kotoage: "time", arguments: Json::parse("{}"));
+        test::assert_eq(actual: observed_time, expected: 1234);
+        test::assert_eq(actual: balance, expected: 101);
+    }
+"#,
+    );
+    assert!(
+        results.iter().all(|result| result.passed),
+        "{:?}",
+        results
+            .iter()
+            .filter_map(|result| result.failure.as_ref().map(TestFailure::render))
+            .collect::<Vec<_>>()
+    );
+    let calls = results[0]
+        .calls
+        .iter()
+        .map(|call| call.entrypoint.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(calls, ["hajimari", "renew", "height", "renew", "time"]);
+    assert!(
+        results[0]
+            .calls
+            .iter()
+            .all(|call| call.gas > 0 && call.cycles > 0)
+    );
+    assert!(results[0].gas() > 0 && results[0].cycles() > results[0].gas().min(1));
+}
+#[test]
+fn assertions_report_location_source_message_and_typed_values() {
+    let results = run_ledger_tests(
+        r#"
+    #[test]
+    fn generic_equality_passes() {
+        activate();
+        let returned = test::invoke_kotoage(kotoage: "pair", arguments: Json::parse("{}"));
+        test::assert_eq(actual: returned, expected: Pair { left: 1, right: "two" });
+        test::assert_eq(actual: "vault", expected: "vault");
+        test::assert_eq(actual: true, expected: true);
+    }
+    #[test]
+    fn struct_mismatch() {
+        activate();
+        let returned = test::invoke_kotoage(kotoage: "pair", arguments: Json::parse("{}"));
+        test::assert_eq(actual: returned, expected: Pair { left: 2, right: "two" }, message: "pair mismatch");
+    }
+    #[test(fixture = "people")]
+    fn account_mismatch() {
+        test::assert_eq(actual: test::actor_account("alice"), expected: test::actor_account("bob"));
+    }
+    #[test]
+    fn plain_assert_keeps_its_message() {
+        test::assert(1 > 2, message: "one is not greater than two");
+    }
+"#,
+    );
+    let passed = results
+        .iter()
+        .find(|result| result.name == "generic_equality_passes")
+        .expect("generic test");
+    assert!(
+        passed.passed,
+        "{:?}",
+        passed.failure.as_ref().map(TestFailure::render)
+    );
+    let structure = failure_of(&results, "struct_mismatch");
+    assert_eq!(structure.kind, FailureKind::Assertion);
+    assert_eq!(structure.message, "pair mismatch");
+    let location = structure.location.as_deref().expect("assertion location");
+    assert!(
+        location.ends_with("tests/ledger.test.ko:24:9"),
+        "{location}"
+    );
+    assert!(
+        structure.details[0].starts_with("test::assert_eq(actual: returned, expected: Pair {"),
+        "{:?}",
+        structure.details
+    );
+    assert!(
+        structure
+            .details
+            .contains(&"actual:   Pair { left: 1, right: \"two\" }".to_owned()),
+        "{:?}",
+        structure.details
+    );
+    assert!(
+        structure
+            .details
+            .contains(&"expected: Pair { left: 2, right: \"two\" }".to_owned()),
+        "{:?}",
+        structure.details
+    );
+    let accounts = failure_of(&results, "account_mismatch").render();
+    assert!(accounts.contains("/* actor \"alice\" */"), "{accounts}");
+    assert!(accounts.contains("/* actor \"bob\" */"), "{accounts}");
+    assert!(accounts.contains("AccountId::parse(\""), "{accounts}");
+    let plain = failure_of(&results, "plain_assert_keeps_its_message");
+    assert_eq!(plain.message, "one is not greater than two");
+    assert_eq!(
+        plain.details,
+        ["test::assert(1 > 2, message: \"one is not greater than two\")"]
+    );
+}
+#[test]
+fn helper_call_failures_are_located_at_the_call_site() {
+    let results = run_ledger_tests(
+        r#"
+    #[test]
+    fn default_caller_lacks_permission() {
+        activate();
+        test::invoke_kotoage(kotoage: "renew", arguments: Json::parse("{\"until\":\"1\"}"));
+    }
+    fn lookup_carol() -> AccountId {
+        return test::actor_account(actor: "carol");
+    }
+    #[test(fixture = "people")]
+    fn unknown_actor_in_helper() {
+        let _who = lookup_carol();
+    }
+    #[test(fixture = "people")]
+    fn wrong_rejection() {
+        activate();
+        test::expect_reject_as(
+            actor: "alice",
+            kotoage: "renew",
+            arguments: Json::parse("{\"until\":\"1\"}"),
+            expected: LedgerError::Expired,
+        );
+    }
+"#,
+    );
+    let permission = failure_of(&results, "default_caller_lacks_permission");
+    assert_eq!(permission.kind, FailureKind::PermissionDenied);
+    let location = permission.location.as_deref().expect("call-site location");
+    assert!(
+        location.ends_with("tests/ledger.test.ko:15:9"),
+        "{location}"
+    );
+    assert_eq!(
+        permission.details[0],
+        "test::invoke_kotoage(kotoage: \"renew\", arguments: Json::parse(\"{\\\"until\\\":\\\"1\\\"}\"))"
+    );
+    let actor = failure_of(&results, "unknown_actor_in_helper");
+    assert_eq!(actor.kind, FailureKind::Harness);
+    assert!(
+        actor.message.contains("unknown actor `carol`"),
+        "{}",
+        actor.render()
+    );
+    let location = actor
+        .location
+        .as_deref()
+        .expect("helper call-site location");
+    assert!(
+        location.ends_with("tests/ledger.test.ko:18:16"),
+        "{location}"
+    );
+    let rejection = failure_of(&results, "wrong_rejection");
+    assert_eq!(rejection.kind, FailureKind::Expectation);
+    let location = rejection
+        .location
+        .as_deref()
+        .expect("multi-line call location");
+    assert!(
+        location.ends_with("tests/ledger.test.ko:27:9"),
+        "{location}"
+    );
+    assert_eq!(
+        rejection.details[0],
+        "test::expect_reject_as(actor: \"alice\", kotoage: \"renew\", arguments: Json::parse(\"{\\\"until\\\":\\\"1\\\"}\"), expected: LedgerError::Expired)"
+    );
+}
+#[test]
+fn unknown_actors_suggest_the_closest_declared_alias() {
+    assert_eq!(closest_name("alcie", &["alice", "bob"]), Some("alice"));
+    assert_eq!(closest_name("bb", &["alice", "bob"]), Some("bob"));
+    assert_eq!(closest_name("carol", &["alice", "bob"]), None);
+    assert_eq!(closest_name("x", &[]), None);
+    let compiled = compiled_suite_with_fixtures(Vec::new());
+    let mut host = build_host_for_fixture(&compiled, None).expect("default host");
+    assert!(
+        host.unknown_actor_message("alice")
+            .contains("the test's fixture declares no actors; add `actor(\"alice\");`")
+    );
+    let account = account_for_seed(&derived_actor_seed("alice", 753)).expect("derived account");
+    host.register_actor("alice".to_owned(), account)
+        .expect("register alice");
+    assert_eq!(
+        host.unknown_actor_message("alcie"),
+        "unknown actor `alcie`; declared actors: `alice`; did you mean `alice`?"
+    );
+    assert_eq!(
+        host.unknown_actor_message("zed"),
+        "unknown actor `zed`; declared actors: `alice`"
+    );
+}
+#[test]
+fn compared_values_render_in_kotodama_value_syntax() {
+    let compiled = compiled_suite_with_fixtures(Vec::new());
+    let host = build_host_for_fixture(&compiled, None).expect("default host");
+    let nodes = [
+        StateValueNodeV1::Option,
+        StateValueNodeV1::Leaf(StateValueKindV1::Bool),
+    ];
+    let render = |atoms: &[StateValueAtomV1]| {
+        let mut index = 0;
+        host.render_value(&nodes, &mut index, &mut atoms.iter())
+            .expect("render value")
+    };
+    assert_eq!(render(&[StateValueAtomV1::Tag(false)]), "Option::none");
+    assert_eq!(
+        render(&[StateValueAtomV1::Tag(true), StateValueAtomV1::Bool(true)]),
+        "Option::some(true)"
+    );
+    assert_eq!(render_state_cursor(&[0xab, 0x01]), "StateCursor(0xab01)");
+    assert_eq!(
+        render_state_cursor(&[7; 40]),
+        "StateCursor(0x0707070707070707\u{2026} /* 40 bytes */)"
+    );
+}
+#[test]
+fn one_line_source_collapses_layout_outside_string_literals() {
+    assert_eq!(
+        one_line_source("test::f(\n    a: 1,\n    b: [ 2, 3, ],\n)"),
+        "test::f(a: 1, b: [2, 3])"
+    );
+    assert_eq!(
+        one_line_source("f(s: \"keep  ( this ,)\\\" spacing\")"),
+        "f(s: \"keep  ( this ,)\\\" spacing\")"
+    );
+    assert_eq!(one_line_source("  Point { x: 1 }  "), "Point { x: 1 }");
+}
+#[test]
+fn lifecycle_rejections_mirror_activation_rules() {
+    let results = run_ledger_tests(
+        r#"
+    #[test]
+    fn view_before_hajimari() {
+        test::invoke_kotoage(kotoage: "height", arguments: Json::parse("{}"));
+    }
+    #[test]
+    fn hajimari_replay() {
+        activate();
+        activate();
+    }
+    #[test]
+    fn kaizen_without_replacement() {
+        activate();
+        test::invoke_kotoage(kotoage: "kaizen", arguments: Json::parse("{}"));
+    }
+"#,
+    );
+    for (name, expected) in [
+        (
+            "view_before_hajimari",
+            "seiyaku `Ledger` has a pending hajimari (始まり) transition; invoke `hajimari` before `height`",
+        ),
+        (
+            "hajimari_replay",
+            "a consumed lifecycle hook cannot be replayed",
+        ),
+        (
+            "kaizen_without_replacement",
+            "kaizen (改善) runs only after an active seiyaku's code is replaced in place",
+        ),
+    ] {
+        let failure = failure_of(&results, name);
+        assert_eq!(failure.kind, FailureKind::Lifecycle, "{name}");
+        assert!(
+            failure.message.contains(expected),
+            "{name}: {}",
+            failure.render()
+        );
+    }
+}
+#[test]
+fn literal_argument_records_are_checked_against_the_target_schema_at_compile_time() {
+    let temp = TestTempDir::new();
+    let path = write_ledger_package(
+        &temp,
+        r#"
+    #[test(fixture = "people")]
+    fn numeric_json() {
+        test::invoke_kotoage_as(actor: "alice", kotoage: "renew", arguments: Json::parse("{\"until\":12}"));
+    }
+"#,
+    );
+    let suite = discover_suite(&path).expect("discover");
+    let Err(SuiteError::Diagnostics(diagnostics)) = compile_suite(&suite, false) else {
+        panic!("a literal record with a JSON number for an int must not compile");
+    };
+    let diagnostic = &diagnostics.diagnostics[0];
+    assert_eq!(diagnostic.code, "K2003");
+    assert!(
+        diagnostic
+            .message
+            .contains("arguments for `renew`: argument `until` expects int"),
+        "{}",
+        diagnostic.message
+    );
+    assert!(
+        diagnostic.message.ends_with("write \"12\""),
+        "{}",
+        diagnostic.message
+    );
+}
+#[test]
+fn named_actors_are_deterministic_and_fixture_errors_are_located() {
+    let first = derived_actor_seed("alice", 753);
+    assert_eq!(first, derived_actor_seed("alice", 753));
+    assert_ne!(first, derived_actor_seed("bob", 753));
+    assert_ne!(first, derived_actor_seed("alice", 369));
+    let compiled = compiled_suite_with_fixtures(Vec::new());
+    let mut host = build_host_for_fixture(&compiled, None).expect("default host");
+    let mut inputs = BTreeMap::new();
+    apply_fixture_action(
+        &FixtureAction {
+            name: "actor".to_owned(),
+            args: vec![Expr::String("alice".to_owned())],
+        },
+        &mut host,
+        &mut inputs,
+        &fixture_environment(),
+    )
+    .expect("one-argument actor");
+    let alice = host.actor_account("alice").expect("derived alice");
+    assert_eq!(
+        alice,
+        account_for_seed(&derived_actor_seed(
+            "alice",
+            iroha_data_model::account::address::chain_discriminant()
+        ))
+        .unwrap()
+    );
+    assert!(
+        host.actors["alice"].seed.is_some(),
+        "derived actors can sign"
+    );
+    for (args, expected) in [
+        (
+            vec![Expr::String("carol".to_owned())],
+            "`carol` is neither a declared actor nor an account literal; declared actors: `alice`",
+        ),
+        (
+            vec![Expr::IntLiteral(5_i64.into())],
+            "expected an actor alias, `seiyaku_subject`, or `AccountId::parse(\"...\")`, got the integer 5",
+        ),
+    ] {
+        let error = apply_fixture_action(
+            &FixtureAction {
+                name: "caller".to_owned(),
+                args,
+            },
+            &mut host,
+            &mut inputs,
+            &fixture_environment(),
+        )
+        .expect_err("invalid caller");
+        assert_eq!(error, expected);
+        assert!(
+            !error.contains("Call("),
+            "no Rust debug formatting: {error}"
+        );
+    }
+    let temp = TestTempDir::new();
+    let path = write_ledger_package(
+        &temp,
+        r#"
+    fixture broken {
+        actor("dave");
+        caller("erin");
+    }
+    #[test(fixture = "broken")]
+    fn uses_broken_fixture() {}
+"#,
+    );
+    let suite = discover_suite(&path).expect("discover");
+    let compiled = compile_suite(&suite, false).expect("compile");
+    let results = execute_suite(&compiled, TraceMode::Off, 1).expect("execute");
+    let failure = failure_of(&results, "uses_broken_fixture");
+    assert_eq!(failure.kind, FailureKind::Harness);
+    assert!(
+        failure
+            .location
+            .as_deref()
+            .is_some_and(|location| location.ends_with("tests/ledger.test.ko:14:9")),
+        "{}",
+        failure.render()
+    );
+    assert!(
+        failure
+            .message
+            .starts_with("fixture `broken` action `caller`: `erin`")
+    );
+}
+#[test]
+fn misspelt_fixtures_and_actions_suggest_the_declared_name_at_their_site() {
+    let compiled = compiled_suite_with_fixtures(Vec::new());
+    let mut host = build_host_for_fixture(&compiled, None).expect("default host");
+    let error = apply_fixture_action(
+        &FixtureAction {
+            name: "actr".to_owned(),
+            args: vec![Expr::String("alice".to_owned())],
+        },
+        &mut host,
+        &mut BTreeMap::new(),
+        &fixture_environment(),
+    )
+    .expect_err("unknown action");
+    assert_eq!(
+        error,
+        "unknown fixture action `actr`; did you mean `actor`?"
+    );
+    let error = apply_fixture_action(
+        &FixtureAction {
+            name: "frobnicate".to_owned(),
+            args: Vec::new(),
+        },
+        &mut host,
+        &mut BTreeMap::new(),
+        &fixture_environment(),
+    )
+    .expect_err("unknown action");
+    assert!(
+        error.contains("the fixture actions are `actor`, `caller`"),
+        "{error}"
+    );
+    let results = run_ledger_tests(
+        r#"
+    #[test(fixture = "peeple")]
+    fn uses_misspelt_fixture() {}
+"#,
+    );
+    let failure = failure_of(&results, "uses_misspelt_fixture");
+    assert_eq!(failure.kind, FailureKind::Harness);
+    assert_eq!(
+        failure.message,
+        "unknown fixture `peeple`; declared fixtures: `people`; did you mean `people`?"
+    );
+    assert!(
+        failure
+            .location
+            .as_deref()
+            .is_some_and(|location| location.ends_with("tests/ledger.test.ko:13:8")),
+        "an unknown fixture is reported at the test that names it: {}",
+        failure.render()
+    );
+}
+#[test]
+fn numeric_faults_name_their_numeric_error_variant() {
+    use ivm_abi::numeric::NumericFaultV1;
+    let failure = classify_vm_error(
+        &ivm::VMError::NumericFault(NumericFaultV1::RepeatingDecimal),
+        Some(ivm_abi::error::VmTrapKind::NumericFault),
+    );
+    assert_eq!(failure.kind, FailureKind::NumericFault);
+    assert_eq!(
+        failure.render(),
+        "numeric fault: `kotodama::NumericError::RepeatingDecimal` (the exact quotient has a non-terminating decimal expansion)\n  help: choose a result scale and rounding with `div_round`"
+    );
+    let internal = numeric_fault_failure(NumericFaultV1::InvalidRoundingMode);
+    assert!(
+        internal.message.contains("ABI fault 10"),
+        "{}",
+        internal.render()
+    );
+    for tag in 1..=13 {
+        let fault = NumericFaultV1::from_tag(tag).expect("defined tag");
+        let rendered = numeric_fault_failure(fault).render();
+        assert!(
+            !rendered.contains("NumericFaultV1") && !rendered.contains(&format!("{fault:?}(")),
+            "no Rust debug formatting: {rendered}"
+        );
+    }
+}
+#[test]
+fn runtime_argument_errors_pair_undeclared_keys_with_parameters() {
+    let results = run_ledger_tests(
+        r#"
+    #[test(fixture = "people")]
+    fn misspelt_key() {
+        activate();
+        let arguments = json { untill: 5 };
+        test::invoke_kotoage_as(actor: "alice", kotoage: "renew", arguments: arguments);
+    }
+"#,
+    );
+    let failure = failure_of(&results, "misspelt_key");
+    assert_eq!(failure.kind, FailureKind::Arguments);
+    assert!(
+        failure
+            .message
+            .ends_with("; `untill` is not a parameter; did you mean `until`?"),
+        "{}",
+        failure.render()
+    );
+}
+#[test]
+fn compile_diagnostics_name_suite_files_as_the_cli_prints_them() {
+    let temp = TestTempDir::new();
+    let path = write_ledger_package(
+        &temp,
+        r#"
+    #[test]
+    fn broken() { test::assert_eq(actual: 1, expected: "x"); }
+"#,
+    );
+    let suite = discover_suite(&path).expect("discover");
+    let Err(error) = compile_suite(&suite, false) else {
+        panic!("a type error must fail compilation");
+    };
+    let bundle = match localize_suite_diagnostics(&suite, error) {
+        SuiteError::Diagnostics(bundle) => bundle,
+        other => panic!("expected diagnostics, found {other}"),
+    };
+    let source = bundle.diagnostics[0]
+        .primary_span
+        .as_ref()
+        .and_then(|span| span.source.clone())
+        .expect("located diagnostic");
+    // The scratch directory lies outside the working directory, so the path stays absolute,
+    // and it names the real test-module file rather than a logical or canonical alias.
+    assert_eq!(
+        source,
+        display_path(&suite.test_modules[0].path),
+        "{}",
+        bundle.render_human()
+    );
+    assert!(source.ends_with("tests/ledger.test.ko"), "{source}");
+}
+#[test]
+fn fixture_numbers_accept_constant_expressions() {
+    let consts = HashMap::from([
+        ("SUPPLY".to_owned(), Expr::IntLiteral(40_i64.into())),
+        ("FEE".to_owned(), Expr::DecimalLiteral("0.5".to_owned())),
+    ]);
+    let environment = FixtureEnvironment {
+        consts: &consts,
+        chain_discriminant: 753,
+    };
+    let expr = Expr::Binary {
+        op: kotodama_lang::ast::BinaryOp::Sub,
+        left: Box::new(Expr::Binary {
+            op: kotodama_lang::ast::BinaryOp::Mul,
+            left: Box::new(Expr::Ident("SUPPLY".to_owned())),
+            right: Box::new(Expr::IntLiteral(3_i64.into())),
+        }),
+        right: Box::new(Expr::Ident("FEE".to_owned())),
+    };
+    assert_eq!(
+        eval_quantity_expr(&expr, &environment)
+            .expect("constant quantity")
+            .to_string(),
+        "119.5"
+    );
+    assert_eq!(
+        eval_u64_expr(&Expr::Ident("SUPPLY".to_owned()), &environment).expect("u64"),
+        40
+    );
+    let error = eval_quantity_expr(&Expr::Ident("missing".to_owned()), &environment)
+        .expect_err("unknown names are not constants");
+    assert!(error.contains("`missing` is not a constant"), "{error}");
+    let error = eval_u64_expr(&Expr::Ident("FEE".to_owned()), &environment)
+        .expect_err("fractions are not integers");
+    assert!(error.contains("0.5"), "{error}");
+    assert_eq!(format_fixed_point(&(-5_i64).into(), 2), "-0.05");
+}
+#[test]
+fn coverage_and_trace_attribute_runtime_and_test_steps_separately() {
+    let temp = TestTempDir::new();
+    let path = write_ledger_package(
+        &temp,
+        r#"
+    #[test]
+    fn reads_height() {
+        activate();
+        test::invoke_kotoage(kotoage: "height", arguments: Json::parse("{}"));
+    }
+"#,
+    );
+    let suite = discover_suite(&path).expect("discover");
+    let compiled = compile_suite(&suite, false).expect("compile");
+    let results = execute_suite(&compiled, TraceMode::PcOnly, 1).expect("execute");
+    let report = render_coverage_report(&compiled, &results);
+    let covered = |function: &str| {
+        report
+            .lines()
+            .find(|line| line.trim_end().ends_with(&format!("  {function}")))
+            .unwrap_or_else(|| panic!("{function} row:\n{report}"))
+            .trim_start()
+            .starts_with("yes")
+    };
+    assert!(covered("hajimari") && covered("height"), "{report}");
+    assert!(
+        !covered("pair") && !covered("renew") && !covered("time"),
+        "{report}"
+    );
+    let results = execute_suite(&compiled, TraceMode::DeltaRegisters, 1).expect("trace");
+    let steps = trace_steps(&compiled, &results[0]);
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.segment == "test" && step.function == Some("reads_height"))
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.segment == "call 1 `hajimari`" && step.function == Some("hajimari"))
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.segment == "call 2 `height`" && step.function == Some("height"))
+    );
+    assert!(
+        steps
+            .iter()
+            .filter(|step| step.segment != "test")
+            .all(|step| step.function != Some("reads_height")),
+        "seiyaku steps never map to the test projection"
+    );
+    let first = steps.first().expect("first step");
+    assert!(first.registers.iter().all(|(_, value)| *value != 0));
 }

@@ -1224,6 +1224,8 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_JSON_GET_INT
             | syscalls::SYSCALL_JSON_GET_DECIMAL
             | syscalls::SYSCALL_JSON_GET_QUANTITY
+            | syscalls::SYSCALL_JSON_GET_STRING
+            | syscalls::SYSCALL_JSON_GET_BOOL
             | syscalls::SYSCALL_JSON_OBJECT
             | syscalls::SYSCALL_JSON_SET_I64
             | syscalls::SYSCALL_JSON_SET_ACCOUNT_ID

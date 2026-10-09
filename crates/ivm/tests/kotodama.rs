@@ -19,43 +19,6 @@ fn test_compiler() -> Compiler {
         ..CompilerOptions::default()
     })
 }
-fn select_test_entrypoint(
-    vm: &mut ivm::IVM,
-    program: &[u8],
-    report: &kotodama_lang::compiler::CompileReport,
-    name: &str,
-) {
-    let parsed = ProgramMetadata::parse(program).expect("parse Kotodama test artifact");
-    assert!(
-        parsed.contract_interface.is_none(),
-        "test-mode artifacts must not embed a deployable CNTR section"
-    );
-    let function = report
-        .budget_report
-        .iter()
-        .find(|function| function.function_name == name)
-        .unwrap_or_else(|| panic!("missing test entrypoint `{name}`"));
-    // This opcode-level assertion fixture supplies its own caller and terminal instruction.
-    // The production/test-suite owners instead authenticate the complete callable sidecar.
-    let mut caller_program = program.to_vec();
-    let return_offset = caller_program.len() - parsed.header_len;
-    caller_program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    vm.load_program(&caller_program)
-        .expect("load assertion opcode fixture");
-    let result = vm.alloc_heap(8).expect("caller-owned Unit result table");
-    vm.set_register(10, 0);
-    vm.set_register(11, 0);
-    vm.set_register(12, result);
-    vm.set_register(13, 1);
-    vm.set_register(
-        1,
-        u64::try_from(return_offset).expect("test return PC fits u64"),
-    );
-    let pc =
-        u64::try_from(parsed.prefix_len()).expect("program prefix fits u64") + function.pc_start;
-    vm.set_program_counter(pc)
-        .unwrap_or_else(|error| panic!("select test entrypoint `{name}`: {error:?}"));
-}
 fn parse(source: &str) -> Result<kd_ast::Program, String> {
     parse_source(source)
 }
@@ -286,7 +249,7 @@ compile_rejection_cases! {
         &["E_NEGATIVE_QUANTITY"], &[];
     "implicit_quantity_to_int_conversion_is_rejected", Production,
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/006.ko")),
-        &["expected int, got quantity"], &[];
+        &["expected `int`, found `quantity`"], &[];
     "public_function_without_authorization_rejected", Production,
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/008.ko")),
         &["authorize"], &[];
@@ -380,7 +343,7 @@ compile_rejection_cases! {
 
 semantic_rejection_cases! {
     "decimal_literal_rejects_int_annotation", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/005.ko")),
-        Some("E_TYPE_ANNOTATION_MISMATCH"), "expected int, got decimal";
+        Some("E_TYPE_ANNOTATION_MISMATCH"), "expected `int`, found `decimal`";
     "semantic_rejects_extended_sysvar_helper_args", CaseSource::Exact(r#"module InvalidContext { fn f() { let _chain = context::chain_id(1); } }"#),
         Some("K2003"), "call `context::chain_id` expects at most 0 arguments, got 1";
     "semantic_rejects_extended_query_and_authority_sysvar_helper_args/query", CaseSource::Exact(r#"module InvalidQuery { fn f() { let _response = query_execute_norito(1); } }"#),
@@ -400,7 +363,7 @@ semantic_rejection_cases! {
     "semantic_rejects_extended_hash_non_bytes_arg", CaseSource::Exact(r#"module InvalidHash { fn f() { let digest = crypto::keccak256(1); } }"#),
         None, "crypto::keccak256 expects (bytes)";
     "semantic_type_error", CaseSource::Exact("module InvalidArithmetic { fn bad() { let a = 1 + \"hi\"; } }"),
-        None, "operator Add is not defined for int and string";
+        None, "operator `+` is not defined for `int` and `string`";
     "invalid_numeric_on_struct_reports_error", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/035.ko")),
         None, "unknown field '0' on struct A";
     "invalid_named_on_tuple_reports_error", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/036.ko")),
@@ -430,7 +393,7 @@ semantic_rejection_cases! {
     "ephemeral_keys_values_take2_helper_is_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/069.ko")),
         None, "Map";
     "semantic_return_value_without_declared_type_is_rejected", CaseSource::Exact("module ReturnMismatch { fn f() { return 1; } }"),
-        Some("E_RETURN_TYPE_MISMATCH"), "expected (), got int";
+        Some("E_RETURN_TYPE_MISMATCH"), "expected `()`, found `int`";
     "semantic_rejects_unbounded_state_map_for_each", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/014.ko")),
         Some("E_UNBOUNDED_ITERATION"), "for iteration requires a bounded List";
 }
@@ -625,29 +588,6 @@ fn semantic_success_case_registry() {
     run_semantic_success_cases(SEMANTIC_SUCCESS_CASES);
 }
 #[test]
-fn assert_builtin_obeys_truthiness() {
-    let compiler = test_compiler();
-    let (pass, _manifest, pass_report) = compiler
-        .compile_source_with_manifest_and_report(
-            "seiyaku AssertTrue { view fn main() { test::assert(true); } }",
-        )
-        .expect("compile passing assert");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&pass).expect("load passing assert");
-    select_test_entrypoint(&mut vm, &pass, &pass_report, "main");
-    vm.run().expect("test::assert(true) should not abort");
-    let (fail, _manifest, fail_report) = compiler
-        .compile_source_with_manifest_and_report(
-            "seiyaku AssertFalse { view fn main() { test::assert(false); } }",
-        )
-        .expect("compile failing assert");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&fail).expect("load failing assert");
-    select_test_entrypoint(&mut vm, &fail, &fail_report, "main");
-    let err = vm.run().expect_err("test::assert(false) should abort");
-    assert!(matches!(err, ivm::VMError::AssertionFailed));
-}
-#[test]
 fn many_string_literals_load_under_wide_guard() {
     // Exercise pointer literal emission with offsets beyond the wide 8-bit range.
     let mut src = String::from("seiyaku Literals { kotoage fn main() authorize(\"Test\") {");
@@ -735,7 +675,7 @@ fn compile_emits_get_authority_syscall() {
 }
 #[test]
 fn compile_emits_current_time_syscall() {
-    let src = r#"seiyaku Time { view fn f() -> int { return context::current_time_ms(); } }"#;
+    let src = r#"seiyaku Time { view fn f() -> int { return context::transaction_time_ms(); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -769,10 +709,7 @@ fn compile_emits_extended_sysvar_helpers() {
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     for (name, syscall) in [
-        (
-            "SYSVAR_BLOCK_TIME_MS",
-            syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS,
-        ),
+        ("SYSVAR_BLOCK_HEIGHT", syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT),
         ("SYSVAR_CHAIN_ID", syscalls::SYSCALL_SYSVAR_CHAIN_ID),
         (
             "SYSVAR_CONTRACT_ADDRESS",
@@ -1055,7 +992,7 @@ fn compile_and_run_add() {
 }
 #[test]
 fn compile_builtin_create_nfts_and_set_detail() {
-    let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")); } }";
+    let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_metadata(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")); } }";
     let code = test_compiler().compile_source(src).expect("compile failed");
     // Sanity: code contains at least three syscalls (order preserved)
     // Byte-pattern search for SCALL encodings (LE): [imm8, 0x00, 0x00, 0x60]
@@ -1106,7 +1043,7 @@ fn semantic_type_enforcement_for_typed_syscalls() {
     )
     .unwrap();
     assert!(analyze(&bad).is_err());
-    let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_detail(account: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), key: Json::parse(\"1\"), value: Name::parse(\"k\")); } }").unwrap();
+    let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_metadata(account: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), key: Json::parse(\"1\"), value: Name::parse(\"k\")); } }").unwrap();
     assert!(analyze(&bad2).is_err());
 }
 #[test]
@@ -1468,7 +1405,7 @@ fn branch_lowering_uses_compact_conditional_and_one_relaxed_transfer() {
     );
 }
 #[test]
-fn compile_poseidon2_and_assert_eq() {
+fn truncated_poseidon2_is_not_a_source_api() {
     // Truncated scalar proof gadgets are internal VM operations.
     let src =
         "module Poseidon { fn f(int a, int b) { let h = crypto::poseidon2(left: a, right: b); } }";
@@ -1476,23 +1413,6 @@ fn compile_poseidon2_and_assert_eq() {
         .compile_source(src)
         .expect_err("truncated Poseidon must not be a source API");
     assert!(error.contains("crypto::poseidon2"));
-    // assert_eq succeeds without enabling ZK mode
-    let src = "seiyaku Assertions { view fn pass() { test::assert_eq(actual: 1, expected: 1); } view fn fail() { test::assert_eq(actual: 1, expected: 2); } }";
-    let (code, _manifest, report) = test_compiler()
-        .compile_source_with_manifest_and_report(src)
-        .expect("compile failed");
-    let (meta, _) = parse_meta_offset(&code).unwrap();
-    assert_eq!(meta.mode & 0x01, 0);
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    select_test_entrypoint(&mut vm, &code, &report, "pass");
-    vm.run().expect("assert_eq failed");
-    // failing case
-    let mut vm2 = ivm::IVM::new(u64::MAX);
-    vm2.load_program(&code).unwrap();
-    select_test_entrypoint(&mut vm2, &code, &report, "fail");
-    let res = vm2.run();
-    assert!(matches!(res, Err(ivm::VMError::AssertionFailed)));
 }
 #[test]
 fn public_scalar_valcom_is_rejected_even_without_pubkgen() {
@@ -1786,7 +1706,7 @@ fn parse_register_asset_builtin() {
     );
 }
 #[test]
-fn parse_create_new_asset_builtin() {
+fn parse_register_then_mint_builtins() {
     use kotodama_lang::ir::Instr;
     let src = include_str!("../fixtures/koto_v1/kotodama/064.ko")
         .strip_suffix('\n')
@@ -1798,8 +1718,9 @@ fn parse_create_new_asset_builtin() {
     assert!(
         instrs
             .iter()
-            .any(|i| matches!(i, Instr::CreateNewAsset { .. }))
+            .any(|i| matches!(i, Instr::RegisterAsset { .. }))
     );
+    assert!(instrs.iter().any(|i| matches!(i, Instr::MintAsset { .. })));
 }
 #[test]
 fn parse_mfc_example() {

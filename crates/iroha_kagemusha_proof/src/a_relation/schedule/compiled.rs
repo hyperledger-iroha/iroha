@@ -31,11 +31,10 @@ impl OperationSchedule {
                 vec![vec![], vec![BootstrapState, BootstrapAuthorization]],
             ),
             Variant::Load => (
-                vec![vec![], vec![0], vec![], vec![1], vec![2]],
+                vec![vec![], vec![0], vec![1], vec![2]],
                 vec![
                     vec![LoadRecovery],
                     vec![],
-                    vec![LoadFinality],
                     vec![LoadReceipt],
                     vec![LoadCurrentAuthorization],
                 ],

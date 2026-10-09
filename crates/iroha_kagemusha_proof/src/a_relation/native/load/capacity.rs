@@ -1,18 +1,12 @@
 //! Source-layout qualification only. Unknown witnesses create no funded Load.
 //!
-//! The source catalog below uses genuine imported sealed source keys, but its
-//! Genesis children cannot satisfy a non-genesis receipt terminal. This pins the
-//! complete verifier layouts without inventing a finality proof or capability.
+//! The predecessor key below supplies only the homogeneous metadata needed to
+//! reconstruct Load layouts. It cannot authorize a production wallet or funding.
 
 use super::*;
 use crate::{
     a_relation::QProofPlan,
     admin_sigma::LoadCircuit,
-    finality::{
-        continuity::{SourcePairPlan, test_support::qualified},
-        history::GenesisSourceCircuit,
-        receipt_finality::ReceiptFinalityCircuit,
-    },
     q_sigma::{QSigmaCircuit, QSigmaPlan, QSigmaWitness, SigmaClass, SigmaSlotWitness},
     q_signature::{QSignatureCircuit, SignatureSlot, SignatureWitness},
 };
@@ -23,25 +17,33 @@ use iroha_plonk::{
 use iroha_plonk_gadgets::p256::native::Affine;
 use iroha_plonk_recursion::verifier::VerifierPlan;
 
+#[derive(Clone)]
+struct PredecessorLayout;
+impl Circuit<Fq> for PredecessorLayout {
+    type Config = [Column<Instance>; 3];
+    type FloorPlanner = SimpleFloorPlanner;
+    fn without_witnesses(&self) -> Self {
+        self.clone()
+    }
+    fn configure(meta: &mut ConstraintSystem<Fq>) -> Self::Config {
+        [1, 2, 16].map(|length| meta.instance_column(length))
+    }
+    fn synthesize(&self, _: Self::Config, _: impl Layouter<Fq>) -> Result<(), LayoutError> {
+        Ok(())
+    }
+}
+
 fn original_plan() -> Plan {
     let pallas = PinnedParams::<Ep>::derive(16).unwrap();
     let vesta = PinnedParams::<Eq>::derive(16).unwrap();
-    let anchor = HistoryAnchor {
-        network: [1; 32],
-        instance: [2; 32],
-        initial_context: [3; 32],
-        initial_epoch: 0,
-        parameters: [1000, 100, 100, 100, 1_048_576, 3600],
-    };
-    let genesis = qualified(&GenesisSourceCircuit::for_source(anchor), &pallas, &vesta);
-    let terminal = ReceiptFinalityCircuit::for_source(
-        anchor,
-        SourcePairPlan::new([genesis.clone(), genesis], &pallas).unwrap(),
+    let predecessor = keygen_pk_v2(
+        &pallas,
+        &PredecessorLayout,
+        &KeygenConfigV2::pipa_r(crate::omega::OmegaPlan::instance_types().to_vec()),
     )
     .unwrap();
-    let finality = qualified(&terminal, &pallas, &vesta);
-    // A real Omega descriptor/key is used strictly as predecessor layout metadata.
-    let (predecessor, predecessor_key) = finality.layout_metadata();
+    let predecessor_key = predecessor.vk().clone();
+    let predecessor = VerifierPlan::new(predecessor.binding().clone(), pallas.clone()).unwrap();
     let state = StateWitness {
         core: [Fp::ZERO; 33],
         rest: [Fp::ZERO; 8],
@@ -156,7 +158,6 @@ fn original_plan() -> Plan {
         policy,
         signatures,
         predecessor_key,
-        FinalityPolicy::new(finality, anchor),
         pallas,
         vesta,
     )
@@ -165,7 +166,7 @@ fn original_plan() -> Plan {
 
 #[test]
 #[ignore = "imports all actual Load and wrapper source tables at k16; run optimized explicitly"]
-fn five_a_four_w_original_sources_qualify_at_k16() {
+fn four_a_three_w_original_sources_qualify_at_k16() {
     struct Original {
         d: Vec<u8>,
         v: Vec<u8>,
@@ -179,7 +180,7 @@ fn five_a_four_w_original_sources_qualify_at_k16() {
         }
     }
     let plan = original_plan();
-    assert_eq!(plan.context.stage_count(), 5);
+    assert_eq!(plan.context.stage_count(), 4);
     assert!(plan.source_circuit(A_STAGE_COUNT, None).is_err());
     assert!(plan.source_circuit(usize::MAX, None).is_err());
     assert!(plan.source_circuit(1, None).is_err());
@@ -257,7 +258,7 @@ fn five_a_four_w_original_sources_qualify_at_k16() {
         core::array::from_fn(|i| w[i].metadata()),
     )
     .unwrap();
-    assert_eq!(imported.descriptors().len(), 9);
+    assert_eq!(imported.descriptors().len(), 7);
     assert_eq!(imported.plan().context().schema(), plan.context().schema());
     for stage in 0..A_STAGE_COUNT {
         let key_seal = imported.import_a(stage, &a[stage].p, config).unwrap();
@@ -280,7 +281,7 @@ fn five_a_four_w_original_sources_qualify_at_k16() {
     assert!(imported.import_a(1, &a[0].p, config).is_err());
     assert!(imported.import_w(1, &w[0].p, config).is_err());
     let mut changed = plan;
-    changed.anchor.network[0] ^= 1;
+    changed.policy.provider[0] ^= 1;
     let changed = Prover::from_artifacts(
         changed,
         core::array::from_fn(|i| a[i].metadata()),

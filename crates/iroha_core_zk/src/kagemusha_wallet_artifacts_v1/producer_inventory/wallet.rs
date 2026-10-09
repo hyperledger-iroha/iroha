@@ -5,10 +5,7 @@
 //! There is no constructor from an Omega-only grant, readiness flag or subset.
 
 use iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier;
-use iroha_kagemusha_proof::{
-    a_relation::schedule::compiled::OperationRoute,
-    finality::{catalog::VerifierLimits, native::Parameters},
-};
+use iroha_kagemusha_proof::a_relation::schedule::compiled::OperationRoute;
 use iroha_plonk::{
     keys::{SourceBoundViewV2, pk::artifact::ReadConfig},
     pcs::ipa::PinnedParams,
@@ -54,12 +51,7 @@ impl WalletSourcesErrorV1 {
                     false
                 }
             },
-            Self::Finality(error) => match error {
-                FinalityQualificationErrorV1::Original(error) => error.is_cancelled(),
-                FinalityQualificationErrorV1::Source(error) => error.is_cancelled(),
-                FinalityQualificationErrorV1::Anchor(_)
-                | FinalityQualificationErrorV1::AnchorMismatch => false,
-            },
+            Self::Finality(_) => false,
             Self::Q(error) => match error {
                 QQualificationErrorV1::Original(error) => error.is_cancelled(),
                 QQualificationErrorV1::Sigma(error) => error.is_cancelled(),
@@ -93,7 +85,6 @@ impl WalletSourcesErrorV1 {
             self,
             Self::Original(Error::Unavailable)
                 | Self::Sigma(SigmaQualificationErrorV1::Original(Error::Unavailable))
-                | Self::Finality(FinalityQualificationErrorV1::Original(Error::Unavailable))
                 | Self::Q(QQualificationErrorV1::Original(Error::Unavailable))
                 | Self::Operation(OperationQualificationErrorV1::Original(Error::Unavailable))
                 | Self::Operation(OperationQualificationErrorV1::Bootstrap(
@@ -140,8 +131,7 @@ fn require_installation(
 impl AuthenticatedProducerInventoryV1 {
     /// Consume this authenticated inventory only after every compiled source has
     /// been reconstructed and every selected wallet PK strictly imported.
-    /// Ordinary finality uses only its complete authenticated descriptor/VK graph;
-    /// its server proving-key lengths/hashes remain signed metadata, never wallet reads.
+    /// Ordinary finality uses native BLS commit certificates and needs no circuit artifacts.
     /// The native finality verifier must be independently selected from signed genesis.
     /// All imports are sequential; only exact descriptor/VK metadata survives each.
     /// # Errors
@@ -153,8 +143,6 @@ impl AuthenticatedProducerInventoryV1 {
         native_finality: &SumeragiFinalityVerifier,
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
-        finality_params: Parameters,
-        finality_limits: VerifierLimits,
     ) -> Result<QualifiedWalletSourcesV1, WalletSourcesErrorV1> {
         require_installation(
             self.installation(),
@@ -173,7 +161,7 @@ impl AuthenticatedProducerInventoryV1 {
         let q_parameters = Arc::clone(installed.verifier().pallas_parameters());
         // Native genesis binding happens before any source-original read.
         let finality =
-            self.qualify_finality(native_finality, originals, finality_params, finality_limits)?;
+            self.qualify_finality(installed, native_finality)?;
         let sigmas = self.qualify_sigmas(originals, config)?;
         let mut q = Vec::with_capacity(self.inventory.operations.len());
         for program in 0..self.inventory.operations.len() {
@@ -193,7 +181,6 @@ impl AuthenticatedProducerInventoryV1 {
                     q.get(usize::try_from(*program).map_err(|_| Error::Inventory)?)
                         .ok_or(Error::Inventory)?,
                     u32::try_from(index).map_err(|_| Error::Inventory)?,
-                    Some(&finality),
                     originals,
                     config,
                 )?,
@@ -231,7 +218,7 @@ impl QualifiedWalletSourcesV1 {
     pub const fn sigmas(&self) -> &QualifiedSigmasV1 {
         &self.sigmas
     }
-    /// Complete receipt source bound to independently authenticated native genesis.
+    /// Direct certificate verifier bound to independently authenticated native genesis.
     pub const fn finality(&self) -> &QualifiedReceiptSourceV1 {
         &self.finality
     }
@@ -477,7 +464,6 @@ mod tests {
             for nested in [
                 WalletSourcesErrorV1::Original(error),
                 WalletSourcesErrorV1::Sigma(SigmaQualificationErrorV1::Original(error)),
-                WalletSourcesErrorV1::Finality(FinalityQualificationErrorV1::Original(error)),
                 WalletSourcesErrorV1::Q(QQualificationErrorV1::Original(error)),
                 WalletSourcesErrorV1::Operation(OperationQualificationErrorV1::Original(error)),
                 WalletSourcesErrorV1::Operation(OperationQualificationErrorV1::Bootstrap(
@@ -550,9 +536,6 @@ mod cancellation_tests {
             WalletSourcesErrorV1::Operation(OperationQualificationErrorV1::Cancelled),
             WalletSourcesErrorV1::Q(QQualificationErrorV1::Original(Error::Cancelled)),
             WalletSourcesErrorV1::Omega(OmegaQualificationErrorV1::Original(Error::Cancelled)),
-            WalletSourcesErrorV1::Finality(FinalityQualificationErrorV1::Original(
-                Error::Cancelled,
-            )),
             WalletSourcesErrorV1::Sigma(SigmaQualificationErrorV1::Original(Error::Cancelled)),
         ];
         for error in cases {

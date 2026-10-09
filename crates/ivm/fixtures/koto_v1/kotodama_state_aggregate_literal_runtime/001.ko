@@ -22,7 +22,7 @@
             kotoage fn main() -> bool authorize("WriteState") {
                 let Name proposal_id = Name::parse("request1");
                 let AccountId requester = context::authority();
-                let int created_at_ms = context::current_time_ms();
+                let int created_at_ms = context::transaction_time_ms();
                 Requests[proposal_id] = Request {
                     proposal_id,
                     requester,

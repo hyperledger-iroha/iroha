@@ -38,7 +38,7 @@ fn invalid_json_literal_reports_error() {
     let src = r#"
         seiyaku InvalidJson {
           kotoage fn main() authorize("SetAccountDetail") {
-            ledger::account::set_detail(account: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), key: Name::parse("cursor"), value: Json::parse("{\"unterminated\":}"));
+            ledger::account::set_metadata(account: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), key: Name::parse("cursor"), value: Json::parse("{\"unterminated\":}"));
           }
         }
     "#;

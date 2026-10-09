@@ -198,6 +198,23 @@ impl Queue {
             }
             return Ok(ledger);
         }
+        {
+            // Startup can reserve before the first actual admission initializes custody.
+            // Borrow the inline pool binding only; no charged owner drops under this lock.
+            let binding = self.sumeragi_wake.lock();
+            #[cfg(all(test, sumeragi_core_mutation = "HC192"))]
+            let _ = &binding;
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC192")))]
+            if binding
+                .as_ref()
+                .is_some_and(|original| !original.belongs_to(budget))
+            {
+                return Err(Error::AdmissionInvariant {
+                    reason: "Queue resident custody belongs to a different original State pool"
+                        .to_owned(),
+                });
+            }
+        }
         let layout = ChargedShared::<QueueResidentLedger>::allocation_layout();
         let mut reservation = budget
             .try_reserve(layout)

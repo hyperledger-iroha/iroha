@@ -265,6 +265,30 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Accumulator("sccp_message_accumulator"),
     ),
     function(
+        "crates/iroha_core/src/smartcontracts/isi/sccp/read/history.rs",
+        "leaves",
+        1,
+        UseOwner::Accumulator("sccp_message_accumulator"),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/sccp/read/history.rs",
+        "peaks",
+        1,
+        UseOwner::Accumulator("sccp_message_accumulator"),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/sccp/read/history.rs",
+        "root_and_path",
+        1,
+        UseOwner::Accumulator("sccp_message_accumulator"),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/sccp/read/views.rs",
+        "history_proof",
+        1,
+        UseOwner::Accumulator("sccp_message_accumulator"),
+    ),
+    function(
         "crates/iroha_core/src/smartcontracts/isi/sccp/roster.rs",
         "install",
         1,
@@ -662,6 +686,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/state.rs",
+        "sccp_policy_hash_v1",
+        1,
+        UseOwner::Roots(&["confidential_feature_digest"]),
+    ),
+    function(
+        "crates/iroha_core/src/state.rs",
         "soracloud_hf_shared_lease_pools_mut_for_testing",
         1,
         UseOwner::Other(Use::Test, TEST_ONLY),
@@ -962,6 +992,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/state/authority_registry/complete/table_capture/frozen.rs",
+        "capture_original_membership_once",
+        1,
+        UseOwner::Roots(&["state_table_substrate", "transaction_membership_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/authority_registry/complete/table_capture/frozen.rs",
         "capture_original_table_once",
         1,
         UseOwner::Roots(&["state_table_substrate"]),
@@ -981,6 +1017,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     function(
         "crates/iroha_core/src/state/authority_registry/complete/transaction_membership.rs",
         "capture_observed",
+        1,
+        UseOwner::Roots(&["state_table_substrate", "transaction_membership_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/authority_registry/complete/transaction_membership.rs",
+        "capture_original_membership_group_once",
         1,
         UseOwner::Roots(&["state_table_substrate", "transaction_membership_root"]),
     ),
@@ -1106,6 +1148,18 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/state/world_state_accumulator.rs",
+        "apply_block",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/world_state_accumulator.rs",
+        "capture",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/world_state_accumulator.rs",
         "run",
         1,
         UseOwner::Roots(&["world_state_root"]),
@@ -1155,6 +1209,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     function(
         "crates/iroha_core/src/sumeragi/finality.rs",
         "build_proof",
+        1,
+        UseOwner::Other(Use::ResultBinding, CERTIFIED_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/sumeragi/finality.rs",
+        "current_execution_proof",
         1,
         UseOwner::Other(Use::ResultBinding, CERTIFIED_IDENTITY),
     ),

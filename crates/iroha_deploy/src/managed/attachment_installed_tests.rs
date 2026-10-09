@@ -1648,6 +1648,7 @@ fn private_receipt_commit_requires_exact_canonical_success() {
         block_height: 7,
         scope: "global".into(),
         resolved_from: "state".into(),
+        charge: None,
     };
     let receipt = norito::json!({ "commit": (json::to_value(&commit).unwrap()) });
     assert_eq!(receipt_commit(&receipt).unwrap(), commit);

@@ -280,8 +280,11 @@ It registers actual private-ballot sessions, rejects premature failure and old-T
 reuse, derives registration-deadline NoResult, admits one fresh retry, exhausts
 the frozen limit, checks four-peer finality and restores a validator.
 It does not replace the sibling proof-valid timed-OVN aggregate-opening test or
-provide deployment/audit qualification. Later-phase private deadline retries and
-partial-write rollback still need separate four-validator coverage.
+provide deployment/audit qualification. Timed-OVN is retired by the
+[ballot decision](../specs/parliament_private_ballot_design.md); no further
+timed-OVN coverage is planned. The anonymous ballot needs its own
+four-validator corridor, and the shared Parliament corridor support (with the
+gates that reuse it) must move to that ballot.
 
 Prebuild the same-source native `iroha3d` with `test-network-parliament-signers`
 and the ordinary `iroha` CLI; point `TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS`

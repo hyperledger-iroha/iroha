@@ -207,7 +207,7 @@ mod raw_ivm_work {
                 r#"
 seiyaku RawMeteredFailure {
   kotoage fn run() authorize("CanInvokeContractEntrypoint") {
-    ledger::account::set_detail(
+    ledger::account::set_metadata(
       account: context::authority(),
       key: Name::parse("raw_contract_not_written"),
       value: Json::parse("true")

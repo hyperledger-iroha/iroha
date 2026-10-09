@@ -40,6 +40,7 @@ impl LaneRecord {
     }
 
     /// Untrusted mandatory original signature table, without a payload availability claim.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn availability(&self) -> &AvailabilityFrame {
         &self.availability
     }

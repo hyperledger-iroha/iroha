@@ -1,7 +1,8 @@
 // Demonstrates struct declaration and durable state.
 seiyaku StructAndState {
     struct Pair {
-        int first, int second
+        int first,
+        int second,
     }
 
     state Pair stored_pair;

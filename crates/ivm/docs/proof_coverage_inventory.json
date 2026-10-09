@@ -6,7 +6,7 @@
   "completion_open": true,
   "completion_blockers": ["no_registered_relation","open_semantics","opcodes_incomplete","syscalls_incomplete","trap_kinds_incomplete","fault_codes_incomplete","invocation_obligations_incomplete"],
   "default_syscall_exclusions": [],
-  "summary": {"components":9,"numeric_faults":13,"numeric_faults_complete":0,"opcodes":90,"opcodes_complete":0,"opcodes_component_only":58,"opcodes_uncovered":32,"open_semantics":9,"pointer_abi_faults":11,"pointer_abi_faults_complete":0,"syscalls":226,"syscalls_complete":0,"trap_kinds":32,"trap_kinds_complete":0,"vm_errors":41},
+  "summary": {"components":9,"numeric_faults":13,"numeric_faults_complete":0,"opcodes":90,"opcodes_complete":0,"opcodes_component_only":58,"opcodes_uncovered":32,"open_semantics":9,"pointer_abi_faults":11,"pointer_abi_faults_complete":0,"syscalls":228,"syscalls_complete":0,"trap_kinds":32,"trap_kinds_complete":0,"vm_errors":41},
   "obligations": [
     {"id":"fetch","requirement":"every executed word is the admitted artifact word at the constrained PC"},
     {"id":"typed_values","requirement":"full 64-bit register words, privacy tags and typed table words are constrained, never reduced modulo the proof field"},
@@ -434,6 +434,8 @@
     {"access":"None","contract_bound":false,"coverage":"uncovered","gas_formula":"ByteLinear","hex":"0x010160","metering":"Reserved","name":"JSON_GET_INT","number":65888,"relation":"typed_codec","result":"uncovered","statement":"uncovered","trap":"uncovered"},
     {"access":"None","contract_bound":false,"coverage":"uncovered","gas_formula":"ByteLinear","hex":"0x010161","metering":"Reserved","name":"JSON_GET_DECIMAL","number":65889,"relation":"typed_codec","result":"uncovered","statement":"uncovered","trap":"uncovered"},
     {"access":"None","contract_bound":false,"coverage":"uncovered","gas_formula":"ByteLinear","hex":"0x010162","metering":"Reserved","name":"JSON_GET_QUANTITY","number":65890,"relation":"typed_codec","result":"uncovered","statement":"uncovered","trap":"uncovered"},
+    {"access":"None","contract_bound":false,"coverage":"uncovered","gas_formula":"ByteLinear","hex":"0x010166","metering":"Reserved","name":"JSON_GET_STRING","number":65894,"relation":"typed_codec","result":"uncovered","statement":"uncovered","trap":"uncovered"},
+    {"access":"None","contract_bound":false,"coverage":"uncovered","gas_formula":"ByteLinear","hex":"0x010167","metering":"Reserved","name":"JSON_GET_BOOL","number":65895,"relation":"typed_codec","result":"uncovered","statement":"uncovered","trap":"uncovered"},
     {"access":"LedgerWrite","contract_bound":false,"coverage":"uncovered","gas_formula":"ConservativeEnvelope","hex":"0x010200","metering":"Reserved","name":"SET_ASSET_TRANSFER_AVAILABILITY","number":66048,"relation":"ledger_effect","result":"uncovered","statement":"uncovered","trap":"uncovered"},
     {"access":"LedgerWrite","contract_bound":false,"coverage":"uncovered","gas_formula":"ConservativeEnvelope","hex":"0x010201","metering":"Reserved","name":"SET_ASSET_TRANSFER_DAILY_LIMIT","number":66049,"relation":"ledger_effect","result":"uncovered","statement":"uncovered","trap":"uncovered"},
     {"access":"LedgerWrite","contract_bound":false,"coverage":"uncovered","gas_formula":"ConservativeEnvelope","hex":"0x010202","metering":"Reserved","name":"SET_ASSET_HOLDING_LIMIT","number":66050,"relation":"ledger_effect","result":"uncovered","statement":"uncovered","trap":"uncovered"},
@@ -447,7 +449,12 @@
     {"hex":"0x00FE0002","name":"KOTO_TEST_ACTOR_PUBLIC_KEY","number":16646146,"outcome":"UnknownSyscall"},
     {"hex":"0x00FE0003","name":"KOTO_TEST_ACTOR_SIGN","number":16646147,"outcome":"UnknownSyscall"},
     {"hex":"0x00FE0004","name":"KOTO_TEST_INVOKE_ENTRYPOINT_AS","number":16646148,"outcome":"UnknownSyscall"},
-    {"hex":"0x00FE0005","name":"KOTO_TEST_EXPECT_REJECT_AS","number":16646149,"outcome":"UnknownSyscall"}
+    {"hex":"0x00FE0005","name":"KOTO_TEST_EXPECT_REJECT_AS","number":16646149,"outcome":"UnknownSyscall"},
+    {"hex":"0x00FE0006","name":"KOTO_TEST_ASSERT_FAILED","number":16646150,"outcome":"UnknownSyscall"},
+    {"hex":"0x00FE0007","name":"KOTO_TEST_SET_BLOCK_HEIGHT","number":16646151,"outcome":"UnknownSyscall"},
+    {"hex":"0x00FE0008","name":"KOTO_TEST_ADVANCE_BLOCKS","number":16646152,"outcome":"UnknownSyscall"},
+    {"hex":"0x00FE0009","name":"KOTO_TEST_SET_TRANSACTION_TIME_MS","number":16646153,"outcome":"UnknownSyscall"},
+    {"hex":"0x00FE000A","name":"KOTO_TEST_CALL_SITE","number":16646154,"outcome":"UnknownSyscall"}
   ],
   "trap_origins": [
     {"id":"prepare_rejection","in_invocation":false,"obligations":["statement_binding"]},

@@ -204,7 +204,7 @@
   "pinned_history": {
     "manifest": "fixtures/core/first_release_history/manifest.json",
     "format": "iroha.first_release_history.pinned.v1",
-    "history_sha256": "ba98b7ec015e74b679976473f819d5fd78c5b1348598fd8ae6785da0dce35ec7",
+    "history_sha256": "755ee3aaf1de98519d2c60ce037b47677a703a54fb34bc361a1796f17bdd7f45",
     "generator": {
       "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
       "test": "capture_pinned_first_release_history"
@@ -302,6 +302,10 @@
     "integration_tests"
   ],
   "retired_identifiers": [
+    {
+      "identifier": "SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE",
+      "retired": "contract-originated SCCP record operation tag 2; ABI v1 instruction execution admits only SubmitBallot"
+    },
     {
       "identifier": "BlockHeaderForConsensusLegacy",
       "retired": "second consensus header layout hashed for pre-release Taira blocks"
@@ -986,13 +990,6 @@
     ]
   },
   "open_findings": [
-    {
-      "id": "T1-A01",
-      "owner": "I.3",
-      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-      "anchor": "TODO(ws45): drop 2=RecordSccpMessage from the ivm_abi 0xA0 args text",
-      "summary": "stale operation tag 2 of the generic instruction syscall still described by the ABI text; removing it changes abi_hash"
-    },
     {
       "id": "T1-A02",
       "owner": "I.5",

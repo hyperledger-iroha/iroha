@@ -52,11 +52,10 @@ fn fixture(context: bool) -> Box<World> {
 }
 
 fn check(world: &World, work: u64) -> Result<(), GroupedOwnershipError> {
-    let budget = iroha_allocation::AllocationBudget::new(16_777_216);
     let mut result = None;
     assert_eq!(
         allocations_during(|| {
-            result = Some(CheckedAssetDefinitions::capture(world, &budget, work).map(|_| ()));
+            result = Some(CheckedAssetDefinitions::capture(world, work).map(|_| ()));
         }),
         0
     );
@@ -92,8 +91,7 @@ fn owner_and_optional_domain_changes_keep_both_images_through_replacement() {
         }
         world.rebuild_asset_definition_indexes().unwrap();
         assert_eq!(check(&world, 16_777_216), Ok(()));
-        let budget = iroha_allocation::AllocationBudget::new(16_777_216);
-        let checked = CheckedAssetDefinitions::capture(&world, &budget, 16_777_216).unwrap();
+        let checked = CheckedAssetDefinitions::capture(&world, 16_777_216).unwrap();
         let current = checked.rows().get(&id()).unwrap();
         assert_eq!(current.owned_by(), after.owned_by());
         assert_eq!(current.owning_domain(), after.owning_domain());
@@ -269,8 +267,7 @@ fn work_is_charged_before_rows_domain_lookups_and_absent_undo_inspections() {
 fn every_original_source_and_index_reader_detects_native_publication() {
     for index in 0..7 {
         let world = fixture(true);
-        let budget = iroha_allocation::AllocationBudget::new(16_777_216);
-        let checked = CheckedAssetDefinitions::capture(&world, &budget, 16_777_216).unwrap();
+        let checked = CheckedAssetDefinitions::capture(&world, 16_777_216).unwrap();
         match index {
             0 => world.asset_definitions.block().commit(),
             1 => world.domains.block().commit(),
@@ -318,8 +315,7 @@ fn every_asset_original_publication_precedes_success_work_and_semantic_outcomes(
     for source in 0..7 {
         for outcome in 0..3 {
             let world = fixture(true);
-            let budget = iroha_allocation::AllocationBudget::new(16_777_216);
-            let checked = CheckedAssetDefinitions::capture(&world, &budget, 16_777_216).unwrap();
+            let checked = CheckedAssetDefinitions::capture(&world, 16_777_216).unwrap();
             match source {
                 0 => world.asset_definitions.block().commit(),
                 1 => world.domains.block().commit(),
@@ -356,8 +352,7 @@ fn every_asset_original_publication_precedes_success_work_and_semantic_outcomes(
 #[test]
 fn first_original_busy_refusal_keeps_exact_release_and_all_probe_order() {
     let world = fixture(true);
-    let budget = iroha_allocation::AllocationBudget::new(16_777_216);
-    let checked = CheckedAssetDefinitions::capture(&world, &budget, 16_777_216).unwrap();
+    let checked = CheckedAssetDefinitions::capture(&world, 16_777_216).unwrap();
     world.domains.block().commit();
     world.confidential_policy_transition_counts.block().commit();
     let detached = world

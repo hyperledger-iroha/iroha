@@ -91,6 +91,85 @@ TODO: Execute the generated three-provider cold publication, detach/restart reco
 cold package fetch against the composed native candidate. Source and component controls alone do
 not establish publication or service readiness.
 
+## Local compilation
+
+`musubi check`, `musubi build` and `musubi test` compile for the data-model default
+account-address profile (SORA, `0x02F1` = 753) unless a network binding or
+`--chain-discriminant` selects another one; `koto` uses the same default, so address
+literals compile identically in both tools. `--zk` enables the Kotodama ZK surface for
+the selected contracts and tests. `musubi new <dir>` creates a counter seiyaku named
+after the package, four tests, a README and `.gitignore`; `--namespace` defaults to
+`local` until the package is published.
+
+Kotodama lints warn by default. A `[lints]` table in `Musubi.toml` sets a level per lint
+name, and `deny-warnings = true` turns every warning into an error; a package without
+`[lints]` uses its workspace root's table. `musubi check|build|test --deny-warnings` does
+the same for one run. A denied lint fails the command with `MUSUBI_E_COMPILER`:
+
+```toml
+[lints]
+unused-local = "deny"
+exact-division = "allow"
+deny-warnings = false
+```
+
+Unknown lint names are manifest errors that name the closest lint; `koto explain --list`
+lists them all.
+
+Path dependencies stay below one workspace root. For two standalone sibling packages,
+`musubi add <alias> --path ../<dir> --create-workspace` writes the shared parent
+`Musubi.toml` listing both as members before adding the dependency; it refuses packages
+that already hold network bindings, deployment or call journals, or publication state,
+because that state is scoped to the old root.
+
+## Command output and exit codes
+
+`--format human` (default) writes success to stdout and failures to stderr. `--format json`
+writes one `musubi-cli-output` document to stdout; compiler failures carry the canonical
+Kotodama diagnostic records (codes, spans, labels, notes, help and fixes) under
+`error.diagnostics`. `--format sarif` (`check`, `build` and `test` only) writes one SARIF
+2.1.0 document with the same diagnostics. Sources of local workspace packages are named by
+their path from the workspace root (for example `feemath/src/lib.ko`); registry package
+sources keep their package identity. A test source that fails to compile is reported with
+the compiler's rendering under `error.details.compiler_output`. The exit status does not
+depend on the format:
+
+| Status | Codes |
+| --- | --- |
+| 0 | success |
+| 2 | `MUSUBI_E_USAGE`, `MUSUBI_E_MANIFEST_INVALID`, `MUSUBI_E_WORKSPACE_INVALID` |
+| 3 | `MUSUBI_E_LOCKFILE_INVALID`, `MUSUBI_E_LOCKFILE_LEGACY`, `MUSUBI_E_LOCKED` |
+| 4 | `MUSUBI_E_OFFLINE_MISS`, `MUSUBI_E_RESOLUTION_CONFLICT`, `MUSUBI_E_DEPENDENCY_CYCLE` |
+| 5 | `MUSUBI_E_REGISTRY`, `MUSUBI_E_NETWORK` |
+| 6 | `MUSUBI_E_UNAUTHORIZED`, `MUSUBI_E_GOVERNANCE` |
+| 7 | `MUSUBI_E_PACKAGE_INVALID`, `MUSUBI_E_ARCHIVE_INVALID`, `MUSUBI_E_CACHE_CORRUPT` |
+| 8 | `MUSUBI_E_COMPILER` (source, link or test compilation rejected) |
+| 9 | `MUSUBI_E_PUBLISH` |
+| 10 | `MUSUBI_E_IO` |
+| 11 | `MUSUBI_E_TEST_FAILED` (tests compiled and ran, and at least one failed) |
+| 70 | `MUSUBI_E_INTERNAL` |
+
+## Deployment, activation and calls
+
+`musubi deploy` rebuilds the declared contract from its locked source. With
+`--artifact <file.to> --artifact-manifest <file.manifest.json>` it deploys that exact
+prebuilt artifact only when the locked build reproduces its code and ABI hashes. A
+seiyaku that declares `hajimari`/`始まり` rejects every other call and view until the
+hook runs: `musubi deploy --activate [--args JSON]` runs it as a recoverable call after
+the deployment is Applied, and otherwise the deploy output prints the exact activation
+command. Its JSON `activation.status` is `pending` when this command completed the
+deployment and `unverified` when it returns an earlier completed deployment whose hook may
+already have run. `call`, `view` and `deploy --activate` all take named arguments with `--args
+JSON` or `--args-file PATH`.
+
+`musubi call` simulates the call on current state before signing. A rejected simulation
+stops the call; otherwise the signature-bound gas limit is the simulated gas plus half
+again and a fixed margin, unless `--gas-limit` chooses one. A call that first grants its
+own entrypoint permission cannot be simulated beforehand and uses 1,500,000 gas unless
+`--gas-limit` is given. Every Applied stage in deployment and call receipts records the
+gas used and fee settled by its committed fee receipt when the node reports it; that
+charge is reporting evidence and never gates finality or recovery.
+
 Mutable calls require finite aggregate fee authorization. Use the selected network's
 configured maxima or supply `musubi call --entrypoint SELECTOR --max-fee-asset ASSET
 --max-fee AMOUNT`. The shared native owner quotes, signs and retains the optional

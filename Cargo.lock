@@ -5438,10 +5438,6 @@ dependencies = [
 name = "iroha_kagemusha_proof"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "ark-bls12-381",
- "ark-ec",
- "ark-ff",
- "ark-serialize",
  "ff",
  "group",
  "iroha_crypto",
@@ -6047,7 +6043,6 @@ dependencies = [
  "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_samples",
- "iroha_torii",
  "iroha_torii_shared",
  "iroha_version",
  "iroha_zkp_halo2",
@@ -6695,6 +6690,7 @@ dependencies = [
 name = "kotodama_toolchain"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "clap",
  "ed25519-dalek",
  "hex",
  "iroha_allocation",

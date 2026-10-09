@@ -3,8 +3,12 @@
 //! This crate talks to the outside world on behalf of the irohad light-client
 //! keeper (§4.13.4), the `iroha sccp` CLI and the SCCP wallet (§7):
 //!
-//! - public-RPC endpoint lists with failover and owner-only secret headers;
-//! - blocking HTTP over rustls, with `norito::json` parsing;
+//! - public-RPC endpoint lists with failover, seeded start indices, rotation
+//!   away from endpoints that answer badly, poll budgets and owner-only
+//!   secret headers;
+//! - blocking HTTP over rustls with one wall-clock deadline per attempt, and
+//!   `norito::json` parsing under per-route byte caps and decode limits
+//!   ([`limits`]);
 //! - EVM JSON-RPC, the beacon light-client API, TRON HTTP and a TON ADNL-TCP
 //!   liteclient;
 //! - builders for light-client advances, backfills, bootstraps, inbound
@@ -20,11 +24,12 @@ pub mod builders;
 pub mod endpoints;
 pub mod evm;
 pub mod http;
+pub mod limits;
 pub mod ton;
 pub mod tron;
 
 pub use beacon::BeaconClient;
-pub use endpoints::{Backoff, EndpointSet, FailoverPolicy, HttpEndpointKind};
+pub use endpoints::{Backoff, EndpointSet, FailoverPolicy, HttpEndpointKind, PollBudget};
 pub use evm::EvmClient;
 pub use http::{HttpConfig, HttpTransport, RpcError};
 pub use tron::TronClient;

@@ -2,7 +2,7 @@
 //! The HTTP peer supplies transport responses; this is not a remote execution/finality claim.
 use super::*;
 use std::{
-    io::{Read as _, Write as _},
+    io::Write as _,
     net::{TcpListener, TcpStream},
     thread,
     time::{Duration, Instant},

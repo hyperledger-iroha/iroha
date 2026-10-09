@@ -253,7 +253,7 @@ fn literal_heavy_source(count: usize) -> String {
     let mut src = String::from("seiyaku Literals {\n  kotoage fn main() authorize(\"Bench\") {\n");
     for i in 0..count {
         src.push_str(&format!(
-            "    ledger::account::set_detail(account: context::authority(), key: Name::parse(\"literal{i}\"), value: Json::parse(\"{{\\\"value\\\":{i}}}\"));\n"
+            "    ledger::account::set_metadata(account: context::authority(), key: Name::parse(\"literal{i}\"), value: Json::parse(\"{{\\\"value\\\":{i}}}\"));\n"
         ));
     }
     src.push_str("  }\n}\n");

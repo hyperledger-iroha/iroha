@@ -4753,6 +4753,12 @@ Either way, applications must handle the gap instead of treating closure as a
 lossless continuation point. Aborting `signal` or leaving the `for await`
 loop cancels the response body.
 
+Contract-event rows (`contractEvents` pages and `streamContractEvents`) are
+call-derived: Torii projects them from committed `ContractCall` transactions,
+contracts do not emit them, and `provenance` is always `"derived"`. Both
+clients reject a `provenance` stream filter naming anything else, and
+`ToriiClient` also rejects such a row.
+
 `streamEvents({ filter })` takes a `Filter`, a text filter or the JSON form.
 Torii accepts `=` and `in` on `tx_hash`, `tx_status`, `tx_block_height`,
 `tx_lane_id`, `tx_dataspace_id`, `block_status`, `block_height`,

@@ -14,6 +14,13 @@ workspace reverse-dependency graph. The PR workflow runs locked Clippy, build,
 test, and documentation commands for the resulting package sets, then exposes
 one required aggregate result.
 
+Torii integration tests require its explicit `test-fixtures` feature. The routed
+test command enables it whenever Torii is selected; a direct full Torii run uses
+`cargo test -p iroha_torii --features test-fixtures`. Owning mutation checks use
+`python3 scripts/sumeragi_mutation_gate.py --torii --strict --jobs 1`. Torii has
+no self dev-dependency: that edge would compile the mutation feature into a
+non-test library, which its shipping guard rejects. Unit fixtures use `cfg(test)`.
+
 Package-level `package_binaries` requirements split each selected lane into
 binary-free and network package sets. The first set starts immediately after
 classification; only the second waits for release artifacts. The network

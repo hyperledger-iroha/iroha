@@ -46,6 +46,8 @@ Purpose
     `--model` selects DataModel unit tests in the test profile and its separate `SUMERAGI_MODEL_MUTATION`.
     `--sdk` and `--deploy` select their own unit-test crates in the test profile, with
     `SUMERAGI_SDK_MUTATION` and `SUMERAGI_DEPLOY_MUTATION`.
+    `--torii` selects Torii canonical-outcome custody unit tests in the test profile
+    with `SUMERAGI_TORII_MUTATION`.
     Each test-only feature guards only its own crate, without mutating dependencies.
 
 Prerequisites
@@ -70,6 +72,7 @@ Examples
     scripts/sumeragi_mutation_gate.py --list
     scripts/sumeragi_mutation_gate.py --core --strict --jobs 1
     scripts/sumeragi_mutation_gate.py --daemon --only HC93 --strict --jobs 1
+    scripts/sumeragi_mutation_gate.py --torii --only TOR1 --strict --jobs 1
 """
 
 from __future__ import annotations
@@ -129,6 +132,7 @@ SCENARIOS = {
     "f34": "sim::tests::f34_late_entrants",
     "f35": "sim::tests::f35_local_queue_asymmetry",
     "f36": "sim::tests::f36_late_leaders",
+    "f39": "sim::tests::f39_clock_guard",
     "exact-quorum": "sim::tests::exact_quorum_under_genuine_superset_attack",
     # F9 variant for ML5a: a vote blackout ending at GST (sim/mutation_group_2.rs).
     "f09r": "sim::mutation_group_2::f09r_vote_blackout_until_gst",
@@ -270,6 +274,15 @@ MUTATIONS = [
        "codec_resource_errors_survive_lossless_norito_conversion"], []),
     m("MS50", "static byte-domain bounds become retryable local decode refusals",
       ["protocol_byte_lengths_are_terminal_codec_errors"], []),
+    # The application clock guard of §4.5: the core's `Execute.certified` flag (MS51) and the
+    # simulator's model of the node executor's CT1 (MS52, a fake-driver mutation; the
+    # production guard is the planned Core case SC5).
+    m("MS51", "request_exec: emits Execute{certified: false} for a block a held PrepareQC certifies",
+      ["f33_hidden_prepareqc_due_work_block_commits_after_lag",
+       "det_s51_execute_certified_flag"], ["f39"]),
+    m("MS52", "fake driver executor: the application clock guard CT1 deleted",
+      ["clock_guard_certified_time_within_two_drifts",
+       "clock_guard_liveness_with_f_plus_one_slow_clocks"], ["f39"]),
     # ---- liveness rules
     m("ML1", "level returns start(h)", ["det_l1_levels_grow"], ["f15"]),
     m("ML2", "on_tick rebroadcast 1 deleted", ["det_l2_lost_timeout_resent"], ["f09"]),
@@ -331,7 +344,7 @@ MUTATIONS = [
     m("MS46", "header signatures omit application control", ["det_s46_control_witness_is_bound_by_header_hash_and_proposal_signature"], []),
     m("MS47", "real work invents an absent authenticated control response", ["det_s47_nonempty_work_waits_for_independent_control_and_preserves_original_payload"], []),
     m("MS48", "control response accepts another exact source", ["det_s48_control_response_requires_exact_request_epoch_view_and_parent_source"], []),
-    m("MS51", "on_proposal: zero-payload signed-defect rejection omitted",
+    m("MS53", "on_proposal: zero-payload signed-defect rejection omitted",
       ["empty_proposals_are_rejected_at_every_view"], []),
     # ---- as-built rules of Appendix E (E1-E7) and their regression tests
     m("ME1", "on_status: rate-limited Status drops its fresh CommitQC (E1)",
@@ -848,6 +861,47 @@ CORE_MUTATIONS = [
 
     m("HC179", "retained World cut: discard completed original tail after final shared control refusal",
       ["sumeragi::executor::publication_tests::original_worker_world_cut_retains_completed_tail_after_final_control_refusal"]),
+    m("HC180", "verified evidence attribution: substitute a fresh pool for the original offender graph",
+      ["sumeragi::evidence_history::lane::tests::lane_verified_offender_graph_refuses_occupied_original_pool_and_retries"]),
+    m("HC181", "World evidence COW: recopy the original proof and offender graph instead of sharing its immutable body",
+      ["sumeragi::evidence::lifecycle_tests::world_evidence_current_undo_and_cow_retain_original_proof_and_offender_allocations"]),
+    m("HC182", "detached native AMX source: discard its original acquired archive frame on transfer",
+      ["sumeragi::amx::proof_tests::persisted_amx_detached_source_keeps_original_frame_pool_and_retry_after_view_drop"]),
+    m("HC183", "native Prepared publication: acknowledge the original commit without its durable outbound intent",
+      ["sumeragi::executor::amx_intent_tests::original_paid_prepared_commit_captures_durable_intent_before_acknowledgement"]),
+    m("HC184", "off-chain G1 status source: substitute the State execution pool for the original admitted query frame pool",
+      ["smartcontracts::isi::tx::native_carrier_reader_tests::genesis_status_prefix_retains_original_admitted_pool_and_cumulative_refusal_work"]),
+    m("HC185", "owned native AMX issuer: reopen the original archive descriptor after its first refused poll",
+      ["query::native_receipts::amx_read::issuer_tests::owned_issuer_retains_first_refused_archive_descriptor_after_original_view_drop"]),
+    m("HC186", "terminal native AMX source: discard acquired original frame after shared body-control refusal",
+      ["query::native_receipts::amx_read::certification_tests::terminal_amx_raw_frame_survives_original_shared_shell_refusal"]),
+    m("HC187", "original native slot: ignore captured start during same-inode relocation",
+      ["kura::native_execution_read_tests::native_frame_original_start_refuses_same_inode_relocation_before_body_admission"]),
+    m("HC188", "terminal native AMX selection: forget decoded original target after a later predecessor refusal",
+      ["query::native_receipts::amx_read::certification_tests::terminal_amx_target_survives_original_later_gap_capacity_and_proof_retry"]),
+    m("HC189", "native queue admission: omit original global driver wake",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_global_driver_after_empty"]),
+    m("HC190", "native queue admission: omit original live lane runner wake",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_live_lane_after_empty"]),
+    m("HC191", "native queue startup: omit early exclusive original-owner refusal",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_owner_refuses_duplicate_prepared_start_and_requires_fresh_queue_restart"]),
+    m("HC192", "native queue startup: omit cold reserved original-pool admission binding",
+      ["queue::sumeragi_wake::tests::reserved_original_pool_refuses_foreign_resident_admission_before_allocation"]),
+    m("HC193", "native queue startup: omit existing resident original-pool binding",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_reservation_refuses_foreign_funded_pool_without_changing_original_pending"]),
+    m("HC194", "native queue retirement: omit terminal admission refusal",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_owner_refuses_duplicate_prepared_start_and_requires_fresh_queue_restart"]),
+    m("HC195", "durable lane publication: omit original global merge wake",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_live_lane_after_empty"]),
+    m("HC196", "durable lane merge source: omit original cold State pool binding",
+      ["sumeragi::lanes::store::publication_tests::lane_merge_wake_binding_preserves_original_queue_and_pool_across_retry"]),
+    m("HC197", "durable lane merge source: accept a foreign original Queue identity",
+      ["sumeragi::lanes::store::publication_tests::lane_merge_wake_binding_preserves_original_queue_and_pool_across_retry"]),
+    m("HC199", "completed certified lane payload: discard original source and output on same-scope build retry",
+      ["sumeragi::executor::payload_owner::tests::completed_certified_lane_payload_keeps_original_output_across_same_scope_build_retry"]),
+
+
+
 
 ]
 
@@ -901,6 +955,10 @@ DAEMON_MUTATIONS = [
       ["beacon_bootstrap::seat_attempt::finality::tests::durable_native_replay_rejects_foreign_source_pool_without_pinning_or_advancing"]),
     m("HC93", "broker beacon operation: reconstruct the authenticated session at every phase",
       ["runtime_provider_broker::protocol::platform::tests::beacon_operation_reuses_original_graph_across_ingress_dispatch_and_response"]),
+    m("HC198", "DKG file publication: omit exact original creation mode initialization before public bytes",
+      ["beacon_bootstrap::seat_export::tests::public_output_initializes_exact_original_creation_mode_before_publication_and_restore"]),
+    m("HC200", "DKG aggregate restore: require adjacent live phase height while rebuilding complete original certified history",
+      ["beacon_bootstrap::seat_attempt::finality::tests::aggregate_restart_replays_complete_original_history_before_next_phase_and_keeps_cutoff"]),
 ]
 
 
@@ -925,6 +983,8 @@ DEPLOY_MUTATIONS = [
     m("DEP5", "Managed AMX sources: reopen replaced G1/H2 from an unchanged local record",
       ["bootstrap::amx_sources::tests::managed_amx_sources_reopen_refuses_identical_g1_h2_replacement_without_http_repair",
        "bootstrap::amx_sources::tests::managed_amx_sources_reopen_preserves_original_native_pair_and_directory_without_new_reads"]),
+    m("DEP6", "Administrative AMX registration: accept a substituted original child or signer",
+      ["attachment::amx_registration::tests::original_amx_administrator_child_fees_time_and_checkpoint_survive_reopen_and_refuse_substitution"]),
 ]
 
 
@@ -942,7 +1002,18 @@ BY_ID = index_mutations(MUTATIONS)
 
 
 
+TORII_MUTATIONS = [
+    m("TOR1", "Pipeline cache: accept a block outcome without its exact canonical transaction binding",
+      ["tests_runtime_handlers::pipeline_status_cached_applied_refuses_removed_original_membership",
+       "tests_runtime_handlers::prepared_submit_outcome_cached_applied_refuses_removed_original_membership"]),
+    m("TOR2", "Pipeline pending refresh: use execution capacity before original query admission and mutate the cache on refusal",
+      ["tests_runtime_handlers::pipeline_status_pending_refresh_retains_original_query_refusal_and_pending_source"]),
+]
+
+
 def package_options(args):
+    if getattr(args, "torii", False):
+        return "iroha_torii", "mutation-testing", "SUMERAGI_TORII_MUTATION"
     """Select the actual implementation owner without propagating a mutation to dependencies."""
     if getattr(args, "sdk", False):
         return "iroha", "mutation-testing", "SUMERAGI_SDK_MUTATION"
@@ -1018,6 +1089,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     env.pop("SUMERAGI_MODEL_MUTATION", None)
     env.pop("SUMERAGI_SDK_MUTATION", None)
     env.pop("SUMERAGI_DEPLOY_MUTATION", None)
+    env.pop("SUMERAGI_TORII_MUTATION", None)
     crate, features, mutation_env = package_options(args)
     env.pop("SUMERAGI_SIM_SEED", None)
     env.pop("SUMERAGI_SIM_SEED_BASE", None)
@@ -1028,7 +1100,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     else:
         env.pop("SUMERAGI_SIM_SEEDS", None)
     env["CARGO_TARGET_DIR"] = str(target_dir)
-    profile = ("test" if any(getattr(args, owner, False) for owner in ("model", "sdk", "deploy")) else
+    profile = ("test" if any(getattr(args, owner, False) for owner in ("model", "sdk", "deploy", "torii")) else
                (getattr(args, "core_profile", None) or "test") if getattr(args, "core", False) else None)
     profile_options = ["--profile", profile] if profile else ["--release"]
     cmd = ["cargo", "test", "--locked", "-p", crate, *profile_options, "--features", features, "--lib"]
@@ -1165,10 +1237,12 @@ def build(args, target_dir, mutation, log_path):
                 detail=detail, log=str(log_path))
 
 
-def has_switch(mid, *, core=False, daemon=False, model=False, sdk=False, deploy=False):
-    if sum((core, daemon, model, sdk, deploy)) > 1:
+def has_switch(mid, *, core=False, daemon=False, model=False, sdk=False, deploy=False, torii=False):
+    if sum((core, daemon, model, sdk, deploy, torii)) > 1:
         raise ValueError("a mutation has exactly one implementation owner")
-    if sdk:
+    if torii:
+        cfg, source = "sumeragi_torii_mutation", REPO / "crates" / "iroha_torii" / "src"
+    elif sdk:
         cfg, source = "sumeragi_sdk_mutation", REPO / "crates" / "iroha" / "src"
     elif deploy:
         cfg, source = "sumeragi_deploy_mutation", REPO / "crates" / "iroha_deploy" / "src"
@@ -1216,7 +1290,9 @@ def evaluate(args, target_dir, mu):
         result.update(verdict="error", reason="no named test selectors")
         return result
     started = time.monotonic()
-    if getattr(args, "sdk", False):
+    if getattr(args, "torii", False):
+        present = has_switch(mu.id, torii=True)
+    elif getattr(args, "sdk", False):
         present = has_switch(mu.id, sdk=True)
     elif getattr(args, "deploy", False):
         present = has_switch(mu.id, deploy=True)
@@ -1307,6 +1383,8 @@ def main():
                        help="qualify registered SDK public-read rules with owning unit tests in the test profile")
     owner.add_argument("--deploy", action="store_true",
                        help="qualify registered Deploy managed-bootstrap custody rules with owning unit tests in the test profile")
+    owner.add_argument("--torii", action="store_true",
+                       help="qualify registered Torii canonical-outcome custody rules with owning unit tests in the test profile")
     parser.add_argument("--only", help="comma-separated mutation ids (default: all)")
     parser.add_argument("--jobs", type=int, default=1,
                         help="parallel jobs, each with its own target sub-directory")
@@ -1315,7 +1393,7 @@ def main():
     parser.add_argument("--seeds", type=int, default=200,
                         help="SUMERAGI_SIM_SEEDS for the scenarios (default 200)")
     parser.add_argument("--target-dir", type=Path,
-                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants; --daemon: target/sumeragi-daemon-mutants; --model: target/sumeragi-model-mutants; --sdk: target/sumeragi-sdk-mutants; --deploy: target/sumeragi-deploy-mutants)")
+                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants; --daemon: target/sumeragi-daemon-mutants; --model: target/sumeragi-model-mutants; --sdk: target/sumeragi-sdk-mutants; --deploy: target/sumeragi-deploy-mutants; --torii: target/sumeragi-torii-mutants)")
     parser.add_argument("--skip-baseline", action="store_true",
                         help="do not run the unmutated build")
     parser.add_argument("--strict", action="store_true",
@@ -1338,7 +1416,8 @@ def main():
     if args.strict and args.skip_baseline:
         parser.error("--strict requires the unmutated baseline")
     if args.target_dir is None:
-        name = ("sumeragi-sdk-mutants" if args.sdk else
+        name = ("sumeragi-torii-mutants" if args.torii else
+                "sumeragi-sdk-mutants" if args.sdk else
                 "sumeragi-deploy-mutants" if args.deploy else
                 "sumeragi-model-mutants" if args.model else
                 "sumeragi-daemon-mutants" if args.daemon else
@@ -1347,7 +1426,7 @@ def main():
     args.target_dir = args.target_dir.resolve()
     if args.core_profile is not None and not args.core:
         parser.error("--core-profile requires --core; protocol and daemon qualification use release")
-    table = (SDK_MUTATIONS if args.sdk else DEPLOY_MUTATIONS if args.deploy else
+    table = (TORII_MUTATIONS if args.torii else SDK_MUTATIONS if args.sdk else DEPLOY_MUTATIONS if args.deploy else
              MODEL_MUTATIONS if args.model else DAEMON_MUTATIONS if args.daemon else
              CORE_MUTATIONS if args.core else MUTATIONS)
     by_id = index_mutations(table)
@@ -1434,7 +1513,7 @@ def main():
         "generated": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "command": sys.argv,
         "package": package_options(args)[0],
-        "profile": ("test" if args.model or args.sdk or args.deploy else
+        "profile": ("test" if args.model or args.sdk or args.deploy or args.torii else
                     (args.core_profile or "test") if args.core else "release"),
         "seeds": None if args.fast else args.seeds,
         "fast": args.fast,

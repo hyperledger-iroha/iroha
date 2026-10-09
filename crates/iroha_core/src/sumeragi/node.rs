@@ -99,7 +99,8 @@ pub struct PrepareInputs {
 pub struct StartInputs<N> {
     /// The transport.
     pub net: Arc<N>,
-    /// The transaction queue.
+    /// The transaction queue. One successful native startup owns it for its lifetime;
+    /// authenticated restart requires a fresh Queue, not a retired binding.
     pub queue: Arc<Queue>,
     /// The node's consensus key pair (BLS normal).
     pub key_pair: KeyPair,
@@ -147,6 +148,8 @@ pub struct RunningNode {
     config_fingerprint: iroha_crypto::Hash,
     beacon_readiness: super::epoch_beacon::producer::NativeBeaconReadiness,
     startup_recovery: crate::snapshot::StartupRecovery,
+    // Retire notification first; permanent Queue exclusion remains through all joins.
+    queue_wake: crate::queue::SumeragiQueueRegistration,
     /// The driver.
     pub driver: RunningDriver,
     /// The instance id (`I`).
@@ -778,7 +781,9 @@ impl Prepared {
     }
 
     /// Install the safety records of the node's keys, assemble the core's `Init` and spawn the
-    /// driver over `inputs.net`.
+    /// driver over `inputs.net`. The Queue is reserved before attachment or signer launch.
+    /// A successful Queue cannot be started again, including after shutdown; ordinary
+    /// authenticated restart supplies a fresh Queue and the original State/journal source.
     ///
     /// # Errors
     /// See [`NodeError`].
@@ -805,6 +810,9 @@ impl Prepared {
             observer,
             driver,
         } = inputs;
+        let queue_reservation = queue
+            .reserve_sumeragi_start(&state.ivm_execution_budget())
+            .map_err(|error| NodeError::Input(error.into()))?;
         let node_gate = state.view().kura().native_consensus_gate();
         let _startup = node_gate
             .enter()
@@ -908,7 +916,7 @@ impl Prepared {
         let lanes =
             super::lanes::runner::LaneRunner::spawn(super::lanes::runner::LaneRunnerInputs {
                 state: Arc::clone(&state),
-                queue,
+                queue: Arc::clone(&queue),
                 watch: applied_watch,
                 stores: lane_stores,
                 crypto: Arc::clone(&crypto),
@@ -958,12 +966,16 @@ impl Prepared {
             )
             .map_err(NodeError::from)?;
         ingress.register(instance, Arc::new(running.handle()));
+        let queue_wake = queue_reservation
+            .install(running.handle().queue_wake(), lanes.queue_wake())
+            .map_err(|error| NodeError::Input(error.into()))?;
         recovery_publisher.lock().ready();
         Ok(RunningNode {
             state,
             config_fingerprint,
             beacon_readiness,
             startup_recovery,
+            queue_wake,
             driver: running,
             instance,
             crypto,
@@ -995,6 +1007,7 @@ impl Prepared {
         let ingress_thread = match spawn_ingress(subscription, Arc::clone(&ingress)) {
             Ok(thread) => thread,
             Err(error) => {
+                drop(node.queue_wake);
                 node.lanes.shutdown();
                 node.driver.shutdown();
                 return Err(NodeError::IngressThread(error));
@@ -1026,6 +1039,7 @@ impl NetworkedNode {
     /// Stop the instance and wait for its threads. The ingress thread ends with the network.
     pub fn shutdown(self) {
         self.ingress.unregister(&self.node.instance);
+        drop(self.node.queue_wake);
         self.node.lanes.shutdown();
         self.node.driver.shutdown();
         drop(self.ingress_thread);
@@ -1209,6 +1223,8 @@ mod tests {
     mod history_cutover_tests;
     #[path = "p2p_owner_tests.rs"]
     mod p2p_owner_tests;
+    #[path = "queue_wake_tests.rs"]
+    mod queue_wake_tests;
     #[path = "root_owner_tests.rs"]
     mod root_owner_tests;
     #[test]
@@ -1692,6 +1708,7 @@ mod tests {
     fn shutdown(validators: Vec<Validator>) {
         for validator in validators {
             let recovery = validator.node.handle().startup_recovery();
+            drop(validator.node.queue_wake);
             validator.node.lanes.shutdown();
             validator.node.driver.shutdown();
             assert!(
@@ -1977,6 +1994,10 @@ mod tests {
     /// A lane policy pinning fixed lane 2 to the whole validator set and routing Alice's
     /// transactions to it.
     fn fixed_lane_policy(keys: &[KeyPair]) -> Vec<Parameter> {
+        fixed_lane_policy_with_retry(keys, 200)
+    }
+
+    fn fixed_lane_policy_with_retry(keys: &[KeyPair], retry_ms: u64) -> Vec<Parameter> {
         use iroha_data_model::sumeragi_lanes::{
             SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
         };
@@ -1987,7 +2008,7 @@ mod tests {
             stall_window: 10_000,
             lane_params: iroha_data_model::parameter::system::SumeragiParameters {
                 block_cadence_ms: NonZeroU64::new(100).expect("non-zero"),
-                payload_retry_interval_ms: NonZeroU64::new(200).expect("non-zero"),
+                payload_retry_interval_ms: NonZeroU64::new(retry_ms).expect("non-zero"),
                 ..iroha_data_model::parameter::system::SumeragiParameters::default()
             },
             fixed: vec![SumeragiFixedLane {

@@ -98,10 +98,16 @@ def wallet_address(owner: int, minter: int, wallet_code: builder.Cell) -> int:
     return int.from_bytes(builder.state_init(wallet_code, data).hash, "big")
 
 
-def bucket_address(minter: int, index: int, bucket_code: builder.Cell) -> int:
-    """Account id of bucket `index` (flags clear) under minter `0:minter`."""
+def bucket_initial_data(minter: int, index: int) -> builder.Cell:
+    """Canonical data of bucket `index`: `bucket_data` with `activated = false` and clear flags."""
 
-    data = builder.Builder().address(0, minter).uint(index, 64).uint(0, 256).uint(0, 256).end()
+    return builder.Builder().address(0, minter).uint(index, 64).bit(False).uint(0, 256).uint(0, 256).end()
+
+
+def bucket_address(minter: int, index: int, bucket_code: builder.Cell) -> int:
+    """Account id of bucket `index` (not activated, flags clear) under minter `0:minter`."""
+
+    data = bucket_initial_data(minter, index)
     return int.from_bytes(builder.state_init(bucket_code, data).hash, "big")
 
 

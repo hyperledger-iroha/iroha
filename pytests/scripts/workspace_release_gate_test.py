@@ -686,10 +686,10 @@ def _validate_release_workflow(workflow: str, nextest_config: str | None = None)
             "name: workspace-release-compile-units",
             f"path: {COMPILE_UNIT_REPORT}",
             "if-no-files-found: error",
-            "cargo test --locked --workspace --no-fail-fast",
+            "cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures",
         ),
         "coverage": (
-            "mold --run cargo llvm-cov nextest --workspace --locked --branch --no-report",
+            "mold --run cargo llvm-cov nextest --workspace --locked --features iroha_torii/test-fixtures --branch --no-report",
             "mold --run cargo llvm-cov --doc --branch --no-report",
             "cargo llvm-cov report --doctests --ignore-filename-regex "
             "'iroha_cli|iroha_torii' --lcov --output-path lcov.info",
@@ -1512,10 +1512,10 @@ ReleaseMutation = Callable[[str], str]
         (
             lambda workflow: _replace_once(
                 workflow,
-                "cargo test --locked --workspace --no-fail-fast",
-                "cargo test --workspace --no-fail-fast",
+                "cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures",
+                "cargo test --workspace --no-fail-fast --features iroha_torii/test-fixtures",
             ),
-            "test is missing required command: cargo test --locked --workspace --no-fail-fast",
+            "test is missing required command: cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures",
         ),
         (
             lambda workflow: _replace_once_in_job(
@@ -1832,3 +1832,17 @@ def test_supported_feature_reader_command_cannot_be_removed(job: str) -> None:
     old = f"python3 scripts/rust_ci.py run --workspace --checks {job}"
     changed = _replace_once_in_job(workflow, job, old, "true # removed supported feature owner")
     assert f"{job} is missing required command: {old}" in _validate_release_workflow(changed)
+
+
+@pytest.mark.parametrize("job", ("test", "coverage"))
+def test_full_workspace_routes_cannot_omit_torii_integration_fixture_owner(job: str) -> None:
+    """Raw full-test and coverage commands must admit all required Torii targets."""
+    workflow = RELEASE_WORKFLOW.read_text()
+    changed = _replace_once_in_job(
+        workflow, job, "--features iroha_torii/test-fixtures", "",
+    )
+    assert any(
+        error.startswith(f"{job} is missing required command:")
+        and "iroha_torii/test-fixtures" in error
+        for error in _validate_release_workflow(changed)
+    )

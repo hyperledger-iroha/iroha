@@ -41,6 +41,10 @@ mod commitment;
 pub use commitment::*;
 mod checkpoint;
 pub use checkpoint::{MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint};
+mod compact;
+pub use compact::{
+    SumeragiCommitCertificateV1, SumeragiCommitVerifierV1, VerifiedSumeragiCommitV1,
+};
 mod page;
 pub use page::{VerifiedFinalityPage, certified_block_context_id, verify_checkpoint_page};
 mod world_state;

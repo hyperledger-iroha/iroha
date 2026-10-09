@@ -4,9 +4,11 @@
 
 import "@stdlib/gas-payments"
 import "@acton/build"
+import "@acton/emulation/config"
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
+import "@acton/types/transaction"
 import "@contracts/sccp-addresses"
 import "@contracts/sccp-cells"
 import "@contracts/sccp-constants"
@@ -474,6 +476,7 @@ fun canonicalStorage(
         config: config.toCell(),
         roster: state.toCell(),
         prevRoster: null,
+        retries: [],
     };
 }
 
@@ -510,13 +513,18 @@ fun deployWithInit(
 
 /// Deployed and initialized minter with an n-member roster (`zeros` keyless).
 fun setupEnvWith(n: int, zeros: int, maxSupply: int): Env {
+    return setupEnvFunded(n, zeros, maxSupply, grams("10"));
+}
+
+/// [setupEnvWith] deployed with `value` (below `MINTER_FLOOR` when small).
+fun setupEnvFunded(n: int, zeros: int, maxSupply: int, value: coins): Env {
     testing.setNow(T0);
     val deployer = testing.treasury("deployer");
     val roster = defaultRoster(n, zeros);
     val (minter, res) = deployWithInit(
         canonicalStorage(VEC_NETWORK_ID, TEST_REVISION, maxSupply, roster),
         deployer.address,
-        grams("10"),
+        value,
     );
     expect(res).toHaveSuccessfulDeploy({ to: minter.address });
     expect(minter.getSccpState().initialized).toBeTrue();
@@ -530,6 +538,64 @@ fun setupEnvWith(n: int, zeros: int, maxSupply: int): Env {
 
 fun setupEnv(): Env {
     return setupEnvWith(4, 0, TEST_MAX_SUPPLY);
+}
+
+/// Overwrites the balance of the deployed account `addr` in the emulator
+/// (storage statistics unchanged), e.g. to model storage drift or a
+/// storage-price increase.
+fun setAccountBalance(addr: address, balance: coins) {
+    var shard = testing.getShardAccount(addr)!;
+    val account = shard.account.load();
+    if (account is TlbAccountInfo) {
+        var info = account;
+        info.storage.balance.grams = balance;
+        // `TlbAccountInfo` carries its own `0b1` union prefix
+        shard.account = (info.toCell() as cell) as Cell<TlbAccount>;
+        testing.setShardAccount(addr, shard);
+        return;
+    }
+    throw SccpErrors.InvalidMessage;
+}
+
+/// Multiplies the basechain forwarding price per cell by `factor` (and
+/// returns the previous config), so that messages with many cells cannot be
+/// paid while single-cell messages, such as bounces, still can.
+fun raiseCellForwardPrice(factor: int): BlockchainConfigMap {
+    val previous = testing.getConfig();
+    var config = previous;
+    var prices = config.getMsgForwardPrices(BASECHAIN);
+    prices.cellPrice = prices.cellPrice * factor;
+    config.setMsgForwardPrices(prices, BASECHAIN);
+    expect(testing.setConfig(config)).toBeTrue();
+    return previous;
+}
+
+/// Multiplies the basechain forwarding price per bit by `factor` (and
+/// returns the previous config).
+fun raiseBitForwardPrice(factor: int): BlockchainConfigMap {
+    val previous = testing.getConfig();
+    var config = previous;
+    var prices = config.getMsgForwardPrices(BASECHAIN);
+    prices.bitPrice = prices.bitPrice * factor;
+    config.setMsgForwardPrices(prices, BASECHAIN);
+    expect(testing.setConfig(config)).toBeTrue();
+    return previous;
+}
+
+/// The canonical (not activated, flags clear) bucket `index` of `env.minter`.
+fun canonicalBucket(env: Env, index: int): SccpConsumedBucket {
+    return SccpConsumedBucket.fromStorage({
+        minterAddress: env.minter.address,
+        index,
+        activated: false,
+        bitsHi: 0,
+        bitsLo: 0,
+    });
+}
+
+/// Sends `sccp_retry` for `nonce` with `value`.
+fun sendRetry(env: Env, nonce: int, value: coins): SendResultList {
+    return env.minter.sendSccpRetry(env.deployer, 12, env.deployer, nonce, { value, bounce: true });
 }
 
 // ---------------------------------------------------------------------------

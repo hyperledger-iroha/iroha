@@ -19,7 +19,10 @@ use iroha::{
         },
     },
 };
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 const REWARD_EPOCH: u64 = 2;
 
@@ -199,9 +202,9 @@ pub(super) struct WithdrawalLifecycle {
     // departing owner has withdrawn. This is a read, never a new delegation.
     reserve_validator: AccountId,
     pending: PublicLaneUnbonding,
-    signed_genesis_hash: HashOf<iroha::data_model::block::BlockHeader>,
     network_id: NetworkId,
     retained_stake: Quantity,
+    history: Arc<committee_staking_history::RetainedHistory>,
 }
 
 impl WithdrawalLifecycle {
@@ -311,18 +314,13 @@ impl WithdrawalLifecycle {
             validate_joined_custody(&confirmed, &confirmed_auxiliary)?;
             break (prepared, auxiliary, supply);
         };
-        let (_, chain) = tokio::time::timeout_at(
+        let chain = tokio::time::timeout_at(
             deadline.into(),
             read_on_dedicated_thread({
                 let client = self.owner.client.clone();
-                let network_id = self.network_id;
-                let genesis = self.signed_genesis_hash;
+                let history = Arc::clone(&self.history);
                 let height = prepared.observed_height;
-                move || {
-                    read_contiguous_finality_chain_until(
-                        &client, network_id, genesis, height, deadline,
-                    )
-                }
+                move || history.read_until(&client, height, deadline)
             }),
         )
         .await
@@ -855,6 +853,11 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
             .and_then(|height| height.checked_add(npos.slashing_delay_blocks))
             .ok_or_else(|| eyre!("unbond liability horizon overflow"))?,
     };
+    let history = Arc::new(committee_staking_history::RetainedHistory::new(
+        network.chain_id(),
+        network.network_id(),
+        signed_genesis_hash,
+    )?);
     let mut lifecycle = WithdrawalLifecycle {
         destination: AssetId::with_scope(xor, owner.account.clone(), *escrow.scope()),
         owner,
@@ -862,9 +865,9 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
         reward_treasury,
         reserve_validator,
         pending,
-        signed_genesis_hash,
         network_id: network.network_id(),
         retained_stake: Quantity::zero(),
+        history,
     };
     let before_schedule = lifecycle
         .observe(PublicLanePreparationOperationV1::Bond(

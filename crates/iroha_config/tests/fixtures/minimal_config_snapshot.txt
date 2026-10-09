@@ -510,7 +510,6 @@ Root {
             routes: [],
         },
         kagemusha_enrollment: None,
-        kagemusha_load_finality: None,
         da_ingest: DaIngest {
             replay_cache_capacity: 4096,
             replay_cache_max_lane_epochs: 1024,
@@ -1975,6 +1974,7 @@ Root {
             advance_after: None,
             poll_interval: 60s,
             request_timeout: 10s,
+            poll_budget: 120s,
             max_advance_bytes: 262144,
             endpoints: SccpLightClientKeeperEndpoints {
                 ethereum_execution: [

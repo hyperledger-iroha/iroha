@@ -10,7 +10,6 @@ seiyaku AssetOps {
             destination: bob,
             asset_definition: coin,
             amount: 500,
-            dataspace: DataSpaceId::parse("0"),
         );
         ledger::asset::burn(account: bob, asset_definition: coin, amount: 100);
     }

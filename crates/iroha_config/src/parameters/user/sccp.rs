@@ -155,16 +155,24 @@ pub struct SccpLightClientKeeper {
     /// milliseconds. `0` (the default) means `ws_bound_ms / 4` of each light client.
     #[config(default = "ms(defaults::sccp::light_client_keeper::ADVANCE_AFTER_MS)")]
     pub advance_after_ms: DurationMs,
-    /// How often local light-client state is checked, in milliseconds (default `60000`,
-    /// nonzero).
+    /// How often each network's local light-client state is checked, in milliseconds (default
+    /// `60000`, nonzero). The keeper adds up to a quarter of jitter and doubles the wait after
+    /// each consecutive failed poll of a network, up to 64 × this interval.
     #[config(default = "ms(defaults::sccp::light_client_keeper::POLL_INTERVAL_MS)")]
     pub poll_interval_ms: DurationMs,
-    /// Timeout of one RPC request in milliseconds, with failover to the next endpoint (default
-    /// `10000`, nonzero).
+    /// Total wall-clock time of one RPC attempt in milliseconds (connecting, sending and
+    /// reading the whole answer), then failover to the next endpoint (default `10000`,
+    /// nonzero).
     #[config(default = "ms(defaults::sccp::light_client_keeper::REQUEST_TIMEOUT_MS)")]
     pub request_timeout_ms: DurationMs,
-    /// Largest encoded advance the keeper submits (default `262144`, nonzero); a larger built
-    /// advance is dropped with a warning. The on-chain per-instruction bounds still apply.
+    /// Wall-clock budget of one network's poll in milliseconds, covering every RPC request of
+    /// one advance build (default `120000`, nonzero).
+    #[config(default = "ms(defaults::sccp::light_client_keeper::POLL_BUDGET_MS)")]
+    pub poll_budget_ms: DurationMs,
+    /// Largest encoded advance the keeper submits (default `262144`, nonzero). Advances are
+    /// stepped to fit it (a light client far behind catches up over several polls); one that
+    /// still does not fit is dropped with a warning. The on-chain per-instruction bounds still
+    /// apply.
     #[config(default = "defaults::sccp::light_client_keeper::MAX_ADVANCE_BYTES")]
     pub max_advance_bytes: usize,
     /// `[sccp.light_client_keeper.endpoints]`: RPC endpoint lists per chain.
@@ -192,6 +200,12 @@ impl SccpLightClientKeeper {
             defaults.request_timeout,
             emitter,
         );
+        let poll_budget = nonzero_duration(
+            self.poll_budget_ms,
+            "sccp.light_client_keeper.poll_budget_ms",
+            defaults.poll_budget,
+            emitter,
+        );
         let max_advance_bytes = NonZeroUsize::new(self.max_advance_bytes).unwrap_or_else(|| {
             emit_sccp_error(
                 emitter,
@@ -204,6 +218,7 @@ impl SccpLightClientKeeper {
             advance_after: (!advance_after_ms.is_zero()).then_some(advance_after_ms),
             poll_interval,
             request_timeout,
+            poll_budget,
             max_advance_bytes,
             endpoints: self.endpoints.parse(emitter),
             secret_headers: parse_secret_headers(self.secret_headers, emitter),
@@ -516,6 +531,10 @@ mod tests {
             (
                 "[light_client_keeper]\nrequest_timeout_ms = 0\n",
                 "request_timeout_ms must be nonzero",
+            ),
+            (
+                "[light_client_keeper]\npoll_budget_ms = 0\n",
+                "poll_budget_ms must be nonzero",
             ),
             (
                 "[light_client_keeper]\nmax_advance_bytes = 0\n",

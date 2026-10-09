@@ -185,7 +185,6 @@ pub(super) fn plan(
     scope: SourceScopeV1,
     recipe: &QProgramRecipeV1,
     omega: &KeyArtifact<Ep>,
-    receipt: Option<ReceiptSourceRecipeV1<'_>>,
 ) -> Result<Plan, OperationQualificationErrorV1> {
     let policy = source(scope.own())?;
     let pallas = source(PinnedParams::derive(16))?;
@@ -210,14 +209,12 @@ pub(super) fn plan(
     Ok(match route.variant {
         Variant::Bootstrap => return Err(OperationQualificationErrorV1::Source),
         Variant::Load => {
-            let receipt = receipt.ok_or(OperationQualificationErrorV1::Source)?;
             let signatures = source(recipe.signatures().to_vec().try_into())?;
             Plan::Load(source(load::Plan::new(
                 operation,
                 policy,
                 signatures,
                 key,
-                load::FinalityPolicy::new(receipt.source.clone(), *receipt.anchor),
                 pallas,
                 vesta,
             ))?)
@@ -358,17 +355,15 @@ impl AuthenticatedProducerInventoryV1 {
     /// Qualify every original A/W source for one exact compiled selector route.
     /// The complete native plan is reconstructed before comparing the signed context.
     /// Each original PK is read, strictly imported and dropped before the next one.
-    /// Load additionally requires the same installation's source-qualified receipt owner.
     /// Candidate Omega metadata does not confer complete-catalog or wallet readiness.
     /// # Errors
     /// Another installation/Q program/route, foreign selector class, missing qualified
-    /// finality, changed context, capped original or any strict source/key mismatch.
+    /// changed context, capped original or any strict source/key mismatch.
     pub fn qualify_operation_route(
         &self,
         installed: &InstalledVerifierPackV1,
         qualified_q: &QualifiedQProgramV1,
         route_index: u32,
-        receipt: Option<&QualifiedReceiptSourceV1>,
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
     ) -> Result<QualifiedOperationRouteV1, OperationQualificationErrorV1> {
@@ -405,16 +400,12 @@ impl AuthenticatedProducerInventoryV1 {
                 w_seals: Vec::new(),
             });
         }
-        if route.variant == Variant::Load && receipt.is_none_or(|r| r.installation() != identity) {
-            return Err(Error::Authority.into());
-        }
         let omega = metadata(self.read_verifier_original(self.inventory.omega, originals)?)?;
         let plan = plan(
             route,
             SourceScopeV1::from_scheme(installed.verifier().scheme())?,
             qualified_q.recipe(),
             &omega,
-            receipt.map(|r| ReceiptSourceRecipeV1::new(r.source(), r.anchor())),
         )?;
         let schema: Vec<_> = plan
             .context()

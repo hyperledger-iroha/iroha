@@ -1402,3 +1402,10 @@ Generic per-node enum wrappers and the previous vector body are retired; no
 alternate decoder remains. This changes the authenticated V1 semantic ABI hash,
 so all native artifact captures and generated ABI hash material must be produced
 from the changed compiler before their mandatory consumers pass.
+
+
+The JSON parser's `parse_string_with_buffer` and typed map/sequence callbacks share
+ordinary parsing, framing and logical-quota kernels. A caller can admit an exact
+original-pool string/key destination before copying without replacing a resource
+refusal with syntax. These callbacks do not fund enclosing maps, crypto validation
+scratch or retained retry state, and do not change canonical JSON or binary layouts.

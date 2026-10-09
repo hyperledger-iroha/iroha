@@ -2,34 +2,6 @@
 
 use super::*;
 
-pub(super) fn require_receipt(
-    finality: &FinalityV1,
-    expected: [BlobV1; 2],
-) -> Result<(), CompilationErrorV1> {
-    use iroha_kagemusha_proof::finality::native::{ArtifactId, Composition, NodeId};
-    let id = ArtifactId::Wrapper(NodeId::Composition(Composition::Receipt));
-    let mut selected = None;
-    for record in &finality.originals {
-        if record
-            .matches_identity(&id)
-            .map_err(|_| CompilationErrorV1::Closure)?
-        {
-            if selected.replace(record).is_some() {
-                return Err(CompilationErrorV1::Closure);
-            }
-        }
-    }
-    let record = selected.ok_or(CompilationErrorV1::Closure)?;
-    if expected
-        .iter()
-        .enumerate()
-        .any(|(i, blob)| record.lengths[i] != blob.bytes || record.sha256[i] != blob.sha256)
-    {
-        return Err(CompilationErrorV1::Closure);
-    }
-    Ok(())
-}
-
 fn intern(originals: &mut Vec<OriginalV1>, item: OriginalV1) -> Result<u32, CompilationErrorV1> {
     let i = if let Some(i) = originals.iter().position(|old| *old == item) {
         i
@@ -56,7 +28,6 @@ impl OfflineCompilerV1<'_> {
         sigmas: &CompiledSigmasV1,
         operations: &[CompiledOperationV1],
         omega: &CompiledOmegaV1,
-        finality: FinalityV1,
     ) -> Result<ProducerInventoryV1, CompilationErrorV1> {
         let routes = compiled_routes();
         if operations.len() != routes.len() {
@@ -71,13 +42,6 @@ impl OfflineCompilerV1<'_> {
         let mut dispatch = Vec::new();
         let mut terminals = Vec::new();
         let mut terminal_keys: Vec<&KeyArtifact<Eq>> = Vec::new();
-        let anchor = iroha_kagemusha_proof::finality::history::HistoryAnchor {
-            network: finality.network,
-            instance: finality.instance,
-            initial_context: finality.initial_context,
-            initial_epoch: finality.initial_epoch,
-            parameters: finality.parameters,
-        };
         for (operation, route) in operations.iter().zip(routes) {
             if operation.scope != self.scope
                 || operation.route != route
@@ -89,17 +53,8 @@ impl OfflineCompilerV1<'_> {
                         .as_ref()
                         .is_none_or(|k| !equal(k, &omega.key.metadata))
                 }
-                || (route.variant == Variant::Load && operation.anchor != Some(anchor))
-                || (route.variant != Variant::Load && operation.anchor.is_some())
-                || (route.variant != Variant::Load && operation.receipt.is_some())
             {
                 return Err(CompilationErrorV1::Closure);
-            }
-            if route.variant == Variant::Load {
-                require_receipt(
-                    &finality,
-                    operation.receipt.ok_or(CompilationErrorV1::Closure)?,
-                )?;
             }
             let record = OperationV1 {
                 variant: u8::try_from(
@@ -166,85 +121,9 @@ impl OfflineCompilerV1<'_> {
             routes: dispatch,
             terminals,
             omega,
-            finality,
         };
         inventory.validate()?;
         Ok(inventory)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use iroha_kagemusha_proof::finality::{
-        catalog::{ArtifactSink, DirectoryCatalog},
-        continuity::tree::OriginalBytes,
-        native::{ArtifactId, Composition, ImportLimits, NodeId},
-    };
-
-    #[test]
-    fn receipt_wrapper_original_is_unique_and_matches_both_exact_metadata_addresses() {
-        let directory = tempfile::tempdir().unwrap();
-        let limits = ImportLimits {
-            key: super::super::tests::limits(),
-            maximum_artifacts: 8,
-            maximum_original_bytes: 1024,
-        };
-        let mut store =
-            DirectoryCatalog::create(directory.path().join("originals"), limits).unwrap();
-        // These are metadata-comparison fixtures; no proof/source importer accepts them.
-        let original = OriginalBytes {
-            descriptor: vec![1, 2],
-            verifying_key: vec![3, 4],
-            proving_key: vec![5],
-        };
-        let expected = [
-            BlobV1::of(&original.descriptor),
-            BlobV1::of(&original.verifying_key),
-        ];
-        let source = ArtifactId::Source(NodeId::Composition(Composition::Receipt));
-        let wrapper = ArtifactId::Wrapper(NodeId::Composition(Composition::Receipt));
-        store.store(&source, &original).unwrap();
-        store.store(&wrapper, &original).unwrap();
-        let bytes = store.inventory().unwrap();
-        let records: Vec<ArtifactRecord> = norito::decode_canonical_with_limits(
-            &bytes,
-            norito::canonical_decode_limits(bytes.len()),
-        )
-        .unwrap();
-        let finality = FinalityV1 {
-            network: [1; 32],
-            instance: [2; 32],
-            initial_context: [3; 32],
-            initial_epoch: 0,
-            parameters: [1; 6],
-            originals: records,
-        };
-        require_receipt(&finality, expected).unwrap();
-        let index = finality
-            .originals
-            .iter()
-            .position(|r| r.matches_identity(&wrapper).unwrap())
-            .unwrap();
-        for field in 0..2 {
-            let mut changed = finality.clone();
-            changed.originals[index].lengths[field] += 1;
-            assert!(require_receipt(&changed, expected).is_err());
-            let mut changed = finality.clone();
-            changed.originals[index].sha256[field][0] ^= 1;
-            assert!(require_receipt(&changed, expected).is_err());
-        }
-        let mut changed = finality.clone();
-        changed.originals.remove(index);
-        assert!(
-            require_receipt(&changed, expected).is_err(),
-            "matching source is not the wrapper"
-        );
-        let mut changed = finality.clone();
-        changed.originals.push(finality.originals[index].clone());
-        assert!(require_receipt(&changed, expected).is_err());
-        let mut changed = finality;
-        changed.originals[index].name.push(0);
-        assert!(require_receipt(&changed, expected).is_err());
-    }
-}

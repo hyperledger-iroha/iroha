@@ -32,8 +32,20 @@ fn retained_native_evidence_frames_belong_to_original_preparation_pool() {
     drop(view);
     read.complete().unwrap();
     let candidate = &read.candidates.as_slice()[0];
-    assert!(candidate.frame.belongs_to(budget));
-    assert_eq!(candidate.frame.as_slice(), original);
+    assert!(
+        candidate
+            .verified
+            .as_ref()
+            .unwrap()
+            .body
+            .as_ref()
+            .unwrap()
+            .proof_belongs_to(budget)
+    );
+    assert_eq!(
+        candidate.verified.as_ref().unwrap().native_frame().unwrap(),
+        original
+    );
     let admitted = read.finish().unwrap();
     assert!(admitted.belongs_to(budget));
     assert!(admitted.as_slice()[0].attribution().safety_violation);
@@ -87,7 +99,16 @@ fn frame_refusal_refunds_failed_capture_and_retries_original_source() {
         AdmissionRead::capture(state, &view, generation, 3, std::slice::from_ref(&proof)).unwrap();
     drop(view);
     retry.complete().unwrap();
-    assert!(retry.candidates.as_slice()[0].frame.belongs_to(budget));
+    assert!(
+        retry.candidates.as_slice()[0]
+            .verified
+            .as_ref()
+            .unwrap()
+            .body
+            .as_ref()
+            .unwrap()
+            .proof_belongs_to(budget)
+    );
     let admitted = retry.finish().unwrap();
     assert!(admitted.as_slice()[0].attribution().safety_violation);
     drop(admitted);

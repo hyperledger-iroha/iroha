@@ -24,3 +24,20 @@ fn abi_hash_has_valid_iroha_hash_marker() {
         "ABI hash must not be an invalid-surface diagnostic sentinel"
     );
 }
+#[test]
+fn abi_v1_execute_instruction_advertises_only_the_submit_ballot_tag() {
+    // specs/sccp.md §4.4: contracts record no SCCP messages, so the hashed 0xA0 surface names
+    // the single operation tag `1=SubmitBallot` and nothing about `RecordSccpMessage`.
+    let table = ivm::syscalls::render_syscalls_markdown_table();
+    let rows: Vec<&str> = table
+        .lines()
+        .filter(|line| line.starts_with("| 0xA0 |"))
+        .collect();
+    assert_eq!(rows.len(), 1, "exactly one 0xA0 row: {rows:?}");
+    assert!(
+        rows[0].contains("r11=operation_tag(1=SubmitBallot) |"),
+        "{}",
+        rows[0]
+    );
+    assert!(!table.contains("RecordSccpMessage"));
+}

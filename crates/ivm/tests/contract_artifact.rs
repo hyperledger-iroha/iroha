@@ -721,7 +721,7 @@ fn sdk_code_readback_fixture_is_reproducible_and_admitted() {
     );
     assert_eq!(
         hex::encode(admitted.code_hash.as_ref()),
-        "8ea032a639a92b0c46b366b93a8207699e3253bf4c14fd159c6f1f5261b928a9"
+        "c6005c844c0414f55939dc48b9ecf6e550f967db06f5af4f422b4cf1bb64c5bb"
     );
 }
 #[test]
@@ -1627,7 +1627,11 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
         "言挙げ",
         "始まり_",
         "fn",
-        "account_id",
+        // Unnamespaced source builtins and compile-time value types stay
+        // reserved; compiler-internal lowering spellings such as `account_id`
+        // are ordinary public selector names.
+        "require",
+        "Mintable",
         "Amount",
         "__kotodama_link_private",
     ] {

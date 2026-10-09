@@ -21,8 +21,9 @@ use iroha_data_model::musubi::{
 use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
 use kotodama_lang::{
     compiler::{CompilerMode, CompilerOptions},
+    diagnostic::{Diagnostic, DiagnosticBundle, SourceSpan},
     driver::{
-        BuildDriver, BuildStatus, LinkedSourceBuildRequest, PublishLayout, PublishMode,
+        BuildDriver, BuildError, BuildStatus, LinkedSourceBuildRequest, PublishLayout, PublishMode,
         discover_source_link_request, discover_source_modules,
     },
     linker::{
@@ -36,7 +37,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 /// Compiler operation requested by the Cargo-style command surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,8 +86,8 @@ pub struct CompilerExecutionV1 {
     pub validated_packages: usize,
     /// Number of deployable contract roots checked or built.
     pub contract_targets: usize,
-    /// Total non-fatal lint findings from checked deployable roots.
-    pub warnings: usize,
+    /// Canonical non-fatal lint diagnostics from checked deployable roots, in source order.
+    pub warnings: Vec<Diagnostic>,
     /// Generated artifacts (empty for `check`).
     pub artifacts: Vec<CompilerArtifactV1>,
     /// Typed reusable-package interfaces in canonical package order.
@@ -103,8 +104,96 @@ pub enum CompilerBridgeErrorV1 {
     Cache(String),
     /// A cached or local manifest/source set is not a valid V1 package.
     Package(String),
-    /// The canonical Kotodama compiler rejected the graph.
+    /// The canonical Kotodama compiler rejected source with structured diagnostics.
+    Diagnostics(DiagnosticBundle),
+    /// The compiler driver failed outside source diagnostics (filesystem, publication, invariant).
     Compiler(String),
+}
+impl CompilerBridgeErrorV1 {
+    /// Classify a driver failure, retaining canonical source diagnostics without rendering them.
+    pub(crate) fn from_build_error(error: BuildError) -> Self {
+        match error.into_diagnostics() {
+            Ok(diagnostics) => Self::Diagnostics(diagnostics),
+            Err(other) => Self::Compiler(other.to_string()),
+        }
+    }
+    /// Classify a driver failure and attach one contextual note to each source diagnostic.
+    fn from_build_error_with_note(error: BuildError, note: &str) -> Self {
+        match Self::from_build_error(error) {
+            Self::Diagnostics(mut bundle) => {
+                for diagnostic in &mut bundle.diagnostics {
+                    diagnostic.notes.push(note.to_owned());
+                }
+                Self::Diagnostics(bundle)
+            }
+            Self::Compiler(reason) => Self::Compiler(format!("{note}: {reason}")),
+            other => other,
+        }
+    }
+    /// Name local workspace sources in source diagnostics by their workspace-relative paths.
+    ///
+    /// See [`locate_workspace_diagnostic`].
+    fn located(self, member_directory: &str, local_directories: &BTreeMap<String, String>) -> Self {
+        match self {
+            Self::Diagnostics(mut bundle) => {
+                for diagnostic in &mut bundle.diagnostics {
+                    locate_workspace_diagnostic(diagnostic, member_directory, local_directories);
+                }
+                Self::Diagnostics(bundle)
+            }
+            other => other,
+        }
+    }
+}
+/// Workspace-relative directory of one member, empty for the package at the workspace root.
+fn member_directory(member: &WorkspaceMember) -> &str {
+    match member.workspace_path.as_str() {
+        "." => "",
+        path => path,
+    }
+}
+/// Rewrite every span of one diagnostic that points into a local workspace package.
+///
+/// The compiler names a contract root's sources relative to its own package and names local
+/// library sources by an opaque local package identity. Musubi reports them from the workspace
+/// root instead: a span without a package identity belongs to `member_directory`, and a span whose
+/// identity is a local package belongs to that package's directory. Both become
+/// `<directory>/<source>` without a package identity, so human, JSON and SARIF output name the
+/// file the user edits. Registry package spans keep their identity and logical path.
+fn locate_workspace_diagnostic(
+    diagnostic: &mut Diagnostic,
+    member_directory: &str,
+    local_directories: &BTreeMap<String, String>,
+) {
+    let locate = |span: &mut SourceSpan| {
+        let directory = match span.package_identity.as_deref() {
+            None => member_directory,
+            Some(identity) => match local_directories.get(identity) {
+                Some(directory) => directory.as_str(),
+                None => return,
+            },
+        };
+        span.package_identity = None;
+        if let Some(source) = span.source.as_mut()
+            && !directory.is_empty()
+            && !Path::new(source.as_str()).is_absolute()
+        {
+            *source = format!("{directory}/{source}");
+        }
+    };
+    if let Some(span) = &mut diagnostic.primary_span {
+        locate(span);
+    }
+    for label in &mut diagnostic.labels {
+        locate(&mut label.span);
+    }
+    for fix in diagnostic
+        .fix
+        .iter_mut()
+        .chain(diagnostic.alternative_fixes.iter_mut())
+    {
+        locate(&mut fix.span);
+    }
 }
 impl fmt::Display for CompilerBridgeErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -113,6 +202,7 @@ impl fmt::Display for CompilerBridgeErrorV1 {
             Self::Lock(reason) => write!(formatter, "invalid exact compiler lock: {reason}"),
             Self::Cache(reason) => write!(formatter, "authenticated package cache error: {reason}"),
             Self::Package(reason) => write!(formatter, "invalid compiler package: {reason}"),
+            Self::Diagnostics(bundle) => formatter.write_str(&bundle.render_human()),
             Self::Compiler(reason) => write!(formatter, "Kotodama compiler failed: {reason}"),
         }
     }
@@ -149,6 +239,8 @@ impl RegistryCompilerSourceV1 for Option<&MusubiCache> {
 /// Execute one compiler operation for selected workspace packages.
 ///
 /// Local graphs need no registry cache. Every registry node requires an authenticated cache.
+///
+/// `zk_enabled` enables the Kotodama ZK compilation surface for every selected contract root.
 pub fn execute_compiler_graph(
     cache: Option<&MusubiCache>,
     workspace: &Workspace,
@@ -156,6 +248,7 @@ pub fn execute_compiler_graph(
     lock: &LockfileV1,
     action: CompilerActionV1,
     chain_discriminant: u16,
+    zk_enabled: bool,
 ) -> Result<CompilerExecutionV1, CompilerBridgeErrorV1> {
     execute_with_source(
         &cache,
@@ -164,6 +257,7 @@ pub fn execute_compiler_graph(
         lock,
         action,
         chain_discriminant,
+        zk_enabled,
     )
 }
 /// Rebuild and validate the exact clean source tree that will enter a release bundle.
@@ -311,7 +405,7 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
     )
     .map_err(CompilerBridgeErrorV1::Cache)?;
     let driver = BuildDriver::for_current_executable(CompilerSession::new(options))
-        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+        .map_err(CompilerBridgeErrorV1::from_build_error)?;
     let interface_digest = match root {
         Some(root) => {
             let validated = driver
@@ -319,7 +413,7 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
                     package: root,
                     dependencies: dependencies.clone(),
                 })
-                .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+                .map_err(CompilerBridgeErrorV1::from_build_error)?;
             MusubiContentDigestV1::new(*validated.interface_fingerprint.as_ref())
         }
         None => contract_only_interface_digest(),
@@ -450,10 +544,13 @@ fn validate_packaged_contract_targets(
                 packages: dependencies.to_vec(),
             })
             .map_err(|error| {
-                CompilerBridgeErrorV1::Compiler(format!(
-                    "packaged contract target `{}` source `{source_name}` failed clean validation: {error}",
-                    target.name
-                ))
+                CompilerBridgeErrorV1::from_build_error_with_note(
+                    error,
+                    &format!(
+                        "packaged contract target `{}` source `{source_name}` failed clean validation",
+                        target.name
+                    ),
+                )
             })?;
     }
     Ok(())
@@ -509,12 +606,15 @@ fn validate_packaged_test_targets(
                     },
                     &compile_source_name,
                 )
-                .map_err(|diagnostics| {
-                    CompilerBridgeErrorV1::Compiler(format!(
-                        "packaged test target `{}` source `{source_name}` failed clean validation against normal dependencies only; development dependencies do not propagate: {}",
-                        target.name,
-                        diagnostics.render_human()
-                    ))
+                .map_err(|mut diagnostics| {
+                    let note = format!(
+                        "packaged test target `{}` source `{source_name}` failed clean validation against normal dependencies only; development dependencies do not propagate",
+                        target.name
+                    );
+                    for diagnostic in &mut diagnostics.diagnostics {
+                        diagnostic.notes.push(note.clone());
+                    }
+                    CompilerBridgeErrorV1::Diagnostics(diagnostics)
                 })?;
         }
     }
@@ -682,6 +782,7 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     lock: &LockfileV1,
     action: CompilerActionV1,
     chain_discriminant: u16,
+    zk_enabled: bool,
 ) -> Result<CompilerExecutionV1, CompilerBridgeErrorV1> {
     if chain_discriminant == 0 {
         return Err(CompilerBridgeErrorV1::Package(
@@ -721,10 +822,21 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
             "two local packages share one manifest path".to_owned(),
         ));
     }
+    let local_directories = local_members
+        .iter()
+        .map(|member| {
+            (
+                local_package(&member.package.selector, &member.package.version),
+                member_directory(member).to_owned(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut local_units = BTreeMap::new();
     let mut package_interfaces = Vec::with_capacity(local_members.len());
     for member in &local_members {
-        let Some(unit) = local_source_package(member, lock, &local_identities)? else {
+        let Some(unit) = local_source_package(member, lock, &local_identities)
+            .map_err(|error| error.located(member_directory(member), &local_directories))?
+        else {
             continue;
         };
         if local_units.insert(unit.identity.clone(), unit).is_some() {
@@ -760,10 +872,11 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     let options = CompilerOptions {
         chain_discriminant,
         mode: CompilerMode::Production,
+        force_zk: zk_enabled,
         ..CompilerOptions::default()
     };
     let driver = BuildDriver::for_current_executable(CompilerSession::new(options))
-        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+        .map_err(CompilerBridgeErrorV1::from_build_error)?;
     for member in &local_members {
         let identity = local_package(&member.package.selector, &member.package.version);
         let Some(package) = local_units.get(&identity).cloned() else {
@@ -779,7 +892,10 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
                 package,
                 dependencies,
             })
-            .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+            .map_err(|error| {
+                CompilerBridgeErrorV1::from_build_error(error)
+                    .located(member_directory(member), &local_directories)
+            })?;
         package_interfaces.push(CompilerPackageInterfaceV1 {
             package: member.package.selector.clone(),
             digest: MusubiContentDigestV1::new(*validated.interface_fingerprint.as_ref()),
@@ -790,7 +906,7 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     let mut result = CompilerExecutionV1 {
         validated_packages: local_members.len(),
         contract_targets: 0,
-        warnings: 0,
+        warnings: Vec::new(),
         artifacts: Vec::new(),
         package_interfaces,
     };
@@ -799,9 +915,12 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
         .filter(|member| selected_set.contains(&member.package.selector))
     {
         let target_root = package_target_root(workspace, member);
-        let imports = local_imports(member, lock, &local_identities)?;
+        let locate = |error: CompilerBridgeErrorV1| {
+            error.located(member_directory(member), &local_directories)
+        };
+        let imports = local_imports(member, lock, &local_identities).map_err(locate)?;
         for target in &member.manifest.contracts {
-            let root = contract_source_unit(member, &target.path)?;
+            let root = contract_source_unit(member, &target.path).map_err(locate)?;
             result.contract_targets += 1;
             let graph = SourceLinkRequest {
                 sources: kotodama_lang::driver::load_source_companions(
@@ -809,22 +928,45 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
                     &member.package_root,
                     &BTreeMap::new(),
                 )
-                .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?,
+                .map_err(CompilerBridgeErrorV1::from_build_error)
+                .map_err(locate)?,
                 root: root.clone(),
                 imports: imports.clone(),
                 packages: all_packages.clone(),
             };
             match action {
                 CompilerActionV1::Check => {
-                    result.warnings += driver
-                        .check_project(graph)
-                        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?
-                        .len();
+                    let language = kotodama_lang::i18n::detect_language();
+                    let lints = member_lint_config(workspace, member);
+                    result.warnings.extend(
+                        driver
+                            .check_project(graph)
+                            .map_err(CompilerBridgeErrorV1::from_build_error)
+                            .map_err(locate)?
+                            .into_iter()
+                            .filter_map(|warning| {
+                                let lint = match lints.level(warning.warning.code) {
+                                    kotodama_lang::lint::LintLevel::Allow => return None,
+                                    level => warning.warning.with_level(level),
+                                };
+                                let mut diagnostic = lint.to_diagnostic(
+                                    &warning.source_name,
+                                    warning.package_identity.as_deref(),
+                                    language,
+                                );
+                                locate_workspace_diagnostic(
+                                    &mut diagnostic,
+                                    member_directory(member),
+                                    &local_directories,
+                                );
+                                Some(diagnostic)
+                            }),
+                    );
                 }
                 CompilerActionV1::Build => {
                     let stem = target.name.to_string();
                     let layout = PublishLayout::standard(&target_root, profile, &stem, true)
-                        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+                        .map_err(CompilerBridgeErrorV1::from_build_error)?;
                     let outcome = driver
                         .build_project(LinkedSourceBuildRequest {
                             source_name: root.source_name.clone(),
@@ -833,7 +975,8 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
                             layout,
                             mode: PublishMode::Write,
                         })
-                        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+                        .map_err(CompilerBridgeErrorV1::from_build_error)
+                        .map_err(locate)?;
                     result.artifacts.push(CompilerArtifactV1 {
                         package: member.package.selector.clone(),
                         target: stem,
@@ -868,6 +1011,7 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
             }
         }
     }
+    result.warnings = DiagnosticBundle::new(std::mem::take(&mut result.warnings)).diagnostics;
     result.artifacts.sort_by(|left, right| {
         left.package
             .cmp(&right.package)
@@ -875,6 +1019,19 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
             .then_with(|| left.source.cmp(&right.source))
     });
     Ok(result)
+}
+/// Lint levels for one checked member: its own `[lints]`, else the workspace root's, else the
+/// defaults (every lint warns).
+fn member_lint_config(
+    workspace: &Workspace,
+    member: &WorkspaceMember,
+) -> kotodama_lang::session::LintConfig {
+    member
+        .manifest
+        .lints
+        .clone()
+        .or_else(|| workspace.root_manifest().lints.clone())
+        .unwrap_or_default()
 }
 fn package_target_root(workspace: &Workspace, member: &WorkspaceMember) -> PathBuf {
     workspace
@@ -896,7 +1053,7 @@ fn local_source_package(
     };
     let mut units =
         discover_source_modules(&member.package_root.join(library.source_dir.to_path_buf()))
-            .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+            .map_err(CompilerBridgeErrorV1::from_build_error)?;
     for source in &mut units {
         if library.source_dir.as_str() != "." {
             source.source_name = format!("{}/{}", library.source_dir.as_str(), source.source_name);
@@ -908,7 +1065,7 @@ fn local_source_package(
         &member.package_root,
         &BTreeMap::new(),
     )
-    .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+    .map_err(CompilerBridgeErrorV1::from_build_error)?;
     for source in loaded {
         if !sources_contains_path(&sources, &source.source_name) {
             sources.push(source);
@@ -1182,7 +1339,7 @@ fn contract_source_unit(
     }
     discover_source_link_request(&path, &member.package_root, Vec::new(), Vec::new())
         .map(|request| request.root)
-        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))
+        .map_err(CompilerBridgeErrorV1::from_build_error)
 }
 #[cfg(all(test, unix))]
 mod tests {
@@ -1202,6 +1359,77 @@ mod tests {
     use iroha_model_base::topology::DataSpaceId;
     use std::fs;
     use tempfile::TempDir;
+    #[test]
+    fn local_source_diagnostics_are_named_from_the_workspace_root() {
+        use kotodama_lang::diagnostic::{
+            DiagnosticFix, DiagnosticLabel, DiagnosticPhase, SourcePosition,
+        };
+        let span = |identity: Option<&str>, source: &str| SourceSpan {
+            package_identity: identity.map(ToOwned::to_owned),
+            source: Some(source.to_owned()),
+            start: SourcePosition { line: 1, column: 1 },
+            end: SourcePosition { line: 1, column: 2 },
+            byte_range: None,
+        };
+        let mut diagnostic = Diagnostic::error(
+            "E_TEST",
+            DiagnosticPhase::Semantic,
+            "located",
+            Some(span(None, "contracts/app.ko")),
+        );
+        diagnostic.labels = vec![
+            DiagnosticLabel {
+                span: span(Some("musubi/local/feemath"), "src/lib.ko"),
+                message: "local library".to_owned(),
+            },
+            DiagnosticLabel {
+                span: span(Some("musubi/registry/math"), "src/lib.ko"),
+                message: "registry release".to_owned(),
+            },
+        ];
+        diagnostic.fix = Some(DiagnosticFix {
+            span: span(None, "contracts/app.ko"),
+            replacement: "x".to_owned(),
+        });
+        diagnostic.alternative_fixes = vec![DiagnosticFix {
+            span: span(Some("musubi/local/root"), "src/lib.ko"),
+            replacement: "y".to_owned(),
+        }];
+        let directories = BTreeMap::from([
+            ("musubi/local/feemath".to_owned(), "libs/feemath".to_owned()),
+            ("musubi/local/root".to_owned(), String::new()),
+        ]);
+        let located =
+            CompilerBridgeErrorV1::Diagnostics(DiagnosticBundle::single(diagnostic.clone()))
+                .located("app", &directories);
+        let CompilerBridgeErrorV1::Diagnostics(bundle) = located else {
+            panic!("diagnostics stay structured");
+        };
+        let located = &bundle.diagnostics[0];
+        let primary = located.primary_span.as_ref().expect("primary span");
+        assert_eq!(primary.source.as_deref(), Some("app/contracts/app.ko"));
+        assert_eq!(primary.package_identity, None);
+        assert_eq!(
+            located.labels[0].span.source.as_deref(),
+            Some("libs/feemath/src/lib.ko")
+        );
+        assert_eq!(located.labels[0].span.package_identity, None);
+        assert_eq!(located.labels[1].span, diagnostic.labels[1].span);
+        assert_eq!(
+            located.fix.as_ref().expect("fix").span.source.as_deref(),
+            Some("app/contracts/app.ko")
+        );
+        let root = &located.alternative_fixes[0].span;
+        assert_eq!(root.source.as_deref(), Some("src/lib.ko"));
+        assert_eq!(root.package_identity, None);
+        let mut unchanged = diagnostic.clone();
+        locate_workspace_diagnostic(&mut unchanged, "", &BTreeMap::new());
+        assert_eq!(unchanged.primary_span, diagnostic.primary_span);
+        assert!(matches!(
+            CompilerBridgeErrorV1::Compiler("io".to_owned()).located("app", &directories),
+            CompilerBridgeErrorV1::Compiler(reason) if reason == "io"
+        ));
+    }
     #[test]
     fn named_source_units_distinguish_test_roots_from_included_fragments() {
         for (source, expected) in [
@@ -1348,6 +1576,7 @@ exports = ["value"]
             &lock,
             CompilerActionV1::Check,
             1,
+            false,
         )
         .expect("compiler graph");
         assert_eq!(execution.validated_packages, 1);
@@ -1582,6 +1811,7 @@ path = "tests"
             &local,
             CompilerActionV1::Build,
             1,
+            false,
         )
         .expect("build exact named targets");
         assert_eq!(built.contract_targets, 2);
@@ -1649,8 +1879,11 @@ path = "contracts/deploy.ko"
             .expect("repair ambient contract");
         assert!(matches!(
             validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1),
-            Err(CompilerBridgeErrorV1::Compiler(reason))
-                if reason.contains("packaged contract target `deploy`")
+            Err(CompilerBridgeErrorV1::Diagnostics(bundle))
+                if bundle.diagnostics.iter().all(|diagnostic| diagnostic
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("packaged contract target `deploy`")))
         ));
     }
     #[test]
@@ -1851,8 +2084,11 @@ path = "tests/unit.ko"
         let plan = plan_package(&layout, manifest, &lock).expect("package plan");
         assert!(matches!(
             validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1),
-            Err(CompilerBridgeErrorV1::Compiler(reason))
-                if reason.contains("development dependencies do not propagate")
+            Err(CompilerBridgeErrorV1::Diagnostics(bundle))
+                if bundle.diagnostics.iter().all(|diagnostic| diagnostic
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("development dependencies do not propagate")))
         ));
     }
     #[test]
@@ -1934,12 +2170,12 @@ exports = ["value"]
         fs::write(temp.path().join("Musubi.toml"), &manifest).expect("manifest");
         fs::write(
             temp.path().join("contracts/coffee-club.ko"),
-            include_str!("../templates/contract.ko"),
+            include_str!("../../../examples/coffee-club/contracts/coffee-club.ko"),
         )
         .expect("contract");
         fs::write(
             temp.path().join("tests/coffee-club.test.ko"),
-            include_str!("../templates/contract.test.ko"),
+            include_str!("../../../examples/coffee-club/tests/coffee-club.test.ko"),
         )
         .expect("public tests");
         let lock = clean_verification_lock();

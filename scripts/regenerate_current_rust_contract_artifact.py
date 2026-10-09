@@ -1238,11 +1238,12 @@ def _build_artifact(
     artifact_path = stage.path / "current_rust_contract_artifact.to"
     manifest_path = stage.path / "current_rust_contract_artifact.manifest.json"
     source_descriptor = _open_snapshot(source)
-    source_argument = (
-        Path(f"/proc/self/fd/{source_descriptor}")
-        if sys.platform.startswith("linux")
-        else Path(f"/dev/fd/{source_descriptor}")
-    )
+    # The native source-graph owner selects a direct regular .ko file and retains
+    # that file and its ancestors through graph discovery. Use the existing
+    # sealed copy's logical filename; descriptor pseudo-paths have no .ko name
+    # and cannot satisfy that contract. Keep our original descriptor open as an
+    # independent identity fence before and after each native selection.
+    source_argument = source.path
     bindings: list[str] = []
     commands = (
         ("fmt", "--check", source_argument),
@@ -1269,7 +1270,6 @@ def _build_artifact(
                 koto,
                 arguments,
                 environment=environment,
-                inherited_fds=(source_descriptor,),
             )
             bindings.append(binding)
             _authenticate_directory(sealed_inputs)

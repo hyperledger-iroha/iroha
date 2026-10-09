@@ -5,6 +5,7 @@ pub(in crate::state) mod musubi_universal_policy;
 
 use super::{Canonical, DerivationCheck, Field, Role, Schema, V1_LAYOUT, schema};
 use crate::state::*;
+use iroha_data_model::block::consensus::EvidenceRecord;
 
 classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldReadReleases, {
     parameters: Cell<Parameters> => ("world.parameters",
@@ -190,6 +191,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Table { key: schema::<DataSpaceId>(), value: schema::<AxtHandleCounterRecord>() })), release = axt_handle_counters;
     axt_asset_incarnations: Storage<AssetDefinitionId, AxtAssetIncarnationV1> => ("world.axt_asset_incarnations",
         Role::Canonical(Canonical::Table { key: schema::<AssetDefinitionId>(), value: schema::<AxtAssetIncarnationV1>() })), release = axt_asset_incarnations;
+    asset_definition_direct_homes: Storage<AssetDefinitionId, AssetDefinitionDirectHomeV1> => ("world.asset_definition_direct_homes",
+        Role::Canonical(Canonical::Table { key: schema::<AssetDefinitionId>(), value: schema::<AssetDefinitionDirectHomeV1>() })), release = asset_definition_direct_homes;
     axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord> => ("world.axt_replay_ledger",
         Role::Canonical(Canonical::Table { key: schema::<AxtHandleReplayKey>(), value: schema::<AxtReplayRecord>() })), release = axt_replay_ledger;
     axt_spend_nonce_ledger: Storage<AxtAnchoredSpendReplayKeyV1, u64> => ("world.axt_spend_nonce_ledger",
@@ -280,7 +283,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Cell(schema::<Vec<Hash>>()))), release = merge_hint_roots;
     merge_global_state_root: Cell<Option<Hash>> => ("world.merge_global_state_root",
         Role::Canonical(Canonical::Cell(schema::<Option<Hash>>()))), release = merge_global_state_root;
-    consensus_evidence: Storage<Hash, EvidenceRecord> => ("world.consensus_evidence",
+    consensus_evidence: Storage<Hash, RetainedEvidenceRecord> => ("world.consensus_evidence",
         Role::Canonical(Canonical::Table { key: schema::<Hash>(), value: schema::<EvidenceRecord>() })), release = consensus_evidence;
     contract_manifests: Storage<iroha_data_model::smart_contract::ContractArtifactId, iroha_data_model::smart_contract::manifest::ContractManifest> => ("world.contract_manifests",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::smart_contract::ContractArtifactId>(), value: schema::<iroha_data_model::smart_contract::manifest::ContractManifest>() })), release = contract_manifests;
@@ -626,4 +629,6 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Table { key: schema::<(iroha_data_model::bridge::SccpNetworkV1, u64)>(), value: schema::<iroha_data_model::sccp::light_client::SccpLcCheckpointV1>() })), release = sccp_light_client_checkpoints;
     sccp_light_client_stride_index: Storage<(iroha_data_model::bridge::SccpNetworkV1, u64), u64> => ("world.sccp_light_client_stride_index",
         Role::Canonical(Canonical::Table { key: schema::<(iroha_data_model::bridge::SccpNetworkV1, u64)>(), value: schema::<u64>() })), release = sccp_light_client_stride_index;
+    sccp_light_client_profiles: Storage<(iroha_data_model::bridge::SccpNetworkV1, u32), iroha_data_model::sccp::light_client::SccpLcProfileActivationV1> => ("world.sccp_light_client_profiles",
+        Role::Canonical(Canonical::Table { key: schema::<(iroha_data_model::bridge::SccpNetworkV1, u32)>(), value: schema::<iroha_data_model::sccp::light_client::SccpLcProfileActivationV1>() })), release = sccp_light_client_profiles;
 });

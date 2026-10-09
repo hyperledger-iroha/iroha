@@ -16,7 +16,7 @@ fn pointer_cannot_participate_in_arithmetic() {
         .expect_err("compile should reject pointer arithmetic");
     assert!(
         error.contains("error[K2003]")
-            && error.contains("operator Add is not defined for Name and int"),
+            && error.contains("operator `+` is not defined for `Name` and `int`"),
         "unexpected pointer arithmetic diagnostic: {error}"
     );
 }

@@ -69,6 +69,9 @@ pub(crate) struct RetainedDeployment {
     pub preflight: DeploymentPreflight,
     pub journal: PathBuf,
     pub receipt: Option<DeploymentReceipt>,
+    /// The receipt belongs to a deployment that had already completed before this command, so
+    /// later calls such as its activation may have run since.
+    pub completed_earlier: bool,
 }
 
 enum Binding {
@@ -356,6 +359,7 @@ impl DeploymentSlot {
             inspect()?
         };
         self.revalidate()?;
+        let completed_earlier = matches!(disposition, JournalDisposition::Completed(_));
         let receipt = match disposition {
             JournalDisposition::Pending { .. } if same_input => {
                 if retained.fee_quotes.iter().any(|quote| {
@@ -392,6 +396,7 @@ impl DeploymentSlot {
             preflight: retained,
             journal,
             receipt,
+            completed_earlier,
         }))
     }
 
