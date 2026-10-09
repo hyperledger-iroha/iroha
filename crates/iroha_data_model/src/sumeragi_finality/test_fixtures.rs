@@ -196,6 +196,27 @@ impl NativeFinalityFixture {
         )
     }
 
+    /// Start a permissioned Global genesis that signs `nexus_amx_context_hash` and appends
+    /// `extra` signed genesis instructions (for example a lane policy). The fixed public
+    /// fixture keys and synthetic results grant no runtime authority.
+    #[must_use]
+    pub fn start_with_genesis_extension(
+        chain_id: &str,
+        nexus_amx_context_hash: [u8; 32],
+        extra: Vec<InstructionBox>,
+    ) -> Self {
+        Self::start_with_genesis_inputs(
+            chain_id,
+            SumeragiConsensusMode::Permissioned,
+            crate::block::consensus::SumeragiRootScope::Global,
+            false,
+            crate::parameter::system::SumeragiNposParameters::default(),
+            4,
+            Some(nexus_amx_context_hash),
+            extra,
+        )
+    }
+
     fn start_with_selected_npos_parameters(
         chain_id: &str,
         mode: SumeragiConsensusMode,
@@ -203,6 +224,29 @@ impl NativeFinalityFixture {
         explicit_parameters: bool,
         npos_parameters: crate::parameter::system::SumeragiNposParameters,
         committee_seats: usize,
+    ) -> Self {
+        Self::start_with_genesis_inputs(
+            chain_id,
+            mode,
+            root_scope,
+            explicit_parameters,
+            npos_parameters,
+            committee_seats,
+            None,
+            Vec::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_with_genesis_inputs(
+        chain_id: &str,
+        mode: SumeragiConsensusMode,
+        root_scope: crate::block::consensus::SumeragiRootScope,
+        explicit_parameters: bool,
+        npos_parameters: crate::parameter::system::SumeragiNposParameters,
+        committee_seats: usize,
+        nexus_amx_context_hash: Option<[u8; 32]>,
+        extra: Vec<InstructionBox>,
     ) -> Self {
         assert!(!chain_id.is_empty(), "fixture chain label must be selected");
         assert!((4..=31).contains(&committee_seats) && (committee_seats - 1).is_multiple_of(3));
@@ -227,6 +271,10 @@ impl NativeFinalityFixture {
             consensus_fingerprint: ConsensusFingerprint::new([0x71; 32]),
             sumeragi_context: crate::block::consensus::SumeragiGenesisContextParameters {
                 root_scope,
+                nexus_amx_context_hash: nexus_amx_context_hash.unwrap_or(
+                    crate::block::consensus::SumeragiGenesisContextParameters::recommended()
+                        .nexus_amx_context_hash,
+                ),
                 ..crate::block::consensus::SumeragiGenesisContextParameters::recommended()
             },
         };
@@ -265,6 +313,7 @@ impl NativeFinalityFixture {
                     .map(|parameter| SetParameter::new(Parameter::Sumeragi(parameter)).into()),
             );
         }
+        instructions.extend(extra);
         let mut tx = TransactionBuilder::new_genesis(
             AccountId::new(authority.public_key().clone()),
             FeePaymentIntent::authority(vec![], None),
@@ -638,6 +687,8 @@ impl NativeFinalityFixture {
     }
 }
 
+mod genesis_dataspace;
+pub use genesis_dataspace::*;
 mod npos_capture;
 
 #[cfg(test)]

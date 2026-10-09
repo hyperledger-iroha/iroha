@@ -588,5 +588,5 @@ fn blocking_load_read_reuses_owned_runtime_and_rejects_nested_async_entry() {
     assert_eq!(requests.lock().unwrap().len(), 2);
 }
 
-mod event_proof;
 mod finality;
+mod finality_transport;

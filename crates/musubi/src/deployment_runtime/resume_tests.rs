@@ -366,7 +366,10 @@ impl Drop for Http {
 fn runtime(root: &Path, origin: &str) -> DeploymentRuntime {
     let mut config = super::tests::config();
     config.torii_api_url = origin.parse().unwrap();
-    config.torii_request_timeout = Duration::from_millis(500);
+    // The serial loopback fixture always answers; a generous per-request bound keeps the
+    // capability probe and read-only evidence queries from timing out under parallel test load.
+    // Status polling keeps its short bound so non-Applied fixtures finish quickly.
+    config.torii_request_timeout = Duration::from_secs(5);
     config.transaction_status_timeout = Duration::from_millis(500);
     DeploymentRuntime::new(config, root.join("journals"), root.join("cache"))
 }

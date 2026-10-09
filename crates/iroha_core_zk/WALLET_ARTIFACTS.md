@@ -56,8 +56,8 @@ event, then returns `KagemushaWalletLoadFinalityV1`: the receipt block's origina
 BLS commit certificate and counted receipt-event Merkle proof. No historical
 prefix is included. The server reads exactly the selected durable frame and
 borrows the canonical header and certificate fields without decoding transaction
-or execution-output graphs. The original wire, bounded certificate decoding and
-response remain charged to the request pool. It returns DATA, not a finality
+or execution-output graphs. The original wire, fixed certificate-sized selector
+allowance, bounded certificate decoding and response remain charged to the request pool. It returns DATA, not a finality
 capability or a validation of the skipped body fields.
 
 The phone verifies the exact receipt digest and event inclusion against the BLS

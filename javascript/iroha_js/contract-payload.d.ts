@@ -27,12 +27,15 @@ export type ContractArgumentLeafKind =
   | "DataSpaceId"
   | "Blob";
 
+/** Tuple arity or list capacity as manifest JSON may publish it: a number, bigint or decimal string. */
+export type ContractArgumentSchemaCount = number | bigint | string;
+
 /** One preorder node of an entrypoint value type, as published in the signed contract manifest. */
 export type ContractArgumentTypeNode =
   | { readonly kind: "Struct"; readonly value: { readonly name: string; readonly fields: readonly string[] } }
-  | { readonly kind: "Tuple"; readonly value: number }
+  | { readonly kind: "Tuple"; readonly value: ContractArgumentSchemaCount }
   | { readonly kind: "Option" | "Result" | "Unit"; readonly value?: null }
-  | { readonly kind: "List"; readonly value: { readonly capacity: number } }
+  | { readonly kind: "List"; readonly value: { readonly capacity: ContractArgumentSchemaCount } }
   | { readonly kind: "Leaf"; readonly value: { readonly kind: ContractArgumentLeafKind; readonly value?: null } }
   | {
     readonly kind: "Error";

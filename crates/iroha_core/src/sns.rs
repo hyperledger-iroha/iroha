@@ -86,7 +86,7 @@ fn default_namespace_lease_price() -> Quantity {
         .expect("hard-coded SNS lease price is canonical")
 }
 /// Reserved dataspace alias that must stay permanently defined.
-pub const RESERVED_UNIVERSAL_DATASPACE_ALIAS: &str = "universal";
+pub use iroha_data_model::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS;
 /// Stable diagnostic code emitted when static and ledger-backed dataspace mappings disagree.
 pub const ALIAS_CATALOG_MAPPING_CONFLICT_CODE: &str = "alias.catalog.mapping_conflict";
 /// Name-record metadata key carrying the expected numeric id of a dataspace alias.
@@ -1070,11 +1070,7 @@ pub fn selector_for_dataspace_alias(alias: &str) -> Result<NameSelectorV1, NameS
 /// dataspace without an out-of-band catalog update.
 #[must_use]
 pub fn dataspace_id_for_sns_alias(alias: &str) -> Option<DataSpaceId> {
-    let selector = selector_for_dataspace_alias(alias.trim()).ok()?;
-    if selector.label == RESERVED_UNIVERSAL_DATASPACE_ALIAS {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    Some(DataSpaceId::from_hash(&selector.name_hash()))
+    iroha_data_model::sns::dataspace_id_for_alias(alias)
 }
 fn selector_for_account_alias_literal(literal: &str) -> Result<NameSelectorV1, SnsError> {
     let alias = literal

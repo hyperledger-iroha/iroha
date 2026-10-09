@@ -1549,7 +1549,7 @@
         },
         {
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 604,
+          "line": 602,
           "path": "crates/iroha_data_model/src/isi/kagemusha_wallet/load_finality/tests.rs",
           "scope": "test"
         },

@@ -1,21 +1,35 @@
-//! Original asynchronous and blocking event-path transport boundaries.
+//! Bounded receipt-certificate transport authentication, cancellation and framing.
 
 use super::*;
 use iroha_crypto::{HashOf, MerkleProof};
-use iroha_data_model::events::EventBox;
+use iroha_data_model::{
+    kagemusha::{KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1, KagemushaWalletLoadFinalityV1},
+    sumeragi_finality::SumeragiCommitCertificateV1,
+};
 
-const EVENT_OP: &str = "kagemusha.wallet.load_event_proof.read";
-const EVENT_MAX: usize = 8_192;
+const FINALITY_OP: &str = "kagemusha.wallet.load_finality.read";
+const FINALITY_MAX: usize = KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1;
 
-fn proof() -> MerkleProof<EventBox> {
-    MerkleProof::from_audit_path(
-        0,
-        vec![Some(HashOf::from_untyped_unchecked(Hash::new(
-            b"event sibling DATA",
-        )))],
-    )
+fn proof(payer: &iroha_data_model::account::AccountId) -> KagemushaWalletLoadFinalityV1 {
+    let receipt = original(payer);
+    KagemushaWalletLoadFinalityV1 {
+        version: 1,
+        receipt_digest: receipt.receipt_digest().unwrap(),
+        // Transport only; these components cannot establish native finality.
+        certificate: SumeragiCommitCertificateV1 {
+            consensus_header: vec![1],
+            commit_qc: vec![2],
+            result_preimage: vec![3],
+        },
+        event_proof: MerkleProof::from_audit_path(
+            0,
+            vec![Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"event sibling DATA",
+            )))],
+        ),
+    }
 }
-fn reply(proof: &MerkleProof<EventBox>) -> Response<Vec<u8>> {
+fn reply(proof: &KagemushaWalletLoadFinalityV1) -> Response<Vec<u8>> {
     Response::builder()
         .status(200)
         .header("content-type", "application/x-norito")
@@ -24,9 +38,9 @@ fn reply(proof: &MerkleProof<EventBox>) -> Response<Vec<u8>> {
 }
 
 #[tokio::test]
-async fn event_path_signs_exact_account_network_route_and_preserves_original_data() {
+async fn finality_signs_exact_account_network_route_and_preserves_original_data() {
     let initial = client_with_base_url(base_url());
-    let expected = proof();
+    let expected = proof(&initial.account);
     let response = reply(&expected);
     let (client, requests, _) = attach(
         &initial,
@@ -46,7 +60,7 @@ async fn event_path_signs_exact_account_network_route_and_preserves_original_dat
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_event_proof(&value.scheme_id, &value.wallet_id, &REQUEST)
+            .load_finality(&value)
             .await
             .unwrap();
         assert_eq!(actual, expected);
@@ -58,14 +72,14 @@ async fn event_path_signs_exact_account_network_route_and_preserves_original_dat
         assert_eq!(
             request.url.path(),
             format!(
-                "/v1/kagemusha/{}/wallets/{}/loads/{}/event-proof",
+                "/v1/kagemusha/{}/wallets/{}/loads/{}/finality",
                 hex::encode(value.scheme_id),
                 hex::encode(value.wallet_id),
                 hex::encode(REQUEST)
             )
         );
         assert!(request.url.query().is_none() && request.body.is_empty());
-        assert_eq!(request.max_response_bytes, EVENT_MAX);
+        assert_eq!(request.max_response_bytes, FINALITY_MAX);
         assert_eq!(header(request, "accept"), "application/x-norito");
         assert_eq!(
             header(request, "x-iroha-account"),
@@ -115,7 +129,7 @@ async fn event_path_signs_exact_account_network_route_and_preserves_original_dat
                 .is_err()
         );
         let mut altered = request.url.clone();
-        altered.set_path("/v1/kagemusha/foreign/event-proof");
+        altered.set_path("/v1/kagemusha/foreign/finality");
         let message = Client::exact_network_request_message(
             &client.network_id,
             &request.method,
@@ -138,7 +152,7 @@ async fn event_path_signs_exact_account_network_route_and_preserves_original_dat
 }
 
 #[tokio::test]
-async fn event_path_refuses_zero_scope_and_witness_before_dispatch() {
+async fn finality_refuses_zero_scope_and_witness_before_dispatch() {
     let (client, requests, _) = attach(
         &client_with_base_url(base_url()),
         |_| unreachable!(),
@@ -156,10 +170,15 @@ async fn event_path_refuses_zero_scope_and_witness_before_dispatch() {
                 .account_client()
                 .unwrap()
                 .kagemusha()
-                .load_event_proof(&scheme, &wallet, &request)
+                .load_finality(&KagemushaWalletLoadReceiptV1 {
+                    scheme_id: scheme,
+                    wallet_id: wallet,
+                    request_id: request,
+                    ..value
+                })
                 .await,
             Err(Error::InvalidRequest {
-                operation: EVENT_OP,
+                operation: FINALITY_OP,
                 ..
             })
         ));
@@ -174,10 +193,10 @@ async fn event_path_refuses_zero_scope_and_witness_before_dispatch() {
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_event_proof(&value.scheme_id, &value.wallet_id, &REQUEST)
+            .load_finality(&value)
             .await,
         Err(Error::InvalidRequest {
-            operation: EVENT_OP,
+            operation: FINALITY_OP,
             ..
         })
     ));
@@ -185,7 +204,7 @@ async fn event_path_refuses_zero_scope_and_witness_before_dispatch() {
 }
 
 #[tokio::test]
-async fn event_path_refuses_noncanonical_media_frames_and_excess_depth() {
+async fn finality_refuses_noncanonical_media_frames_and_excess_depth() {
     let initial = client_with_base_url(base_url());
     let value = original(&initial.account);
     let mut replies = Vec::new();
@@ -195,7 +214,7 @@ async fn event_path_refuses_noncanonical_media_frames_and_excess_depth() {
         vec!["application/x-norito", "application/x-norito"],
         vec!["application/x-norito, application/json"],
     ] {
-        let mut response = reply(&proof());
+        let mut response = reply(&proof(&initial.account));
         response.headers_mut().remove("content-type");
         for media in types {
             response
@@ -207,13 +226,19 @@ async fn event_path_refuses_noncanonical_media_frames_and_excess_depth() {
     for bytes in [
         vec![],
         vec![0xff],
-        [norito::encode_canonical(&proof()).unwrap(), vec![0]].concat(),
+        [
+            norito::encode_canonical(&proof(&initial.account)).unwrap(),
+            vec![0],
+        ]
+        .concat(),
     ] {
-        let mut response = reply(&proof());
+        let mut response = reply(&proof(&initial.account));
         *response.body_mut() = bytes;
         replies.push(response);
     }
-    replies.push(reply(&MerkleProof::from_audit_path(0, vec![None; 33])));
+    let mut deep = proof(&initial.account);
+    deep.event_proof = MerkleProof::from_audit_path(0, vec![None; 33]);
+    replies.push(reply(&deep));
     for response in replies {
         let (client, requests, _) = attach(
             &initial,
@@ -226,13 +251,13 @@ async fn event_path_refuses_noncanonical_media_frames_and_excess_depth() {
                 .account_client()
                 .unwrap()
                 .kagemusha()
-                .load_event_proof(&value.scheme_id, &value.wallet_id, &REQUEST)
+                .load_finality(&value)
                 .await,
             Err(Error::Decode {
-                operation: EVENT_OP,
+                operation: FINALITY_OP,
                 ..
             } | Error::CanonicalDecode {
-                operation: EVENT_OP,
+                operation: FINALITY_OP,
                 ..
             })
         ));
@@ -241,7 +266,7 @@ async fn event_path_refuses_noncanonical_media_frames_and_excess_depth() {
 }
 
 #[tokio::test]
-async fn event_path_preserves_status_transport_and_capacity_without_retry() {
+async fn finality_preserves_status_transport_and_capacity_without_retry() {
     let initial = client_with_base_url(base_url());
     let value = original(&initial.account);
     for status in [401, 403, 404, 429, 503] {
@@ -261,11 +286,11 @@ async fn event_path_preserves_status_transport_and_capacity_without_retry() {
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_event_proof(&value.scheme_id, &value.wallet_id, &REQUEST)
+            .load_finality(&value)
             .await
             .unwrap_err();
         assert!(
-            matches!(error, Error::Http { operation: EVENT_OP, status: actual, body, .. } if actual == status && body == b"unavailable-path")
+            matches!(error, Error::Http { operation: FINALITY_OP, status: actual, body, .. } if actual == status && body == b"unavailable-path")
         );
         assert_eq!(requests.lock().unwrap().len(), 1);
     }
@@ -280,10 +305,10 @@ async fn event_path_preserves_status_transport_and_capacity_without_retry() {
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_event_proof(&value.scheme_id, &value.wallet_id, &REQUEST)
+            .load_finality(&value)
             .await,
         Err(Error::Transport {
-            operation: EVENT_OP,
+            operation: FINALITY_OP,
             kind: TransportErrorKind::Io(std::io::ErrorKind::ConnectionRefused),
             ..
         })
@@ -295,7 +320,7 @@ async fn event_path_preserves_status_transport_and_capacity_without_retry() {
             move |_| {
                 Ok(Response::builder()
                     .status(status)
-                    .body(vec![0; EVENT_MAX + 1])
+                    .body(vec![0; FINALITY_MAX + 1])
                     .unwrap())
             },
             Duration::ZERO,
@@ -306,10 +331,10 @@ async fn event_path_preserves_status_transport_and_capacity_without_retry() {
                 .account_client()
                 .unwrap()
                 .kagemusha()
-                .load_event_proof(&value.scheme_id, &value.wallet_id, &REQUEST)
+                .load_finality(&value)
                 .await,
             Err(Error::ResponseTooLarge {
-                maximum: EVENT_MAX,
+                maximum: FINALITY_MAX,
                 ..
             })
         ));
@@ -318,10 +343,10 @@ async fn event_path_preserves_status_transport_and_capacity_without_retry() {
 }
 
 #[tokio::test]
-async fn event_path_obeys_deadline_and_cancels_pending_dispatch() {
+async fn finality_obeys_deadline_and_cancels_pending_dispatch() {
     let initial = client_with_base_url(base_url());
     let value = original(&initial.account);
-    let response = reply(&proof());
+    let response = reply(&proof(&initial.account));
     let (client, requests, completed) = attach(
         &initial,
         move |_| Ok(response.clone()),
@@ -333,10 +358,10 @@ async fn event_path_obeys_deadline_and_cancels_pending_dispatch() {
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_event_proof(&value.scheme_id, &value.wallet_id, &REQUEST)
+            .load_finality(&value)
             .await,
         Err(Error::Timeout {
-            operation: EVENT_OP
+            operation: FINALITY_OP
         })
     ));
     assert_eq!(requests.lock().unwrap().len(), 1);
@@ -348,20 +373,20 @@ async fn event_path_obeys_deadline_and_cancels_pending_dispatch() {
             .account_client()
             .unwrap()
             .kagemusha()
-            .load_event_proof(&value.scheme_id, &value.wallet_id, &REQUEST)
+            .load_finality(&value)
             .await,
         Err(Error::Timeout {
-            operation: EVENT_OP
+            operation: FINALITY_OP
         })
     ));
     assert_eq!(requests.lock().unwrap().len(), 1);
 }
 
 #[test]
-fn blocking_event_path_reuses_runtime_and_refuses_nested_async_entry() {
+fn blocking_finality_reuses_runtime_and_refuses_nested_async_entry() {
     let initial = client_with_base_url(base_url());
     let value = original(&initial.account);
-    let response = reply(&proof());
+    let response = reply(&proof(&initial.account));
     let (client, requests, _) = attach(
         &initial,
         move |_| Ok(response.clone()),
@@ -371,11 +396,8 @@ fn blocking_event_path_reuses_runtime_and_refuses_nested_async_entry() {
     let account = blocking::AccountClient::from_client(client.account_client().unwrap()).unwrap();
     for current in [account.clone(), account.clone()] {
         assert_eq!(
-            current
-                .kagemusha()
-                .load_event_proof(&value.scheme_id, &value.wallet_id, &REQUEST)
-                .unwrap(),
-            proof()
+            current.kagemusha().load_finality(&value).unwrap(),
+            proof(&initial.account)
         );
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -384,9 +406,7 @@ fn blocking_event_path_reuses_runtime_and_refuses_nested_async_entry() {
         .unwrap();
     runtime.block_on(async {
         assert!(matches!(
-            account
-                .kagemusha()
-                .load_event_proof(&value.scheme_id, &value.wallet_id, &REQUEST),
+            account.kagemusha().load_finality(&value),
             Err(Error::Blocking(_))
         ));
         drop(account);

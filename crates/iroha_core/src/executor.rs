@@ -10560,6 +10560,40 @@ mod tests {
         }
     }
     #[test]
+    fn asset_definition_listing_requires_all_ledger_access() {
+        use iroha_data_model::query::{
+            asset::prelude::{
+                FindAssetDefinitionById, FindAssetDefinitionDirectHome, FindAssetDefinitions,
+            },
+            parameters::QueryParams,
+        };
+        let envelope = QueryWithParams {
+            query: (),
+            query_payload: FindAssetDefinitions.encode(),
+            item: QueryItemKind::AssetDefinition,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert_eq!(
+            native_iterable_query_access(&envelope).expect("authorize definition listing"),
+            NativeQueryAccess::AllLedger
+        );
+        let id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::try_new("homes", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
+        for query in [
+            SingularQueryBox::from(FindAssetDefinitionById::new(id.clone())),
+            SingularQueryBox::from(FindAssetDefinitionDirectHome::new(id)),
+        ] {
+            assert_eq!(
+                native_singular_query_access(&query),
+                NativeQueryAccess::Registered
+            );
+        }
+    }
+    #[test]
     fn native_escrow_query_authorization_uses_query_specific_tags() {
         use iroha_data_model::{
             escrow::AssetEscrowStatus,

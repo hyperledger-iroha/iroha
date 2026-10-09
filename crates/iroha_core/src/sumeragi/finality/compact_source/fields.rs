@@ -21,13 +21,18 @@ use norito::core::{
 
 type Result<T> = std::result::Result<T, DecodeIntoError<Infallible>>;
 
+// Norito accounts for each borrowed byte as sequence metadata. Only the three
+// certificate leaves are visited, never the availability or executed body graph.
+pub(super) const SCRATCH_BYTES: usize = super::MAX_COMMIT_CERTIFICATE_BYTES_V1;
+
 pub(super) struct Selected<'a> {
     pub(super) header: BlockHeader,
     pub(super) components: [&'a [u8]; 3],
 }
 
 pub(super) fn select(bytes: &[u8]) -> std::result::Result<Selected<'_>, norito::Error> {
-    let limits = norito::DecodeLimits::new(bytes.len(), bytes.len(), bytes.len(), 0, 32);
+    let limits =
+        norito::DecodeLimits::new(bytes.len(), bytes.len(), bytes.len(), SCRATCH_BYTES, 32);
     norito::with_decode_limits(limits, || select_fields(bytes))
 }
 
@@ -158,19 +163,19 @@ impl FieldDestination for CertificateFields<'_> {
 impl<const INDEX: usize> DecodeField<INDEX, Vec<u8>> for CertificateFields<'_> {
     type Value = ();
     fn decode_field(&mut self, field: CanonicalField<'_, Vec<u8>>) -> Result<()> {
+        // The fourth original field is opaque availability, not phone evidence.
+        if INDEX == 3 {
+            return Ok(());
+        }
+        let component = self
+            .components
+            .get_mut(INDEX)
+            .ok_or(norito::Error::LengthMismatch)?;
         field.with_payload(|bytes| {
             let (leaf, used) = <&[u8] as DecodeFromSlice>::decode_from_slice(bytes)?;
             if used != bytes.len() {
                 return Err(norito::Error::LengthMismatch.into());
             }
-            // The fourth original field is availability, not phone finality evidence.
-            if INDEX == 3 {
-                return Ok(());
-            }
-            let component = self
-                .components
-                .get_mut(INDEX)
-                .ok_or(norito::Error::LengthMismatch)?;
             let start = leaf
                 .as_ptr()
                 .addr()

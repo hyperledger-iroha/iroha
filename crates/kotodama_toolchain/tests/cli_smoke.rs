@@ -250,6 +250,13 @@ fn usage_errors_exit_two_with_the_subcommand_usage() {
         let output = koto(&out_dir(), &[command, "no_such_source.ko"]);
         assert_eq!(output.status.code(), Some(10), "koto {command}");
     }
+    let output = koto(&out_dir(), &["lsp", "--project", "no_such_project.json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(10),
+        "an unreadable language-server project is an I/O failure: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let output = koto(&out_dir(), &["check", "--help"]);
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -388,12 +395,21 @@ fn lint_levels_come_from_flags_and_the_project_manifest() {
     let output = koto(&root, &["check", "--deny-warnings", "contracts/linted.ko"]);
     assert_eq!(output.status.code(), Some(8));
     assert!(String::from_utf8_lossy(&output.stderr).contains("error[K5013]"));
-    let output = koto(&root, &["check", "--deny", "unused-local", "contracts/linted.ko"]);
+    let output = koto(
+        &root,
+        &["check", "--deny", "unused-local", "contracts/linted.ko"],
+    );
     assert_eq!(output.status.code(), Some(8));
-    let output = koto(&root, &["check", "--allow", "unused-local", "contracts/linted.ko"]);
+    let output = koto(
+        &root,
+        &["check", "--allow", "unused-local", "contracts/linted.ko"],
+    );
     assert!(output.status.success());
     assert!(!String::from_utf8_lossy(&output.stderr).contains("K5013"));
-    let output = koto(&root, &["check", "--deny", "unused-locl", "contracts/linted.ko"]);
+    let output = koto(
+        &root,
+        &["check", "--deny", "unused-locl", "contracts/linted.ko"],
+    );
     assert_eq!(output.status.code(), Some(2));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("did you mean `unused-local`?"),
@@ -417,7 +433,11 @@ fn lint_levels_come_from_flags_and_the_project_manifest() {
     )
     .expect("write project manifest");
     let output = koto(&root, &["check", "--project", "kotodama.project.json"]);
-    assert_eq!(output.status.code(), Some(8), "the manifest denies the lint");
+    assert_eq!(
+        output.status.code(),
+        Some(8),
+        "the manifest denies the lint"
+    );
     let output = koto(
         &root,
         &[

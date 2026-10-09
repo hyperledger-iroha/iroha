@@ -123,7 +123,7 @@ struct Cli {
 enum KotoCommand {
     /// Type-check sources and report diagnostics without writing artifacts.
     Check(CheckArgs),
-    /// Compile one seiyaku into an IVM `.to` artifact and its interface manifest.
+    /// Compile seiyaku into IVM `.to` artifacts and their interface manifests.
     Build(BuildArgs),
     /// Discover and run `#[test]` functions against the seiyaku under test.
     Test(TestArgs),
@@ -597,7 +597,7 @@ fn run(cli: Cli) -> Result<(), KotoError> {
         KotoCommand::Fmt(args) => format_sources(args),
         KotoCommand::Doc(args) => document(args),
         KotoCommand::Explain(args) => explain::run(&args.topic, args.list, args.format),
-        KotoCommand::Lsp(args) => language_server(args).map_err(KotoError::Failed),
+        KotoCommand::Lsp(args) => language_server(args),
     }
 }
 /// Translate the parsed `koto test` command line into the runner's option record.
@@ -1508,6 +1508,24 @@ fn value_example(
         .to_owned(),
     }
 }
+/// Encoding rules `koto doc` states for one argument schema, each only when a parameter uses it:
+/// numbers that would lose precision in JSON are decimal strings, and options are tagged objects.
+fn argument_encoding_notes(
+    schema: &iroha_data_model::smart_contract::entrypoint::EntrypointArgumentSchemaV1,
+) -> String {
+    use iroha_data_model::smart_contract::entrypoint::{
+        EntrypointValueKindV1 as Kind, EntrypointValueTypeNodeV1 as Node,
+    };
+    let nodes = || schema.fields.iter().flat_map(|field| &field.ty.nodes);
+    let mut notes = String::new();
+    if nodes().any(|node| matches!(node, Node::Leaf(Kind::Int | Kind::Decimal | Kind::Quantity))) {
+        notes.push_str(" `int`, `decimal` and `quantity` values are canonical decimal strings.");
+    }
+    if nodes().any(|node| matches!(node, Node::Option)) {
+        notes.push_str(" Options are `{\"some\": value}` or `{\"none\": true}`.");
+    }
+    notes
+}
 /// Advance `index` past one complete value subtree.
 fn skip_value(
     nodes: &[iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1],
@@ -1681,8 +1699,9 @@ fn render_entrypoint_documentation(
         Some(schema) => {
             let _ = writeln!(
                 output,
-                "Arguments: a JSON object keyed by parameter name, for example `{}`. `int`, `decimal` and `quantity` values are canonical decimal strings; options are `{{\"some\": value}}` or `{{\"none\": true}}`.",
-                markdown_inline(&argument_example(schema))
+                "Arguments: a JSON object keyed by parameter name, for example `{}`.{}",
+                markdown_inline(&argument_example(schema)),
+                argument_encoding_notes(schema)
             );
         }
         None if !entrypoint.params.is_empty() => {
@@ -1839,7 +1858,11 @@ fn lint_diagnostic(warning: kotodama_lang::lint::LintWarning, path: &Path) -> Di
         kotodama_lang::i18n::detect_language(),
     )
 }
-fn language_server(args: LspArgs) -> Result<(), String> {
+/// Serve the language server over stdio.
+///
+/// An unreadable project manifest is an I/O failure and an invalid one reports its diagnostics,
+/// as in `koto check`; a broken transport stream is an I/O failure.
+fn language_server(args: LspArgs) -> Result<(), KotoError> {
     let LspArgs { zk, selection } = args;
     let zk_enabled = zk;
     let source_root = selection.source_root;
@@ -1848,13 +1871,13 @@ fn language_server(args: LspArgs) -> Result<(), String> {
         .as_deref()
         .map(load_source_project_manifest)
         .transpose()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| build_error(DiagnosticFormat::Human, error))?;
     let inbox = lsp_transport::Inbox::new();
     let reader = inbox.clone();
     let _reader = std::thread::Builder::new()
         .name("koto-lsp-input".to_owned())
         .spawn(move || reader.read_from(&mut std::io::stdin().lock()))
-        .map_err(|error| format!("start LSP input reader: {error}"))?;
+        .map_err(|error| KotoError::Internal(format!("start LSP input reader: {error}")))?;
     let stdout = std::io::stdout();
     let result = language_server_dispatch(
         &inbox,
@@ -1865,7 +1888,7 @@ fn language_server(args: LspArgs) -> Result<(), String> {
         source_root.as_deref(),
     );
     inbox.close();
-    result
+    result.map_err(KotoError::Io)
 }
 
 fn language_server_dispatch(
@@ -2427,24 +2450,72 @@ fn collect_lsp_workspace_diagnostics(
     documents: &HashMap<String, String>,
     project: Option<&LoadedSourceProject>,
 ) -> HashMap<String, DiagnosticBundle> {
-    let local_project = project
-        .is_none()
-        .then(|| lsp_local_source_project(documents, None))
-        .flatten();
-    let project = project.or(local_project.as_ref());
-    let Some(project) = project else {
-        return collect_lsp_project_diagnostics(driver, documents);
+    // Without an explicit project every open seiyaku roots its own local graph, exactly as
+    // navigation analyzes it, so unrelated seiyaku in one directory are never one check.
+    let local_projects = if project.is_none() {
+        lsp_local_source_projects_with_root(documents, None, None, usize::MAX)
+    } else {
+        Vec::new()
     };
-    let (graph, source_uris, project_documents, _) =
-        match lsp_project_with_open_overlays(project, documents) {
-            Ok(overlaid) => overlaid,
-            Err(error) => return lsp_source_loading_diagnostics(error, project, documents),
-        };
+    let projects = project
+        .into_iter()
+        .chain(&local_projects)
+        .collect::<Vec<_>>();
+    if projects.is_empty() {
+        return collect_lsp_project_diagnostics(driver, documents);
+    }
     let mut grouped = documents
         .keys()
         .cloned()
         .map(|uri| (uri, Vec::new()))
         .collect::<HashMap<_, Vec<Diagnostic>>>();
+    let mut covered = HashSet::new();
+    for project in projects {
+        let (diagnostics, project_documents) =
+            collect_lsp_graph_diagnostics(driver, documents, project);
+        for (uri, bundle) in diagnostics {
+            let published = grouped.entry(uri).or_default();
+            for diagnostic in bundle.diagnostics {
+                // A module imported by several open roots reports each of its errors once.
+                if !published.contains(&diagnostic) {
+                    published.push(diagnostic);
+                }
+            }
+        }
+        covered.extend(project_documents);
+    }
+    let loose_documents = documents
+        .iter()
+        .filter(|(uri, _)| !covered.contains(*uri))
+        .map(|(uri, source)| (uri.clone(), source.clone()))
+        .collect::<HashMap<_, _>>();
+    for (uri, bundle) in collect_lsp_project_diagnostics(driver, &loose_documents) {
+        grouped.entry(uri).or_default().extend(bundle.diagnostics);
+    }
+    grouped
+        .into_iter()
+        .map(|(uri, diagnostics)| (uri, DiagnosticBundle::new(diagnostics)))
+        .collect()
+}
+/// Diagnostics of one project graph with the open documents overlaid, and the open documents
+/// that graph accounts for. A graph whose sources cannot be loaded reports only that loading
+/// error and accounts for every open document, as a failed `koto check` stops there.
+fn collect_lsp_graph_diagnostics(
+    driver: &BuildDriver,
+    documents: &HashMap<String, String>,
+    project: &LoadedSourceProject,
+) -> (HashMap<String, DiagnosticBundle>, HashSet<String>) {
+    let (graph, source_uris, project_documents, _) =
+        match lsp_project_with_open_overlays(project, documents) {
+            Ok(overlaid) => overlaid,
+            Err(error) => {
+                return (
+                    lsp_source_loading_diagnostics(error, project, documents),
+                    documents.keys().cloned().collect(),
+                );
+            }
+        };
+    let mut grouped = HashMap::<String, Vec<Diagnostic>>::new();
     match driver.check_project(graph) {
         Ok(warnings) => {
             for warning in warnings {
@@ -2495,7 +2566,9 @@ fn collect_lsp_workspace_diagnostics(
                             span.source.as_deref().unwrap_or("<source>")
                         ));
                     }
+                    // Edits for a source that is not open here cannot be applied.
                     diagnostic.fix = None;
+                    diagnostic.alternative_fixes.clear();
                 }
                 remap_lsp_locked_project_diagnostic(&mut diagnostic, &source_uris);
                 if let Some(uri) = owner.or_else(|| fallback.clone()) {
@@ -2504,18 +2577,13 @@ fn collect_lsp_workspace_diagnostics(
             }
         }
     }
-    let loose_documents = documents
-        .iter()
-        .filter(|(uri, _)| !project_documents.contains(*uri))
-        .map(|(uri, source)| (uri.clone(), source.clone()))
-        .collect::<HashMap<_, _>>();
-    for (uri, bundle) in collect_lsp_project_diagnostics(driver, &loose_documents) {
-        grouped.entry(uri).or_default().extend(bundle.diagnostics);
-    }
-    grouped
-        .into_iter()
-        .map(|(uri, diagnostics)| (uri, DiagnosticBundle::new(diagnostics)))
-        .collect()
+    (
+        grouped
+            .into_iter()
+            .map(|(uri, diagnostics)| (uri, DiagnosticBundle::new(diagnostics)))
+            .collect(),
+        project_documents,
+    )
 }
 fn lsp_source_loading_diagnostics(
     error: BuildError,
@@ -2602,6 +2670,17 @@ fn lsp_local_source_project_with_root(
     requested_uri: Option<&str>,
     source_root: Option<&Path>,
 ) -> Option<LoadedSourceProject> {
+    lsp_local_source_projects_with_root(documents, requested_uri, source_root, 1).pop()
+}
+/// Local graphs rooted at the open seiyaku documents, in path order, at most `limit` of them.
+/// Each root reads its declared `include`/`import` closure relative to its own directory (or
+/// `source_root`); with `requested_uri`, only graphs containing that document are returned.
+fn lsp_local_source_projects_with_root(
+    documents: &HashMap<String, String>,
+    requested_uri: Option<&str>,
+    source_root: Option<&Path>,
+    limit: usize,
+) -> Vec<LoadedSourceProject> {
     let overlays = documents
         .iter()
         .filter_map(|(uri, source)| lsp_file_uri_path(uri).map(|path| (path, source.clone())))
@@ -2609,7 +2688,11 @@ fn lsp_local_source_project_with_root(
     let requested = requested_uri.and_then(lsp_file_uri_path);
     let mut ordered = overlays.iter().collect::<Vec<_>>();
     ordered.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let mut projects = Vec::new();
     for (path, source) in ordered {
+        if projects.len() >= limit {
+            break;
+        }
         if !kotodama_lang::parser::parse(source)
             .is_ok_and(|program| program.unit.kind == kotodama_lang::ast::SourceUnitKind::Seiyaku)
         {
@@ -2648,10 +2731,10 @@ fn lsp_local_source_project_with_root(
             .as_ref()
             .is_none_or(|requested| project.source_paths.values().any(|path| path == requested))
         {
-            return Some(project);
+            projects.push(project);
         }
     }
-    None
+    projects
 }
 /// Project link graph with the open editor documents overlaid: the link request, the
 /// document URI of each project source, the open document URIs owned by the project, and
@@ -2936,7 +3019,11 @@ fn remap_lsp_locked_project_diagnostic(
     for label in &mut diagnostic.labels {
         remap(&mut label.span);
     }
-    for fix in diagnostic.fix.iter_mut().chain(&mut diagnostic.alternative_fixes) {
+    for fix in diagnostic
+        .fix
+        .iter_mut()
+        .chain(&mut diagnostic.alternative_fixes)
+    {
         remap(&mut fix.span);
     }
 }
@@ -2959,7 +3046,11 @@ fn remap_project_diagnostic_sources(
     for label in &mut diagnostic.labels {
         remap(&mut label.span);
     }
-    for fix in diagnostic.fix.iter_mut().chain(&mut diagnostic.alternative_fixes) {
+    for fix in diagnostic
+        .fix
+        .iter_mut()
+        .chain(&mut diagnostic.alternative_fixes)
+    {
         remap(&mut fix.span);
     }
 }
@@ -2985,7 +3076,11 @@ fn remap_locked_project_diagnostic_sources(
     for label in &mut diagnostic.labels {
         remap(&mut label.span);
     }
-    for fix in diagnostic.fix.iter_mut().chain(&mut diagnostic.alternative_fixes) {
+    for fix in diagnostic
+        .fix
+        .iter_mut()
+        .chain(&mut diagnostic.alternative_fixes)
+    {
         remap(&mut fix.span);
     }
 }
@@ -3010,7 +3105,11 @@ fn remap_rooted_diagnostic_sources(diagnostic: &mut Diagnostic, root: &Path) {
     for label in &mut diagnostic.labels {
         remap(&mut label.span);
     }
-    for fix in diagnostic.fix.iter_mut().chain(&mut diagnostic.alternative_fixes) {
+    for fix in diagnostic
+        .fix
+        .iter_mut()
+        .chain(&mut diagnostic.alternative_fixes)
+    {
         remap(&mut fix.span);
     }
 }
@@ -3747,6 +3846,40 @@ mod tests {
         );
     }
     #[test]
+    fn documentation_states_only_the_encodings_a_record_uses() {
+        let source = "seiyaku Notes { view fn greet(string who) -> string { return who; } view fn pick(Option<int> limit) -> int { return 1; } }";
+        let output = CompilerSession::default()
+            .build(CompileRequest {
+                source,
+                source_name: Some("notes.ko"),
+            })
+            .expect("compile encoding documentation fixture");
+        let schema = |name: &str| {
+            output
+                .manifest
+                .entrypoints
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .find(|entrypoint| entrypoint.name == name)
+                .and_then(|entrypoint| entrypoint.argument_schema.clone())
+                .expect("argument schema")
+        };
+        assert_eq!(argument_encoding_notes(&schema("greet")), "");
+        assert_eq!(
+            argument_encoding_notes(&schema("pick")),
+            " `int`, `decimal` and `quantity` values are canonical decimal strings. Options are `{\"some\": value}` or `{\"none\": true}`."
+        );
+        let markdown = render_contract_documentation(
+            &output.manifest,
+            &DocumentationContext::new(&[], Some(source)),
+        );
+        assert!(
+            markdown.contains("for example `{\"who\": \"\"}`.\n"),
+            "{markdown}"
+        );
+    }
+    #[test]
     fn documentation_groups_compiler_owned_errors_separately() {
         let source = "seiyaku Rates { view fn ratio(decimal left, decimal right) -> decimal { return left / right; } }";
         let output = CompilerSession::default()
@@ -4032,9 +4165,8 @@ mod tests {
         .to_string();
         for expected in [
             "error[E_UNEXPORTED_SYMBOL] resolve",
-            "modules/app.ko:3:9-3:22",
-            "modules/math.ko:1:18-1:24",
-            "the private declaration is here",
+            "--> modules/app.ko:3:9",
+            "= label: modules/math.ko:1:18: the private declaration is here",
             "imports are explicit in V1",
             "= help:",
             "= fix:",
@@ -4145,7 +4277,10 @@ mod tests {
             .expect("unused local");
         let denied = leveled_lint(&denying, unused.clone()).expect("denied lints are reported");
         assert_eq!(denied.severity, kotodama_lang::lint::LintSeverity::Error);
-        assert!(leveled_lint(&config, unused).is_none(), "allowed lints are dropped");
+        assert!(
+            leveled_lint(&config, unused).is_none(),
+            "allowed lints are dropped"
+        );
     }
     #[test]
     fn rooted_diagnostics_name_existing_sources_relative_to_the_working_directory() {
@@ -4170,7 +4305,10 @@ mod tests {
         });
         remap_rooted_diagnostic_sources(&mut diagnostic, &root);
         assert_eq!(
-            diagnostic.primary_span.and_then(|span| span.source).as_deref(),
+            diagnostic
+                .primary_span
+                .and_then(|span| span.source)
+                .as_deref(),
             Some("src/lib.rs")
         );
         assert_eq!(
@@ -4219,7 +4357,8 @@ mod tests {
         )
         .expect("write explicit project manifest");
         let driver = BuildDriver::new(CompilerSession::default(), "koto-check-test");
-        let (checked, diagnostics) = check_locked_project(&driver, &project, &LintConfig::default());
+        let (checked, diagnostics) =
+            check_locked_project(&driver, &project, &LintConfig::default());
         let canonical_app = app.canonicalize().expect("canonical app path");
         let canonical_module = module.canonicalize().expect("canonical module path");
         assert_eq!(
@@ -4264,7 +4403,8 @@ mod tests {
             "seiyaku App { view fn run() -> int { return Missing::value(); } }",
         )
         .expect("write unknown module call");
-        let (checked, diagnostics) = check_locked_project(&driver, &project, &LintConfig::default());
+        let (checked, diagnostics) =
+            check_locked_project(&driver, &project, &LintConfig::default());
         assert!(checked.is_empty());
         let error = diagnostics
             .diagnostics

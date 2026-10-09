@@ -81,11 +81,13 @@ plan against that request, the account, the network, and its expiry. Synchronous
 callers use `iroha::blocking::Client::plan_alias_setup(&request)?`, which runs the
 same transport and verification through the facade's owned runtime.
 
-`account.kagemusha().load_issuance(...)` and `load_event_proof(...)` read bounded
-canonical Load receipt and event-path originals with the account’s exact network
-signature; the blocking account facade exposes the same methods. These reads do
-not grant balance authority: verify the event path against an independently
-finalized block’s counted event commitment and the exact retained receipt.
+`account.kagemusha().load_issuance(...)`, `load_finality(...)` and `load_epoch(...)`
+read bounded canonical Load receipts, receipt certificates with event paths, and
+individual epoch-boundary certificates with the account's exact network
+signature. The blocking account facade exposes the same methods. These reads
+return data, not balance authority: the native wallet must verify BLS finality
+against signed genesis and authenticated epoch changes, then bind the counted
+event commitment to the exact retained receipt before signing its Advance.
 
 Signed Iroha queries use `account.query_single(query).await?` for singular
 lookups such as `FindAccountById`. Iterable signed queries

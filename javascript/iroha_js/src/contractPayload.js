@@ -233,6 +233,22 @@ function schemaFailure(path) {
   );
 }
 
+/**
+ * Read a schema count (tuple arity or list capacity) published as a number, bigint or canonical
+ * unsigned decimal string, as manifest JSON may carry either form.
+ */
+function schemaCount(value, path) {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
+  if (typeof value === "bigint" && value >= 0n && value <= BigInt(Number.MAX_SAFE_INTEGER)) {
+    return Number(value);
+  }
+  if (typeof value === "string" && UNSIGNED_DIGITS_PATTERN.test(value)) {
+    const count = Number(value);
+    if (Number.isSafeInteger(count)) return count;
+  }
+  return schemaFailure(path);
+}
+
 /** Return the index just past the preorder subtree rooted at `start`. */
 function subtreeEnd(nodes, start, path) {
   let index = start;
@@ -247,7 +263,7 @@ function subtreeEnd(nodes, start, path) {
         pending += node.value?.fields?.length ?? schemaFailure(path);
         break;
       case "Tuple":
-        pending += Number.isSafeInteger(node.value) ? node.value : schemaFailure(path);
+        pending += schemaCount(node.value, path);
         break;
       case "Option":
       case "List":
@@ -387,7 +403,7 @@ function canonicalNode(nodes, start, value, path, depth) {
       return output;
     }
     case "Tuple": {
-      const arity = node.value;
+      const arity = schemaCount(node.value, path);
       if (!Array.isArray(value) || value.length !== arity) {
         argumentFailure(path, `a tuple as a JSON array of exactly ${arity} element(s)`, value);
       }
@@ -401,7 +417,7 @@ function canonicalNode(nodes, start, value, path, depth) {
       return output;
     }
     case "List": {
-      const capacity = node.value?.capacity;
+      const capacity = schemaCount(node.value?.capacity, path);
       if (!Array.isArray(value) || value.length > capacity) {
         argumentFailure(path, `a list as a JSON array of at most ${capacity} element(s)`, value);
       }

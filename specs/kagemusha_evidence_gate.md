@@ -1491,12 +1491,39 @@ for both curves. `coset-first-pass-x86-validation-1/result.json` has SHA
 `be5270f67e1c792fdbb41bc23f4108524fc31d9fb2769939de479907588c9f5b`;
 its actual compiler-input receipt has SHA
 `23e1c2296a1406b903c0051abbc9c1bcbcb97fc41a2b08a3e952ac306c4dd1ce`.
-These are component correctness/lint results. The fresh four-worker M3 campaign
-under `m3-post-fft3-20261009-1` is running with separate synthetic/real Q/A
-configurations; no performance or full-candidate qualification is claimed. Repair source and assertions
+These are component correctness/lint results. Repair source and assertions
 are retained in `plonk-rebuild-probe-lints-1`. Its `root-validation.json`
 records the two successful follow-up invocations from the tool transcript; it
 is not a full compiler/tool provenance receipt.
+
+The subsequent `m3-post-fft3-20261009-1` four-worker campaign completes with
+all four configurations passing. It retains 36 valid fresh processes across
+three blocks per configuration, two verified proofs per process, and 11 invalid
+attempts out of 47 total attempts. All invalid calibration or memory-pressure
+attempts remain in the record. Q uses the slower proof's observed elapsed time;
+A's four-worker requirement is memory only. All valid runs satisfy their hard
+limits and every block median satisfies the applicable 10% time and 5% memory
+margins. No timing adjustment was applied.
+
+| Four-worker workload | Slower-proof elapsed block medians (seconds) | Maximum valid elapsed (seconds) | Maximum kernel RSS (bytes) | Verdict |
+| --- | --- | --- | --- | --- |
+| Synthetic Q | 6.271861417 / 6.379341667 / 6.350869875 | 6.659121 | 664,305,664 | pass |
+| Real Q chips | 8.516209625 / 8.641103541 / 8.528893833 | 8.677744459 | 693,485,568 | pass |
+| Synthetic A | 8.043878083 / 7.946488458 / 7.841625417 | 10.382043417 (informational) | 805,847,040 | pass |
+| Real A chips | 8.934245166 / 9.011196541 / 8.899934 | 12.979032125 (informational) | 838,959,104 | pass |
+
+The supervisor completed with exit0 and unchanged source, binary, helper and
+tool pins. Root independently recomputed the summary from every retained raw
+measured/calibration record: `root-four-worker-review.json` SHA
+`aa9724b41b276e37336315476340e3310b73aaaedef86915f667e8685bc13abb`.
+The frozen candidate SHA is
+`6719f2bd974599cf80ba76f69997e74671b6274314f9998171806effc3cef0a2`;
+`four-thread-campaign/summary.json` SHA is
+`9441660548ffad1f01c08972e48caa230628dbd4d2946c3595d9547ba00fb37e`.
+This qualifies only the four-worker phase for that engine candidate. Its
+one-worker configurations have no samples, so the complete M3 verdict remains
+**inconclusive**. It does not qualify the monetary catalog, full wallet, two-second
+durable completion or physical phones.
 
 The earlier installed quotient scratch change reuses three dead gate-stage coset
 buffers for streamed lookup transforms. Eight focused ARM correctness cases

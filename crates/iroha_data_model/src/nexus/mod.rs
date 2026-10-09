@@ -26,6 +26,7 @@ use std::{
     str::FromStr,
 };
 use thiserror::Error;
+mod amx_context;
 mod axt;
 mod committee;
 mod committee_status;
@@ -38,6 +39,7 @@ mod privacy;
 mod private_settlement;
 mod relay;
 mod runtime_catalog;
+pub use amx_context::*;
 pub use axt::*;
 pub use committee::*;
 pub use committee_status::*;
@@ -3221,7 +3223,12 @@ mod tests {
         let dataspace = |seed: u64| DataSpaceId::new(0x7a1a_0000_0000_0000 | seed);
         let mut lanes = vec![
             visibility_lane(0, "core", DataSpaceId::UNIVERSAL, LaneVisibility::Public),
-            visibility_lane(1, "governance", DataSpaceId::UNIVERSAL, LaneVisibility::Public),
+            visibility_lane(
+                1,
+                "governance",
+                DataSpaceId::UNIVERSAL,
+                LaneVisibility::Public,
+            ),
             visibility_lane(2, "zk", DataSpaceId::UNIVERSAL, LaneVisibility::Public),
         ];
         for (id, alias, visibility) in [
@@ -3231,7 +3238,12 @@ mod tests {
             (6, "cbsi", LaneVisibility::Restricted),
             (7, "is", LaneVisibility::Restricted),
         ] {
-            lanes.push(visibility_lane(id, alias, dataspace(u64::from(id)), visibility));
+            lanes.push(visibility_lane(
+                id,
+                alias,
+                dataspace(u64::from(id)),
+                visibility,
+            ));
         }
         lanes
     }
@@ -3254,7 +3266,12 @@ mod tests {
 
         let mut mixed = taira_reset_catalog_lanes();
         let cbsi = mixed[6].dataspace_id;
-        mixed.push(visibility_lane(8, "cbsi-public", cbsi, LaneVisibility::Public));
+        mixed.push(visibility_lane(
+            8,
+            "cbsi-public",
+            cbsi,
+            LaneVisibility::Public,
+        ));
         assert_eq!(
             LaneCatalog::new(NonZeroU32::new(9).unwrap(), mixed),
             Err(LaneCatalogError::MixedDataspaceVisibility { dataspace: cbsi })

@@ -182,7 +182,8 @@ async fn epoch_read_refuses_wrong_height_trailing_oversized_and_proof_job_replie
                 Error::ResponseBinding {
                     field: "boundary_height",
                     ..
-                } | Error::CanonicalDecode { .. }
+                } | Error::ResponseTooLarge { .. }
+                    | Error::CanonicalDecode { .. }
                     | Error::Decode { .. }
             ));
         }

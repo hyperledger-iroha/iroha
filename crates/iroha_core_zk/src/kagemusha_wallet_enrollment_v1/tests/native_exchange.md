@@ -78,9 +78,11 @@ never a substitute for the native verifier's source capability.
 
 The Load evidence exporter authenticates the installed wallet identity, independently
 pinned signed genesis and every ordinary H1–H5 certificate and counted event opening.
-It retains only certified epoch boundaries and the receipt-block certificate in
-`load-finality.norito`, alongside `receipt.norito` and `generated.json`. The native
-verifier rechecks this envelope directly with BLS. There is no finality circuit,
+It retains only the receipt-block certificate and counted event path in
+`load-finality.norito`, alongside `receipt.norito` and `generated.json`. Certified
+epoch boundaries are synchronized separately into the native wallet's authenticated
+epoch index. The native verifier restores the receipt's selected epoch and rechecks
+the envelope directly with BLS. There is no finality circuit,
 proving-key cache, proof journal or finality source catalog. The seven source pins
 include `KAGEMUSHA_SIGNED_GENESIS_FIXTURE_SHA256` and the six wallet catalog/identity
 pins; they do not include a finality producer or inventory.

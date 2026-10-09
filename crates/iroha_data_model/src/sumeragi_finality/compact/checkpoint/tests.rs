@@ -36,6 +36,53 @@ fn authenticated_boundary(
 }
 
 #[test]
+fn initial_checkpoint_ignores_authenticated_later_decisions() {
+    let (fixture, chain) = NativeFinalityFixture::short_npos_boundary_chain(4);
+    let populated = fixture.verifier();
+    assert!(!populated.decisions.is_empty());
+    let generic = SumeragiCommitVerifierV1::new(&populated).unwrap();
+    assert_eq!(generic.epochs.len(), 2);
+    let later = generic.export_epoch_checkpoint(1).unwrap();
+    assert_eq!(
+        later.selected_epoch().authorization.epoch,
+        1,
+        "the generic constructor must retain its authenticated-history semantics"
+    );
+
+    let checkpoint = SumeragiCommitCheckpointV1::from_authenticated_genesis(&populated).unwrap();
+    let fresh = SumeragiCommitCheckpointV1::from_authenticated_genesis(&root(&fixture)).unwrap();
+    assert_eq!(checkpoint, fresh);
+    assert_eq!(checkpoint.initial, checkpoint.selected);
+    assert_eq!(checkpoint.selected_epoch().authorization.epoch, 0);
+    assert_eq!(
+        checkpoint.encode_canonical().unwrap(),
+        fresh.encode_canonical().unwrap()
+    );
+    let mut bounded =
+        SumeragiCommitVerifierV1::from_trusted_epoch_checkpoint(&checkpoint, &populated).unwrap();
+    assert_eq!(bounded.epochs.len(), 1);
+    assert!(bounded.export_epoch_checkpoint(1).is_err());
+    assert!(bounded.verify(&certificate(&fixture, &chain[3])).is_err());
+    assert_eq!(
+        bounded
+            .verify(&certificate(&fixture, &chain[1]))
+            .unwrap()
+            .height(),
+        2
+    );
+    assert_eq!(bounded.epochs.len(), 1);
+
+    let private = NativeFinalityFixture::start_with_scope(
+        "initial-checkpoint-private",
+        crate::block::consensus::SumeragiRootScope::Dataspace {
+            parent_network_id: fixture.network_id(),
+            dataspace_id: iroha_model_base::topology::DataSpaceId::new(9),
+        },
+    );
+    assert!(SumeragiCommitCheckpointV1::from_authenticated_genesis(&root(&private)).is_err());
+}
+
+#[test]
 fn authenticated_boundary_checkpoint_restores_without_prior_blocks() {
     let (fixture, chain) = NativeFinalityFixture::short_npos_boundary_chain(4);
     let selected = root(&fixture);

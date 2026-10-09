@@ -24,8 +24,9 @@ pub const MAX_COMMIT_CHECKPOINT_BYTES: usize = 2 * MAX_RESULT_PREIMAGE_BYTES + 4
 /// Its genesis identity is the native signed-header hash, which commits the original proposal
 /// contents; it is not an execution-overlay or signature-wire digest.
 ///
-/// Only [`SumeragiCommitVerifierV1::export_epoch_checkpoint`] constructs a record from native
-/// authority. A decoded record is still DATA. Before calling
+/// [`Self::from_authenticated_genesis`] constructs the initial record without reading retained
+/// decisions; [`SumeragiCommitVerifierV1::export_epoch_checkpoint`] exports an already
+/// authenticated epoch. A decoded record is still DATA. Before calling
 /// [`SumeragiCommitVerifierV1::from_trusted_epoch_checkpoint`], the wallet must authenticate
 /// its exact bytes through the selected protected local manifest and archive record. This is
 /// not an API for accepting peer-supplied checkpoints or changing the selected trust root.
@@ -44,6 +45,45 @@ pub struct SumeragiCommitCheckpointV1 {
 }
 
 impl SumeragiCommitCheckpointV1 {
+    /// Select only the initial authority of independently authenticated global genesis.
+    ///
+    /// This copies the root identity and two bounded initial contexts directly. It never
+    /// visits or imports `native`'s retained decisions, even when that owner has a long
+    /// authenticated history. Later authority still requires separately selected local
+    /// checkpoint custody or a verified boundary certificate.
+    ///
+    /// # Errors
+    /// Rejects a private root, an oversized chain label or malformed initial authority.
+    pub fn from_authenticated_genesis(
+        native: &SumeragiFinalityVerifier,
+    ) -> Result<Self, FinalityError> {
+        need(
+            matches!(
+                native.root_scope().map_err(malformed)?,
+                crate::block::consensus::SumeragiRootScope::Global
+            ),
+            "compact global finality requires global signed genesis",
+        )?;
+        // Check the only variable-length root label before allocating its owned copy.
+        need(
+            !native.chain_id().is_empty() && native.chain_id().len() <= 1024,
+            "compact checkpoint chain label exceeds bound",
+        )?;
+        // The native owner has already admitted this exact initial roster. Its size is
+        // bounded independently of the number of retained authenticated decisions.
+        let initial = native.initial_epoch();
+        let checkpoint = Self {
+            genesis_hash: native.genesis.hash(),
+            network: initial.network_id,
+            chain: native.chain_id().into(),
+            instance: native.instance(),
+            initial: initial.clone(),
+            selected: initial.clone(),
+        };
+        checkpoint.validate_bounds()?;
+        Ok(checkpoint)
+    }
+
     /// Claimed genesis-derived network; decoding alone does not authenticate it.
     #[must_use]
     pub const fn network(&self) -> NetworkId {

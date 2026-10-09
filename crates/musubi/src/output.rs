@@ -145,6 +145,14 @@ impl ErrorCode {
         }
     }
 }
+/// Where human failure details render relative to the one-line summary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DetailPlacement {
+    /// A primary report (test results, compiler output) that the summary line concludes.
+    BeforeSummary,
+    /// An explanatory note following the summary line.
+    AfterSummary,
+}
 /// One structured, secret-redacted command diagnostic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
@@ -153,7 +161,7 @@ pub struct Diagnostic {
     context: BTreeMap<String, String>,
     help: Option<String>,
     /// Boxed so `Result<_, Diagnostic>` stays small on every command path; details are rare.
-    details: Option<Box<(String, Value)>>,
+    details: Option<Box<(String, Value, DetailPlacement)>>,
     /// Canonical Kotodama compiler diagnostics behind this failure, rendered structurally.
     compiler: Option<Box<DiagnosticBundle>>,
 }
@@ -214,8 +222,22 @@ impl Diagnostic {
         self.details = Some(Box::new((
             sanitize_diagnostic_text(&human.into()),
             redact_json_value(data),
+            DetailPlacement::AfterSummary,
         )));
         self
+    }
+    /// Preserve the primary report of a failed operation, such as test results or compiler output.
+    ///
+    /// Human output prints the report first and ends with the summary line, as it does for
+    /// compiler diagnostics; JSON carries `data` under `error.details` exactly like
+    /// [`Self::with_details`].
+    #[must_use]
+    pub fn with_report(self, human: impl Into<String>, data: &Value) -> Self {
+        let mut diagnostic = self.with_details(human, data);
+        if let Some(details) = diagnostic.details.as_deref_mut() {
+            details.2 = DetailPlacement::BeforeSummary;
+        }
+        diagnostic
     }
     /// Return the stable public code.
     #[must_use]
@@ -244,7 +266,7 @@ impl Diagnostic {
         if let Some(help) = &self.help {
             diagnostic.insert("help".to_owned(), Value::from(help.clone()));
         }
-        if let Some((_, data)) = self.details.as_deref() {
+        if let Some((_, data, _)) = self.details.as_deref() {
             diagnostic.insert("details".to_owned(), data.clone());
         }
         if let Some(bundle) = self.compiler.as_deref() {
@@ -262,8 +284,11 @@ impl Diagnostic {
                 &bundle.render_human(),
             )));
         }
+        if let Some((human, _, DetailPlacement::BeforeSummary)) = self.details.as_deref() {
+            rendered.push_str(&terminated(human));
+        }
         let _ = writeln!(rendered, "error[{}]: {}", self.code.as_str(), self.message);
-        if let Some((human, _)) = self.details.as_deref() {
+        if let Some((human, _, DetailPlacement::AfterSummary)) = self.details.as_deref() {
             rendered.push_str(&terminated(human));
         }
         for (key, value) in &self.context {
@@ -983,6 +1008,44 @@ mod tests {
                 .pointer("/error/details/cases/1/name")
                 .and_then(Value::as_str),
             Some("second")
+        );
+    }
+    #[test]
+    fn reports_precede_the_summary_line_and_notes_follow_it() {
+        let data = norito::json!({"failed": 1});
+        let report = Diagnostic::new(
+            ErrorCode::TestFailed,
+            "Kotodama tests failed: 1 of 2 failed",
+        )
+        .with_report(
+            "PASS first\nFAIL second\ntest completed: 1 passed; 1 failed",
+            &data,
+        )
+        .with_help("fix the failing test");
+        let human = CommandOutput::failure("test", report.clone())
+            .render(OutputFormat::Human)
+            .expect("human report");
+        assert_eq!(human.exit_code(), 11);
+        assert_eq!(
+            human.stderr(),
+            "PASS first\nFAIL second\ntest completed: 1 passed; 1 failed\n\
+             error[MUSUBI_E_TEST_FAILED]: Kotodama tests failed: 1 of 2 failed\n\
+             \x20 help: fix the failing test\n"
+        );
+        let note = Diagnostic::new(ErrorCode::Network, "deployment failed")
+            .with_details("Correct the reported cause.", &data);
+        assert!(note.render_human().starts_with(
+            "error[MUSUBI_E_NETWORK]: deployment failed\nCorrect the reported cause.\n"
+        ));
+        let json = CommandOutput::failure("test", report)
+            .render(OutputFormat::Json)
+            .expect("JSON report");
+        let value: Value = norito::json::from_str(json.stdout()).expect("one document");
+        assert_eq!(
+            value
+                .pointer("/error/details/failed")
+                .and_then(Value::as_u64),
+            Some(1)
         );
     }
     #[test]

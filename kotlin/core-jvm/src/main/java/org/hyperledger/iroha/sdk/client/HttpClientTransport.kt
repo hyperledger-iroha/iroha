@@ -727,18 +727,6 @@ class HttpClientTransport private constructor(
         return result
     }
 
-    /** Original event-path DATA for the same payer and Load; Native alone verifies inclusion. */
-    fun getKagemushaWalletLoadEventProofOriginalV1(
-        selection: ToriiKagemushaWalletLoadSelectionV1,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        requireCurrentOwner: Runnable,
-    ): CompletableFuture<ByteArray> {
-        requireCurrentOwner.run()
-        config.requireLocalSigningContext()
-        val request = buildKagemushaWalletLedgerOriginalRequestV1(selection.path + "/event-proof", 8192, canonicalAuth)
-        return readKagemushaWalletLedgerOriginalV1(request, requireCurrentOwner)
-    }
-
     /** One native BLS certificate and exact Load event inclusion. The response remains DATA
      * until Native verifies the signed genesis, epoch transitions and receipt binding. */
     fun getKagemushaWalletLoadFinalityOriginalV1(

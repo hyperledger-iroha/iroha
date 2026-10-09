@@ -858,6 +858,10 @@ fn run_add(explicit_manifest: Option<&Path>, args: &AddArgs) -> CommandResult {
         DependencySection::Workspace => "workspace",
     };
     let mut message = format!("added {alias} ({kind})");
+    let stale_lockfiles = created_workspace
+        .as_deref()
+        .map(stale_member_lockfiles)
+        .unwrap_or_default();
     if let Some(created) = &created_workspace {
         let root = created.parent().unwrap_or(created);
         let _ = write!(
@@ -866,6 +870,13 @@ fn run_add(explicit_manifest: Option<&Path>, args: &AddArgs) -> CommandResult {
             created.display(),
             root.display()
         );
+        for lockfile in &stale_lockfiles {
+            let _ = write!(
+                message,
+                "\n{} is no longer read; delete it",
+                lockfile.display()
+            );
+        }
     }
     Ok(Success {
         message,
@@ -879,8 +890,35 @@ fn run_add(explicit_manifest: Option<&Path>, args: &AddArgs) -> CommandResult {
                     .as_ref()
                     .map_or(Value::Null, |path| Value::from(path.display().to_string())),
             ),
+            (
+                "stale_lockfiles",
+                Value::Array(
+                    stale_lockfiles
+                        .iter()
+                        .map(|path| Value::from(path.display().to_string()))
+                        .collect(),
+                ),
+            ),
         ]),
     })
+}
+/// Lockfiles that members of a newly created workspace kept from when they were standalone.
+///
+/// Only the workspace root's `Musubi.lock` is read afterwards; the member copies are reported so
+/// the user can delete them rather than mistake them for the active lock.
+fn stale_member_lockfiles(workspace_manifest: &Path) -> Vec<PathBuf> {
+    let Ok(workspace) = load_workspace(workspace_manifest) else {
+        return Vec::new();
+    };
+    let mut stale = workspace
+        .members()
+        .values()
+        .filter(|member| member.package_root != workspace.root())
+        .map(|member| member.package_root.join(LOCK_FILE_NAME))
+        .filter(|path| fs::symlink_metadata(path).is_ok())
+        .collect::<Vec<_>>();
+    stale.sort();
+    stale
 }
 fn dependency_from_add(args: &AddArgs) -> Result<(Name, DependencySpec), Diagnostic> {
     if args.workspace {
@@ -2362,13 +2400,13 @@ fn test_runner_diagnostic(error: &WorkspaceTestErrorV1) -> Diagnostic {
             ErrorCode::Compiler
         }
         WorkspaceTestErrorV1::Compilation(rendered) => {
-            // The summary stays one line; the compiler's own rendering follows it unchanged
-            // instead of being nested after a second error prefix.
+            // The compiler's own rendering precedes the one-line summary unchanged, as for
+            // `check`, instead of being nested after a second error prefix.
             return Diagnostic::new(
                 ErrorCode::Compiler,
                 "Kotodama rejected the selected test sources",
             )
-            .with_details(
+            .with_report(
                 rendered.clone(),
                 &object([("compiler_output", Value::from(rendered.clone()))]),
             );
@@ -2699,6 +2737,23 @@ pub(crate) fn publish_generated(
     clippy::too_many_lines,
     reason = "publication setup is one security-sensitive validation and staging workflow"
 )]
+/// Refuse to publish a package that still carries the scaffold's placeholder namespace.
+///
+/// `musubi new` defaults `[package] namespace` to `local` so local work needs no registry; a
+/// release must name a registry namespace its publisher owns.
+fn reject_placeholder_namespace(selector: &MusubiPackageSelectorV1) -> Result<(), Diagnostic> {
+    if selector.namespace.to_string() != scaffold::DEFAULT_NAMESPACE {
+        return Ok(());
+    }
+    Err(Diagnostic::new(
+        ErrorCode::Usage,
+        "the package still uses the placeholder namespace `local` from `musubi new`",
+    )
+    .with_context("package", selector.to_string())
+    .with_help(
+        "set `namespace` in the `[package]` table of Musubi.toml to a registry namespace you own, then publish",
+    ))
+}
 fn run_publish(
     explicit_manifest: Option<&Path>,
     args: &PublishArgs,
@@ -2736,6 +2791,7 @@ fn run_publish(
         .with_context("selected_packages", selected_names.len().to_string())
         .with_help("select one package with `-p namespace/package`"));
     };
+    reject_placeholder_namespace(selector)?;
     let lock_path = workspace.root().join(PUBLICATION_LOCK_PATH);
     let previous = read_optional_publication_lock(&workspace)?;
     let config_image = if let Some(execution) = generated {

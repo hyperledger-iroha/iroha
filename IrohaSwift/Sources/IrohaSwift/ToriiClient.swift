@@ -22920,23 +22920,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             expectedURL: request.url, response: response, bytes: data)
     }
 
-    /// Read counted event-path DATA for the same canonically authenticated payer and Load.
-    /// Native authenticates this inclusion against the receipt block's BLS-certified result.
-    public func getKagemushaWalletLoadEventProofOriginalV1(
-        selection: ToriiKagemushaWalletLoadSelectionV1,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        requireCurrentOwner: @escaping @Sendable () async throws -> Void
-    ) async throws -> Data {
-        try await requireCurrentOwner()
-        var request = try makeCanonicalAccountRequest(path: selection.path + "/event-proof", method: .get,
-            headers: ["Accept": "application/x-norito", "Accept-Encoding": "identity",
-                      "Cache-Control": "no-cache, no-store"], canonicalAuth: canonicalAuth)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.httpShouldUsePipelining = false
-        return try await readKagemushaLedgerOriginal(request, maximum: 8192,
-            requireCurrentOwner: requireCurrentOwner)
-    }
-
     /// Receive one native BLS certificate and exact Load event inclusion from the payer route.
     /// These bytes remain DATA until the installed Native wallet verifies them with the exact receipt.
     public func getKagemushaWalletLoadFinalityOriginalV1(

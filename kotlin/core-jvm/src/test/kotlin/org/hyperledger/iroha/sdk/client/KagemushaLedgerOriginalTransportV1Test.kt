@@ -42,7 +42,7 @@ class KagemushaLedgerOriginalTransportV1Test {
         }
         assertFailsWith<IllegalStateException> { client.getKagemushaWalletLedgerFinalityOriginalV1(BigInteger.ONE, Runnable { error("retired") }) }
         val selection = ToriiKagemushaWalletLoadSelectionV1(ByteArray(32) { 1 }, ByteArray(32) { 2 }, ByteArray(32) { 3 })
-        assertFailsWith<IllegalStateException> { client.getKagemushaWalletLoadEventProofOriginalV1(selection,
+        assertFailsWith<IllegalStateException> { client.getKagemushaWalletLoadFinalityOriginalV1(selection,
             ToriiCanonicalRequestAuth("unadmitted", RequestSigner { error("must not sign") }), Runnable { error("retired") }) }
         assertTrue(executor.requests.isEmpty())
     }

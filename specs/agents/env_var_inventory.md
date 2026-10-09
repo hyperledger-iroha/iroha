@@ -299,7 +299,7 @@ Total references: **975** · Unique variables: **235**
 - test: crates/iroha_data_model/src/isi/escrow.rs:743 — `let fixture_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - prod: crates/iroha_data_model/src/isi/generated_record_identity_tests/sorafs_values.rs:15 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_data_model/src/isi/governance.rs:838 — `let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/iroha_data_model/src/isi/kagemusha_wallet/load_finality/tests.rs:604 — `env!("CARGO_MANIFEST_DIR"),`
+- test: crates/iroha_data_model/src/isi/kagemusha_wallet/load_finality/tests.rs:602 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_data_model/src/kagemusha/enrollment_eligibility_v1/template.rs:405 — `let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_data_model/src/kagemusha/enrollment_eligibility_v1/tests.rs:409 — `let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1/enrollment_policy_tests.rs:99 — `env!("CARGO_MANIFEST_DIR"),`

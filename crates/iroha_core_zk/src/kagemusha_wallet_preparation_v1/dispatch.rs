@@ -855,7 +855,9 @@ mod error_tests {
         ));
         assert!(matches!(
             proof::<()>(Err(Error::Unavailable)),
-            Err(state::Error::ArtifactsUnavailable("native operation artifact"))
+            Err(state::Error::ArtifactsUnavailable(
+                "native operation artifact"
+            ))
         ));
         for rejected in [
             Error::Authority,
@@ -866,7 +868,9 @@ mod error_tests {
         ] {
             assert!(matches!(
                 proof::<()>(Err(rejected)),
-                Err(state::Error::Proof("installed native operation preparation"))
+                Err(state::Error::Proof(
+                    "installed native operation preparation"
+                ))
             ));
         }
     }

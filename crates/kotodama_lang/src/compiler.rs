@@ -5721,7 +5721,7 @@ impl Compiler {
                             // Per-argument strategy: values produced via DataRef/StringConst use a
                             // LOAD fixup in the appropriate register; runtime values move from their
                             // allocated register. This allows patterns like
-                            // `ledger::account::set_detail(account: context::authority(),
+                            // `ledger::account::set_metadata(account: context::authority(),
                             // key: Name::parse("k"), value: Json::parse("{}"))` where only key/value
                             // are literals and account is provided by the host.
                             // r10 = &AccountId

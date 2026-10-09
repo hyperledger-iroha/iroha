@@ -411,8 +411,7 @@ impl<'a> PreparationCustodyV1<'a> {
             MAX_COMMIT_CHECKPOINT_BYTES, SumeragiCommitCheckpointV1, SumeragiCommitVerifierV1,
         };
         let checkpoint = if epoch == 0 {
-            SumeragiCommitVerifierV1::new(genesis)
-                .and_then(|reader| reader.export_epoch_checkpoint(0))
+            SumeragiCommitCheckpointV1::from_authenticated_genesis(genesis)
                 .map_err(|_| Error::Proof("Load initial epoch authority"))?
         } else {
             let bytes = self

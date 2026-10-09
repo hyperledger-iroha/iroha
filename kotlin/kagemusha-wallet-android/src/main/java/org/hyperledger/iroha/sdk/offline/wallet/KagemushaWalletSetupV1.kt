@@ -108,7 +108,7 @@ class KagemushaWalletFeeClaimV1 internal constructor(payment: ByteArray, request
     fun request(): ByteArray = retainedRequest.copyOf()
     override fun toString(): String = "KagemushaWalletFeeClaimV1(originals=[REDACTED])"
 }
-/** Last durably selected native Global-chain decision; no payout permission is implied. */
+/** Protected native Load epoch authority; no receipt or monetary permission is implied. */
 class KagemushaWalletEpochProgressV1 internal constructor(result: KagemushaWalletCallV1) {
     val epoch: java.math.BigInteger
     val firstHeight: java.math.BigInteger
@@ -127,6 +127,7 @@ class KagemushaWalletEpochProgressV1 internal constructor(result: KagemushaWalle
     }
 }
 
+/** Last durably selected native Global-chain decision; no payout permission is implied. */
 class KagemushaWalletLedgerProgressV1 internal constructor(result: KagemushaWalletCallV1) {
     /** Unsigned u64 height carried as its exact Long bits. */
     val heightBits: Long

@@ -87,8 +87,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Err(Error::WitnessLost("selected finality epoch manifest"));
         }
         let checkpoint = if epoch == initial {
-            SumeragiCommitVerifierV1::new(genesis)
-                .and_then(|reader| reader.export_epoch_checkpoint(initial))
+            SumeragiCommitCheckpointV1::from_authenticated_genesis(genesis)
                 .map_err(|_| Error::Proof("native initial epoch"))?
         } else {
             let entry = self.epoch_entry(manifest, epoch)?;

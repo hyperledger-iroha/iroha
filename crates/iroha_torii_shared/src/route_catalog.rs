@@ -4418,7 +4418,6 @@ pub mod contracts_and_verification_keys {
         SORAFS_RESERVE_POLICY_PROOF_GET => app_account_read_sdk_get("contracts.sorafs_reserve_policy_proof_get", "/v1/sorafs/reserve/policy/{height}");
         KAGEMUSHA_ENROLLMENT_POST => app_account_mutation_post("contracts.kagemusha_enrollment_post", "/v1/kagemusha/enrollment");
         KAGEMUSHA_LOAD_ISSUANCE_GET => app_account_read_sdk_get("contracts.kagemusha_load_issuance_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}");
-        KAGEMUSHA_LOAD_EVENT_PROOF_GET => app_account_read_sdk_get("contracts.kagemusha_load_event_proof_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/event-proof");
         KAGEMUSHA_LOAD_FINALITY_GET => app_account_read_sdk_get("contracts.kagemusha_load_finality_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality");
         KAGEMUSHA_LOAD_EPOCH_GET => app_account_read_sdk_get("contracts.kagemusha_load_epoch_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/epochs/{boundary}");
         SORAFS_RESERVE_ACCOUNT_PROOF_GET => app_account_read_sdk_get("contracts.sorafs_reserve_account_proof_get", "/v1/sorafs/reserve/providers/{provider_id}/proof/{height}");

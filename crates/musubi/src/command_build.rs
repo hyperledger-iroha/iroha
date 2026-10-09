@@ -96,7 +96,7 @@ pub(super) fn run_build_with_warnings(
                     report.passed() + failed
                 ),
             )
-            .with_details(human, &Value::Object(data)));
+            .with_report(human, &Value::Object(data)));
         }
     } else {
         append_build_completion(
@@ -122,10 +122,8 @@ pub(super) fn run_build_with_warnings(
 fn leveled_warnings(
     mut warnings: Vec<kotodama_lang::diagnostic::Diagnostic>,
     deny_warnings: bool,
-) -> Result<
-    kotodama_lang::diagnostic::DiagnosticBundle,
-    kotodama_lang::diagnostic::DiagnosticBundle,
-> {
+) -> Result<kotodama_lang::diagnostic::DiagnosticBundle, kotodama_lang::diagnostic::DiagnosticBundle>
+{
     use kotodama_lang::diagnostic::{DiagnosticBundle, Severity};
     if deny_warnings {
         for warning in &mut warnings {

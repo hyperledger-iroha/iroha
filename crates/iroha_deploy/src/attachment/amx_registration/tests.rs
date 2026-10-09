@@ -330,10 +330,13 @@ fn administrative_amx_replay_evidence_refuses_missing_journal_before_parent_obse
         ));
         assert_eq!(source.0.get(), 0, "no parent read before source refusal");
         assert!(!saved.path().join("transaction").exists());
-        assert_eq!(saved.read(ORIGIN, MAX_RECORD_BYTES).unwrap(), original);
         assert_eq!(
-            saved.read(proof_name, MAX_RECORD_BYTES).unwrap(),
-            checkpoint
+            saved.read(ORIGIN, MAX_RECORD_BYTES).unwrap().as_slice(),
+            original.as_slice()
+        );
+        assert_eq!(
+            saved.read(proof_name, MAX_RECORD_BYTES).unwrap().as_slice(),
+            checkpoint.as_slice()
         );
     }
     let mut unsigned =
@@ -354,7 +357,10 @@ fn administrative_amx_replay_evidence_refuses_missing_journal_before_parent_obse
         "unsigned original without proof reaches the fresh parent read"
     );
     assert!(!saved.path().join("transaction").exists());
-    assert_eq!(saved.read(ORIGIN, MAX_RECORD_BYTES).unwrap(), original);
+    assert_eq!(
+        saved.read(ORIGIN, MAX_RECORD_BYTES).unwrap().as_slice(),
+        original.as_slice()
+    );
 }
 
 #[test]

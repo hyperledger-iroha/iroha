@@ -132,33 +132,6 @@ final class ToriiKagemushaWalletLoadIssuanceV1Tests: XCTestCase {
             headers: ["Content-Type": "application/x-norito", "Content-Length": "1"]), expected: url).canonicalResponseOriginal, Data([1]))
     }
 
-    func testCanonicalEventProofTransportSignsItsExactTargetAndPreservesBytes() async throws {
-        let selected = try selection(), signer = try auth(), bytes = Data([0, 255, 1])
-        let publicKey = try Curve25519.Signing.PrivateKey(rawRepresentation: seed).publicKey
-        let network = self.network
-        let (client, cleanup) = proofClient { request in
-            XCTAssertEqual(request.url?.path, selected.path + "/event-proof")
-            XCTAssertEqual(request.httpMethod, "GET"); XCTAssertNil(request.httpBody)
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept-Encoding"), "identity")
-            let signature = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))))
-            let timestamp = try XCTUnwrap(UInt64(XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs))))
-            let nonce = try XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerNonce))
-            let message = try ToriiCanonicalRequest.signatureMessage(networkId: network, method: "GET",
-                url: XCTUnwrap(request.url), timestampMs: timestamp, nonce: nonce)
-            XCTAssertTrue(publicKey.isValidSignature(signature, for: message))
-            let receiptURL = request.url!.deletingLastPathComponent()
-            let receiptMessage = try ToriiCanonicalRequest.signatureMessage(networkId: network, method: "GET",
-                url: receiptURL, timestampMs: timestamp, nonce: nonce)
-            XCTAssertFalse(publicKey.isValidSignature(signature, for: receiptMessage))
-            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
-                headerFields: ["Content-Type": "application/x-norito", "Content-Length": "3"])!, bytes)
-        }
-        defer { cleanup() }
-        let received = try await client.getKagemushaWalletLoadEventProofOriginalV1(
-            selection: selected, canonicalAuth: signer, requireCurrentOwner: {})
-        XCTAssertEqual(received, bytes) // DATA only; no Native finality or credit is inferred.
-    }
-
     func testCanonicalNativeFinalityTransportSignsItsExactTargetAndPreservesBytes() async throws {
         let selected = try selection(), signer = try auth(), bytes = Data([0, 255, 1])
         let publicKey = try Curve25519.Signing.PrivateKey(rawRepresentation: seed).publicKey
@@ -278,31 +251,6 @@ final class ToriiKagemushaWalletLoadIssuanceV1Tests: XCTestCase {
             XCTFail("retired prover response must be rejected")
         } catch is ToriiClientError { }
         XCTAssertEqual(calls.values.count, 1)
-    }
-
-    func testCanonicalProofTransportRejectsOversizedOrChangedRepresentations() async throws {
-        let selected = try selection(), signer = try auth()
-        let variants: [(Int, [String: String], Data)] = [
-            (200, ["Content-Type": "application/x-norito"], Data(repeating: 1, count: 8_193)),
-            (200, ["Content-Type": "application/x-norito", "Content-Length": "8193"], Data([1])),
-            (200, ["Content-Type": "application/x-norito", "Content-Length": "2"], Data([1])),
-            (200, ["Content-Type": "application/x-norito", "Content-Encoding": "gzip"], Data([1])),
-            (200, ["Content-Type": "application/json"], Data([1])),
-            (200, ["Content-Type": "application/x-norito"], Data()),
-            (202, ["Content-Type": "application/x-norito"], Data([1])),
-            (503, ["Content-Type": "application/x-norito"], Data([1])),
-        ]
-        for (status, headers, bytes) in variants {
-            let (client, cleanup) = proofClient { request in
-                (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: headers)!, bytes)
-            }
-            defer { cleanup() }
-            do {
-                _ = try await client.getKagemushaWalletLoadEventProofOriginalV1(
-                    selection: selected, canonicalAuth: signer, requireCurrentOwner: {})
-                XCTFail("invalid representation must not escape as an original")
-            } catch is ToriiClientError { }
-        }
     }
 
     func testNativeFinalityTransportRejectsOversizedOrChangedRepresentations() async throws {

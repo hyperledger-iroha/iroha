@@ -75,7 +75,8 @@ impl NativeCommitCertificateDataV1 {
 /// sole canonical record walks borrow the original frame's inline header and
 /// certificate byte leaves; transactions, execution outputs and availability
 /// remain opaque and are not decoded or independently validated by this reader.
-/// One exact wire allocation is charged, without a decoded body graph. The
+/// One exact wire allocation and a fixed certificate-sized parser allowance are
+/// charged, without a decoded body graph. The
 /// returned reservation conservatively covers twice the copied
 /// component bytes plus certificate shell, preserving the response/encoding budget.
 /// These requested-allocation bounds are not RSS measurements.
@@ -125,6 +126,9 @@ pub fn read_commit_certificate(
         })?
         .ok_or_else(unavailable)?;
     check_deadline(deadline)?;
+    let _selector_charge = budget
+        .try_reserve_bytes(fields::SCRATCH_BYTES)
+        .map_err(|_| Error::Allocation)?;
     let selected = fields::select(bytes.as_slice())?;
     if selected.header.height() != height || selected.header.hash() != expected {
         return Err(unavailable());
@@ -330,6 +334,18 @@ mod tests {
         ));
         assert_eq!(empty.reserved_bytes(), 0);
         assert_eq!(budget.reserved_bytes(), 0);
+        let wire_len = chain.committed(2).block().encode_wire().unwrap().len();
+        let scratch_short = AllocationBudget::new(wire_len + fields::SCRATCH_BYTES - 1);
+        assert!(matches!(
+            read_commit_certificate(
+                &view,
+                NonZeroU64::new(2).unwrap(),
+                &scratch_short,
+                deadline()
+            ),
+            Err(Error::Allocation)
+        ));
+        assert_eq!(scratch_short.reserved_bytes(), 0);
         drop(
             read_commit_certificate(&view, NonZeroU64::new(2).unwrap(), &budget, deadline())
                 .unwrap(),

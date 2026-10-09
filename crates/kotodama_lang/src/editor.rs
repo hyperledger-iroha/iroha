@@ -1457,6 +1457,10 @@ impl EditorSnapshot {
         if let Some(candidates) = self.selector_completions(unit, offset) {
             return candidates;
         }
+        // `.` triggers completion, so a sentence in a comment or a string must not open a list.
+        if inside_comment_or_literal(&unit.file, offset) {
+            return Vec::new();
+        }
         if recover && unit.resolved.is_none() {
             for repaired in repair::completion_repairs(&unit.file, &unit.tokens, offset) {
                 let recovery = self.with_replaced_source(unit, repaired);
@@ -1491,6 +1495,10 @@ impl EditorSnapshot {
                     candidates
                 })
                 .unwrap_or_default();
+        }
+        // Only members follow `.`; a literal or keyword before it has none to offer.
+        if after_member_dot(&unit.tokens, offset) {
+            return Vec::new();
         }
         let prefix = path_prefix(&unit.tokens, offset);
         if let Some((namespace, _)) = prefix.rsplit_once("::") {
@@ -2573,6 +2581,48 @@ fn path_prefix(tokens: &[Token], offset: u32) -> String {
     pieces.reverse();
     pieces.concat()
 }
+/// Whether `offset` lies inside a comment or a string or byte literal, including an
+/// unterminated one that runs to the end of its line, where no Kotodama word applies.
+fn inside_comment_or_literal(file: &SourceFile, offset: u32) -> bool {
+    use crate::syntax::SyntaxKind;
+    crate::syntax::lex(file, FrontendBudget::v1())
+        .tokens
+        .iter()
+        .any(|token| {
+            let strictly_inside = token.range.start < offset && offset < token.range.end;
+            // A line comment, and an unterminated literal, still covers the end of its line.
+            let through_end = token.range.start < offset && offset <= token.range.end;
+            match token.kind {
+                SyntaxKind::LineComment => through_end,
+                SyntaxKind::BlockComment | SyntaxKind::String | SyntaxKind::Bytes => {
+                    strictly_inside
+                }
+                SyntaxKind::ErrorToken => {
+                    through_end
+                        && file.slice(token.range).is_some_and(|text| {
+                            ["\"", "b\"", "r\"", "r#", "br", "rb", "/*"]
+                                .iter()
+                                .any(|opening| text.starts_with(opening))
+                        })
+                }
+                _ => false,
+            }
+        })
+}
+/// Whether the cursor follows `.`, possibly with a partially typed member name.
+fn after_member_dot(tokens: &[Token], offset: u32) -> bool {
+    let mut before = tokens
+        .iter()
+        .filter(|token| token.kind != TokenKind::EOF && token.range.end <= offset)
+        .rev();
+    let mut last = before.next();
+    if last
+        .is_some_and(|token| token.range.end == offset && matches!(token.kind, TokenKind::Ident(_)))
+    {
+        last = before.next();
+    }
+    last.is_some_and(|token| token.kind == TokenKind::Dot)
+}
 fn receiver_before(tokens: &[Token], offset: u32) -> Option<TextRange> {
     let before = tokens
         .iter()
@@ -2671,6 +2721,48 @@ mod tests {
             .into_iter()
             .map(|candidate| candidate.label)
             .collect()
+    }
+    #[test]
+    fn comments_strings_and_non_member_dots_offer_no_completions() {
+        let body = |statement: &str| {
+            format!(
+                "seiyaku A {{\n    state StateMap<int, int> Scores;\n    view fn f(int who) -> int {{\n        {statement}\n        return 0;\n    }}\n}}\n"
+            )
+        };
+        for (statement, needle, delta) in [
+            ("// read Scores.", "Scores.", 7),
+            ("// read Sco", "read Sco", 8),
+            ("/* Scores. */", "Scores.", 7),
+            ("debug::info(\"Scores.\");", "Scores.\"", 7),
+            ("debug::info(\"Scores.", "Scores.", 7),
+            ("let x = 1.", "1.", 2),
+            ("let x = true.", "true.", 5),
+        ] {
+            let source = body(statement);
+            let snapshot = EditorSnapshot::single("quiet.ko", &source, false);
+            let offset = cursor(&source, needle) + delta;
+            assert!(
+                labels(&snapshot, offset).is_empty(),
+                "`{statement}` offered {:?}",
+                labels(&snapshot, offset)
+            );
+        }
+        // Ordinary positions, and members after a value receiver, still complete.
+        let source = body("let x = Scores.");
+        let snapshot = EditorSnapshot::single("members.ko", &source, false);
+        assert!(labels(&snapshot, cursor(&source, "Scores.\n") + 7).contains("contains"));
+        let source = body("// note\n        ");
+        let snapshot = EditorSnapshot::single("statement.ko", &source, false);
+        assert!(labels(&snapshot, cursor(&source, "note\n") + 13).contains("let"));
+        let file = SourceFile::new(SourceId(0), "edge.ko", "// end\nlet s = \"ab\"; /* c */");
+        assert!(inside_comment_or_literal(&file, 6), "end of a line comment");
+        assert!(!inside_comment_or_literal(&file, 7), "next line");
+        assert!(inside_comment_or_literal(&file, 17), "inside a string");
+        assert!(
+            !inside_comment_or_literal(&file, 19),
+            "after the closing quote"
+        );
+        assert!(!inside_comment_or_literal(&file, 28), "after `*/`");
     }
     #[test]
     fn declaration_hovers_document_their_leading_keyword_in_the_written_spelling() {

@@ -2558,4 +2558,5 @@ pub(in crate::managed) mod operation_scope_tests;
 #[path = "body_history/graph_original_tests.rs"]
 pub(in crate::managed) mod graph_original_tests;
 #[cfg(test)]
+#[path = "body_history/scope_ancestry_tests.rs"]
 mod scope_ancestry_tests;

@@ -14,14 +14,12 @@ impl AsRef<[u8]> for IssuanceBody {
     }
 }
 const ROUTE: &str = "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}";
-const EVENT_ROUTE: &str = "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/event-proof";
 const FINALITY_ROUTE: &str = "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality";
 const EPOCH_ROUTE: &str =
     "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/epochs/{boundary}";
 #[derive(Clone, Copy)]
 enum Original {
     Receipt,
-    Event,
     Finality,
     Epoch(u64),
 }
@@ -82,25 +80,6 @@ pub(crate) async fn handler(
     )
     .await
 }
-pub(crate) async fn event_handler(
-    State(app): State<SharedAppState>,
-    axum::extract::Path((scheme, wallet, request)): axum::extract::Path<(String, String, String)>,
-    headers: HeaderMap,
-    axum::Extension(auth): axum::Extension<crate::app_auth::VerifiedCanonicalRequest>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    read(
-        app,
-        scheme,
-        wallet,
-        request,
-        headers,
-        auth.account,
-        remote,
-        Original::Event,
-    )
-    .await
-}
 pub(crate) async fn finality_handler(
     State(app): State<SharedAppState>,
     axum::extract::Path((scheme, wallet, request)): axum::extract::Path<(String, String, String)>,
@@ -156,7 +135,6 @@ async fn read(
 ) -> Result<AxResponse, Error> {
     let route = match original {
         Original::Receipt => ROUTE,
-        Original::Event => EVENT_ROUTE,
         Original::Finality => FINALITY_ROUTE,
         Original::Epoch(_) => EPOCH_ROUTE,
     };
@@ -234,17 +212,6 @@ async fn read(
                     return Err(unavailable());
                 }
                 original
-            } else if matches!(original, Original::Event) {
-                let path = source
-                    .event_path_for(&payer, &scheme, &wallet, &request)
-                    .map_err(|_| unavailable())?;
-                let proof = path.proof().map_err(|_| unavailable())?;
-                crate::native_projection_response::encode_canonical(
-                    &proof,
-                    maximum.min(8192),
-                    &budget,
-                    unavailable,
-                )?
             } else {
                 let receipt = source
                     .receipt_for(&payer, &scheme, &wallet, &request)
@@ -312,7 +279,6 @@ mod tests {
         };
         const ROUTES: &[iroha_torii_shared::route_catalog::RouteDescriptor] = &[
             routes::KAGEMUSHA_LOAD_ISSUANCE_GET,
-            routes::KAGEMUSHA_LOAD_EVENT_PROOF_GET,
             routes::KAGEMUSHA_LOAD_FINALITY_GET,
             routes::KAGEMUSHA_LOAD_EPOCH_GET,
         ];
@@ -328,14 +294,10 @@ mod tests {
         );
         builder.route(
             &ROUTES[1],
-            catalog_get(event_handler).authenticated_canonical_account_body(app.clone(), 0),
-        );
-        builder.route(
-            &ROUTES[2],
             catalog_get(finality_handler).authenticated_canonical_account_body(app.clone(), 0),
         );
         builder.route(
-            &ROUTES[3],
+            &ROUTES[2],
             catalog_get(epoch_handler).authenticated_canonical_account_body(app.clone(), 0),
         );
         builder.finish().unwrap().0.with_state(app)
@@ -353,7 +315,7 @@ mod tests {
         let payer = AccountId::new(key.public_key().clone());
         let app = mk_app_state_for_tests_with_world(world_with_account(&payer));
         let router = read_router(app.clone());
-        for suffix in ["", "/event-proof", "/finality", "/epochs/2"] {
+        for suffix in ["", "/finality", "/epochs/2"] {
             let uri: axum::http::Uri = format!(
                 "/v1/kagemusha/{}/wallets/{}/loads/{}{suffix}",
                 "11".repeat(32),
