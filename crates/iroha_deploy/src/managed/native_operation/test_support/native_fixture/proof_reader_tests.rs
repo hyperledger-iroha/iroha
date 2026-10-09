@@ -248,3 +248,6 @@ fn check_generated_source_loss(native: &NativeFixture, _authority: &ServiceAutho
         original.block_wire
     );
 }
+
+#[path = "http_admission_tests.rs"]
+mod http_admission_tests;

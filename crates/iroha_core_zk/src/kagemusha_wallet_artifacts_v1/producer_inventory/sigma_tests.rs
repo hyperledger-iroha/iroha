@@ -543,8 +543,97 @@ fn signed_bootstrap_program_qualifies_whole_context_and_all_original_stages() {
                 .import_terminal(&original.proving_key, read)
                 .unwrap()
         };
-        expected.require_prover(&actual).unwrap();
+        let view = if role == 19 {
+            qualified.prover().bind_first(&actual, None).unwrap()
+        } else {
+            qualified.prover().bind_terminal(&actual, None).unwrap()
+        };
+        expected.require_source_bound(&view).unwrap();
     }
+    // Acquisition reuses only the exact prior strict-origin seal; every selected
+    // original remains mandatory, even though no PK import is repeated here.
+    let before = disk.opens;
+    assert!(qualified.bind_a(0, 21, None).is_err());
+    assert!(qualified.bind_w(0, 19, None).is_err());
+    assert_eq!(
+        disk.opens, before,
+        "member mismatch must precede source I/O"
+    );
+    let acquire = |disk: &mut Disk, cap: ReadConfig, cancellation| {
+        let view = qualified.bind_a(0, 19, cancellation).unwrap();
+        wallet::revalidate_stage(&authenticated2, 19, view, disk, cap, cancellation)
+    };
+    let too_few_rows = ReadConfig {
+        maximum_rows: (1 << 16) - 1,
+        ..read
+    };
+    assert!(matches!(
+        acquire(&mut disk, too_few_rows, None),
+        Err(wallet::WalletSourcesErrorV1::Original(Error::Inventory))
+    ));
+    assert_eq!(
+        disk.opens, before,
+        "a tighter current row cap precedes source I/O"
+    );
+    let zero_bytes = ReadConfig {
+        maximum_bytes: 0,
+        ..read
+    };
+    assert!(matches!(
+        acquire(&mut disk, zero_bytes, None),
+        Err(wallet::WalletSourcesErrorV1::Original(Error::Inventory))
+    ));
+    assert_eq!(disk.opens, before, "a tighter byte cap precedes source I/O");
+    let view = acquire(&mut disk, read, None).unwrap();
+    first_key.require_source_bound(&view).unwrap();
+    assert_eq!(
+        disk.opens - before,
+        3,
+        "every acquisition streams D, VK and PK"
+    );
+    let selected = authenticated2.inventory.originals[19];
+    for blob in [
+        selected.descriptor,
+        selected.verifying_key,
+        selected.proving_key,
+    ] {
+        let path = disk.directory.path().join(hex::encode(blob.sha256));
+        let saved = path.with_extension("retained");
+        std::fs::rename(&path, &saved).unwrap();
+        assert!(
+            acquire(&mut disk, read, None).is_err(),
+            "missing role cannot grant a view"
+        );
+        std::fs::write(&path, [0u8]).unwrap();
+        assert!(
+            matches!(
+                acquire(&mut disk, read, None),
+                Err(wallet::WalletSourcesErrorV1::Original(Error::Inventory))
+            ),
+            "changed role cannot grant a view"
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(saved, path).unwrap();
+    }
+    let before = disk.opens;
+    let token = iroha_pasta::CancellationToken::new();
+    token.cancel();
+    assert!(qualified.bind_a(0, 19, Some(&token)).is_err());
+    let admitted = qualified.bind_a(0, 19, None).unwrap();
+    assert!(
+        wallet::revalidate_stage(
+            &authenticated2,
+            19,
+            admitted,
+            &mut disk,
+            too_few_rows,
+            Some(&token)
+        )
+        .unwrap_err()
+        .is_cancelled(),
+        "cancellation precedes cap rejection and I/O"
+    );
+    assert_eq!(disk.opens, before);
     let route = authenticated2
         .qualify_operation_route(&installed2, &q, 0, None, &mut disk, read)
         .unwrap();

@@ -4,7 +4,9 @@
 //! selects the signature slots, hard/soft modes and fixed roots independently of
 //! operation input. This component checks that exact compiled source and key
 //! continuity, derives verdicts from the raw signatures, proves those verdicts,
-//! and fully self-verifies the Q proof. It generates no runtime key.
+//! and fully self-verifies the Q proof. Only source-bound verifier metadata survives
+//! installation. Proving reconstructs temporary buffers without commitment MSMs;
+//! no new artifact key is generated and no proving key is cached.
 //!
 //! A still binds every exported digest, key and signature to its original object
 //! tapes and owns the global incoming/burn branch. A Q leaf alone is neither a
@@ -21,7 +23,11 @@ use iroha_plonk::{
     VerifyError, VerifyingKey, Witness, create_proof_owned,
     cs::{CurveV1, InstanceModeV1, ProofSuffixV1, TranscriptV2},
     frontend::{Circuit, Error as LayoutError},
-    keys::pk::artifact::{Error as ArtifactError, ReadConfig},
+    keys::{
+        CosetCachePolicy, RebuildError, SourceBoundVerifyingKeyV2, SourceBoundViewV2,
+        keygen_pk_from_vk_v2_cancellable,
+        pk::artifact::{Error as ArtifactError, ReadConfig},
+    },
     pcs::ipa::PinnedParams,
 };
 use iroha_plonk_gadgets::{
@@ -58,6 +64,8 @@ pub enum QSignatureError {
     Signature,
     /// Circuit assignment or actual proof generation failed.
     Prover(ProverError),
+    /// Source-bound temporary proving-buffer reconstruction failed.
+    Rebuild(RebuildError),
     /// Complete self-verification failed.
     Verify(VerifyError),
 }
@@ -74,18 +82,19 @@ impl QSignatureError {
             Self::Layout(error) => matches!(error, iroha_plonk::frontend::Error::Cancelled),
             Self::Artifact(error) => error.is_cancelled(),
             Self::Prover(error) => error.is_cancelled(),
+            Self::Rebuild(error) => error.is_cancelled(),
             Self::Verify(error) => error.is_cancelled(),
             _ => false,
         }
     }
 }
 
-/// One immutable installed signature-Q source and its original imported key.
+/// One immutable installed signature-Q source and its admitted verifier metadata.
 /// Private fields prevent a witness from changing slot policy or fixed roots.
 pub struct QSignatureProver {
     plan: QSignaturePlan,
     params: PinnedParams<Ep>,
-    key: ProvingKey<Ep>,
+    key: SourceBoundVerifyingKeyV2<Ep>,
 }
 impl QSignaturePlan {
     /// Reconstruct the exact unknown signature-Q source for offline key tooling.
@@ -197,7 +206,14 @@ impl QSignatureProver {
         if key.vk().to_bytes() != installed_vk {
             return Err(QSignatureError::UnauthorizedKey);
         }
-        Ok(Self { plan, params, key })
+        let metadata = SourceBoundVerifyingKeyV2::from_proving_key(&key, cancellation)
+            .map_err(QSignatureError::Rebuild)?;
+        drop(key);
+        Ok(Self {
+            plan,
+            params,
+            key: metadata,
+        })
     }
 
     /// Exact installed slot order, hard/soft policy and fixed keys.
@@ -206,22 +222,16 @@ impl QSignatureProver {
         &self.plan
     }
 
-    /// Imported original material for native package production; export adds no authority.
-    #[must_use]
-    pub const fn proving_key(&self) -> &ProvingKey<Ep> {
-        &self.key
-    }
-
     /// Fixed original V2 descriptor used by A's signature-Q verifier.
     #[must_use]
     pub fn binding(&self) -> &DescriptorBinding {
         self.key.binding()
     }
 
-    /// Fixed Q verifying key, already retained by the imported original PK.
+    /// Fixed Q verifying key retained after strict original import.
     #[must_use]
     pub fn verifying_key(&self) -> &VerifyingKey<Ep> {
-        self.key.vk()
+        self.key.verifying_key()
     }
 
     /// Pinned k16 Pallas parameters of this immutable component.
@@ -230,6 +240,85 @@ impl QSignatureProver {
         &self.params
     }
 
+    /// Move admitted metadata into an installed owner's existing public graph.
+    #[must_use]
+    pub fn into_metadata(self) -> SourceBoundVerifyingKeyV2<Ep> {
+        self.key
+    }
+    /// Borrow the exact standalone policy, parameters and admitted source.
+    #[must_use]
+    pub fn view(&self) -> QSignatureProverView<'_> {
+        QSignatureProverView {
+            plan: &self.plan,
+            params: &self.params,
+            key: self.key.view(),
+        }
+    }
+    /// Prove through the same borrowed implementation used by installed owners.
+    /// # Errors
+    /// Wrong fixed policy, source, witness, cancellation or complete proof failure.
+    pub fn prove(
+        &self,
+        witnesses: &[SignatureWitness],
+        randomness: ProverRandomness<'_>,
+        config: ProverConfig,
+    ) -> Result<QSignatureProof, QSignatureError> {
+        self.view().prove(witnesses, randomness, config)
+    }
+}
+
+/// Borrowed installed signature policy and exact-source authority.
+pub struct QSignatureProverView<'a> {
+    plan: &'a QSignaturePlan,
+    params: &'a PinnedParams<Ep>,
+    key: SourceBoundViewV2<'a, Ep>,
+}
+impl<'a> QSignatureProverView<'a> {
+    /// Select only a previously admitted source under its exact fixed signature schema.
+    /// # Errors
+    /// Non-k16/profile or a different declared public schema.
+    pub fn from_source_bound(
+        plan: &'a QSignaturePlan,
+        params: &'a PinnedParams<Ep>,
+        key: SourceBoundViewV2<'a, Ep>,
+    ) -> Result<Self, QSignatureError> {
+        if params.k() != 16 {
+            return Err(QSignatureError::Parameters);
+        }
+        let d = key.binding().descriptor();
+        let length = u32::try_from(plan.instance_length()).map_err(|_| QSignatureError::Profile)?;
+        if d.k != 16
+            || d.curve != CurveV1::Pallas
+            || d.transcript != TranscriptV2::KagemushaPoseidonRp57Base
+            || d.instance_mode != InstanceModeV1::Direct
+            || d.proof_suffix != ProofSuffixV1::FoldedGenerator
+            || d.instance_types.as_deref() != Some(&QSignaturePlan::instance_types())
+            || d.instance_lengths.as_slice() != [length]
+        {
+            return Err(QSignatureError::Profile);
+        }
+        Ok(Self { plan, params, key })
+    }
+    /// Exact borrowed policy.
+    #[must_use]
+    pub const fn plan(&self) -> &QSignaturePlan {
+        self.plan
+    }
+    /// Exact borrowed descriptor.
+    #[must_use]
+    pub fn binding(&self) -> &DescriptorBinding {
+        self.key.binding()
+    }
+    /// Exact borrowed verifier.
+    #[must_use]
+    pub fn verifying_key(&self) -> &VerifyingKey<Ep> {
+        self.key.verifying_key()
+    }
+    /// Shared pinned parameter storage.
+    #[must_use]
+    pub const fn params(&self) -> &PinnedParams<Ep> {
+        self.params
+    }
     /// Prove exact raw signature inputs under the installed policy and self-verify.
     /// Verdicts are derived from the actual low-S native P-256 check; the caller
     /// supplies no verdict or operation-wide incoming/burn decision. Soft failure
@@ -244,16 +333,31 @@ impl QSignatureProver {
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<QSignatureProof, QSignatureError> {
+        iroha_pasta::CancellationToken::checkpoint(config.cancellation)
+            .map_err(|_| QSignatureError::Prover(ProverError::Cancelled))?;
         let instances = self.plan.native_instances(witnesses)?;
-        let circuit = QSignatureCircuit::new(self.plan.clone(), witnesses.to_vec())
-            .map_err(QSignatureError::Layout)?;
-        let witness =
-            Witness::from_circuit_cancellable(&self.key, &circuit, &instances, config.cancellation)
-                .map_err(QSignatureError::Prover)?;
-        let bytes = create_proof_owned(&self.params, &self.key, witness, randomness, config)
-            .map_err(QSignatureError::Prover)?;
+        let bytes = {
+            let source = self.plan.source_circuit()?;
+            let key = keygen_pk_from_vk_v2_cancellable(
+                self.params,
+                &source,
+                &self.key,
+                CosetCachePolicy::OnDemand,
+                config.cancellation,
+            )
+            .map_err(QSignatureError::Rebuild)?;
+            drop(source);
+            let circuit = QSignatureCircuit::new((*self.plan).clone(), witnesses.to_vec())
+                .map_err(QSignatureError::Layout)?;
+            let witness =
+                Witness::from_circuit_cancellable(&key, &circuit, &instances, config.cancellation)
+                    .map_err(QSignatureError::Prover)?;
+            create_proof_owned(self.params, &key, witness, randomness, config)
+                .map_err(QSignatureError::Prover)?
+        };
+        // All proving buffers are released before complete self-verification.
         iroha_plonk::verifier::verify_full_cancellable(
-            &self.params,
+            self.params,
             self.binding(),
             self.verifying_key(),
             &instances,
@@ -335,6 +439,14 @@ pub struct QSignatureProof {
 mod tests {
     use super::*;
     use crate::q_signature::SignatureSlot;
+
+    #[test]
+    fn rebuild_failure_preserves_cancellation_and_refuses_source_authority() {
+        assert!(QSignatureError::Rebuild(RebuildError::Key(KeyError::Cancelled)).is_cancelled());
+        for error in [RebuildError::Profile, RebuildError::Source] {
+            assert!(!QSignatureError::Rebuild(error).is_cancelled());
+        }
+    }
 
     #[test]
     fn derived_verdicts_preserve_hard_soft_and_fixed_key_boundaries() {

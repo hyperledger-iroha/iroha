@@ -260,13 +260,15 @@ fn five_a_four_w_original_sources_qualify_at_k16() {
     assert_eq!(imported.descriptors().len(), 9);
     assert_eq!(imported.plan().context().schema(), plan.context().schema());
     for stage in 0..A_STAGE_COUNT {
-        let key = imported.import_a(stage, &a[stage].p, config).unwrap();
-        assert_eq!(key.vk().to_bytes(), a[stage].v);
-        drop(key);
+        let key_seal = imported.import_a(stage, &a[stage].p, config).unwrap();
+        let key = imported.bind_a(stage, &key_seal, None).unwrap();
+        assert_eq!(key.verifying_key().to_bytes(), a[stage].v);
+        drop(key_seal);
         if stage < A_STAGE_COUNT - 1 {
-            let key = imported.import_w(stage, &w[stage].p, config).unwrap();
-            assert_eq!(key.vk().to_bytes(), w[stage].v);
-            drop(key);
+            let key_seal = imported.import_w(stage, &w[stage].p, config).unwrap();
+            let key = imported.bind_w(stage, &key_seal, None).unwrap();
+            assert_eq!(key.verifying_key().to_bytes(), w[stage].v);
+            drop(key_seal);
         }
     }
     assert!(imported.import_a(A_STAGE_COUNT, &a[0].p, config).is_err());

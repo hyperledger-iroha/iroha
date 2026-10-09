@@ -55,6 +55,53 @@ use iroha_pasta::{
 };
 use rayon::prelude::*;
 
+// Scoped to the calling thread, before any commitment worker dispatch. This observes
+// coefficient/evaluation commitments, including optional-table paths, without a
+// process-wide test counter or any shipping configuration.
+#[cfg(test)]
+pub(crate) mod test_observation {
+    use std::{cell::Cell, marker::PhantomData, rc::Rc};
+
+    thread_local! {
+        static CALLS: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    /// An unwind-safe observation confined to its originating test thread.
+    pub(crate) struct CommitmentProbe(PhantomData<Rc<()>>);
+
+    impl CommitmentProbe {
+        /// Begin a non-nested observation of actual commitment entries.
+        pub(crate) fn start() -> Self {
+            CALLS.with(|calls| {
+                assert!(calls.get().is_none(), "nested commitment probe");
+                calls.set(Some(0));
+            });
+            Self(PhantomData)
+        }
+
+        /// Number of calls through the shared commitment entry on this thread.
+        pub(crate) fn calls(&self) -> usize {
+            CALLS.with(|calls| calls.get().expect("active commitment probe"))
+        }
+    }
+
+    impl Drop for CommitmentProbe {
+        fn drop(&mut self) {
+            CALLS.with(|calls| calls.set(None));
+        }
+    }
+
+    pub(super) fn record() {
+        CALLS.with(|calls| {
+            if let Some(count) = calls.get() {
+                calls.set(Some(
+                    count.checked_add(1).expect("commitment probe overflow"),
+                ));
+            }
+        });
+    }
+}
+
 /// The key-generation blind (`Blind::default()` in the vendored code).
 pub const DEFAULT_BLIND: u64 = 1;
 
@@ -79,6 +126,8 @@ fn commit_with_bases<C: PastaCurve>(
     budget: MemoryBudget,
     cancellation: Option<&CancellationToken>,
 ) -> Result<C, MsmError> {
+    #[cfg(test)]
+    test_observation::record();
     CancellationToken::checkpoint(cancellation)?;
     let shared = SharedMemoryBudget::process_default();
     let bases = bases.get(..scalars.len()).ok_or(MsmError::LengthMismatch(

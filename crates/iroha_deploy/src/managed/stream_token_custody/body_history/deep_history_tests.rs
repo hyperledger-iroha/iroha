@@ -157,6 +157,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
         let selection_started;
         let selection_finished;
         let finish_started;
+        let finish_capture;
         let (history, authorization) = if ordinal > 1 {
             let previous = BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2))
                 .unwrap()
@@ -187,6 +188,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     fixture.options.deadline,
                 )
                 .unwrap();
+            finish_capture = finish_timing::Capture::start();
             finish_started = Instant::now();
             let history = history
                 .finish_pending_with_reads(
@@ -196,7 +198,12 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     fixture.options.deadline,
                     &NativeEnrollmentReads(&fixture.native),
                 )
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "body {ordinal} finish failed: {error:?}; inclusive_finish_phases={:?}",
+                        finish_timing::snapshot(),
+                    )
+                });
             (history, authorization)
         } else {
             selection_started = Instant::now();
@@ -225,6 +232,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
             let authorization = turn
                 .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
                 .unwrap();
+            finish_capture = finish_timing::Capture::start();
             finish_started = Instant::now();
             let history = history
                 .finish_pending_with_reads(
@@ -234,17 +242,23 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     fixture.options.deadline,
                     &NativeEnrollmentReads(&fixture.native),
                 )
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "body {ordinal} finish failed: {error:?}; inclusive_finish_phases={:?}",
+                        finish_timing::snapshot(),
+                    )
+                });
             (history, authorization)
         };
         let finish_finished = Instant::now();
+        let finish_phases = finish_capture.finish();
         assert_eq!(history.anchor.highest, ordinal);
         assert_eq!(history.bodies.len(), usize::from(ordinal));
         assert_eq!(history.anchor.active, Some(ordinal));
         assert!(!history.has_pending());
         assert!(
             history.anchor.completed.is_some() && history.original().unwrap().is_some(),
-            "body {ordinal} must complete its signed Original before dispatch: selected_at_unix_ms={}, body_expiry_unix_ms={}, now_unix_ms={}, completed={}, original_present={}",
+            "body {ordinal} must complete its signed Original before dispatch: selected_at_unix_ms={}, body_expiry_unix_ms={}, now_unix_ms={}, completed={}, original_present={}, inclusive_finish_phases={finish_phases:?}",
             history
                 .bodies
                 .last()
@@ -271,7 +285,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                 let failed_at = Instant::now();
                 let unsigned = &history.bodies.last().unwrap().reservation.unsigned;
                 panic!(
-                    "generated body {ordinal} request retention failed: {error:?}; selected_at_unix_ms={}, body_expiry_unix_ms={}, now_unix_ms={}, options_remaining_ms={}, policy_expiry_unix_ms={}, selection_us={}, reservation_authorization_us={}, finish_us={}, assertions_us={}, native_retention_us={}, timed_body_work_us={}",
+                    "generated body {ordinal} request retention failed: {error:?}; selected_at_unix_ms={}, body_expiry_unix_ms={}, now_unix_ms={}, options_remaining_ms={}, policy_expiry_unix_ms={}, selection_us={}, reservation_authorization_us={}, finish_us={}, assertions_us={}, native_retention_us={}, timed_body_work_us={}, inclusive_finish_phases={finish_phases:?}",
                     unsigned.selected_at_unix_ms,
                     unsigned.statement.expires_at_unix_ms,
                     now_ms().unwrap(),
@@ -339,6 +353,8 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                 .cumulative_reserved_count(),
             usize::from(ordinal)
         );
+        // Report only after finite request retention and this body's existing assertions.
+        eprintln!("body {ordinal} inclusive_finish_phases={finish_phases:?}");
     }
 
     let history = retained.unwrap();

@@ -12,6 +12,7 @@
 //! checks each original PK against its independently authenticated descriptor/VK and
 //! fixed source. It creates no prepared operation, checkpoint or accepted claim.
 
+use iroha_plonk::keys::{SourceAdmissionSealV2, SourceBoundViewV2};
 #[path = "load/checkpoint.rs"]
 mod checkpoint;
 pub use checkpoint::{CheckpointKind, CheckpointLayout};
@@ -24,8 +25,7 @@ use iroha_pasta::{
     Ep, Eq, EqAffine, Fp, Fq, PastaAffine, msm::MemoryBudget, poseidon::hash_with_domain,
 };
 use iroha_plonk::{
-    DescriptorBinding, ProverConfig, ProverRandomness, ProvingKey, VerifyingKey, Witness,
-    create_proof_owned_with_claim,
+    DescriptorBinding, ProverConfig, ProverRandomness, ProvingKey, VerifyingKey,
     cs::{
         Column, ConstraintSystem, CurveV1, Instance, InstanceModeV1, InstanceType, ProofSuffixV1,
         TranscriptV2,
@@ -83,6 +83,51 @@ use crate::{
     tree::IndexedInsert,
 };
 
+impl Prover {
+    /// Bind a previously source-admitted seal to this exact installed A stage.
+    /// This borrows existing metadata and retains no proving polynomials.
+    /// # Errors
+    /// Wrong stage, descriptor/verifier identity or cooperative cancellation.
+    pub fn bind_a<'a>(
+        &'a self,
+        stage: usize,
+        seal: &'a SourceAdmissionSealV2<Eq>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<SourceBoundViewV2<'a, Eq>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        let artifact = self.a.get(stage).ok_or(Error::Artifact)?;
+        seal.bind(artifact.binding(), artifact.key(), cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })
+    }
+    /// Bind a previously source-admitted seal to this exact installed W stage.
+    /// This borrows existing metadata and retains no proving polynomials.
+    /// # Errors
+    /// Wrong stage, descriptor/verifier identity or cooperative cancellation.
+    pub fn bind_w<'a>(
+        &'a self,
+        stage: usize,
+        seal: &'a SourceAdmissionSealV2<Ep>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<SourceBoundViewV2<'a, Ep>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        let artifact = self.w.get(stage).ok_or(Error::Artifact)?;
+        seal.bind(artifact.binding(), artifact.key(), cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })
+    }
+}
+
 #[cfg(test)]
 #[path = "load/tests.rs"]
 mod tests;
@@ -113,6 +158,15 @@ pub enum Error {
     Proof,
     /// Installed circuit assignment or proof production failed.
     Prover,
+}
+impl From<super::proving::Error> for Error {
+    fn from(error: super::proving::Error) -> Self {
+        match error {
+            super::proving::Error::Cancelled => Self::Cancelled,
+            super::proving::Error::Artifact => Self::Artifact,
+            super::proving::Error::Prover => Self::Prover,
+        }
+    }
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1655,8 +1709,8 @@ impl Prover {
         })
     }
     /// Import one A original against the exact installed stage and preceding W identity.
-    /// This uses unknown source inputs, never creates accepted claims, and returns one
-    /// owned PK without retaining it or its original bytes. No runtime keygen occurs.
+    /// This uses unknown source inputs, never creates accepted claims, and returns
+    /// a compact source-admission seal after dropping the strictly imported PK and original borrow.
     /// # Errors
     /// Wrong stage/cap, changed source/table/commitments or full installed-key mismatch.
     pub fn import_a(
@@ -1664,7 +1718,7 @@ impl Prover {
         stage: usize,
         original: &[u8],
         config: ReadConfig,
-    ) -> Result<ProvingKey<Eq>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Eq>, Error> {
         self.import_a_cancellable(stage, original, config, None)
     }
     /// Import the same original with an explicit operation cancellation signal.
@@ -1676,7 +1730,7 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<ProvingKey<Eq>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Eq>, Error> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let artifact = self.a.get(stage).ok_or(Error::Artifact)?;
         original_bounds(original, artifact.binding().n(), config)?;
@@ -1702,10 +1756,19 @@ impl Prover {
             }
         })?;
         artifact.require_prover(&key).map_err(|_| Error::Artifact)?;
-        Ok(key)
+        let metadata =
+            SourceAdmissionSealV2::from_proving_key(&key, cancellation).map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })?;
+        drop(key);
+        Ok(metadata)
     }
     /// Import one W original bound to the preceding installed A descriptor and full VK.
-    /// The producer retains neither original bytes nor the returned proving buffers.
+    /// The returned seal retains no original bytes, descriptor, verifier copy or proving buffers.
     /// # Errors
     /// Wrong stage/cap, changed source/table/commitments or full installed-key mismatch.
     pub fn import_w(
@@ -1713,7 +1776,7 @@ impl Prover {
         stage: usize,
         original: &[u8],
         config: ReadConfig,
-    ) -> Result<ProvingKey<Ep>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Ep>, Error> {
         self.import_w_cancellable(stage, original, config, None)
     }
     /// Import the same original with an explicit operation cancellation signal.
@@ -1725,7 +1788,7 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<ProvingKey<Ep>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Ep>, Error> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let artifact = self.w.get(stage).ok_or(Error::Artifact)?;
         original_bounds(original, artifact.binding().n(), config)?;
@@ -1747,7 +1810,16 @@ impl Prover {
             }
         })?;
         artifact.require_prover(&key).map_err(|_| Error::Artifact)?;
-        Ok(key)
+        let metadata =
+            SourceAdmissionSealV2::from_proving_key(&key, cancellation).map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })?;
+        drop(key);
+        Ok(metadata)
     }
     /// Check all original proofs/tapes and create a session using only installed artifacts.
     /// # Errors
@@ -1941,7 +2013,7 @@ impl Session<'_> {
     /// Fixed artifact/circuit mismatch, failed fold, proof or complete decide.
     pub fn first(
         &self,
-        key: &ProvingKey<Eq>,
+        key: &SourceBoundViewV2<'_, Eq>,
         salt: Fp,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
@@ -1957,7 +2029,7 @@ impl Session<'_> {
         let fold = &normalized_fold;
 
         self.prover.a[0]
-            .require_prover(key)
+            .require_source_bound(key)
             .map_err(|_| Error::Artifact)?;
         let first = self.prepared.first(salt, fold)?;
         let public = first_public(&first)?;
@@ -2070,7 +2142,7 @@ impl Session<'_> {
     pub fn wrapper(
         &self,
         source: &ACheckpoint,
-        key: &ProvingKey<Ep>,
+        key: &SourceBoundViewV2<'_, Ep>,
         salt: Fq,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
@@ -2089,7 +2161,7 @@ impl Session<'_> {
             .w
             .get(source.stage)
             .ok_or(Error::Input)?
-            .require_prover(key)
+            .require_source_bound(key)
             .map_err(|_| Error::Artifact)?;
         self.verify_a_cancellable(source, fold.kernel_budget, config.cancellation)?;
         if source.stage >= A_STAGE_COUNT - 1 {
@@ -2163,29 +2235,14 @@ impl Session<'_> {
         )
         .map_err(|_| Error::Input)?;
         let public = omega_instances(source.public[0], &vesta)?;
-        let witness =
-            Witness::from_circuit_cancellable(key, &circuit, &public, config.cancellation)
-                .map_err(|error| {
-                    if error.is_cancelled() {
-                        Error::Cancelled
-                    } else {
-                        Error::Prover
-                    }
-                })?;
-        let output = create_proof_owned_with_claim(
+        let output = super::proving::prove(
             &self.prepared.plan.pallas,
             key,
-            witness,
+            &circuit,
+            &public,
             randomness,
             config,
-        )
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
+        )?;
         self.restore_wrapper_cancellable(
             source,
             output.proof,
@@ -2301,7 +2358,7 @@ impl Session<'_> {
     pub fn advance(
         &self,
         wrapper: &WCheckpoint,
-        key: &ProvingKey<Eq>,
+        key: &SourceBoundViewV2<'_, Eq>,
         salt: Fp,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
@@ -2321,7 +2378,7 @@ impl Session<'_> {
             .a
             .get(next)
             .ok_or(Error::Input)?
-            .require_prover(key)
+            .require_source_bound(key)
             .map_err(|_| Error::Artifact)?;
         let restored = self.restore_wrapper_cancellable(
             &wrapper.source,
@@ -2918,7 +2975,7 @@ fn opening_vesta_cancellable(
 }
 fn prove_a(
     plan: &Plan,
-    key: &ProvingKey<Eq>,
+    key: &SourceBoundViewV2<'_, Eq>,
     circuit: &StageCircuit,
     public: &[Fp],
     randomness: ProverRandomness<'_>,
@@ -2926,26 +2983,11 @@ fn prove_a(
     budget: MemoryBudget,
 ) -> Result<(Vec<u8>, FoldInput<Eq>), Error> {
     let public = [public.to_vec()];
-    let witness = Witness::from_circuit_cancellable(key, circuit, &public, config.cancellation)
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
-    let output = create_proof_owned_with_claim(&plan.vesta, key, witness, randomness, config)
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
+    let output = super::proving::prove(&plan.vesta, key, circuit, &public, randomness, config)?;
     iroha_plonk::verifier::verify_full_cancellable(
         &plan.vesta,
         key.binding(),
-        key.vk(),
+        key.verifying_key(),
         &public,
         &output.proof,
         budget,
@@ -2961,7 +3003,7 @@ fn prove_a(
     let opening = opening_vesta_cancellable(
         &plan.vesta,
         key.binding(),
-        key.vk(),
+        key.verifying_key(),
         &public,
         &output.proof,
         budget,

@@ -1322,7 +1322,7 @@ fn prove_chain(source: archive_q::ArchiveSource) {
         assert_eq!(key.binding(), &identities[index].binding);
         assert_eq!(key.vk().to_bytes(), identities[index].key.to_bytes());
         let original = key.artifact_bytes_v2().unwrap();
-        drop(key);
+        let baseline_key = key;
         let read = iroha_plonk::keys::pk::artifact::ReadConfig {
             maximum_bytes: original.len(),
             maximum_rows: 1 << 16,
@@ -1339,20 +1339,22 @@ fn prove_chain(source: archive_q::ArchiveSource) {
                 .import_a((index + 1) % native::A_STAGE_COUNT, &original, read)
                 .is_err()
         );
-        let key = prover.import_a(index, &original, read).unwrap();
+        let key_seal = prover.import_a(index, &original, read).unwrap();
+        let key = prover.bind_a(index, &key_seal, None).unwrap();
         drop(original);
         let output = create_proof_owned_with_claim(
             &vparams,
-            &key,
-            Witness::from_circuit(&key, &stage, &public).unwrap(),
+            &baseline_key,
+            Witness::from_circuit(&baseline_key, &stage, &public).unwrap(),
             common::recovery(170 + u8::try_from(index).unwrap()),
             ProverConfig::default(),
         )
         .unwrap();
+        drop(baseline_key);
         verify_full(
             &vparams,
             key.binding(),
-            key.vk(),
+            key.verifying_key(),
             &public,
             &output.proof,
             MemoryBudget::DEFAULT,
@@ -1408,7 +1410,7 @@ fn prove_chain(source: archive_q::ArchiveSource) {
             let terminal = session.terminal(&native, MemoryBudget::DEFAULT).unwrap();
             assert_eq!(terminal.proof, output.proof);
             assert_eq!(terminal.instances, public[0]);
-            drop(key);
+            drop(key_seal);
             replay_native_checkpoints(&prover, input, &retained, &native);
             eprintln!(
                 "ARCHIVE_COMPLETE all10A_all9W=true valid={} native_maps=true native_source_and_proof_bytes_equal=true original_PK_import=true all19_canonical_checkpoints_restored=true no_final_omega_admission=true ordinary_finality_fixture=true release_qualified=false",
@@ -1434,9 +1436,9 @@ fn prove_chain(source: archive_q::ArchiveSource) {
             index,
             key.binding().clone(),
             vparams.clone(),
-            vec![key.vk().kagemusha_digest(key.binding()).unwrap()],
+            vec![key.verifying_key().kagemusha_digest(key.binding()).unwrap()],
             iroha_kagemusha_proof::omega::OmegaWitness {
-                key: key.vk().clone(),
+                key: key.verifying_key().clone(),
                 instances: public[0].clone(),
                 length: output.proof.len().try_into().unwrap(),
                 proof: output.proof,
@@ -1444,7 +1446,7 @@ fn prove_chain(source: archive_q::ArchiveSource) {
             },
         )
         .unwrap();
-        drop(key);
+        drop(key_seal);
         let (wrapper, key) = WKey::keygen(&wrapper_circuit, &params).unwrap();
         let planned = identities[index].wrapper.as_ref().unwrap();
         assert_eq!(wrapper.verifier().binding(), planned.verifier().binding());
@@ -1453,7 +1455,7 @@ fn prove_chain(source: archive_q::ArchiveSource) {
             planned.verifying_key().to_bytes()
         );
         let original = key.artifact_bytes_v2().unwrap();
-        drop(key);
+        let baseline_key = key;
         let read = iroha_plonk::keys::pk::artifact::ReadConfig {
             maximum_bytes: original.len(),
             ..read
@@ -1468,7 +1470,8 @@ fn prove_chain(source: archive_q::ArchiveSource) {
                 .import_w((index + 1) % native::W_STAGE_COUNT, &original, read)
                 .is_err()
         );
-        let key = prover.import_w(index, &original, read).unwrap();
+        let key_seal = prover.import_w(index, &original, read).unwrap();
+        let key = prover.bind_w(index, &key_seal, None).unwrap();
         drop(original);
         for wrong in 0..=stage.plan.context().stage_count() {
             if wrong != index + 1 {
@@ -1495,16 +1498,17 @@ fn prove_chain(source: archive_q::ArchiveSource) {
         ];
         let output = create_proof_owned_with_claim(
             &params,
-            &key,
-            Witness::from_circuit(&key, &wrapper_circuit, &wpublic).unwrap(),
+            &baseline_key,
+            Witness::from_circuit(&baseline_key, &wrapper_circuit, &wpublic).unwrap(),
             common::recovery(180 + u8::try_from(index).unwrap()),
             ProverConfig::default(),
         )
         .unwrap();
+        drop(baseline_key);
         verify_full(
             &params,
             key.binding(),
-            key.vk(),
+            key.verifying_key(),
             &wpublic,
             &output.proof,
             MemoryBudget::DEFAULT,
@@ -1532,7 +1536,7 @@ fn prove_chain(source: archive_q::ArchiveSource) {
         assert_eq!(encoded.len(), layouts[2 * index + 1].payload_bytes());
         retained.push(encoded);
         prior_native = Some(native_wrapper);
-        drop(key);
+        drop(key_seal);
         eprintln!(
             "Archive W{index} verified actual proof_bytes={}",
             output.proof.len()

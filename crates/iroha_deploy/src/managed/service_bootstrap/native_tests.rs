@@ -176,8 +176,9 @@ impl NativeFixture {
     }
 }
 
-// This test transport retries only the actual exclusive snapshot acquisition. Every attempt
-// reruns the complete State cut/source/root checks, and no verifier or deadline is replaced.
+// This test transport retries only typed physical State-reader or snapshot-acquisition Busy.
+// Every attempt reruns the complete State cut/source/root checks; no partial proof, verifier,
+// or deadline crosses a retry. Both variants retain the exact original release observation.
 fn bounded_native_snapshot<T>(
     budget: &AllocationBudget,
     deadline: Instant,
@@ -192,7 +193,10 @@ fn bounded_native_snapshot<T>(
             }
             Err(WorldStateSnapshotError::Acquisition(
                 mv::storage::AdmittedStorageError::Busy { release, .. },
-            )) => wait_native_snapshot_release(budget, release, deadline)?,
+            ))
+            | Err(WorldStateSnapshotError::View(iroha_core::state::StateViewError::Busy(
+                release,
+            ))) => wait_native_snapshot_release(budget, release, deadline)?,
             Err(error) => return Err(crate::managed::Error::Invalid(error.to_string())),
         }
     }
@@ -1066,3 +1070,6 @@ fn generated_runtime_fee_ceiling_pays_real_native_isi_fee_from_original_role() {
     );
     // Real generated native fee execution, not full stream-token operation or Serving evidence.
 }
+
+#[path = "native_tests/reader_busy_tests.rs"]
+mod reader_busy_tests;

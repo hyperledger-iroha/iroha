@@ -50,6 +50,12 @@ use crate::{
     },
 };
 
+mod rebuild;
+pub use rebuild::{
+    RebuildError, SourceAdmissionSealV2, SourceBoundVerifyingKeyV2, SourceBoundViewV2,
+    keygen_pk_from_vk_v2, keygen_pk_from_vk_v2_cancellable,
+};
+
 /// The protocol choices and resources of key generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeygenConfig {

@@ -1,5 +1,9 @@
 //! Archive schema/dispatch metadata tests; no fixture key is admitted.
 
+mod current_omega_soft;
+mod hard_predecessor;
+#[path = "../../../tests/common/proof_fixtures/omega_hard_fixture.rs"]
+mod omega_fixture;
 mod real_sources;
 mod stage_context;
 
@@ -712,8 +716,12 @@ fn native_source_import_sweep_with_incoming_k(
                 .import_a((stage + 1) % native::A_STAGE_COUNT, &original, read)
                 .is_err()
         );
-        let imported = prover.import_a(stage, &original, read).unwrap();
-        assert_eq!(imported.vk().to_bytes(), a[stage].key().to_bytes());
+        let imported_seal = prover.import_a(stage, &original, read).unwrap();
+        let imported = prover.bind_a(stage, &imported_seal, None).unwrap();
+        assert_eq!(
+            imported.verifying_key().to_bytes(),
+            a[stage].key().to_bytes()
+        );
         eprintln!(
             "ARCHIVE_SOURCE_IMPORT variant={variant:?} A={stage} original_bytes={} real_Q_source={real_q} incoming_sigma_k={incoming_k} captured_predecessor={captured_predecessor}",
             original.len()
@@ -737,9 +745,10 @@ fn native_source_import_sweep_with_incoming_k(
                     .import_w((stage + 1) % native::W_STAGE_COUNT, &original, read)
                     .is_err()
             );
-            let imported = prover.import_w(stage, &original, read).unwrap();
+            let imported_seal = prover.import_w(stage, &original, read).unwrap();
+            let imported = prover.bind_w(stage, &imported_seal, None).unwrap();
             assert_eq!(
-                imported.vk().to_bytes(),
+                imported.verifying_key().to_bytes(),
                 wrappers[stage].verifying_key().to_bytes()
             );
             eprintln!(

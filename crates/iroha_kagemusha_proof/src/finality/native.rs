@@ -1,8 +1,10 @@
 //! Installed, bounded production of the complete ordinary Load finality graph.
 //!
 //! The complete fixed descriptor/verifier graph is qualified before installation.
-//! Only verifier metadata is retained; every active node strictly imports its
-//! original proving tables and checks the installed identity before proving.
+//! Installation retains only verifier metadata. Each proving call strictly imports
+//! original tables before use; consecutive leaves of one program may reuse its
+//! last imported pair after reloading and binding every original artifact. Every
+//! witness still checks the complete compiled layout and installed identity.
 //! Installation alone does not assert that any proving key is resident or ready.
 //! Native inputs are untrusted
 //! witness proposals, never authorization verdicts. The application must also

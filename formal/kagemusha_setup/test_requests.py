@@ -1,14 +1,221 @@
 """Small sequential/adaptive simulator controls; no native or full-size proof."""
-from dataclasses import FrozenInstanceError, fields, replace
+from dataclasses import FrozenInstanceError, dataclass, fields, replace
 import hashlib
 import json
+from pathlib import Path
 import random
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from .custody import ROOT
 
 OUTPUT = None
+
+
+class _ShapeDescriptor(dict):
+    """Request-boundary fixture only; never a decoded or admitted descriptor."""
+    def __init__(self, lengths, k=16):
+        super().__init__(k=k)
+        self.lengths = lengths
+        self.raw = repr((lengths, k)).encode()
+        self.checked = 0
+
+    def check_instances(self, instances):
+        from .requests import require
+        self.checked += 1
+        require([len(column) for column in instances] == self.lengths, 'fixture descriptor shape')
+        require(all(0 <= value < 257 for column in instances for value in column),
+                'fixture canonical scalar')
+
+
+@dataclass
+class _ShapeCase:
+    """Immutable-byte binding fixture; has no parameters, keys or proof authority."""
+    descriptor: _ShapeDescriptor
+    directory: Path
+    key: bytes = b'request-shape-key-fixture'
+    raw_params: bytes = b'request-shape-parameter-fixture'
+    public_original: bytes = b'request-shape-original-fixture'
+
+
+class RequestShapeTests(unittest.TestCase):
+    """Bounded admission and failure replay, with no simulator or proof execution."""
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix='request-shapes-', dir=OUTPUT if OUTPUT is not None else ROOT/'target')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        simulator = patch(__package__+'.requests.simulate',
+                          side_effect=ValueError('deliberate pre-proof sentinel'))
+        budget = patch(__package__+'.requests.sample_budget',
+                       return_value={'scope': 'request-shape data fixture'})
+        self.addCleanup(simulator.stop)
+        self.addCleanup(budget.stop)
+        self.simulator, self.budget = simulator.start(), budget.start()
+        self.entropy = Mock(side_effect=AssertionError('unexpected entropy'))
+
+    def owner_case(self, lengths, *, allow_large=True, k=16):
+        from .requests import Owner
+        owner = Owner(self.root/f'owner-{len(list(self.root.iterdir()))}',
+                      entropy=self.entropy, allow_large=allow_large, max_requests=1)
+        return owner, _ShapeCase(_ShapeDescriptor(lengths, k), self.root)
+
+    def test_load_69_admitted_failure_replays_at_capacity_and_changed_binding_refuses(self):
+        owner, case = self.owner_case([69])
+        values = [list(range(69))]
+        result = owner.submit(b'load', case, values)
+        self.assertIsNone(result.proof)
+        self.assertIn('deliberate pre-proof sentinel', owner.records[b'load']['failure'])
+        self.assertEqual(self.simulator.call_count, 1)
+        values[0][0] = 7
+        with self.assertRaisesRegex(ValueError, 'binding changed'):
+            owner.submit(b'load', case, values)
+        self.assertIs(owner.submit(b'load', case, [list(range(69))]), result)
+        self.assertEqual(self.simulator.call_count, 1)
+        self.assertEqual(owner.draws, 0)
+        self.entropy.assert_not_called()
+
+    def test_same_256_total_budget_accepts_different_descriptor_shapes(self):
+        for lengths in ([256], [128, 128], [64, 64, 64, 64]):
+            with self.subTest(lengths=lengths):
+                owner, case = self.owner_case(lengths)
+                self.assertIsNone(owner.submit(b'bounded', case, [[0]*n for n in lengths]).proof)
+                self.assertIn(b'bounded', owner.records)
+        self.assertEqual(self.simulator.call_count, 3)
+        self.entropy.assert_not_called()
+
+    def test_oversize_containers_refuse_before_descriptor_and_attempt(self):
+        for values in ([[0]*257], [[0]*129, [0]*128], [[] for _ in range(257)]):
+            with self.subTest(lengths=[len(c) for c in values]):
+                owner, case = self.owner_case([len(c) for c in values])
+                with self.assertRaisesRegex(ValueError, 'bounded canonical instance container'):
+                    owner.submit(b'large', case, values)
+                self.assertEqual(case.descriptor.checked, 0)
+                self.assertEqual(owner.records, {})
+        self.simulator.assert_not_called()
+        self.budget.assert_not_called()
+        self.entropy.assert_not_called()
+
+    def test_non_list_columns_and_non_integer_values_refuse_before_attempt(self):
+        for values in (([0],), [(0,)], [[True]], [[1.0]], [[None]]):
+            with self.subTest(values=values):
+                owner, case = self.owner_case([1])
+                with self.assertRaisesRegex(ValueError, 'bounded canonical instance container'):
+                    owner.submit(b'syntax', case, values)
+                self.assertEqual(case.descriptor.checked, 0)
+                self.assertEqual(owner.records, {})
+        self.simulator.assert_not_called()
+        self.entropy.assert_not_called()
+
+    def test_descriptor_shape_and_scalar_validation_remain_required(self):
+        for values, reason in (([[0]*68], 'descriptor shape'), ([[0]*70], 'descriptor shape'),
+                               ([[-1]+[0]*68], 'canonical scalar'), ([[257]+[0]*68], 'canonical scalar')):
+            with self.subTest(reason=reason):
+                owner, case = self.owner_case([69])
+                with self.assertRaisesRegex(ValueError, reason):
+                    owner.submit(b'invalid', case, values)
+                self.assertEqual(case.descriptor.checked, 1)
+                self.assertEqual(owner.records, {})
+        self.simulator.assert_not_called()
+        self.budget.assert_not_called()
+        self.entropy.assert_not_called()
+
+    def test_large_opt_in_is_still_required_and_small_requests_keep_working(self):
+        owner, case = self.owner_case([69], allow_large=False)
+        with self.assertRaisesRegex(ValueError, 'large simulation requires opt-in'):
+            owner.submit(b'load', case, [[0]*69])
+        self.assertEqual(case.descriptor.checked, 0)
+        self.assertEqual(owner.records, {})
+        small, small_case = self.owner_case([1], allow_large=False, k=6)
+        self.assertIsNone(small.submit(b'small', small_case, [[1]]).proof)
+        self.assertEqual(self.simulator.call_count, 1)
+        self.entropy.assert_not_called()
+
+    def test_five_column_q0_shape_replays_and_keeps_descriptor_checks(self):
+        # Exact historical Load Q0 lengths, used only as request-shape DATA.
+        # This fixture neither decodes nor admits the native descriptor.
+        lengths = [124, 2, 1, 1, 1]
+        owner, case = self.owner_case(lengths)
+        values = [list(range(n)) for n in lengths]
+        result = owner.submit(b'q0', case, values)
+        self.assertIsNone(result.proof)
+        self.assertIn('deliberate pre-proof sentinel', owner.records[b'q0']['failure'])
+        self.assertIs(owner.submit(b'q0', case, [column[:] for column in values]), result)
+        changed = [column[:] for column in values]
+        changed[0][0] = 7
+        with self.assertRaisesRegex(ValueError, 'binding changed'):
+            owner.submit(b'q0', case, changed)
+        with self.assertRaisesRegex(ValueError, 'binding changed'):
+            owner.submit(b'q0', replace(case, key=case.key+b'foreign'), values)
+        self.assertEqual(self.simulator.call_count, 1)
+        self.assertEqual(set(owner.records), {b'q0'})
+        self.assertEqual(owner.draws, 0)
+
+        # Same aggregate with a different partition still fails exact lengths.
+        for invalid, reason in (([[0]*123, [0]*3, [0], [0], [0]], 'descriptor shape'),
+                                ([[-1]+[0]*123, [0, 0], [0], [0], [0]], 'canonical scalar'),
+                                ([[257]+[0]*123, [0, 0], [0], [0], [0]], 'canonical scalar')):
+            refused, selected = self.owner_case(lengths)
+            before_budget = self.budget.call_count
+            with self.assertRaisesRegex(ValueError, reason):
+                refused.submit(b'q0', selected, invalid)
+            self.assertEqual(selected.descriptor.checked, 1)
+            self.assertEqual(refused.records, {})
+            self.assertEqual(self.budget.call_count, before_budget)
+        no_large, selected = self.owner_case(lengths, allow_large=False)
+        with self.assertRaisesRegex(ValueError, 'large simulation requires opt-in'):
+            no_large.submit(b'q0', selected, values)
+        self.assertEqual(selected.descriptor.checked, 0)
+        self.assertEqual(no_large.records, {})
+        self.assertEqual(self.simulator.call_count, 1)
+        self.entropy.assert_not_called()
+
+    def test_named_column_limit_accepts_256_and_refuses_257(self):
+        from . import requests
+        for lengths in ([0]*256, [1]*256):
+            with self.subTest(lengths=lengths):
+                owner, case = self.owner_case(lengths)
+                outcome = owner.submit(b'columns', case, [[0]*n for n in lengths])
+                self.assertIsNone(outcome.proof)
+                self.assertIn('deliberate pre-proof sentinel', owner.records[b'columns']['failure'])
+                self.assertEqual(case.descriptor.checked, 1)
+                self.assertEqual(owner.draws, 0)
+        self.assertEqual(self.simulator.call_count, 2)
+        for values in ([[] for _ in range(257)], [[0]]+[[] for _ in range(256)]):
+            owner, case = self.owner_case([len(column) for column in values])
+            before_budget = self.budget.call_count
+            with self.assertRaisesRegex(ValueError, 'bounded canonical instance container'):
+                owner.submit(b'columns', case, values)
+            self.assertEqual(case.descriptor.checked, 0)
+            self.assertEqual(owner.records, {})
+            self.assertEqual(self.budget.call_count, before_budget)
+        self.assertEqual(self.simulator.call_count, 2)
+        self.entropy.assert_not_called()
+        self.assertEqual((requests.MAX_INSTANCE_COLUMNS, requests.MAX_INSTANCE_VALUES), (256, 256))
+
+    def test_shape_budgets_refuse_before_visiting_scalar_values(self):
+        sentinel = object()
+        real_type = type
+        def metadata_type(value):
+            if value is sentinel:
+                raise AssertionError('scalar visited before shape budget refusal')
+            return real_type(value)
+        # Per-column, aggregate, many-column aggregate, then column-count caps.
+        matrices = ([[sentinel]*257], [[sentinel]*129, [sentinel]*128],
+                    [[sentinel, sentinel]]+[[sentinel] for _ in range(255)],
+                    [[sentinel]]+[[] for _ in range(256)])
+        for values in matrices:
+            owner, case = self.owner_case([len(column) for column in values])
+            with patch(__package__+'.requests.type', side_effect=metadata_type, create=True):
+                with self.assertRaisesRegex(ValueError, 'bounded canonical instance container'):
+                    owner.submit(b'over-limit', case, values)
+            self.assertEqual(case.descriptor.checked, 0)
+            self.assertEqual(owner.records, {})
+            self.assertEqual(owner.draws, 0)
+        self.simulator.assert_not_called()
+        self.budget.assert_not_called()
+        self.entropy.assert_not_called()
 
 
 class OwnerTests(unittest.TestCase):

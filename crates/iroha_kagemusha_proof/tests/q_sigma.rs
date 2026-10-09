@@ -338,6 +338,94 @@ fn two_sigmas_fold_exact_sources_and_soft_trivial_mode() {
     }
 }
 
+// Explicit producer-side reconstruction evidence. This temporary engine key is
+// separate from QSigmaProver; no runtime PK or artifact accessor is exposed.
+fn check_producer_rebuild<C: Circuit<Fq>>(
+    params: &iroha_plonk::pcs::ipa::PinnedParams<iroha_pasta::Ep>,
+    key: &iroha_plonk::ProvingKey<iroha_pasta::Ep>,
+    circuit: &C,
+    original: &[u8],
+) {
+    use iroha_plonk::keys::{CosetCachePolicy, SourceBoundVerifyingKeyV2, keygen_pk_from_vk_v2};
+    let metadata = SourceBoundVerifyingKeyV2::from_proving_key(key, None).unwrap();
+    let rebuilt = keygen_pk_from_vk_v2(
+        params,
+        &circuit.without_witnesses(),
+        &metadata.view(),
+        CosetCachePolicy::OnDemand,
+    )
+    .unwrap();
+    assert!(!rebuilt.has_coset_cache());
+    assert_eq!(rebuilt.commitment_tables().present(), (false, false));
+    assert_eq!(rebuilt.binding(), key.binding());
+    assert_eq!(rebuilt.vk().to_bytes(), key.vk().to_bytes());
+    assert_eq!(rebuilt.copy_digest(), key.copy_digest());
+    assert_eq!(rebuilt.artifact_bytes_v2().unwrap(), original);
+}
+
+type RecoveryLog = std::sync::Arc<std::sync::Mutex<Vec<[u8; 32]>>>;
+fn recorded_recovery(seed: u8, log: RecoveryLog) -> iroha_plonk::ProverRandomness<'static> {
+    use rand_chacha::rand_core::SeedableRng as _;
+    iroha_plonk::ProverRandomness::recovery(move |context: &[u8; 32]| {
+        log.lock().unwrap().push(*context);
+        Ok::<_, std::convert::Infallible>(rand_chacha::ChaCha20Rng::from_seed([seed; 32]))
+    })
+}
+fn no_recovery_draw() -> iroha_plonk::ProverRandomness<'static> {
+    iroha_plonk::ProverRandomness::recovery(
+        |_: &[u8; 32]| -> Result<rand_chacha::ChaCha20Rng, ()> {
+            panic!("refused Q source consumed recovery entropy")
+        },
+    )
+}
+fn check_prover_cancellation(
+    prover: &iroha_kagemusha_proof::q_sigma::native::QSigmaProverView<'_>,
+    prepared: &iroha_kagemusha_proof::q_sigma::native::PreparedQSigma,
+) {
+    use rand_chacha::rand_core::SeedableRng as _;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let cancelled = iroha_pasta::CancellationToken::new();
+    cancelled.cancel();
+    let error = prover
+        .prove(
+            prepared,
+            no_recovery_draw(),
+            iroha_plonk::ProverConfig {
+                cancellation: Some(&cancelled),
+                ..iroha_plonk::ProverConfig::default()
+            },
+        )
+        .unwrap_err();
+    assert!(error.is_cancelled());
+    // Opening the recovery stream follows reconstruction and witness assignment.
+    // Cancellation there must discard the temporary key; a later normal proof
+    // below reuses this metadata owner, not a partial/cached proving key.
+    let after_rebuild = iroha_pasta::CancellationToken::new();
+    let signal = after_rebuild.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = calls.clone();
+    let randomness = iroha_plonk::ProverRandomness::recovery(move |_: &[u8; 32]| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        signal.cancel();
+        Ok::<_, ()>(rand_chacha::ChaCha20Rng::from_seed([131; 32]))
+    });
+    let error = prover
+        .prove(
+            prepared,
+            randomness,
+            iroha_plonk::ProverConfig {
+                cancellation: Some(&after_rebuild),
+                ..iroha_plonk::ProverConfig::default()
+            },
+        )
+        .unwrap_err();
+    assert!(error.is_cancelled());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
 #[test]
 #[ignore = "actual k16 Q_sigma proof over real k12/k14 sigma and local AS; run in release"]
 fn actual_two_sigma_q_proof_verifies() {
@@ -387,9 +475,13 @@ fn actual_two_sigma_q_proof_verifies() {
         let mut not_correctable = input; not_correctable.mode = IncomingMode::Corrected;
         assert!(plan.prepare(own,Some(not_correctable),&inner_params,Fq::from(73),&FoldConfig::default()).is_err());
         let params = iroha_plonk::pcs::ipa::PinnedParams::<iroha_pasta::Ep>::derive(16).unwrap();
-        let producer = QSigmaProver::keygen(&prepared, params.clone()).unwrap();
-        let original = producer.proving_key().artifact_bytes_v2().unwrap();
-        let installed_vk = producer.verifying_key().to_bytes();
+        // Artifact production is explicit; the runtime owner retains no PK.
+        let mut keygen = iroha_plonk::keys::KeygenConfigV2::pipa_r(QSigmaPlan::instance_types().to_vec());
+        keygen.coset_cache = iroha_plonk::keys::CosetCachePolicy::OnDemand;
+        let producer = iroha_plonk::keys::keygen_pk_v2(&params, prepared.circuit(), &keygen).unwrap();
+        let original = producer.artifact_bytes_v2().unwrap();
+        check_producer_rebuild(&params, &producer, prepared.circuit(), &original);
+        let installed_vk = producer.vk().to_bytes();
         let descriptor = producer.binding().encoded();
         let config = iroha_plonk::keys::pk::artifact::ReadConfig {
             maximum_bytes: original.len(), maximum_rows: 1 << 16,
@@ -441,7 +533,7 @@ fn actual_two_sigma_q_proof_verifies() {
         let changed_class = SigmaClass::new(class.verifier().clone(), vec![(4,
             prepared.circuit().witness.own.key.kagemusha_digest(class.verifier().binding()).unwrap())]).unwrap();
         let changed_plan = QSigmaPlan::new(changed_class, plan.class(1).cloned(), &inner_params).unwrap();
-        let changed_source = QSigmaSource::new(changed_plan,
+        let changed_source = QSigmaSource::new(changed_plan.clone(),
             prepared.circuit().witness.own.key.clone(),
             prepared.circuit().witness.incoming.as_ref().map(|slot| slot.sigma.key.clone())).unwrap();
         assert!(matches!(QSigmaProver::from_original_artifact(
@@ -449,13 +541,40 @@ fn actual_two_sigma_q_proof_verifies() {
         ), Err(iroha_kagemusha_proof::q_sigma::native::QSigmaError::Artifact(
             iroha_plonk::keys::pk::artifact::Error::Source))));
         let prover = mount(&original, config).expect("installed Q original");
-        assert!(!prover.proving_key().has_coset_cache());
-        assert_eq!(prover.proving_key().artifact_bytes_v2().unwrap(), original);
         assert_eq!(prover.binding(), producer.binding());
         assert_eq!(prover.verifying_key().to_bytes(), installed_vk);
+        let (bound_d,bound_v,seal)=prover.into_metadata().into_parts();
+        let view=seal.bind(&bound_d,&bound_v,None).unwrap();
+        assert!(core::ptr::eq(view.binding(),&bound_d));
+        assert!(core::ptr::eq(view.verifying_key(),&bound_v));
+        let prover=iroha_kagemusha_proof::q_sigma::native::QSigmaProverView::from_source_bound(&params,view,&plan,None).unwrap();
+        let cancelled = iroha_pasta::CancellationToken::new(); cancelled.cancel();
+        assert!(QSigmaProver::from_original_artifact_cancellable(
+            &source, params.clone(), descriptor, installed_vk, &original, config, Some(&cancelled)
+        ).unwrap_err().is_cancelled());
+        let changed_prepared = changed_plan.prepare(
+            prepared.circuit().witness.own.clone(),
+            prepared.circuit().witness.incoming.as_ref().map(|slot| IncomingSigma {
+                sigma: slot.sigma.clone(), mode: IncomingMode::Accept,
+            }), &inner_params, Fq::from(73), &FoldConfig::default(),
+        ).unwrap();
+        assert!(matches!(prover.prove(&changed_prepared, no_recovery_draw(), iroha_plonk::ProverConfig::default()),
+            Err(iroha_kagemusha_proof::q_sigma::native::QSigmaError::Rebuild(_))));
+        check_prover_cancellation(&prover, &prepared);
+        let direct_log = RecoveryLog::default();
+        let installed_log = RecoveryLog::default();
+        let direct = iroha_plonk::create_proof_owned(
+            &params, &producer, iroha_plonk::Witness::from_circuit(&producer, prepared.circuit(), prepared.instances()).unwrap(),
+            recorded_recovery(99, direct_log.clone()), iroha_plonk::ProverConfig::default(),
+        ).unwrap();
+        iroha_plonk::verify_full(&params, producer.binding(), producer.vk(), prepared.instances(), &direct, MemoryBudget::DEFAULT).unwrap();
         let start = std::time::Instant::now();
-        let proof = prover.prove(&prepared,common::recovery(99),iroha_plonk::ProverConfig::default()).expect("actual Q proof");
+        let proof = prover.prove(&prepared,recorded_recovery(99, installed_log.clone()),iroha_plonk::ProverConfig::default()).expect("actual Q proof");
         let prove_elapsed = start.elapsed();
+        assert_eq!(proof.bytes, direct);
+        assert_eq!(proof.instances, prepared.instances());
+        assert_eq!(*direct_log.lock().unwrap(), *installed_log.lock().unwrap());
+        assert_eq!(installed_log.lock().unwrap().len(), 1);
         assert_eq!(proof.bytes.len(),10_496);
         assert_eq!(proof.part, *prepared.part());
         let mut wrong = proof.instances.clone(); wrong[0][1] += Fq::ONE;
@@ -482,9 +601,18 @@ fn installed_serialized_q_originals_prove_and_reject_default_profile() {
         .unwrap();
     let params = PinnedParams::<Ep>::derive(16).unwrap();
     // Fixture production selects the explicit frozen profile; installation never keygens.
-    let producer = QSigmaProver::keygen_serialized_foreign(&prepared, params.clone(), 2).unwrap();
-    let original = producer.proving_key().artifact_bytes_v2().unwrap();
-    let vk = producer.verifying_key().to_bytes();
+    let circuit = prepared
+        .circuit()
+        .clone()
+        .with_serialized_foreign(2)
+        .unwrap();
+    let mut keygen =
+        iroha_plonk::keys::KeygenConfigV2::pipa_r(QSigmaPlan::instance_types().to_vec());
+    keygen.coset_cache = CosetCachePolicy::OnDemand;
+    let producer = iroha_plonk::keys::keygen_pk_v2(&params, &circuit, &keygen).unwrap();
+    let original = producer.artifact_bytes_v2().unwrap();
+    check_producer_rebuild(&params, &producer, &circuit, &original);
+    let vk = producer.vk().to_bytes();
     let config = ReadConfig {
         maximum_bytes: original.len(),
         maximum_rows: 1 << 16,
@@ -501,13 +629,28 @@ fn installed_serialized_q_originals_prove_and_reject_default_profile() {
         2,
     )
     .expect("genuine installed serialized Q original");
-    assert_eq!(
-        imported.proving_key().artifact_bytes_v2().unwrap(),
-        original
-    );
     assert_eq!(imported.binding(), producer.binding());
     assert_eq!(imported.verifying_key().to_bytes(), vk);
-    assert!(!imported.proving_key().has_coset_cache());
+    let (bound_d, bound_v, seal) = imported.into_metadata().into_parts();
+    let view = seal.bind(&bound_d, &bound_v, None).unwrap();
+    assert!(core::ptr::eq(view.binding(), &bound_d));
+    assert!(core::ptr::eq(view.verifying_key(), &bound_v));
+    let imported = iroha_kagemusha_proof::q_sigma::native::QSigmaProverView::from_source_bound(
+        &params,
+        view,
+        source.plan(),
+        Some(2),
+    )
+    .unwrap();
+    assert!(
+        iroha_kagemusha_proof::q_sigma::native::QSigmaProverView::from_source_bound(
+            &params,
+            view,
+            source.plan(),
+            Some(0)
+        )
+        .is_err()
+    );
     assert!(
         QSigmaProver::from_original_artifact(
             &source,
@@ -522,7 +665,7 @@ fn installed_serialized_q_originals_prove_and_reject_default_profile() {
     assert!(
         QSigmaProver::from_original_artifact_serialized_foreign(
             &source,
-            params,
+            params.clone(),
             producer.binding().encoded(),
             vk,
             &original,
@@ -531,30 +674,70 @@ fn installed_serialized_q_originals_prove_and_reject_default_profile() {
         )
         .is_err()
     );
+    let cancelled = iroha_pasta::CancellationToken::new();
+    cancelled.cancel();
+    assert!(
+        QSigmaProver::from_original_artifact_serialized_foreign_cancellable(
+            &source,
+            params.clone(),
+            producer.binding().encoded(),
+            vk,
+            &original,
+            config,
+            2,
+            Some(&cancelled),
+        )
+        .unwrap_err()
+        .is_cancelled()
+    );
+    check_prover_cancellation(&imported, &prepared);
+    let direct_log = RecoveryLog::default();
+    let installed_log = RecoveryLog::default();
+    let direct = iroha_plonk::create_proof_owned(
+        &params,
+        &producer,
+        iroha_plonk::Witness::from_circuit(&producer, &circuit, prepared.instances()).unwrap(),
+        recorded_recovery(82, direct_log.clone()),
+        iroha_plonk::ProverConfig::default(),
+    )
+    .unwrap();
+    iroha_plonk::verify_full(
+        &params,
+        producer.binding(),
+        producer.vk(),
+        prepared.instances(),
+        &direct,
+        MemoryBudget::DEFAULT,
+    )
+    .unwrap();
     let proof = imported
         .prove(
             &prepared,
-            common::recovery(82),
+            recorded_recovery(82, installed_log.clone()),
             iroha_plonk::ProverConfig::default(),
         )
         .expect("genuine imported serialized Q proof");
     iroha_plonk::verify_full(
-        producer.params(),
+        &params,
         producer.binding(),
-        producer.verifying_key(),
+        producer.vk(),
         &proof.instances,
         &proof.bytes,
         MemoryBudget::DEFAULT,
     )
     .expect("original installed Q key");
+    assert_eq!(proof.bytes, direct);
+    assert_eq!(proof.instances, prepared.instances());
+    assert_eq!(*direct_log.lock().unwrap(), *installed_log.lock().unwrap());
+    assert_eq!(installed_log.lock().unwrap().len(), 1);
     assert_eq!(proof.part, *prepared.part());
     let mut wrong = proof.instances.clone();
     wrong[0][0] += Fq::ONE;
     assert!(
         iroha_plonk::verify_full(
-            producer.params(),
+            &params,
             producer.binding(),
-            producer.verifying_key(),
+            producer.vk(),
             &wrong,
             &proof.bytes,
             MemoryBudget::DEFAULT

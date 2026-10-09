@@ -43,6 +43,8 @@ pub(in crate::managed) trait EnrollmentScopeEvidence:
     ) -> Result<()>;
     fn revalidate_with_snapshot_read_pass(&self, pass: Option<&SnapshotReadPass<'_>>)
     -> Result<()>;
+    // Pure membership only; the graph caller retains fresh operation/scope validation.
+    fn covers_semantic_original(&self, pass: &SnapshotReadPass<'_>, semantic: [u8; 32]) -> bool;
     fn require_active(&self) -> Result<()>;
 }
 pub(in crate::managed) trait BodyReplacementTarget:
@@ -261,6 +263,25 @@ impl HistoryScope {
             }
         }
         Ok(())
+    }
+    // Invoked only by the graph-specific capability after fresh validate_local above.
+    // Keep the caller's exact operation path, purpose and semantic joined to this evidence;
+    // validate_local retains both native identity checks at the local entry and exit.
+    pub(super) fn covers_semantic_original(
+        &self,
+        pass: &SnapshotReadPass<'_>,
+        operation: &PrivateDirectory,
+        purpose: Purpose,
+        semantic: [u8; 32],
+    ) -> bool {
+        let Self::Enrollment(value) = self else {
+            return false;
+        };
+        let evidence = &value.state.evidence;
+        evidence.binding().purpose == purpose
+            && evidence.binding().semantic == semantic
+            && evidence.operation().path() == operation.path()
+            && evidence.covers_semantic_original(pass, semantic)
     }
     pub(super) fn with_snapshot_read_pass(
         &self,

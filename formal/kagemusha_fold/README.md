@@ -62,3 +62,49 @@ test that security theorem. Neither control group establishes adaptive privacy,
 entropy or resource guarantees, recursive continuation, C12, current artifact
 validity or release qualification. No external Python dependency or `target/`
 input is needed.
+
+The separate `ideal_game.py`/`test_ideal_game.py` controls implement a finite
+partial-bijection game. They never call RP57. A private path begins at its first
+salt-bearing input `(initial_capacity, domain, salt)` and carries each output's
+capacity through rate-two absorption. Its supplied output tapes disclose only
+one rate coordinate. Public attempts name both primitive endpoints, including
+inverse, replay and refused-candidate attempts. These endpoint records must be
+independent of private salts/capacities given the disclosed words; the Python
+model cannot infer that hypothesis from arbitrary caller data. The common initial
+capacity must be fixed before, or independent of, the virtual private output
+capacities, conditionally on disclosed words. Choosing it after seeing the
+private capacity tape is an explicit hypothesis-violation control.
+
+The conservative bad event charges fresh salt collisions, a private output
+capacity equal to the common initial capacity or an earlier private capacity,
+a public endpoint equal to a salt-bearing initial input, or a public endpoint's
+capacity equal to a private output capacity. With B fresh attempts, H private
+edges and Q public attempts, independent uniform virtual salt/capacity tapes
+(conditional on disclosed words) give
+
+`min(1, [2Q(B+H) + B(B-1)/2 + H(H+1)/2] / p)`.
+
+Each public attempt contributes two endpoints, each guessing at most one salt
+per initial path and one value per private capacity. Salt-pair and private
+capacity-pair/initial collisions give the remaining terms. This is an
+unconditioned first-hit union bound on complete virtual tapes, not a claim that
+secrets remain uniform after conditioning on prior misses. On no-bad tapes,
+private inputs have distinct capacities except for the distinct salted initial
+inputs; private outputs have distinct capacities. Their consistency with the
+public table follows from the excluded endpoint hits. Input/output vertex
+coalescence within a path is legal: only duplicate inputs with different outputs
+or duplicate outputs with different inputs violate a permutation. Rejected
+attempts retain all earlier edges. Coupling a genuinely random permutation still
+requires the stipulated hidden interface and its sampling model.
+
+Nine additional controls include every one of 83,521 independent p17 single-edge
+tapes, with 13,889 bad tapes and 69,632 no-bad tapes, below the nonvacuous 5/17 bound.
+A separate 2,187-tape two-edge case checks carried capacity and exact replay even
+when its probability bound is vacuous. Forward/inverse conflicts retain their
+original table, and same-salt changed-input attempts cannot masquerade as retained
+replay. Deliberately leaking a salt/capacity or basing public admission on private
+table occupancy defeats the interface premise; those negative controls are not
+protocol attacks or tests of a concrete sponge. `ideal_source_manifest.json`
+pins exactly these two model files and this README. Existing polynomial and
+actual-RP57 transcript controls remain unchanged. None of these conditional-model
+controls establishes fixed-RP57 joint hiding, actual Omega composition or C12.

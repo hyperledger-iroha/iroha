@@ -1818,14 +1818,64 @@ fn authenticated_bootstrap_for_schemes(
             "production A1 retains all original constraints"
         );
         assert!(matches!(
-            session.first(&a2key, common::recovery(76), ProverConfig::default()),
+            session.first(
+                &iroha_plonk::keys::SourceBoundVerifyingKeyV2::from_proving_key(&a2key, None)
+                    .unwrap()
+                    .view(),
+                common::recovery(76),
+                ProverConfig::default()
+            ),
             Err(native::Error::Artifact)
         ));
-        let first_key = installed.import_first(&originals[0].pk, config).unwrap();
+        let first_key_seal = installed.import_first(&originals[0].pk, config).unwrap();
+        let first_key = installed.bind_first(&first_key_seal, None).unwrap();
+        // Cancellation before reconstruction consumes no recovery stream.
+        let cancelled = iroha_pasta::CancellationToken::new();
+        cancelled.cancel();
+        let early = iroha_plonk::ProverRandomness::recovery(
+            |_: &[u8; 32]| -> Result<rand_chacha::ChaCha20Rng, std::convert::Infallible> {
+                panic!("pre-cancelled A1 must not request recovery entropy")
+            },
+        );
+        assert!(matches!(
+            session.first(
+                &first_key,
+                early,
+                ProverConfig {
+                    cancellation: Some(&cancelled),
+                    ..ProverConfig::default()
+                }
+            ),
+            Err(native::Error::Cancelled)
+        ));
+        // The recovery derivation occurs after exact source reconstruction and
+        // witness assignment. A cancellation there must drop the temporary PK;
+        // the following existing parity proof reuses the unchanged metadata.
+        let late_cancel = iroha_pasta::CancellationToken::new();
+        let requested = std::sync::atomic::AtomicBool::new(false);
+        let late = iroha_plonk::ProverRandomness::recovery(|_: &[u8; 32]| {
+            requested.store(true, std::sync::atomic::Ordering::SeqCst);
+            late_cancel.cancel();
+            Ok::<rand_chacha::ChaCha20Rng, std::convert::Infallible>(
+                rand_chacha::rand_core::SeedableRng::from_seed([76; 32]),
+            )
+        });
+        assert!(matches!(
+            session.first(
+                &first_key,
+                late,
+                ProverConfig {
+                    cancellation: Some(&late_cancel),
+                    ..ProverConfig::default()
+                }
+            ),
+            Err(native::Error::Cancelled)
+        ));
+        assert!(requested.load(std::sync::atomic::Ordering::SeqCst));
         let native_first = session
             .first(&first_key, common::recovery(76), ProverConfig::default())
             .unwrap();
-        drop(first_key);
+        drop(first_key_seal);
         assert_eq!(native_first.proof(), a1.proof);
         let (wrapper_circuit, _, _) = prepared
             .wrapper_circuit(
@@ -1839,7 +1889,12 @@ fn authenticated_bootstrap_for_schemes(
         assert!(matches!(
             session.wrapper(
                 &native_first,
-                &signature_key,
+                &iroha_plonk::keys::SourceBoundVerifyingKeyV2::from_proving_key(
+                    &signature_key,
+                    None
+                )
+                .unwrap()
+                .view(),
                 Fq::from(31),
                 &FoldConfig::default(),
                 common::recovery(77),
@@ -1847,7 +1902,8 @@ fn authenticated_bootstrap_for_schemes(
             ),
             Err(native::Error::Artifact)
         ));
-        let wrapper_key = installed.import_wrapper(&originals[1].pk, config).unwrap();
+        let wrapper_key_seal = installed.import_wrapper(&originals[1].pk, config).unwrap();
+        let wrapper_key = installed.bind_wrapper(&wrapper_key_seal, None).unwrap();
         let native_wrapper = session
             .wrapper(
                 &native_first,
@@ -1858,7 +1914,7 @@ fn authenticated_bootstrap_for_schemes(
                 ProverConfig::default(),
             )
             .unwrap();
-        drop(wrapper_key);
+        drop(wrapper_key_seal);
         assert_eq!(native_wrapper.proof(), last.source.proof);
         let wrapper_public = vec![
             vec![Fq::from_repr(native_wrapper.context().to_repr()).unwrap()],
@@ -1925,7 +1981,9 @@ fn authenticated_bootstrap_for_schemes(
         assert!(matches!(
             session.terminal(
                 &native_wrapper,
-                &a1key,
+                &iroha_plonk::keys::SourceBoundVerifyingKeyV2::from_proving_key(&a1key, None)
+                    .unwrap()
+                    .view(),
                 Fp::from(32),
                 &FoldConfig::default(),
                 common::recovery(78),
@@ -1933,7 +1991,8 @@ fn authenticated_bootstrap_for_schemes(
             ),
             Err(native::Error::Artifact)
         ));
-        let terminal_key = installed.import_terminal(&originals[2].pk, config).unwrap();
+        let terminal_key_seal = installed.import_terminal(&originals[2].pk, config).unwrap();
+        let terminal_key = installed.bind_terminal(&terminal_key_seal, None).unwrap();
         let terminal = session
             .terminal(
                 &native_wrapper,
@@ -1944,10 +2003,10 @@ fn authenticated_bootstrap_for_schemes(
                 ProverConfig::default(),
             )
             .unwrap();
-        drop(terminal_key);
+        drop(terminal_key_seal);
         assert_eq!(terminal.proof, a2.proof);
         eprintln!(
-            "NATIVE_BOOTSTRAP_PARITY metadata_only_producer=true borrowed_stage_PK=true exact_original_proof_bytes=true"
+            "NATIVE_BOOTSTRAP_PARITY metadata_only_producer=true temporary_source_bound_PK=true exact_original_proof_bytes=true"
         );
         installed_native_source = Some((installed, native_plan.clone(), input.clone()));
         terminal

@@ -295,11 +295,12 @@ impl ManagedStreamTokenCustody {
         require_deadline(deadline)
     }
 
-    pub(super) fn validate_renewal_original(
+    pub(super) fn validate_renewal_original<P: Borrow<RetainedProviderServicePlan>>(
         &self,
         original: &Original,
         control: &SignerCustodyControlStateV1,
         sequence: u64,
+        provider_plan: impl FnOnce() -> Result<P>,
     ) -> Result<()> {
         let Action::Enroll {
             validity,
@@ -314,7 +315,13 @@ impl ManagedStreamTokenCustody {
             .current
             .as_ref()
             .ok_or_else(|| invalid("renewal predecessor absent"))?;
-        let expected = self.renewal_validity(current, control, sequence, *selected_at_unix_ms)?;
+        let expected = validate_renewal_validity(
+            current,
+            control,
+            sequence,
+            *selected_at_unix_ms,
+            provider_plan,
+        )?;
         if *validity != expected {
             return Err(invalid("renewal differs from original finite interval"));
         }

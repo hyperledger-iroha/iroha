@@ -77,6 +77,9 @@ fn counted<T>(action: impl FnOnce() -> T) -> (T, Census) {
     (result, census)
 }
 impl History {
+    pub(in crate::managed) fn test_handle_work<T>(action: impl FnOnce() -> T) -> (T, Census) {
+        counted(action)
+    }
     pub(in crate::managed) fn test_retained_handle_census(&self) -> (Result<()>, Census) {
         counted(|| self.revalidate_retained_handles())
     }

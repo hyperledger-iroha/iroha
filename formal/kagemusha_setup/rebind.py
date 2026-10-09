@@ -1,4 +1,4 @@
-"""Private known-log re-keying of pinned public tables; source draft only.
+"""Private known-log re-keying of pinned public tables.
 
 No import constructs parameters, reads a large artifact or changes repository
 authority. Callers supply already retained original bytes and chosen parameters.
@@ -30,6 +30,15 @@ def reference(directory, exact_descriptor_sha=None, parameter_authority=None, *,
     Hashing, canonical parsing, equations and generator decision are unchanged.
     The chosen authority is written before any reference module is imported.
     """
+    return _reference(directory, exact_descriptor_sha, parameter_authority,
+                      allow_large=allow_large)
+
+
+def _reference(directory, exact_descriptor_sha=None, parameter_authority=None, *,
+               allow_large=False, resource_curve=0, writer=write_new, saver=save,
+               before_import=lambda: None):
+    """Private factored copy mechanism; normal public front keeps its old guards."""
+    require(type(resource_curve) is int and resource_curve in (0,1), 'private resource curve')
     require(type(allow_large) is bool, 'explicit large flag')
     require(exact_descriptor_sha is None or
             (type(exact_descriptor_sha) is str and len(exact_descriptor_sha) == 64
@@ -60,15 +69,16 @@ def reference(directory, exact_descriptor_sha=None, parameter_authority=None, *,
         if exact_descriptor_sha is not None and name == 'descriptor.py':
             require(text.count(old_d) == 1, 'exact descriptor resource source')
             text = text.replace(old_d, "require(1 <= v['k'] <= 10 or "
-                "(v['k'] == 16 and self.version == 2 and v['curve'] == 0 and "
+                f"(v['k'] == 16 and self.version == 2 and v['curve'] == {resource_curve} and "
                 f"hashlib.sha256(self.raw).hexdigest() == '{exact_descriptor_sha}'), "
                 "'reference domain exponent / exact private descriptor')")
         if exact_descriptor_sha is not None and name == 'parameters.py':
             require(text.count(old_p) == 1, 'exact parameter resource source')
             text = text.replace(old_p, "require(type(k) is int and (1 <= k <= 10 or "
-                "(k == 16 and curve.tag == 0)), 'reference parameter exponent / Pallas k16')")
+                f"(k == 16 and curve.tag == {resource_curve})), 'reference parameter exponent / "
+                +("Pallas" if resource_curve == 0 else "Vesta")+" k16')")
         copied = text.encode()
-        write_new(package/name, copied)
+        writer(package/name, copied)
         changes.append({'name':name, 'before_sha256':sha(raw), 'after_sha256':sha(copied)})
     kats = json.loads((ROOT/'fixtures/native_prover/kats_v1.json').read_text())
     if parameter_authority is not None:
@@ -76,10 +86,11 @@ def reference(directory, exact_descriptor_sha=None, parameter_authority=None, *,
         kats['params_ipa'] = {'ep':[], 'eq':[]}
         kats['params_ipa']['ep' if tag == 0 else 'eq'] = [
             {'k':k, 'byte_len':len(raw), 'sha256':sha(raw)}]
-    save(directory/'kats_v1.json', kats)
-    save(directory/'copy-receipt.json', {'source_changes':changes,
+    saver(directory/'kats_v1.json', kats)
+    saver(directory/'copy-receipt.json', {'source_changes':changes,
          'exact_k16_descriptor':exact_descriptor_sha,
          'authority_before_import':True, 'no_transcript_or_equation_changes':True})
+    before_import()
     spec = importlib.util.spec_from_file_location(package_name, package/'__init__.py',
                                                   submodule_search_locations=[str(package)])
     module = importlib.util.module_from_spec(spec)
@@ -152,6 +163,16 @@ def make_case(directory, descriptor_raw, key, original, expected, chosen, *, all
             'direct PIPA-R suffix profile')
     require(d['k'] <= 10 or (k16 and d['k'] == 16 and d['curve'] == 0), 'historical domain scope')
     public = PublicSetup.decode(original, d, key, expected['original'])
+    return _finish_case(directory, descriptor_raw, d, key, original, expected, chosen, old, public,
+                        reference_factory=lambda path,digest,authority: reference(
+                            path,digest if k16 else None,authority,allow_large=allow_large))
+
+
+def _finish_case(directory, descriptor_raw, d, key, original, expected, chosen, old, public, *,
+                 reference_factory, writer=write_new, saver=save,
+                 checkpoint=lambda: None):
+    """One unchanged re-key algorithm shared with the closed diagnostic front."""
+    from .public_setup import PublicSetup
     curve, m, n = d.curve, d.curve.scalar, d.n
     require(chosen.curve_tag == d['curve'] and chosen.k == d['k'], 'chosen curve/domain')
     require(isinstance(chosen.raw, bytes) and len(chosen.raw) == 64*n+68,
@@ -162,17 +183,18 @@ def make_case(directory, descriptor_raw, key, original, expected, chosen, *, all
     require(type(g) is tuple and type(lag) is tuple and len(g) == len(lag) == n,
             'chosen log vectors')
     require(all(type(v) is int and 0 < v < m for v in (*g, *lag, w, u)), 'finite canonical parameter logs')
-    require(lag == scalar_ifft(g, curve, d['k']), 'chosen Lagrange IFFT')
+    require(lag == scalar_ifft(g, curve, d['k'], checkpoint), 'chosen Lagrange IFFT')
     base = chosen.base
     require(curve.equal(curve.decode(curve.encode(base)), base), 'chosen finite base')
-    expected_params = uint(d['k'])+b''.join(curve.encode(curve.multiply(base, value))
-                                           for value in (*g, *lag, w, u))
+    expected_params = _parameter_bytes(curve,base,d['k'],g,lag,w,u,checkpoint)
     require(isinstance(chosen.raw, bytes) and chosen.raw == expected_params,
             'chosen raw parameters and all private logs')
     new_desc = rebound_descriptor(descriptor_raw, hashlib.sha256(chosen.raw).digest(), old['codec'])
-    private = reference(directory/'chosen-reference', sha(new_desc) if k16 else None,
-                        (d['curve'], d['k'], chosen.raw), allow_large=allow_large)
+    checkpoint()
+    private = reference_factory(directory/'chosen-reference', sha(new_desc),
+                                (d['curve'], d['k'], chosen.raw))
     params = private['parameters'].Parameters.decode(chosen.raw, curve, d['k'])
+    checkpoint()
     new_d = private['descriptor'].Descriptor.decode(new_desc, 2)
     require({k:v for k,v in new_d.values.items() if k != 'params_digest'} ==
             {k:v for k,v in d.values.items() if k != 'params_digest'}, 'unchanged descriptor relation')
@@ -188,16 +210,18 @@ def make_case(directory, descriptor_raw, key, original, expected, chosen, *, all
     # Keep all selector bitmap bytes and all copy/table bytes unchanged.
     table_offset = 44+len(key)
     new_original = b'PIPAPK01'+new_d.digest+uint(len(new_key))+new_key+original[table_offset:]
+    checkpoint()
     setup = PublicSetup.decode(new_original, new_d, new_key, sha(new_original))
+    checkpoint()
     require(setup.fixed == public.fixed and setup.sigma == public.sigma and
             setup.copy_digest == public.copy_digest, 'unchanged public tables/copy digest')
     for name, raw in [('descriptor.norito', new_desc), ('vk.bin', new_key),
                       ('public-original.bin', new_original), ('parameters.bin', chosen.raw)]:
-        write_new(directory/('chosen-'+name), raw)
+        writer(directory/('chosen-'+name), raw)
     count = d['num_fixed_columns']
     all_logs = dict(chosen.logs, fixed=tuple(logs[:count]), sigma=tuple(logs[count:]))
-    save(directory/'private-logs.json', {'not_public_protocol_data':True, 'logs':all_logs})
-    save(directory/'rebind-receipt.json', {'historical':expected,
+    saver(directory/'private-logs.json', {'not_public_protocol_data':True, 'logs':all_logs})
+    saver(directory/'rebind-receipt.json', {'historical':expected,
          'chosen':{'descriptor':sha(new_desc), 'key':sha(new_key), 'original':sha(new_original),
                    'parameters':sha(chosen.raw)}, 'default_key_blind':1,
          'same_relation_fields_except_parameter_digest':True, 'same_public_tables':True,
@@ -205,3 +229,12 @@ def make_case(directory, descriptor_raw, key, original, expected, chosen, *, all
          'scope':'Historical polynomial relation with chosen outer commitment parameters; no recursively regenerated source catalog or current release admission.'})
     return Case(directory, private['verify'], private['transcript'], new_d, new_key,
                 chosen.raw, params, base, all_logs, setup, expected['descriptor'], new_original)
+
+
+def _parameter_bytes(curve,base,k,g,lag,w,u,checkpoint):
+    """Same ordered point reconstruction, checkpointing each bounded point."""
+    encoded=bytearray()
+    for value in (*g,*lag,w,u):
+        encoded.extend(curve.encode(curve.multiply(base,value)))
+        checkpoint()
+    return uint(k)+bytes(encoded)

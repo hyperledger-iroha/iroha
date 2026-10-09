@@ -12,6 +12,11 @@ import secrets
 from .simulator import simulate, sample_budget
 
 
+# Diagnostic intake limits; the descriptor's protocol bounds remain separate.
+MAX_INSTANCE_COLUMNS = 256
+MAX_INSTANCE_VALUES = 256
+
+
 def require(value, message):
     if not value:
         raise ValueError(message)
@@ -77,9 +82,12 @@ class Owner:
         require(not self.busy, 'atomic owner request')
         require(type(request_id) is bytes and 1 <= len(request_id) <= 64,
                 'bounded request identity')
-        require(type(instances) is list and len(instances) <= 4 and
-                all(type(column) is list and len(column) <= 64 and
-                    all(type(value) is int for value in column) for column in instances),
+        # Bound columns and their aggregate before visiting any scalar. These
+        # finite diagnostic limits do not replace the descriptor's exact shape.
+        require(type(instances) is list and len(instances) <= MAX_INSTANCE_COLUMNS and
+                all(type(column) is list and len(column) <= MAX_INSTANCE_VALUES for column in instances) and
+                sum(len(column) for column in instances) <= MAX_INSTANCE_VALUES and
+                all(type(value) is int for column in instances for value in column),
                 'bounded canonical instance container')
         require(case.descriptor['k'] <= 6 or self.allow_large, 'large simulation requires opt-in')
         case.descriptor.check_instances(instances)

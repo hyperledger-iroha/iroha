@@ -37,7 +37,7 @@ jobs:
         run: python3 -B -S formal/kagemusha_pasta/check.py
       - name: Exercise arithmetic certificate rejection controls
         run: python3 -B -S -m unittest discover -s formal/kagemusha_pasta -p 'test_*.py' -v
-      - name: Exercise non-hiding fold polynomial and transcript controls
+      - name: Exercise fold polynomial, transcript and ideal-model controls
         shell: bash
         run: |
           set -o pipefail

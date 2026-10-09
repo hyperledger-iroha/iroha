@@ -476,3 +476,6 @@ fn finality_qualification_requires_native_anchor_and_complete_source_inventory()
     ));
     assert_eq!(source.opens, 0);
 }
+
+#[path = "stream_tests.rs"]
+mod stream_tests;

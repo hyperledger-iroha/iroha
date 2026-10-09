@@ -478,10 +478,16 @@ immutable outcomes, storage and late-metadata failures. Descriptor-derived
 simulator budgets are separate from native polynomial randomness. Direct
 private-reference entry rejects malformed digest/authority inputs and requires
 large-mode opt-in before path creation or hashing supplied large bytes.
-Injected failure fixtures are not counted as proofs. The complete157.94s run has
-zero failures/errors/skips and unchanged source/tool pins in
-`target/qualification/c12-generic-setup-durable-publication-3/result.json`, SHA
-`e669dd9be09f2ff89860761c159c81d8ccbf37134e3268a1eba78f5c12a57318`.
+Injected failure fixtures are not counted as proofs. After the source-bound
+reconstruction port, the maintained custody guard refused the stale keygen and
+commit source pins. The reviewed refresh retains both old bodies, adds the new
+reconstruction/export/source-fingerprint roles and checks missing/altered role
+refusal. All77 current controls and fourteen diagnostic k6 proofs pass again
+with zero failures/errors/skips and unchanged source/tool pins in
+`target/qualification/setup-current-source-controls-1/subject/result.json`, SHA
+`70375b8067d5d453cafb08d0c2926da93691df49895cd3c3215f28f4f9d976aa`.
+The prior manifest, refusal and earlier157.94s result remain historical evidence;
+this refresh supplies no native16 setup authority or C12 theorem.
 The historical rebind changes outer parameters and public commitments only;
 embedded recursive constants stay unchanged. No coherent recursive re-key or
 k16 experiment is established by these controls.
@@ -720,7 +726,7 @@ older relation-finding route within the ideal-tape lemma, and establishes no
 concrete Poseidon pseudorandomness, recursive composition or C12 qualification.
 
 The maintained [fold controls](../formal/kagemusha_fold/README.md) pass
-all20 tests with unchanged source/tool pins. The ten polynomial cases check
+all 29 tests with unchanged source/tool pins. The ten polynomial cases check
 exact leading coefficients and degrees through four rounds, dependent generator
 logs, the short-only and missing-shift counterexamples, and the k16 bound's
 arithmetic. An exhaustive F17 control checks all14,739 one-round challenge tapes
@@ -732,10 +738,30 @@ They retain canonical scalar/map boundaries, empty/even/odd padding and its
 logical-history alias, unsqueezed final c/unabsorbed G, and mutation/refusal
 controls. Exact counts are `52+ceil(35m/2)` for Pallas and `52+ceil(19m/2)` for
 Vesta; the test traces use syntactic points and do not assert the IPA equation.
-The current captured result is `c12-rp57-fold-maintained-execution-1/result.json`
-(SHA `436afbb313668a890ea479c33be0fd084a8b5726920c85fb0a4b201afb37687a`).
-These finite algebra and transcript checks generate no native proof or key and
-supply neither a general theorem proof nor the independent-tape premise.
+Nine further controls use a finite partial-permutation model with explicit
+private tapes and both endpoints of every public attempt. Exhaustive counts
+cover 83,521 single-edge tapes and 2,187 carried-capacity two-edge tapes, including
+legal input/output vertex coalescence. Replay and refused candidates cannot
+overwrite earlier edges; malformed public records cannot hide extra endpoints
+inside one counted query. The conservative first-hit event yields
+
+`min(1, [2Q(B+H) + B(B-1)/2 + H(H+1)/2] / p)`
+
+for B fresh paths, H private edges and Q public attempts under independent
+uniform private salt/capacity tapes conditional on disclosed words. The common
+initial capacity must be fixed before or independent of those tapes, and public
+endpoints must be independent of hidden salts/capacities given the disclosures.
+Negative controls deliberately violate each hidden-state or causal premise.
+The model cannot infer these independence assumptions from caller values, and
+this finite exercise does not instantiate a random-permutation coupling for the
+actual fixed RP57 implementation.
+
+The current captured result is `c12-ideal-fold-maintained-execution-1/result.json`
+(SHA `79f581777c5bd2ce71213ccfd679cff4221208f224a0f48d746bbee7e84ecbef`):
+29 tests pass with 32 unchanged source/tool pins. These finite algebra,
+transcript and ideal-model checks generate no native proof or key and supply
+neither a general theorem proof nor the independent-tape premise. C12 remains
+open.
 
 ### Conditional joint view in the full-prefix model
 
@@ -774,6 +800,380 @@ that interface by an actual outer proof with only computational zero knowledge
 gives a PPT distinguishing bound, not statistical closeness of actual proofs.
 Neither the required actual-Omega interface theorem nor the concrete Poseidon
 realization follows from this lemma; C12 remains open.
+
+### Post-erasure transcript-ROM interface
+
+A further source-reviewed reduction uses one shared random function per field
+on the actual canonical padded block tuples. It respects padding aliases rather
+than assigning independent answers to distinct logical API-call histories. A
+fresh native `as1` attempt has nineteen strictly extending squeeze addresses;
+exact authenticated replay reuses the same addresses and outcomes. The salt
+is needed by the private transcript handle, but not by the subsequent fold
+arithmetic. This factors the public accumulator/error projection only: it does
+not construct the salt-bearing native witness or checkpoint.
+
+After a valid outer-proof and private-state erasure, assume that, apart from the
+designated accumulator outputs, public messages, refusals and permitted auxiliary
+state are jointly generated from permitted earlier public state and independent
+coins. The interface cannot expose the salt, private transcript addresses, fold
+body or salt-dependent scheduling information. Additional exposed functions of
+private source history require their own coupling. With deterministic attempt/query maxima
+`B_C`, `Q_C`, the hidden-address term is
+`sum_C [B_C Q_C + B_C(B_C-1)/2] / p_C`. For deciding inputs fixed before each
+fresh tape, a full-k16 source slot and input-count maximum `M_C,i`, the reviewed
+non-hiding polynomial argument adds at most
+`min(1, [3,015,170 + 32(M_C,i-1)] lambda_C)` per potential attempt, where
+`lambda_Pallas = 1/|Fp|` and `lambda_Vesta = 2/|Fq|`. The final bound is capped
+at one and includes the separate coin and operational terms. It uses
+unconditioned virtual tapes and stops before extra private-history-dependent
+aborts are exposed; it asserts no uniform law conditioned on prior misses or
+successful completion. The polynomial bound remains valid with known setup
+logs. A total public-instance-only outer simulator can postprocess this
+restricted view without constructing a replacement Omega witness.
+
+The native APIs expose more private state than that oracle abstraction:
+`FoldWitness`, Omega checkpoints and the source-context preimage retain salt.
+The missing theorem must couple the continuing honest wallet state while
+preserving legitimate later source witnesses and exact retained replay. It must
+also justify applying the chosen transcript ROM to the recursive relation,
+whose native and circuit verifiers currently compute fixed RP57 arithmetic.
+Changing only native transcript answers would break those circuit witnesses.
+The accepted ROM and concrete Poseidon heuristic are unchanged; this argument
+adds no PRF assumption and does not demand an unconditional proof of a fixed
+hash's security. It neither establishes the adaptive state/interface coupling
+nor closes C12. The complete argument and independent review are retained at
+`target/qualification/c12-post-erasure-rom-interface-1` (review SHA
+`8777f70d01f2b33ef23aeb9d30b4f5dff18d729bd11f818b2028d2e14e7698c2`).
+
+A target-only public-view adapter now binds exact public18/P/V and request
+identity before the existing diagnostic request owner. Its corrected projection
+uses the domain/arity framing for the52-word lineage digest and the complete
+`kgwvkey1` commitment/metadata digest; transcript representation alone is not
+that key digest. Eleven bounded projection, canonical-shape, refusal and failed-
+replay controls pass with unchanged captured inputs. The prior erroneous draft
+and withdrawn review remain preserved. The adapter has not executed its positive
+native16 path or generated any proof/parameter authority. A separate private
+Vesta16 reader now preserves the existing exact parameter KAT, decoder and full
+generator decision while narrowing its copied resource exception to Eq/k16.
+Twelve bounded controls pass on the first run; its inode-replacement test fails
+because the reader correctly rejects at an earlier identity check. The unchanged
+reader and corrected single test then pass separately. Both results remain;
+this is not a fresh13-case run. No native16 originals, large decode, adapter
+success or proof is exercised. The reader does not admit chosen experimental
+parameters. Its outcome is retained in
+`target/qualification/c12-vesta16-private-intake-execution-2` (independent review
+SHA `474da5e7f775244329ca564ddb0b04c16fdcb73d2aeeb7c0ab46ad114992e161`).
+Coherent actual cases, native state coupling and recursive ROM lifting remain
+open. The preceding adapter results and independent review are retained in
+`target/qualification/c12-native-public-view-adapter-execution-1`; the independent
+outcome receipt is `81b30c854a51b169760fc97bc89bc9bc11c02306619eceedf8d2455e123cbf35`.
+
+The source-reviewed attempt map distinguishes an operation, its selected
+checkpoint chain, each fresh final-Omega finish entry, and a completed record.
+Charge every finish entry to the deterministic Vesta attempt budget, including
+pre-entropy refusal; exact completed-record adoption adds no new attempt. A
+restart before publication may draw fresh randomness and must be charged again.
+Adoption validates checkpoint envelopes and the completed proof/head/maps but
+bypasses restoration of the terminal native checkpoint. It therefore does not
+compare checkpoint-derived P with the P carried by the completed Fold. Retained
+Bootstrap salt and admitted Q/W originals can nevertheless reconstruct that P.
+Replacing only transported P while exposing that complete private view admits
+an equality distinguisher; unrestricted private-state coupling is not justified.
+This is an interface limitation, not a demonstrated production soundness flaw
+or a contradiction of the restricted remote post-erasure game. The eleven
+illustrative trace contracts are unexecuted data. The argument, source mapping
+and independent review are retained in
+`target/qualification/c12-native-attempt-replay-map-1` (review SHA
+`6428e293f0d2e98695fb02a79ad498a881008f619eab5edfa5912798b4f4ca2a`).
+
+The canonical stock-OS target protects private proof transcripts from the
+transported view; it does not disclose every local checkpoint to the observer.
+A further source-scoped continuation reduction fixes the same acknowledged R
+and shows that future released-wallet entrypoints do not decode its old Q/A/W
+payloads. Collection removes their keys using retained count metadata. The
+unacknowledged branch separately preserves its envelope reads and refusal
+outcomes. This permits retaining dormant payloads privately without asserting
+erasure or indistinguishability of two different R values.
+
+For a fresh successor, a fully accepted R supplies the predecessor proof and
+claim inputs. Its exact proof bytes form the next verifier circuit's witness;
+the predecessor's Omega relation witness is not required. Legitimate private
+application state, signatures, maps and external originals remain necessary.
+Substitution must occur before public release and downstream exact-byte
+commitments, with consistent Fold/index bindings. The conditional continuation
+bound requires the joint live state, selected R and consistent future access to
+the residual shared oracle, not merely two indistinguishable accumulator
+marginals or a past query log. Coherent chosen setup, native/circuit completeness
+and the hidden-fold model bridge remain open. The argument and independent
+review are retained in `target/qualification/c12-continuing-private-state-coupling-1`
+(review SHA `27228d464586aaa30a5cc10ab86a07bdda80f6e29aeedacf8ef5632c53e9f2e3`).
+
+A further source-reviewed publication kernel permits the logical live state
+after acknowledgement to be `Pub(L, R)`: legitimate application witnesses,
+maps and earlier history in `L` are fixed before the current designated salts;
+the selected accepted transport `R` determines the new Fold, index and manifest
+bytes. Complete verifies the lineage and its public roots without requiring the
+old Omega witness. The hidden-prefix bound can therefore carry correlated
+pre-salt private application state as auxiliary input, subject to fresh
+independent tapes and the stated total query/attempt accounting. Designated
+private fold evaluations and exact replays belong to their tape handles, not
+the independent public-query budget. Exact archive-digest replay is idempotent;
+fresh publication still compares the expected old manifest. Those branches,
+storage faults, unacknowledged adoption and retained physical checkpoint/marker
+bytes require separate custody coupling. This does not permit rewriting an
+already published record or its downstream commitments.
+
+Historical no-hit alone does not justify future mixed native-ROM and fixed
+circuit computations: even at a fresh disjoint address, an independent uniform
+oracle word equals the fixed circuit word with probability only `1/p`. This
+refutes that proposed general implication, not the actual protocol, whose two
+paths use fixed RP57. A conditional fresh-Load reduction freezes the completed
+three-Q prefix and replaces proofs in reverse dependency order: Omega, A5, W3,
+A4, W2, A3, W1, A2, W0, A1. Each comparison retains the genuine prefix and uses
+the same total public-instance sampler and restoration kernel for the already
+replaced suffix. Thus local joint errors add without conditioning on success
+or invoking an honest invalid-statement prover. Native A/W restoration verifies
+the selected proof and carried claims, derives its opening, and needs no old
+stage proving witness. Only after all ten replacements may the fold tapes
+change. This still requires the local total sampler laws and a consistent
+residual oracle; it does not itself switch fixed RP57 into an ideal oracle.
+No new primitive assumption or concrete-hash theorem is claimed.
+The source/math note and independent reviews are retained at
+`target/qualification/c12-publication-kernel-rom-localization-1` (argument SHA
+`c386a561bac75fe809fe3dd9fc1fe0977b92a2dec55567be5c65415c6a2427a6`,
+independent review SHA
+`85335ca5f993552edaed63180c5ebe74da46a59b287b90ce6dd73f0f3b720466`).
+No new execution or C12 qualification follows from this local result.
+
+The fresh Load suffix has five P and five V folds, each with a full-k16 slot.
+Its source-reviewed local laws include the exact ideal advice-commitment and
+identity-stop distribution, the explicit 512-bit modular-reduction bias, lookup
+membership preservation under compression, and the generic admitted-descriptor
+Cauchy rank bound. With an explicit conditional challenge atom bound `lambda`,
+the conservative zero-denominator term is `(n*m + 2*u*L)*lambda`, capped at one,
+for `m` equality columns and `L` lookups. Zero inversion is a ghost bad event,
+not necessarily a native abort. The historical Load table predicates below supply
+the mask-boundary checks for the selected A/W artifacts, conditional on valid
+pre-mask advice and full copy-permutation admission. Current-source admission
+and the complete joint composition are still required. Total sampler, challenge
+freshness, private context/custody and operational laws, coherent setup and
+all-operation completeness remain open. The argument and independent review
+are retained at `target/qualification/c12-fresh-load-reverse-erasure-1`
+(argument SHA `dd7746a5489bd056f506a5f24ef057791ee89fc702796392a20ff3f51f033ae5`,
+review SHA `3ae32d31d5ac32bd94941380b5cec71a04f18dcb546eb409bed2c82acaa83715`).
+This is source/math evidence, with no new runtime qualification.
+
+The selected historical Load A1 (original24 of the complete52 inventory) passes
+the exact-table audit at `target/qualification/c12-load-a1-mask-boundary-draft-1`.
+Its Eq/k16 descriptor uses degree8, seven quotient pieces, 51 fixed columns,
+16 equality columns and advice rotations -1,0,1,2. Those rotations require
+usable boundary rows0,65527,65528 and tail rows65529..65535. All1,210 gate
+expression checks and 42 lookup expression checks have no tail-advice dependence;
+tail gates are identically zero, every fixed tail entry is zero and all16 sigma
+tails self-map. Fourteen bounded-reader and symbolic controls pass. The single
+audit hashes exactly140,511,414 PK bytes and then reads2,230 framing bytes plus
+19,904 selected scalar bytes through the same held file descriptor. File and
+parent identities and all source/tool pins remain unchanged. The retained
+result SHA is `31b3a98a77995446c97a4a12adc55ebd51769cef92f43135d39a556b24ce7b14`.
+Under separate valid-witness, full-copy-permutation and nonzero-denominator
+premises, these predicates preserve the relation under the prescribed masks;
+the numerator degree is at most524,280 and its domain-divisible quotient degree
+at most458,744, below seven times65,536. The audit does not revalidate the whole
+copy mapping or original source/VK commitments. Transfer to current Load requires
+exact artifact equality and separate current-source admission. No proof, keygen,
+FFT or MSM ran, and its diagnostic elapsed time is not a performance gate.
+The complete source-bound sampler and fixed-RP57 composition obligations remain open.
+
+The eight remaining selected Load keys also pass their exact-table predicates
+(`target/qualification/c12-load-remaining-mask-boundary-preparation-1`). These
+are A2–A5 at original indices 25–28 and W0–W3 at 29–32, each with a distinct VK/PK.
+Eight new selection, layout, capacity and framing controls pass; the earlier
+fourteen core controls were not rerun. Each A has the A1 descriptor profile and
+passes 1,210 gate and 42 lookup expression checks against its own tables. Each W
+uses Ep/k16, degree 6, five quotient pieces, b=5, 36 fixed and 20 equality columns,
+and 11 lookups. Its advice rotations -1,0,1,6 and fixed rotations 0,6 require
+seven usable boundary rows, 13 gate rows and 19 fixed rows. Each W passes 1,547
+gate and 154 lookup expression checks. All selected fixed tails are zero and
+sigma tails self-map. The W quotient degree bound is 327,674, below five times
+65,536, under the same valid-relation and divisibility premises.
+
+The one finite eight-key audit hashes 1,032,765,488 bytes, checks 966,704 framing
+bytes and reads 182,528 sparse scalar bytes. All held file/parent identities,
+source pins and Python/supervisor identities remain unchanged; both numeric
+child exits are zero. In total 11,028 gate and 784 lookup checks pass, within the
+unchanged per-key symbolic limits. The result SHA is
+`3d2a5f9f8dce2549e4e50c16a46d1449ca5b801582074cd62016e152f1a64a5e`;
+the independent outcome review SHA is
+`ed222ea8d47389bce81486e41953439c242d5f9321a6798b08b5fbcbdc1b8ba2`.
+Together with the earlier A1 audit and the exact matching previously audited
+Omega D/V/PK triple, this covers the selected historical fresh-Load suffix's
+mask-table predicates. It does not establish whole-copy bijectivity, a valid
+original witness, current source/VK admission, or a local joint law by itself.
+No parameters, proofs, keygens, FFTs or MSMs ran. The 5.515-second diagnostic
+audit duration is not a proving or payment latency measurement.
+
+A conditional A1 local law now couples the total response and the complete
+residual normalized-prefix oracle jointly with the legitimate pre-coin state.
+Both prover algorithms and their verifier are interpreted through that same
+mathematical squeeze oracle. Assume valid pre-mask advice, full source/copy
+admission, the exact audited tables, coherent known-log setup, independent new
+coins and atomic publication. With `r=|Fp|`, `p=|Fq|` and at most `T` prior
+addresses in this field, the ideal-byte experiment has the conservative bound
+`min(1, epsilon_operational + 131411*delta_r + 173*q_cap +
+2*T/(r-1) + 6815552/p)`, where `delta_r=t*(r-t)/(r*2^512)`,
+`t=2^512 mod r`, and `q_cap=(1-r/2^255)^128`. Whole-group identity and IPA
+rank-collapse stops are coupled directly; no success conditioning removes their
+mass. Freshness uses both C0 coordinates at words75/76 of every squeeze prefix.
+The first actual primitive sponge input contains only x(C0), so its separate
+two-to-one first-input estimate does not establish a full primitive-table or
+concrete-RP57 coupling. Operational costs may be large; OS/ChaCha replacement
+is a separate computational hybrid. The six masked groups imply173 simulator
+scalar samples and7,744 proof bytes by source arithmetic, with no Eq16 simulator
+proof executed. The dedicated outer Eq16 constructor is integrated below, but
+its actual large construction and coherent recursive authority remain untested.
+The shared future native/circuit interface remains open. The argument and independent review are retained in
+`target/qualification/c12-load-a1-joint-sampler-law-1` (argument SHA
+`4f8d4991f6aeb98dadbbcdea9650c86fe30ad8776f66e4970620fa37def9c63d`,
+review SHA `afb3ce8de2fa75adbfee4775e09690c7d65cd414582882efd303390e33da5d70`).
+
+The same conditional normalized-oracle law now covers A2–A5 and W0–W3, with
+each role's separately audited tables. W has seven opening groups, of which
+six are masked. The seventh contains only fixed columns 10/11 at rotations 0/6;
+its value is exactly `x1*F10(x3)+F11(x3)`, including its public correlations.
+It must not be replaced by a uniform sample. Each individual W slot has enough
+independent pads for its distinct initial queries and the residual evaluation;
+the excluded global rotations are -6,-1,0,1,6. For W, the base-field Fp challenge
+maps injectively into scalar Fq, so its maximum fresh atom is `1/|Fp|`.
+Its denominator/exception count is `K=2883460`, giving the conditional bound
+`min(1, epsilon_op,W + 131565*delta_|Fq| + 247*q_|Fq| +
+2*T_W/(|Fq|-1) + 5766920/|Fp|)` with the same definitions and premises as above.
+Whole-group identity and rank-collapse failures remain in the coupled response.
+
+W uses 247 simulator samples and at most 31,616 provider calls. Its 108 points
+and 200 scalars imply 9,856 bytes by arithmetic, not an executed proof. The 19
+direct scalars in three columns produce a 48-word prelude and place C0 at 48/49;
+rate alignment alone still supplies no complete primitive-table or concrete-RP57
+bridge. Five A and four W local bounds can telescope through the reviewed
+reverse order with the Omega local term below and under the complete
+continuation/setup/source premises. Their maximum 237,184 provider calls fit the
+default aggregate draw budget; request policy must also admit the distinct
+requests explicitly.
+The argument and independent review are retained in
+`target/qualification/c12-load-aw-joint-sampler-laws-1` (argument SHA
+`e05e3b03b2f645ad75dde1847ae8fc4e838eddb65466080120dcce1190e8bdda`,
+review SHA `598236461c47a90871f57ccbc538f3ff0f704ef954443c5bfeae0e5971926075`).
+This does not erase the Q prefix, construct the coherent recursive setup,
+quantify actual operational/entropy costs, or close C12.
+
+The independently reviewed Omega local law completes the ten conditional
+proof-erasure terms for the selected historical fresh-Load suffix. Its four
+opening groups each retain a coefficient-one residual mask; no group is
+public-only. The direct columns have lengths [1,2,16], placing C0 at words
+48/49. Its Fp-to-Fq challenge map is injective, giving maximum atom `1/|Fp|`.
+The conservative denominator and algebra exception count is `K=655354`.
+With the same ideal-byte and normalized-oracle definitions, the bound is
+`min(1, epsilon_op,Omega + 131218*delta_|Fq| + 96*q_|Fq| +
+2*T_Omega/(|Fq|-1) + 1310708/|Fp|)`.
+
+The 131,218 native draws include all 32 IPA blinds. There are 58 fresh point
+samples, 37 sampled evaluations and at most one final coefficient sample;
+59 serialized points and 57 scalars imply 3,712 bytes by arithmetic only.
+The local result fixes the transported P/V claims. Following the outer proof
+with the same total native opening/Pallas/Vesta admission function preserves
+distance only under the stated common-cut interface. The generic Python
+simulator does not itself perform all three native transport decisions.
+
+Before expectation over legitimate cuts and the outer cap at one, the ten-role
+sum is `657055*delta_|Fp| + 657478*delta_|Fq| + 865*q_|Fp| +
+1084*q_|Fq| + 34077760/|Fq| + 24378388/|Fp|`, plus
+`2*sum_A(T_A)/(|Fp|-1) + 2*(sum_W(T_W)+T_Omega)/(|Fq|-1)` and the ten
+operational terms. Add setup/prior distance and the separate source, actual
+entropy and continuation/interface errors. Identity, rank-collapse and failed
+attempts remain in the total response and residual oracle; none is conditioned
+away. At most 249,472 provider calls fit the aggregate budget, but the default
+eight-request policy must be explicitly raised to at least ten. The three-Q
+prefix, coherent recursive setup, fixed-RP57/native/circuit interface and joint
+fold/publication reduction remain open. The source/math packet is retained at
+`target/qualification/c12-omega-joint-sampler-law-1` (argument SHA
+`91b6991857ab1b7eed8626f4cb88403fbb5b176d972e8c787d1c6b0c7e381299`,
+independent review SHA
+`a23b51bc7e10734c2b829446ae17defa8b3e1d99f2ec161db264256da60c3735`).
+
+For the exact no-incoming Load route, the three Q circuit witnesses have a
+deterministic inverse from their stage-public columns and admitted catalog.
+Q0's [124,2,1,1,1] columns contain the complete LE32 length and sigma byte tape,
+statement, key index, verdict and normalized opening. The worker uses the exact
+installed sigma key, and its prepared object has no incoming witness or local
+fold. Q1/Q2 export every signature-witness field through canonical digest and
+128/128-bit integer limbs; the unchanged native prover re-derives each hard
+low-S and fixed-key verdict. A future decoder must also reject malformed tape
+padding, lengths, fields and parts; reconstruction alone supplies no admission.
+
+At the native proof-entry cut, replace each Q call with that same native
+algorithm on the recovered typed argument. For identical provider responses,
+configuration and matched external events, the entire response, partial
+transcript, residual oracle and provider trace are pointwise identical. Thus
+each conditional local distance is zero without an ideal-entropy or random-
+oracle substitution for these identical calls. The capsule-derived `kgwqnon1`
+query still occurs before preparation and remains in the common prior state,
+even though Load does not use its result in a Q-local fold. Additional decoding
+or native validation work must occur before the cut or be charged explicitly;
+silently repeating preparation afterward would invalidate this equality.
+
+The Q2,Q1,Q0 comparisons add no local terms to the ten suffix bounds under the
+same continuation/publication premises. They preserve exact checkpoint replay
+and require later folds to use the selected Q proofs' actual outer openings.
+Their stage-public inputs are not the final external wallet/payment view:
+those inputs still include the original sigma and signatures. Their joint
+distribution, hidden source hashing, coherent recursive setup and the different
+A/W/Omega algorithms' shared RP57 interface remain obligations. The private
+native inverse and proof-parity tests now have a separately reviewed four-file
+implementation in `target/qualification/c12-load-q-public-inverse-draft-1`.
+Its manifest SHA is `2b67be25aae2fefe9af91202378c59b227ec5e43dc1a8ae413244c6c2b04656a`.
+The patch is unapplied, uncompiled and unrun. Eleven ordinary controls and two
+ignored genuine tests preserve canonical fields/tapes, exact native policy
+and pre-cut validation, then compare the unchanged native prover under matched
+deterministic recovery contexts and actual 32-byte provider responses. Running
+the genuine tests requires seven proofs, four keygens and three strict imports;
+source review does not supply those results or an OS entropy claim.
+The source argument and independent review are retained at
+`target/qualification/c12-load-q-public-reconstruction-1` (argument SHA
+`6dca35a226079f9d317b40391d939871fcbc559867d01bcb844e2fcb894105ab`,
+review SHA `2b05d7511881325eb5d96558d32bcfe0b06d96820314cd4989b562a714a9d2e5`).
+
+A source-reviewed constructor draft for the exact historical outer Eq16 A1
+relation passes 14 small custody, parser, ordering and failure/replay controls
+(`target/qualification/c12-load-a1-chosen-eq-constructor-draft-2`, result SHA
+`762524b6d42b193d1e1e811bb150fb964545181fa12e57b5510cc73b813ca010`,
+independent outcome review SHA
+`33188a4e9af1d3004f47f8d2d363860f26ebfc16cd5e548ca44005394f715e36`).
+It keeps one internally derived setup owner, preserves original read observations,
+uses one allocation tracer, and publishes only after retained-output and source
+checks. Its 2 GiB checkpointed Python allocation ceiling is not an RSS or M3
+guarantee. These controls use tiny DATA or sentinels; no real A1/parameter
+construction, group arithmetic, transform or proof ran in those controls.
+The constructor is now integrated in `formal/kagemusha_setup` with package
+source custody, a DATA-only descriptor fixture and a caller-selected originals
+directory; the D/V/PK profile and hashes remain fixed in code. The maintained
+14 constructor and two custody controls pass once with unchanged execution
+sources/tools and child exit zero (`target/qualification/c12-load-a1-constructor-maintained-controls-1`,
+result SHA `79b9a6b247d0a67a80b447c47c63f3e0783fc6869789d0de44f23951b4265431`).
+All 83 existing selectors remain and the 14 constructor selectors bring that
+inventory to 97. The subsequent diagnostic Owner repair adds three request-
+shape controls, bringing the full suite to 100 with the same 14 small proofs.
+It names separate 256-column and 256-value resource caps, admitting Q0's five
+columns while preserving exact descriptor checking, failure replay and early
+over-budget refusal. The two new positive-boundary regression methods fail
+against the old four-column guard; all nine request-shape methods pass against
+the installed repair without proof or entropy execution
+(`target/qualification/formal-owner-column-cap-execution-1`, result SHA
+`0e682db8b80bc0eef61338071b3ef03715a2b393736411e5a6ffa2aa5b7bd623`,
+independent review SHA
+`a59de5a32838dc35af919bdbdebfa7ccbc021529dee98b9fc39c7cc8ffc93582`).
+These are finite diagnostic bounds; the canonical descriptor limit remains
+65,535 columns. The full regression has not been rerun after the changes.
+Actual large A1 construction remains unexecuted, and unchanged
+inner recursive constants cannot supply coherent recursive authority.
 
 ## Executable checks and remaining review
 

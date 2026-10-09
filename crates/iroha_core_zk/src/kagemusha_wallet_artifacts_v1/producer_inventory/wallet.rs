@@ -1,7 +1,7 @@
 //! One complete authenticated source grant for native wallet proving.
 //!
-//! Metadata and installed public generators remain resident; each active import
-//! reads one exact signed original.
+//! Metadata, compact source-admission seals and installed public generators remain
+//! resident; each Q/A/W/Omega acquisition streams all three exact signed originals.
 //! There is no constructor from an Omega-only grant, readiness flag or subset.
 
 use iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier;
@@ -9,7 +9,10 @@ use iroha_kagemusha_proof::{
     a_relation::schedule::compiled::OperationRoute,
     finality::{catalog::VerifierLimits, native::Parameters},
 };
-use iroha_plonk::{ProvingKey, keys::pk::artifact::ReadConfig, pcs::ipa::PinnedParams};
+use iroha_plonk::{
+    keys::{SourceBoundViewV2, pk::artifact::ReadConfig},
+    pcs::ipa::PinnedParams,
+};
 use std::sync::Arc;
 
 use super::*;
@@ -310,7 +313,7 @@ impl QualifiedWalletSourcesV1 {
         }
         Ok(owner)
     }
-    /// Import one exact Q source for a selected route, preserving its fixed signature policy.
+    /// Revalidate one sealed Q source and borrow its installed signature policy and metadata.
     /// # Errors
     /// Undefined route/stage, bounded original failure or a changed source/key identity.
     pub fn import_q(
@@ -319,7 +322,7 @@ impl QualifiedWalletSourcesV1 {
         stage: usize,
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
-    ) -> Result<ImportedQV1, WalletSourcesErrorV1> {
+    ) -> Result<ImportedQV1<'_>, WalletSourcesErrorV1> {
         self.import_q_cancellable(route, stage, originals, config, None)
     }
 
@@ -333,57 +336,25 @@ impl QualifiedWalletSourcesV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<ImportedQV1, WalletSourcesErrorV1> {
+    ) -> Result<ImportedQV1<'_>, WalletSourcesErrorV1> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let record = self.record(route)?;
         let index = *record.q.get(stage).ok_or(Error::Inventory)?;
-        let original = self.authenticated.read_original_cancellable(
+        let owner =
+            self.q(route)?
+                .borrow_cancellable(stage, index, &self.q_parameters, cancellation)?;
+        if owner.binding().n() > config.maximum_rows {
+            return Err(Error::Inventory.into());
+        }
+        self.authenticated.revalidate_original_cancellable(
             index,
             originals,
             config.maximum_bytes,
             cancellation,
         )?;
-        let q = self.q(route)?;
-        // Reuse the source-qualified plan, including its exact generator owners.
-        // Reconstructing the offline recipe here would derive generators and the
-        // fixed trivial claim again without an operation cancellation boundary.
-        let representative = |selectors: &[u8]| {
-            selectors
-                .first()
-                .and_then(|selector| self.sigmas.key(*selector))
-                .map(|key| key.key().clone())
-                .ok_or(Error::Inventory)
-        };
-        let incoming = if record.incoming_class.is_empty() {
-            None
-        } else {
-            Some(representative(&record.incoming_class)?)
-        };
-        let source = iroha_kagemusha_proof::q_sigma::native::QSigmaSource::new(
-            q.sigma().clone(),
-            representative(&record.own_class)?,
-            incoming,
-        )
-        .map_err(QQualificationErrorV1::from)?;
-        let owner = q::import(
-            stage,
-            &source,
-            q.signatures(),
-            &original,
-            &self.q_parameters,
-            config,
-            cancellation,
-        )?;
-        let actual = owner.metadata()?;
-        let expected = self.q(route)?.keys().get(stage).ok_or(Error::Inventory)?;
-        if actual.binding() != expected.binding()
-            || actual.key().to_bytes() != expected.key().to_bytes()
-        {
-            return Err(Error::Inventory.into());
-        }
         Ok(owner)
     }
-    /// Import the original key for one selected native A stage.
+    /// Revalidate the selected A originals and borrow their already-admitted source view.
     /// # Errors
     /// Undefined route/stage, bounded read or any strict source/context/key mismatch.
     pub fn import_a(
@@ -392,13 +363,13 @@ impl QualifiedWalletSourcesV1 {
         stage: usize,
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
-    ) -> Result<ProvingKey<Eq>, WalletSourcesErrorV1> {
+    ) -> Result<SourceBoundViewV2<'_, Eq>, WalletSourcesErrorV1> {
         self.import_a_cancellable(route, stage, originals, config, None)
     }
 
     /// Import the same exact source with a caller-owned cancellation signal.
     /// # Errors
-    /// The ordinary source errors, or cancellation without an imported key.
+    /// The ordinary source errors, or cancellation without admitted metadata.
     pub fn import_a_cancellable(
         &self,
         route: OperationRoute,
@@ -406,23 +377,22 @@ impl QualifiedWalletSourcesV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<ProvingKey<Eq>, WalletSourcesErrorV1> {
+    ) -> Result<SourceBoundViewV2<'_, Eq>, WalletSourcesErrorV1> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let index = *self.record(route)?.a.get(stage).ok_or(Error::Inventory)?;
-        let original = self.authenticated.read_original_cancellable(
+        // Bind the exact retained role before any source I/O. A seal is authority
+        // only inside this already-qualified immutable installation and stage.
+        let view = self.route(route)?.bind_a(stage, index, cancellation)?;
+        revalidate_stage(
+            &self.authenticated,
             index,
+            view,
             originals,
-            config.maximum_bytes,
-            cancellation,
-        )?;
-        Ok(self.route(route)?.owner().import_a(
-            stage,
-            &original.proving_key,
             config,
             cancellation,
-        )?)
+        )
     }
-    /// Import the original key for one selected native W continuation stage.
+    /// Revalidate selected W originals and borrow their already-admitted source view.
     /// # Errors
     /// Undefined route/stage, bounded read or any strict source/context/key mismatch.
     pub fn import_w(
@@ -431,13 +401,13 @@ impl QualifiedWalletSourcesV1 {
         stage: usize,
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
-    ) -> Result<ProvingKey<Ep>, WalletSourcesErrorV1> {
+    ) -> Result<SourceBoundViewV2<'_, Ep>, WalletSourcesErrorV1> {
         self.import_w_cancellable(route, stage, originals, config, None)
     }
 
     /// Import the same exact source with a caller-owned cancellation signal.
     /// # Errors
-    /// The ordinary source errors, or cancellation without an imported key.
+    /// The ordinary source errors, or cancellation without admitted metadata.
     pub fn import_w_cancellable(
         &self,
         route: OperationRoute,
@@ -445,30 +415,29 @@ impl QualifiedWalletSourcesV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<ProvingKey<Ep>, WalletSourcesErrorV1> {
+    ) -> Result<SourceBoundViewV2<'_, Ep>, WalletSourcesErrorV1> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let index = *self.record(route)?.w.get(stage).ok_or(Error::Inventory)?;
-        let original = self.authenticated.read_original_cancellable(
+        // Bind the exact retained role before any source I/O. A seal is authority
+        // only inside this already-qualified immutable installation and stage.
+        let view = self.route(route)?.bind_w(stage, index, cancellation)?;
+        revalidate_stage(
+            &self.authenticated,
             index,
+            view,
             originals,
-            config.maximum_bytes,
-            cancellation,
-        )?;
-        Ok(self.route(route)?.owner().import_w(
-            stage,
-            &original.proving_key,
             config,
             cancellation,
-        )?)
+        )
     }
-    /// Import the sole complete final Omega original for one active terminal proof.
+    /// Revalidate the sole final Omega originals and borrow its exact installed metadata.
     /// # Errors
     /// Bounded read failure or changed original/source/verifier identity.
     pub fn import_omega(
         &self,
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
-    ) -> Result<iroha_kagemusha_proof::omega::native::Prover, WalletSourcesErrorV1> {
+    ) -> Result<iroha_kagemusha_proof::omega::native::ProverView<'_>, WalletSourcesErrorV1> {
         self.import_omega_cancellable(originals, config, None)
     }
 
@@ -480,11 +449,14 @@ impl QualifiedWalletSourcesV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<iroha_kagemusha_proof::omega::native::Prover, WalletSourcesErrorV1> {
+    ) -> Result<iroha_kagemusha_proof::omega::native::ProverView<'_>, WalletSourcesErrorV1> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
-        Ok(self
-            .omega
-            .import_prover_cancellable(originals, config, cancellation)?)
+        Ok(self.omega.import_prover_cancellable(
+            &self.authenticated,
+            originals,
+            config,
+            cancellation,
+        )?)
     }
 }
 
@@ -590,4 +562,28 @@ mod cancellation_tests {
         assert!(!WalletSourcesErrorV1::Original(Error::Unavailable).is_cancelled());
         assert!(!WalletSourcesErrorV1::Original(Error::Proof).is_cancelled());
     }
+}
+
+// The view can only be produced by the exact qualified stage owner above. This
+// common acquisition path enforces current policy before opening any original;
+// no retained seal freezes the row/byte limits used during initial admission.
+pub(super) fn revalidate_stage<'a, C: iroha_pasta::PastaCurve>(
+    authenticated: &AuthenticatedProducerInventoryV1,
+    member: u32,
+    view: SourceBoundViewV2<'a, C>,
+    originals: &mut dyn OriginalSourceV1,
+    config: ReadConfig,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<SourceBoundViewV2<'a, C>, WalletSourcesErrorV1> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+    if view.binding().n() > config.maximum_rows {
+        return Err(Error::Inventory.into());
+    }
+    authenticated.revalidate_original_cancellable(
+        member,
+        originals,
+        config.maximum_bytes,
+        cancellation,
+    )?;
+    Ok(view)
 }

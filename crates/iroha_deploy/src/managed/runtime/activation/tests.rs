@@ -220,6 +220,10 @@ fn phase_failures_and_late_or_cancelled_results_use_only_closed_diagnostics() {
             "confirming the original bootstrap carrier on validator 3",
         ),
         (
+            Phase::CarrierPeers,
+            "confirming the original bootstrap carrier on all four validators",
+        ),
+        (
             Phase::Catalog,
             "publishing the exact generated gateway catalog",
         ),

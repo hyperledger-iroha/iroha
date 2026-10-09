@@ -7,6 +7,8 @@ use super::{
     attempts::{self, BodyReplacementTarget, Origin, Purpose},
     invalid, now_ms, require_deadline,
 };
+#[cfg(test)]
+use crate::managed::stream_token_custody::body_history::finish_timing;
 use crate::managed::{ManagedBootstrapFailure, Result};
 use iroha_crypto::Hash;
 use iroha_data_model::sorafs::capacity::ProviderId;
@@ -81,7 +83,7 @@ impl ReplacementTarget {
 }
 
 /// Closed local scope. It cannot supply a native policy, current state or successful carrier.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::managed) enum Scope {
     Bootstrap([ProviderId; 3]),
     Renewal { provider: ProviderId, sequence: u64 },
@@ -215,6 +217,9 @@ impl Lease {
     // All native and final live checks remain in their original order. The caller owns
     // either the shared census guard or the exclusive replacement guard throughout.
     fn check_locked(&self, deadline: Instant) -> Result<Instant> {
+        #[cfg(test)]
+        let _closure_timing =
+            finish_timing::phase_in_closure(finish_timing::Phase::ClosureLiveCheck);
         require_active(&self.cancelled)?;
         let deadline = deadline.min(self.deadline);
         if deadline <= Instant::now() {
@@ -309,6 +314,9 @@ impl Lease {
         })
     }
     fn claim(&self, purpose: Purpose, target: ReplacementTarget, deadline: Instant) -> Result<()> {
+        #[cfg(test)]
+        let _closure_timing =
+            finish_timing::phase_in_closure(finish_timing::Phase::ClosureLiveClaim);
         let _guard = self.write_guard(deadline)?;
         #[cfg(test)]
         parallel_tests::after_claim_lock();
@@ -410,8 +418,9 @@ pub(in crate::managed) trait DispatchAuthorization: sealed::Sealed {
     }
 }
 
-// Owned once by a lexical read. Bytes must be freshly observed at every use; these
-// immutable DTOs and lazy pure digests cannot issue a Lease or survive in BodyHistory.
+// Owned once by a lexical read. Ordinary censuses and selected parser references freshly
+// observe their bytes; a parser's original complete sequence also closes at full exit.
+// These immutable DTOs/digests cannot issue a Lease or survive in BodyHistory.
 struct RecordImage<T> {
     bytes: Vec<u8>,
     value: T,
@@ -434,11 +443,13 @@ struct RetainedEpoch {
     claim: Option<RecordImage<Replacement>>,
 }
 
-/// One body parser's bounded pure metadata reuse; no source or live authorization verdict.
-/// Each census still reads every record/absence and brackets the same exact native namespace.
+/// One body parser's bounded metadata workspace, never a live authorization verdict.
+/// A concrete read-only parser may borrow its exact original source until the full exit;
+/// ordinary/effectful readers and active decode budgets retain every complete census.
 #[derive(Default)]
 pub(in crate::managed) struct EpochReader {
     records: Vec<RetainedEpoch>,
+    parser_source: Option<parser::Source>,
 }
 impl EpochReader {
     fn refresh(
@@ -481,6 +492,15 @@ impl EpochReader {
         scope: Scope,
         origins: impl Iterator<Item = &'a Origin>,
     ) -> Result<()> {
+        if self.parser_source.is_some() {
+            return self.validate_parser_references(
+                directory,
+                original_digest,
+                fees,
+                scope,
+                origins,
+            );
+        }
         self.refresh(directory, original_digest, fees, scope)?;
         for origin in origins {
             if let Origin::Generated {
@@ -518,16 +538,26 @@ pub(in crate::managed) fn validate_retained(
     EpochReader::default().validate_retained(directory, original_digest, fees, scope)
 }
 
+// One physical producer for ordinary imports and exact parser-owned image comparisons.
+fn read_source_image(root: &PrivateDirectory, name: &str) -> Result<Option<Vec<u8>>> {
+    #[cfg(test)]
+    reader_tests::record_read();
+    super::read_optional(root, name, attempts::MAX_RECORD_BYTES)
+}
+
 fn read_image<T: norito::NoritoSerialize + for<'a> norito::NoritoDeserialize<'a>>(
     root: &PrivateDirectory,
     name: &str,
     retained: Option<RecordImage<T>>,
+    exact: bool,
 ) -> Result<Option<RecordImage<T>>> {
-    #[cfg(test)]
-    reader_tests::record_read();
-    // This is exactly the read/absence owner used by attempts::read_record. Every cached
-    // image must pass all original fresh native identity, permission, size and path fences.
-    let Some(bytes) = super::read_optional(root, name, attempts::MAX_RECORD_BYTES)? else {
+    let current = read_source_image(root, name)?;
+    // Compare before dropping or replacing the original image: absence, a newly appeared
+    // claim/epoch, and changed bytes all refuse the exact lexical parser exit.
+    if exact && current.as_deref() != retained.as_ref().map(|image| image.bytes.as_slice()) {
+        return Err(invalid("original epoch parser image changed"));
+    }
+    let Some(bytes) = current else {
         return Ok(None);
     };
     // An enclosing decoder owns its current admission, including field/sequence/depth
@@ -547,12 +577,60 @@ fn read_image<T: norito::NoritoSerialize + for<'a> norito::NoritoDeserialize<'a>
         digest: Cell::new(None),
     }))
 }
+fn validate_epoch(
+    epoch: &RecordImage<Epoch>,
+    ordinal: usize,
+    previous: Option<&RecordImage<Epoch>>,
+    parent_intent: [u8; 32],
+    fees: &Fees,
+) -> Result<()> {
+    let value = &epoch.value;
+    value.terms.validate()?;
+    if usize::from(value.ordinal) != ordinal
+        || value.parent_intent != parent_intent
+        || value.terms.fees != *fees
+        || value.issued_at_unix_ms == 0
+        || value.issued_at_unix_ms >= value.terms.signing_deadline_unix_ms
+        || value.previous != previous.map(RecordImage::digest).transpose()?
+    {
+        return Err(invalid(
+            "generated epoch changed original intent, fees or lineage",
+        ));
+    }
+    Ok(())
+}
+fn validate_claim(
+    claim: &RecordImage<Replacement>,
+    epoch: &RecordImage<Epoch>,
+    scope: Scope,
+) -> Result<()> {
+    scope.check(claim.value.purpose)?;
+    claim.value.target.validate(claim.value.purpose)?;
+    if claim.value.epoch != epoch.digest()? {
+        return Err(invalid("generated unsigned replacement claim changed"));
+    }
+    Ok(())
+}
+
 fn read_epochs(
     root: &PrivateDirectory,
     parent_intent: [u8; 32],
     fees: &Fees,
     scope: Scope,
     retained: Vec<RetainedEpoch>,
+) -> Result<Vec<RetainedEpoch>> {
+    read_epochs_using(root, parent_intent, fees, scope, retained, false)
+}
+
+// One canonical sequence reader owns bounds, physical reads, decoding, semantics and
+// namespace order. The parser exit moves its original images through this same reader.
+fn read_epochs_using(
+    root: &PrivateDirectory,
+    parent_intent: [u8; 32],
+    fees: &Fees,
+    scope: Scope,
+    retained: Vec<RetainedEpoch>,
+    exact: bool,
 ) -> Result<Vec<RetainedEpoch>> {
     #[cfg(test)]
     reader_tests::namespace_read();
@@ -568,35 +646,22 @@ fn read_epochs(
         let (old_epoch, old_claim) = retained
             .next()
             .map_or((None, None), |entry| (Some(entry.epoch), entry.claim));
-        let Some(epoch): Option<RecordImage<Epoch>> = read_image(root, &name, old_epoch)? else {
+        let Some(epoch): Option<RecordImage<Epoch>> = read_image(root, &name, old_epoch, exact)?
+        else {
             break;
         };
-        let value = &epoch.value;
-        value.terms.validate()?;
-        if usize::from(value.ordinal) != index
-            || value.parent_intent != parent_intent
-            || value.terms.fees != *fees
-            || value.issued_at_unix_ms == 0
-            || value.issued_at_unix_ms >= value.terms.signing_deadline_unix_ms
-            || value.previous
-                != epochs
-                    .last()
-                    .map(|entry| entry.epoch.digest())
-                    .transpose()?
-        {
-            return Err(invalid(
-                "generated epoch changed original intent, fees or lineage",
-            ));
-        }
+        validate_epoch(
+            &epoch,
+            index,
+            epochs.last().map(|entry| &entry.epoch),
+            parent_intent,
+            fees,
+        )?;
         expected.push(name.into());
         let claim_name = format!("{index:04}-replacement.nrt");
-        let claim = read_image(root, &claim_name, old_claim)?;
+        let claim = read_image(root, &claim_name, old_claim, exact)?;
         if let Some(claim) = &claim {
-            scope.check(claim.value.purpose)?;
-            claim.value.target.validate(claim.value.purpose)?;
-            if claim.value.epoch != epoch.digest()? {
-                return Err(invalid("generated unsigned replacement claim changed"));
-            }
+            validate_claim(claim, &epoch, scope)?;
             expected.push(claim_name.into());
         }
         epochs.push(RetainedEpoch { epoch, claim });
@@ -637,3 +702,7 @@ mod cancellation_tests;
 #[cfg(test)]
 #[path = "authorization/parallel_tests.rs"]
 mod parallel_tests;
+
+#[path = "authorization/parser.rs"]
+mod parser;
+pub(in crate::managed) use parser::BodyParserEpochContext;

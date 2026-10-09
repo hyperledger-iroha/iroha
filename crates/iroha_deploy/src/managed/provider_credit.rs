@@ -498,7 +498,7 @@ impl ManagedInitialProviderCredit {
                     &original.checkpoint,
                     &transaction,
                     &report,
-                    observed.checkpoint().height(),
+                    observed,
                     deadline,
                 )?
             } else {

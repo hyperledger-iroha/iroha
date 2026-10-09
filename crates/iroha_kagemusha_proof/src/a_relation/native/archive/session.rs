@@ -1,5 +1,6 @@
 //! Fixed-artifact proof production and exact source-bound checkpoint restoration.
 
+use iroha_plonk::keys::{SourceAdmissionSealV2, SourceBoundViewV2};
 #[path = "checkpoint.rs"]
 mod checkpoint;
 #[path = "original.rs"]
@@ -21,15 +22,13 @@ use crate::{
 use ff::PrimeField;
 use iroha_pasta::msm::MemoryBudget;
 use iroha_plonk::DescriptorBinding;
-use iroha_plonk::{
-    ProverConfig, ProverRandomness, ProvingKey, Witness, create_proof_owned_with_claim,
-};
+use iroha_plonk::{ProverConfig, ProverRandomness, ProvingKey};
 use iroha_plonk_recursion::{FoldConfig, create_fold, verifier::VerifierPlan};
 use std::sync::Arc;
 
 /// Installed A1–A10 and W0–W8 artifacts for the complete Archive owner schedule.
-/// Only verifier metadata is retained. The caller borrows one matching stage
-/// proving key for each proving call and may release it immediately afterward.
+/// Only verifier metadata is retained. Each proving call reconstructs one exact
+/// admitted source and drops its temporary PK before verification and decisions.
 /// Package authentication and original PK import belong to artifact installation.
 pub struct Prover {
     plan: Plan,
@@ -47,7 +46,7 @@ impl Prover {
     }
 
     /// Install exact fixed-profile verifier metadata without retaining any PK.
-    /// There is no runtime key generation or profile selection.
+    /// Installation performs no runtime key generation or profile selection.
     /// # Errors
     /// Wrong public schema, internal/terminal profile or authenticated W stage identity.
     pub fn from_artifacts(
@@ -263,13 +262,13 @@ impl Session<'_> {
     }
     #[allow(
         clippy::too_many_arguments,
-        reason = "the current stage PK is borrowed independently of source and proving randomness"
+        reason = "source-bound stage metadata is borrowed independently of source and proving randomness"
     )]
     fn prove_a(
         &self,
         stage: usize,
         circuit: Stage,
-        key: &ProvingKey<Eq>,
+        key: &SourceBoundViewV2<'_, Eq>,
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
         budget: MemoryBudget,
@@ -278,48 +277,29 @@ impl Session<'_> {
             .a
             .get(stage)
             .ok_or(Error::Artifact)?
-            .require_prover(key)
+            .require_source_bound(key)
             .map_err(|_| Error::Artifact)?;
         let public = circuit.public()?;
         let actual = StageCircuit {
             inner: circuit.clone(),
         };
-        let witness = Witness::from_circuit_cancellable(
+        let output = super::super::proving::prove(
+            &self.prepared.plan().vesta,
             key,
             &actual,
             std::slice::from_ref(&public),
-            config.cancellation,
-        )
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
-        let output = create_proof_owned_with_claim(
-            &self.prepared.plan().vesta,
-            key,
-            witness,
             randomness,
             config,
-        )
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
+        )?;
         self.checked_a_cancellable(stage, circuit, output.proof, budget, config.cancellation)
     }
     /// Prove A1 with hard predecessor and own-sigma ownership.
-    /// The borrowed A1 PK must match the installed identity before folding.
+    /// The admitted A1 metadata must match the installed identity before folding.
     /// # Errors
     /// Failed fixed-artifact assignment, proof or complete decide.
     pub fn first(
         &self,
-        key: &ProvingKey<Eq>,
+        key: &SourceBoundViewV2<'_, Eq>,
         salt: Fp,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
@@ -335,7 +315,7 @@ impl Session<'_> {
         let fold = &normalized_fold;
 
         self.prover.a[0]
-            .require_prover(key)
+            .require_source_bound(key)
             .map_err(|_| Error::Artifact)?;
         self.prove_a(
             0,
@@ -380,16 +360,16 @@ impl Session<'_> {
     }
     /// Prove the fixed W successor of a nonterminal A checkpoint.
     /// Every W retains source-part, own-A and two explicit trivial Vesta slots.
-    /// The borrowed W PK is checked against this exact stage before verification.
+    /// The admitted W metadata is checked against this exact stage before folding.
     /// # Errors
     /// Foreign/terminal source, wrong installed key, proof or full-claim failure.
     #[allow(
         clippy::too_many_arguments,
-        reason = "the current stage PK is borrowed independently of source and proving randomness"
+        reason = "source-bound stage metadata is borrowed independently of source and proving randomness"
     )]
     pub fn wrapper(
         &self,
-        key: &ProvingKey<Ep>,
+        key: &SourceBoundViewV2<'_, Ep>,
         source: &ACheckpoint,
         salt: Fq,
         fold: &FoldConfig,
@@ -409,7 +389,7 @@ impl Session<'_> {
             .w
             .get(source.stage)
             .ok_or(Error::Artifact)?
-            .require_prover(key)
+            .require_source_bound(key)
             .map_err(|_| Error::Artifact)?;
         self.verify_a_cancellable(source, fold.kernel_budget, config.cancellation)?;
         if source.stage + 1 >= A_STAGE_COUNT {
@@ -479,29 +459,14 @@ impl Session<'_> {
         )
         .map_err(|_| Error::Input)?;
         let public = omega_instances(source.public[0], &vesta)?;
-        let witness =
-            Witness::from_circuit_cancellable(key, &circuit, &public, config.cancellation)
-                .map_err(|error| {
-                    if error.is_cancelled() {
-                        Error::Cancelled
-                    } else {
-                        Error::Prover
-                    }
-                })?;
-        let output = create_proof_owned_with_claim(
+        let output = super::super::proving::prove(
             &self.prepared.plan().pallas,
             key,
-            witness,
+            &circuit,
+            &public,
             randomness,
             config,
-        )
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
+        )?;
         self.restore_wrapper_cancellable(
             source,
             output.proof,
@@ -688,16 +653,16 @@ impl Session<'_> {
     }
     /// Prove the next exact A owner after a checked W checkpoint.
     /// The terminal folds the two selected incoming Pallas obligations exactly once.
-    /// The borrowed next-A PK is authenticated before any fold or proof work.
+    /// The admitted next-A metadata is authenticated before any fold or proof work.
     /// # Errors
     /// Foreign source, omitted stage/claim, wrong key, failed proof or full decide.
     #[allow(
         clippy::too_many_arguments,
-        reason = "the current stage PK is borrowed independently of source and proving randomness"
+        reason = "source-bound stage metadata is borrowed independently of source and proving randomness"
     )]
     pub fn advance(
         &self,
-        key: &ProvingKey<Eq>,
+        key: &SourceBoundViewV2<'_, Eq>,
         wrapper: &WCheckpoint,
         salt: Fp,
         fold: &FoldConfig,
@@ -718,7 +683,7 @@ impl Session<'_> {
             .a
             .get(index)
             .ok_or(Error::Artifact)?
-            .require_prover(key)
+            .require_source_bound(key)
             .map_err(|_| Error::Artifact)?;
         let circuit = self.prepare_advance(wrapper, salt, fold)?;
         self.prove_a(index, circuit, key, randomness, config, fold.kernel_budget)
@@ -895,4 +860,49 @@ pub struct Terminal {
     pub incoming_correction: EqAffine,
     /// Actual terminal A opening, distinct from every carried obligation.
     pub opening: FoldInput<Eq>,
+}
+
+impl Prover {
+    /// Bind a previously source-admitted seal to this exact installed A stage.
+    /// This borrows existing metadata and retains no proving polynomials.
+    /// # Errors
+    /// Wrong stage, descriptor/verifier identity or cooperative cancellation.
+    pub fn bind_a<'a>(
+        &'a self,
+        stage: usize,
+        seal: &'a SourceAdmissionSealV2<Eq>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<SourceBoundViewV2<'a, Eq>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        let artifact = self.a.get(stage).ok_or(Error::Artifact)?;
+        seal.bind(artifact.binding(), artifact.key(), cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })
+    }
+    /// Bind a previously source-admitted seal to this exact installed W stage.
+    /// This borrows existing metadata and retains no proving polynomials.
+    /// # Errors
+    /// Wrong stage, descriptor/verifier identity or cooperative cancellation.
+    pub fn bind_w<'a>(
+        &'a self,
+        stage: usize,
+        seal: &'a SourceAdmissionSealV2<Ep>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<SourceBoundViewV2<'a, Ep>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        let artifact = self.w.get(stage).ok_or(Error::Artifact)?;
+        seal.bind(artifact.binding(), artifact.key(), cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })
+    }
 }

@@ -6,7 +6,9 @@
 //! the actual terminal A proof, derives all four Vesta fold slots from its canonical
 //! frame, preserves the full original Pallas claim, and self-verifies the generated
 //! Omega proof and both transported claims with complete native decisions.
-//! It performs no runtime key generation and grants no wallet-open or custody authority.
+//! It derives no new artifact key and grants no wallet-open or custody authority.
+//! Strict import retains only source-bound verifier metadata; each proving attempt
+//! rebuilds one OnDemand PK without commitment MSMs and drops it before verification.
 //! Full catalog/profile authentication, original G1 preparation, source-marker admission
 //! and exact G1 Payment/Credited byte qualification remain mandatory in the owning loader.
 
@@ -21,7 +23,10 @@ use iroha_plonk::{
     create_proof_owned_with_claim,
     cs::{CurveV1, InstanceModeV1, ProofSuffixV1, TranscriptV2},
     frontend::Circuit,
-    keys::pk::artifact::ReadConfig,
+    keys::{
+        CosetCachePolicy, RebuildError, SourceBoundVerifyingKeyV2, SourceBoundViewV2,
+        keygen_pk_from_vk_v2_cancellable, pk::artifact::ReadConfig,
+    },
     pcs::ipa::PinnedParams,
     transcript::decode_point,
 };
@@ -245,10 +250,20 @@ impl Program {
     }
 }
 
-/// Original installed outer key and fixed program. No method generates artifact keys.
+/// Original installed verifier identity and fixed program, without a retained PK.
+/// No method generates a new artifact key. Proving buffers exist for one attempt only;
+/// preparation, checkpoint layouts and restore paths retain verifier metadata only.
 pub struct Prover {
     program: Program,
-    key: ProvingKey<Ep>,
+    key: SourceBoundVerifyingKeyV2<Ep>,
+}
+
+fn rebuild_error(error: &RebuildError) -> Error {
+    if error.is_cancelled() {
+        Error::Cancelled
+    } else {
+        Error::Artifact
+    }
 }
 
 /// Installed-key-derived canonical final checkpoint layout; no caller-supplied size or kind.
@@ -345,7 +360,15 @@ impl Prover {
         if key.vk().to_bytes() != installed_vk {
             return Err(Error::Artifact);
         }
-        Ok(Self { program, key })
+        let identity = SourceBoundVerifyingKeyV2::from_proving_key(&key, cancellation)
+            .map_err(|error| rebuild_error(&error))?;
+        // Strict admission above remains the authority root. Do not retain its
+        // polynomial/coset buffers between subproofs or during restore.
+        drop(key);
+        Ok(Self {
+            program,
+            key: identity,
+        })
     }
 
     /// Exact immutable outer descriptor bound by the installed key.
@@ -356,9 +379,95 @@ impl Prover {
     /// Exact installed native outer verifying key.
     #[must_use]
     pub fn verifying_key(&self) -> &VerifyingKey<Ep> {
-        self.key.vk()
+        self.key.verifying_key()
     }
 
+    /// Move exact admitted public metadata into the installation's existing graph.
+    #[must_use]
+    pub fn into_metadata(self) -> SourceBoundVerifyingKeyV2<Ep> {
+        self.key
+    }
+    /// Borrow the immutable standalone program and admitted public identity.
+    #[must_use]
+    pub fn view(&self) -> ProverView<'_> {
+        ProverView {
+            program: &self.program,
+            key: self.key.view(),
+        }
+    }
+    /// Derive exact checkpoint bounds without reconstructing proving buffers.
+    /// # Errors
+    /// Invalid protocol/key digest or canonical extent overflow.
+    pub fn checkpoint_layout(&self) -> Result<CheckpointLayout, Error> {
+        self.view().checkpoint_layout()
+    }
+    /// Prepare through the same borrowed implementation used by installed owners.
+    /// # Errors
+    /// Invalid source proof/frame/claim, fold or installed identity.
+    pub fn prepare(
+        &self,
+        input: Input,
+        salt: [u8; 32],
+        budget: MemoryBudget,
+    ) -> Result<Session<'_>, Error> {
+        self.view().prepare(input, salt, budget)
+    }
+    /// Prepare with cooperative cancellation and no partial session on refusal.
+    /// # Errors
+    /// As preparation, or cancellation.
+    pub fn prepare_cancellable(
+        &self,
+        input: Input,
+        salt: [u8; 32],
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Session<'_>, Error> {
+        self.view()
+            .prepare_cancellable(input, salt, budget, cancellation)
+    }
+}
+
+/// Borrowed complete program and exact admitted outer identity, without graph clones.
+/// The installation owner binds this program to its strict-source admission; live
+/// proof reconstruction additionally checks its complete source fingerprint.
+#[derive(Clone, Copy)]
+pub struct ProverView<'a> {
+    program: &'a Program,
+    key: SourceBoundViewV2<'a, Ep>,
+}
+impl<'a> ProverView<'a> {
+    /// Bind exact admitted outer metadata to the retained complete source program.
+    /// This component grants no catalog or installation authority.
+    /// # Errors
+    /// Another fixed outer protocol, k, curve or public schema.
+    pub fn from_source_bound(
+        program: &'a Program,
+        key: SourceBoundViewV2<'a, Ep>,
+    ) -> Result<Self, Error> {
+        let d = key.binding().descriptor();
+        if program.pallas.k() != 16
+            || d.curve != CurveV1::Pallas
+            || d.k != 16
+            || d.transcript != TranscriptV2::KagemushaPoseidonRp57Base
+            || d.instance_mode != InstanceModeV1::Direct
+            || d.proof_suffix != ProofSuffixV1::FoldedGenerator
+            || d.instance_lengths != [1, 2, u32::try_from(K).map_err(|_| Error::Artifact)?]
+            || d.instance_types.as_deref() != Some(&OmegaPlan::instance_types())
+        {
+            return Err(Error::Artifact);
+        }
+        Ok(Self { program, key })
+    }
+    /// Exact borrowed outer descriptor.
+    #[must_use]
+    pub fn binding(&self) -> &DescriptorBinding {
+        self.key.binding()
+    }
+    /// Exact borrowed outer verifier.
+    #[must_use]
+    pub fn verifying_key(&self) -> &VerifyingKey<Ep> {
+        self.key.verifying_key()
+    }
     /// Derive the exact canonical durable checkpoint size from the installed descriptor.
     /// # Errors
     /// Invalid native protocol/key digest or canonical size/codec overflow.
@@ -397,7 +506,7 @@ impl Prover {
         input: Input,
         salt: [u8; 32],
         budget: MemoryBudget,
-    ) -> Result<Session<'_>, Error> {
+    ) -> Result<Session<'a>, Error> {
         self.prepare_cancellable(input, salt, budget, None)
     }
     /// Execute the same native check with an explicit operation signal.
@@ -409,9 +518,9 @@ impl Prover {
         salt: [u8; 32],
         budget: MemoryBudget,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<Session<'_>, Error> {
+    ) -> Result<Session<'a>, Error> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
-        let program = &self.program;
+        let program = self.program;
         let original = input.key.to_bytes();
         let key = program
             .source_keys
@@ -468,7 +577,7 @@ impl Prover {
             })?;
         let omega_key_digest = self
             .key
-            .vk()
+            .verifying_key()
             .kagemusha_digest(self.key.binding())
             .map_err(|_| Error::Artifact)?;
         if input.public[17] != omega_key_digest
@@ -526,7 +635,7 @@ impl Prover {
         };
         let circuit = program.circuit(witness)?;
         Ok(Session {
-            owner: self,
+            owner: *self,
             circuit,
             public,
             pallas: input.pallas,
@@ -554,7 +663,7 @@ pub struct Input {
 
 /// Prepared session tied to its immutable imported owner; private fields prevent forged state.
 pub struct Session<'a> {
-    owner: &'a Prover,
+    owner: ProverView<'a>,
     circuit: OmegaCircuit,
     public: Vec<Vec<Fq>>,
     pallas: AccumulatorT<Ep>,
@@ -681,7 +790,7 @@ impl Session<'_> {
         iroha_plonk::verifier::verify_full_cancellable(
             &owner.program.pallas,
             owner.key.binding(),
-            owner.key.vk(),
+            owner.key.verifying_key(),
             &self.public,
             proof,
             budget,
@@ -697,7 +806,7 @@ impl Session<'_> {
         let opening = iroha_plonk::verifier::accumulate_generator_cancellable(
             &owner.program.pallas,
             owner.key.binding(),
-            owner.key.vk(),
+            owner.key.verifying_key(),
             &self.public,
             proof,
             budget,
@@ -757,33 +866,52 @@ impl Session<'_> {
         config: ProverConfig,
     ) -> Result<Output, Error> {
         let owner = self.owner;
-        let witness = Witness::from_circuit_cancellable(
-            &owner.key,
-            &self.circuit,
-            &self.public,
-            config.cancellation,
-        )
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
-        let output = create_proof_owned_with_claim(
-            &owner.program.pallas,
-            &owner.key,
-            witness,
-            randomness,
-            config,
-        )
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
+        iroha_pasta::CancellationToken::checkpoint(config.cancellation)
+            .map_err(|_| Error::Cancelled)?;
+        let output = {
+            let key = {
+                let blank = owner.program.source_circuit()?;
+                keygen_pk_from_vk_v2_cancellable(
+                    &owner.program.pallas,
+                    &blank,
+                    &owner.key,
+                    CosetCachePolicy::OnDemand,
+                    config.cancellation,
+                )
+                .map_err(|error| rebuild_error(&error))?
+            };
+            let witness = Witness::from_circuit_cancellable(
+                &key,
+                &self.circuit,
+                &self.public,
+                config.cancellation,
+            )
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Prover
+                }
+            })?;
+            let output = create_proof_owned_with_claim(
+                &owner.program.pallas,
+                &key,
+                witness,
+                randomness,
+                config,
+            )
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Prover
+                }
+            })?;
+            // No PK survives into native verification/decides. Lexical ownership
+            // also drops it on every earlier error, cancellation or unwind.
+            drop(key);
+            output
+        };
         let expected = Protocol::new(owner.key.binding().descriptor())
             .map_err(|_| Error::Artifact)?
             .proof_length();
@@ -793,7 +921,7 @@ impl Session<'_> {
         iroha_plonk::verifier::verify_full_cancellable(
             &owner.program.pallas,
             owner.key.binding(),
-            owner.key.vk(),
+            owner.key.verifying_key(),
             &self.public,
             &output.proof,
             config.msm_budget,

@@ -10,6 +10,10 @@ use core::marker::PhantomData;
 use ff::PrimeField;
 use std::collections::BTreeMap;
 
+#[path = "program/imported.rs"]
+mod imported;
+use imported::LastImported;
+
 pub(super) fn identity(source: &SourceVerifier) -> Result<SourceIdentity, Error> {
     Ok(SourceIdentity {
         descriptor: *source.binding().digest(),
@@ -64,15 +68,17 @@ impl<C: SourceCircuit> Mounted<C> {
             circuit: PhantomData,
         })
     }
-    pub(super) fn prove(
+    fn prove(
         &self,
         witness: &C,
         params: &Parameters,
         limits: ImportLimits,
         context: &mut ProvingContext<'_, '_>,
+        imported: &mut LastImported<Prover<C>>,
     ) -> Result<SourceNodeEvidence, Error> {
+        imported.select(&self.id);
         let entropy = context.entropy(self.id.clone())?;
-        self.prove_with(witness, params, limits, context, entropy)
+        self.prove_with(witness, params, limits, context, entropy, Some(imported))
     }
     pub(super) fn prepare_and_prove(
         &self,
@@ -86,15 +92,16 @@ impl<C: SourceCircuit> Mounted<C> {
         let mut fold = context.fold.clone();
         fold.cancellation = context.proof.cancellation.cloned();
         let witness = circuit(prepare(entropy.inner_salt, &fold))?;
-        self.prove_with(&witness, params, limits, context, entropy)
+        self.prove_with(&witness, params, limits, context, entropy, None)
     }
-    pub(super) fn prove_with(
+    fn prove_with(
         &self,
         witness: &C,
         params: &Parameters,
         limits: ImportLimits,
         context: &mut ProvingContext<'_, '_>,
         entropy: crate::finality::continuity::tree::NodeRandomness<'_>,
+        imported: Option<&mut LastImported<Prover<C>>>,
     ) -> Result<SourceNodeEvidence, Error> {
         iroha_pasta::CancellationToken::checkpoint(context.proof.cancellation)?;
         let exports = witness.exports(
@@ -108,16 +115,26 @@ impl<C: SourceCircuit> Mounted<C> {
         {
             return Ok(proof);
         }
-        let pair = load_pair(context.artifacts, &self.id)?;
-        let prover = Prover::from_original_artifacts_cancellable(
-            witness,
-            borrowed(&pair.source),
-            borrowed(&pair.wrapper),
-            params.pallas.clone(),
-            params.vesta.clone(),
-            limits.key,
-            context.proof.cancellation,
-        )?;
+        let cancellation = context.proof.cancellation;
+        let import = |pair: &crate::finality::continuity::tree::OriginalPair| {
+            Prover::from_original_artifacts_cancellable(
+                witness,
+                borrowed(&pair.source),
+                borrowed(&pair.wrapper),
+                params.pallas.clone(),
+                params.vesta.clone(),
+                limits.key,
+                cancellation,
+            )
+        };
+        let fresh;
+        let prover = if let Some(imported) = imported {
+            imported.get_or_import(&self.id, context.artifacts, cancellation, import)?
+        } else {
+            let pair = load_pair(context.artifacts, &self.id)?;
+            fresh = import(&pair)?;
+            &fresh
+        };
         if identity(&prover.qualified_source()?)? != identity(&self.source)? {
             return Err(Error::Artifact);
         }
@@ -218,10 +235,15 @@ impl<C: SourceCircuit> InstalledProgram<C> {
             return Err(Error::Input);
         }
         let mut leaves = Vec::with_capacity(witnesses.len());
+        // Only this call's last leaf class retains imported tables. Parameters,
+        // read policy and installed metadata cannot change within this scope.
+        let mut imported = LastImported::new(limits.key.maximum_bytes);
         for (witness, class) in witnesses.into_iter().zip(&self.sequence) {
             let installed = &self.leaves[class];
-            leaves.push(installed.prove(&witness, params, limits, context)?);
+            leaves.push(installed.prove(&witness, params, limits, context, &mut imported)?);
         }
+        // No resident leaf pair overlaps the interval-tree key imports.
+        drop(imported);
         let ProvingContext {
             artifacts,
             randomness,
@@ -254,3 +276,7 @@ impl<C: SourceCircuit> InstalledProgram<C> {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "program/genuine_reuse.rs"]
+mod genuine_reuse;

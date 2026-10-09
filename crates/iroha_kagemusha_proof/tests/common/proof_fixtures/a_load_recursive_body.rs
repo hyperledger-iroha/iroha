@@ -215,25 +215,27 @@ pub fn authenticated_load(
         .expect("genuine finality, predecessor and Q originals are mandatory");
     let fold = FoldConfig::default();
     let config = ProverConfig::default();
-    let active = prover
+    let active_seal = prover
         .import_a(0, &source.a[0].read(source.read.maximum_bytes), source.read)
         .unwrap();
+    let active = prover.bind_a(0, &active_seal, None).unwrap();
     let mut a = session
         .first(&active, Fp::from(201), &fold, common::recovery(201), config)
         .unwrap();
-    drop(active);
+    drop(active_seal);
     a = session
         .restore_first(a.proof().to_vec(), &a.pallas_bytes(), MemoryBudget::DEFAULT)
         .unwrap();
     for stage in 0..A_STAGE_COUNT - 1 {
         let seed = u8::try_from(202 + stage * 2).unwrap();
-        let active = prover
+        let active_seal = prover
             .import_w(
                 stage,
                 &source.w[stage].read(source.read.maximum_bytes),
                 source.read,
             )
             .unwrap();
+        let active = prover.bind_w(stage, &active_seal, None).unwrap();
         let w = session
             .wrapper(
                 &a,
@@ -244,7 +246,7 @@ pub fn authenticated_load(
                 config,
             )
             .unwrap();
-        drop(active);
+        drop(active_seal);
         let w = session
             .restore_wrapper(
                 &a,
@@ -253,13 +255,14 @@ pub fn authenticated_load(
                 MemoryBudget::DEFAULT,
             )
             .unwrap();
-        let active = prover
+        let active_seal = prover
             .import_a(
                 stage + 1,
                 &source.a[stage + 1].read(source.read.maximum_bytes),
                 source.read,
             )
             .unwrap();
+        let active = prover.bind_a(stage + 1, &active_seal, None).unwrap();
         a = session
             .advance(
                 &w,
@@ -270,7 +273,7 @@ pub fn authenticated_load(
                 config,
             )
             .unwrap();
-        drop(active);
+        drop(active_seal);
         let mut changed = a.proof().to_vec();
         changed[0] ^= 1;
         assert!(

@@ -728,6 +728,50 @@ impl VerifiedSumeragiBlock {
         )
     }
 
+    /// Join two already authenticated non-genesis Global receipts at one exact native edge.
+    ///
+    /// Both original verifiers have already authenticated their complete result/schedule and
+    /// certificate witnesses. This compares those opaque decisions without re-decoding proofs,
+    /// rechecking signatures, or making a fresh-currentness claim. Alternate valid local QC
+    /// witnesses are equivalent; equal proposal hashes with different execution results are not.
+    ///
+    /// # Errors
+    /// Rejects genesis, a foreign network/chain/root, a height gap, a changed native parent
+    /// hash/result or Iroha predecessor, or inconsistent authenticated successor slots.
+    pub fn verify_immediate_global_successor_of(
+        &self,
+        parent: &Self,
+        expected_network: NetworkId,
+        expected_chain: &str,
+    ) -> Result<(), FinalityError> {
+        parent.verify_global_scope(expected_network, expected_chain)?;
+        self.verify_global_scope(expected_network, expected_chain)?;
+        let header = self
+            .0
+            .header
+            .as_ref()
+            .ok_or_else(|| FinalityError("Global successor has no native header".into()))?;
+        need(
+            parent.height().checked_add(1) == Some(self.height())
+                && header.parent_hash == parent.core_hash()
+                && header.parent_result == parent.result()
+                && self.header().prev_block_hash() == Some(parent.header().hash()),
+            "Global successor differs from its exact authenticated native parent",
+        )?;
+        let previous = &parent.commitment().schedule;
+        let current = &self.commitment().schedule;
+        need(
+            previous.height == parent.height() && current.height == self.height(),
+            "Global successor schedule differs from its authenticated block heights",
+        )?;
+        // Both opaque receipts already passed the complete individual schedule/epoch and
+        // QC/availability checks. Exact parent R joins the child's boundary/beacon authority
+        // to this original commitment; the pure cross-result rule has one canonical owner.
+        previous
+            .validate_successor_relation(current)
+            .map_err(malformed)
+    }
+
     /// Canonical executed bytes with only the node-local certificate removed.
     ///
     /// # Errors
@@ -943,8 +987,8 @@ impl SumeragiFinalityVerifier {
         self.verify_retained_decision_with_validation(candidate, None)
     }
 
-    // Cold checkpoint import calls this producer directly, without another owned proof
-    // return boundary. Standalone callers pass None and retain all independent scopes.
+    // Checkpoint import and export borrow their lexical pure epoch work here, without
+    // another owned proof return boundary. Standalone witness readers pass None.
     fn verify_retained_decision_with_validation(
         &self,
         candidate: &SumeragiFinalityProof,
@@ -1370,6 +1414,9 @@ impl Crypto for ProofCrypto {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod immediate_successor_tests;
 
 #[cfg(all(test, feature = "transparent_api"))]
 mod retained_decision_tests;

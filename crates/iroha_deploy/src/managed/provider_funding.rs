@@ -808,10 +808,11 @@ impl ProviderFundingBootstrap {
         Ok(())
     }
     fn require_empty_child(&self, purpose: ProviderPurpose, child: &str) -> Result<()> {
-        let Some(owner) = ServiceAuthority::open_provider_existing(
-            &self.authority.prepared,
+        let Some(owner) = ServiceAuthority::open_provider_existing_from_original(
+            &self.authority,
             self.authority.provider_id()?,
             purpose,
+            None,
         )?
         else {
             return Ok(());
@@ -971,3 +972,7 @@ mod bootstrap_test_support;
 #[cfg(test)]
 #[path = "provider_funding/creating_original_tests.rs"]
 mod creating_original_tests;
+
+#[cfg(test)]
+#[path = "provider_funding/absence_original_tests.rs"]
+mod absence_original_tests;

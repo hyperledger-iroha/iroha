@@ -773,3 +773,6 @@ fn compiled_result_batches_prove_exact_spans_and_reject_foreign_class() {
         );
     }
 }
+
+#[path = "tests/result_reuse_fixture.rs"]
+mod result_reuse_fixture;

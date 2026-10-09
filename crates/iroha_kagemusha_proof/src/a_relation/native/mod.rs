@@ -11,6 +11,7 @@ pub mod artifact;
 
 pub mod archive;
 
+mod proving;
 mod support;
 
 pub mod bootstrap;

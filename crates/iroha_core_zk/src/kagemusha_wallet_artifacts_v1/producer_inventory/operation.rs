@@ -13,6 +13,7 @@ use iroha_kagemusha_proof::a_relation::{
 use iroha_plonk::{keys::pk::artifact::ReadConfig, pcs::ipa::PinnedParams};
 use iroha_plonk_recursion::verifier::VerifierPlan;
 
+use super::recipe::InstalledSourceSealV1;
 use super::*;
 
 /// A logical route failed exact source reconstruction or original-key intake.
@@ -68,6 +69,8 @@ pub struct QualifiedOperationRouteV1 {
     owner: QualifiedOperationOwnerV1,
     terminal: KeyArtifact<Eq>,
     omega: Option<KeyArtifact<Ep>>,
+    a_seals: Vec<InstalledSourceSealV1<Eq>>,
+    w_seals: Vec<InstalledSourceSealV1<Ep>>,
 }
 impl QualifiedOperationRouteV1 {
     /// Authenticated installation, logical route index and signed program index.
@@ -277,7 +280,7 @@ impl QualifiedOperationOwnerV1 {
         original: &[u8],
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<iroha_plonk::ProvingKey<Eq>, OperationQualificationErrorV1> {
+    ) -> Result<iroha_plonk::keys::SourceAdmissionSealV2<Eq>, OperationQualificationErrorV1> {
         iroha_pasta::CancellationToken::checkpoint(cancellation)
             .map_err(|_| OperationQualificationErrorV1::Cancelled)?;
         match self {
@@ -317,7 +320,7 @@ impl QualifiedOperationOwnerV1 {
         original: &[u8],
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<iroha_plonk::ProvingKey<Ep>, OperationQualificationErrorV1> {
+    ) -> Result<iroha_plonk::keys::SourceAdmissionSealV2<Ep>, OperationQualificationErrorV1> {
         iroha_pasta::CancellationToken::checkpoint(cancellation)
             .map_err(|_| OperationQualificationErrorV1::Cancelled)?;
         match self {
@@ -398,6 +401,8 @@ impl AuthenticatedProducerInventoryV1 {
                 owner: QualifiedOperationOwnerV1::Bootstrap(Box::new(owner)),
                 terminal,
                 omega: None,
+                a_seals: Vec::new(),
+                w_seals: Vec::new(),
             });
         }
         if route.variant == Variant::Load && receipt.is_none_or(|r| r.installation() != identity) {
@@ -435,13 +440,17 @@ impl AuthenticatedProducerInventoryV1 {
             .collect::<Result<Vec<_>, OperationQualificationErrorV1>>()?;
         let terminal = a.last().ok_or(Error::Inventory)?.clone();
         let owner = plan.install(a, w)?;
+        let mut a_seals = Vec::with_capacity(record.a.len());
+        let mut w_seals = Vec::with_capacity(record.w.len());
         for stage in 0..record.a.len() {
             let original = self.read_original(record.a[stage], originals, config.maximum_bytes)?;
-            drop(owner.import_a(stage, &original.proving_key, config, None)?);
+            let seal = owner.import_a(stage, &original.proving_key, config, None)?;
+            a_seals.push(InstalledSourceSealV1::new(record.a[stage], seal));
             drop(original);
             if let Some(index) = record.w.get(stage) {
                 let original = self.read_original(*index, originals, config.maximum_bytes)?;
-                drop(owner.import_w(stage, &original.proving_key, config, None)?);
+                let seal = owner.import_w(stage, &original.proving_key, config, None)?;
+                w_seals.push(InstalledSourceSealV1::new(*index, seal));
                 drop(original);
             }
         }
@@ -452,7 +461,92 @@ impl AuthenticatedProducerInventoryV1 {
             owner,
             terminal,
             omega: Some(omega),
+            a_seals,
+            w_seals,
         })
+    }
+}
+
+impl QualifiedOperationRouteV1 {
+    pub(super) fn bind_a(
+        &self,
+        stage: usize,
+        expected_member: u32,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<iroha_plonk::keys::SourceBoundViewV2<'_, Eq>, OperationQualificationErrorV1> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| OperationQualificationErrorV1::Cancelled)?;
+        if let QualifiedOperationOwnerV1::Bootstrap(p) = &self.owner {
+            return p
+                .bind_a(stage, expected_member, cancellation)
+                .map_err(Into::into);
+        }
+        let seal = self
+            .a_seals
+            .get(stage)
+            .ok_or(Error::Inventory)?
+            .seal(expected_member)?;
+        match &self.owner {
+            QualifiedOperationOwnerV1::Bootstrap(_) => unreachable!("handled above"),
+            QualifiedOperationOwnerV1::Load(p) => p
+                .bind_a(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            QualifiedOperationOwnerV1::Send(p) => p
+                .bind_a(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            QualifiedOperationOwnerV1::Receive(p) => p
+                .bind_a(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            QualifiedOperationOwnerV1::Archive(p) => p
+                .bind_a(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            QualifiedOperationOwnerV1::Consuming(p) => p
+                .bind_a(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            QualifiedOperationOwnerV1::Refresh(p) => p
+                .bind_a(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+        }
+    }
+    pub(super) fn bind_w(
+        &self,
+        stage: usize,
+        expected_member: u32,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<iroha_plonk::keys::SourceBoundViewV2<'_, Ep>, OperationQualificationErrorV1> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| OperationQualificationErrorV1::Cancelled)?;
+        if let QualifiedOperationOwnerV1::Bootstrap(p) = &self.owner {
+            return p
+                .bind_w(stage, expected_member, cancellation)
+                .map_err(Into::into);
+        }
+        let seal = self
+            .w_seals
+            .get(stage)
+            .ok_or(Error::Inventory)?
+            .seal(expected_member)?;
+        match &self.owner {
+            QualifiedOperationOwnerV1::Bootstrap(_) => unreachable!("handled above"),
+            QualifiedOperationOwnerV1::Load(p) => p
+                .bind_w(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+            QualifiedOperationOwnerV1::Send(p) => p
+                .bind_w(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+            QualifiedOperationOwnerV1::Receive(p) => p
+                .bind_w(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+            QualifiedOperationOwnerV1::Archive(p) => p
+                .bind_w(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+            QualifiedOperationOwnerV1::Consuming(p) => p
+                .bind_w(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+            QualifiedOperationOwnerV1::Refresh(p) => p
+                .bind_w(stage, seal, cancellation)
+                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+        }
     }
 }
 

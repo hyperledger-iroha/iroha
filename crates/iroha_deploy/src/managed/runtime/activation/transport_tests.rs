@@ -100,7 +100,7 @@ impl HttpTransport for Captured {
         })
     }
 }
-fn terminals() -> Vec<ManagedTransactionFinality> {
+pub(super) fn terminals() -> Vec<ManagedTransactionFinality> {
     (0_u64..29)
         .map(|index| {
             let height = 13 + index / 3;
@@ -118,7 +118,7 @@ fn terminals() -> Vec<ManagedTransactionFinality> {
         .collect()
 }
 
-fn fixture() -> (tempfile::TempDir, PreparedLocalnet) {
+pub(super) fn fixture() -> (tempfile::TempDir, PreparedLocalnet) {
     let temporary = tempfile::tempdir().unwrap();
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
     let prepared = crate::localnet::prepare_localnet_at(
@@ -131,7 +131,7 @@ fn fixture() -> (tempfile::TempDir, PreparedLocalnet) {
     .unwrap();
     (temporary, prepared)
 }
-fn budget() -> Budget {
+pub(super) fn budget() -> Budget {
     Budget {
         started: Instant::now(),
         timeout: Duration::from_secs(120),
@@ -140,6 +140,19 @@ fn budget() -> Budget {
         cancelled: Arc::new(AtomicBool::new(false)),
         progress: Arc::new(Progress::default()),
     }
+}
+
+fn serial_carriers(
+    prepared: &PreparedLocalnet,
+    required: &[ManagedTransactionFinality],
+    budget: &Budget,
+    configure: impl Fn(iroha::client::ClientBuilder) -> iroha::client::ClientBuilder,
+) -> std::result::Result<(), Failure> {
+    let limit = 64 * 1024 * 1024;
+    let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        limit, limit, limit, limit, 64,
+    ));
+    context.with(|| confirm_carriers_with(prepared, required, budget, configure))
 }
 
 #[test]
@@ -152,7 +165,7 @@ fn carrier_peer_contexts_keep_original_request_identity_and_local_height_checks(
         expected: required.clone(),
         ..Default::default()
     });
-    confirm_carriers_with(&prepared, &required, &budget, |builder| {
+    serial_carriers(&prepared, &required, &budget, |builder| {
         builder.http_transport(transport.clone())
     })
     .unwrap();
@@ -204,7 +217,7 @@ fn carrier_peer_contexts_keep_original_request_identity_and_local_height_checks(
                 ..Default::default()
             });
             assert!(
-                confirm_carriers_with(&prepared, &required, &self::budget(), |builder| builder
+                serial_carriers(&prepared, &required, &self::budget(), |builder| builder
                     .http_transport(wrong.clone()),)
                 .is_err()
             );
@@ -231,7 +244,7 @@ fn carrier_cancellation_or_expiry_prevents_reused_transport_dispatch() {
     let cancelled = budget();
     cancelled.cancelled.store(true, Ordering::Release);
     assert!(
-        confirm_carriers_with(&prepared, &required, &cancelled, |builder| builder
+        serial_carriers(&prepared, &required, &cancelled, |builder| builder
             .http_transport(transport.clone()))
         .is_err()
     );
@@ -240,7 +253,7 @@ fn carrier_cancellation_or_expiry_prevents_reused_transport_dispatch() {
         ..budget()
     };
     assert!(
-        confirm_carriers_with(&prepared, &required, &expired, |builder| builder
+        serial_carriers(&prepared, &required, &expired, |builder| builder
             .http_transport(transport.clone()))
         .is_err()
     );
@@ -252,7 +265,7 @@ fn carrier_cancellation_or_expiry_prevents_reused_transport_dispatch() {
         cancel_after: Some((5, Arc::clone(&cancelled.cancelled))),
         ..Default::default()
     });
-    let result = confirm_carriers_with(&prepared, &required, &cancelled, |builder| {
+    let result = serial_carriers(&prepared, &required, &cancelled, |builder| {
         builder.http_transport(transport.clone())
     });
     assert_eq!(
@@ -278,7 +291,7 @@ fn carrier_cancellation_or_expiry_prevents_reused_transport_dispatch() {
         expire_after: Some((5, expiring.started + expiring.timeout)),
         ..Default::default()
     });
-    let result = confirm_carriers_with(&prepared, &required, &expiring, |builder| {
+    let result = serial_carriers(&prepared, &required, &expiring, |builder| {
         builder.http_transport(transport.clone())
     });
     assert_eq!(
@@ -320,7 +333,7 @@ fn carrier_reuse_refuses_replaced_or_changed_private_configuration() {
             change_config: Some((4, prepared.context.client_config.clone(), replace)),
             ..Default::default()
         });
-        let result = confirm_carriers_with(&prepared, &required, &budget(), |builder| {
+        let result = serial_carriers(&prepared, &required, &budget(), |builder| {
             builder.http_transport(transport.clone())
         });
         assert!(result.is_err());
@@ -337,6 +350,15 @@ fn carrier_reuse_refuses_replaced_or_changed_private_configuration() {
 
 #[test]
 fn native_carrier_reads_share_one_live_pool_and_keep_every_local_proof() {
+    native_carrier_pool(false);
+}
+
+#[test]
+fn joined_carrier_reads_keep_bounded_live_pool_and_every_local_proof() {
+    native_carrier_pool(true);
+}
+
+fn native_carrier_pool(parallel: bool) {
     use std::{
         io::{ErrorKind, Read, Write},
         net::TcpListener,
@@ -426,20 +448,46 @@ fn native_carrier_reads_share_one_live_pool_and_keep_every_local_proof() {
         timeout: Duration::from_secs(15),
         ..budget()
     };
-    let result = confirm_carriers_with(&prepared, &required, &budget, |builder| builder);
+    let result = if parallel {
+        confirm_carriers_with(&prepared, &required, &budget, |builder| builder)
+    } else {
+        serial_carriers(&prepared, &required, &budget, |builder| builder)
+    };
     let (connections, requests) = server.join().unwrap();
     result.unwrap();
-    assert_eq!(
-        connections, 1,
-        "the originating runtime must drive its shared pool until every carrier and peer finishes"
-    );
-    assert_eq!(
-        requests,
-        (0..29)
-            .flat_map(|_| (0..4).map(|peer| format!(
-                "/peer{peer}{}",
-                iroha_torii_shared::route_catalog::pipeline::TRANSACTION_STATUS.path()
-            )))
-            .collect::<Vec<_>>()
-    );
+    if parallel {
+        assert!(
+            (1..=4).contains(&connections),
+            "one outstanding read per peer keeps a bounded pool"
+        );
+        assert_eq!(requests.len(), 29 * 4);
+        let mut expected: Vec<_> = (0..4)
+            .map(|peer| {
+                format!(
+                    "/peer{peer}{}",
+                    iroha_torii_shared::route_catalog::pipeline::TRANSACTION_STATUS.path()
+                )
+            })
+            .collect();
+        expected.sort();
+        for cohort in requests.chunks_exact(4) {
+            let mut actual = cohort.to_vec();
+            actual.sort();
+            assert_eq!(actual, expected);
+        }
+    } else {
+        assert_eq!(
+            connections, 1,
+            "the originating runtime must drive its shared pool until every carrier and peer finishes"
+        );
+        assert_eq!(
+            requests,
+            (0..29)
+                .flat_map(|_| (0..4).map(|peer| format!(
+                    "/peer{peer}{}",
+                    iroha_torii_shared::route_catalog::pipeline::TRANSACTION_STATUS.path()
+                )))
+                .collect::<Vec<_>>()
+        );
+    }
 }

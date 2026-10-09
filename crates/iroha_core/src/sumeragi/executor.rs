@@ -375,12 +375,37 @@ fn require_body_admission(
     Ok(())
 }
 
-/// The driver-facing handle of the executor thread.
+/// The driver-facing owner of the executor thread.
+///
+/// Dropping a caller-owned handle closes request admission and waits for the original worker
+/// to finish accepted work and release its State, storage and archive owners. Constructors
+/// never give the worker a request sender or this handle, and synchronous calls retain the
+/// handle through their reply. Defensive self-destruction closes admission without joining
+/// the current thread; canonical callers cannot transfer their borrowed owner that way.
 pub struct StateExecutor {
     /// The same pool as the worker, checked before retaining a queued certificate.
     execution_budget: iroha_allocation::AllocationBudget,
-    requests: mpsc::SyncSender<Request>,
-    _thread: JoinHandle<()>,
+    requests: Option<mpsc::SyncSender<Request>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for StateExecutor {
+    fn drop(&mut self) {
+        // Disconnect before joining: both receive paths stop after the original queued
+        // requests drain. No request cancellation, publication shortcut or new signal is used.
+        drop(self.requests.take());
+        if let Some(thread) = self.thread.take() {
+            if thread.thread().id() == std::thread::current().id() {
+                // Canonical callers never move the owner into its worker. If a private
+                // callback does so, its current stack must return before the worker can exit.
+                // Closing admission is still necessary; joining ourselves would deadlock.
+                return;
+            }
+            if thread.join().is_err() {
+                iroha_logger::error!("sumeragi state executor panicked during shutdown");
+            }
+        }
+    }
 }
 
 impl StateExecutor {
@@ -418,12 +443,21 @@ impl StateExecutor {
         // already owns bounded control ingress and the original publication retry.
         let (requests, rx) = mpsc::sync_channel(1);
         let execution_budget = context.state.ivm_execution_budget();
-        let thread = super::threads::sumeragi_thread_builder("sumeragi-state-exec")
-            .spawn(move || run(&context, &rx))?;
+        #[cfg(test)]
+        let exit_hook = shutdown_tests::take_exit_hook();
+        let thread =
+            super::threads::sumeragi_thread_builder("sumeragi-state-exec").spawn(move || {
+                run(&context, &rx);
+                #[cfg(test)]
+                if let Some(exit_hook) = exit_hook {
+                    exit_hook();
+                }
+                drop(context);
+            })?;
         Ok(Self {
             execution_budget,
-            requests,
-            _thread: thread,
+            requests: Some(requests),
+            thread: Some(thread),
         })
     }
 
@@ -475,7 +509,7 @@ impl StateExecutor {
 
     fn call<T>(&self, request: impl FnOnce(mpsc::SyncSender<T>) -> Request) -> Option<T> {
         let (tx, rx) = mpsc::sync_channel(1);
-        self.requests.send(request(tx)).ok()?;
+        self.requests.as_ref()?.send(request(tx)).ok()?;
         rx.recv().ok()
     }
 }
@@ -483,7 +517,9 @@ impl StateExecutor {
 impl StateExecutor {
     /// Attach the transaction queue: the builder reads it and applied blocks clean it.
     pub fn attach_queue(&self, queue: Arc<Queue>) {
-        let _ = self.requests.send(Request::AttachQueue(queue));
+        if let Some(requests) = &self.requests {
+            let _ = requests.send(Request::AttachQueue(queue));
+        }
     }
 
     /// Attach the configured archives once, after replay and before starting the driver.
@@ -586,7 +622,9 @@ impl Executor for StateExecutor {
     }
 
     fn discard(&mut self, height: u64, keep: &[Hash32]) {
-        let _ = self.requests.send(Request::Discard(height, keep.to_vec()));
+        if let Some(requests) = &self.requests {
+            let _ = requests.send(Request::Discard(height, keep.to_vec()));
+        }
     }
 
     fn prepare(
@@ -653,9 +691,9 @@ impl Executor for StateExecutor {
     }
 
     fn reject(&mut self, height: u64, view: u64, block_hash: &Hash32) {
-        let _ = self
-            .requests
-            .send(Request::Reject(height, view, *block_hash));
+        if let Some(requests) = &self.requests {
+            let _ = requests.send(Request::Reject(height, view, *block_hash));
+        }
     }
 }
 
@@ -3449,3 +3487,6 @@ mod local_signature_preparation_tests;
 #[cfg(test)]
 #[path = "executor_amx_retry_tests.rs"]
 mod amx_retry_tests;
+
+#[cfg(test)]
+mod shutdown_tests;

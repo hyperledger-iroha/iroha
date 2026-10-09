@@ -292,7 +292,7 @@ impl ServiceAuthority {
         original_checkpoint: &[u8],
         transaction: &SignedTransaction,
         report: &OperationReport,
-        observed_height: u64,
+        observed: &FinalityVerifier,
         deadline: Instant,
     ) -> Result<Option<ManagedTransactionFinality>> {
         let height = report
@@ -301,13 +301,17 @@ impl ServiceAuthority {
             .and_then(|e| e.get("block_height"))
             .and_then(norito::json::Value::as_u64)
             .ok_or_else(|| invalid("Applied native operation observation has no carrier hint"))?;
-        self.advance_carrier_at(
+        self.advance_carrier_with_source(
             directory,
             original_checkpoint,
             transaction,
-            height,
-            observed_height,
-            deadline,
+            CarrierTarget {
+                height,
+                observed_height: observed.checkpoint().height(),
+                observed: Some(observed),
+                deadline,
+            },
+            |height, deadline| self.source(height, deadline),
         )
     }
 
@@ -322,13 +326,37 @@ impl ServiceAuthority {
         observed_height: u64,
         deadline: Instant,
     ) -> Result<Option<ManagedTransactionFinality>> {
+        self.advance_carrier_with_source(
+            directory,
+            original_checkpoint,
+            transaction,
+            CarrierTarget {
+                height,
+                observed_height,
+                observed: None,
+                deadline,
+            },
+            |height, deadline| self.source(height, deadline),
+        )
+    }
+
+    // Production and genuine fixtures use the same native selection and publication owner.
+    // The injected source changes transport only; it cannot construct an observed receipt.
+    pub(super) fn advance_carrier_with_source<S: FinalitySource>(
+        &self,
+        directory: &PrivateDirectory,
+        original_checkpoint: &[u8],
+        transaction: &SignedTransaction,
+        target: CarrierTarget<'_>,
+        source: impl FnOnce(u64, Instant) -> Result<S>,
+    ) -> Result<Option<ManagedTransactionFinality>> {
         let original_verifier = self.decode_checkpoint(original_checkpoint)?;
-        if height <= original_verifier.checkpoint().height() {
+        if target.height <= original_verifier.checkpoint().height() {
             return Err(invalid(
                 "native operation carrier predates its original request",
             ));
         }
-        if height > observed_height {
+        if target.height > target.observed_height {
             return Ok(None);
         }
         // Applied is only a replaceable lookup hint. A false earlier hint cannot irreversibly
@@ -336,15 +364,93 @@ impl ServiceAuthority {
         let progress = read_optional(directory, "replay.nrt", MAX_CHECKPOINT_BYTES)?
             .map(|bytes| self.decode_checkpoint(&bytes))
             .transpose()?;
-        let mut verifier = replay_start(original_verifier, progress, height)?;
-        let source = self.source(verifier.checkpoint().height(), deadline)?;
-        let finalized =
-            retain_carrier_progress(directory, transaction, &mut verifier, height, &source)?;
+        let handoff = (!norito::core::decode_limits_active() && progress.is_none())
+            .then_some(target.observed)
+            .flatten()
+            .filter(|observed| {
+                original_verifier.checkpoint().height() > 1
+                    && observed.checkpoint().height() == target.height
+                    && original_verifier.checkpoint().height().checked_add(1) == Some(target.height)
+            });
+        let mut verifier = replay_start(original_verifier, progress, target.height)?;
+        // Keep the existing endpoint/network/deadline constructor even when the native proof
+        // was already delivered by the immediately preceding fresh quorum.
+        let source = source(verifier.checkpoint().height(), target.deadline)?;
+        let finalized = match handoff {
+            Some(observed) => {
+                self.validate_profile()?;
+                require_deadline(target.deadline)?;
+                let result = retain_observed_carrier(
+                    directory,
+                    transaction,
+                    &mut verifier,
+                    observed,
+                    target.deadline,
+                );
+                // Close original profile custody and the unchanged clock on every result.
+                self.validate_profile()?;
+                require_deadline(target.deadline)?;
+                result?
+            }
+            None => retain_carrier_progress(
+                directory,
+                transaction,
+                &mut verifier,
+                target.height,
+                &source,
+            )?,
+        };
         if finalized.is_some() {
             self.remember_certificate(directory, &verifier)?;
         }
         Ok(finalized)
     }
+}
+
+// The observed owner is supplied only by the same post-Apply fresh quorum. A numeric frontier
+// remains sufficient for renewal/recovery, which always keep their independent replay.
+pub(super) struct CarrierTarget<'a> {
+    pub(super) height: u64,
+    pub(super) observed_height: u64,
+    pub(super) observed: Option<&'a FinalityVerifier>,
+    pub(super) deadline: Instant,
+}
+
+fn retain_observed_carrier(
+    directory: &PrivateDirectory,
+    transaction: &SignedTransaction,
+    original: &mut FinalityVerifier,
+    observed: &FinalityVerifier,
+    deadline: Instant,
+) -> Result<Option<ManagedTransactionFinality>> {
+    let parent = original
+        .verified_tip_ref()
+        .map_err(|_| invalid("invalid original native operation checkpoint"))?;
+    let child = observed
+        .verified_tip_ref()
+        .map_err(|_| invalid("invalid observed native operation carrier"))?;
+    child
+        .verify_immediate_global_successor_of(
+            parent,
+            original.checkpoint().network_id(),
+            original.checkpoint().chain_id(),
+        )
+        .map_err(|_| invalid("observed carrier is not the exact original native successor"))?;
+    if observed.checkpoint().network_id() != original.checkpoint().network_id()
+        || observed.checkpoint().chain_id() != original.checkpoint().chain_id()
+    {
+        return Err(invalid(
+            "observed carrier changed original network or chain",
+        ));
+    }
+    require_deadline(deadline)?;
+    *original = observed.clone();
+    retain_verified_carrier(
+        directory,
+        transaction,
+        original,
+        original.checkpoint().height(),
+    )
 }
 
 /// Retain a bounded verified replay from the sole finality-source abstraction. Test sources
@@ -368,6 +474,16 @@ pub(crate) fn retain_carrier_progress(
             NonZeroU64::new(target).ok_or_else(|| invalid("zero native operation carrier"))?,
         )
         .map_err(|_| invalid("original native operation carrier replay unavailable"))?;
+    retain_verified_carrier(directory, transaction, verifier, height)
+}
+
+// Preserve one publication order for independently replayed and already observed carriers.
+fn retain_verified_carrier(
+    directory: &PrivateDirectory,
+    transaction: &SignedTransaction,
+    verifier: &FinalityVerifier,
+    height: u64,
+) -> Result<Option<ManagedTransactionFinality>> {
     let bytes = checkpoint_bytes(verifier)?;
     directory.write_atomic("replay.nrt", &bytes, PublishMode::Replace)?;
     if verifier.checkpoint().height() != height {
@@ -472,6 +588,12 @@ pub(crate) fn retain_observation(
     verifier: &mut FinalityVerifier,
     observation: std::result::Result<AttestationQuorum, FinalityError>,
 ) -> Result<()> {
+    // Native component failures need the original per-peer cause before the public
+    // managed result closes it into its existing classification. Success stays silent.
+    #[cfg(test)]
+    if let Err(error) = &observation {
+        eprintln!("native finality observation refused: {error:?}");
+    }
     match &observation {
         Ok(_) => {}
         Err(FinalityError::CatchingUp { .. }) => {

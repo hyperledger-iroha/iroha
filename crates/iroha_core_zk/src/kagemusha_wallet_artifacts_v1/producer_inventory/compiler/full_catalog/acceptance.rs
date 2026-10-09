@@ -7,6 +7,9 @@ use super::*;
 use crate::kagemusha_wallet_artifacts_v1::InstalledVerifierPackV1;
 use p256::ecdsa::{Signature, signature::Signer};
 
+#[path = "acquisition_tests.rs"]
+mod acquisition_tests;
+
 struct Combined<'a> {
     wallet: &'a mut Originals,
     metadata: &'a mut VerifierFiles,
@@ -290,6 +293,7 @@ fn qualify_authenticated(
         qualified.q(route).unwrap();
     }
     let (sigma_imports, q_imports) = active_imports(&qualified, &mut originals, config);
+    let acquisition_cases = acquisition_tests::run(&qualified, &mut originals, config);
     let inventory = qualified.inventory();
     publish(
         &output.join("qualified-source-membership.json"),
@@ -312,11 +316,12 @@ fn qualify_authenticated(
     )
     .unwrap();
     eprintln!(
-        "WALLET_SOURCE_ACCEPTED engineering=true deployment_authority=false complete_routes={} strict_original_reads={} active_sigma_imports={} active_q_imports={} cancelled_import_opens=0 unavailable_retry=true scheme={} manifest={} genuine_receipt=false native_wallet_open=false",
+        "WALLET_SOURCE_ACCEPTED engineering=true deployment_authority=false complete_routes={} strict_original_reads={} active_sigma_imports={} active_q_imports={} cancelled_import_opens=0 unavailable_retry=true active_seal_acquisition_cases={} scheme={} manifest={} genuine_receipt=false native_wallet_open=false",
         inventory.routes.len(),
         originals.reads,
         sigma_imports,
         q_imports,
+        acquisition_cases,
         hex::encode(installation.scheme_id),
         hex::encode(installation.manifest_digest),
     );

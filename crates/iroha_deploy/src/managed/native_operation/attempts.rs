@@ -3,6 +3,10 @@
 //! This module cannot inspect, retire, quote, sign or submit a wallet operation. Concrete owners
 //! supply canonical wallet inspections and retirement receipts. Local records never prove native
 //! state, successful execution or current authority. The stable native intent is stored once.
+#[cfg(test)]
+use crate::managed::stream_token_custody::body_history::{
+    finish_timing, graph_original_tests, operation_scope_tests,
+};
 
 use super::{Terms, encode, invalid, read_optional, require_empty};
 use crate::managed::{ManagedBootstrapFailure, Result};
@@ -27,7 +31,9 @@ pub(in crate::managed) use parser_pass::EnrollmentReadPass;
 #[path = "attempts/scope.rs"]
 mod scope;
 use closure::{ClosurePlan, ClosureRecord};
-pub(in crate::managed) use closure::{PendingUnsignedClosure, VerifiedUnsignedClosure};
+pub(in crate::managed) use closure::{
+    PendingUnsignedClosure, UnsignedClosureVerification, VerifiedUnsignedClosure,
+};
 pub(in crate::managed) use scope::{
     BodyDispatchScope, BodyReplacementTarget, EnrollmentScopeBinding, EnrollmentScopeEvidence,
     HistoryScope, SemanticSuccessor,
@@ -374,7 +380,10 @@ impl History {
         retained: &History,
         pass: Option<&EnrollmentReadPass<'_>>,
     ) -> Result<Self> {
-        retained.revalidate_retained_handles()?;
+        let covered = pass.is_some_and(|pass| pass.covers_retained(retained));
+        if !covered {
+            retained.revalidate_retained_handles()?;
+        }
         let mut current = Some(retained);
         let mut matched = None;
         let mut count = 0usize;
@@ -399,7 +408,9 @@ impl History {
                 .map(VerifiedUnsignedClosure::retained_history);
         }
         let current = Self::read_with_handles(operation, purpose, semantic, scope, matched, pass)?;
-        retained.revalidate_retained_handles()?;
+        if !covered {
+            retained.revalidate_retained_handles()?;
+        }
         Ok(current)
     }
 
@@ -488,6 +499,13 @@ impl History {
         }
         current.revalidate_handles()?;
         Ok(current)
+    }
+
+    fn revalidate_parser_handles(&self, pass: Option<&EnrollmentReadPass<'_>>) -> Result<()> {
+        match pass {
+            Some(pass) => pass.revalidate_handles(self),
+            None => self.revalidate_retained_handles(),
+        }
     }
 
     // Directory custody only: old metadata can legitimately differ after the canonical writer.
@@ -591,6 +609,8 @@ impl History {
         retained: Option<&History>,
         pass: Option<&EnrollmentReadPass<'_>>,
     ) -> Result<Self> {
+        #[cfg(test)]
+        closure::record_history_parse_for_test();
         scope.validate(operation, purpose, semantic, pass)?;
         // The inventory begins and ends with fresh native directory checks.
         operation_inventory(operation, purpose)?;
@@ -1071,7 +1091,7 @@ impl History {
         pass: Option<&crate::managed::stream_token_custody::body_history::SnapshotReadPass<'_>>,
     ) -> Result<()> {
         retained_graph::with_native_read_tree(self, |tree| {
-            self.require_current_local_in_tree(pass, tree)
+            self.require_current_local_in_tree(pass, tree, None)
         })
     }
 
@@ -1079,6 +1099,7 @@ impl History {
         &self,
         pass: Option<&crate::managed::stream_token_custody::body_history::SnapshotReadPass<'_>>,
         mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+        originals: Option<&retained_graph::OriginalReadPass<'_, '_>>,
     ) -> Result<()> {
         // An inherited decoder always retains the original physical read/allocation recipe,
         // even if a caller entered this native bracket before installing its decode owner.
@@ -1094,10 +1115,7 @@ impl History {
         self.scope
             .validate_local(&self.operation, self.purpose, self.semantic, pass)?;
         // The inventory begins and ends with fresh native directory checks.
-        let operation_names =
-            operation_inventory_in_tree(&self.operation, self.purpose, tree.as_deref_mut())?;
-        require_semantic_original_in_tree(&self.operation, self.semantic, tree.as_deref_mut())?;
-        self.require_metadata_in_tree(tree.as_deref_mut())?;
+        let operation_names = self.require_operation_entry(tree.as_deref_mut(), originals)?;
         match &self.root {
             None => {
                 if operation_names.iter().any(|name| name == "attempts") {
@@ -1174,11 +1192,7 @@ impl History {
                 revalidate_directory_in_tree(root, tree.as_deref_mut())?;
             }
         }
-        self.require_metadata_in_tree(tree.as_deref_mut())?;
-        require_semantic_original_in_tree(&self.operation, self.semantic, tree.as_deref_mut())?;
-        if operation_inventory_in_tree(&self.operation, self.purpose, tree.as_deref_mut())?
-            != operation_names
-        {
+        if self.require_operation_exit(tree.as_deref_mut(), originals)? != operation_names {
             return Err(invalid(
                 "dispatch operation inventory changed during inspection",
             ));
@@ -1191,6 +1205,9 @@ impl History {
     // Keep original native owners live through the sole fresh parser; retain shares their
     // Files rather than opening a second complete graph before the old value can drop.
     fn reread(self) -> Result<Self> {
+        #[cfg(test)]
+        let _closure_timing =
+            finish_timing::phase_in_closure(finish_timing::Phase::ClosureRetainedRead);
         Self::read_retained(
             &self.operation,
             self.purpose,
@@ -1200,11 +1217,60 @@ impl History {
         )
     }
 
-    fn require_metadata_in_tree(
+    // Only adjacent internal reads share a suffix bracket. The attempt traversal, full
+    // graph/snapshot exits and effectful callers retain all of their independent fences.
+    // Intermediate suffix observations consolidate under iroha_fs's read_scope contract.
+    fn require_operation_entry(
         &self,
-        tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
-    ) -> Result<()> {
-        let read = |reader: &mut iroha_fs::PrivateReadScope<'_>| {
+        mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+        originals: Option<&retained_graph::OriginalReadPass<'_, '_>>,
+    ) -> Result<Vec<std::ffi::OsString>> {
+        if reuse_operation_scope()
+            && let Some(tree) = tree.as_deref_mut()
+        {
+            #[cfg(test)]
+            operation_scope_tests::bracket();
+            return tree.read_scope(&self.operation, |reader| {
+                let names = operation_inventory_in_scope(reader, self.purpose)?;
+                if !originals.is_some_and(|pass| pass.covers(self)) {
+                    require_semantic_original_in_scope(reader, self.semantic)?;
+                }
+                self.require_metadata_in_scope(reader)?;
+                Ok(names)
+            });
+        }
+        let names =
+            operation_inventory_in_tree(&self.operation, self.purpose, tree.as_deref_mut())?;
+        require_semantic_original_in_tree(&self.operation, self.semantic, tree.as_deref_mut())?;
+        self.require_metadata_in_tree(tree)?;
+        Ok(names)
+    }
+
+    fn require_operation_exit(
+        &self,
+        mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+        originals: Option<&retained_graph::OriginalReadPass<'_, '_>>,
+    ) -> Result<Vec<std::ffi::OsString>> {
+        if reuse_operation_scope()
+            && let Some(tree) = tree.as_deref_mut()
+        {
+            #[cfg(test)]
+            operation_scope_tests::bracket();
+            return tree.read_scope(&self.operation, |reader| {
+                self.require_metadata_in_scope(reader)?;
+                if !originals.is_some_and(|pass| pass.covers(self)) {
+                    require_semantic_original_in_scope(reader, self.semantic)?;
+                }
+                operation_inventory_in_scope(reader, self.purpose)
+            });
+        }
+        self.require_metadata_in_tree(tree.as_deref_mut())?;
+        require_semantic_original_in_tree(&self.operation, self.semantic, tree.as_deref_mut())?;
+        operation_inventory_in_tree(&self.operation, self.purpose, tree)
+    }
+
+    fn require_metadata_in_scope(&self, reader: &mut iroha_fs::PrivateReadScope<'_>) -> Result<()> {
+        let result = (|| {
             if read_record_in_scope::<Dispatch>(reader, "dispatch.nrt")? != self.dispatch
                 || read_record_in_scope::<ClosurePlan>(reader, "closing.nrt")? != self.closing
                 || read_record_in_scope::<ClosureRecord>(reader, "closed.nrt")? != self.closed
@@ -1214,11 +1280,41 @@ impl History {
                 ));
             }
             Ok(())
-        };
+        })();
+        #[cfg(test)]
+        operation_scope_tests::after_leaf(operation_scope_tests::Point::Metadata)?;
+        result
+    }
+
+    fn require_metadata_in_tree(
+        &self,
+        tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+    ) -> Result<()> {
+        #[cfg(test)]
+        operation_scope_tests::bracket();
         match tree {
-            Some(tree) => tree.read_scope(&self.operation, read),
-            None => self.operation.read_scope(read),
+            Some(tree) => tree.read_scope(&self.operation, |reader| {
+                self.require_metadata_in_scope(reader)
+            }),
+            None => self
+                .operation
+                .read_scope(|reader| self.require_metadata_in_scope(reader)),
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::managed) fn test_operation_records<T>(
+        read: impl FnOnce() -> T,
+    ) -> (T, [usize; 4]) {
+        tests::operation_record_work(read)
+    }
+
+    #[cfg(test)]
+    pub(in crate::managed) fn test_current_local_in_tree(
+        &self,
+        tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+    ) -> Result<()> {
+        self.require_current_local_in_tree(None, tree, None)
     }
 
     fn retain_root(&self, operation: &PrivateDirectory) -> Result<()> {
@@ -1447,6 +1543,8 @@ fn checked_operation_inventory(
 }
 
 fn require_semantic_original(operation: &PrivateDirectory, semantic: [u8; 32]) -> Result<()> {
+    #[cfg(test)]
+    graph_original_tests::record_original_read();
     let intent = read_optional(
         operation,
         "original.nrt",
@@ -1483,28 +1581,51 @@ fn revalidate_directory_in_tree(
     Ok(())
 }
 
+fn reuse_operation_scope() -> bool {
+    #[cfg(test)]
+    if operation_scope_tests::original_recipe() {
+        return false;
+    }
+    !norito::core::decode_limits_active()
+}
+
+fn operation_inventory_in_scope(
+    reader: &mut iroha_fs::PrivateReadScope<'_>,
+    purpose: Purpose,
+) -> Result<Vec<std::ffi::OsString>> {
+    let result = reader
+        .entries(6)
+        .map_err(crate::managed::Error::from)
+        .and_then(|names| checked_operation_inventory(names, purpose));
+    #[cfg(test)]
+    operation_scope_tests::after_leaf(operation_scope_tests::Point::Inventory)?;
+    result
+}
+
 fn operation_inventory_in_tree(
     operation: &PrivateDirectory,
     purpose: Purpose,
     tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
 ) -> Result<Vec<std::ffi::OsString>> {
     match tree {
-        Some(tree) => tree.read_scope(operation, |reader| {
-            checked_operation_inventory(reader.entries(6)?, purpose)
-        }),
+        Some(tree) => {
+            #[cfg(test)]
+            operation_scope_tests::bracket();
+            tree.read_scope(operation, |reader| {
+                operation_inventory_in_scope(reader, purpose)
+            })
+        }
         None => operation_inventory(operation, purpose),
     }
 }
 
-fn require_semantic_original_in_tree(
-    operation: &PrivateDirectory,
+fn require_semantic_original_in_scope(
+    reader: &mut iroha_fs::PrivateReadScope<'_>,
     semantic: [u8; 32],
-    tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
 ) -> Result<()> {
-    let Some(tree) = tree else {
-        return require_semantic_original(operation, semantic);
-    };
-    tree.read_scope(operation, |reader| {
+    #[cfg(test)]
+    graph_original_tests::record_original_read();
+    let result = (|| {
         let original = reader
             .read_optional(
                 "original.nrt",
@@ -1516,6 +1637,24 @@ fn require_semantic_original_in_tree(
             return Err(invalid("dispatch semantic original was changed"));
         }
         Ok(())
+    })();
+    #[cfg(test)]
+    operation_scope_tests::after_leaf(operation_scope_tests::Point::Semantic)?;
+    result
+}
+
+fn require_semantic_original_in_tree(
+    operation: &PrivateDirectory,
+    semantic: [u8; 32],
+    tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+) -> Result<()> {
+    let Some(tree) = tree else {
+        return require_semantic_original(operation, semantic);
+    };
+    #[cfg(test)]
+    operation_scope_tests::bracket();
+    tree.read_scope(operation, |reader| {
+        require_semantic_original_in_scope(reader, semantic)
     })
 }
 
@@ -1856,6 +1995,8 @@ pub(in crate::managed) fn write_record<T: norito::NoritoSerialize>(
     name: &str,
     value: &T,
 ) -> Result<()> {
+    #[cfg(test)]
+    let _closure_timing = finish_timing::phase_in_closure(finish_timing::Phase::ClosureRecordWrite);
     let bytes = encode(value, MAX_RECORD_BYTES)?;
     if let Some(retained) = read_optional(directory, name, MAX_RECORD_BYTES)? {
         if retained != bytes {

@@ -1058,13 +1058,13 @@ impl ManagedStreamTokenCustody {
                 report.status,
                 deadline,
                 ServiceAuthority::observe_finality,
-                |authority, observed_height, deadline| {
+                |authority, observed, deadline| {
                     authority.advance_carrier(
                         &directory,
                         &original.checkpoint,
                         &transaction,
                         &report,
-                        observed_height,
+                        observed,
                         deadline,
                     )
                 },
@@ -1238,7 +1238,7 @@ fn validate_enrollment_slots(
 }
 
 // Submission can commit above the predecessor observed before dispatch. As for Reserve,
-// refresh independently authenticated finality before bounding the exact native carrier replay.
+// refresh independently authenticated finality before selecting the exact native carrier.
 // These callbacks use the same observation/replay owners in production and native fixtures;
 // they confer no signing authority and always receive the unchanged operation deadline.
 fn applied_carrier(
@@ -1246,7 +1246,11 @@ fn applied_carrier(
     status: OperationStatus,
     deadline: Instant,
     observe: impl FnOnce(&mut ServiceAuthority, Instant) -> Result<FinalityVerifier>,
-    replay: impl FnOnce(&ServiceAuthority, u64, Instant) -> Result<Option<ManagedTransactionFinality>>,
+    replay: impl FnOnce(
+        &ServiceAuthority,
+        &FinalityVerifier,
+        Instant,
+    ) -> Result<Option<ManagedTransactionFinality>>,
 ) -> Result<Option<ManagedTransactionFinality>> {
     if status != OperationStatus::Applied {
         return Ok(None);
@@ -1255,7 +1259,7 @@ fn applied_carrier(
     let Ok(observed) = observe(authority, deadline) else {
         return Ok(None);
     };
-    replay(authority, observed.checkpoint().height(), deadline)
+    replay(authority, &observed, deadline)
 }
 
 fn matches_predecessor(

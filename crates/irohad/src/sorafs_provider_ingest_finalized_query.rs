@@ -855,6 +855,22 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         ),
         ProviderIngestFinalizedArchiveErrorV1,
     > {
+        self.qualify_live_with_view_observed(
+            #[cfg(test)]
+            &mut || Ok(()),
+        )
+    }
+
+    fn qualify_live_with_view_observed(
+        &self,
+        #[cfg(test)] interleave: &mut impl FnMut() -> Result<(), ProviderIngestFinalizedArchiveErrorV1>,
+    ) -> Result<
+        (
+            StateQueryView<'_>,
+            ProviderIngestFinalizedArchiveQualificationV1,
+        ),
+        ProviderIngestFinalizedArchiveErrorV1,
+    > {
         for _ in 0..LIVE_SELECTION_ATTEMPTS_V1 {
             let view = self.state.query_view();
             if view.network_id() != &self.network_id {
@@ -867,11 +883,22 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             #[cfg(test)]
             self.live_qualification_attempts
                 .fetch_add(1, Ordering::SeqCst);
-            match self.archive.qualify_against_certified_tip(
+            #[cfg(test)]
+            let qualification = self
+                .archive
+                .qualify_against_certified_tip_with_interleaving_for_testing(
+                    &view,
+                    self.kura.as_ref(),
+                    self.max_kura_tip_lag_blocks,
+                    |_| interleave(),
+                );
+            #[cfg(not(test))]
+            let qualification = self.archive.qualify_against_certified_tip(
                 &view,
                 self.kura.as_ref(),
                 self.max_kura_tip_lag_blocks,
-            ) {
+            );
+            match qualification {
                 Err(ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged {
                     ..
                 }) => {}
@@ -888,12 +915,29 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
     /// Validate adapter identity readiness without requiring a first commit to
     /// have completed before Sumeragi starts.
     ///
-    /// Empty bootstrap and authenticated archive lag within the configured ceiling
-    /// defer activation. Neither grants query authority; corruption, incompatible
+    /// Empty bootstrap, authenticated archive lag within the configured ceiling,
+    /// and an unstable boundary after bounded qualification defer activation.
+    /// None grants query authority; corruption, incompatible
     /// finality and excessive lag retain their original errors.
     pub(crate) fn activation_ready(&self) -> Result<bool, ProviderIngestFinalizedArchiveErrorV1> {
-        match self.qualify_live_with_view() {
+        self.activation_ready_observed(
+            #[cfg(test)]
+            &mut || Ok(()),
+        )
+    }
+
+    fn activation_ready_observed(
+        &self,
+        #[cfg(test)] interleave: &mut impl FnMut() -> Result<(), ProviderIngestFinalizedArchiveErrorV1>,
+    ) -> Result<bool, ProviderIngestFinalizedArchiveErrorV1> {
+        match self.qualify_live_with_view_observed(
+            #[cfg(test)]
+            interleave,
+        ) {
             Ok((view, qualification)) => self.qualification_is_visible(&view, &qualification),
+            Err(ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged { .. }) => {
+                Ok(false)
+            }
             Err(error) => match self.activation_gate {
                 ArchiveActivationGateV1::StrictLive => Err(error),
                 ArchiveActivationGateV1::AwaitingGenesis => {
@@ -2387,6 +2431,58 @@ mod tests {
             )
         ));
     }
+    #[test]
+    fn activation_defers_exhausted_genuine_boundary_drift_without_issuing_readiness() {
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+
+        let root = physical_tempdir().unwrap();
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        let config = archive_config();
+        let prepared = prepare_provider_ingest_finalized_archive_v1(
+            &config,
+            chain.network_id(),
+            ProviderId::new([0x51; 32]),
+            root.path(),
+            chain.state(),
+            chain.kura(),
+            None,
+        )
+        .unwrap();
+        let reader = prepared.runtime_query();
+        assert!(reader.activation_ready().unwrap());
+        let before = reader.live_qualification_attempts.load(Ordering::SeqCst);
+        let mut drifts = 0;
+        let mut interleave = || {
+            drifts += 1;
+            chain.commit_at(1_000 + drifts * 1_000, Vec::new());
+            prepared
+                .archive()
+                .capture_certified_view(&chain.state().view(), chain.kura())?;
+            Ok(())
+        };
+        assert!(!reader.activation_ready_observed(&mut interleave).unwrap());
+        assert_eq!(drifts, u64::try_from(LIVE_SELECTION_ATTEMPTS_V1).unwrap());
+        assert_eq!(
+            reader.live_qualification_attempts.load(Ordering::SeqCst) - before,
+            LIVE_SELECTION_ATTEMPTS_V1
+        );
+        assert!(
+            reader.activation_ready().unwrap(),
+            "settled original writers permit a fresh qualification"
+        );
+        let key = reader.qualify_live().unwrap().archive_tip().clone();
+        let record = prepared.archive().record_path(&key).unwrap();
+        let original = std::fs::read(&record).unwrap();
+        std::fs::write(&record, [0xff]).unwrap();
+        assert!(
+            reader.activation_ready().is_err(),
+            "stable corrupt storage is still fatal"
+        );
+        std::fs::write(&record, original).unwrap();
+        assert!(reader.activation_ready().unwrap());
+    }
+
     #[test]
     fn native_capture_selection_qualifies_once_and_fences_archive_generation() {
         use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};

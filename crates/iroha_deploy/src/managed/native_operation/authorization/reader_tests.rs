@@ -53,6 +53,27 @@ fn counts() -> Counts {
 fn reset_counts() {
     COUNTS.with(|counts| counts.set(Counts::default()));
 }
+impl EpochReader {
+    /// Measure only real epoch source reads, canonical decodes, digests and namespaces.
+    pub(in crate::managed) fn test_epoch_work<T>(
+        action: impl FnOnce() -> T,
+    ) -> (T, (usize, usize, usize, usize)) {
+        struct Restore(Counts);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                COUNTS.with(|state| state.set(self.0));
+            }
+        }
+        let _restore = Restore(COUNTS.with(|state| state.replace(Counts::default())));
+        let value = action();
+        let counts = counts();
+        (
+            value,
+            (counts.reads, counts.decodes, counts.digests, counts.names),
+        )
+    }
+}
+
 struct Fixture {
     _temporary: tempfile::TempDir,
     parent: PrivateDirectory,

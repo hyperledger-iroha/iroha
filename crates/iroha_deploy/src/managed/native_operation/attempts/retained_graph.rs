@@ -3,10 +3,42 @@
 //! No memoized result survives a call. Both passes read the same live native custody; local
 //! History checks cannot descend recursively and no historical owner or receipt is discarded.
 use super::*;
+use crate::managed::stream_token_custody::body_history::SnapshotReadPass;
+#[cfg(test)]
+use crate::managed::stream_token_custody::body_history::finish_timing;
 
 // The sole enrollment body owner admits at most 64 bodies, including this selected body.
 // This is a graph traversal bound, separate from its cumulative paid reservation count.
 const MAX_RETAINED_BODIES: usize = 64;
+
+// Minted only by the closed complete graph traversal below, never by the parser pass.
+// No callback, effect or returned receipt may retain this borrowed immutable coverage.
+pub(super) struct OriginalReadPass<'pass, 'snapshot> {
+    snapshot: &'pass SnapshotReadPass<'snapshot>,
+}
+impl OriginalReadPass<'_, '_> {
+    pub(super) fn covers(&self, history: &History) -> bool {
+        #[cfg(test)]
+        if crate::managed::stream_token_custody::body_history::graph_original_tests::original_recipe(
+        ) {
+            return false;
+        }
+        if norito::core::decode_limits_active() {
+            return false;
+        }
+        let covered = history.scope.covers_semantic_original(
+            self.snapshot,
+            &history.operation,
+            history.purpose,
+            history.semantic,
+        );
+        #[cfg(test)]
+        if covered {
+            crate::managed::stream_token_custody::body_history::graph_original_tests::record_covered();
+        }
+        covered
+    }
+}
 
 pub(super) fn validate(current: &History) -> Result<()> {
     validate_bounded(current, MAX_RETAINED_BODIES)
@@ -19,6 +51,8 @@ pub(super) fn validate_predecessor(prior: &VerifiedUnsignedClosure) -> Result<()
 }
 
 fn validate_bounded(current: &History, maximum: usize) -> Result<()> {
+    #[cfg(test)]
+    let _closure_timing = finish_timing::phase_in_closure(finish_timing::Phase::ClosureFullGraph);
     let mut predecessors = [None; MAX_RETAINED_BODIES - 1];
     let mut count = 0;
     let mut next = current.scope.predecessor();
@@ -39,7 +73,7 @@ fn validate_bounded(current: &History, maximum: usize) -> Result<()> {
     // predecessor, preserve that common path without replaying it a second time.
     if count == 0 {
         return with_native_read_tree(current, |tree| {
-            current.require_current_local_in_tree(None, tree)
+            current.require_current_local_in_tree(None, tree, None)
         });
     }
     // Authenticate all ancestors before the selected node, then recheck in reverse order.
@@ -49,18 +83,23 @@ fn validate_bounded(current: &History, maximum: usize) -> Result<()> {
     // mutable traversals retain their own native ancestry bracket, local attempt census,
     // inventory and receipt checks, with no wallet callback or effect between directions.
     current.scope.with_snapshot_read_pass(&mut |pass| {
+        // Immutable leaf observations consolidate only inside this callback-free graph.
+        // Persistent source/native refusal at the full snapshot exit overrides every
+        // ordinary inner result. A leaf changed and restored inside may be unseen;
+        // this does not retain interior leaf-error timing or an atomic snapshot.
+        let originals = pass.map(|snapshot| OriginalReadPass { snapshot });
         with_native_read_tree(current, |mut tree| {
             for prior in predecessors[..count].iter().rev().flatten() {
-                prior.require_retained_local(pass, tree.as_deref_mut())?;
+                prior.require_retained_local(pass, tree.as_deref_mut(), originals.as_ref())?;
             }
-            current.require_current_local_in_tree(pass, tree.as_deref_mut())
+            current.require_current_local_in_tree(pass, tree.as_deref_mut(), originals.as_ref())
         })?;
         #[cfg(test)]
         after_forward_for_test()?;
         with_native_read_tree(current, |mut tree| {
-            current.require_current_local_in_tree(pass, tree.as_deref_mut())?;
+            current.require_current_local_in_tree(pass, tree.as_deref_mut(), originals.as_ref())?;
             for prior in predecessors[..count].iter().flatten() {
-                prior.require_retained_local(pass, tree.as_deref_mut())?;
+                prior.require_retained_local(pass, tree.as_deref_mut(), originals.as_ref())?;
             }
             Ok(())
         })
@@ -222,5 +261,41 @@ impl History {
         let census =
             VALIDATION_VISITS.with(|state| state.take().expect("test observer retained").census);
         (result, census)
+    }
+}
+
+#[cfg(test)]
+impl History {
+    // Adversarial tests may lend an independently parsed Snapshot; production construction
+    // of OriginalReadPass remains solely inside validate_bounded's complete closed pass.
+    pub(in crate::managed) fn test_original_local(
+        &self,
+        snapshot: Option<&SnapshotReadPass<'_>>,
+    ) -> Result<()> {
+        with_native_read_tree(self, |tree| {
+            let originals = snapshot.map(|snapshot| OriginalReadPass { snapshot });
+            self.require_current_local_in_tree(snapshot, tree, originals.as_ref())
+        })
+    }
+    pub(in crate::managed) fn test_original_binding(
+        &self,
+        snapshot: &SnapshotReadPass<'_>,
+        operation: &PrivateDirectory,
+        purpose: Purpose,
+        semantic: [u8; 32],
+    ) -> bool {
+        self.scope
+            .covers_semantic_original(snapshot, operation, purpose, semantic)
+    }
+    pub(in crate::managed) fn test_fixed_original_binding(
+        &self,
+        snapshot: &SnapshotReadPass<'_>,
+    ) -> bool {
+        HistoryScope::FixedBody.covers_semantic_original(
+            snapshot,
+            &self.operation,
+            self.purpose,
+            self.semantic,
+        )
     }
 }

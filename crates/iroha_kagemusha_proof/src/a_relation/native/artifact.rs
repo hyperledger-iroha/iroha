@@ -64,7 +64,21 @@ impl<C: PastaCurve> KeyArtifact<C> {
     pub const fn key(&self) -> &VerifyingKey<C> {
         &self.key
     }
-    /// Check a borrowed stage PK before any fold or proof work.
+    /// Require exact installed identity of a strictly source-bound stage capability.
+    /// This check precedes folds; the reconstruction additionally checks the full
+    /// source fingerprint. Descriptor equality alone does not authorize a stage.
+    /// # Errors
+    /// Another descriptor, stage or canonical verifier.
+    pub fn require_source_bound(
+        &self,
+        key: &iroha_plonk::keys::SourceBoundViewV2<'_, C>,
+    ) -> Result<(), ArtifactError> {
+        if key.binding() != &self.binding || key.verifying_key().to_bytes() != self.key.to_bytes() {
+            return Err(ArtifactError::Identity);
+        }
+        Ok(())
+    }
+    /// Check a fully constructed PK during strict original admission.
     ///
     /// Both the entire descriptor and canonical VK bytes must match. Matching only
     /// a descriptor cannot establish the operation, stage or compiled source.

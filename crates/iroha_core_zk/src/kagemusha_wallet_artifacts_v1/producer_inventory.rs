@@ -472,6 +472,26 @@ fn read_cancellable(
     cap: usize,
     cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<Vec<u8>, Error> {
+    scan_cancellable(
+        source,
+        blob,
+        cap,
+        cancellation,
+        Vec::with_capacity,
+        |bytes, chunk| bytes.extend_from_slice(chunk),
+    )
+}
+
+// Both collecting and hash-only callers consume the same bounded retained reader.
+// A successful scan authenticates exact bytes only; it grants no source capability.
+fn scan_cancellable<T>(
+    source: &mut dyn OriginalSourceV1,
+    blob: BlobV1,
+    cap: usize,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+    initialize: impl FnOnce(usize) -> T,
+    mut accept: impl FnMut(&mut T, &[u8]),
+) -> Result<T, Error> {
     let check =
         || iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled);
     check()?;
@@ -482,7 +502,8 @@ fn read_cancellable(
     let opened = source.open(blob.sha256);
     check()?;
     let mut reader = opened?.take(maximum);
-    let mut bytes = Vec::with_capacity(length);
+    let mut output = initialize(length);
+    let mut consumed = 0_usize;
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
@@ -505,18 +526,19 @@ fn read_cancellable(
         if count == 0 {
             break;
         }
-        if count > length.saturating_sub(bytes.len()) {
+        if count > length.saturating_sub(consumed) {
             return Err(Error::Inventory);
         }
         hash.update(&buffer[..count]);
-        bytes.extend_from_slice(&buffer[..count]);
+        accept(&mut output, &buffer[..count]);
+        consumed += count;
     }
     check()?;
     let actual: [u8; 32] = hash.finalize().into();
-    if bytes.len() != length || actual != blob.sha256 {
+    if consumed != length || actual != blob.sha256 {
         return Err(Error::Inventory);
     }
-    Ok(bytes)
+    Ok(output)
 }
 
 impl AuthenticatedProducerInventoryV1 {
@@ -545,6 +567,41 @@ impl AuthenticatedProducerInventoryV1 {
             verifying_key: read(source, original.verifying_key, VERIFYING_KEY_MAX_BYTES_V1)?,
         })
     }
+    /// Revalidate all three selected originals without retaining their payloads.
+    ///
+    /// This checks signed content identity and current reader custody only. A
+    /// source-qualified owner must separately retain its opaque strict-import
+    /// authority and enforce the current row/profile limits before using it.
+    /// No key, source capability, or durable filesystem snapshot is returned.
+    /// # Errors
+    /// Invalid member or local limit, cancelled I/O, unavailable original, or a
+    /// length, digest or retained-custody mismatch. All role caps precede any open.
+    pub(crate) fn revalidate_original_cancellable(
+        &self,
+        index: u32,
+        source: &mut dyn OriginalSourceV1,
+        maximum_pk_bytes: usize,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        if maximum_pk_bytes == 0 || maximum_pk_bytes > PROVING_KEY_MAX_BYTES_V1 {
+            return Err(Error::Inventory);
+        }
+        let original = *self.inventory.member(index)?;
+        let roles = [
+            (original.descriptor, DESCRIPTOR_MAX_BYTES_V1),
+            (original.verifying_key, VERIFYING_KEY_MAX_BYTES_V1),
+            (original.proving_key, maximum_pk_bytes),
+        ];
+        for (blob, cap) in roles {
+            blob.length(cap)?;
+        }
+        for (blob, cap) in roles {
+            scan_cancellable(source, blob, cap, cancellation, |_| (), |(), _| {})?;
+        }
+        Ok(())
+    }
+
     /// Read and hash-check one original, with a finite local PK limit before allocation.
     /// The caller must pass these bytes to the exact source-specific native importer.
     /// # Errors

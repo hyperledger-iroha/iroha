@@ -159,6 +159,14 @@ impl FinalitySource for HttpFinalitySource {
                 .map(|_| Err(HttpFinalityError::Invalid("peer batch count")))
                 .collect();
         }
+        if norito::core::decode_limits_active() {
+            // The SDK decodes and verifies each response synchronously. Keep an enclosing
+            // caller's cumulative admission and peer order on its original thread.
+            return peers
+                .iter()
+                .map(|peer| self.latest_attestation(peer, challenge))
+                .collect();
+        }
         // Batches bound native threads and open requests. All joins finish before returning;
         // no detached task or retry can outlive the shared operation deadline.
         concurrent_reads(peers, |peer| self.latest_attestation(peer, challenge))
