@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Reject the retired Axiom proof stack in normal/build dependency closures.
+"""Reject the retired Axiom proof stack in every workspace dependency closure.
 
-The nonpublishable iroha_plonk_oracle root remains an independent test oracle
-until M7 closes. No other workspace root may depend on it. Orchard's separate
-Zcash halo2_proofs and the nonvendored halo2curves primitive are not retired.
+No oracle root or development edge is exempt. Orchard's separate Zcash
+halo2_proofs and the nonvendored halo2curves primitive are not retired.
 """
 from __future__ import annotations
 
@@ -19,11 +18,10 @@ RETIRED = frozenset({
     "snark-verifier", "snark-verifier-sdk", "poseidon-primitives",
     "iroha_plonk_oracle",
 })
-ORACLE_MANIFEST = Path("crates/iroha_plonk_oracle/Cargo.toml")
 
 
 def violations(metadata: dict, root: Path) -> list[str]:
-    """Return forbidden normal/build paths; incomplete Cargo data fails closed."""
+    """Return forbidden normal/build/development paths; incomplete Cargo data fails closed."""
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
     members = metadata["workspace_members"]
@@ -40,22 +38,15 @@ def violations(metadata: dict, root: Path) -> list[str]:
                 raise ValueError(f"unknown dependency kind from {package_id}")
             if dep["pkg"] not in packages or dep["pkg"] not in nodes:
                 raise ValueError(f"dependency has no resolved package: {dep['pkg']}")
-            # Inspect every target, including platform-specific and optional
-            # edges selected by --all-features. Dev edges do not ship.
-            if any(item["kind"] in (None, "build") for item in kinds):
-                selected.append(dep["pkg"])
+            # First-release retirement covers every target and dependency kind,
+            # including test-only, platform-specific and optional selected edges.
+            selected.append(dep["pkg"])
         edges[package_id] = selected
     problems = []
     for member in members:
         if member not in packages or member not in nodes:
             raise ValueError(f"workspace member has no resolved package: {member}")
         package = packages[member]
-        if package["name"] == "iroha_plonk_oracle":
-            if (Path(package["manifest_path"]).resolve() != (root / ORACLE_MANIFEST).resolve()
-                    or package.get("publish") != []):
-                problems.append("iroha_plonk_oracle must be the exact nonpublishable test owner")
-            # Only the root is exempt. A consumer reaching it below fails.
-            continue
         queue = deque([(member, (package["name"],))])
         visited = set()
         while queue:
@@ -95,9 +86,9 @@ def main() -> int:
         return 1
     if problems:
         for problem in problems:
-            print(f"[no-vendored-halo2] forbidden production path: {problem}", file=sys.stderr)
+            print(f"[no-vendored-halo2] forbidden dependency path: {problem}", file=sys.stderr)
         return 1
-    print("[no-vendored-halo2] PASS: non-oracle workspace normal/build closures exclude the retired stack")
+    print("[no-vendored-halo2] PASS: all workspace normal/build/development closures exclude the retired stack")
     return 0
 
 

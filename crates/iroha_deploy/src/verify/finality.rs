@@ -105,6 +105,36 @@ pub struct GenesisAnchor {
     pub validators: Vec<FinalityValidator>,
 }
 
+/// A raw source statement or an immutable statement authenticated by its exact SDK read.
+///
+/// Both forms still require the observation's independently selected peer, challenge and
+/// network, and the same contiguous chain and committee-membership checks. Raw statements
+/// additionally undergo full structural and node-signature verification on admission.
+#[derive(Debug)]
+pub enum FinalityAttestation {
+    /// An arbitrary source statement with no retained authentication provenance.
+    Raw(SumeragiFinalityAttestation),
+    /// A statement constructed only by the SDK's strict, request-bound response reader.
+    Authenticated(iroha::client::AuthenticatedFinalityAttestation),
+}
+
+impl FinalityAttestation {
+    /// Borrow the statement without promoting it to chain or committee authority.
+    #[must_use]
+    pub fn attestation(&self) -> &SumeragiFinalityAttestation {
+        match self {
+            Self::Raw(attestation) => attestation,
+            Self::Authenticated(attestation) => attestation.attestation(),
+        }
+    }
+}
+
+impl From<SumeragiFinalityAttestation> for FinalityAttestation {
+    fn from(attestation: SumeragiFinalityAttestation) -> Self {
+        Self::Raw(attestation)
+    }
+}
+
 /// Untrusted transport for native proof frames and challenged node statements.
 pub trait FinalitySource {
     /// Transport failure.
@@ -122,14 +152,14 @@ pub trait FinalitySource {
         &self,
         peer: &PeerId,
         challenge: &[u8; 32],
-    ) -> Result<SumeragiFinalityAttestation, Self::Error>;
+    ) -> Result<FinalityAttestation, Self::Error>;
     /// Read a bounded batch in request order. HTTP transports can overlap independent peers.
     /// Each result still needs the caller's independent committee and chain verification.
     fn latest_attestations(
         &self,
         peers: &[PeerId],
         challenge: &[u8; 32],
-    ) -> Vec<Result<SumeragiFinalityAttestation, Self::Error>> {
+    ) -> Vec<Result<FinalityAttestation, Self::Error>> {
         peers
             .iter()
             .map(|peer| self.latest_attestation(peer, challenge))
@@ -754,6 +784,13 @@ impl FinalityVerifier {
         let report = prefix.report(&mut reads, &mut unverified)?;
         if report.verified() >= report.required {
             self.replace_checkpoint(prefix.checkpoint()?);
+            if !norito::core::decode_limits_active() {
+                // The published checkpoint contains this exact already verified prefix tip.
+                // Keep that capability in its existing owner; newly offered witnesses still
+                // require their own native verification. An enclosing decoder keeps the
+                // original cold follow-up read and its physical allocation/refusal behavior.
+                self.verified_tip.get_or_init(|| prefix.verified);
+            }
             self.pending = None;
             return Ok(report);
         }
@@ -792,20 +829,34 @@ enum Read {
 
 impl Read {
     fn new(
-        response: Result<SumeragiFinalityAttestation, String>,
+        response: Result<FinalityAttestation, String>,
         peer: &PeerId,
         challenge: &[u8; 32],
         network: NetworkId,
     ) -> Self {
         match response {
             Err(error) => Self::Unreachable(error),
-            Ok(attestation) if attestation.body.node_id != *peer => {
-                Self::Substituted(Box::new(attestation.body.node_id))
+            Ok(attestation) if attestation.attestation().body.node_id != *peer => {
+                Self::Substituted(Box::new(attestation.attestation().body.node_id.clone()))
             }
-            Ok(attestation) => match verify_identity(network, challenge, &attestation) {
-                Ok(()) => Self::Claim(Box::new(attestation)),
-                Err(error) => Self::Invalid(Box::new(error)),
-            },
+            Ok(attestation) => {
+                if let Err(error) =
+                    verify_request_binding(network, challenge, attestation.attestation())
+                {
+                    return Self::Invalid(Box::new(error));
+                }
+                match attestation {
+                    FinalityAttestation::Raw(attestation) => match attestation.verify() {
+                        Ok(()) => Self::Claim(Box::new(attestation)),
+                        Err(error) => Self::Invalid(Box::new(error.into())),
+                    },
+                    // The private SDK carrier retains the exact statement it already checked.
+                    // Request rebinding above and trusted prefix placement below remain fresh.
+                    FinalityAttestation::Authenticated(attestation) => {
+                        Self::Claim(Box::new(attestation.into_attestation()))
+                    }
+                }
+            }
         }
     }
 }
@@ -858,12 +909,26 @@ struct Prefix {
 
 impl Prefix {
     fn new(checkpoint: &SumeragiFinalityCheckpoint) -> Result<Self, FinalityError> {
-        let native = SumeragiFinalityVerifier::from_trusted_checkpoint(
-            checkpoint,
-            &checkpoint.network_id(),
-            checkpoint.chain_id(),
-        )?;
-        let verified = native.verify_retained_decision(checkpoint.tip())?;
+        let (native, verified) = if norito::core::decode_limits_active() {
+            // An enclosing decoder owner retains the original two physical reads and their
+            // cumulative allocation charges, including refusal during the second read.
+            let native = SumeragiFinalityVerifier::from_trusted_checkpoint(
+                checkpoint,
+                &checkpoint.network_id(),
+                checkpoint.chain_id(),
+            )?;
+            let verified = native.verify_retained_decision(checkpoint.tip())?;
+            (native, verified)
+        } else {
+            // Complete import already authenticates this exact immutable tip. Keep its
+            // capability; newly supplied member witnesses still use independent placement.
+            SumeragiFinalityVerifier::from_trusted_checkpoint_with_consumer(
+                checkpoint,
+                &checkpoint.network_id(),
+                checkpoint.chain_id(),
+                |_, native, verified| (native, verified),
+            )?
+        };
         Ok(Self {
             native,
             tip: checkpoint.tip().clone(),
@@ -1050,8 +1115,27 @@ impl Prefix {
         if height + 1 < self.start {
             return Err(FinalityError::OutsideRetainedPrefix { checkpoint, height });
         }
-        let verified = self.native.verify_retained_decision(proof)?;
-        if verified.commitment().schedule.current.authorization.epoch < epoch.saturating_sub(1) {
+        // Only this complete immutable witness already produced the retained capability.
+        // Equal block hashes alone cannot reuse it: a different header, canonical body,
+        // committee or proof of possession still needs independent native verification.
+        // An enclosing decoder keeps the original physical read and allocation charges.
+        let verified_epoch = if !norito::core::decode_limits_active() && proof == &self.tip {
+            self.verified
+                .commitment()
+                .schedule
+                .current
+                .authorization
+                .epoch
+        } else {
+            self.native
+                .verify_retained_decision(proof)?
+                .commitment()
+                .schedule
+                .current
+                .authorization
+                .epoch
+        };
+        if verified_epoch < epoch.saturating_sub(1) {
             return Err(FinalityError::OutsideRetainedPrefix { checkpoint, height });
         }
         Ok(AttestedTip {
@@ -1066,6 +1150,18 @@ fn verify_identity(
     challenge: &[u8; 32],
     attestation: &SumeragiFinalityAttestation,
 ) -> Result<(), FinalityError> {
+    verify_request_binding(network, challenge, attestation)?;
+    attestation.verify()?;
+    // Structural consistency binds the decoded genesis to the selected network; the tip
+    // still requires exact retained-decision or contiguous-successor authentication.
+    Ok(())
+}
+
+fn verify_request_binding(
+    network: NetworkId,
+    challenge: &[u8; 32],
+    attestation: &SumeragiFinalityAttestation,
+) -> Result<(), FinalityError> {
     require_challenge(challenge)?;
     if attestation.body.challenge != *challenge {
         return Err(FinalityError::StaleChallenge);
@@ -1076,10 +1172,6 @@ fn verify_identity(
             actual: attestation.body.network_id,
         });
     }
-    attestation.verify()?;
-    // validate_consistency binds the complete decoded genesis frame to this independently
-    // selected network hash. Its result-only execution is not authority for the current tip.
-    // The tip is checked separately against exact retained decisions or contiguous successors.
     Ok(())
 }
 

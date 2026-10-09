@@ -5,12 +5,10 @@ use super::*;
 use crate::{
     attachment::tests::Fixture,
     bootstrap::{NetworkRelease, ReleaseCheckpointStore, ReleaseTrust, SignedNetworkCheckpoint},
+    verify::finality::FinalityAttestation,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
-use iroha_data_model::{
-    sumeragi_finality::{SumeragiFinalityAttestation, SumeragiFinalityProof},
-    transaction::FeePaymentIntent,
-};
+use iroha_data_model::{sumeragi_finality::SumeragiFinalityProof, transaction::FeePaymentIntent};
 use iroha_model_base::peer::PeerId;
 use iroha_primitives::numeric::Quantity;
 use std::{cell::Cell, collections::BTreeMap, num::NonZeroU64, time::Duration};
@@ -97,7 +95,7 @@ impl FinalitySource for Offline {
         &self,
         _: &PeerId,
         _: &[u8; 32],
-    ) -> std::result::Result<SumeragiFinalityAttestation, Self::Error> {
+    ) -> std::result::Result<FinalityAttestation, Self::Error> {
         self.0.set(self.0.get() + 1);
         Err(std::io::Error::other("offline"))
     }

@@ -49,7 +49,7 @@ use iroha_data_model::{
         },
     },
     sumeragi::{SumeragiFootprint, SumeragiStatus},
-    sumeragi_finality::{SumeragiFinalityAttestation, SumeragiFinalityProof},
+    sumeragi_finality::SumeragiFinalityProof,
     transaction::{
         FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionDomain,
         TransactionPayload,
@@ -344,7 +344,7 @@ impl<V: StateReadOnly> FinalitySource for NativeObservationSource<'_, '_, V> {
         &self,
         peer: &PeerId,
         challenge: &[u8; 32],
-    ) -> io::Result<SumeragiFinalityAttestation> {
+    ) -> io::Result<crate::verify::finality::FinalityAttestation> {
         self.native.latest_attestation(peer, challenge)
     }
 }
@@ -359,7 +359,7 @@ impl FinalitySource for NativeFixture {
         &self,
         peer: &PeerId,
         challenge: &[u8; 32],
-    ) -> io::Result<SumeragiFinalityAttestation> {
+    ) -> io::Result<crate::verify::finality::FinalityAttestation> {
         let (key, fingerprint) = self
             .validators
             .iter()
@@ -404,6 +404,7 @@ impl FinalitySource for NativeFixture {
             *challenge,
             key,
         )
+        .map(crate::verify::finality::FinalityAttestation::Raw)
         .map_err(|error| io::Error::other(error.to_string()))
     }
 }

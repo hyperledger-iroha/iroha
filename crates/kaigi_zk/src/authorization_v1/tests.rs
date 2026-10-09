@@ -72,15 +72,14 @@ fn reject_words(words: [Scalar; CONTEXT_WORDS]) {
 
 #[test]
 fn framed_sponge_matches_independent_poseidon_primitive() {
-    use poseidon_primitives::poseidon::primitives::{ConstantLength, Hash};
-    let primitive = Hash::<Scalar, crate::KaigiPoseidonSpec, ConstantLength<2>, 3, 2>::init();
+    let mut captured = include_str!("../../../../fixtures/poseidon/kaigi-framed-rp56.hex").lines();
     for domain in [DOMAIN_COMMITMENT, DOMAIN_NULLIFIER, DOMAIN_AUTHORIZATION] {
         for length in 0..=33 {
             let payload: Vec<_> = (0..length)
                 .map(|i| blinding() + Scalar::from(i as u64))
                 .collect();
-            // Separate complete-frame construction and the dependency's own
-            // permutation implementation, rather than the circuit round helper.
+            // Separate complete-frame construction and the independent test
+            // permutation over captured constants, rather than the circuit round helper.
             let mut frame = vec![Scalar::from(length as u64)];
             frame.extend_from_slice(&payload);
             frame.push(Scalar::ONE);
@@ -91,8 +90,18 @@ fn framed_sponge_matches_independent_poseidon_primitive() {
             for pair in frame.chunks_exact(2) {
                 state[0] += pair[0];
                 state[1] += pair[1];
-                primitive.permute(&mut state);
+                crate::tests::reference_permute(&mut state);
             }
+            let row: Vec<_> = captured
+                .next()
+                .expect("captured frame")
+                .split_whitespace()
+                .collect();
+            assert_eq!(row.len(), 3);
+            assert_eq!(u64::from_str_radix(row[0], 16).unwrap(), domain);
+            assert_eq!(row[1].parse::<usize>().unwrap(), length);
+            let expected = Scalar::from_repr(crate::tests::reference::field_bytes(row[2])).unwrap();
+            assert_eq!(state[0], expected, "independent reference frame");
             assert_eq!(
                 sponge(domain, &payload),
                 state[0],
@@ -100,6 +109,7 @@ fn framed_sponge_matches_independent_poseidon_primitive() {
             );
         }
     }
+    assert!(captured.next().is_none(), "all 102 frames covered");
     let context = context(KaigiAuthorizationActionV1::Join);
     let outputs = compute_authorization_v1(&context, &witness(blinding())).unwrap();
     let hex = outputs.canonical_bytes().map(|bytes| {
@@ -109,7 +119,7 @@ fn framed_sponge_matches_independent_poseidon_primitive() {
             .collect::<String>()
     });
     // Derived only after the complete-frame implementation above matched the
-    // dependency's independently implemented permutation for all frame lengths.
+    // captured independent permutation for all frame lengths.
     assert_eq!(
         hex,
         [

@@ -2833,3 +2833,408 @@ fn runtime_selection_missing_original_bootstrap_keeps_absence_and_same_original_
     owner.authority.validate_profile().unwrap();
     no_http(&peers);
 }
+
+thread_local! {
+    static SELECTION_FINISH_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+pub(super) fn before_selection_finish() {
+    let action = SELECTION_FINISH_HOOK.with(|hook| hook.borrow_mut().take());
+    if let Some(action) = action {
+        action();
+    }
+}
+
+struct SelectionFinishHook;
+impl SelectionFinishHook {
+    fn install(action: impl FnOnce() + 'static) -> Self {
+        SELECTION_FINISH_HOOK.with(|hook| {
+            assert!(hook.borrow_mut().replace(Box::new(action)).is_none());
+        });
+        Self
+    }
+}
+impl Drop for SelectionFinishHook {
+    fn drop(&mut self) {
+        SELECTION_FINISH_HOOK.with(|hook| *hook.borrow_mut() = None);
+    }
+}
+
+fn assert_same_runtime_selection(
+    authority: &ServiceAuthority,
+    actual: &RuntimeSelection,
+    expected: &RuntimeSelection,
+) {
+    assert_eq!(
+        encode(&actual.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&expected.policies, MAX_POLICY_BYTES).unwrap()
+    );
+    assert_eq!(actual.initial, expected.initial);
+    assert_eq!(
+        actual.publication.configuration_table().unwrap(),
+        expected.publication.configuration_table().unwrap()
+    );
+    for index in 0..3 {
+        assert!(
+            actual.identity(authority, index).unwrap()
+                == expected.identity(authority, index).unwrap()
+        );
+    }
+}
+
+#[test]
+fn runtime_selection_immutable_projection_keeps_original_values_and_bounded_full_checks() {
+    use crate::managed::service_authority::profile_validation_test_support;
+
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-projection-checks");
+    let policies = select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let expected_plans = owner.authority.provider_plans().unwrap().clone();
+    let expected_publication = owner.authority.publication_plan().unwrap();
+    let expected_compliance: [_; 3] = std::array::from_fn(|index| {
+        owner
+            .authority
+            .gateway_compliance_plan(expected_plans[index].provider_id())
+            .unwrap()
+    });
+    let expected_initial = standalone_custody_initials(&owner.authority, &policies);
+    let (actual, checks) =
+        profile_validation_test_support::count(|| RuntimeSelection::read(&owner.authority));
+    let actual = actual.unwrap();
+    // The existing bootstrap constructor additionally performs one direct profile revalidation.
+    // This successful absent-custody path therefore keeps seventeen full traversals, not twenty-one.
+    assert_eq!(checks, 16);
+    assert_eq!(actual.initial, expected_initial);
+    assert_eq!(
+        encode(&actual.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&policies, MAX_POLICY_BYTES).unwrap()
+    );
+    assert_eq!(
+        actual.publication.configuration_table().unwrap(),
+        expected_publication.configuration_table().unwrap()
+    );
+    for index in 0..3 {
+        assert_eq!(
+            actual.plans[index].original_profile_commitment(),
+            expected_plans[index].original_profile_commitment()
+        );
+        assert_eq!(
+            actual.plans[index].provider_id(),
+            expected_plans[index].provider_id()
+        );
+        assert_eq!(
+            actual.plans[index].peer_index(),
+            expected_plans[index].peer_index()
+        );
+        assert_eq!(actual.plans[index].slot(), expected_plans[index].slot());
+        assert_eq!(
+            actual.compliance[index].original_commitment(),
+            expected_compliance[index].original_commitment()
+        );
+    }
+    no_http(&peers);
+}
+
+#[test]
+fn runtime_selection_projection_refuses_source_changes_at_entry_and_exit_then_retries() {
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-projection-custody");
+    select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let expected = RuntimeSelection::read(&owner.authority).unwrap();
+    let generation = PrivateDirectory::open_exact(generation_path(&prepared).unwrap()).unwrap();
+    let original = generation.read("peer3.toml", MAX_CONFIG_BYTES).unwrap();
+    let mut changed = original.to_vec();
+    changed.extend_from_slice(b"\n# changed source image, same parsed configuration\n");
+    let names = owner
+        .authority
+        .directory
+        .entries(MAX_RUNTIME_ENTRIES)
+        .unwrap();
+
+    generation
+        .write_atomic("peer3.toml", &changed, PublishMode::Replace)
+        .unwrap();
+    assert!(RuntimeSelection::read(&owner.authority).is_err());
+    generation
+        .write_atomic("peer3.toml", &original, PublishMode::Replace)
+        .unwrap();
+    let restored = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_same_runtime_selection(&owner.authority, &restored, &expected);
+
+    let source = generation.retain().unwrap();
+    let hook = SelectionFinishHook::install(move || {
+        source
+            .write_atomic("peer3.toml", &changed, PublishMode::Replace)
+            .unwrap();
+    });
+    let error = RuntimeSelection::read(&owner.authority).err().unwrap();
+    assert!(SELECTION_FINISH_HOOK.with(|value| value.borrow().is_none()));
+    drop(hook);
+    assert!(
+        matches!(error, crate::managed::Error::Invalid(message) if message == "retained service profile input custody differs")
+    );
+    generation
+        .write_atomic("peer3.toml", &original, PublishMode::Replace)
+        .unwrap();
+    let restored = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_same_runtime_selection(&owner.authority, &restored, &expected);
+    assert_eq!(
+        owner
+            .authority
+            .directory
+            .entries(MAX_RUNTIME_ENTRIES)
+            .unwrap(),
+        names
+    );
+    no_http(&peers);
+}
+
+#[test]
+fn runtime_selection_projection_closes_original_custody_after_child_read_error() {
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-projection-error-exit");
+    select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let expected = RuntimeSelection::read(&owner.authority).unwrap();
+    let generation = PrivateDirectory::open_exact(generation_path(&prepared).unwrap()).unwrap();
+    let profile = generation.read("peer3.toml", MAX_CONFIG_BYTES).unwrap();
+    let bootstrap = PrivateDirectory::open_exact(
+        owner
+            .authority
+            .directory
+            .path()
+            .parent()
+            .unwrap()
+            .join("service-bootstrap"),
+    )
+    .unwrap();
+    let initial = bootstrap.open_child("initial").unwrap();
+    let original = initial.read("original.nrt", MAX_POLICY_BYTES).unwrap();
+    let names = initial.entries(32).unwrap();
+    initial
+        .write_atomic(
+            "original.nrt",
+            b"malformed bootstrap original",
+            PublishMode::Replace,
+        )
+        .unwrap();
+    let ordinary = RuntimeSelection::read(&owner.authority).err().unwrap();
+    assert!(
+        matches!(ordinary, crate::managed::Error::Invalid(message) if message == "invalid original service bootstrap intent")
+    );
+
+    let source = generation.retain().unwrap();
+    let mut changed = profile.to_vec();
+    changed.extend_from_slice(b"\n# changed source after an ordinary child refusal\n");
+    let hook = SelectionFinishHook::install(move || {
+        source
+            .write_atomic("peer3.toml", &changed, PublishMode::Replace)
+            .unwrap();
+    });
+    let error = RuntimeSelection::read(&owner.authority).err().unwrap();
+    assert!(SELECTION_FINISH_HOOK.with(|value| value.borrow().is_none()));
+    drop(hook);
+    assert!(
+        matches!(error, crate::managed::Error::Invalid(message) if message == "retained service profile input custody differs")
+    );
+    generation
+        .write_atomic("peer3.toml", &profile, PublishMode::Replace)
+        .unwrap();
+    initial
+        .write_atomic("original.nrt", &original, PublishMode::Replace)
+        .unwrap();
+    let restored = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_same_runtime_selection(&owner.authority, &restored, &expected);
+    assert_eq!(initial.entries(32).unwrap(), names);
+    no_http(&peers);
+}
+
+#[test]
+fn renewal_operation_releases_original_custody_before_catalog_validation() {
+    use crate::managed::{
+        ManagedBootstrapFailure, native_operation::Fees, runtime::test_with_renewal_custody,
+        stream_token_custody::renewal::GeneratedRenewalTurn,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Genuine::with_material_preflight("runtime-renewal-lock", true, false, true);
+    let peers = fixture.peers();
+    assert_eq!(fixture.carriers.len(), 29);
+    assert_eq!(fixture.catalog.stage(), GeneratedRuntimeStage::Catalog);
+    let provider = fixture.selection.plans[0].provider_id();
+    let options = BoundedTransactionOptions {
+        fee_payment: fixture
+            .selection
+            .policies
+            .network
+            .runtime_fee_payment
+            .clone(),
+        max_total_fees: BTreeMap::from([(
+            fixture
+                .selection
+                .policies
+                .network
+                .reserve
+                .asset_definition
+                .clone(),
+            Quantity::from(1_u64),
+        )]),
+        deadline: fixture.options.deadline,
+    };
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let require_overlap_refusal = || {
+        assert!(matches!(
+            fixture.owner.validate(&fixture.catalog),
+            Err(crate::managed::Error::Invalid(message))
+                if message == "another managed native operation holds this generation"
+        ));
+    };
+    fixture.owner.validate(&fixture.catalog).unwrap();
+    let mut turn = test_with_renewal_custody(&fixture.prepared, provider, |custody| {
+        require_overlap_refusal();
+        GeneratedRenewalTurn::begin(
+            custody,
+            &fixture.selection.policies.providers[0].custody,
+            Fees::from_options(&options)?,
+            *fixture.carriers.last().unwrap(),
+            options.deadline,
+            Arc::clone(&cancelled),
+        )
+    })
+    .unwrap();
+    // The genuine native configuration and carrier created this exact owned turn. The
+    // production scope must release its operation lock before the renderer can reopen it.
+    fixture.owner.validate(&fixture.catalog).unwrap();
+    let original_turn = std::ptr::addr_of!(turn);
+    let result = test_with_renewal_custody(&fixture.prepared, provider, |custody| {
+        require_overlap_refusal();
+        custody.reconcile_generated_renewal(&mut turn, Instant::now())
+    });
+    assert!(matches!(result, Err(crate::managed::Error::NativeDeadline)));
+    assert_eq!(std::ptr::addr_of!(turn), original_turn);
+    fixture.owner.validate(&fixture.catalog).unwrap();
+
+    // Reopening custody cannot replace the turn's original cancellation capability. Both
+    // ordinary failures close the actual native lock before the complete renderer check.
+    cancelled.store(true, Ordering::Release);
+    let result = test_with_renewal_custody(&fixture.prepared, provider, |custody| {
+        require_overlap_refusal();
+        custody.reconcile_generated_renewal(&mut turn, options.deadline)
+    });
+    assert!(matches!(
+        result,
+        Err(crate::managed::Error::Bootstrap(
+            ManagedBootstrapFailure::Cancelled
+        ))
+    ));
+    assert_eq!(std::ptr::addr_of!(turn), original_turn);
+    fixture.owner.validate(&fixture.catalog).unwrap();
+    assert!(cancelled.load(Ordering::Acquire));
+    no_http(&peers);
+}
+
+#[test]
+fn fresh_catalog_round_preserves_original_census_and_expired_current_proof_refusal() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Genuine::with_material_preflight("runtime-catalog-round", true, false, true);
+    let peers = fixture.peers();
+    assert_eq!(fixture.carriers.len(), 29);
+    assert!(fixture.owner.fresh_catalog_round().unwrap());
+    let finite = 64 * 1024 * 1024;
+    let active = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        finite, finite, finite, 0, 64,
+    ));
+    assert!(
+        !active.with(|| fixture.owner.fresh_catalog_round()).unwrap(),
+        "active limits skip even the scheduling census"
+    );
+    let required = RequiredTransactions::from_originals(fixture.carriers.iter().copied()).unwrap();
+    let before = fixture.owner.authority.directory.entries(32).unwrap();
+    let floor = required.observation_floor().unwrap();
+    // This is the production three-owner loop with real independent finality/challenge and
+    // native custody producers. It never fabricates a checkpoint, proof or retained enrollment.
+    for wrong_provider in [false, true, false] {
+        let challenges: [_; 3] = std::array::from_fn(|_| std::sync::Mutex::new(Vec::new()));
+        let result = fixture.owner.current_provider_round(
+            &fixture.selection,
+            fixture.options.deadline,
+            true,
+            |slot, custody| {
+                let policy = &fixture.selection.policies.providers[slot].custody;
+                let current = custody.test_native_current(
+                    &fixture.native,
+                    policy,
+                    fixture.options.deadline,
+                    &challenges[slot],
+                )?;
+                let selected = if wrong_provider && slot == 1 { 0 } else { slot };
+                custody.verify_enrollment_at(
+                    fixture.components[selected].enrollment(),
+                    policy,
+                    floor.height,
+                    *floor.block_hash.as_ref(),
+                    &current,
+                    now_ms()?,
+                    fixture.options.deadline,
+                )?;
+                Ok(fixture.components[slot].enrollment().record_digest())
+            },
+        );
+        assert_eq!(result.is_err(), wrong_provider);
+        if let Ok(digests) = result {
+            assert_eq!(
+                digests,
+                fixture
+                    .components
+                    .each_ref()
+                    .map(|component| component.enrollment().record_digest())
+            );
+        }
+        let challenges = challenges.map(|values| values.into_inner().unwrap());
+        for values in &challenges {
+            assert_eq!(values.len(), 4);
+            assert!(values.iter().all(|value| *value == values[0]));
+            assert_ne!(values[0], [0; 32]);
+        }
+        assert_ne!(challenges[0][0], challenges[1][0]);
+        assert_ne!(challenges[0][0], challenges[2][0]);
+        assert_ne!(challenges[1][0], challenges[2][0]);
+        // Even the failed aggregate joined and released every actual provider purpose lock.
+        for plan in &fixture.selection.plans {
+            drop(ManagedStreamTokenCustody::open(&fixture.prepared, plan.provider_id()).unwrap());
+        }
+    }
+    for parallel in [false, true] {
+        assert!(matches!(
+            fixture.owner.verify_current_components(
+                &fixture.selection,
+                &fixture.components,
+                &required,
+                Instant::now(),
+                parallel,
+            ),
+            Err(crate::managed::Error::NativeDeadline)
+        ));
+    }
+    assert_eq!(
+        fixture.owner.authority.directory.entries(32).unwrap(),
+        before
+    );
+    fixture.owner.validate(&fixture.catalog).unwrap();
+    // An actual retained provider-purpose owner selects original serial recovery, including
+    // the empty pre-catalog prefix. This name confers no catalog or native admission result.
+    let provider = fixture.selection.plans[1].provider_id();
+    let publisher = crate::managed::gateway_compliance::ManagedGatewayCompliance::open(
+        &fixture.prepared,
+        provider,
+    )
+    .unwrap();
+    assert!(!fixture.owner.fresh_catalog_round().unwrap());
+    drop(publisher);
+    assert!(!fixture.owner.fresh_catalog_round().unwrap());
+    no_http(&peers);
+}

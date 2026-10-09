@@ -457,6 +457,17 @@ These unsigned observations never authenticate readiness or finality. Every
 response is `no-store`, carries `X-Content-Type-Options: nosniff`, and varies by
 `X-Iroha-Finality-Challenge, Accept`.
 
+For current-tip attestations past H2, the ordinary State-backed producer joins the
+current certificate and H2's genesis execution anchor through every original native
+ancestry frame in one captured State history. It verifies the exact current and H2
+quorums and signed availability; the response does not assert the health of every
+intermediate local quorum witness. The separately returned genesis proof must match
+that exact H2 parent execution. Standalone proof and checkpoint exports retain their
+full-prefix certificate checks. A typed unavailable body or height outside the
+captured native snapshot maps to `FinalityUnavailable`; other original-execution
+rejections map to `ConflictingState`. Neither failure permits startup retries, and
+diagnostic text never determines classification.
+
 Exact committed details use `POST /v1/pipeline/transactions/details`. The body
 is a canonical `SignedQuery` containing `FindTransactions` with exactly one
 `entrypoint_hash` equality predicate and default query parameters and selector.

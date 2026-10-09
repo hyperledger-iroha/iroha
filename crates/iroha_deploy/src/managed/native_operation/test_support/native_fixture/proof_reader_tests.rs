@@ -67,11 +67,11 @@ impl<S: FinalitySource> FinalitySource for CountedSource<'_, S> {
         &self,
         peer: &PeerId,
         challenge: &[u8; 32],
-    ) -> Result<SumeragiFinalityAttestation, Self::Error> {
+    ) -> Result<crate::verify::finality::FinalityAttestation, Self::Error> {
         self.attesters.borrow_mut().push(peer.clone());
         let actual = self.source.latest_attestation(peer, challenge)?;
-        assert_eq!(&actual.body.challenge, challenge);
-        actual.verify().unwrap();
+        assert_eq!(&actual.attestation().body.challenge, challenge);
+        actual.attestation().verify().unwrap();
         Ok(actual)
     }
 }

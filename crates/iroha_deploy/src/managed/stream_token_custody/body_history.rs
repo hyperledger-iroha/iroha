@@ -8,8 +8,8 @@ use super::*;
 use crate::localnet::service_authorities::RetainedProviderServicePlan;
 use crate::managed::native_operation::{
     attempts::{
-        BodyDispatchScope, BodyReplacementTarget, EnrollmentScopeBinding, EnrollmentScopeEvidence,
-        History, HistoryScope, SemanticSuccessor, VerifiedUnsignedClosure,
+        BodyDispatchScope, BodyReplacementTarget, EnrollmentReadPass, EnrollmentScopeBinding,
+        EnrollmentScopeEvidence, History, HistoryScope, SemanticSuccessor, VerifiedUnsignedClosure,
     },
     require_retained_material,
 };
@@ -68,6 +68,8 @@ impl RecordSnapshot {
         }
     }
     fn revalidate(&self) -> Result<()> {
+        #[cfg(test)]
+        shared_snapshot_tests::record_read();
         // Both readers begin with fresh native directory revalidation. The
         // optional reader also revalidates custody before accepting absence.
         let bytes = if self.observed.is_some() {
@@ -84,6 +86,8 @@ impl RecordSnapshot {
         Ok(())
     }
     fn revalidate_in_scope(&self, reader: &mut iroha_fs::PrivateReadScope<'_>) -> Result<()> {
+        #[cfg(test)]
+        shared_snapshot_tests::record_read();
         let observe = |bytes: &[u8]| (bytes.len(), *Hash::new(bytes).as_ref());
         let observed = if self.observed.is_some() {
             Some(reader.read(&self.name, self.maximum, observe)?)
@@ -128,6 +132,27 @@ struct Snapshot {
     records: Vec<RecordSnapshot>,
     names: Vec<NamesSnapshot>,
     root: Option<Arc<PrivateDirectory>>,
+}
+/// Borrowed coverage of one exact immutable snapshot chain during a closed read-only pass.
+/// Construction and membership stay with the sole snapshot owner; no token is retained.
+pub(in crate::managed) struct SnapshotReadPass<'a> {
+    head: &'a Snapshot,
+}
+impl SnapshotReadPass<'_> {
+    fn covers(&self, snapshot: &Snapshot) -> bool {
+        if norito::core::decode_limits_active() {
+            return false;
+        }
+        let mut next = Some(self.head);
+        for _ in 0..usize::from(MAX_BODIES) + 2 {
+            let Some(current) = next else { return false };
+            if std::ptr::eq(current, snapshot) {
+                return true;
+            }
+            next = current.previous.as_deref();
+        }
+        false
+    }
 }
 impl Snapshot {
     fn revalidate(&self) -> Result<()> {
@@ -225,6 +250,8 @@ impl Snapshot {
         &self,
         mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
     ) -> Result<()> {
+        #[cfg(test)]
+        shared_snapshot_tests::snapshot_visit();
         if let Some(root) = &self.root {
             root.revalidate()?;
             check_names(root, &["original.nrt", "anchor.nrt", "bodies", "epochs"], 4)?;
@@ -294,6 +321,29 @@ impl EnrollmentScopeEvidence for ScopeEvidence {
         &self.fees
     }
     fn revalidate(&self) -> Result<()> {
+        self.revalidate_with_snapshot_read_pass(None)
+    }
+    fn with_snapshot_read_pass(
+        &self,
+        action: &mut dyn FnMut(Option<&SnapshotReadPass<'_>>) -> Result<()>,
+    ) -> Result<()> {
+        // Preserve the original source/codec charging recipe under an inherited owner.
+        if norito::core::decode_limits_active() {
+            return action(None);
+        }
+        self.revalidate()?;
+        let pass = SnapshotReadPass {
+            head: &self.snapshots,
+        };
+        let result = action(Some(&pass));
+        // Close every ordinary result. Persistent custody/byte changes outrank inner errors.
+        self.revalidate()?;
+        result
+    }
+    fn revalidate_with_snapshot_read_pass(
+        &self,
+        pass: Option<&SnapshotReadPass<'_>>,
+    ) -> Result<()> {
         self.root.revalidate()?;
         check_names(
             &self.root,
@@ -301,7 +351,11 @@ impl EnrollmentScopeEvidence for ScopeEvidence {
             4,
         )?;
         self.body.revalidate()?;
-        self.snapshots.revalidate()
+        if pass.is_some_and(|pass| pass.covers(&self.snapshots)) {
+            Ok(())
+        } else {
+            self.snapshots.revalidate()
+        }
     }
     fn require_active(&self) -> Result<()> {
         self.revalidate()?;
@@ -323,6 +377,12 @@ struct Target {
 }
 impl Target {
     fn revalidate(&self) -> Result<()> {
+        self.revalidate_with_snapshot_read_pass(None)
+    }
+    fn revalidate_with_snapshot_read_pass(
+        &self,
+        pass: Option<&SnapshotReadPass<'_>>,
+    ) -> Result<()> {
         self.fees.validate()?;
         if self.outer == [0; 32]
             || self.previous_body == [0; 32]
@@ -331,7 +391,11 @@ impl Target {
         {
             return Err(invalid("enrollment replacement target is incomplete"));
         }
-        self.snapshots.revalidate()
+        if pass.is_some_and(|pass| pass.covers(&self.snapshots)) {
+            Ok(())
+        } else {
+            self.snapshots.revalidate()
+        }
     }
 }
 /// Native-validated unsigned selection; the live issuer consumes this target before publication.
@@ -367,6 +431,12 @@ macro_rules! replacement_target {
             fn validate_target(&self) -> Result<()> {
                 self.target.revalidate()
             }
+            fn validate_target_with_snapshot_read_pass(
+                &self,
+                pass: Option<&SnapshotReadPass<'_>>,
+            ) -> Result<()> {
+                self.target.revalidate_with_snapshot_read_pass(pass)
+            }
         }
     };
 }
@@ -378,6 +448,12 @@ impl SemanticSuccessor for ReservedBodySuccessor {
     }
     fn revalidate(&self) -> Result<()> {
         self.target.revalidate()
+    }
+    fn revalidate_with_snapshot_read_pass(
+        &self,
+        pass: Option<&SnapshotReadPass<'_>>,
+    ) -> Result<()> {
+        self.target.revalidate_with_snapshot_read_pass(pass)
     }
 }
 
@@ -536,11 +612,19 @@ impl BodyHistory {
         owner: &ManagedStreamTokenCustody,
         purpose: CustodyPurpose,
     ) -> Result<Option<Self>> {
-        Self::open_with_imports(
+        // Reuse only the two exact pure epoch contexts within this fresh historical parse.
+        // Source, current authority and active decoder admission remain with their owners.
+        let mut validation = EpochValidationScope::new();
+        let result = Self::open_with_imports(
             owner,
             purpose,
-            &mut crate::managed::service_authority::CheckpointImports::new(&owner.authority, None),
-        )
+            &mut crate::managed::service_authority::CheckpointImports::new(
+                &owner.authority,
+                Some(&mut validation),
+            ),
+        );
+        drop(validation);
+        result
     }
 
     pub(super) fn open_with_imports(
@@ -594,15 +678,25 @@ impl BodyHistory {
         }
         let reference = read_reference(owner, self.purpose)?;
         let plan = owner.authority.provider_plan()?;
-        let current = require_retained_material(Self::read(
-            owner,
-            self.purpose,
-            Arc::clone(&self.root),
-            reference,
-            Some(self),
-            plan,
-            &mut crate::managed::service_authority::CheckpointImports::new(&owner.authority, None),
-        ))?;
+        let current = {
+            // End this parse's pure workspace before the closing retained-custody fences
+            // and before the caller can publish any successor, retirement or signature.
+            let mut validation = EpochValidationScope::new();
+            let result = Self::read(
+                owner,
+                self.purpose,
+                Arc::clone(&self.root),
+                reference,
+                Some(self),
+                plan,
+                &mut crate::managed::service_authority::CheckpointImports::new(
+                    &owner.authority,
+                    Some(&mut validation),
+                ),
+            );
+            drop(validation);
+            require_retained_material(result)?
+        };
         require_retained_material(self.revalidate_handles())?;
         require_retained_material(self.require_retained_prefix(&current))?;
         require_retained_material(current.revalidate_handles())?;
@@ -1081,6 +1175,29 @@ impl BodyHistory {
         retained: Option<&Self>,
         epochs: &mut crate::managed::native_operation::authorization::EpochReader,
     ) -> Result<()> {
+        if norito::core::decode_limits_active() {
+            return self.verify_histories_in_pass(owner, retained, epochs, None);
+        }
+        let snapshots = self.bodies.last().map_or_else(
+            || Arc::clone(&self.root_snapshots),
+            |body| Arc::clone(&body.snapshots),
+        );
+        snapshots.revalidate()?;
+        let pass = SnapshotReadPass { head: &snapshots };
+        let result = EnrollmentReadPass::run(&pass, |pass| {
+            self.verify_histories_in_pass(owner, retained, epochs, Some(pass))
+        });
+        // Persistent immutable custody changes override every ordinary parser result.
+        snapshots.revalidate()?;
+        result
+    }
+    fn verify_histories_in_pass(
+        &mut self,
+        owner: &ManagedStreamTokenCustody,
+        retained: Option<&Self>,
+        epochs: &mut crate::managed::native_operation::authorization::EpochReader,
+        pass: Option<&EnrollmentReadPass<'_>>,
+    ) -> Result<()> {
         let retained_graph = retained.and_then(|prior| {
             prior
                 .active
@@ -1172,20 +1289,23 @@ impl BodyHistory {
                         && self.anchor.completed == body.semantic,
                 }),
                 preceding.take(),
+                pass,
             )?);
             let history = match retained_graph {
-                Some(prior) => History::read_retained(
+                Some(prior) => History::read_retained_with_pass(
                     &body.directory,
                     self.selection.purpose,
                     original.digest()?,
                     &scope,
                     prior,
+                    pass,
                 )?,
-                None => History::read(
+                None => History::read_with_pass(
                     &body.directory,
                     self.selection.purpose,
                     original.digest()?,
                     &scope,
+                    pass,
                 )?,
             };
             history.require_fees(&self.selection.fees)?;
@@ -1217,7 +1337,7 @@ impl BodyHistory {
                 Ok(preparation)
             };
             if let Some(successor) = successor {
-                match history.verify_unsigned_closure(&successor, inspect)? {
+                match history.verify_unsigned_closure_with_pass(&successor, inspect, pass)? {
                     Some(closure) => {
                         previous_retirement = Some(closure.digest());
                         preceding = Some(closure);
@@ -1239,7 +1359,7 @@ impl BodyHistory {
                     }
                 }
             } else {
-                history.verify_wallets(inspect)?;
+                history.verify_wallets_with_pass(inspect, pass)?;
                 self.active = Some(ActiveHistory {
                     index,
                     scope,
@@ -1249,6 +1369,11 @@ impl BodyHistory {
             }
         }
         self.nearest_closure = preceding;
+        if pass.is_some() {
+            if let Some(active) = &self.active {
+                active.history.close_parser_read()?;
+            }
+        }
         Ok(())
     }
     pub(super) fn validate_renewal_context(
@@ -2065,3 +2190,11 @@ mod handle_tree_tests;
 #[cfg(test)]
 #[path = "body_history/optional_admission_tests.rs"]
 mod optional_admission_tests;
+
+#[cfg(test)]
+#[path = "body_history/shared_snapshot_tests.rs"]
+mod shared_snapshot_tests;
+
+#[cfg(test)]
+#[path = "body_history/epoch_scope_tests.rs"]
+mod epoch_scope_tests;

@@ -1160,9 +1160,12 @@ mod std_fs {
         let _lock = other.lock_exclusive().expect("released");
         assert!(store.available_bytes().expect("statvfs") > 0);
         assert_eq!(kagemusha_wallet_probe_noreplace_v1(&store), Ok(()));
-        let staging = store.fs().staging_name();
+        let staging = store.fs().staging_name().expect("staging name");
         assert!(crate::kagemusha_wallet_advance_v1::kagemusha_wallet_is_staging_name_v1(&staging));
-        assert_ne!(staging, store.fs().staging_name());
+        assert_ne!(
+            staging,
+            store.fs().staging_name().expect("another staging name")
+        );
     }
     #[test]
     fn wallet_advance_v1_std_fs_retains_root_and_child_authority_across_replacement() {
@@ -1212,7 +1215,7 @@ mod std_fs {
         use std::os::unix::fs::PermissionsExt as _;
         let (temp, store) = std_store();
         let fs = store.fs();
-        let staged = fs.staging_name();
+        let staged = fs.staging_name().expect("staging name");
         let mut file = fs.create_new(&dir(), &staged).expect("create");
         fs.write_all(&mut file, BYTES).expect("write");
         fs.sync_staged(&file).expect("sync");
@@ -1359,4 +1362,116 @@ mod windows_std_fs {
         drop(lock);
         let _lock = other.lock_exclusive().unwrap();
     }
+}
+
+#[test]
+fn staging_name_entropy_failure_never_returns_a_fallback_name() {
+    let name = staging_name_with_entropy(|bytes| {
+        *bytes = [0xab; 16];
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(name, format!(".tmp-{}", "ab".repeat(16)));
+    assert!(crate::kagemusha_wallet_advance_v1::kagemusha_wallet_is_staging_name_v1(&name));
+    let error = staging_name_with_entropy(|bytes| {
+        *bytes = [0xff; 16];
+        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+    })
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[test]
+fn staging_entropy_failure_does_not_mutate_and_retry_publishes_exact_bytes() {
+    let fs = base();
+    fs.inject_staging_name_error(0, io::ErrorKind::Other);
+    let before = fs.steps();
+    assert_eq!(
+        store(&fs).write_new(&dir(), &name("f"), BYTES),
+        KagemushaWalletPublishOutcomeV1::NotPublished(KagemushaWalletNotPublishedV1::Failed(
+            KagemushaWalletUnavailableV1::Io(0)
+        ))
+    );
+    assert_eq!(
+        fs.steps(),
+        before,
+        "no filesystem operation followed failed entropy"
+    );
+    assert!(fs.visible_names(&dir()).is_empty());
+    assert_eq!(
+        store(&fs).write_new(&dir(), &name("f"), BYTES),
+        KagemushaWalletPublishOutcomeV1::Published
+    );
+    fs.power_loss(KagemushaWalletSimPowerLossV1::DropUnsynced);
+    assert_eq!(fs.visible_file(&dir(), "f").as_deref(), Some(BYTES));
+}
+
+#[test]
+fn staging_entropy_failure_keeps_existing_destination_during_rewrite() {
+    let fs = base_with_file(BYTES);
+    fs.inject_staging_name_error(0, io::ErrorKind::Other);
+    let before = fs.steps();
+    assert!(matches!(
+        store(&fs).rewrite_same(&dir(), &name("f"), BYTES),
+        KagemushaWalletPublishOutcomeV1::NotPublished(KagemushaWalletNotPublishedV1::Failed(_))
+    ));
+    assert_eq!(fs.trace_since(before), [KagemushaWalletSimStepV1::Read]);
+    assert_eq!(fs.visible_names(&dir()), ["f"]);
+    assert_eq!(fs.visible_file(&dir(), "f").as_deref(), Some(BYTES));
+    assert_eq!(
+        store(&fs).rewrite_same(&dir(), &name("f"), BYTES),
+        KagemushaWalletPublishOutcomeV1::Published
+    );
+    fs.power_loss(KagemushaWalletSimPowerLossV1::DropUnsynced);
+    assert_eq!(fs.visible_file(&dir(), "f").as_deref(), Some(BYTES));
+}
+
+#[test]
+fn staging_entropy_failure_on_either_pair_member_never_publishes_a_destination() {
+    for before_error in [0, 1] {
+        let fs = base();
+        fs.inject_staging_name_error(before_error, io::ErrorKind::Other);
+        let outcome = store(&fs).write_new_pair(&dir(), (&name("a"), BYTES), (&name("b"), OTHER));
+        assert!(outcome.iter().all(|result| matches!(
+            result,
+            KagemushaWalletPublishOutcomeV1::NotPublished(KagemushaWalletNotPublishedV1::Failed(_))
+        )));
+        assert!(
+            fs.visible_names(&dir()).is_empty(),
+            "first staged member is discarded"
+        );
+        fs.power_loss(KagemushaWalletSimPowerLossV1::DropUnsynced);
+        assert!(fs.visible_names(&dir()).is_empty());
+        assert_eq!(
+            store(&fs).write_new_pair(&dir(), (&name("a"), BYTES), (&name("b"), OTHER)),
+            [KagemushaWalletPublishOutcomeV1::Published; 2]
+        );
+        fs.power_loss(KagemushaWalletSimPowerLossV1::DropUnsynced);
+        assert_eq!(fs.visible_file(&dir(), "a").as_deref(), Some(BYTES));
+        assert_eq!(fs.visible_file(&dir(), "b").as_deref(), Some(OTHER));
+    }
+}
+
+#[test]
+fn simulated_staging_entropy_faults_are_separate_and_resettable() {
+    let fs = base();
+    let before = fs.steps();
+    fs.inject_staging_name_error(1, io::ErrorKind::PermissionDenied);
+    assert!(fs.staging_name().is_ok());
+    assert_eq!(
+        fs.staging_name().unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert!(fs.staging_name().is_ok());
+    assert_eq!(
+        fs.steps(),
+        before,
+        "name requests do not renumber filesystem faults"
+    );
+    fs.inject_staging_name_error(0, io::ErrorKind::Other);
+    fs.clear_faults();
+    assert!(fs.staging_name().is_ok());
+    fs.inject_staging_name_error(0, io::ErrorKind::Other);
+    fs.power_loss(KagemushaWalletSimPowerLossV1::DropUnsynced);
+    assert!(fs.staging_name().is_ok());
 }

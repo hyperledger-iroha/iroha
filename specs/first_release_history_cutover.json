@@ -204,7 +204,7 @@
   "pinned_history": {
     "manifest": "fixtures/core/first_release_history/manifest.json",
     "format": "iroha.first_release_history.pinned.v1",
-    "history_sha256": "ba98b7ec015e74b679976473f819d5fd78c5b1348598fd8ae6785da0dce35ec7",
+    "history_sha256": "354936e5b3c613185971eefda55825e1deaabf5f68472245e34187473f4f9015",
     "generator": {
       "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
       "test": "capture_pinned_first_release_history"

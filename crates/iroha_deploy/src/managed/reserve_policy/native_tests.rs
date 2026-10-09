@@ -524,6 +524,13 @@ fn native_activation() {
     drop(coordinator);
     coordinator = ManagedInitialReservePolicy::open(&prepared).unwrap();
     let mut unavailable = UnavailablePeers::start(&prepared);
+    crate::managed::native_operation::test_support::assert_optional_current(
+        &unavailable,
+        &current_verifier,
+        |verifier| {
+            coordinator.read_current(&policy, verifier, Instant::now() + Duration::from_secs(30))
+        },
+    );
     let selected_options = original
         .terms
         .options(Instant::now() + Duration::from_secs(30));

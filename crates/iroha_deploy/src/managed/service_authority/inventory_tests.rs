@@ -929,3 +929,49 @@ fn census_import_scope_reuses_only_immutable_imports_and_ends_cold() {
     drop(child);
     inventory.finish().unwrap();
 }
+
+#[test]
+fn catalog_scheduling_requires_all_original_purpose_names_absent() {
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, parent) = fixture();
+    assert!(
+        ServiceChildInventory::begin(&parent)
+            .unwrap()
+            .gateway_catalog_purposes_absent()
+            .unwrap()
+    );
+    let operations = parent
+        .profile
+        .runtime()
+        .open_child("service-operations")
+        .unwrap();
+    let providers = operations.ensure_child("providers").unwrap();
+    for slot in 0..3 {
+        let provider = providers.ensure_child(slot.to_string()).unwrap();
+        let inventory = ServiceChildInventory::begin(&parent).unwrap();
+        let purpose = provider
+            .ensure_child(ProviderPurpose::GatewayCompliance.directory_name())
+            .unwrap();
+        assert!(
+            inventory.gateway_catalog_purposes_absent().is_err(),
+            "appeared name closes original census"
+        );
+        assert!(
+            !ServiceChildInventory::begin(&parent)
+                .unwrap()
+                .gateway_catalog_purposes_absent()
+                .unwrap(),
+            "even empty purpose selects recovery"
+        );
+        assert!(purpose.entries(1).unwrap().is_empty());
+        let path = purpose.path().to_path_buf();
+        drop(purpose);
+        std::fs::remove_dir(path).unwrap();
+        assert!(
+            ServiceChildInventory::begin(&parent)
+                .unwrap()
+                .gateway_catalog_purposes_absent()
+                .unwrap()
+        );
+    }
+}

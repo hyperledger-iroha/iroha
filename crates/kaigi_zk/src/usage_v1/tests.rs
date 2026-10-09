@@ -57,8 +57,6 @@ fn check(circuit: &KaigiUsageCircuitV1, instance: [Scalar; 25]) -> bool {
 
 #[test]
 fn usage_c_and_u_match_independent_poseidon_framing() {
-    use poseidon_primitives::poseidon::primitives::{ConstantLength, Hash};
-    let primitive = Hash::<Scalar, crate::KaigiPoseidonSpec, ConstantLength<2>, 3, 2>::init();
     let reference = |domain: u64, payload: &[Scalar]| {
         let mut frame = vec![Scalar::from(payload.len() as u64)];
         frame.extend_from_slice(payload);
@@ -70,7 +68,7 @@ fn usage_c_and_u_match_independent_poseidon_framing() {
         for pair in frame.chunks_exact(2) {
             state[0] += pair[0];
             state[1] += pair[1];
-            primitive.permute(&mut state);
+            crate::tests::reference_permute(&mut state);
         }
         state[0]
     };
@@ -90,7 +88,7 @@ fn usage_c_and_u_match_independent_poseidon_framing() {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     });
-    // Pinned only after agreement with the separately framed dependency permutation.
+    // Pinned only after agreement with the separately framed independent permutation.
     assert_eq!(
         hex,
         [

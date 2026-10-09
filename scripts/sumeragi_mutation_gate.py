@@ -861,6 +861,34 @@ CORE_MUTATIONS = [
       ["sumeragi::executor::amx_intent_tests::original_paid_prepared_commit_captures_durable_intent_before_acknowledgement"]),
     m("HC184", "off-chain G1 status source: substitute the State execution pool for the original admitted query frame pool",
       ["smartcontracts::isi::tx::native_carrier_reader_tests::genesis_status_prefix_retains_original_admitted_pool_and_cumulative_refusal_work"]),
+    m("HC185", "owned native AMX issuer: reopen the original archive descriptor after its first refused poll",
+      ["query::native_receipts::amx_read::issuer_tests::owned_issuer_retains_first_refused_archive_descriptor_after_original_view_drop"]),
+    m("HC186", "terminal native AMX source: discard acquired original frame after shared body-control refusal",
+      ["query::native_receipts::amx_read::certification_tests::terminal_amx_raw_frame_survives_original_shared_shell_refusal"]),
+    m("HC187", "original native slot: ignore captured start during same-inode relocation",
+      ["kura::native_execution_read_tests::native_frame_original_start_refuses_same_inode_relocation_before_body_admission"]),
+    m("HC188", "terminal native AMX selection: forget decoded original target after a later predecessor refusal",
+      ["query::native_receipts::amx_read::certification_tests::terminal_amx_target_survives_original_later_gap_capacity_and_proof_retry"]),
+    m("HC189", "native queue admission: omit original global driver wake",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_global_driver_after_empty"]),
+    m("HC190", "native queue admission: omit original live lane runner wake",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_live_lane_after_empty"]),
+    m("HC191", "native queue startup: omit early exclusive original-owner refusal",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_owner_refuses_duplicate_prepared_start_and_requires_fresh_queue_restart"]),
+    m("HC192", "native queue startup: omit cold reserved original-pool admission binding",
+      ["queue::sumeragi_wake::tests::reserved_original_pool_refuses_foreign_resident_admission_before_allocation"]),
+    m("HC193", "native queue startup: omit existing resident original-pool binding",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_reservation_refuses_foreign_funded_pool_without_changing_original_pending"]),
+    m("HC194", "native queue retirement: omit terminal admission refusal",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_owner_refuses_duplicate_prepared_start_and_requires_fresh_queue_restart"]),
+    m("HC195", "durable lane publication: omit original global merge wake",
+      ["sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_live_lane_after_empty"]),
+    m("HC196", "durable lane merge source: omit original cold State pool binding",
+      ["sumeragi::lanes::store::publication_tests::lane_merge_wake_binding_preserves_original_queue_and_pool_across_retry"]),
+    m("HC197", "durable lane merge source: accept a foreign original Queue identity",
+      ["sumeragi::lanes::store::publication_tests::lane_merge_wake_binding_preserves_original_queue_and_pool_across_retry"]),
+
+
 
 
 ]
@@ -915,6 +943,10 @@ DAEMON_MUTATIONS = [
       ["beacon_bootstrap::seat_attempt::finality::tests::durable_native_replay_rejects_foreign_source_pool_without_pinning_or_advancing"]),
     m("HC93", "broker beacon operation: reconstruct the authenticated session at every phase",
       ["runtime_provider_broker::protocol::platform::tests::beacon_operation_reuses_original_graph_across_ingress_dispatch_and_response"]),
+    m("HC198", "DKG file publication: omit exact original creation mode initialization before public bytes",
+      ["beacon_bootstrap::seat_export::tests::public_output_initializes_exact_original_creation_mode_before_publication_and_restore"]),
+    m("HC200", "DKG aggregate restore: require adjacent live phase height while rebuilding complete original certified history",
+      ["beacon_bootstrap::seat_attempt::finality::tests::aggregate_restart_replays_complete_original_history_before_next_phase_and_keeps_cutoff"]),
 ]
 
 

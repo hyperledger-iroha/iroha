@@ -190,6 +190,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "iroha_telemetry?/sm",
         ),
         "ipa-commitment": ("dep:iroha_zkp_halo2",),
+        "profiling": ("dep:pprof", "dep:bytes"),
         "iroha_schema": ("dep:iroha_schema",),
         "iroha_schema_gen": ("dep:iroha_schema_gen",),
         "iroha_telemetry": ("dep:iroha_telemetry",),
@@ -468,7 +469,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_torii": (
         "bench",
         "mutation-testing",
-        "pprof",
         "profiling",
         "test-fixtures",
         "test-network-private-settlement-route-control",

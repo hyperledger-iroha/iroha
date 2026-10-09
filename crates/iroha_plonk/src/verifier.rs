@@ -264,7 +264,7 @@ struct Mode<C: PastaCurve> {
 struct ReadProof<C: PastaCurve> {
     pending: PendingOpening<C>,
     suffix: Option<C::AffineExt>,
-    #[cfg(any(test, iroha_plonk_oracle))]
+    #[cfg(test)]
     challenges: Vec<C::ScalarExt>,
 }
 
@@ -529,7 +529,7 @@ where
         DescriptorHash::<C>::production(descriptor.transcript)
     };
     let mut transcript = TranscriptReader::<C, _>::new(hash, proof);
-    #[cfg(any(test, iroha_plonk_oracle))]
+    #[cfg(test)]
     if mode.oracle {
         transcript.record_challenges();
     }
@@ -767,19 +767,19 @@ where
     } else {
         None
     };
-    #[cfg(any(test, iroha_plonk_oracle))]
+    #[cfg(test)]
     let challenges = transcript.take_challenges();
     transcript.finish()?;
     Ok(ReadProof {
         pending,
         suffix,
-        #[cfg(any(test, iroha_plonk_oracle))]
+        #[cfg(test)]
         challenges,
     })
 }
 
 /// The oracle-mode hash of the descriptor's transcript.
-#[cfg(any(test, iroha_plonk_oracle))]
+#[cfg(test)]
 fn oracle_hash<C: PastaCurve>(
     descriptor: &ProtocolDescriptor,
 ) -> Result<DescriptorHash<C>, TranscriptError>
@@ -796,7 +796,7 @@ where
 }
 
 /// Oracle mode is unavailable in shipping builds and explicitly rejects use.
-#[cfg(not(any(test, iroha_plonk_oracle)))]
+#[cfg(not(test))]
 fn oracle_hash<C: PastaCurve>(
     _descriptor: &ProtocolDescriptor,
 ) -> Result<DescriptorHash<C>, TranscriptError>
@@ -978,12 +978,12 @@ where
 
 /// [`verify_full`] in oracle mode (spec 6.4): the vendored
 /// `transcript_repr`, `fe_to_fe` Poseidon point absorption, no instance
-/// frame. Unit tests and oracle builds only.
+/// frame. Unit tests only.
 ///
 /// # Errors
 ///
 /// As [`verify_full`].
-#[cfg(any(test, iroha_plonk_oracle))]
+#[cfg(test)]
 #[doc(hidden)]
 pub fn verify_full_oracle<C: PastaCurve>(
     params: &PinnedParams<C>,
@@ -1019,7 +1019,7 @@ where
 ///
 /// # Errors
 /// As [`accumulate_succinct`], using the supplied vendored transcript scalar.
-#[cfg(any(test, iroha_plonk_oracle))]
+#[cfg(test)]
 #[doc(hidden)]
 pub fn accumulate_succinct_oracle<C: PastaCurve>(
     params: &PinnedParams<C>,

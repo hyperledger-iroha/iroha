@@ -75,7 +75,7 @@ fn with_chain_at(height: u64, check_original: fn(&CertifiedTestChain)) {
     } else {
         CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap()
     };
-    if height > 1 {
+    while chain.height() < height {
         chain.commit(Vec::new());
     }
     assert_eq!(chain.height(), height);
@@ -91,9 +91,11 @@ fn check_original_attestation(chain: &CertifiedTestChain) {
     let original_tip = build_proof(&view, height).unwrap();
     let expected_frames = if height == 1 {
         vec![1, 1]
+    } else if height == 2 {
+        vec![1, 1, 2]
     } else {
-        let mut frames = vec![1, 1, height];
-        frames.extend(2..height);
+        let mut frames = vec![1, 1];
+        frames.extend((1..=height).rev());
         frames
     };
     let (produced, checked) =
@@ -101,12 +103,16 @@ fn check_original_attestation(chain: &CertifiedTestChain) {
     let produced = produced.unwrap();
     assert_eq!(
         checked.frames, expected_frames,
-        "one original genesis prefix serves both proofs"
+        "one genesis successor and the original current execution bind the proofs"
     );
     assert_eq!(
         checked.qcs,
-        (2..=height).collect::<Vec<_>>(),
-        "every original native QC remains checked exactly once"
+        if height > 2 {
+            vec![height, 2]
+        } else {
+            (2..=height).collect::<Vec<_>>()
+        },
+        "the current target and the genesis successor each retain exact native verification"
     );
     assert_eq!(produced.body.genesis_finality_proof, original_genesis);
     assert_eq!(produced.body.finality_proof, original_tip);
@@ -151,7 +157,7 @@ fn challenged_tip_attestation_checks_one_original_native_prefix() {
 }
 
 #[test]
-fn challenged_boundary_attestation_checks_every_exact_native_quorum() {
+fn challenged_boundary_attestation_checks_exact_target_and_genesis_successor_quorums() {
     with_chain_at(10, check_original_attestation);
 }
 
@@ -421,6 +427,11 @@ fn check_tail_source_retry(chain: &CertifiedTestChain) {
         let expected = AttestationBuildError::FinalityProof(ProofError::from(
             CertifiedChain::new(&view).unwrap_err(),
         ));
+        assert!(matches!(
+            capture(&view, chain, [50; 32], status(chain)),
+            Err(AttestationBuildError::GenesisFinalityProof(_))
+        ));
+        assert_eq!(budget.reserved_bytes(), reserved);
         for invalid_instance in [false, true] {
             let mut invalid = status(chain);
             invalid.committed_height -= 1;
@@ -457,3 +468,9 @@ fn check_tail_source_retry(chain: &CertifiedTestChain) {
     }
     assert_eq!(chain.height(), 2);
 }
+
+#[path = "attestation_signature_tests.rs"]
+mod signature_tests;
+
+#[path = "attestation_execution_tests.rs"]
+mod execution_tests;

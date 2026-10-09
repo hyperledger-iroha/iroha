@@ -1184,6 +1184,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/sumeragi/finality.rs",
+        "current_execution_proof",
+        1,
+        UseOwner::Other(Use::ResultBinding, CERTIFIED_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/sumeragi/finality.rs",
         "current_prefix_source",
         1,
         UseOwner::Other(Use::Record, ORIGINAL_WIRE_FENCE),

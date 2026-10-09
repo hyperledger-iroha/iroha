@@ -22,7 +22,7 @@ fn prepared() -> (SimFs, Dir, FsArchive<SimFs>) {
 }
 
 fn replace(fs: &SimFs, directory: &Dir, name: &str, original: &[u8]) {
-    let staged = fs.staging_name();
+    let staged = fs.staging_name().expect("staging name");
     let mut file = fs.create_new(directory, &staged).unwrap();
     fs.write_all(&mut file, original).unwrap();
     fs.sync_staged(&file).unwrap();
@@ -172,4 +172,71 @@ fn exact_content_object_readback_covers_every_byte_and_never_republishes_on_rest
         Err(Error::WitnessLost(_))
     ));
     assert!(archive.write_object(&[1; 3], 2).is_err());
+}
+
+#[test]
+fn archive_staging_entropy_failure_is_storage_error_and_retry_restores_both_copies() {
+    let key = ArchiveKey::Fold(91);
+    let content = b"exact retained fold witness";
+    for before_error in [0, 1] {
+        let (fs, directory, mut archive) = prepared();
+        fs.inject_staging_name_error(before_error, io::ErrorKind::Other);
+        assert!(matches!(archive.put(key, content), Err(Error::Storage(_))));
+        let expected_names = if before_error == 0 {
+            Vec::new()
+        } else {
+            vec![key.name()]
+        };
+        assert_eq!(fs.visible_names(&directory), expected_names);
+        fs.power_loss(PowerLoss::DropUnsynced);
+        assert_eq!(fs.visible_names(&directory), expected_names);
+        let expected_content = (before_error != 0).then(|| content.to_vec());
+        assert_eq!(archive.get(key, content.len()).unwrap(), expected_content);
+        archive.put(key, content).unwrap();
+        fs.power_loss(PowerLoss::DropUnsynced);
+        assert_eq!(
+            archive.get(key, content.len()).unwrap().as_deref(),
+            Some(content.as_slice())
+        );
+        let first = fs.read(&directory, &key.name(), 4096).unwrap();
+        assert_eq!(
+            fs.read(&directory, &format!("{}.r", key.name()), 4096)
+                .unwrap(),
+            first
+        );
+    }
+}
+
+#[test]
+fn archive_staging_entropy_failure_leaves_existing_exact_record_readable() {
+    let (fs, directory, mut archive) = prepared();
+    let key = ArchiveKey::Fold(92);
+    let content = b"existing durable witness";
+    archive.put(key, content).unwrap();
+    let original = fs.read(&directory, &key.name(), 4096).unwrap();
+    let names = fs.visible_names(&directory);
+    fs.inject_staging_name_error(0, io::ErrorKind::Other);
+    let before = fs.steps();
+    assert!(matches!(archive.put(key, content), Err(Error::Storage(_))));
+    assert_eq!(
+        fs.trace_since(before),
+        [crate::kagemusha_wallet_advance_v1::KagemushaWalletSimStepV1::Read]
+    );
+    assert_eq!(fs.visible_names(&directory), names);
+    assert_eq!(fs.read(&directory, &key.name(), 4096).unwrap(), original);
+    assert_eq!(
+        fs.read(&directory, &format!("{}.r", key.name()), 4096)
+            .unwrap(),
+        original
+    );
+    assert_eq!(
+        archive.get(key, content.len()).unwrap().as_deref(),
+        Some(content.as_slice())
+    );
+    archive.put(key, content).unwrap();
+    fs.power_loss(PowerLoss::DropUnsynced);
+    assert_eq!(
+        archive.get(key, content.len()).unwrap().as_deref(),
+        Some(content.as_slice())
+    );
 }

@@ -66,7 +66,7 @@ evidence, and implementation coverage alone does not close its network or releas
 All six gates remain open. H6 uses the reset runbook's deployment authority and runtime-only
 signing inputs; local build or component results cannot stand in for live qualification.
 
-### Current validation contract (2026-10-08)
+### Current validation contract (2026-10-09)
 
 Validate the current implementation and its surviving requirements. Generic
 consensus attestation, its flag/attachments and its dedicated mutations are
@@ -78,6 +78,12 @@ mint-finality, Halo2 State curve-policy and generic-attestation controls are not
 prerequisites. Supported Native PIPA-R and STARK admission, key/envelope binding,
 refusal, deduplication and retry remain required, alongside the remaining safety,
 custody and liveness controls.
+
+Native AMX reader changes must pass the paid startup, certified restart and debit-
+bypass regression under the default stack limit, together with the complete affected
+component selection. Passing selected custody mutations alone does not qualify this
+path; retain startup or restart aborts as failures and fix them without widening the
+stack or runtime deadlines.
 
 Discover test names and ignores from the actual built executable. Match libtest's
 substring filter semantics and account for every selected test. Mutation controls
@@ -151,6 +157,11 @@ Deploy bootstrap and Torii canonical-outcome custody controls have separate test
 selectors; their named
 positive baselines and mutation kills use their actual owning crates. Forwarded mutation
 selectors are refused, and feature coverage is checked against actual Cargo metadata.
+Owning mutation libtests must not introduce a self dev-dependency that also builds
+the mutation feature as a non-test library. Full Torii, workspace and coverage
+routes explicitly enable `iroha_torii/test-fixtures`; all eight current Torii
+integration targets remain required. Unit-test fixture helpers use `cfg(test)`,
+and shipping mutation guards remain enforced.
 CI sweeps clear inherited single-seed and seed-base overrides. The nightly
 simulator explicitly runs 10,000 seeds; PR simulator and driver controls clear
 the inherited count as well to preserve each scenario's default coverage.

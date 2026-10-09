@@ -3,6 +3,42 @@
 const SUMERAGI_FINALITY_RESPONSE_MAX_BYTES: usize =
     2 * iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES + 4 * 1024 * 1024;
 
+/// One immutable node statement authenticated by the exact SDK read that produced it.
+///
+/// The SDK has checked canonical response framing, body consistency, the node signature and
+/// the requested height, challenge, network and peer. This does not authenticate the embedded
+/// chain or establish committee membership; consumers must independently verify both.
+/// There is no public constructor or decoder. Borrowing cannot mutate the checked statement;
+/// consuming it returns a raw statement and discards this authentication evidence.
+///
+/// ```compile_fail
+/// use iroha::client::AuthenticatedFinalityAttestation;
+/// use iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation;
+/// fn forge(attestation: SumeragiFinalityAttestation) -> AuthenticatedFinalityAttestation {
+///     AuthenticatedFinalityAttestation { attestation }
+/// }
+/// ```
+#[derive(Debug)]
+pub struct AuthenticatedFinalityAttestation {
+    attestation: iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation,
+}
+
+impl AuthenticatedFinalityAttestation {
+    /// Borrow the unchanged authenticated statement, without granting chain or committee trust.
+    #[must_use]
+    pub fn attestation(&self) -> &iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation {
+        &self.attestation
+    }
+
+    /// Discard authentication provenance and return the raw statement.
+    #[must_use]
+    pub fn into_attestation(
+        self,
+    ) -> iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation {
+        self.attestation
+    }
+}
+
 impl Client {
     /// Read current provider discovery and authenticate it against an independently selected block.
     ///
@@ -291,7 +327,7 @@ impl Client {
         height: NonZeroU64,
         challenge: [u8; 32],
         expected_node: &iroha_model_base::peer::PeerId,
-    ) -> Result<iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation> {
+    ) -> Result<AuthenticatedFinalityAttestation> {
         if challenge == [0; 32] {
             return Err(eyre!("finality challenge must be nonzero"));
         }
@@ -345,7 +381,7 @@ impl Client {
             ));
         }
         self.ensure_activation_evidence_deadline()?;
-        Ok(attestation)
+        Ok(AuthenticatedFinalityAttestation { attestation })
     }
 
     /// Fetch one canonical current proof without choosing a trust root from the response.

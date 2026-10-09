@@ -1,5 +1,4 @@
 use crate::buf::{limit, Chain, Limit, UninitSlice};
-#[cfg(feature = "std")]
 use crate::buf::{writer, Writer};
 use crate::{panic_advance, panic_does_not_fit, TryGetError};
 
@@ -1311,8 +1310,6 @@ pub unsafe trait BufMut {
     ///
     /// assert_eq!(*buf, b"hello world"[..]);
     /// ```
-    #[cfg(feature = "std")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     #[inline]
     fn writer(self) -> Writer<Self>
     where

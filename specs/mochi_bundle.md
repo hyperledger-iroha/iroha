@@ -121,6 +121,21 @@ context, with only one network running at a time. It checks context list/show/us
 after restarting the intended network. Both deployments are read and executed on all four
 validators; cleanup covers both named environments.
 
+After that workflow passes, separate fresh stores exercise `.to` and local-package
+inputs as the first deployment command. Each must start four validators, execute
+the contract on every peer and return the original receipt on repetition, without
+supplied runtime configuration or build tools on `PATH`.
+
+Stock managed Global localnets and private roots use an explicit SoraNet admission
+cost profile only when every generated P2P/Torii listener, advertised peer and
+telemetry endpoint is numeric loopback: Argon2id uses 4,096 KiB, one iteration,
+one lane and difficulty 6. This deliberately lowers local denial-of-service work
+cost; it is not the public deployment cost profile. The mandatory puzzle,
+transport/transcript binding, replay protection and ticket lifetimes remain in
+force. Exported localnets, public chain identities, hostnames and non-loopback
+managed endpoints retain the standard admission defaults (65,536 KiB, two
+iterations, one lane, difficulty 6). Consensus and signed genesis are unchanged.
+
 Cleanup uses authenticated localnet control; failures retain the private runtime
 directory and diagnostics. The combined installed publication regression has not
 yet been executed for the current candidate. The matrix retains the exact profile SHA-256, source path/commit for release input, and

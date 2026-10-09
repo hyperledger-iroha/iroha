@@ -614,35 +614,39 @@ async fn advance_to_height(
             ProgressAction::AwaitCatchup => {}
             ProgressAction::SubmitAt(height) => {
                 let client = peers[usize::try_from(tick)? % peers.len()].client();
-                let account = client.account_client();
                 let message = format!("committee transition progress {target}:{tick}");
                 pending_height = Some(height);
-                tokio::time::timeout_at(deadline.into(), async {
-                    let mut payload = account.prepare_transaction(
-                        iroha::client::AccountTransactionDraft::new(
-                            vec![Log::new(Level::INFO, message)],
-                            FeePaymentIntent::authority(Vec::new(), None),
-                            Metadata::default(),
-                        ),
-                    )?;
-                    let quote = account
-                        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
-                            payload: &payload,
-                        })
-                        .await?;
-                    ensure!(
-                        payload
-                            .fee_payment
-                            .has_same_payer_and_gas_bound(&quote.intent),
-                        "progress fee quote changed the signed payer"
-                    );
-                    payload.fee_payment = quote.intent;
-                    let transaction = account.sign_transaction(payload)?;
-                    account.submit_transaction_and_wait(&transaction).await?;
-                    Ok::<_, eyre::Report>(())
-                })
+                committee_status::submit_async_until(
+                    client.client().clone(),
+                    deadline,
+                    |bounded| async move {
+                        let account = bounded.account_client()?;
+                        let mut payload = account.prepare_transaction(
+                            iroha::client::AccountTransactionDraft::new(
+                                vec![Log::new(Level::INFO, message)],
+                                FeePaymentIntent::authority(Vec::new(), None),
+                                Metadata::default(),
+                            ),
+                        )?;
+                        let quote = account
+                            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
+                                payload: &payload,
+                            })
+                            .await?;
+                        ensure!(
+                            payload
+                                .fee_payment
+                                .has_same_payer_and_gas_bound(&quote.intent),
+                            "progress fee quote changed the signed payer"
+                        );
+                        payload.fee_payment = quote.intent;
+                        let transaction = account.sign_transaction(payload)?;
+                        account.submit_transaction_and_wait(&transaction).await?;
+                        Ok::<_, eyre::Report>(())
+                    },
+                )
                 .await
-                .wrap_err("progress transaction exceeded its original deadline")??;
+                .wrap_err("committee progress transaction failed")?;
                 tick += 1;
             }
         }

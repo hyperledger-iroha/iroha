@@ -15,18 +15,22 @@ use iroha_kagemusha_proof::{
     },
     omega::native as omega,
 };
-use iroha_pasta::{Fp, Fq, msm::MemoryBudget};
+use iroha_pasta::{CancellationToken, Fp, Fq, msm::MemoryBudget};
 use iroha_plonk::{ProverConfig, ProverRandomness, keys::pk::artifact::ReadConfig};
 use iroha_plonk_recursion::FoldConfig;
 use sha2::{Digest, Sha256};
 
 use super::{Cancellation, CheckpointLayout, Error};
+use crate::kagemusha_wallet_advance_v1::{
+    KagemushaWalletProviderErrorV1, KagemushaWalletUnavailableV1,
+};
 use crate::kagemusha_wallet_artifacts_v1::{
     InstalledVerifierPackV1,
     producer_inventory::{
         OriginalSourceV1, QualifiedOperationOwnerV1, QualifiedWalletSourcesV1, WalletSourcesErrorV1,
     },
 };
+use crate::kagemusha_wallet_proofs_v1::randomness;
 
 mod incoming;
 mod incoming_inputs;
@@ -84,6 +88,23 @@ fn artifact(error: WalletSourcesErrorV1) -> Error {
         Error::Proof("native proving source")
     }
 }
+
+fn salt_error(error: randomness::Error) -> Error {
+    match error {
+        randomness::Error::Cancelled => Error::Cancelled,
+        randomness::Error::Unavailable => {
+            KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
+                .into()
+        }
+    }
+}
+
+fn fresh_fold_salt<F: PrimeField<Repr = [u8; 32]>>(
+    cancellation: &CancellationToken,
+) -> Result<F, Error> {
+    randomness::sample(Some(cancellation), randomness::os_entropy).map_err(salt_error)
+}
+
 fn layout(
     descriptor: &[u8; 32],
     key: &[u8; 32],
@@ -232,7 +253,7 @@ impl NativeFoldWorkerV1 {
             .import_omega_cancellable(originals, self.read, Some(cancellation.prover_token()))
             .map_err(artifact)?;
         cancellation.check()?;
-        let salt = rand::random::<[u8; 32]>();
+        let salt = fresh_fold_salt::<Fq>(cancellation.prover_token())?.to_repr();
         let session = proof(owner.prepare_cancellable(
             input,
             salt,
@@ -256,6 +277,31 @@ impl NativeFoldWorkerV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn salt_failures_preserve_unavailable_and_cancellation() {
+        assert!(matches!(
+            salt_error(randomness::Error::Cancelled),
+            Error::Cancelled
+        ));
+        assert!(matches!(
+            salt_error(randomness::Error::Unavailable),
+            Error::Provider(KagemushaWalletProviderErrorV1::Unavailable(
+                KagemushaWalletUnavailableV1::Platform(0)
+            ))
+        ));
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert!(matches!(
+            fresh_fold_salt::<Fp>(&cancellation),
+            Err(Error::Cancelled)
+        ));
+        assert!(matches!(
+            fresh_fold_salt::<Fq>(&cancellation),
+            Err(Error::Cancelled)
+        ));
+    }
+
     #[test]
     fn checkpoint_identity_binds_both_keys_role_order_and_size() {
         let original = layout(&[1; 32], &[2; 32], 2, 3, 64).unwrap();

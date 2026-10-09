@@ -1,12 +1,30 @@
 # Native prover migration inventory
 
-Status: M0 baseline with current consumer migration results (2026-10-07). This table lists every
-workspace crate, SDK and tool that uses the vendored halo2 stack or another
-Pasta/halo2 implementation. The Iroha-native crates (`iroha_pasta`,
-`iroha_plonk`, `iroha_plonk_gadgets`, `iroha_plonk_recursion`) replace the
-vendored stack. Update a row in the same change that migrates its consumer.
+Status: native consumer migration and source retirement installed (2026-10-08);
+focused post-retirement checks pass; full delivery qualification remains open.
+The Iroha-native crates (`iroha_pasta`,
+`iroha_plonk`, `iroha_plonk_gadgets`, `iroha_plonk_recursion`) own the migrated
+proof implementation. The temporary differential oracle, three retired vendor
+trees and their dependency edges are deleted. Cargo prunes 14 package identities,
+adds none and preserves every retained package identity/checksum. The exact
+transaction and deleted originals are retained under
+`target/qualification/m7-retirement-port-1` and `m7-retirement-draft`.
 
-## Oracle baseline
+Independent reference coverage remains: all 42 Sigma/Wide cases regenerate
+matching native descriptors, keys and proof bytes at 1/2/4/7 workers on ARM and
+x86 under Rosetta; all mutation checks pass. RP56 migration preserves all 822
+parameter fields and 102 framed Kaigi cases, independently rederived in Python.
+Affected native checks pass: Poseidon20, Kaigi5, SoraFS3, IVM units4 and IVM SIMD11.
+Dependency, retirement, source-seal, codec and IVM-only guards pass, alongside
+strict Plonk library/test lint and the three negative public-API doctests. The
+IVM-only guard initially found an existing no-std bytes fork; its reviewed
+native/std repair passes 1,007 tests with the custom custody implementation
+unchanged (`target/qualification/bytes-native-only-port-1`).
+These are component correctness results, not full protocol, release-package or
+physical-device qualification. The tables distinguish retained consumers from
+historical capture provenance; update a row when its current status changes.
+
+## Historical oracle baseline
 
 | Item | Value |
 | --- | --- |
@@ -16,17 +34,17 @@ vendored stack. Update a row in the same change that migrates its consumer.
 | `snark-verifier`, `halo2-ecc`/`halo2-base` git | rev `bbfcc721d714bea0d44a27c8fc6c4736e73ca853`, tag `v0.5.3` |
 | Toolchain, host | Rust 1.93.1; native aarch64 and captured x86_64-apple-darwin executable under Rosetta. Current proof-byte parity: 45 non-timing cases on each; both targets also pass all 73 parameter/curve/constraint-system/KAT cases including ignored release cases |
 
-Contract artifacts:
+Capture provenance (the named oracle sources are now deleted):
 
-- `crates/iroha_plonk_oracle/tests/vendored_goldens.rs` runs
+- `crates/iroha_plonk_oracle/tests/vendored_goldens.rs` ran
   `vendor/halo2-axiom/tests/golden_proof_bytes.rs` unchanged through `#[path]`.
   It covers 20 cases, each in Rayon pools of 1, 2, 4 and 7 threads; k = 11 is
   ignored and run in release.
 - `fixtures/native_prover/kats_v1.json` holds the golden tables, `ParamsIPA`
   digests for k6-k16, generators, `w`/`u`, Blake2b and Poseidon transcript
   vectors, the RP57 constants, and the KAGEMUSHA and confidential hash vectors.
-  `crates/iroha_plonk_oracle/tests/native_prover_kats.rs` generates and checks
-  it; `fixtures/native_prover/verify_kats_v1.py` re-derives it independently.
+  `crates/iroha_plonk_oracle/tests/native_prover_kats.rs` generated and checked
+  it; retained `fixtures/native_prover/verify_kats_v1.py` re-derives it independently.
 
 ## Method
 
@@ -43,10 +61,9 @@ The inventory was built with these commands; it is not regenerated automatically
   than the halo2 stack are listed by hand (`vendor/vega-prover`).
 - Exposure: `configs/soranexus/` and the `skills/sora-*` docs.
 
-The Rust crates below import the vendored stack as `halo2_proofs` (the renamed
-`halo2-axiom` package), except where the row names Zcash and except
-`iroha_plonk_oracle`, which imports it under its own crate name
-`halo2_axiom`.
+Historical imports used `halo2_proofs` for the renamed `halo2-axiom` package,
+while the differential oracle used `halo2_axiom`. Current migrated consumers
+have neither edge. The separate Zcash/Orchard package identities remain.
 
 Use: **P** prove, **V** verify, **T** types/encodings, **H** native hashing.
 Milestones follow the judge plan in its corrected form (see the notes at the
@@ -72,10 +89,11 @@ end); the labels are defined in the legend below.
 | T1-T21 | First-milestone tasks. Cited here: T7 `iroha_pasta::poseidon` with a KAT test against the M0 `kagemusha_v1_poseidon` vectors; T15 `iroha_plonk_oracle`; T16 `iroha_core_zk/src/prover_golden_parity_tests.rs` re-proving the σ golden natively (no longer possible: the old circuits were deleted on 2026-10-05; the goldens stay pinned in `kats_v1.json`) |
 
 Outstanding outcomes and owners for the programme are tracked by C9 and S7
-in `roadmap.md`. Retained consumers must migrate and re-key before M7 removes
-the shared vendor tree and temporary oracle; no compatibility shim is shipped.
+in `roadmap.md`. Retained consumers are migrated and re-keyed, and the shared
+vendor trees and temporary oracle are deleted; no compatibility shim is shipped.
+Post-retirement guards and rebuilt release consumers remain separate checks.
 
-## Direct users of the vendored stack
+## Migrated consumers of the retired stack
 
 | Consumer | Stack (direct) | Use | Live exposure | Milestone |
 | --- | --- | --- | --- | --- |
@@ -92,13 +110,13 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | `sorafs_manifest::pop_credentials::zk` | `iroha_pasta`, `iroha_plonk`; native Grain RP56 constants | P V H | SoraFS PoP credentials (irohad runtime provider). Live: unknown | M2(a) native candidate: consuming-witness PIPA-R proving/full verification and verifier-only key generation; new circuit identity/key fingerprints, no old-key path. All 38 PoP tests pass, including unchanged RP56 constants/hash vectors and coordinated nonce/empty-leaf forgeries. Generated structural SDK fixtures and signed inventory pass their guard; all-target strict Clippy passes. All 25 Node PoP consumer tests pass. Rebuilt SDK consumer qualification remains open. |
 | `iroha_js_host` (`kaigi_proof_v1.rs`; `confidential_wallet.rs` through `iroha_core_zk`) | Native PIPA-R for Kaigi and confidential | P | npm package | M2(b) Kaigi native candidate installed; rebuilt native host passes all 22 Kaigi tests, including genuine proofs and every public-row mutation. Packaged SDK and network qualification remain open. M2(c) confidential production is native; rebuilt host confidential execution remains open. Proof randomness remains engine-owned and hedged; SDK blindings are consumed and zeroized. |
 | `xtask` `vote_tally.rs` (feature `dev-vote-fixture`) | `iroha_pasta`, `iroha_plonk` | P V | Fixture only | M2(d) native candidate passes the reproducibility/math, transcript mutation/truncation, metadata/digest drift and development-only admission tests. Canonical Norito proof/key artifacts replace the retired TLV files; production dispatch still rejects this development relation. |
-| `iroha_plonk_oracle` (imports `halo2_axiom`, not `halo2_proofs`) | halo2-axiom, halo2-base, snark-verifier (halo2-ecc transitively) | P V T H | None (test only, `publish = false`). Reads no other crate's sources: the `iroha_core_zk` KAGEMUSHA golden table is pinned in `kats_v1.json` (`golden_proofs.iroha_core_zk_kagemusha`) and carried over unchanged | M7 deletion pending retained-consumer migration and parity qualification |
+| Retired differential oracle | No current dependency | Historical P V T H | None | Deleted after ARM/x86 differential checks and captured-vector replacement. Native unit tests retain historical transcript comparisons; no production configuration exposes their test hooks. |
 
 ## Other Pasta and halo2 implementations (not the vendored stack)
 
 | Consumer | Stack | Use | Live exposure | Milestone |
 | --- | --- | --- | --- | --- |
-| `iroha_zkp_poseidon` (`pasta.rs`, `poseidon.rs`; native-field cross-check in `pasta/tests.rs`) | halo2curves 0.9; dev iroha_pasta | T H | Shared proof-system primitives; the paired-key authority helper is deleted | Direct vendored field edge removed; all 19 native/BN254 primitive tests pass with the independent `iroha_pasta` field cross-check. The upstream parameter-generation oracle retains its own dependency until its retirement gate closes. |
+| `iroha_zkp_poseidon` (`pasta.rs`, `poseidon.rs`; native-field cross-check in `pasta/tests.rs`) | halo2curves 0.9; dev iroha_pasta | T H | Shared proof-system primitives; the paired-key authority helper is deleted | Direct vendored field and parameter-generator edges removed; all20 primitive tests pass with the independent field cross-check and captured RP56 banks. The retained Python implementation independently rederives every parameter field. |
 | `iroha_zkp_halo2` (native Pallas/BN254 IPA, SHA3 transcript; used by `ivm`, `iroha_core` `zk-ipa-native`, `iroha_cli`, `iroha_torii`, `iroha_core_privacy`, `fastpq_prover`, `iroha_core_zk`, `iroha_python_rs`) | halo2curves 0.9 (optional) | P V T | Non-optional dependency of `iroha_core`, so every node | Owner: converge or keep separate |
 | `iroha_core_privacy` `privacy_engines/orchard.rs`; `iroha_core` feature `privacy-release-evidence` | orchard 0.15.4 (git rev `9d07047d`, a non-optional dependency of `iroha_core_privacy`), Zcash `halo2_proofs` 0.3.4, `pasta_curves` 0.5.2 | V | Taira privacy catalog `orchard-halo2-actions-v1`, `activation_state: not-executed` (`privacy_bootstrap_plan.json`) | Carve-out: stays after M7; separate package identities retained by `scripts/check_no_vendored_halo2.py` |
 | Orchard linkers (through `iroha_core_privacy`): `connect_norito_bridge` (iOS/Android), `irohad`, `iroha_torii`, `iroha_cli`, `iroha_kagami`, `iroha_js_host`, `zk_ace_prover`, `integration_tests`, and `python/iroha_python/iroha_python_rs` (`privacy_wallet_bundle.rs`, `privacy_native_actions.rs` build Orchard spend/change prover inputs) | orchard, Zcash `halo2_proofs` 0.3.4, `pasta_curves` 0.5.2 (linked, not imported) | P V T | Every node binary, the mobile bridge, npm and PyPI wheels | Carve-out with Orchard; binary-size and seal reports count it |
@@ -131,8 +149,8 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | Python `iroha_python` | `iroha_python_rs` | M2(c): five original nonskipping tests pass against actual installed sealed wheels, including a full-depth real proof and local verification, change redemption, adversarial rejection and GIL progress. Exact artifacts and scope are recorded below. |
 | `fuzz/Cargo.toml`, `crates/fastpq_prover/fuzz/Cargo.toml`, `scripts/cargo_fuzz_locked_cargo.sh` | Native consumer dependencies; obsolete vendored Halo2 patches and proxy path requirements removed | Step 7 source cleanup complete. Locked/offline forwarding and fuzz-smoke inventory checks pass; this is not standalone sanitizer execution or a qualified locking proxy. Existing fuzz runtime/lock qualification remains open. |
 | `scripts/norito_bridge_source_seal.py`, `scripts/check_ivm_only.py`, `pytests/scripts/norito_bridge_source_seal_reviewed_vendor_test.py`, `pytests/scripts/workspace_release_gate_test.py` | Name vendored paths or packages | Step 7, M7 |
-| `ci/dependency_budget.json`, `scripts/check_release_feature_graph.py` (`proofs-halo2`, `zk-halo2`, `zk-halo2-ipa`), source-token guards in `pr.yml` | Pin the current graph and features. The reviewed native-consumer manifest baseline counts the native crates; shipping configurations forbid `iroha_plonk_oracle` | Update in each migrating change |
-| CI for the release-only oracle suites and `fixtures/native_prover/verify_kats_v1.py` | `pytests/scripts/native_prover_kats_test.py` runs the complete standard-library verifier from an unrelated directory and rejects a forged transcript challenge. Together with the confidential corpus mutations, eight tests pass; fixed category counts prevent partial replay. The captured x86_64 Mach-O oracle now passes all 45 non-timing cases under Rosetta with actual Cargo dep-info and unchanged consumed source/tool inputs (`target/qualification/oracle-x86-rosetta/attempt2/summary.json`). This satisfies the x86 instruction-target proof-parity subset of M1a; no physical x86 performance claim is made. Both companion captures pass all 73 library, parameter/curve, release KAT and constraint-system cases with unchanged consumed code, fixtures and tools (`target/qualification/oracle-m1a-current/{arm,x86}/summary.json`). The x86 receipt separately records the oracle README update during execution; no consumed input changed. The path-filtered `native_prover_parity.yml` job now requires all five release harnesses on native ARM and x86 runners, including ignored correctness cases, and rejects disabled oracle mode, incomplete counts and ignored tails; hosted execution remains unobserved. It excludes the named timing measurement and maintenance-only reference fixture printer, retaining the timing parser test | M0 exit (x86_64 run) |
+| `ci/dependency_budget.json`, `scripts/check_release_feature_graph.py` (`proofs-halo2`, `zk-halo2`, `zk-halo2-ipa`), source-token guards in `pr.yml` | Pin the current graph and features. The reviewed native-consumer manifest baseline counts the native crates; all dependency edges forbid the retired proof packages | Update in each migrating change |
+| Native instruction-target CI and independent reference fixtures | `native_prover_parity.yml` runs native arithmetic/proof/mutation suites, the explicit large GLV case, negative production-API doctests and dependency-retirement guards on ARM/x86. Standard-library Python checks retain proof, transcript, parameter and corruption coverage. The deleted oracle's last ARM/x86 captures each pass50 correctness cases; its historical companion/KAT receipts remain unchanged. Hosted execution of the replacement job remains unobserved. | Local component parity; release and physical-performance checks remain separate |
 | Independent full-proof Python reference | `reference_verifier/` derives the complete individual PLONK/multiopen/IPA verifier and generator decision from the normative equations, using only the standard library. The 46-case frozen genuine fixture spans both curves, three transcript profiles and k6–k10. All 169 adversarial/parser/decision tests pass with source drift zero; a fresh exact Rust fixture recomputation passes with 2,743 pinned consumed inputs and no tool/runtime drift (`target/qualification/python-reference/current2`). Constructive false claims preserve the soft equation yet fail `decide`. Independent review accepted the bounded implementation. CI requires both genuine fixture equality and independent verification. Keep the reference and inputs after oracle deletion; this is not a production decoder. Batch weights, encoded accumulators, k16, recursion and full wallet catalog remain outside its scope | §15 individual-reference requirement; broader M7 gates remain open |
 
 Current native source admission requires **ABI 27** because the wallet runtime

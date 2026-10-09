@@ -1,5 +1,28 @@
-//! Pure source-frame mutation checks. No fixture here is an admitted operation.
+//! Source-frame mutations and resumed fold cancellation. No fixture is an admitted operation.
 use super::*;
+
+#[test]
+fn restored_terminal_fold_observes_cancellation_after_configuration() {
+    let params = PinnedParams::<Ep>::derive(1).unwrap();
+    let cancellation = iroha_pasta::CancellationToken::new();
+    let config = terminal_restore_fold_config(MemoryBudget::default(), Some(&cancellation));
+    assert!(matches!(
+        create_fold(&params, &[], Fp::ZERO.to_repr(), &config),
+        Err(iroha_plonk_recursion::Error::Parameters(_))
+    ));
+    cancellation.cancel();
+    // Cancellation after configuration must reach the resumed recursive fold
+    // through the same shared signal, before its deliberately short parameters.
+    assert!(matches!(
+        create_fold(&params, &[], Fp::ZERO.to_repr(), &config),
+        Err(iroha_plonk_recursion::Error::Cancelled)
+    ));
+    let independent = terminal_restore_fold_config(MemoryBudget::default(), None);
+    assert!(matches!(
+        create_fold(&params, &[], Fp::ZERO.to_repr(), &independent),
+        Err(iroha_plonk_recursion::Error::Parameters(_))
+    ));
+}
 
 fn original() -> Inputs {
     let state = BootstrapWitness {

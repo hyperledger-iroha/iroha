@@ -39,8 +39,10 @@
 //! `(A + beta)(S + gamma)` numerator column per lookup. A single triple of
 //! committed lookup cosets is then reused in lookup order, appending the five
 //! constraints to each row's Horner accumulator without changing its powers
-//! of `y`. This uses `L + 3` lookup columns (`0` for no lookups), versus `3L`:
-//! one additional column for `L = 1`, fewer columns for `L >= 2`.
+//! of `y`. Only `L` numerator columns remain live between the stages;
+//! the lookup triple reuses dead gate-stage cosets. With `B` owned gate-stage
+//! cosets, their combined allocation is `max(B, 3) + L` for `L > 0`,
+//! plus the shared powers column. Cached key cosets are never overwritten.
 //!
 //! Rows are independent, so the rows of a coset are split across the
 //! caller's Rayon pool; every row's arithmetic is the same at any pool size.
@@ -609,16 +611,17 @@ pub(super) fn workspace_elements<C: PastaCurve>(
             .checked_add(shape.permutation_columns)
             .ok_or(ProtocolError::Overflow)?
     };
-    // Every lookup owns its committed product/input/table triple, while
-    // compressed numerators are not FFT inputs. One powers column is retained
-    // exactly when at least one owned transform exists; eager fixed-only keys
-    // therefore retain zero workspace storage.
+    // Gate-stage cosets are dead before the lookup stage, so the streamed
+    // product/input/table triple reuses their first three owned columns. Only
+    // a shortfall is allocated when fewer than three such columns exist.
+    // Numerators and the FFT powers remain separate throughout both stages.
+    // Eager fixed-only keys without lookups retain no workspace storage.
     let transformed = key_columns
         .checked_add(shape.num_advice)
         .and_then(|v| v.checked_add(shape.num_instance))
         .and_then(|v| v.checked_add(shape.permutation_sets))
-        .and_then(|v| v.checked_add(if shape.lookups == 0 { 0 } else { 3 }))
         .ok_or(ProtocolError::Overflow)?;
+    let transformed = transformed.max(if shape.lookups == 0 { 0 } else { 3 });
     transformed
         .checked_add(shape.lookups)
         .and_then(|v| v.checked_add(usize::from(transformed != 0)))
@@ -837,15 +840,10 @@ pub(super) fn evaluate_with_workspace_cancellable<C: PastaCurve>(
     let mut lookup_numerators = (0..shape.lookups)
         .map(|_| next_column(&mut columns))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut lookup_cosets = if shape.lookups == 0 {
-        None
-    } else {
-        Some([
-            next_column(&mut columns)?,
-            next_column(&mut columns)?,
-            next_column(&mut columns)?,
-        ])
-    };
+    // The remaining columns are exactly the shortfall after reusing owned
+    // gate-stage cosets. Most circuits need none; tiny eager keys may need all
+    // three. Every buffer still belongs to the same zeroizing workspace lease.
+    let mut lookup_spill: Vec<_> = columns.collect();
     if inputs.lookups.len() != shape.lookups {
         return Err(KeyError::Shape {
             what: "quotient lookups",
@@ -1030,14 +1028,41 @@ pub(super) fn evaluate_with_workspace_cancellable<C: PastaCurve>(
             });
         drop(tile_plan);
         CancellationToken::checkpoint(cancellation)?;
-        if let Some([product, input, table]) = &mut lookup_cosets {
+        // Gate/permutation evaluation has joined every row task. Its cosets
+        // are now dead; only lookup numerators, masks, powers and `values` are
+        // needed below. End all shared views before overwriting owned cosets.
+        drop((
+            bound,
+            permutation_columns,
+            fixed_refs,
+            advice_refs,
+            instance_refs,
+            sigma_refs,
+        ));
+        if shape.lookups != 0 {
+            let mut lookup_columns = fixed
+                .iter_mut()
+                .chain(sigma.iter_mut())
+                .filter_map(|column| match column {
+                    KeyCoset::Cached(_) => None,
+                    KeyCoset::Workspace(values) => Some(&mut **values),
+                })
+                .chain(advice.iter_mut().map(|values| &mut **values))
+                .chain(instance.iter_mut().map(|values| &mut **values))
+                .chain(products.iter_mut().map(|values| &mut **values))
+                .chain(lookup_spill.iter_mut().map(|values| &mut **values));
+            let [product, input, table] = [
+                next_column(&mut lookup_columns)?,
+                next_column(&mut lookup_columns)?,
+                next_column(&mut lookup_columns)?,
+            ];
             for (index, (lookup, numerator)) in
                 inputs.lookups.iter().zip(&lookup_numerators).enumerate()
             {
                 evaluate_many(
                     plan.as_ref(),
                     &[lookup.product, lookup.input, lookup.table],
-                    &mut [&mut **product, &mut **input, &mut **table],
+                    &mut [&mut *product, &mut *input, &mut *table],
                     cancellation,
                 )?;
                 values
@@ -1100,7 +1125,7 @@ pub(super) fn evaluate_with_workspace_cancellable<C: PastaCurve>(
         instance,
         products,
         lookup_numerators,
-        lookup_cosets,
+        lookup_spill,
     ));
     drop(lease);
     CancellationToken::checkpoint(cancellation)?;

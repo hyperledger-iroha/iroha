@@ -2,8 +2,8 @@
 //!
 //! This journal establishes durable ordering, not KYC, worker provenance or signer authority.
 //! The enrollment service must authenticate its selected scope and recheck current eligibility.
-//! TODO: wire the service's approved selection, private worker and rooted signer through this
-//! owner, then register the owner in the node's authenticated Torii enrollment endpoints.
+//! `EnrollmentIssuerV1` opens this owner with the approved selection, private worker and
+//! rooted signer; Torii's enrollment service dispatches authenticated requests through it.
 
 use iroha_data_model::kagemusha::KagemushaWalletEnrollmentChallengeV1;
 use iroha_fs::{FileIdentity, FileSnapshot, PrivateDirectory, PublishMode};

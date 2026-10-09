@@ -2,7 +2,9 @@
 //!
 //! The portable proof's complete backing is prepaid before copying its authenticated fields.
 //! A final namespace refusal retains that complete graph; delivery still requires every
-//! original source guard. Native prefix verification remains a distinct custody boundary.
+//! original source guard. The actual certified reader retains completed terminal target/gap
+//! work across local refusal; partial genesis/certificate/schedule work and full native-prefix
+//! graph funding remain distinct custody boundaries.
 //! TODO(S8): connect this owned acquisition to the durable validator-relay owner; detachment
 //! supplies no transaction-signing, fee, permission or restart-publication authority.
 
@@ -84,6 +86,25 @@ pub enum NativeAmxRecordProofPollV1 {
     Pending,
     /// All carrier/archive checks completed; `None` means authenticated absence.
     Complete(Option<AllocatedAmxRecordProofV1>),
+}
+
+/// Issuance is distinct from completing a proof or authenticating record absence.
+///
+/// A refused issuance still owns the exact certified carrier and first selected archive
+/// descriptor. Its original cause is returned unchanged; further polling must pass every
+/// original namespace, decoder, pool and proof check. No variant grants relay authority.
+#[derive(Debug)]
+#[must_use = "retain the issued job and its exact refusal until explicit recovery or retirement"]
+pub enum NativeAmxRecordProofIssuedV1 {
+    /// The same acquired job moved without a new read or allocation.
+    Acquired(NativeAmxRecordProofOwnedV1),
+    /// A genuine archive poll selected the original descriptor but could not complete.
+    Refused {
+        /// Exact pending carrier, descriptor and any acquired backing, never a replacement.
+        original: NativeAmxRecordProofOwnedV1,
+        /// Exact first refusal, including a source or permanent failure requiring recovery.
+        cause: NativeAmxRecordProofErrorV1,
+    },
 }
 
 #[cfg(test)]
@@ -237,9 +258,9 @@ impl<'v, V: StateReadOnly> NativeAmxRecordProofReadV1<'v, V> {
         if source.certified.is_none() {
             source.certified = Some(
                 self.chain
-                    .as_ref()
+                    .as_mut()
                     .expect("original native reader")
-                    .certified(source.height)?,
+                    .certified_terminal_amx(source.height)?,
             );
         }
         if source.read.is_none() {
@@ -310,6 +331,74 @@ impl<'v, V: StateReadOnly> NativeAmxRecordProofReadV1<'v, V> {
         // can own original-pool charges which the target carrier alone does not retain.
         // No prefix refund/notification is introduced inside detachment.
         Ok(NativeAmxRecordProofOwnedV1 { source })
+    }
+
+    /// Issue the same independent job even when its genuine first archive poll refuses.
+    ///
+    /// Delegates once to `try_detach`; certification, descriptor selection, byte acquisition
+    /// and all completed stages are the same owners. A refusal before native certification or
+    /// actual file/length selection remains an error with this borrower intact. Once selected,
+    /// a refused job and its exact cause move together; this is never a completed proof or
+    /// authenticated absence. The completed prefix verifier remains in this retired borrowed
+    /// wrapper until its normal scoped drop, as for `try_detach`.
+    ///
+    /// No extra poll occurs after a previous successful source poll. Namespace failure may
+    /// move as an explicit refused outcome; restoring the original namespace remains mandatory
+    /// before this same owned engine can deliver. Permanent source/limit failures do not gain
+    /// a retry interval or alternate source. An armed borrowed test observer stays in its
+    /// original borrower until it fires and can never escape into an independent owner.
+    ///
+    /// # Errors
+    /// Original pre-issuance certification/archive refusal, completed selection, or an armed
+    /// test observer; the exact acquisition remains with this borrower.
+    pub fn try_issue(
+        &mut self,
+    ) -> Result<NativeAmxRecordProofIssuedV1, NativeAmxRecordProofErrorV1> {
+        match self.try_detach() {
+            Ok(original) => Ok(NativeAmxRecordProofIssuedV1::Acquired(original)),
+            Err(cause) => {
+                #[cfg(test)]
+                if self.portable_probe.is_some() {
+                    return Err(cause);
+                }
+                let Some(source) = self.source.as_mut() else {
+                    return Err(cause);
+                };
+                if source.completed
+                    || source.certified.is_none()
+                    || !source
+                        .read
+                        .as_ref()
+                        .is_some_and(NativeContextRead::has_pinned_source)
+                {
+                    return Err(cause);
+                }
+                #[cfg(all(test, sumeragi_core_mutation = "HC185"))]
+                {
+                    // Deliberately forget only the selected descriptor after a refused poll.
+                    // Native certification and later authentication still run unchanged.
+                    let read = source.read.take().expect("actual selected archive job");
+                    source.read = Some(
+                        read.into_archive().read_job(
+                            source.height,
+                            source
+                                .certified
+                                .as_ref()
+                                .expect("actual certified carrier")
+                                .block_hash(),
+                        ),
+                    );
+                }
+                let source = self
+                    .source
+                    .take()
+                    .expect("original refused source moves once");
+                Ok(NativeAmxRecordProofIssuedV1::Refused {
+                    original: NativeAmxRecordProofOwnedV1 { source },
+                    cause,
+                })
+            }
+        }
     }
 
     /// Observe one actual completed portable construction, before its final namespace guard.
@@ -533,3 +622,12 @@ impl OriginalAmxSource {
         Ok(NativeAmxRecordProofPollV1::Complete(proof))
     }
 }
+
+#[cfg(test)]
+mod issuer_tests;
+
+#[cfg(test)]
+mod certification_tests;
+
+#[cfg(test)]
+mod certification_retry_tests;

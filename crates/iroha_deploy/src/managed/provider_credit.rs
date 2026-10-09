@@ -96,6 +96,21 @@ impl ManagedInitialProviderCredit {
         })
     }
 
+    /// Borrow the immutable original profile while admitting this provider's own purpose lock.
+    /// Active decode admission and owned parents retain the full standalone capture recipe.
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+    ) -> Result<Self> {
+        Ok(Self {
+            authority: ServiceAuthority::open_provider_from_original(
+                parent,
+                provider,
+                ProviderPurpose::InitialProviderCredit,
+            )?,
+        })
+    }
+
     /// Retain one exact initial projection after fresh native absence/predecessor proof.
     /// # Errors
     /// Refuses changed intent, roles, fees or UTC terms, unavailable proof, or existing credit.
@@ -146,6 +161,7 @@ impl ManagedInitialProviderCredit {
         Ok(original)
     }
 
+    #[cfg(test)]
     pub(super) fn open_existing(
         prepared: &PreparedLocalnet,
         provider: iroha_data_model::sorafs::capacity::ProviderId,
@@ -494,9 +510,11 @@ impl ManagedInitialProviderCredit {
         if let Some(finalized) = &finalized {
             self.validate_carrier(&original, finalized)?;
         }
-        let current = observed
-            .as_ref()
-            .and_then(|verifier| self.read_current(&original.policy, verifier, deadline).ok());
+        let current = super::native_operation::optional_current(
+            observe_current,
+            observed.as_ref(),
+            |verifier| self.read_current(&original.policy, verifier, deadline),
+        );
         verify_custody()?;
         Ok(progress(report.status, finalized, current))
     }

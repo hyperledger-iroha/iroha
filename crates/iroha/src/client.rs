@@ -50,6 +50,8 @@ mod transaction_wait;
 mod validator_committee;
 pub use transaction_wait::TransactionFinalityFailure;
 #[cfg(test)]
+mod confirmation_poll_tests;
+#[cfg(test)]
 mod transaction_wait_tests;
 pub use crate::query::QueryError;
 use crate::{
@@ -14992,6 +14994,8 @@ impl AccountClient {
     ///
     /// Queue-plan ambiguity is retained while finality is reconciled and attached
     /// to an unresolved confirmation error without replaying the transaction.
+    /// Automatic polling uses the shorter configured timeout or remaining context deadline;
+    /// preparation and submission never renew that inherited deadline.
     ///
     /// # Errors
     /// Returns compatibility, transport, rejection, expiry, timeout, or unresolved
@@ -15031,12 +15035,21 @@ impl AccountClient {
         } else {
             client.transaction_status_timeout
         };
+        // Select cadence after preparation and submission from the actual remaining context.
+        // Keep the configured timeout and inherited absolute deadline as the wait's owners;
+        // a long configured timeout must not impose long sleeps on a short original turn.
+        let polling_budget = client
+            .http_transport
+            .deadline()
+            .map_or(timeout, |deadline| {
+                timeout.min(deadline.saturating_duration_since(std::time::Instant::now()))
+            });
         client
             .wait_until_transaction_applied(
                 hash,
                 TransactionWaitOptions {
                     timeout,
-                    poll_interval: Client::tx_confirmation_poll_interval(timeout),
+                    poll_interval: Client::tx_confirmation_poll_interval(polling_budget),
                 },
             )
             .await

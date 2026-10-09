@@ -182,3 +182,32 @@ mod musubi_namespace_tests;
 
 #[path = "test_support/amx_registration_native_tests.rs"]
 mod amx_registration_native_tests;
+
+/// Exercise the shared post-carrier decision against an actual native fixture's authenticated
+/// frontier and its owner's real bounded SDK proof reader. No paid wallet or source is replaced.
+pub(in crate::managed) fn assert_optional_current<T>(
+    peers: &UnavailablePeers,
+    frontier: &FinalityVerifier,
+    read: impl Fn(&FinalityVerifier) -> Result<T>,
+) {
+    let before = peers.requests.lock().unwrap().len();
+    assert!(optional_current(false, Some(frontier), &read).is_none());
+    assert_eq!(
+        peers.requests.lock().unwrap().len(),
+        before,
+        "unrequested current reporting must not fetch a World proof after native carrier replay",
+    );
+    assert!(optional_current(true, None, &read).is_none());
+    assert_eq!(peers.requests.lock().unwrap().len(), before);
+    assert!(optional_current(true, Some(frontier), read).is_none());
+    // Isolate this explicit read window from the caller's subsequent offline-recovery census.
+    // An enabled current read reaches the real proof endpoint and fails closed on its 503;
+    // removing the false guard fails above on these same concrete HTTP requests.
+    let requests = peers.requests.lock().unwrap().split_off(before);
+    assert!(requests.iter().all(|request| request.method == "GET"));
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.path != "/v1/node/capabilities")
+    );
+}

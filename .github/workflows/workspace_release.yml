@@ -249,7 +249,7 @@ jobs:
           path: target/ci/iroha-data-model-compile-units.json
           if-no-files-found: error
       - name: Test the full workspace
-        run: cargo test --locked --workspace --no-fail-fast
+        run: cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures
 
   coverage:
     name: Workspace coverage
@@ -292,7 +292,7 @@ jobs:
       - name: Collect workspace test coverage
         run: >-
           mold --run cargo llvm-cov nextest
-          --workspace --locked
+          --workspace --locked --features iroha_torii/test-fixtures
           --branch --no-report
       - name: Collect documentation-test coverage
         run: >-

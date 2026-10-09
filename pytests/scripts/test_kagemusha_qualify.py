@@ -219,6 +219,50 @@ def environment_fixture():
     }}
 
 
+@pytest.mark.parametrize("power", [
+    "unavailable\n", "AC Power:\n", "Battery Power:\n lowpowermode 0\n",
+    "AC Power:\n lowpowermode 0\nAC Power:\n lowpowermode 0\n",
+    "AC Power:\n lowpowermode 0\n lowpowermode 0\n",
+    "AC Power:\n lowpowermode unknown\n",
+])
+def test_power_probe_requires_an_unambiguous_active_profile(power):
+    before = environment_fixture()
+    before["raw"]["power"]["stdout"] = power
+    assert qualify.environment_reasons(before, deepcopy(before))
+
+
+@pytest.mark.parametrize("source", [
+    "AC Power unavailable\n", "Now drawing from 'Battery Power'\nAC Power\n",
+    "Now drawing from 'AC Power'\nNow drawing from 'Battery Power'\n",
+])
+def test_power_source_requires_the_actual_unique_ac_header(source):
+    before = environment_fixture()
+    before["raw"]["source"]["stdout"] = source
+    assert qualify.environment_reasons(before, deepcopy(before))
+
+
+def test_only_the_active_ac_low_power_setting_controls_qualification():
+    before = environment_fixture()
+    before["raw"]["power"]["stdout"] = (
+        "Battery Power:\n lowpowermode 1\nAC Power:\n lowpowermode 0\n"
+    )
+    assert qualify.environment_reasons(before, deepcopy(before)) == []
+    before["raw"]["power"]["stdout"] = (
+        "Battery Power:\n lowpowermode 0\nAC Power:\n lowpowermode 1\n"
+    )
+    assert qualify.environment_reasons(before, deepcopy(before))
+
+
+def test_recognized_ac_profile_without_optional_low_power_capability_is_supported():
+    before = environment_fixture()
+    # The retained qualification host reports this multiword key and ordinary
+    # AC settings, without exposing a lowpowermode capability.
+    before["raw"]["power"]["stdout"] = (
+        "AC Power:\n Sleep On Power Button 1\n sleep 0\n displaysleep 10\n"
+    )
+    assert qualify.environment_reasons(before, deepcopy(before)) == []
+
+
 def observation_fixture(value):
     return {"seed": value["seed"], "report": deepcopy(value), "reasons": [],
             "process": {"code": 0, "stdout": qualify.PREFIX + json.dumps(value), "stderr": ""},
@@ -257,12 +301,18 @@ def ledger_fixture():
             row["post"] = observation_fixture(value)
             for boundary in ("candidate_before", "candidate_after"):
                 row[boundary] = {key: candidate[key] for key in ("source_sha256", "binary_sha256")}
-    order = qualify.schedule(random.Random(123))
+    rng = random.Random(123)
+    order = qualify.schedule(rng)
     sequence = 0
     for block, names in enumerate(order):
         for name in names:
             for row in configs[name]:
                 if row["block"] == block:
+                    row["seed"] = rng.randrange(1 << 64)
+                    row["report"]["seed"] = row["seed"]
+                    row["measured"]["seed"] = row["seed"]
+                    row["measured"]["report"]["seed"] = row["seed"]
+                    refresh_raw(row["measured"])
                     row["sequence"] = sequence
                     sequence += 1
     return {"schema": "kagemusha.m3.runs.v1", "shuffle_seed": 123,
@@ -280,6 +330,19 @@ def test_summary_cannot_qualify_report_only_records(tmp_path):
     # No process exit, raw probe, calibration or candidate-boundary records
     # were retained. Empty reason strings are not evidence of validity.
     assert qualify.summarize(path)["status"] != "pass"
+
+
+def test_summary_rejects_resampled_seed_even_when_raw_measurement_agrees(tmp_path):
+    ledger = ledger_fixture()
+    row = ledger["attempts"]["q_chips-1"][0]
+    row["seed"] ^= 1 << 63
+    row["report"]["seed"] = row["seed"]
+    row["measured"]["seed"] = row["seed"]
+    row["measured"]["report"]["seed"] = row["seed"]
+    refresh_raw(row["measured"])
+    path = tmp_path / "runs.json"
+    qualify.write_json(path, ledger)
+    assert qualify.summarize(path)["status"] == "inconclusive"
 
 
 @pytest.mark.parametrize("policy", [None, "all-vm-counters-unchanged", "unknown"])

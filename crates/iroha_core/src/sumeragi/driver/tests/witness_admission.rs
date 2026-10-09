@@ -37,6 +37,8 @@ fn fixture(
         backlog: Mutex::new(Backlog::default()),
         wake: ThreadWake::admit(budget).unwrap(),
         transactions_pending: AtomicBool::new(false),
+        empty_waiting: std::sync::atomic::AtomicBool::new(false),
+        empty_epoch: std::sync::atomic::AtomicU64::new(0),
         alive: AtomicBool::new(true),
         stopped: Mutex::new(None),
         metrics: None,

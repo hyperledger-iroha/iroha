@@ -38,7 +38,7 @@
 //! the witness digest and the statement, and a recovery seed whose stream
 //! this crate keys with the witness and statement digests, so a caller
 //! cannot opt out of the binding). Fixed seeds exist only in this crate's
-//! unit tests and in oracle builds (`--cfg iroha_plonk_oracle`).
+//! unit tests.
 //!
 //! # Determinism
 //!
@@ -340,8 +340,8 @@ enum Source<'a> {
     Hedged,
     /// A caller derivation from the recovery context.
     Recovery(RecoveryDerivation<'a>),
-    /// A caller-supplied stream (unit tests and oracle builds only).
-    #[cfg(any(test, iroha_plonk_oracle))]
+    /// A caller-supplied stream (unit tests only).
+    #[cfg(test)]
     External(Box<dyn ProverRng + Send + 'a>),
 }
 
@@ -371,7 +371,7 @@ enum Source<'a> {
 /// "PIPA-v1-WitnessD", u32_le(advice columns) || u32_le(u) || the usable
 /// rows of every advice column)`.
 ///
-/// No seed or byte buffer is accepted outside unit tests and oracle builds.
+/// No seed or byte buffer is accepted outside unit tests.
 pub struct ProverRandomness<'a> {
     source: Source<'a>,
 }
@@ -382,7 +382,7 @@ impl fmt::Debug for ProverRandomness<'_> {
             Source::Os => "Os",
             Source::Hedged => "Hedged",
             Source::Recovery(_) => "Recovery",
-            #[cfg(any(test, iroha_plonk_oracle))]
+            #[cfg(test)]
             Source::External(_) => "External",
         };
         f.debug_struct("ProverRandomness")
@@ -451,9 +451,9 @@ impl<'a> ProverRandomness<'a> {
         }
     }
 
-    /// A caller-supplied stream. Unit tests and oracle builds only (spec
+    /// A caller-supplied stream. Unit tests only (spec
     /// 6.4): it reproduces vendored proofs from their fixed seeds.
-    #[cfg(any(test, iroha_plonk_oracle))]
+    #[cfg(test)]
     #[doc(hidden)]
     #[must_use]
     pub fn from_rng_for_tests<R: ProverRng + Send + 'a>(rng: R) -> Self {
@@ -462,9 +462,9 @@ impl<'a> ProverRandomness<'a> {
         }
     }
 
-    /// A `ChaCha20` stream from a fixed seed. Unit tests and oracle builds
+    /// A `ChaCha20` stream from a fixed seed. Unit tests
     /// only.
-    #[cfg(any(test, iroha_plonk_oracle))]
+    #[cfg(test)]
     #[doc(hidden)]
     #[must_use]
     pub fn fixed_seed_for_tests(seed: [u8; 32]) -> Self {
@@ -503,7 +503,7 @@ impl<'a> ProverRandomness<'a> {
                 drawn.fill(0);
                 Ok(StreamRng::ChaCha(Box::new(ChaCha20Rng::from_seed(key))))
             }
-            #[cfg(any(test, iroha_plonk_oracle))]
+            #[cfg(test)]
             Source::External(rng) => Ok(StreamRng::Boxed(rng)),
         }
     }
@@ -527,9 +527,9 @@ pub fn recovery_stream_key(drawn: &[u8; 32], context: &[u8; 32]) -> [u8; 32] {
 enum StreamRng<'a> {
     ChaCha(Box<ChaCha20Rng>),
     /// A caller-supplied stream: only [`ProverRandomness::from_rng_for_tests`]
-    /// (unit tests and oracle builds) constructs it; production streams are
+    /// (unit tests) constructs it; production streams are
     /// always the `ChaCha20` streams this crate keys.
-    #[cfg_attr(not(any(test, iroha_plonk_oracle)), allow(dead_code))]
+    #[cfg_attr(not(test), allow(dead_code))]
     Boxed(Box<dyn ProverRng + Send + 'a>),
 }
 
@@ -1055,13 +1055,13 @@ where
 
 /// [`create_proof`] in oracle mode (spec 6.4): the vendored
 /// `transcript_repr` is injected, Poseidon points are absorbed with
-/// `fe_to_fe` and the instance frame is omitted. Unit tests and oracle builds
+/// `fe_to_fe` and the instance frame is omitted. Unit tests
 /// only; never compiled into shipping binaries.
 ///
 /// # Errors
 ///
 /// As [`create_proof`].
-#[cfg(any(test, iroha_plonk_oracle))]
+#[cfg(test)]
 #[doc(hidden)]
 pub fn create_proof_oracle<C: PastaCurve>(
     params: &PinnedParams<C>,
@@ -1406,7 +1406,7 @@ where
 }
 
 /// The oracle-mode hash of the descriptor's transcript.
-#[cfg(any(test, iroha_plonk_oracle))]
+#[cfg(test)]
 fn oracle_hash<C: PastaCurve>(
     descriptor: &ProtocolDescriptor,
 ) -> Result<DescriptorHash<C>, TranscriptError>
@@ -1424,7 +1424,7 @@ where
 
 /// Oracle mode does not exist in shipping builds; the production hash is
 /// returned so the code path stays total.
-#[cfg(not(any(test, iroha_plonk_oracle)))]
+#[cfg(not(test))]
 fn oracle_hash<C: PastaCurve>(
     _descriptor: &ProtocolDescriptor,
 ) -> Result<DescriptorHash<C>, TranscriptError>

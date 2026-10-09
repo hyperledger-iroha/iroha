@@ -1845,7 +1845,19 @@ mod tests {
         std::fs::write(&unsupported, "unsupported input").unwrap();
         let source = temporary.path().join("contract.ko");
         std::fs::write(&source, "seiyaku Test {}").unwrap();
-        for (path, alias) in [(&unsupported, None), (&source, Some("not an alias"))] {
+        let bytecode = temporary.path().join("invalid.to");
+        std::fs::write(&bytecode, b"not an IVM artifact").unwrap();
+        let package = temporary.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let manifest = package.join("Musubi.toml");
+        std::fs::write(&manifest, "[broken").unwrap();
+        for (path, alias) in [
+            (&unsupported, None),
+            (&source, Some("not an alias")),
+            (&bytecode, None),
+            (&manifest, None),
+            (&package, None),
+        ] {
             let mut args = vec![
                 "kagami",
                 "contract",

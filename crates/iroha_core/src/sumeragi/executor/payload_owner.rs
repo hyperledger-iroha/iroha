@@ -1761,4 +1761,64 @@ mod tests {
             drop(original);
         });
     }
+
+    #[test]
+    fn completed_certified_lane_payload_keeps_original_output_across_same_scope_build_retry() {
+        lanes::merge::with_original_lane_merge_fixture(
+            |chain, lane_blocks, certify, [first, _second]| {
+                super::super::publication_tests::with_worker_chain(
+                    chain,
+                    ConsensusMode::Permissioned,
+                    lane_blocks,
+                    |chain, worker, _blocks, _events| {
+                        let parent_height = chain.height();
+                        assert_eq!(parent_height, 3, "actual fixed-lane activation source");
+                        let height = parent_height.checked_add(1).unwrap();
+                        let (_, time) = iroha_primitives::time::TimeSource::new_mock(
+                            Duration::from_millis(2_001),
+                        );
+                        let queue = Arc::new(Queue::test(
+                            iroha_config::parameters::actual::Queue::default(),
+                            &time,
+                        ));
+                        worker.queue = Some(Arc::clone(&queue));
+                        let lane_hash = certify(1, parent_height, vec![first]);
+                        let budget = worker.state.ivm_execution_budget();
+                        let original = worker
+                            .build(height, 0, 1 << 20, 100)
+                            .unwrap()
+                            .expect("genuine certified lane work");
+                        assert!(original.admitted_to(&budget));
+                        let decoded = payload::decode(original.as_slice()).unwrap();
+                        assert_eq!(decoded.network_entrypoint_count(), 0);
+                        let section = decoded.lane_merge().expect("actual certified lane range");
+                        assert_eq!(section.merges.len(), 1);
+                        assert_eq!(section.merges[0].to, 1);
+                        assert_eq!(section.merges[0].tip_hash, lane_hash.0);
+                        drop(decoded);
+                        assert_eq!(queue.queued_len(), 0);
+
+                        // A deadline retry creates a new Core request, but the Worker request
+                        // still names this exact height/view/parent and complete build policy.
+                        // Keep the first public output alive: a newly encoded allocation cannot
+                        // coincidentally reuse its address and satisfy the retention assertion.
+                        let retry = worker
+                            .build(height, 0, 1 << 20, 100)
+                            .unwrap()
+                            .expect("same original certified lane work remains mandatory");
+                        assert!(
+                            std::ptr::eq(original.as_slice().as_ptr(), retry.as_slice().as_ptr()),
+                            "completed certified lane payload must retain its exact output across build deadline retry"
+                        );
+                        assert_eq!(retry.as_slice(), original.as_slice());
+                        assert!(retry.admitted_to(&budget));
+                        assert_eq!(queue.queued_len(), 0);
+                        worker.retire_completed_payload(height);
+                        assert!(worker.payload_build.is_none());
+                        drop((retry, original));
+                    },
+                );
+            },
+        );
+    }
 }

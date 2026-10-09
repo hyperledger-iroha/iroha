@@ -104,6 +104,7 @@ use std::{
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
+mod managed_puzzle;
 mod private_root;
 pub(crate) use custody::sync_private_tree;
 pub(crate) use private_root::private_fee_policy;
@@ -7597,6 +7598,7 @@ fn managed_peer_config(rendered: &str, data_dir: &Path) -> Result<Zeroizing<Stri
         table.get("sumeragi").and_then(Value::as_table).is_some(),
         "generated validator configuration has no sumeragi section"
     );
+    managed_puzzle::apply_if_loopback(&mut table);
     toml::to_string(&*table)
         .map(Zeroizing::new)
         .map_err(|_| eyre!("cannot encode managed validator configuration"))
@@ -7699,22 +7701,7 @@ mod managed_tests {
                     iroha_config::parameters::defaults::network::PREAUTH_TIMEOUT,
                 )
             );
-            let pow = &config.network.soranet_handshake.pow;
-            let expected_pow = actual::SoranetPow::default_const();
-            assert_eq!(
-                (
-                    pow.difficulty,
-                    pow.puzzle.memory_kib,
-                    pow.puzzle.time_cost,
-                    pow.puzzle.lanes,
-                ),
-                (
-                    expected_pow.difficulty,
-                    expected_pow.puzzle.memory_kib,
-                    expected_pow.puzzle.time_cost,
-                    expected_pow.puzzle.lanes,
-                )
-            );
+            managed_puzzle::assert_managed_profile(&table, &config.network.soranet_handshake.pow);
             let node = managed_node_dir(&root, index);
             assert_eq!(table["data_dir"].as_str(), node.to_str());
             assert!(table["sumeragi"].get("mint_finality_seed_fd").is_none());

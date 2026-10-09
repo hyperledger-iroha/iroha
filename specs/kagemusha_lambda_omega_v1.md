@@ -393,8 +393,8 @@ public transcript, the transported acc_P and the constant `vkΩ_digest`.
 
 ### 3.4 PIPA-AS-v1 fold proof
 
-BCMS20 PC_DL accumulation (snark-verifier `IpaAs`; reference `iroha_core_zk`
-`accumulation.rs`):
+BCMS20 PC_DL accumulation, implemented in
+`iroha_plonk_recursion::accumulation`:
 
 - **Transcript.** A base-field sponge with tag `pipa-as1` absorbs a canonical prover salt
   (one base-field element), r, and for each slot (finite G_i as [x, y], source k_i,
@@ -601,15 +601,18 @@ evaluation cost is ≈ 0.43k cells per chunk [E], about 46k–48k cells per σ.
 | Ω / W | 16 | 11 | 3,648 (+1,088) | 0.58M | 15–21 s |
 | PIPA-AS fold | K16 | — | 1,088 | — | 2.9–3.1 s |
 
-Prove-time calibration [E]: a 25-column k16 circuit took 43.5 s with the vendored prover on 1
-thread [M]; the measured native/vendored ratio of 0.43–0.60 gives 18.7–26 s. No native proof
-wider than k14 has been timed (G3.6).
+Historical prove-time calibration [E]: a 25-column k16 circuit took 43.5 s with the
+vendored prover on one thread [M]; the measured native/vendored ratio of 0.43–0.60
+gave an estimate of 18.7–26 s. Current native k16 synthetic and real-chip measurements
+are recorded in the [evidence checklist](kagemusha_evidence_gate.md); that campaign
+still has hard failures, borderline margins and incomplete configurations. These
+historical estimates cannot establish the current G3.6 result.
 
 | Unit | Cells |
 |---|---:|
 | Pow5 permutation | 148 [M] |
 | Tree node `P(d, [l, r])` | 2 permutations = 296 [M] |
-| P-256 variable key (complete, low-S, SEC1, soft) | 0.2–0.4M [E]; **threshold 0.30M**; measured today with halo2-base: 1,466,624 [M, checklist §8] |
+| P-256 variable key (complete, low-S, SEC1, soft) | 0.2–0.4M [E]; **threshold 0.30M**; historical retired-engine measurement: 1,466,624 [M, checklist §8] |
 | P-256 fixed key (scheme root) | 0.06–0.15M [E]; **threshold 0.12M** |
 | SHA-256 block, degree 6 | 37–50k [E] (Table8 source estimate 2,304 rows, unmeasured) |
 | FF-CRT multiplication (Fq-in-Fp, Fp-in-Fq, P-256 p and n) | 80–100 [E] |
@@ -691,12 +694,14 @@ The peak falls in the quotient phase [E]:
   4] + 2(d − 1);
 - × 2 MiB at k16 × 1.15, + 8 MiB params + 64 MiB MSM scratch cap + 50 MiB core baseline.
 
-The witness factor is c = 3 today, because `commit_advice` clones the witness values and then
-keeps coefficients [S `crates/iroha_plonk/src/prover/advice.rs`]; c = 2 with an owned-witness
-API. Streaming keeps fixed and permutation columns as coefficients only and drops advice values
-once the permutation and lookup products are built.
+The original borrowed-witness estimate used c = 3; the implemented consuming-witness
+path uses c = 2 in that estimate. Advice values move into coefficient buffers after
+the permutation and lookup products are built
+[S `crates/iroha_plonk/src/prover/advice.rs`]. The table below retains design estimates;
+current peak RSS qualification must use the measured owned-witness path and complete
+process lifetime. Streaming fixed/permutation columns remains a separate memory choice.
 
-| Circuit | Today (c = 3) | Owned witness (c = 2) | Streamed |
+| Circuit | Borrowed estimate (c = 3) | Owned estimate (c = 2) | Streamed estimate |
 |---|---:|---:|---:|
 | A (32 / 44 / 10 / 3) | 0.91 GiB | **0.84 GiB** | 0.64 GiB |
 | Q (22 / 32 / 8 / 3) | 0.72 GiB | 0.67 GiB | 0.53 GiB |
@@ -799,10 +804,21 @@ bad path. The [containment argument](kagemusha_recursion_soundness_v1.md#branch-
 reduces the selection rule to C2, C7 and C10; complete operation binding and
 independent review remain G4.1 work.
 
-**C9. Liveness of hard verification.** Q, A and Ω are hiding and are re-proved with fresh
-blinds if self-verification fails, which by C7 never happens for honest witnesses. PIPA-AS takes
-a prover salt as cheap insurance; grinding through it only adds hash queries, already counted in
-C2.
+**C9. Hard-verifier completeness and retries.** C7 gives native/circuit verdict agreement;
+it does not exclude zero challenges, identity messages or exceptional denominators for an
+honest witness. The native Q/A/Ω owners perform one proving attempt and propagate proof,
+self-verification, entropy, resource and cancellation failures. A failure does not establish
+payment completion or authorize a burn. PIPA-AS does not silently retry its salt,
+and a salt retry cannot repair an all-short input set (§3.3).
+
+A retry of unpublished proof work is a new attempt; all hash queries and any fresh blinds
+or fold salts actually drawn enter the bounded experiment, including failed attempts.
+Q's capsule-derived public local-fold nonce is reused and is not fresh private entropy.
+Retained checkpoints and completed Ω records are restored from their exact bytes;
+payment retries return the retained Payment and never repeat irreversible Send. The
+[conditional failure bounds](kagemusha_recursion_soundness_v1.md#conditional-honest-fold-abort-bound)
+retain their independent-challenge premise and separate operational failures. Hiding and
+verdict parity alone establish no unconditional liveness or zero failure probability.
 
 **C10. Maps.** Every wallet map except the quota-usage array (below) and the credit-digest tree
 is the wire §3.2 depth-32 indexed Merkle tree (the Aztec construction): leaves `(key, value, next_key)` sorted and linked from a
@@ -829,12 +845,21 @@ of `P` and of SHA-256 on 32-byte inputs, plus P-256 EUF-CMA (owner protocol choi
 in-circuit P-256 is complete for natively accepted inputs: complete Renes–Costello–Batina
 formulas, low-S, x(R) mod n.
 
-**C12. Zero knowledge.** Ω follows the halo2 argument (PIPA §13). acc_P and acc_V are outputs of
-non-hiding fold IPAs whose inputs derive from hiding proofs; in the ROM u is a hash of
-high-entropy transcripts and G = ⟨s(u), g⟩ is public given u, so a simulator samples u. D_A is
-a function of public fields and acc_P. Q, A and the fold proofs never leave the device. Ω
-already exposes `wallet_id` and `payment_key`, so linkability is unchanged. The formal memo is
-M4 work (PIPA §13 TODO).
+**C12. Zero knowledge.** Ω uses the hiding proof construction in PIPA §13. For a deciding
+accumulator, G = ⟨s(u), g⟩ is determined by u and the pinned generators. D_A hashes the
+18 public lineage fields and acc_P's coordinates and challenge limbs (52 field words),
+so it adds no information beyond that public tuple. Q, A and the local fold proofs are
+not transported; `wallet_id` and `payment_key` are already public.
+
+These local facts do not prove privacy of the joint public transcript. The two exposed
+challenge vectors come from non-hiding folds and can share inputs correlated with
+public σ proofs and earlier accumulators. A simulator must handle both vectors and Ω
+under one random oracle, including adaptive queries, retained checkpoint reuse, retries
+and exceptional aborts. Independently sampling two vectors does not by itself produce
+an Ω witness or establish that distribution. Fresh private salts support a possible
+hidden-prefix argument, but that argument and the composed simulator remain M4 work
+([recursive soundness memo](kagemusha_recursion_soundness_v1.md), PIPA §13 TODO).
+No stronger privacy or linkability conclusion is established by this paragraph.
 
 ## 8. PIPA-v1 extensions (applied to `plonk_ipa_v1.md` in M4)
 

@@ -1,6 +1,6 @@
 //! Replay the independent snark-verifier corpus without linking the retired stack.
 //!
-//! Historical transcript framing is available only in test/oracle builds. The
+//! Historical transcript framing is available only in unit tests. The
 //! captured native descriptor and original key/proof bytes stay reviewable after
 //! vendor retirement. A cheap result is checked against G/u and then decided.
 

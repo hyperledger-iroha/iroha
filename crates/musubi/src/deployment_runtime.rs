@@ -22,6 +22,9 @@ use kotodama_lang::{
 };
 use std::path::{Path, PathBuf};
 
+mod slot;
+pub(crate) use slot::{DeploymentSlot, RetainedDeployment, RetryRequest};
+
 /// Explicit contract input; source and bytecode require no project manifest.
 #[derive(Debug)]
 pub enum ContractInput {
@@ -47,12 +50,52 @@ impl ContractInput {
     /// Native selection runs before provisioning and retains the original root file through
     /// startup and build. An explicitly selected non-root member deploys only its owning package;
     /// an actual workspace root retains declared defaults and explicit package selection.
-    /// Declared companions and package graphs are still read by their owners.
+    /// The selected artifact or manifest passes network-independent admission before startup.
+    /// Declared companions, full package graphs and source compilation still belong to their
+    /// canonical owners under the actual selected network. Later validation is never skipped.
     ///
     /// # Errors
     /// Rejects missing or nonregular inputs, missing package manifests, package selectors on
-    /// standalone files and unsupported file names.
+    /// standalone files, unsupported file names, malformed artifacts and invalid manifests.
     pub fn from_path(
+        path: &Path,
+        package: Option<String>,
+        contract: Option<String>,
+        locked: bool,
+    ) -> Result<Self> {
+        let input = Self::select_path(path, package, contract, locked)?;
+        input.validate_local()?;
+        Ok(input)
+    }
+
+    fn validate_local(&self) -> Result<()> {
+        // Keep the captured original file alive. Every read uses that same native owner;
+        // close ordinary parser failures as well as success before returning the selection.
+        // Do not install/reset a decode budget or retain a validation result across startup.
+        let (selected, result) = match self {
+            Self::Source(_) => return Ok(()),
+            Self::Bytecode(selected) => (
+                selected,
+                selected
+                    .read(MAX_DEPLOYMENT_ARTIFACT_BYTES)
+                    .wrap_err("read exact contract bytecode")
+                    .and_then(BuiltArtifact::from_bytes)
+                    .map(|_| ()),
+            ),
+            Self::Package { manifest, .. } => (
+                manifest,
+                crate::workspace::read_manifest_selected(manifest.path(), Some(manifest))
+                    .map(|_| ())
+                    .map_err(Into::into),
+            ),
+        };
+        selected
+            .revalidate()
+            .wrap_err("retain original deployment input")?;
+        result
+    }
+
+    fn select_path(
         path: &Path,
         package: Option<String>,
         contract: Option<String>,
@@ -370,73 +413,24 @@ impl DeploymentRuntime {
         let service = DeploymentService::new(self.config.clone())?;
         let slot = deployment_slot(&self.config, &self.journal_root, &alias);
         let session = DeploymentSlot::open(&slot)?;
-        if let Some(journal) = session.current_journal()? {
-            let retained = service
-                .retained_preflight(&journal)
-                .map_err(|error| journal_failure(error, &journal))?;
-            validate_journal_location(
-                &self.config,
-                session
-                    .writer
-                    .path()
-                    .parent()
-                    .expect("runtime slot has root"),
-                &journal,
-                &retained.contract_alias,
-                &plan_journal_id(&retained)?,
-            )?;
-            let same_input =
-                retained.code_hash == artifact.code_hash && retained.contract_alias == alias;
-            let disposition = if same_input {
-                after_review(&retained, review, || {
-                    service
-                        .inspect_journal(&journal)
-                        .map_err(|error| journal_failure(error, &journal))
-                })?
-            } else {
-                service
-                    .inspect_journal(&journal)
-                    .map_err(|error| journal_failure(error, &journal))?
-            };
-            match disposition {
-                JournalDisposition::Pending { .. } if same_input => {
-                    if retained
-                        .fee_quotes
-                        .iter()
-                        .any(|quote| !fee_payment.has_same_payer_and_gas_bound(&quote.intent))
-                    {
-                        bail!(
-                            "pending deployment uses a different fee payer or gas bound; resume its exact journal: {}",
-                            journal.display()
-                        );
-                    }
-                    let receipt = service
-                        .resume(&journal, progress)
-                        .map_err(|error| journal_failure(error, &journal))?;
-                    return Ok(DeploymentRun { receipt, journal });
-                }
-                JournalDisposition::Pending { .. } => {
-                    bail!(
-                        "an earlier deployment has different unresolved artifact or alias inputs; resume its exact journal: {}",
-                        journal.display()
-                    );
-                }
-                JournalDisposition::Completed(_) if same_input => {
-                    let receipt = service
-                        .current_completed_receipt(&journal)
-                        .map_err(|error| journal_failure(error, &journal))?
-                        .ok_or_else(|| {
-                            eyre!(
-                                "completed deployment lost its authenticated receipt\nDeployment journal: {}",
-                                journal.display()
-                            )
-                        })?;
-                    return Ok(DeploymentRun { receipt, journal });
-                }
-                JournalDisposition::Completed(_)
-                | JournalDisposition::Failed(_)
-                | JournalDisposition::Cancelled(_) => {}
-            }
+        if let Some(retained) = session.recover_matching(
+            &service,
+            RetryRequest {
+                code_hash: artifact.code_hash,
+                alias: &alias,
+                fee_payment: &fee_payment,
+                prepare_only: false,
+            },
+            review,
+            progress,
+        )? {
+            let receipt = retained
+                .receipt
+                .ok_or_else(|| eyre!("deployment recovery returned no receipt"))?;
+            return Ok(DeploymentRun {
+                receipt,
+                journal: retained.journal,
+            });
         }
         let prepared = service.prepare(&DeploymentRequest {
             artifact: artifact.bytes,
@@ -446,9 +440,7 @@ impl DeploymentRuntime {
         })?;
         review(prepared.preflight())?;
         let journal = session.persist(&service, &prepared)?;
-        let receipt = service
-            .execute(&prepared, &journal, progress)
-            .map_err(|error| journal_failure(error, &journal))?;
+        let receipt = session.execute(&service, &prepared, &journal, progress)?;
         Ok(DeploymentRun { receipt, journal })
     }
 
@@ -467,9 +459,15 @@ impl DeploymentRuntime {
             .journal_root
             .canonicalize()
             .wrap_err("resolve deployment journal root")?;
+        let name = journal
+            .file_name()
+            .ok_or_else(|| eyre!("deployment journal has no commit ID"))?;
         let retained = journal
+            .parent()
+            .ok_or_else(|| eyre!("deployment journal has no slot"))?
             .canonicalize()
-            .wrap_err("resolve exact deployment journal")?;
+            .wrap_err("resolve exact deployment slot")?
+            .join(name);
         if retained
             .strip_prefix(&root)
             .map(|relative| relative.components().count())
@@ -480,8 +478,9 @@ impl DeploymentRuntime {
         let slot = retained
             .parent()
             .ok_or_else(|| eyre!("deployment journal has no slot"))?;
-        let _session = DeploymentSlot::open(slot)?;
+        let session = DeploymentSlot::open_read(slot)?;
         let service = DeploymentService::new(self.config.clone())?;
+        session.admit_resume(&service, &retained)?;
         let retained_preflight = service
             .retained_preflight(&retained)
             .map_err(|error| journal_failure(error, &retained))?;
@@ -493,9 +492,7 @@ impl DeploymentRuntime {
             &plan_journal_id(&retained_preflight)?,
         )?;
         let receipt = after_review(&retained_preflight, review, || {
-            service
-                .resume(&retained, progress)
-                .map_err(|error| journal_failure(error, &retained))
+            session.resume(&service, &retained, progress)
         })?;
         Ok(DeploymentRun {
             receipt,
@@ -514,15 +511,7 @@ impl DeploymentRuntime {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let slot = deployment_slot(&self.config, &self.journal_root, alias);
         // A read must not create a new alias slot merely because no deployment exists.
-        let writer = PrivateDirectory::open(&slot)?;
-        let lock = writer.open_read("deployment.lock")?;
-        lock.try_lock()
-            .wrap_err("deployment target is already in use")?;
-        writer.revalidate()?;
-        let session = DeploymentSlot {
-            writer,
-            _lock: lock,
-        };
+        let session = DeploymentSlot::open_read(&slot)?;
         let journal = session
             .current_journal()?
             .ok_or_else(|| eyre!("contract alias has no retained deployment"))?;
@@ -543,6 +532,7 @@ impl DeploymentRuntime {
         let contract = service
             .current_completed_contract(&journal)
             .map_err(|error| journal_failure(error, &journal))?;
+        session.revalidate()?;
         Ok(CurrentDeployment { contract, journal })
     }
 }
@@ -572,12 +562,25 @@ fn after_review<T, R, F: FnMut(&T) -> Result<()> + ?Sized>(
 }
 
 fn deployment_slot(config: &Config, root: &Path, alias: &ContractAlias) -> PathBuf {
-    let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+    root.join(deployment_slot_name(
+        &config.network_id,
+        config.account_chain_discriminant,
+        &config.account,
+        alias,
+    ))
+}
+
+fn deployment_slot_name(
+    network: &iroha_data_model::NetworkId,
+    discriminant: u16,
+    authority: &iroha_data_model::account::AccountId,
+    alias: &ContractAlias,
+) -> String {
+    let _profile = ChainDiscriminantGuard::enter(discriminant);
     let identity = format!(
-        "iroha.contract-deployment-slot.v1\n{}\n{}\n{}\n{}",
-        config.network_id, config.account_chain_discriminant, config.account, alias
+        "iroha.contract-deployment-slot.v1\n{network}\n{discriminant}\n{authority}\n{alias}"
     );
-    root.join(blake3::hash(identity.as_bytes()).to_hex().as_str())
+    blake3::hash(identity.as_bytes()).to_hex().to_string()
 }
 
 fn validate_journal_location(
@@ -592,72 +595,6 @@ fn validate_journal_location(
         bail!("deployment journal location differs from its authenticated target and commit");
     }
     Ok(())
-}
-
-/// One locked deployment target, also used by the existing package command adapter.
-pub(crate) struct DeploymentSlot {
-    writer: PrivateDirectory,
-    _lock: std::fs::File,
-}
-impl DeploymentSlot {
-    pub(crate) fn open(path: &Path) -> Result<Self> {
-        let writer = PrivateDirectory::open_or_create(path)?;
-        let lock = writer.open_lock("deployment.lock")?;
-        lock.try_lock()
-            .wrap_err("deployment target is already in use")?;
-        writer.revalidate()?;
-        Ok(Self {
-            writer,
-            _lock: lock,
-        })
-    }
-
-    pub(crate) fn ensure_previous_terminal(&self, service: &DeploymentService) -> Result<()> {
-        let Some(journal) = self.current_journal()? else {
-            return Ok(());
-        };
-        if matches!(
-            service.inspect_journal(&journal)?,
-            JournalDisposition::Pending { .. }
-        ) {
-            bail!(
-                "an earlier deployment is unresolved; resume its exact journal: {}",
-                journal.display()
-            );
-        }
-        Ok(())
-    }
-
-    pub(crate) fn current_journal(&self) -> Result<Option<PathBuf>> {
-        let Some(bytes) = self.writer.read_optional("active-journal", 64)? else {
-            return Ok(None);
-        };
-        let id = std::str::from_utf8(&bytes)?;
-        validate_journal_id(id)?;
-        Ok(Some(self.writer.path().join(id)))
-    }
-
-    pub(crate) fn persist(
-        &self,
-        service: &DeploymentService,
-        prepared: &PreparedDeployment,
-    ) -> Result<PathBuf> {
-        let id = plan_journal_id(prepared.preflight())?;
-        let journal = self.writer.path().join(&id);
-        service
-            .persist(prepared, &journal)
-            .map_err(|error| journal_failure(error, &journal))?;
-        self.publish_active_journal(&id, &journal)?;
-        Ok(journal)
-    }
-
-    fn publish_active_journal(&self, id: &str, journal: &Path) -> Result<()> {
-        // The original plan is already durable. A pointer failure must retain its exact recovery
-        // path even though this slot cannot yet discover it through the active record.
-        self.writer
-            .write_atomic("active-journal", id.as_bytes(), PublishMode::Replace)
-            .map_err(|error| journal_failure(DeploymentError::Journal(error.into()), journal))
-    }
 }
 
 pub(crate) fn plan_journal_id(preflight: &DeploymentPreflight) -> Result<String> {
@@ -772,10 +709,14 @@ mod tests {
         let bytecode = temp.path().join("x.to");
         let manifest = temp.path().join("Musubi.toml");
         fs::write(&source, SOURCE)?;
-        fs::write(&bytecode, b"build validates the actual bytes")?;
+        let artifact = kotodama_lang::compiler::Compiler::new()
+            .compile_source(SOURCE)
+            .map_err(|error| eyre!(error))?;
+        fs::write(&bytecode, artifact)?;
         assert!(ContractInput::from_path(temp.path(), None, None, false).is_err());
         assert!(ContractInput::from_path(&manifest, None, None, false).is_err());
-        fs::write(&manifest, "manifest-version = 1")?;
+        let package_manifest = "manifest-version = 1\n[package]\nnamespace = \"demo\"\nname = \"coffee\"\nversion = \"0.1.0\"\nedition = \"1\"\nabi-version = 1\n[[contract]]\nname = \"coffee\"\npath = \"x.ko\"\n";
+        fs::write(&manifest, package_manifest)?;
         assert!(matches!(
             ContractInput::from_path(&source, None, None, false)?,
             ContractInput::Source(_)
@@ -794,10 +735,7 @@ mod tests {
         let source_named_directory = temp.path().join("package.ko");
         fs::create_dir(&source_named_directory)?;
         assert!(ContractInput::from_path(&source_named_directory, None, None, false).is_err());
-        fs::write(
-            source_named_directory.join("Musubi.toml"),
-            "manifest-version = 1",
-        )?;
+        fs::write(source_named_directory.join("Musubi.toml"), package_manifest)?;
         assert!(matches!(
             ContractInput::from_path(&source_named_directory, None, None, false)?,
             ContractInput::Package { .. }
@@ -823,7 +761,72 @@ mod tests {
         Ok(())
     }
 
-    fn config() -> Config {
+    #[test]
+    fn input_preflight_rejects_local_content_and_preserves_active_decode_limits() -> Result<()> {
+        let temporary = TempDir::new()?;
+        let artifact_path = temporary.path().join("invalid.to");
+        for bytes in [b"".as_slice(), b"not an IVM artifact"] {
+            fs::write(&artifact_path, bytes)?;
+            let error = ContractInput::from_path(&artifact_path, None, None, false).unwrap_err();
+            assert!(format!("{error:#}").contains("contract artifact"));
+        }
+        fs::File::create(&artifact_path)?.set_len((MAX_DEPLOYMENT_ARTIFACT_BYTES + 1) as u64)?;
+        assert!(ContractInput::from_path(&artifact_path, None, None, false).is_err());
+        let manifest = temporary.path().join("Musubi.toml");
+        fs::File::create(&manifest)?.set_len(crate::workspace::MAX_MANIFEST_BYTES + 1)?;
+        assert!(ContractInput::from_path(&manifest, None, None, false).is_err());
+        for bytes in [b"[broken".as_slice(), b"manifest-version = 1", &[0xff]] {
+            fs::write(&manifest, bytes)?;
+            assert!(ContractInput::from_path(&manifest, None, None, false).is_err());
+            assert!(ContractInput::from_path(temporary.path(), None, None, false).is_err());
+        }
+        // A virtual root needs no invented package/network binding during local admission.
+        fs::write(
+            &manifest,
+            "manifest-version = 1\n[workspace]\nmembers = []\n",
+        )?;
+        assert!(ContractInput::from_path(&manifest, None, None, false).is_ok());
+        let bytes = kotodama_lang::compiler::Compiler::new()
+            .compile_source(SOURCE)
+            .map_err(|error| eyre!(error))?;
+        fs::write(&artifact_path, &bytes)?;
+        for allocation in [0, 1] {
+            let limits = norito::DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                allocation,
+                usize::MAX,
+            );
+            let result = norito::core::with_decode_limits_scope(limits, || {
+                ContractInput::from_path(&artifact_path, None, None, false)
+            });
+            assert!(
+                result.is_err(),
+                "selection must retain the caller's decode refusal"
+            );
+        }
+        let selected = ContractInput::from_path(&artifact_path, None, None, false)?;
+        let runtime = DeploymentRuntime::new(
+            config(),
+            temporary.path().join("journals"),
+            temporary.path().join("cache"),
+        );
+        // Early admission does not bypass a later active owner or replace authoritative build.
+        assert!(
+            norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || runtime.build(&selected),
+            )
+            .is_err()
+        );
+        assert_eq!(runtime.build(&selected)?.bytes(), bytes);
+        assert!(!temporary.path().join("journals").exists());
+        assert!(!temporary.path().join("cache").exists());
+        Ok(())
+    }
+
+    pub(super) fn config() -> Config {
         let source = br#"
 chain = "00000000-0000-0000-0000-000000000000"
 network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
@@ -854,7 +857,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         directory.write_atomic("sentinel", b"original", PublishMode::CreateNew)?;
         assert!(runtime.current_deployment(&alias).is_err());
         assert!(!slot.join("deployment.lock").exists());
-        assert!(!slot.join("active-journal").exists());
+        assert!(!slot.join("publication.json").exists());
         assert_eq!(directory.read("sentinel", 8)?.as_slice(), b"original");
         Ok(())
     }
@@ -878,19 +881,18 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             dataspace: "universal".into(),
         };
         let alias = artifact.alias(&selection)?;
-        let directory = PrivateDirectory::open_or_create(deployment_slot(
-            &runtime.config,
-            root.path(),
-            &alias,
-        ))?;
+        let session = DeploymentSlot::open(&deployment_slot(&runtime.config, root.path(), &alias))?;
+        let directory = &session.writer;
         let id = hex::encode(iroha::crypto::Hash::new(b"original retained deployment").as_ref());
         let journal = directory.create_child(&id)?;
         let original_plan = b"invalid retained plan, never a new deployment";
         journal.write_atomic("plan.json", original_plan, PublishMode::CreateNew)?;
         let original_journal = journal.path().to_path_buf();
-        directory.write_atomic("active-journal", id.as_bytes(), PublishMode::CreateNew)?;
+        session.write_state(&slot::Publication::Active {
+            journal: id.clone(),
+        })?;
         drop(journal);
-        drop(directory);
+        drop(session);
 
         let repeated = runtime
             .deploy_artifact(
@@ -928,8 +930,8 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         let directory =
             PrivateDirectory::open(deployment_slot(&runtime.config, root.path(), &alias))?;
         assert_eq!(
-            directory.read("active-journal", 64)?.as_slice(),
-            id.as_bytes()
+            DeploymentSlot::open_read(directory.path())?.current_journal()?,
+            Some(original_journal)
         );
         assert_eq!(
             fs::read_dir(directory.path())?.count(),
@@ -1446,17 +1448,17 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
     #[test]
     fn slot_lock_and_corrupt_active_record_fail_before_network_access() -> Result<()> {
         let temp = TempDir::new()?;
-        let path = temp.path().join("slot");
+        let path = temp.path().join("private/slot");
         let session = DeploymentSlot::open(&path)?;
         assert!(DeploymentSlot::open(&path).is_err());
         let service = DeploymentService::new(config())?;
-        session.ensure_previous_terminal(&service)?;
+        assert!(session.reconcile(&service)?.is_none());
         session
             .writer
-            .write_atomic("active-journal", b"../escape", PublishMode::Replace)?;
-        assert!(session.ensure_previous_terminal(&service).is_err());
+            .write_atomic("publication.json", b"../escape", PublishMode::Replace)?;
+        assert!(session.reconcile(&service).is_err());
         drop(session);
-        assert!(DeploymentSlot::open(&path).is_ok());
+        assert!(DeploymentSlot::open(&path).is_err());
         Ok(())
     }
 
@@ -1464,14 +1466,14 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
     #[test]
     fn missing_retained_slot_cannot_hide_an_active_deployment() -> Result<()> {
         let temp = TempDir::new()?;
-        let path = temp.path().join("slot");
-        let moved = temp.path().join("original-slot");
+        let path = temp.path().join("private/slot");
+        let moved = temp.path().join("private/original-slot");
         let session = DeploymentSlot::open(&path)?;
         assert!(session.current_journal()?.is_none());
         let id = hex::encode(iroha::crypto::Hash::new(b"retained active deployment").as_ref());
-        session
-            .writer
-            .write_atomic("active-journal", id.as_bytes(), PublishMode::CreateNew)?;
+        session.write_state(&slot::Publication::Active {
+            journal: id.clone(),
+        })?;
         assert_eq!(session.current_journal()?, Some(path.join(&id)));
         fs::rename(&path, &moved)?;
         let result = session.current_journal();
@@ -1481,52 +1483,6 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             Some(error) if error.kind() == std::io::ErrorKind::NotFound
         ));
         assert_eq!(session.current_journal()?, Some(path.join(id)));
-        Ok(())
-    }
-
-    #[test]
-    fn active_pointer_refusal_preserves_original_journal_and_reports_exact_recovery_path()
-    -> Result<()> {
-        let temp = TempDir::new()?;
-        let session = DeploymentSlot::open(&temp.path().join("slot"))?;
-        let id = hex::encode(iroha::crypto::Hash::new(b"original commit pointer").as_ref());
-        let original = session.writer.create_child(&id)?;
-        // This is an opaque filesystem-boundary payload. Native plan authentication belongs to
-        // DeploymentService::persist, which finishes before this pointer publication.
-        let plan = b"original durable plan bytes";
-        original.write_atomic("plan.json", plan, PublishMode::CreateNew)?;
-        let journal = original.path().to_path_buf();
-        let refused = session.writer.create_child("active-journal")?;
-        refused.write_atomic(
-            "sentinel",
-            b"original occupied pointer",
-            PublishMode::CreateNew,
-        )?;
-        let error = session
-            .publish_active_journal(&id, &journal)
-            .expect_err("a directory cannot be replaced by the active journal file");
-        assert!(matches!(
-            error.downcast_ref::<DeploymentError>(),
-            Some(DeploymentError::Journal(_))
-        ));
-        assert!(
-            error
-                .to_string()
-                .ends_with(&format!("Deployment journal: {}", journal.display()))
-        );
-        assert_eq!(original.read("plan.json", plan.len())?.as_slice(), plan);
-        assert_eq!(
-            refused.read("sentinel", 64)?.as_slice(),
-            b"original occupied pointer"
-        );
-        assert!(session.current_journal().is_err());
-        assert_eq!(fs::read_dir(session.writer.path())?.count(), 3);
-        let refused_path = refused.path().to_path_buf();
-        drop(refused);
-        fs::remove_dir_all(refused_path)?;
-        session.publish_active_journal(&id, &journal)?;
-        assert_eq!(session.current_journal()?, Some(journal));
-        assert_eq!(original.read("plan.json", plan.len())?.as_slice(), plan);
         Ok(())
     }
 
@@ -1584,3 +1540,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "deployment_runtime/resume_tests.rs"]
+pub(crate) mod resume_tests;

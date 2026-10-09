@@ -578,6 +578,38 @@ def environment() -> dict:
     return {"platform": sys.platform, "raw": raw}
 
 
+def ac_power_settings(source: str, policy: str) -> dict[str, str]:
+    """Read the active profile; absent optional settings are not invented."""
+    source_lines = [line.strip() for line in source.splitlines() if line.strip()]
+    headers = [line for line in source_lines if line.startswith("Now drawing from ")]
+    if (not source_lines or source_lines[0] != "Now drawing from 'AC Power'" or
+            headers != ["Now drawing from 'AC Power'"]):
+        raise ValueError("qualification host has no unambiguous AC power source")
+    profiles: dict[str, dict[str, str]] = {}
+    current = None
+    for line in policy.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.endswith(":"):
+            if line not in ("AC Power:", "Battery Power:", "UPS Power:") or line in profiles:
+                raise ValueError("unrecognized or duplicate power profile")
+            current = profiles[line] = {}
+            continue
+        setting = re.fullmatch(r"(Sleep On Power Button|[a-z][a-z0-9_]*)\s+(\S.*)", line)
+        if current is None or setting is None or setting[1] in current:
+            raise ValueError("unrecognized or duplicate power setting")
+        current[setting[1]] = setting[2]
+    active = profiles.get("AC Power:")
+    if not active:
+        raise ValueError("missing active AC power settings")
+    # Some supported hosts do not expose this capability at all. When reported,
+    # require an explicit off value in the active profile, not the battery one.
+    if "lowpowermode" in active and active["lowpowermode"] != "0":
+        raise ValueError("active low power mode is enabled or unavailable")
+    return active
+
+
 def environment_counters(value: dict) -> dict:
     """Derive validity from raw probe results, never cached validity flags."""
     if value.get("platform") != "darwin":
@@ -592,10 +624,7 @@ def environment_counters(value: dict) -> dict:
             raise ValueError(f"environment probe failed: {name}")
     if raw["pressure"]["stdout"].strip() != "1":
         raise ValueError("memory pressure is not normal")
-    if "AC Power" not in raw["source"]["stdout"]:
-        raise ValueError("qualification host is not on AC power")
-    if re.search(r"lowpowermode\s+1\b", raw["power"]["stdout"]):
-        raise ValueError("low power mode is enabled")
+    ac_power_settings(raw["source"]["stdout"], raw["power"]["stdout"])
     return parse_vm_stat(raw["vm"]["stdout"])
 
 
@@ -848,7 +877,8 @@ def summarize(path: Path) -> dict:
     if ledger["candidate"].get("memory_activity_policy") != MEMORY_ACTIVITY_POLICY:
         ledger_reasons.append("candidate does not bind the current memory activity policy")
     seed = ledger.get("shuffle_seed")
-    if type(seed) is not int or ledger.get("schedule") != schedule(random.Random(seed)):
+    rng = random.Random(seed) if type(seed) is int else None
+    if rng is None or ledger.get("schedule") != schedule(rng):
         ledger_reasons.append("invalid predeclared configuration schedule")
     if not ledger_reasons:
         sequence = []
@@ -857,7 +887,16 @@ def summarize(path: Path) -> dict:
                 rows = ledger["attempts"].get(name, [])
                 if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
                     raise ValueError("attempts must be an ordered list of records")
-                sequence.extend(row.get("sequence") for row in rows if row.get("block") == block)
+                for row in rows:
+                    if row.get("block") != block:
+                        continue
+                    sequence.append(row.get("sequence"))
+                    # The driver consumes all shuffle draws before one seed per
+                    # attempt, including invalid attempts. Uniqueness alone lets
+                    # a replacement run masquerade as the declared schedule.
+                    expected_seed = rng.randrange(1 << 64)
+                    if type(row.get("seed")) is not int or row["seed"] != expected_seed:
+                        ledger_reasons.append("measurement seed differs from predeclared draw")
         if (any(type(number) is not int for number in sequence) or
                 sequence != list(range(sum(len(rows) for rows in ledger["attempts"].values())))):
             ledger_reasons.append("attempt execution differs from predeclared schedule")

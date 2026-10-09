@@ -612,14 +612,14 @@ impl FinalitySource for Source<'_> {
         &self,
         p: &PeerId,
         c: &[u8; 32],
-    ) -> Result<SumeragiFinalityAttestation, Self::Error> {
+    ) -> Result<FinalityAttestation, Self::Error> {
         assert_eq!(*c, CHALLENGE);
         self.reads.borrow_mut().push(p.clone());
         if self.faults.contains(p) {
             return Err(std::io::Error::other("offline"));
         }
         if let Some(attestation) = self.attestation_overrides.get(p) {
-            return Ok(attestation.clone());
+            return Ok(attestation.clone().into());
         }
         let actual = self.substitutions.get(p).unwrap_or(p);
         let k = self
@@ -629,13 +629,16 @@ impl FinalitySource for Source<'_> {
             .flat_map(|e| &e.keys)
             .find(|k| peer(k) == *actual)
             .unwrap();
-        Ok(self.chain.attest(
-            k,
-            *self
-                .tips
-                .get(p)
-                .unwrap_or(&(self.chain.proofs.len() as u64)),
-        ))
+        Ok(self
+            .chain
+            .attest(
+                k,
+                *self
+                    .tips
+                    .get(p)
+                    .unwrap_or(&(self.chain.proofs.len() as u64)),
+            )
+            .into())
     }
 }
 fn resign(a: &mut SumeragiFinalityAttestation, k: &KeyPair) {
@@ -2097,14 +2100,14 @@ fn observations_reject_incomplete_transport_batches_before_advancing() {
             &self,
             peer: &PeerId,
             challenge: &[u8; 32],
-        ) -> Result<SumeragiFinalityAttestation, Self::Error> {
+        ) -> Result<FinalityAttestation, Self::Error> {
             self.0.latest_attestation(peer, challenge)
         }
         fn latest_attestations(
             &self,
             peers: &[PeerId],
             challenge: &[u8; 32],
-        ) -> Vec<Result<SumeragiFinalityAttestation, Self::Error>> {
+        ) -> Vec<Result<FinalityAttestation, Self::Error>> {
             let mut reads = self.0.latest_attestations(peers, challenge);
             reads.pop();
             reads
@@ -2415,7 +2418,7 @@ fn verified_tip_memo_is_replaced_by_catch_up_and_successful_observation() {
         &verifier.verified_tip,
         &caught_up.verified_tip
     ));
-    assert!(verifier.verified_tip.get().is_none());
+    assert!(verifier.verified_tip.get().is_some());
     assert!(!Arc::ptr_eq(&verifier.checkpoint, &caught_up.checkpoint));
     assert_eq!(caught_up.checkpoint().height(), 4);
     let verified = verifier.verified_tip().unwrap();
@@ -2699,3 +2702,15 @@ fn checkpoint_import_retains_authenticated_tip_without_redecode_or_fresh_witness
     assert_eq!(cloned.verified_tip().unwrap().height(), 2);
     assert_eq!(cloned.checkpoint(), &checkpoint);
 }
+
+#[path = "carrier_tests.rs"]
+mod carrier_tests;
+
+#[path = "prefix_import_tests.rs"]
+mod prefix_import_tests;
+
+#[path = "observed_tip_tests.rs"]
+mod observed_tip_tests;
+
+#[path = "placement_tests.rs"]
+mod placement_tests;

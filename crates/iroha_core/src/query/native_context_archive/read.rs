@@ -36,6 +36,13 @@ impl NativeContextRead {
         self.read.poll(&self.archive)
     }
 
+    // Observes actual selection only; it authenticates neither bytes nor their carrier.
+    // The issuer uses this after a genuine refused poll to move the same retained job.
+    // No file is opened, buffer acquired or source identity manufactured by this check.
+    pub(crate) fn has_pinned_source(&self) -> bool {
+        self.read.file.is_some() && self.read.length.is_some()
+    }
+
     // Borrow the actual pending buffer for custody controls only; no descriptor or source
     // replacement is possible through this observation.
     #[cfg(test)]

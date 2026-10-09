@@ -1,13 +1,12 @@
 name: Native prover instruction-target parity
 
-# Temporary M1a oracle. Remove with the retired stack only after M7 closes.
+# Native correctness and retained independent reference coverage after retirement.
 # These correctness jobs do not qualify timing, RSS or physical phones.
 on:
   pull_request:
     paths:
       - "crates/iroha_pasta/**"
       - "crates/iroha_plonk/**"
-      - "crates/iroha_plonk_oracle/**"
       - "crates/kaigi_zk/**"
       - "crates/iroha_core_zk/src/lib.rs"
       - "crates/iroha_kagemusha_proof/src/lib.rs"
@@ -20,14 +19,15 @@ on:
       - "crates/norito*/**"
       - "vendor/**"
       - "fixtures/native_prover/**"
+      - "fixtures/poseidon/**"
+      - "scripts/check_poseidon_reference.py"
+      - "pytests/scripts/poseidon_reference_test.py"
       - "pytests/scripts/native_prover_reference_test.py"
       - "specs/plonk_ipa_v1.md"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".cargo/**"
-      - "ci/native_prover_oracle.py"
-      - "scripts/tests/native_prover_oracle_test.py"
       - "scripts/tests/native_prover_retirement_source_test.py"
       - ".github/workflows/native_prover_parity.yml"
   workflow_dispatch:
@@ -53,8 +53,8 @@ jobs:
       - name: Install the test runner only
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Exercise independent proof, parser and decision mutations
-        run: python3 -B -m pytest -q pytests/scripts/native_prover_reference_test.py
-  oracle:
+        run: python3 -B -m pytest -q pytests/scripts/native_prover_reference_test.py pytests/scripts/poseidon_reference_test.py
+  native:
     strategy:
       fail-fast: false
       matrix:
@@ -75,17 +75,22 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Exercise complete-harness admission
+      - name: Check complete proof-stack retirement
         run: |
-          python3 -I -B scripts/tests/native_prover_oracle_test.py
           python3 -I -B scripts/tests/native_prover_retirement_source_test.py
-      - name: Run every release correctness case, including large ignored cases
-        run: python3 -I -B ci/native_prover_oracle.py --target '${{ matrix.target }}'
-      - name: Retain source, toolchain, compiler and test records
+          python3 -I -B scripts/check_no_vendored_halo2.py
+      - name: Run native arithmetic, proof, captured transcript and mutation suites
+        shell: bash
+        run: |
+          mkdir -p target/qualification/native-prover/${{ matrix.target }}
+          cargo test --release --locked --target '${{ matrix.target }}' -p iroha_pasta -p iroha_plonk --lib -- --test-threads=2 2>&1 | tee target/qualification/native-prover/${{ matrix.target }}/native.log
+          cargo test --release --locked --target '${{ matrix.target }}' -p iroha_plonk --lib pcs::ipa::commit::tests::glv_path_matches_the_unsigned_path_on_random_inputs -- --ignored --exact --test-threads=1 2>&1 | tee target/qualification/native-prover/${{ matrix.target }}/glv.log
+          cargo test --release --locked --target '${{ matrix.target }}' -p iroha_plonk --doc 2>&1 | tee target/qualification/native-prover/${{ matrix.target }}/public-api.log
+      - name: Retain native test records
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: native-prover-parity-${{ matrix.target }}-${{ github.run_id }}
-          path: target/qualification/native-prover-oracle/${{ matrix.target }}/evidence
+          name: native-prover-${{ matrix.target }}-${{ github.run_id }}
+          path: target/qualification/native-prover/${{ matrix.target }}
           if-no-files-found: error
           retention-days: 14

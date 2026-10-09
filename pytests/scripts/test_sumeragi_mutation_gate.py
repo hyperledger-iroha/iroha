@@ -3967,7 +3967,14 @@ def test_detached_native_amx_source_controls_keep_real_partial_and_completed_cus
                  "persisted_amx_detach_preserves_borrowed_probe_and_authenticated_absence",
                  "persisted_amx_detached_source_rejects_substituted_uncertified_archive_fields"]:
         assert "fn " + name + "(" in body
-    assert "SetKeyValue::account(" in body and '"x".repeat(12_000)' in body
+    fixture = body.split("fn chain_with_begins(", 1)[1].split("fn read_proof(", 1)[0]
+    assert "MAX_AMX_PENDING).contains(&count)" in fixture
+    assert "for index in 1..count" in fixture and "BeginAmxV1" in fixture
+    assert "u64::try_from(index).unwrap().to_le_bytes()" in fixture
+    assert "chain.commit_at(2_000, vec![signed]), vec![true]" in fixture
+    assert "4096 / iroha_data_model::sumeragi_amx::AMX_RECORD_WITNESS_KEY_BYTES + 1" in body
+    assert "chain_with_begins(count)" in body
+    assert "SetKeyValue::account(" not in fixture
     assert "!prefix.is_empty() && prefix.len() <= 4096" in body
     assert "assert_eq!(prefix, &original_file[..prefix.len()])" in body
     assert "assert_eq!(owned.acquired_frame().unwrap(), original_file)" in body
@@ -4375,3 +4382,197 @@ def test_torii_pending_positive_controls_use_current_query_owned_reconciliation(
     assert "pending.deferred.is_some()" in controls
     assert "assert_eq!(pending.block_hash, block.hash())" in controls
     assert "drop(occupied);" in controls and "drop(occupied_cold);" in controls
+
+
+def test_owned_native_amx_issuer_has_exact_refused_descriptor_mutation_and_control():
+    name = "owned_issuer_retains_first_refused_archive_descriptor_after_original_view_drop"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC185"]
+    assert rule.tests == ("query::native_receipts::amx_read::issuer_tests::" + name,)
+    assert not rule.scenarios
+    assert gate.has_switch("HC185", core=True)
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch("HC185", **family)
+    source = ROOT / "crates/iroha_core/src"
+    owners = {path.relative_to(source).as_posix() for path in source.rglob("*.rs")
+              if re.search(r'sumeragi_core_mutation\s*=\s*"HC185"', path.read_text())}
+    assert owners == {"query/native_receipts/amx_read.rs"}
+    owner = (source / "query/native_receipts/amx_read.rs").read_text()
+    issue = owner.split("pub fn try_issue(", 1)[1].split("/// Observe one actual", 1)[0]
+    assert 'all(test, sumeragi_core_mutation = "HC185")' in issue
+    assert "read.into_archive().read_job(" in issue
+    compact_issue = re.sub(r"\s+", "", issue)
+    assert compact_issue.index("self.try_detach()") < compact_issue.index("NativeContextRead::has_pinned_source") < compact_issue.index("self.source.take()")
+    body = (source / "query/native_receipts/amx_read/issuer_tests.rs").read_text().split("fn " + name + "(", 1)[1].split("#[test]", 1)[0]
+    compact = re.sub(r"\s+", "", body)
+    for obligation in ["amx_record_proof(&view", "read.acquire_original_source().unwrap()",
+                       "budget.try_reserve_bytes(original_file.len()).unwrap_err()",
+                       "AllocationRefusal::Capacity", "assert_eq!(actual,expected)",
+                       "read.try_issue().unwrap()", "original.source.budget.same_pool(&budget)",
+                       "std::ptr::eq::<SignedBlock>", "drop(read)", "drop(view)",
+                       "fs::rename(&archive,&retained_path)", "vec![0;original_file.len()]",
+                       "owned issuer must retain the first refused archive descriptor",
+                       "proof.belongs_to(&budget)", "!proof.belongs_to(&foreign)",
+                       "tracker.verify_record", "before_drop-bytes"]:
+        assert re.sub(r"\s+", "", obligation) in compact
+    assert body.index("drop(view)") < body.index("original.poll().unwrap()")
+    assert body.index("owned issuer must retain the first refused archive descriptor") < body.index("original.complete().unwrap()")
+    rows = re.findall(r"^\| HC185 \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and name in rows[0]
+
+
+def test_owned_native_amx_issuer_moves_refusal_without_a_second_verifier_or_decoder():
+    source = ROOT / "crates/iroha_core/src"
+    owner = (source / "query/native_receipts/amx_read.rs").read_text()
+    issue = owner.split("pub fn try_issue(", 1)[1].split("/// Observe one actual", 1)[0]
+    assert issue.count("self.try_detach()") == 1
+    assert "source.completed" in issue and "source.certified.is_none()" in issue
+    assert "self.portable_probe.is_some()" in issue
+    assert "NativeContextRead::has_pinned_source" in issue
+    assert "NativeAmxRecordProofIssuedV1::Refused" in issue and "cause," in issue
+    for forbidden in ["CertifiedChain::new", "decode_projection", "source.acquire_bytes", "self.chain = None", "source.bytes = None", "AllocationBudget::new"]:
+        assert forbidden not in issue
+    assert owner.count("AllocatedAmxRecordProofV1::from_original_witness(") == 1
+    reader = (source / "query/native_context_archive/read.rs").read_text()
+    pinned = reader.split("pub(crate) fn has_pinned_source", 1)[1].split("// Borrow the actual", 1)[0]
+    assert "self.read.file.is_some() && self.read.length.is_some()" in pinned
+    assert "open_record" not in pinned and "poll(" not in pinned
+    public = (source / "query/native_receipts.rs").read_text()
+    assert "NativeAmxRecordProofIssuedV1" in public
+    controls = (source / "query/native_receipts/amx_read/issuer_tests.rs").read_text()
+    for name in ["owned_issuer_preserves_partial_frame_and_same_pool_without_an_extra_poll",
+                 "owned_issuer_keeps_missing_uncertified_and_armed_probe_sources_in_borrower",
+                 "owned_issuer_carries_final_namespace_refusal_without_rebuilding_completed_graph",
+                 "owned_issuer_retains_original_decoder_refusal_and_rejects_substituted_carrier_fields"]:
+        assert "fn " + name + "(" in controls
+    for obligation in ["CertifiedTestChain::start", "chain.commit_at(2_000", "probe_portable_prepared_once",
+                       "assert_eq!(allocations, 0)", "original.source.portable", "replacement.restore()",
+                       "cause.decode_resource_error().is_some()", "changed.carrier_hash", "before_drop - observed.get().unwrap().bytes"]:
+        assert obligation in controls
+
+
+def test_native_original_start_mutation_has_exact_kura_source_and_control():
+    selector = "kura::native_execution_read_tests::native_frame_original_start_refuses_same_inode_relocation_before_body_admission"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC187"]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch("HC187", core=True)
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch("HC187", **family)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if re.search(r'sumeragi_core_mutation\s*=\s*"HC187"', p.read_text())}
+    assert owners == {"kura/native_execution_reads.rs"}
+    rows = re.findall(r"^\| HC187 \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and selector in rows[0]
+
+
+def test_native_original_start_guard_refuses_before_body_admission():
+    source = (ROOT / "crates/iroha_core/src/kura/native_execution_reads.rs").read_text()
+    capture = source.split("pub(crate) fn native_frame_read(", 1)[1].split("/// Read the exact frame", 1)[0]
+    assert "let slot = store.read_block_index(position)?;" in capture
+    assert "start: slot.start" in capture
+    read = source.split("pub(crate) fn read(", 1)[1].split("impl Kura", 1)[0]
+    assert read.index('sumeragi_core_mutation = "HC187"') < read.index("NativeFrameDestination::new")
+    assert "slot.start != start" in read
+    body = source.split("fn native_frame_original_start_refuses_same_inode_relocation_before_body_admission()", 1)[1].split("#[test]", 1)[0]
+    for required in ["slot.start.checked_add(1)", "pool.try_reserve_bytes(pool.limit_bytes())",
+                     "source.read(length, &pool)", "Error::CanonicalBlockWireMismatch { height: 2 }",
+                     "captured native start must refuse relocation before original body admission",
+                     "canonical_query_reads_for_test(), (0, 0)"]:
+        assert required in body
+    assert body.index("write_block_index(1, original.start, original.length)") < body.index("captured native start must refuse relocation")
+
+
+def test_terminal_amx_retention_mutations_have_exact_core_owners_and_native_controls():
+    expected = {
+        "HC186": ("sumeragi/certified_chain/native_acquisition.rs",
+                  "terminal_amx_raw_frame_survives_original_shared_shell_refusal"),
+        "HC188": ("sumeragi/certified_chain/terminal_selection.rs",
+                  "terminal_amx_target_survives_original_later_gap_capacity_and_proof_retry"),
+    }
+    core = ROOT / "crates/iroha_core/src"
+    native = (core / "query/native_receipts/amx_read/certification_tests.rs").read_text()
+    spec = (ROOT / "specs/sumeragi.md").read_text()
+    for mid, (owner, name) in expected.items():
+        selector = "query::native_receipts::amx_read::certification_tests::" + name
+        rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+        assert rule.tests == (selector,) and not rule.scenarios
+        assert gate.has_switch(mid, core=True)
+        owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+                  if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+        assert owners == {owner}
+        for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+            assert not gate.has_switch(mid, **family)
+        rows = re.findall(r"^\| " + mid + r" \|.*$", spec, re.MULTILINE)
+        assert len(rows) == 1 and selector in rows[0]
+        assert "fn " + name + "(" in native
+    for message in ("terminal AMX source must retain the exact acquired frame",
+                    "terminal AMX selection must retain the exact decoded target across gap refusal"):
+        assert message in native
+
+
+def test_native_queue_startup_and_delivery_mutations_have_closed_core_owners_and_exact_controls():
+    expected = {
+        "HC189": ("queue/sumeragi_wake.rs", "sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_global_driver_after_empty"),
+        "HC190": ("queue/sumeragi_wake.rs", "sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_live_lane_after_empty"),
+        "HC191": ("queue.rs", "sumeragi::node::tests::queue_wake_tests::native_queue_owner_refuses_duplicate_prepared_start_and_requires_fresh_queue_restart"),
+        "HC192": ("queue/resident_owner.rs", "queue::sumeragi_wake::tests::reserved_original_pool_refuses_foreign_resident_admission_before_allocation"),
+        "HC193": ("queue.rs", "sumeragi::node::tests::queue_wake_tests::native_queue_reservation_refuses_foreign_funded_pool_without_changing_original_pending"),
+        "HC194": ("queue.rs", "sumeragi::node::tests::queue_wake_tests::native_queue_owner_refuses_duplicate_prepared_start_and_requires_fresh_queue_restart"),
+    }
+    core = ROOT / "crates/iroha_core/src"
+    spec = (ROOT / "specs/sumeragi.md").read_text()
+    for mid, (owner, selector) in expected.items():
+        rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+        assert rule.tests == (selector,) and not rule.scenarios
+        assert gate.has_switch(mid, core=True)
+        owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+                  if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+        assert owners == {owner}
+        for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+            assert not gate.has_switch(mid, **family)
+        rows = re.findall(r"^\| " + mid + r" \|.*$", spec, re.MULTILINE)
+        assert len(rows) == 1 and selector in rows[0]
+        native = core / ("queue/sumeragi_wake.rs" if mid == "HC192" else "sumeragi/node/tests/queue_wake_tests.rs")
+        assert "fn " + selector.rsplit("::", 1)[1] + "(" in native.read_text()
+
+
+@pytest.mark.parametrize("mid,selector,control", [
+    ("HC195", "sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_live_lane_after_empty",
+     "sumeragi/node/tests/queue_wake_tests.rs"),
+    ("HC196", "sumeragi::lanes::store::publication_tests::lane_merge_wake_binding_preserves_original_queue_and_pool_across_retry",
+     "sumeragi/lanes/store/publication_tests.rs"),
+    ("HC197", "sumeragi::lanes::store::publication_tests::lane_merge_wake_binding_preserves_original_queue_and_pool_across_retry",
+     "sumeragi/lanes/store/publication_tests.rs"),
+])
+def test_durable_lane_publication_mutations_have_exact_original_consumers_and_spec_owners(mid, selector, control):
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"sumeragi/lanes/store.rs"}
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and selector in rows[0]
+    native = (core / control).read_text()
+    assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
+
+
+def test_daemon_output_mode_mutation_has_one_actual_owner_and_exact_native_control():
+    mid = "HC198"
+    selector = "beacon_bootstrap::seat_export::tests::public_output_initializes_exact_original_creation_mode_before_publication_and_restore"
+    rule = gate.index_mutations(gate.DAEMON_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, daemon=True)
+    daemon = ROOT / "crates/irohad/src"
+    owners = {p.relative_to(daemon).as_posix() for p in daemon.rglob("*.rs")
+              if f'sumeragi_daemon_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"beacon_bootstrap/seat_export.rs"}
+    for family in ({}, {"core": True}, {"model": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and selector in rows[0]
+    native = (daemon / "beacon_bootstrap/seat_export/tests.rs").read_text()
+    assert "fn " + selector.rsplit("::", 1)[1] + "(" in native

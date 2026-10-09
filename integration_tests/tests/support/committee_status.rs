@@ -39,6 +39,30 @@ pub(super) fn submit_until<T>(
     Ok(result)
 }
 
+/// Submit once asynchronously under the original phase deadline.
+/// Preserve the SDK's unresolved transaction identity when its finality wait expires.
+pub(super) async fn submit_async_until<T, F, Fut>(
+    client: iroha::client::Client,
+    deadline: Instant,
+    submit: F,
+) -> Result<T>
+where
+    F: FnOnce(iroha::client::Client) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    ensure!(
+        Instant::now() < deadline,
+        "committee submission deadline elapsed"
+    );
+    let bounded = client.with_request_deadline(deadline);
+    let result = submit(bounded).await?;
+    ensure!(
+        Instant::now() < deadline,
+        "committee submission deadline elapsed"
+    );
+    Ok(result)
+}
+
 /// Read an authoritative applied height without extending the caller's deadline.
 pub(super) async fn height_until(client: &iroha::client::Client, deadline: Instant) -> Result<u64> {
     tokio::time::timeout_at(deadline.into(), async {
@@ -329,6 +353,92 @@ mod status_observation_tests {
             original.client().to_builder().transaction_status_timeout,
             Duration::from_secs(600)
         );
+    }
+
+    #[tokio::test]
+    async fn asynchronous_submission_retains_original_deadline_and_unresolved_identity() {
+        use iroha_crypto::{Hash, HashOf};
+        let budget = Duration::from_secs(2);
+        let transport = Arc::new(PhaseTransport {
+            requests: Mutex::new(Vec::new()),
+            budget,
+        });
+        let mut builder = client(transport.clone()).to_builder();
+        builder.transaction_status_timeout = Duration::from_secs(600);
+        let original = builder.build().unwrap();
+        let hash = HashOf::from_untyped_unchecked(Hash::prehashed([0x72; Hash::LENGTH]));
+        let deadline = Instant::now() + budget;
+        let error = submit_async_until(original.clone(), deadline, |bounded| async move {
+            assert_eq!(bounded.status().get().await?.blocks, 69);
+            bounded
+                .wait_until_transaction_applied_local(
+                    hash,
+                    iroha::client::TransactionWaitOptions {
+                        timeout: Duration::from_secs(600),
+                        poll_interval: Duration::from_secs(60),
+                    },
+                )
+                .await
+        })
+        .await
+        .expect_err("original finality deadline must finish the pending read");
+        assert!(
+            format!("{error:#}").contains(&hash.to_string()),
+            "asynchronous progress must retain the original unresolved transaction identity: {error:#}"
+        );
+        assert!(Instant::now().saturating_duration_since(deadline) < Duration::from_secs(2));
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2, "deadline cannot dispatch another read");
+        assert_eq!(requests[0].0, "/status");
+        assert_eq!(requests[1].0, "/v1/pipeline/transactions/status");
+        assert!(requests[1].1 < requests[0].1);
+        assert_eq!(
+            original.to_builder().transaction_status_timeout,
+            Duration::from_secs(600)
+        );
+    }
+
+    #[tokio::test]
+    async fn asynchronous_submission_refuses_expired_and_late_success_without_replacing_error() {
+        let original = client(transport([]));
+        let error = submit_async_until::<(), _, _>(original.clone(), Instant::now(), |_| async {
+            panic!("expired progress cannot invoke submission")
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("committee submission deadline elapsed")
+        );
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let error = submit_async_until(original.clone(), deadline, |_| async move {
+            tokio::time::sleep_until(deadline.into()).await;
+            Ok(69_u64)
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("committee submission deadline elapsed")
+        );
+        #[derive(Debug)]
+        struct OriginalDispatch;
+        impl std::fmt::Display for OriginalDispatch {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("original unresolved asynchronous dispatch")
+            }
+        }
+        impl std::error::Error for OriginalDispatch {}
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let error = submit_async_until(original, deadline, |_| async move {
+            tokio::time::sleep_until(deadline.into()).await;
+            Err::<(), _>(OriginalDispatch.into())
+        })
+        .await
+        .unwrap_err();
+        assert!(error.downcast_ref::<OriginalDispatch>().is_some());
     }
 
     #[test]

@@ -2954,6 +2954,8 @@ impl<'s> Worker<'s> {
         );
         // Only real work may activate the pulse signer. A pulse cannot create a block.
         if selected.is_empty() && merges.merges.is_empty() {
+            #[cfg(test)]
+            queue.record_empty_native_payload();
             return Ok(None);
         }
         let assembly = Assembly {

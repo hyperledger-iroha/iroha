@@ -25,7 +25,7 @@
 //! `transcript_repr = F::from_uniform_bytes(BLAKE2b(64, "Iroha-PlonkVK-v1",
 //! descriptor_digest || vk_bytes))` binds the relation, the params digest, the
 //! instance shape and the keys. It replaces the vendored hash of the `Debug`
-//! rendering. Oracle builds (`--cfg iroha_plonk_oracle`) may inject the
+//! rendering. Unit tests may inject the
 //! vendored value with `VerifyingKey::with_transcript_repr_for_oracle`.
 
 use core::fmt;
@@ -513,9 +513,9 @@ impl<C: PastaCurve> VerifyingKey<C> {
         )
     }
 
-    /// Replaces `transcript_repr` with the vendored value (oracle builds
+    /// Replaces `transcript_repr` with the vendored value (unit tests
     /// only, spec 6.4). Never compiled into shipping binaries.
-    #[cfg(iroha_plonk_oracle)]
+    #[cfg(test)]
     #[doc(hidden)]
     #[must_use]
     pub fn with_transcript_repr_for_oracle(mut self, transcript_repr: C::ScalarExt) -> Self {

@@ -46,7 +46,7 @@ implementation boundaries, SDK modules, and validation owners.
 ```bash
 cargo test
 cargo build --workspace
-cargo test --workspace
+cargo test --workspace --features iroha_torii/test-fixtures
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```
@@ -54,8 +54,11 @@ cargo fmt --all
 Notes:
 
 - Plain `cargo test` from the repository root runs the default workspace
-  members; use `cargo test --workspace` when an explicit full-workspace run is
-  needed. Use `cargo test -p <crate>` for a focused crate suite.
+  members. For an explicit full-workspace run including all Torii integration
+  targets, use `cargo test --workspace --features iroha_torii/test-fixtures`.
+  A full Torii run uses `cargo test -p iroha_torii --features test-fixtures`;
+  owning unit-test mutation checks use `--lib` without that feature.
+  Use `cargo test -p <crate>` for other focused crate suites.
 - Ordinary builds use Cargo's native jobserver and libtest's normal thread
   selection. Memory-constrained evidence, packaging, and network lanes set
   explicit local limits in their own scripts instead of serializing every

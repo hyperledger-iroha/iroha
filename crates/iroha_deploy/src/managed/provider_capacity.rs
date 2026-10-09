@@ -117,6 +117,23 @@ impl ManagedProviderCapacity {
         Ok(owner)
     }
 
+    /// Preserve the plan postcondition while admitting this provider's own purpose lock.
+    /// Active decode admission and owned parents retain the full standalone capture recipe.
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+    ) -> Result<Self> {
+        let owner = Self {
+            authority: ServiceAuthority::open_provider_from_original(
+                parent,
+                provider,
+                ProviderPurpose::ProviderCapacityDeclaration,
+            )?,
+        };
+        owner.plan()?;
+        Ok(owner)
+    }
+
     /// Retain the generated declaration against fresh native economic and predecessor facts.
     /// Bootstrap selects policy from its prior owner; users supply no declaration or amount.
     /// Native declaration registration is a replacement, without atomic capacity CAS.
@@ -129,6 +146,7 @@ impl ManagedProviderCapacity {
         self.declare_original(policy, deadline_unix_ms, options, None)
     }
 
+    #[cfg(test)]
     pub(super) fn open_existing(
         prepared: &PreparedLocalnet,
         provider: iroha_data_model::sorafs::capacity::ProviderId,
@@ -622,9 +640,11 @@ impl ManagedProviderCapacity {
         if let Some(finalized) = &finalized {
             self.validate_carrier(&original, finalized)?;
         }
-        let current = observed
-            .as_ref()
-            .and_then(|verifier| self.read_current(&original.policy, verifier, deadline).ok());
+        let current = super::native_operation::optional_current(
+            observe_current,
+            observed.as_ref(),
+            |verifier| self.read_current(&original.policy, verifier, deadline),
+        );
         verify_custody()?;
         Ok(progress(report.status, finalized, current))
     }

@@ -1276,7 +1276,7 @@ pub use gov::{
     handle_gov_unlock_stats,
 };
 // Routing helpers used by integration tests
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
 #[cfg(feature = "telemetry")]
@@ -1307,11 +1307,14 @@ pub use routing::{
     handle_v1_sumeragi_evidence_list,
 };
 // Admission-free handler entry points kept only for integration tests.
-#[cfg(all(feature = "app_api", any(feature = "test-fixtures", feature = "bench")))]
+#[cfg(all(
+    feature = "app_api",
+    any(test, feature = "test-fixtures", feature = "bench")
+))]
 pub use routing::handle_queries_with_opts;
 #[cfg(all(feature = "app_api", feature = "bench"))]
 pub use routing::handle_v1_contracts_activity_get_for_bench;
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use routing::handle_v1_zk_roots;
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -1331,7 +1334,7 @@ pub use routing::{
     handle_transaction_with_metrics as handle_transaction_with_metrics_for_bench,
     verify_signed_query_request as verify_signed_query_request_for_bench,
 };
-#[cfg(all(feature = "app_api", feature = "test-fixtures"))]
+#[cfg(all(feature = "app_api", any(test, feature = "test-fixtures")))]
 pub use routing::{
     handle_count_proofs, handle_list_proofs, handle_v1_events_sse_for_tests,
     signed_find_proof_by_id,

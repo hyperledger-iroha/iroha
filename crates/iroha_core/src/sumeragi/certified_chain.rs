@@ -100,6 +100,8 @@ use iroha_model_base::chain::ChainId;
 const MAX_PROPOSAL_BYTES: usize = 64 * 1024 * 1024;
 
 mod artifacts;
+mod native_acquisition;
+mod terminal_selection;
 pub(crate) use artifacts::PrefixArtifacts;
 pub(super) use artifacts::{PrefixArtifactsError, PrefixArtifactsRead};
 
@@ -912,6 +914,32 @@ pub(crate) fn proof_source_append(previous: Hash, height: u64, length: u64, wire
     Hash::new(fields)
 }
 
+// A verdict owns only the actual decoded certificate; no result/body graph is cloned.
+struct CertificateVerdict {
+    commit_qc: Option<Qc>,
+    verification: QcVerification,
+    certificate_len: usize,
+}
+impl CertificateVerdict {
+    fn into_certified(self, committed: CommittedBlock) -> CertifiedBlock {
+        CertifiedBlock {
+            committed,
+            commit_qc: self.commit_qc,
+            verification: self.verification,
+            certificate_len: self.certificate_len,
+        }
+    }
+}
+
+// Construction proves all fallible successor checks completed. Only private source owners
+// can consume this state to install a gap or deliver a terminal original target.
+struct PreparedAdvance {
+    certificate: CertificateVerdict,
+    schedule: schedule::ConsensusSchedule,
+    authority: Arc<VerifiedAuthority>,
+    proof_source: Option<Hash>,
+}
+
 /// One crypto context for both random pinned reads and one-pass externally streamed evidence.
 struct PrefixVerifierContext {
     instance: Hash32,
@@ -923,6 +951,26 @@ impl PrefixVerifierContext {
         committed: CommittedBlock,
         artifacts: Option<PrefixArtifacts>,
     ) -> Result<CertifiedBlock, ExecutionAttemptError<ChainReadError>> {
+        let prepared = self.prepare_advance(prefix, &committed, artifacts)?;
+        let certified = prepared.certificate.into_certified(committed);
+        // The ordinary returned-receipt API keeps its existing independently retained tip.
+        // Terminal AMX selection instead moves the original gap into this same cursor.
+        prefix.tip = certified.committed.clone();
+        prefix.schedule = prepared.schedule;
+        prefix.authority = prepared.authority;
+        prefix.proof_source = prepared.proof_source;
+        Ok(certified)
+    }
+
+    // Sole fallible successor verifier. The source owner lends its original graph and does
+    // not surrender it until every certificate, availability, boundary and schedule check
+    // succeeds. This preserves the ordinary reader's predicate and refusal ordering.
+    fn prepare_advance(
+        &self,
+        prefix: &mut VerifiedPrefix,
+        committed: &CommittedBlock,
+        artifacts: Option<PrefixArtifacts>,
+    ) -> Result<PreparedAdvance, ExecutionAttemptError<ChainReadError>> {
         let height = committed.height;
         if !committed.extends(&prefix.tip) {
             return Err(ChainReadError::Discontinuous { height }.into());
@@ -949,27 +997,28 @@ impl PrefixVerifierContext {
         let config = scheduled
             .height_config_with_validation(&mut prefix.validation)
             .map_err(|error| malformed(error.to_string()))?;
-        let certified = self.verify_certificate(committed, &authority, Some(&config), artifacts)?;
-        verify_boundary_source(&certified.committed, &prefix.tip, &authority)?;
+        let certificate =
+            self.prepare_certificate(committed, &authority, Some(&config), artifacts)?;
+        verify_boundary_source(committed, &prefix.tip, &authority)?;
         let schedule = prefix
             .schedule
-            .advanced_with_validation(&certified.commitment.schedule, &mut prefix.validation)
+            .advanced_with_validation(&committed.commitment.schedule, &mut prefix.validation)
             .map_err(|error| malformed(error.to_string()))?;
-        // Fold only the genuinely admitted original receipt, after all native
-        // certificate, availability, boundary and schedule checks succeeded.
-        // A failed pure projection disables reuse; it cannot reject or authorize a block.
+        // A local byte fence is folded only after complete native authentication; it never
+        // supplies finality, and failure of this pure projection merely disables reuse.
         let proof_source = prefix.proof_source.and_then(|previous| {
-            certified
+            committed
                 .block()
                 .canonical_wire_identity()
                 .ok()
                 .map(|(length, wire)| proof_source_append(previous, height, length, wire))
         });
-        prefix.tip = certified.committed.clone();
-        prefix.schedule = schedule;
-        prefix.authority = authority;
-        prefix.proof_source = proof_source;
-        Ok(certified)
+        Ok(PreparedAdvance {
+            certificate,
+            schedule,
+            authority,
+            proof_source,
+        })
     }
 
     fn verify_certificate(
@@ -979,10 +1028,20 @@ impl PrefixVerifierContext {
         config: Option<&iroha_sumeragi::types::HeightConfig>,
         artifacts: Option<PrefixArtifacts>,
     ) -> Result<CertifiedBlock, ExecutionAttemptError<ChainReadError>> {
+        let certificate = self.prepare_certificate(&committed, authority, config, artifacts)?;
+        Ok(certificate.into_certified(committed))
+    }
+
+    fn prepare_certificate(
+        &self,
+        committed: &CommittedBlock,
+        authority: &VerifiedAuthority,
+        config: Option<&iroha_sumeragi::types::HeightConfig>,
+        artifacts: Option<PrefixArtifacts>,
+    ) -> Result<CertificateVerdict, ExecutionAttemptError<ChainReadError>> {
         let height = committed.height;
-        // This prefix path has no separate scratch ledger; inherited decoder capacity
-        // and physical refusal still remain unfinished local attempts.
-        self.verify_certificate_with_scratch_admission(
+        // Existing inherited decoder and physical refusal remain unfinished local attempts.
+        self.prepare_certificate_with_scratch_admission(
             committed,
             authority,
             config,
@@ -1051,6 +1110,24 @@ impl PrefixVerifierContext {
         artifacts: Option<PrefixArtifacts>,
         admit_scratch: &mut dyn FnMut(usize) -> Result<(), norito::core::DecodeResourceError>,
     ) -> Result<CertifiedBlock, VerificationReadError> {
+        let certificate = self.prepare_certificate_with_scratch_admission(
+            &committed,
+            authority,
+            config,
+            artifacts,
+            admit_scratch,
+        )?;
+        Ok(certificate.into_certified(committed))
+    }
+
+    fn prepare_certificate_with_scratch_admission(
+        &self,
+        committed: &CommittedBlock,
+        authority: &VerifiedAuthority,
+        config: Option<&iroha_sumeragi::types::HeightConfig>,
+        artifacts: Option<PrefixArtifacts>,
+        admit_scratch: &mut dyn FnMut(usize) -> Result<(), norito::core::DecodeResourceError>,
+    ) -> Result<CertificateVerdict, VerificationReadError> {
         let height = committed.height;
         let malformed = |reason: String| ChainReadError::Malformed { height, reason };
         let certificate = committed
@@ -1060,8 +1137,7 @@ impl PrefixVerifierContext {
         let certificate_len = norito::canonical_frame_len(certificate)
             .map_err(|error| malformed(error.to_string()))?;
         let Some(header) = committed.header.as_ref() else {
-            return Ok(CertifiedBlock {
-                committed,
+            return Ok(CertificateVerdict {
                 commit_qc: None,
                 verification: QcVerification::Genesis,
                 certificate_len,
@@ -1075,21 +1151,20 @@ impl PrefixVerifierContext {
                 .map_err(|error| verification_codec_error(height, error))?;
             (qc, None)
         };
-        self.verify_commit_qc_original(&committed, authority, &commit_qc)?;
+        self.verify_commit_qc_original(committed, authority, &commit_qc)?;
         // Parent-authenticated parameters and authority also bind the original signed row
         // table. A valid CommitQC alone does not certify possession of these payload bytes.
         let config = config.ok_or_else(|| {
             malformed("non-genesis certificate lacks parent-authenticated configuration".into())
         })?;
         verify_availability(
-            &committed,
+            committed,
             config,
             &authority.crypto,
             availability,
             admit_scratch,
         )?;
-        Ok(CertifiedBlock {
-            committed,
+        Ok(CertificateVerdict {
             commit_qc: Some(commit_qc),
             verification: QcVerification::Verified,
             certificate_len,
@@ -1693,10 +1768,10 @@ fn read_durable_pinned_block_bounded(
     budget: &iroha_allocation::AllocationBudget,
     maximum_wire_bytes: usize,
 ) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<ChainReadError>> {
-    let height = index.get() as u64;
-    let unavailable = || ChainReadError::NotInView { height };
     #[cfg(all(test, sumeragi_core_mutation = "HC11"))]
     {
+        let height = index.get() as u64;
+        let unavailable = || ChainReadError::NotInView { height };
         let _ = expected;
         kura.get_block(index, budget)
             .map_err(|error| error.map_rejection(|_| unavailable()))?
@@ -1704,63 +1779,19 @@ fn read_durable_pinned_block_bounded(
     }
     #[cfg(not(all(test, sumeragi_core_mutation = "HC11")))]
     {
-        let source = kura
-            .native_frame_read(height, expected)
-            .map_err(|error| match error {
-                crate::kura::Error::NoritoFrame(error) => read_decode_error(height, error),
-                crate::kura::Error::BlockDecode(error) => {
-                    crate::execution_attempt::canonical_decode_attempt_error(error, |_| {
-                        unavailable()
-                    })
-                }
-                _ => unavailable().into(),
-            })?
-            .ok_or_else(unavailable)?;
-        let wire_len = source.wire_len();
-        if usize::try_from(wire_len).map_or(true, |length| length > maximum_wire_bytes) {
-            return Err(ChainReadError::Malformed {
-                height,
-                reason: "native finality carrier exceeds its bounded extent".into(),
-            }
-            .into());
-        }
-        // NativeFrameRead owns the raw frame's allocation charge; the decoder below
-        // separately charges its graph to the same inherited cumulative scope.
-        let bytes = source
-            .read(wire_len, budget)
-            .map_err(|error| match error {
-                crate::kura::Error::NoritoFrame(error) => read_decode_error(height, error),
-                crate::kura::Error::BlockDecode(error) => {
-                    crate::execution_attempt::canonical_decode_attempt_error(error, |_| {
-                        unavailable()
-                    })
-                }
-                crate::kura::Error::NativeFrameAllocation(error) => {
-                    let deferred = match error {
-                        iroha_allocation::ChargedBufferError::Admission(original) => {
-                            original.into()
-                        }
-                        iroha_allocation::ChargedBufferError::Allocator { .. } => {
-                            ivm::error::ExecutionDeferral::AllocationUnavailable.into()
-                        }
-                    };
-                    ExecutionAttemptError::Deferred(deferred)
-                }
-                _ => unavailable().into(),
-            })?
-            .ok_or_else(unavailable)?;
-        let shell = iroha_data_model::block::SharedSignedBlock::reserve(budget)
-            .map_err(|error| ExecutionAttemptError::Deferred(error.into()))?;
-        let block =
-            iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|error| {
-                crate::execution_attempt::canonical_decode_attempt_error(error, |_| unavailable())
-            })?;
-        if block.hash() != expected || block.header().height().get() != height {
-            return Err(unavailable().into());
-        }
-        Ok(shell.initialize(block))
+        native_acquisition::NativeCarrierAcquisition::new(
+            kura,
+            index,
+            expected,
+            budget.clone(),
+            maximum_wire_bytes,
+        )
+        .complete()
     }
 }
+
+#[cfg(test)]
+type TerminalProbe<'v> = Box<dyn FnOnce(&CommittedBlock) + Send + Sync + 'v>;
 
 /// Certified history over one immutable State view or explicit pinned restoration cut.
 pub struct CertifiedChain<'v, V: StateReadOnly + ?Sized> {
@@ -1769,6 +1800,11 @@ pub struct CertifiedChain<'v, V: StateReadOnly + ?Sized> {
     genesis_epoch: ValidatorEpochContextV1,
     instance: Hash32,
     prefix: parking_lot::Mutex<Option<VerifiedPrefix>>,
+    // Only the move-only AMX borrower selects a terminal target. Ordinary read/reset
+    // semantics remain separate; a pending terminal job cannot be silently replaced.
+    terminal: Option<terminal_selection::TerminalSelection<'v>>,
+    #[cfg(test)]
+    terminal_probe: parking_lot::Mutex<Option<TerminalProbe<'v>>>,
     // Only the scoped portable producer enables original canonical-byte capture.
     proof_source_genesis: Option<(u64, Hash)>,
 }
@@ -1809,6 +1845,9 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             genesis_epoch,
             instance,
             prefix: parking_lot::Mutex::new(None),
+            terminal: None,
+            #[cfg(test)]
+            terminal_probe: parking_lot::Mutex::new(None),
             proof_source_genesis: None,
         })
     }
@@ -1861,6 +1900,13 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         &self,
         height: u64,
     ) -> Result<CertifiedBlock, ExecutionAttemptError<ChainReadError>> {
+        if self
+            .terminal
+            .as_ref()
+            .is_some_and(|pending| !pending.delivered())
+        {
+            return Err(ChainReadError::NotInView { height }.into());
+        }
         self.check_certificate(self.source.block(height)?, height)
     }
 

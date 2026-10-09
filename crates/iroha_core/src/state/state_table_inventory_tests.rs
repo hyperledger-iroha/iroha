@@ -8091,6 +8091,32 @@ fn state_hash_scan_actual_amx_complete_keeps_its_original_listing() {
     );
 }
 
+/// Current execution proofs serve an existing certified identity and result.
+#[test]
+fn state_hash_scan_current_execution_proof_classifies_certified_identity() {
+    let path = "crates/iroha_core/src/sumeragi/finality.rs";
+    let (_, code) = split_source(&source(path));
+    let name = "current_execution_proof";
+    assert_eq!(
+        fn_signatures(&code)
+            .iter()
+            .filter(|entry| entry.name == name && entry.reads_state && entry.returns_hash)
+            .count(),
+        1,
+        "the actual current execution proof producer must remain scanned"
+    );
+    let listed: Vec<_> = STATE_HASH_FUNCTIONS
+        .iter()
+        .filter(|entry| entry.path == path && entry.name == name)
+        .collect();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].count, 1);
+    assert!(matches!(
+        listed[0].owner,
+        UseOwner::Other(Use::ResultBinding, _)
+    ));
+}
+
 /// A test-only enum variant cannot hide the production World-root producers after it.
 #[test]
 fn state_hash_scan_cfg_variant_preserves_world_accumulator_owners() {

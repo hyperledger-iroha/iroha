@@ -422,7 +422,9 @@ fn bridge_finality_attestation_reader_binds_exact_request_headers_and_signed_bod
             &attestation.body.node_id,
         )
     });
-    assert_eq!(actual.expect("attestation"), attestation);
+    let actual = actual.expect("authenticated attestation");
+    assert_eq!(actual.attestation(), &attestation);
+    assert_eq!(actual.into_attestation(), attestation);
     assert_eq!(request.method, HttpMethod::GET);
     assert_eq!(request.url.path(), "/v1/bridge/finality/attestation/1");
     assert!(request.url.query().is_none());

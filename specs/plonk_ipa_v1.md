@@ -5,12 +5,13 @@ transcripts, prover, verifier) on `crates/iroha_pasta` (fields, curves, hash-to-
 FFT, `ParamsIpa`, RP57 Poseidon).
 
 PIPA-v1 is the only Pasta PLONK/IPA format of the first release; there is no fallback decoder.
-Vendored `halo2-axiom` is a test oracle (`crates/iroha_plonk_oracle`), never a production
-dependency.
+The retired independent prover survives only as captured public reference data. Native unit
+tests and an independent standard-library verifier retain its correctness checks; no second
+prover dependency or shipping compatibility decoder remains.
 
 Markers:
 
-- **[V]** reproduces vendored bytes or behaviour; the oracle checks it at the baseline in
+- **[V]** reproduces captured independent bytes or behaviour at the baseline in
   `specs/native_prover_migration_inventory.md`.
 - **[P]** is a PIPA-v1 production deviation: a stricter rejection or the descriptor binding.
   Section 14 registers them all.
@@ -370,30 +371,38 @@ and verifier reject any value outside its descriptor type. Mixed-type public
 statements use homogeneous columns (Ω has lengths 1, 2 and 16), rather than
 silently mixing encodings inside a column.
 
-### 6.4 Oracle mode (test only)
+### 6.4 Historical reference framing (unit tests only)
 
-Oracle mode differs from production in four ways:
+Native unit tests retain four historical reference choices solely to replay
+independently captured fixtures:
 
-- It injects the vendored `transcript_repr`: the `Halo2-Verify-Key` BLAKE2b of the length-prefixed
-  `Debug` rendering, computed by `iroha_plonk_oracle`.
-- It absorbs points with `fe_to_fe`.
-- It omits the instance frame.
-- The prover accepts a caller-seeded random stream, to reproduce vendored proofs from their seeds.
+- The captured `transcript_repr` is the original `Halo2-Verify-Key` BLAKE2b of
+  the length-prefixed key `Debug` rendering.
+- Point absorption uses `fe_to_fe`.
+- The transcript omits the instance frame.
+- The prover accepts a fixed synthetic seed to reproduce the original proof.
 
-It is compiled only with `--cfg iroha_plonk_oracle`, passed through `RUSTFLAGS` into a separate
-target directory. `native_prover_parity.yml` runs all five oracle harnesses on native
-x86_64 and aarch64 hosts, with exact required-case admission and every ignored correctness
-case included. Hosted execution is still unobserved; retained local captures and commands
-are recorded in `specs/native_prover_migration_inventory.md`. It is never a Cargo feature, because
-resolver-2 feature unification would leak it into shipping binaries. A stray `RUSTFLAGS` setting
-could still compile it in, so `iroha_plonk::ORACLE_BUILD` reports the cfg and every shipping root
-that links `iroha_plonk` (node, CLI, SDK and wallet bridges) must fail its build on it with
-`const _: () = assert!(!iroha_plonk::ORACLE_BUILD);`. The retained production
-consumer boundaries now contain unconditional assertions. An actual Kaigi build
-with oracle cfg fails at that assertion with the required E0080 diagnostic;
-unrelated compilation failures do not satisfy the CI negative test. Normal-mode
-CoreZk/bridge library and test strict lint passes. The dependency graph guard
-remains a separate check, and the temporary oracle is a nonpublishable test owner.
+These hooks are compiled only under `cfg(test)` in `iroha_plonk`. There is no
+external oracle cfg, Cargo feature, shipping-root assertion or alternate
+production implementation. Public-API compile-fail tests keep fixed-seed
+proving and historical verification unavailable to normal library consumers.
+
+The native Sigma/Wide frontend circuits regenerate every witness, descriptor,
+key and proof against `fixtures/native_prover/golden_sources_v1.json`: 42
+independent cases cover both Pasta curves, both historical transcript
+profiles, Sigma k6/k9/k11 and Wide k8/k10 with two seeds, plus both Wide k13
+cases. Each case runs at 1, 2, 4 and 7 workers, verifies its proof and rejects
+changed proof bytes, truncation, suffix extension and changed public values.
+The frozen original 20 Blake2b proof hashes remain unchanged. Captured
+transcript and succinct-verifier tests, native mutation cases and the
+independent standard-library full verifier remain separate checks.
+
+`native_prover_parity.yml` runs the native arithmetic/proof suites and public-API
+checks on ARM and x86 instruction targets, plus independent proof and Poseidon
+reference tests. Captured local results are not hosted-CI or device qualification.
+The all-edge dependency guard rejects retired prover dependencies, including
+new test-only edges; separate Orchard/Zcash package identities remain outside
+this retirement.
 
 Assignment-table import (`keygen_from_tables`, `Witness::from_columns`) is public API, not an
 oracle hook. It has no soundness effect, because the verifier evaluates only `D` and the key.
@@ -659,38 +668,39 @@ error, the oracle model and unbounded lineage depth (BCMS20 ePrint 2020/499; BCL
   commitments, so they reveal nothing beyond the inner statement. They are deterministic per inner
   proof, so each use needs a fresh inner proof to stay unlinkable.
 
+The transport-wrap argument here concerns hiding PIPA proofs. KAGEMUSHA also exports
+accumulators from private non-hiding PIPA-AS folds; their joint distribution with
+Omega needs the separate [C12 composition argument](kagemusha_recursion_soundness_v1.md#composition-keys-and-disclosure).
+The polynomial blinding budget alone does not establish that argument.
+
 TODO (M4): a formal memo on the wrap's deferred values, LogUp and endoscalar options before
 adoption.
 
-## 14. Compatibility and deviation registry
+## 14. Historical reference and production deviation registry
 
-**[V]** The oracle enforces byte identity for:
+**[V]** Native reference tests enforce captured byte identity for:
 
-- params and VK bytes, with native keygen and params at 1, 2, 4 and 7 threads;
-- selector compression and permutation keygen;
-- both transcripts in oracle mode (transcript KATs);
-- oracle-mode proof bytes, with imported tables and an equal seed, on both proving paths over the
-  vendored golden circuits: the halo2-axiom Blake2b goldens (golden SHA-256), and the KAGEMUSHA
-  path (RP57 Poseidon with `fe_to_fe` and the `FoldedGenerator` suffix) against the vendored
-  `iroha_core_zk` path (snark-verifier `PoseidonTranscript`, then the vendored `G'_0` appended);
-- BlindingScheduleV1, the multiopen and the IPA.
+- parameter and key bytes, with native generation at 1, 2, 4 and 7 workers;
+- selector compression and permutation key generation;
+- both historical transcript profiles and their transcript known-answer tests;
+- freshly generated Sigma/Wide proof bytes under an equal seed, including the
+  RP57 Poseidon profile with `fe_to_fe` and the `FoldedGenerator` suffix;
+- `BlindingScheduleV1`, multiopen and IPA behavior.
 
 The KAGEMUSHA goldens themselves (`sigma_native_k11`, `p256_k16`, `rec_*`) cannot be re-proved
 natively: their circuits were deleted with the old `iroha_core_zk` KAGEMUSHA code on 2026-10-05.
 Their pinned values stay in `fixtures/native_prover/kats_v1.json`. The native KAGEMUSHA relations
 in `iroha_kagemusha_proof` need their own goldens once their artifact set is frozen (G3).
 
-Every verdict difference from the vendored verifier is a stricter rejection listed below with a
-named test. The oracle's `deviation_registry` test ties every row to a named native test that
-mentions it, and every verdict-corpus deviation to its row. A mismatch missing from this list fails
-the oracle run (§6.4). The tamper corpora run on both proving paths. The historical
-KAGEMUSHA augmented wrapper already requires exact length, so its corpus has only DEV-04.
-The separately captured raw snark-verifier succinct reader accepts a valid prefix with
-trailing bytes (DEV-05); its native-loader group-equation assertion also panics on malformed
-statements. `succinct_parity` preserves these original outcomes while requiring normal
-native rejection, complete generator decisions and equality of every actual challenge.
-The frozen Sigma/Wide corpus and native-only replay remain after oracle retirement; they
-do not establish equality with the distinct PIPA-AS accumulation transcript.
+Every verdict difference from the captured original verifier is a stricter
+rejection listed below and covered by native mutation tests. Historical
+captures retain the original verdicts and challenges; normal native verification
+rejects malformed public input and noncanonical or extended proof encodings.
+The original augmented wrapper already required exact length, while the raw
+succinct reader accepted a valid prefix with trailing bytes and could panic on
+malformed statements. The frozen succinct corpus preserves those observations.
+These individual reference checks do not establish equality with the distinct
+PIPA-AS accumulation transcript or discharge the recursive composition memo.
 
 | ID | Item | Vendored | PIPA-v1 | Modes |
 | --- | --- | --- | --- | --- |
@@ -710,10 +720,10 @@ do not establish equality with the distinct PIPA-AS accumulation transcript.
 
 ## 15. Conformance tests and open items
 
-The owners are T8-T15 and `iroha_plonk_oracle`. Every check has a named test that asserts its
-typed rejection.
+The owners are `iroha_pasta`, `iroha_plonk` and the retained independent reference
+verifiers. Every check has a named test that asserts its typed rejection.
 
-- **Oracle.** All vendored goldens are re-proved natively at 1, 2, 4 and 7 threads, on the Blake2b
+- **Native reference replay.** Captured independent goldens are re-proved natively at 1, 2, 4 and 7 threads, on the Blake2b
   path and on the KAGEMUSHA path. VK and params bytes match, and native keygen is checked at the
   same thread counts. Verdicts match on the tamper corpora of both paths, apart from registered
   deviations. The deleted `iroha_core_zk` KAGEMUSHA goldens are not re-proved (section 14).

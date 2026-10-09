@@ -538,6 +538,10 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
             &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
         )?;
         drop(retained_bundle(result)?);
+        developer_smoke::cold_start_smoke::run(
+            &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
+        )?;
+        drop(retained_bundle(result)?);
         Ok(())
     }
 }

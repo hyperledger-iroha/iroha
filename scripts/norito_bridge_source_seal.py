@@ -407,13 +407,7 @@ _REVIEWED_PUBLIC_VENDOR_INPUTS = frozenset({
     "vendor/bytes/Cargo.toml.orig",
     "vendor/http-body-util/Cargo.toml.orig",
     "vendor/concread/Cargo.toml.orig",
-    "vendor/halo2-axiom/Cargo.toml.orig",
-    "vendor/halo2curves-axiom/Cargo.toml.orig",
     "vendor/wayland-scanner-0.31.10/Cargo.toml.orig",
-    "vendor/halo2curves-axiom/src/bls12_381/tests/g1_compressed_valid_test_vectors.dat",
-    "vendor/halo2curves-axiom/src/bls12_381/tests/g1_uncompressed_valid_test_vectors.dat",
-    "vendor/halo2curves-axiom/src/bls12_381/tests/g2_compressed_valid_test_vectors.dat",
-    "vendor/halo2curves-axiom/src/bls12_381/tests/g2_uncompressed_valid_test_vectors.dat",
 })
 
 # Exact public parser seeds reviewed from the Norito cargo-fuzz owners. The

@@ -17,7 +17,3 @@ iroha_pasta = { path = "../iroha_pasta", default-features = false }
 iroha_plonk = { path = "../iroha_plonk", default-features = false }
 ff = "0.13.1"
 zeroize = { workspace = true }
-
-[dev-dependencies]
-# Independent fixed-parameter and sponge oracle; never linked by consumers.
-poseidon-primitives = "0.2.0"

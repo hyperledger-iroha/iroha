@@ -10,7 +10,8 @@
 //!   write, `sync_all`, `RENAME_NOREPLACE`, parent `sync_all`. Failures before the rename are
 //!   `NotPublished` (the staging file is discarded); `EEXIST` from the rename is
 //!   `DestinationExists`; an indeterminate rename error or any failure after the rename is
-//!   `Uncertain`. Staging-name exhaustion is never `DestinationExists`.
+//!   `Uncertain`. Staging-name exhaustion is never `DestinationExists`; entropy failure
+//!   is `NotPublished` before file creation, with no fallback name.
 //! - **pair** ([`KagemushaWalletDurableStoreV1::write_new_pair`]): two staged files, two
 //!   syncs, two create-new renames and one parent sync; the outcome is reported per name.
 //! - **same-content rewrite** ([`KagemushaWalletDurableStoreV1::rewrite_same`]): publishes
@@ -49,6 +50,20 @@ use super::{
 
 /// Staging-name attempts before a create-new write gives up.
 const STAGING_ATTEMPTS: u32 = 8;
+
+/// Format a random candidate only after a successful, fallible entropy read.
+/// Exclusive creation and retained descriptors establish custody, not the name itself.
+fn staging_name_with_entropy(
+    fill: impl FnOnce(&mut [u8; 16]) -> io::Result<()>,
+) -> io::Result<String> {
+    let mut random = [0_u8; 16];
+    fill(&mut random)?;
+    Ok(format!(
+        "{}{}",
+        super::layout::KAGEMUSHA_WALLET_STAGING_PREFIX_V1,
+        super::layout::lower_hex(&random)
+    ))
+}
 
 /// Durable custody store over one filesystem backend.
 #[derive(Debug, Clone)]
@@ -433,7 +448,10 @@ impl<F: KagemushaWalletFsV1> KagemushaWalletDurableStoreV1<F> {
     ) -> Result<StagedV1<F::StagedFile>, KagemushaWalletNotPublishedV1> {
         let mut collisions = 0_u32;
         let (staged, mut file) = loop {
-            let staged = self.fs.staging_name();
+            let staged = self
+                .fs
+                .staging_name()
+                .map_err(|error| not_published(&error))?;
             match self.fs.create_new(dir, &staged) {
                 Ok(file) => break (staged, file),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -517,7 +535,7 @@ pub use self::std_fs::{KagemushaWalletStdFsLockV1, KagemushaWalletStdFsV1};
 
 mod std_fs {
     use super::super::{
-        layout::{KAGEMUSHA_WALLET_LOCK_NAME_V1, KagemushaWalletCustodyDirV1, lower_hex},
+        layout::{KAGEMUSHA_WALLET_LOCK_NAME_V1, KagemushaWalletCustodyDirV1},
         platform::{
             KagemushaWalletEntryKindV1, KagemushaWalletFsV1, KagemushaWalletListedEntryV1,
             KagemushaWalletNotPublishedV1, KagemushaWalletPublishOutcomeV1,
@@ -942,12 +960,13 @@ mod std_fs {
                 Err(TryLockError::Error(error)) => Err(error),
             }
         }
-        fn staging_name(&self) -> String {
-            format!(
-                "{}{}",
-                super::super::layout::KAGEMUSHA_WALLET_STAGING_PREFIX_V1,
-                lower_hex(&rand::random::<[u8; 16]>())
-            )
+        fn staging_name(&self) -> io::Result<String> {
+            use rand::rand_core::TryRngCore as _;
+            super::staging_name_with_entropy(|bytes| {
+                rand::rngs::OsRng
+                    .try_fill_bytes(bytes)
+                    .map_err(io::Error::other)
+            })
         }
     }
 }
@@ -1097,6 +1116,7 @@ mod sim {
         inodes: BTreeMap<u64, SimInodeV1>,
         next_inode: u64,
         next_staging: u64,
+        staging_name_faults: BTreeMap<u64, io::ErrorKind>,
         steps: u64,
         faults: BTreeMap<u64, KagemushaWalletSimFaultV1>,
         trace: Vec<KagemushaWalletSimStepV1>,
@@ -1134,6 +1154,7 @@ mod sim {
                 inodes: BTreeMap::new(),
                 next_inode: 1,
                 next_staging: 0,
+                staging_name_faults: BTreeMap::new(),
                 steps: 0,
                 faults: BTreeMap::new(),
                 trace: Vec::new(),
@@ -1392,9 +1413,19 @@ mod sim {
             self.state().faults.insert(step, fault);
         }
 
-        /// Disarm every pending fault.
+        /// Fail the staging-name request after `before_error` further name requests.
+        /// This is separate from filesystem steps, so existing fault-matrix indices do not move.
+        pub fn inject_staging_name_error(&self, before_error: u64, error: io::ErrorKind) {
+            let mut state = self.state();
+            let index = state.next_staging.saturating_add(before_error);
+            state.staging_name_faults.insert(index, error);
+        }
+
+        /// Disarm every pending filesystem and staging-name fault.
         pub fn clear_faults(&self) {
-            self.state().faults.clear();
+            let mut state = self.state();
+            state.faults.clear();
+            state.staging_name_faults.clear();
         }
 
         /// Whether the simulated process has crashed (every step fails until a restart).
@@ -1486,6 +1517,7 @@ mod sim {
             state.process = state.process.saturating_add(1);
             state.lock = None;
             state.faults.clear();
+            state.staging_name_faults.clear();
         }
 
         /// Visible bytes of file `name` in `dir`, bypassing steps and faults.
@@ -1857,11 +1889,14 @@ mod sim {
             })
         }
 
-        fn staging_name(&self) -> String {
+        fn staging_name(&self) -> io::Result<String> {
             let mut state = self.state();
             let index = state.next_staging;
             state.next_staging = state.next_staging.saturating_add(1);
-            format!("{KAGEMUSHA_WALLET_STAGING_PREFIX_V1}{index:032x}")
+            if let Some(error) = state.staging_name_faults.remove(&index) {
+                return Err(io::Error::from(error));
+            }
+            Ok(format!("{KAGEMUSHA_WALLET_STAGING_PREFIX_V1}{index:032x}"))
         }
     }
 }

@@ -119,7 +119,7 @@ impl Setup {
         self.validate_original(&original).unwrap();
         let directory = self.authority.directory.ensure_child("setup").unwrap();
         let original =
-            super::tests::retain_explicit_request(self, &directory, &original, utc, options);
+            super::tests::retain_explicit_request(self, &directory, &original, || utc, options);
         let path = original.directory().path().join("transaction");
         let mut http = NativeReadHttp::start_config(
             &self.wallet_config().unwrap(),

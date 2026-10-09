@@ -1022,6 +1022,16 @@ impl ExecSched {
         Some(op)
     }
 
+    /// Test observation of the original completed EMPTY request. It grants no protocol event.
+    #[cfg(test)]
+    pub(super) fn waiting_empty_request_for_test(&self) -> Option<u64> {
+        if self.running.is_none() && self.build.is_none() && !self.arrived_during_build {
+            self.pending_ready
+        } else {
+            None
+        }
+    }
+
     /// Bind the production loop's original charged wake control before dispatch.
     pub(super) fn bind_release_waker(&mut self, waker: Waker) {
         self.release_waker = waker;

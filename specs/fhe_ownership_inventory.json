@@ -12792,22 +12792,6 @@
    ]
   },
   {
-   "id": "incidental",
-   "component": "workspace",
-   "role": "incidental",
-   "tasks": [],
-   "summary": "Files that match a detection pattern without consuming ring arithmetic or RAM-LFE: Lagrange and coefficient basis conversions of vendored halo2.",
-   "files": [
-    {
-     "path": "vendor/halo2-axiom/src/poly/stored_advice/transform/tests.rs",
-     "patterns": ["basis_conversion"],
-     "cfg": ["test"],
-     "test_only": true,
-     "evidence": "fp_lookup_roles_preserve_every_basis_conversion"
-    }
-   ]
-  },
-  {
    "id": "inventory.sibling",
    "component": "specs",
    "role": "inventory",

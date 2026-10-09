@@ -119,3 +119,48 @@ fn original_policy_view_preserves_fresh_compliance_decode_admission_and_same_sou
     assert_eq!(policy_bytes(&authority), original);
     assert_eq!(authority.directory.entries(8).unwrap(), ["operation.lock"]);
 }
+
+#[test]
+fn publication_intent_projection_preserves_network_scope_and_decode_admission() {
+    let _resources = crate::managed::native_test_guard();
+    let (_temporary, authority) = fixture();
+    let expected = authority.publication_plan().unwrap();
+    let intent = authority.original_intent().unwrap();
+    let selected = intent.publication_plan().unwrap();
+    assert_eq!(
+        selected.configuration_table().unwrap(),
+        expected.configuration_table().unwrap()
+    );
+    intent.finish().unwrap();
+
+    let provider = authority.manifest.providers[0].provider_id;
+    let child =
+        ServiceAuthority::open_provider(&authority.prepared, provider, ProviderPurpose::Custody)
+            .unwrap();
+    let expected_error = child.publication_plan().err().unwrap().to_string();
+    let intent = child.original_intent().unwrap();
+    assert_eq!(
+        intent.publication_plan().err().unwrap().to_string(),
+        expected_error
+    );
+    intent.finish().unwrap();
+
+    let limits = norito::DecodeLimits::new(0, 0, 0, 0, 0);
+    let expected_error = norito::with_decode_limits_scope(limits, || {
+        authority.publication_plan().err().unwrap().to_string()
+    });
+    let intent = authority.original_intent().unwrap();
+    let actual_error = norito::with_decode_limits_scope(limits, || {
+        intent.publication_plan().err().unwrap().to_string()
+    });
+    assert_eq!(actual_error, expected_error);
+    intent.finish().unwrap();
+    assert_eq!(
+        authority
+            .publication_plan()
+            .unwrap()
+            .configuration_table()
+            .unwrap(),
+        expected.configuration_table().unwrap()
+    );
+}

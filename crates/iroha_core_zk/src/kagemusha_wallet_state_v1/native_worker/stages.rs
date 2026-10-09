@@ -1,7 +1,5 @@
 //! One genuine native A/W task with complete ordered source restoration.
 
-use ff::Field;
-
 use super::*;
 
 // The native families deliberately retain their typed source capabilities. This
@@ -88,7 +86,7 @@ macro_rules! chain {
                 $cancel.check()?;
                 let source = proof(session.first(
                     &key,
-                    Fp::random(rand_core_06::OsRng),
+                    fresh_fold_salt::<Fp>($cancel.prover_token())?,
                     &fold,
                     ProverRandomness::os(),
                     config,
@@ -111,7 +109,9 @@ macro_rules! chain {
                     .map_err(artifact)?;
                 $cancel.check()?;
                 let source = a.as_ref().ok_or(Error::Proof("native A source"))?;
-                let next = proof(call_wrapper!($order, session, source, key, fold, config))?;
+                let next = proof(call_wrapper!(
+                    $order, session, source, key, fold, config, $cancel
+                ))?;
                 proof(session.encode_wrapper_checkpoint_cancellable(
                     &next,
                     $worker.budget,
@@ -130,7 +130,9 @@ macro_rules! chain {
                     .map_err(artifact)?;
                 $cancel.check()?;
                 let source = w.as_ref().ok_or(Error::Proof("native W source"))?;
-                let next = proof(call_advance!($order, session, source, key, fold, config))?;
+                let next = proof(call_advance!(
+                    $order, session, source, key, fold, config, $cancel
+                ))?;
                 proof(session.encode_a_checkpoint_cancellable(
                     &next,
                     $worker.budget,
@@ -146,21 +148,21 @@ macro_rules! chain {
     }};
 }
 macro_rules! call_wrapper {
-    (source_first,$session:ident,$source:ident,$key:ident,$fold:ident,$config:ident) => {
+    (source_first,$session:ident,$source:ident,$key:ident,$fold:ident,$config:ident,$cancel:expr) => {
         $session.wrapper(
             $source,
             &$key,
-            Fq::random(rand_core_06::OsRng),
+            fresh_fold_salt::<Fq>($cancel.prover_token())?,
             &$fold,
             ProverRandomness::os(),
             $config,
         )
     };
-    (key_first,$session:ident,$source:ident,$key:ident,$fold:ident,$config:ident) => {
+    (key_first,$session:ident,$source:ident,$key:ident,$fold:ident,$config:ident,$cancel:expr) => {
         $session.wrapper(
             &$key,
             $source,
-            Fq::random(rand_core_06::OsRng),
+            fresh_fold_salt::<Fq>($cancel.prover_token())?,
             &$fold,
             ProverRandomness::os(),
             $config,
@@ -168,21 +170,21 @@ macro_rules! call_wrapper {
     };
 }
 macro_rules! call_advance {
-    (source_first,$session:ident,$source:ident,$key:ident,$fold:ident,$config:ident) => {
+    (source_first,$session:ident,$source:ident,$key:ident,$fold:ident,$config:ident,$cancel:expr) => {
         $session.advance(
             $source,
             &$key,
-            Fp::random(rand_core_06::OsRng),
+            fresh_fold_salt::<Fp>($cancel.prover_token())?,
             &$fold,
             ProverRandomness::os(),
             $config,
         )
     };
-    (key_first,$session:ident,$source:ident,$key:ident,$fold:ident,$config:ident) => {
+    (key_first,$session:ident,$source:ident,$key:ident,$fold:ident,$config:ident,$cancel:expr) => {
         $session.advance(
             &$key,
             $source,
-            Fp::random(rand_core_06::OsRng),
+            fresh_fold_salt::<Fp>($cancel.prover_token())?,
             &$fold,
             ProverRandomness::os(),
             $config,
@@ -304,7 +306,7 @@ impl NativeFoldWorkerV1 {
                             let source = proof(session.wrapper(
                                 first.as_ref().ok_or(Error::Proof("Bootstrap A source"))?,
                                 &key,
-                                Fq::random(rand_core_06::OsRng),
+                                fresh_fold_salt::<Fq>(cancellation.prover_token())?,
                                 &fold,
                                 ProverRandomness::os(),
                                 config,
@@ -329,7 +331,7 @@ impl NativeFoldWorkerV1 {
                             cancellation.check()?;
                             let prior =
                                 wrapper.as_ref().ok_or(Error::Proof("Bootstrap W source"))?;
-                            let salt = Fp::random(rand_core_06::OsRng);
+                            let salt = fresh_fold_salt::<Fp>(cancellation.prover_token())?;
                             let source = proof(session.terminal(
                                 prior,
                                 &key,

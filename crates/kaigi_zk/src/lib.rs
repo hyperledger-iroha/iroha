@@ -7,12 +7,6 @@
 //! authority validation remain the responsibility of the Core adapter.
 #![deny(missing_docs)]
 
-// Oracle-only transcript and randomness hooks must never enter a shipping consumer.
-const _: () = assert!(
-    !iroha_plonk::ORACLE_BUILD,
-    "iroha_plonk_oracle is test-only"
-);
-
 pub mod authorization_v1;
 pub mod native;
 mod relation_v1;
@@ -25,36 +19,14 @@ use iroha_plonk::{
     cs::{Advice, Column, ConstraintSystem, Fixed, Rotation, Selector},
     frontend::Value,
 };
-#[cfg(test)]
-use poseidon_primitives::poseidon::primitives::Spec;
 use std::sync::OnceLock;
 
 /// Scalar field used by the Kaigi native prover circuits (Pasta Fp).
 pub type Scalar = Fp;
 const POSEIDON_WIDTH: usize = 3;
-#[cfg(test)]
-const POSEIDON_RATE: usize = 2;
 const POSEIDON_FULL_ROUNDS: usize = 8;
 const POSEIDON_PARTIAL_ROUNDS: usize = 56;
 const POSEIDON_ROUNDS: usize = POSEIDON_FULL_ROUNDS + POSEIDON_PARTIAL_ROUNDS;
-#[cfg(test)]
-#[derive(Debug)]
-struct KaigiPoseidonSpec;
-#[cfg(test)]
-impl Spec<Scalar, POSEIDON_WIDTH, POSEIDON_RATE> for KaigiPoseidonSpec {
-    fn full_rounds() -> usize {
-        POSEIDON_FULL_ROUNDS
-    }
-    fn partial_rounds() -> usize {
-        POSEIDON_PARTIAL_ROUNDS
-    }
-    fn sbox(value: Scalar) -> Scalar {
-        value.pow_vartime([5])
-    }
-    fn secure_mds() -> usize {
-        0
-    }
-}
 struct PoseidonConstants {
     round_constants: Vec<[Scalar; POSEIDON_WIDTH]>,
     mds: [[Scalar; POSEIDON_WIDTH]; POSEIDON_WIDTH],

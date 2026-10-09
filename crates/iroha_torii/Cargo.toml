@@ -50,7 +50,7 @@ telemetry = [
     "dep:prometheus",
 ]
 # Enables profiling endpoint
-profiling = ["pprof"]
+profiling = ["dep:pprof", "dep:bytes"]
 # Enables Data Model Schema endpoint
 schema = ["iroha_schema", "iroha_schema_gen"]
 # App-facing JSON API (convenience endpoints, JSON DSL).
@@ -194,11 +194,15 @@ jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"]
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
+[build-dependencies]
+# Cargo resolves host features separately: pprof's prost-build dependency must
+# also use the workspace's std-only bytes implementation.
+bytes = { workspace = true, optional = true, features = ["std"] }
+
 [dev-dependencies]
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
 fastpq_prover = { workspace = true }
 humantime = { workspace = true }
-iroha_torii = { workspace = true, default-features = false, features = ["test-fixtures"] }
 tokio = { workspace = true, features = ["test-util"] }
 iroha_service_model = { workspace = true }
 criterion = { workspace = true }
@@ -226,39 +230,39 @@ required-features = ["app_api", "bench"]
 [[test]]
 name = "taira_app_contracts"
 path = "tests/grouped/taira_app_contracts.rs"
-required-features = ["node-api"]
+required-features = ["node-api", "test-fixtures"]
 
 [[test]]
 name = "torii_core_routes"
 path = "tests/grouped/core_routes.rs"
-required-features = ["app_api"]
+required-features = ["app_api", "test-fixtures"]
 
 [[test]]
 name = "torii_governance"
 path = "tests/grouped/governance.rs"
-required-features = ["app_api"]
+required-features = ["app_api", "test-fixtures"]
 
 [[test]]
 name = "torii_nexus_sorafs"
 path = "tests/grouped/nexus_sorafs.rs"
-required-features = ["app_api"]
+required-features = ["app_api", "test-fixtures"]
 
 [[test]]
 name = "torii_protocols"
 path = "tests/grouped/protocols.rs"
-required-features = ["app_api"]
+required-features = ["app_api", "test-fixtures"]
 
 [[test]]
 name = "torii_sumeragi_telemetry"
 path = "tests/grouped/sumeragi_telemetry.rs"
-required-features = ["app_api"]
+required-features = ["app_api", "test-fixtures"]
 
 [[test]]
 name = "torii_zk"
 path = "tests/grouped/zk.rs"
-required-features = ["app_api"]
+required-features = ["app_api", "test-fixtures"]
 
 [[test]]
 name = "account_capabilities_contract"
 path = "tests/account_capabilities_contract.rs"
-required-features = ["node-api"]
+required-features = ["node-api", "test-fixtures"]
