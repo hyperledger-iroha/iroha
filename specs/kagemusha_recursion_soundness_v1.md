@@ -831,8 +831,9 @@ successful completion. The polynomial bound remains valid with known setup
 logs. A total public-instance-only outer simulator can postprocess this
 restricted view without constructing a replacement Omega witness.
 
-The native APIs expose more private state than that oracle abstraction:
-`FoldWitness`, Omega checkpoints and the source-context preimage retain salt.
+The actual `FoldWitness` and prepared Omega circuit still contain the salt.
+The unused Omega checkpoint API and source-context hash have been removed;
+this does not assert physical erasure of prior private data.
 The missing theorem must couple the continuing honest wallet state while
 preserving legitimate later source witnesses and exact retained replay. It must
 also justify applying the chosen transcript ROM to the recursive relation,
@@ -927,22 +928,72 @@ Historical no-hit alone does not justify future mixed native-ROM and fixed
 circuit computations: even at a fresh disjoint address, an independent uniform
 oracle word equals the fixed circuit word with probability only `1/p`. This
 refutes that proposed general implication, not the actual protocol, whose two
-paths use fixed RP57. A conditional fresh-Load reduction freezes the completed
-three-Q prefix and replaces proofs in reverse dependency order: Omega, A5, W3,
-A4, W2, A3, W1, A2, W0, A1. Each comparison retains the genuine prefix and uses
-the same total public-instance sampler and restoration kernel for the already
-replaced suffix. Thus local joint errors add without conditioning on success
-or invoking an honest invalid-statement prover. Native A/W restoration verifies
-the selected proof and carried claims, derives its opening, and needs no old
-stage proving witness. Only after all ten replacements may the fold tapes
-change. This still requires the local total sampler laws and a consistent
-residual oracle; it does not itself switch fixed RP57 into an ideal oracle.
-No new primitive assumption or concrete-hash theorem is claimed.
-The source/math note and independent reviews are retained at
+paths use fixed RP57. The retained historical reverse-erasure argument has ten
+suffix calls; the current native Load order is
+`A1,W0,A2,W1,A3,W2,A4,Omega`.
+
+There is a source-backed checkpoint boundary for this current order.
+`native_worker/stages.rs` prepares a fresh session from exact authenticated
+originals and restores every selected A/W payload before the next stage.
+`native/load/checkpoint.rs::Payload` retains authority/ordinal bindings,
+`source_context`, proof and carried accumulator, but no prover coins or local
+fold body. Restoration rederives public frames/openings with empty old fold
+bodies; later continuation synthesis reads its new fold, not the old A1 fold.
+Thus the logical next-stage kernel factors through those originals, payloads,
+the full residual oracle and the matched entropy/fault interface. All native
+checks, context queries and refusal outcomes remain. Correlated `source_context`
+is retained data, not an independent auxiliary input. Changed selected proof or
+claim bytes require consistently regenerated payloads, envelopes and hash-chain
+bindings before publication; an already selected exact replay is not rewritten.
+
+Fix the completed Q prefix and a deterministic cap `N` on fresh proof
+invocations. At invocation `i`'s genuine pre-coin cut `C_i`, assume a total local
+joint comparison with error `epsilon_i(C_i)`, retaining the legitimate state
+and full residual oracle. Later samplers must be total even on canonically
+admitted instances without a source witness. Replace fresh invocations in
+reverse temporal order: the earlier prefix is still genuine and the later
+suffix is the same total kernel in both games. Consequently
+`Delta_proof <= min(1, epsilon_prior/setup +
+sum_i E_real[1_reached_i * epsilon_i(C_i)])`.
+Expectations use the unconditioned genuine execution, not eventual completion.
+A failed call preserves its error and resulting custody state; later retries
+remain possible and use new invocation slots. Exact durable replay adds no
+sampling term, but retains verification, oracle and storage effects. For a
+single no-retry pass the reverse order is
+`Omega,A4,W2,A3,W1,A2,W0,A1`. Current profile errors remain symbolic: historical
+ten-role mask counts and coefficients do not transfer.
+
+Only at the all-erased endpoint may the designated fold tapes change. Under
+the preceding restricted hidden-fold interface, the current no-retry pass has
+Pallas input counts `(2,3,3,3)` and Vesta counts `(4,4,4,4)`, each with a full-k16
+slot. Writing `p=|Fp|`, `q=|Fq|` and `b_C(m)` for the preceding generic fold
+exception bound, its hidden term is at most
+`min(1, (4*Q_P+6)/p + (4*Q_V+6)/q + b_P(2)+3*b_P(3)+4*b_V(4)
++ epsilon_coins + epsilon_operations)`.
+Retries require the general deterministic attempt/input-count bounds, not
+observed successful totals. Let `H` denote that hidden-term bound. Composing
+the same total publication/adoption kernel gives
+`Delta_total <= min(1, Delta_proof + H + epsilon_unmatched)`, where
+`epsilon_unmatched` covers only custody/interface discrepancies not already
+charged in the local or hidden terms. All full decisions and failures stay in
+that kernel; this is a sufficient-condition reduction, not an established
+current sampler or source qualification.
+
+These reductions fix the same legitimate private state. For two histories
+with different such states, their distinguishing bound still includes the
+distance between the two erased endpoints, in addition to both reduction
+errors. Equal external state alone does not remove that middle term. Coherent
+setup/current source admission, actual entropy and operational laws, and the
+shared normalized-oracle realization across future native/circuit fixed-RP57
+work remain separate. No new primitive assumption, execution or C12
+qualification follows.
+The historical source/math note and independent reviews are retained at
 `target/qualification/c12-publication-kernel-rom-localization-1` (argument SHA
 `c386a561bac75fe809fe3dd9fc1fe0977b92a2dec55567be5c65415c6a2427a6`,
 independent review SHA
 `85335ca5f993552edaed63180c5ebe74da46a59b287b90ce6dd73f0f3b720466`).
+The current-source memo preimage, source join and exact change are retained in
+`target/qualification/c12-current-load-checkpoint-composition-update-1`.
 No new execution or C12 qualification follows from this local result.
 
 The historical fresh Load suffix below has five P and five V folds, each with a full-k16 slot. The current direct-BLS Load removes the finality stage; its four-A/three-W catalog must be re-keyed and requalified under [NF1–NF6](kagemusha_native_finality_goals.md).

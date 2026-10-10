@@ -35,7 +35,6 @@ pub struct QualifiedOmegaProgramV1 {
     program: native::Program,
     key: KeyArtifact<Ep>,
     seal: InstalledSourceSealV1<Ep>,
-    layout: native::CheckpointLayout,
     terminals: usize,
 }
 impl QualifiedOmegaProgramV1 {
@@ -50,10 +49,6 @@ impl QualifiedOmegaProgramV1 {
     /// Exact imported Omega descriptor and complete VK.
     pub const fn key(&self) -> &KeyArtifact<Ep> {
         &self.key
-    }
-    /// Complete original-derived final checkpoint and transport bounds.
-    pub const fn checkpoint_layout(&self) -> native::CheckpointLayout {
-        self.layout
     }
     /// Actual number of distinct complete terminal verifier identities.
     pub const fn terminal_count(&self) -> usize {
@@ -239,7 +234,6 @@ impl AuthenticatedProducerInventoryV1 {
         {
             return Err(OmegaQualificationErrorV1::Catalog);
         }
-        let layout = owner.checkpoint_layout()?;
         let (_, _, seal) = owner.into_metadata().into_parts();
         drop(original);
         Ok(QualifiedOmegaProgramV1 {
@@ -247,7 +241,6 @@ impl AuthenticatedProducerInventoryV1 {
             program,
             key: candidate,
             seal: InstalledSourceSealV1::new(self.inventory.omega, seal),
-            layout,
             terminals: terminals.len(),
         })
     }

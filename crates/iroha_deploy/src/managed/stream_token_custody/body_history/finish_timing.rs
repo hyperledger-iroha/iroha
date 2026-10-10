@@ -1,6 +1,13 @@
 //! Opt-in numeric attribution for the existing genuine deep-history test only.
 //! Nested phase totals are inclusive; they must not be added together as exclusive work.
 //! Closure subphases run only inside an existing prepare/finish timer and that same capture.
+//! Attempt record totals include the optional native read and, when present, its canonical
+//! decoder. Decode subphases cover only `decode_record`, including its canonical re-encode;
+//! absent leaves and native refusals before the callback have no decode sample. Scoped reads
+//! exclude their caller's directory/tree entry and exit. Inventory subphases surround only
+//! the original `entries` calls: ordinary calls include full ancestry checks, scoped calls
+//! include native census work under the caller's separate entry/exit fences. No interval
+//! measures wallet decoding or body snapshots, and overlapping totals are not additive.
 
 use std::{cell::Cell, fmt, time::Instant};
 
@@ -25,8 +32,14 @@ pub(in crate::managed) enum Phase {
     ClosureLiveCheck,
     ClosureLiveClaim,
     ClosureRecordWrite,
+    AttemptRecordRead,
+    AttemptRecordDecode,
+    AttemptScopedRecordRead,
+    AttemptScopedRecordDecode,
+    AttemptInventory,
+    AttemptScopedInventory,
 }
-const PHASES: [Phase; 18] = [
+const PHASES: [Phase; 24] = [
     Phase::Finish,
     Phase::Reopen,
     Phase::ReadRecords,
@@ -45,6 +58,12 @@ const PHASES: [Phase; 18] = [
     Phase::ClosureLiveCheck,
     Phase::ClosureLiveClaim,
     Phase::ClosureRecordWrite,
+    Phase::AttemptRecordRead,
+    Phase::AttemptRecordDecode,
+    Phase::AttemptScopedRecordRead,
+    Phase::AttemptScopedRecordDecode,
+    Phase::AttemptInventory,
+    Phase::AttemptScopedInventory,
 ];
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -54,7 +73,14 @@ struct Sample {
 }
 /// Fixed-size counters only, copied out after the measured finish returns.
 #[derive(Clone, Copy, Default)]
-pub(super) struct Stats([Sample; PHASES.len()]);
+pub(in crate::managed) struct Stats([Sample; PHASES.len()]);
+impl Stats {
+    /// Numeric accounting for native reader tests; no source or validation result is retained.
+    pub(in crate::managed) fn sample(&self, phase: Phase) -> (u64, u128) {
+        let sample = self.0[phase as usize];
+        (sample.calls, sample.elapsed_us)
+    }
+}
 impl fmt::Debug for Stats {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut map = formatter.debug_map();
@@ -70,9 +96,9 @@ thread_local! {
 }
 
 /// Single-thread test scope; unwinding removes the opt-in numeric collector.
-pub(super) struct Capture;
+pub(in crate::managed) struct Capture;
 impl Capture {
-    pub(super) fn start() -> Self {
+    pub(in crate::managed) fn start() -> Self {
         ACTIVE.with(|active| {
             assert!(active.get().is_none(), "finish timer capture must not nest");
             CLOSURE_ACTIVE.set(false);
@@ -80,7 +106,7 @@ impl Capture {
         });
         Self
     }
-    pub(super) fn finish(self) -> Stats {
+    pub(in crate::managed) fn finish(self) -> Stats {
         ACTIVE.with(|active| active.take().expect("finish capture is active"))
     }
 }

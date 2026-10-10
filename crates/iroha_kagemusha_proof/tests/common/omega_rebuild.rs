@@ -221,7 +221,13 @@ fn actual_bootstrap_omega_rebuild_preserves_proof_restore_and_cancellation() {
     assert_eq!(owner.binding(), &artifact.binding);
     assert_eq!(owner.verifying_key().to_bytes(), artifact.key.to_bytes());
     // Consume the strict owner and borrow the already retained exact public graph.
-    let expected_layout = owner.checkpoint_layout().unwrap();
+    let expected_proof_bytes = iroha_plonk::Protocol::new(owner.binding().descriptor())
+        .unwrap()
+        .proof_length();
+    let expected_key_digest = owner
+        .verifying_key()
+        .kagemusha_digest(owner.binding())
+        .unwrap();
     let (binding, verifier, seal) = owner.into_metadata().into_parts();
     assert!(
         seal.bind(&binding, &verifier, Some(&token))
@@ -236,8 +242,19 @@ fn actual_bootstrap_omega_rebuild_preserves_proof_restore_and_cancellation() {
     let owner =
         iroha_kagemusha_proof::omega::native::ProverView::from_source_bound(&program, bound)
             .unwrap();
-    let layout = owner.checkpoint_layout().unwrap();
-    assert_eq!(layout, expected_layout);
+    assert_eq!(
+        iroha_plonk::Protocol::new(owner.binding().descriptor())
+            .unwrap()
+            .proof_length(),
+        expected_proof_bytes
+    );
+    assert_eq!(
+        owner
+            .verifying_key()
+            .kagemusha_digest(owner.binding())
+            .unwrap(),
+        expected_key_digest
+    );
     let session = owner
         .prepare(
             input(&artifact),
@@ -297,25 +314,30 @@ fn actual_bootstrap_omega_rebuild_preserves_proof_restore_and_cancellation() {
     direct_transport.extend_from_slice(&artifact.source.pallas.to_bytes());
     direct_transport.extend_from_slice(&folded_vesta.to_bytes());
     assert_eq!(transport, direct_transport);
-    assert_eq!(transport.len(), layout.transport_bytes as usize);
-    let checkpoint = session
-        .encode_checkpoint(&transport, MemoryBudget::DEFAULT)
-        .unwrap();
-    assert_eq!(checkpoint.len(), layout.payload_bytes as usize);
+    assert_eq!(rebuilt.proof.len(), expected_proof_bytes);
+    assert_eq!(
+        transport.len(),
+        expected_proof_bytes + 2 * iroha_plonk_recursion::ACCUMULATOR_BYTES
+    );
     let restored = session
-        .restore_checkpoint(&checkpoint, MemoryBudget::DEFAULT)
+        .restore_transport(&transport, MemoryBudget::DEFAULT)
         .unwrap();
     assert_eq!(restored.transport(), transport);
+    assert_eq!(restored.proof, rebuilt.proof);
+    assert_eq!(restored.instances, rebuilt.instances);
+    assert_eq!(restored.pallas, rebuilt.pallas);
+    assert_eq!(restored.vesta, rebuilt.vesta);
     assert_eq!(restored.opening, rebuilt.opening);
     assert_eq!(
         session
-            .encode_checkpoint(&restored.transport(), MemoryBudget::DEFAULT)
-            .unwrap(),
-        checkpoint
+            .restore_transport(&restored.transport(), MemoryBudget::DEFAULT)
+            .unwrap()
+            .transport(),
+        transport
     );
     assert_eq!(
         session
-            .restore_checkpoint_cancellable(&checkpoint, MemoryBudget::DEFAULT, Some(&token))
+            .restore_transport_cancellable(&transport, MemoryBudget::DEFAULT, Some(&token))
             .err(),
         Some(Error::Cancelled)
     );
@@ -325,6 +347,36 @@ fn actual_bootstrap_omega_rebuild_preserves_proof_restore_and_cancellation() {
             .err(),
         Some(Error::Input)
     );
+    let mut trailing = transport.clone();
+    trailing.push(0);
+    assert_eq!(
+        session
+            .restore_transport(&trailing, MemoryBudget::DEFAULT)
+            .err(),
+        Some(Error::Input)
+    );
+    // Canonical but foreign P and V must fail the prepared-source equality check
+    // independently, before either can be treated as an accepted carried claim.
+    for (offset, point) in [
+        (
+            expected_proof_bytes,
+            iroha_plonk::transcript::encode_point::<Ep>(&(-*rebuilt.pallas.g())),
+        ),
+        (
+            expected_proof_bytes + iroha_plonk_recursion::ACCUMULATOR_BYTES,
+            iroha_plonk::transcript::encode_point::<Eq>(&(-*rebuilt.vesta.g())),
+        ),
+    ] {
+        let mut foreign = transport.clone();
+        assert_ne!(&foreign[offset..offset + 32], point.as_slice());
+        foreign[offset..offset + 32].copy_from_slice(&point);
+        assert_eq!(
+            session
+                .restore_transport(&foreign, MemoryBudget::DEFAULT)
+                .err(),
+            Some(Error::Input)
+        );
+    }
     let mut corrupt = transport.clone();
     corrupt[0] ^= 1;
     assert!(
@@ -332,7 +384,13 @@ fn actual_bootstrap_omega_rebuild_preserves_proof_restore_and_cancellation() {
             .restore_transport(&corrupt, MemoryBudget::DEFAULT)
             .is_err()
     );
-    assert_eq!(owner.checkpoint_layout().unwrap(), layout);
+    assert_eq!(
+        owner
+            .verifying_key()
+            .kagemusha_digest(owner.binding())
+            .unwrap(),
+        expected_key_digest
+    );
     assert_eq!(owner.binding(), &artifact.binding);
     assert_eq!(owner.verifying_key().to_bytes(), artifact.key.to_bytes());
     assert_eq!(contexts(&rebuilt_log), contexts(&direct_log));
@@ -340,6 +398,6 @@ fn actual_bootstrap_omega_rebuild_preserves_proof_restore_and_cancellation() {
     // Restores have no randomness argument and the production call graph has no
     // rebuild edge. These checks do not claim an allocator/RSS observation.
     eprintln!(
-        "OMEGA_METADATA_REBUILD_PARITY complete_additional_outer_proofs=2 cancelled_after_rebuild=1 exact_proof_bytes=true exact_transport_bytes=true recovery_context_and_32_bytes_equal=true checkpoint_exact=true full_catalog=false release_qualified=false"
+        "OMEGA_METADATA_REBUILD_PARITY complete_additional_outer_proofs=2 cancelled_after_rebuild=1 exact_proof_bytes=true exact_transport_bytes=true recovery_context_and_32_bytes_equal=true transport_restore_exact=true full_catalog=false release_qualified=false"
     );
 }

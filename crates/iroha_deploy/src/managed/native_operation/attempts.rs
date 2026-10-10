@@ -42,6 +42,16 @@ pub(in crate::managed) use scope::{
 pub(in crate::managed) const MAX_ATTEMPTS: usize = 64;
 pub(in crate::managed) const MAX_RECORD_BYTES: usize = 16 * 1024;
 
+// The opt-in test capture measures the exact expression once. Ordinary builds evaluate only
+// that original expression; the scope owner, arguments and error/return order stay unchanged.
+macro_rules! measured_inventory {
+    ($phase:ident, $read:expr) => {{
+        #[cfg(test)]
+        let _timing = finish_timing::phase(finish_timing::Phase::$phase);
+        $read
+    }};
+}
+
 /// Fixed paid purposes; a local attempt number is never a native custody sequence or revision.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema,
@@ -692,7 +702,7 @@ impl History {
             }
             Err(error) => return Err(error.into()),
         };
-        let names = root.entries(MAX_ATTEMPTS)?;
+        let names = measured_inventory!(AttemptInventory, root.entries(MAX_ATTEMPTS))?;
         if dispatch.is_none() {
             return Err(invalid("attempt custody lost its dispatch high-water"));
         }
@@ -734,7 +744,7 @@ impl History {
                     None => root.open_child(name)?,
                 };
                 let (inventory, row) = tree.read_scope(&directory, |reader| {
-                    let inventory = checked_attempt_inventory(reader.entries(7)?)?;
+                    let inventory = checked_attempt_inventory(measured_inventory!(AttemptScopedInventory, reader.entries(7))?)?;
                     let Some(authorization): Option<Authorization> =
                         read_record_in_scope(reader, "authorization.nrt")?
                     else {
@@ -865,7 +875,7 @@ impl History {
                 }
             }
         }
-        if root.entries(MAX_ATTEMPTS)? != names {
+        if measured_inventory!(AttemptInventory, root.entries(MAX_ATTEMPTS))? != names {
             return Err(invalid("dispatch inventory changed during inspection"));
         }
         let retained = dispatch
@@ -969,9 +979,7 @@ impl History {
         }
         for (index, attempt) in self.attempts.iter().enumerate() {
             if attempt.observation.is_none() {
-                if attempt
-                    .directory
-                    .entries(7)?
+                if measured_inventory!(AttemptInventory, attempt.directory.entries(7))?
                     .iter()
                     .any(|name| name == "transaction")
                 {
@@ -1154,7 +1162,10 @@ impl History {
                         tree.read_scope(&attempt.directory, |reader| {
                             // Both native censuses and all lazy record reads share one closed
                             // suffix bracket; persistent exit custody overrides every result.
-                            let inventory = checked_attempt_inventory(reader.entries(7)?)?;
+                            let inventory = checked_attempt_inventory(measured_inventory!(
+                                AttemptScopedInventory,
+                                reader.entries(7)
+                            )?)?;
                             attempt.validate_inventory(
                                 &inventory,
                                 self.dispatch.as_ref().is_some_and(|value| {
@@ -1174,7 +1185,11 @@ impl History {
                                     "retained dispatch metadata changed during native operation",
                                 ));
                             }
-                            if checked_attempt_inventory(reader.entries(7)?)? != inventory {
+                            if checked_attempt_inventory(measured_inventory!(
+                                AttemptScopedInventory,
+                                reader.entries(7)
+                            )?)? != inventory
+                            {
                                 return Err(invalid(
                                     "retained dispatch metadata changed during native operation",
                                 ));
@@ -1448,7 +1463,7 @@ impl History {
             Some(value) => value,
             None => root.create_child(&name)?,
         };
-        let names = directory.entries(1)?;
+        let names = measured_inventory!(AttemptInventory, directory.entries(1))?;
         if names.iter().any(|name| name != "authorization.nrt") {
             return Err(invalid("reserved attempt contains unexpected material"));
         }
@@ -1536,7 +1551,10 @@ fn operation_inventory(
     operation: &PrivateDirectory,
     purpose: Purpose,
 ) -> Result<Vec<std::ffi::OsString>> {
-    checked_operation_inventory(operation.entries(6)?, purpose)
+    checked_operation_inventory(
+        measured_inventory!(AttemptInventory, operation.entries(6))?,
+        purpose,
+    )
 }
 
 fn checked_operation_inventory(
@@ -1581,8 +1599,16 @@ fn directory_entries_in_tree(
     tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
 ) -> Result<Vec<std::ffi::OsString>> {
     match tree {
-        Some(tree) => tree.read_scope(directory, |reader| Ok(reader.entries(maximum)?)),
-        None => Ok(directory.entries(maximum)?),
+        Some(tree) => tree.read_scope(directory, |reader| {
+            Ok(measured_inventory!(
+                AttemptScopedInventory,
+                reader.entries(maximum)
+            )?)
+        }),
+        None => Ok(measured_inventory!(
+            AttemptInventory,
+            directory.entries(maximum)
+        )?),
     }
 }
 
@@ -1609,8 +1635,7 @@ fn operation_inventory_in_scope(
     reader: &mut iroha_fs::PrivateReadScope<'_>,
     purpose: Purpose,
 ) -> Result<Vec<std::ffi::OsString>> {
-    let result = reader
-        .entries(6)
+    let result = measured_inventory!(AttemptScopedInventory, reader.entries(6))
         .map_err(crate::managed::Error::from)
         .and_then(|names| checked_operation_inventory(names, purpose));
     #[cfg(test)]
@@ -1675,7 +1700,7 @@ fn require_semantic_original_in_tree(
 }
 
 fn attempt_inventory(directory: &PrivateDirectory) -> Result<Vec<std::ffi::OsString>> {
-    checked_attempt_inventory(directory.entries(7)?)
+    checked_attempt_inventory(measured_inventory!(AttemptInventory, directory.entries(7))?)
 }
 
 fn checked_attempt_inventory(names: Vec<std::ffi::OsString>) -> Result<Vec<std::ffi::OsString>> {
@@ -1760,7 +1785,7 @@ pub(in crate::managed) fn retire_missing(previous: &Attempt, successor: &Attempt
             "a committed dispatch cannot infer unsigned absence from a missing wallet",
         ));
     }
-    let names = previous.directory.entries(7)?;
+    let names = measured_inventory!(AttemptInventory, previous.directory.entries(7))?;
     if names.iter().any(|name| {
         ![
             "authorization.nrt",
@@ -1963,11 +1988,17 @@ pub(in crate::managed) fn read_record<
     name: &str,
 ) -> Result<Option<T>> {
     #[cfg(test)]
+    let _read_timing = finish_timing::phase(finish_timing::Phase::AttemptRecordRead);
+    #[cfg(test)]
     tests::parse_digest_tests::record_read();
     let Some(bytes) = read_optional(directory, name, MAX_RECORD_BYTES)? else {
         return Ok(None);
     };
-    let value = decode_record(&bytes)?;
+    let value = {
+        #[cfg(test)]
+        let _decode_timing = finish_timing::phase(finish_timing::Phase::AttemptRecordDecode);
+        decode_record(&bytes)
+    }?;
     #[cfg(test)]
     tests::parse_digest_tests::record_decoded();
     Ok(Some(value))
@@ -1979,8 +2010,17 @@ fn read_record_in_scope<T: norito::NoritoSerialize + for<'a> norito::NoritoDeser
     name: &str,
 ) -> Result<Option<T>> {
     #[cfg(test)]
+    let _read_timing = finish_timing::phase(finish_timing::Phase::AttemptScopedRecordRead);
+    #[cfg(test)]
     tests::parse_digest_tests::record_read();
-    let Some(value) = reader.read_optional(name, MAX_RECORD_BYTES, decode_record::<T>)? else {
+    #[cfg(test)]
+    let decode = |bytes: &[u8]| {
+        let _timing = finish_timing::phase(finish_timing::Phase::AttemptScopedRecordDecode);
+        decode_record::<T>(bytes)
+    };
+    #[cfg(not(test))]
+    let decode = decode_record::<T>;
+    let Some(value) = reader.read_optional(name, MAX_RECORD_BYTES, decode)? else {
         return Ok(None);
     };
     let value = value?;
@@ -2031,3 +2071,7 @@ mod tests;
 #[cfg(test)]
 #[path = "attempts/retained_handle_census_tests.rs"]
 mod retained_handle_census_tests;
+
+#[cfg(test)]
+#[path = "attempts/measurement_tests.rs"]
+mod measurement_tests;

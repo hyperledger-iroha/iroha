@@ -134,12 +134,14 @@ fn reject_forged(
     wallet: &mut Wallet,
     device: &HostDevice,
     request: &OperationRequestV1,
-) -> OperationRequestV1 {
+) -> [OperationRequestV1; 3] {
     let before = wallet.snapshot().unwrap();
     let signs = device.platform.with(|state| state.sign_calls);
     let forged = forged_loads(request);
-    let mut changed_request = request.clone();
-    changed_request.action = forged[0].clone();
+    let changed_requests = forged.clone().map(|action| OperationRequestV1 {
+        action,
+        ..request.clone()
+    });
     for ((id, label), forged) in [(204, "receipt"), (205, "QC"), (206, "event")]
         .into_iter()
         .zip(forged)
@@ -159,7 +161,7 @@ fn reject_forged(
         );
     }
 
-    changed_request
+    changed_requests
 }
 
 pub(super) fn exercise(
@@ -172,7 +174,7 @@ pub(super) fn exercise(
     request: &OperationRequestV1,
 ) -> (Wallet, HostDevice, Vec<u8>) {
     let before = wallet.snapshot().unwrap();
-    let changed_request = reject_forged(&mut wallet, &device, request);
+    let changed_requests = reject_forged(&mut wallet, &device, request);
     let signs = device.platform.with(|state| state.sign_calls);
 
     device.platform.with(|state| state.sign_unavailable = true);
@@ -186,10 +188,12 @@ pub(super) fn exercise(
         RequestStatusV1::Outcome(Completion::Pending)
     );
     assert!(matches!(wallet.snapshot(), Err(state::Error::Pending)));
-    assert!(matches!(
-        wallet.execute(changed_request.clone()),
-        Err(state::Error::OperationConflict)
-    ));
+    for changed_request in &changed_requests {
+        assert!(matches!(
+            wallet.execute(changed_request.clone()),
+            Err(state::Error::OperationConflict)
+        ));
+    }
     assert_eq!(device.platform.with(|state| state.sign_calls), signs + 1);
     drop(wallet);
     let selected = pending_marker(&device, f.config.scheme.scheme_id());
@@ -209,10 +213,12 @@ pub(super) fn exercise(
         RequestStatusV1::Outcome(Completion::Pending)
     );
     assert!(matches!(wallet.snapshot(), Err(state::Error::Pending)));
-    assert!(matches!(
-        wallet.execute(changed_request.clone()),
-        Err(state::Error::OperationConflict)
-    ));
+    for changed_request in &changed_requests {
+        assert!(matches!(
+            wallet.execute(changed_request.clone()),
+            Err(state::Error::OperationConflict)
+        ));
+    }
     assert_eq!(
         device.platform.with(|state| state.sign_calls),
         0,
@@ -231,15 +237,47 @@ pub(super) fn exercise(
         wallet.retry_request(&request.request_id).unwrap(),
         RequestStatusV1::Outcome(Completion::Complete(loaded.clone()))
     );
-    assert!(matches!(
-        wallet.execute(changed_request),
-        Err(state::Error::OperationConflict)
-    ));
+    for changed_request in &changed_requests {
+        assert!(matches!(
+            wallet.execute(changed_request.clone()),
+            Err(state::Error::OperationConflict)
+        ));
+    }
     assert_eq!(wallet.snapshot().unwrap(), after);
     assert_eq!(
         device.platform.with(|state| state.sign_calls),
         1,
         "completed retries return the retained randomized signature"
     );
+    // Reopen the completed owner from the actual retained private simulator key. A
+    // completion retry must not depend on the earlier process or an available signer.
+    require_persisted_simulator(&device);
+    drop(wallet);
+    drop(device);
+    let device = HostDevice::restore(&root, credential);
+    device.platform.with(|state| state.sign_unavailable = true);
+    let mut wallet = sources.open(&device, f, frames);
+    assert_eq!(wallet.snapshot().unwrap(), after);
+    assert!(wallet.resume().unwrap().is_none());
+    require_released_originals(&mut wallet, &selected, request, &loaded);
+    assert_eq!(complete(wallet.execute(request.clone()).unwrap()), loaded);
+    assert_eq!(
+        wallet.retry_request(&request.request_id).unwrap(),
+        RequestStatusV1::Outcome(Completion::Complete(loaded.clone()))
+    );
+    for changed_request in &changed_requests {
+        assert!(matches!(
+            wallet.execute(changed_request.clone()),
+            Err(state::Error::OperationConflict)
+        ));
+    }
+    assert_eq!(wallet.snapshot().unwrap(), after);
+    assert_eq!(
+        device.platform.with(|state| state.sign_calls),
+        0,
+        "completed replay after restart needs no new signature"
+    );
+    // The surrounding A → B → C exchange continues with its ordinary signer available.
+    device.platform.with(|state| state.sign_unavailable = false);
     (wallet, device, loaded)
 }

@@ -465,7 +465,10 @@ the test result and captured compiler-input receipt. Cargo reused the current
 build; this is not a new clean build or complete release qualification. Server
 and rebuilt SDK checks remain separate. The
 genuine ABC test now includes forged Load inputs, signer-unavailable Selected
-restart and exact retry; the Load-to-Omega component helpers also have explicit
+restart and exact retry. It also checks changed receipt, certificate and event
+bytes across retry states, and completed exact replay after a second restart
+with signing unavailable and zero new signer calls. These additional assertions
+remain uncompiled and unrun. The Load-to-Omega component helpers also have explicit
 ignored test entry points. Both Load integration targets compile in the release
 profile, and their three ordinary receipt/identity/original-custody checks pass
 with zero failures. Their three explicit proof-construction cases remain ignored;
@@ -494,6 +497,11 @@ four stores, then submits the same instruction in a fresh certified transaction
 and requires unchanged balances and total supply. Source review accepts the
 added assertions; they remain uncompiled and unrun. This test-source change
 requires a fresh integration-harness capture before execution.
+Controller revision3 also binds the post-restart completion fields to the exact
+bounded signed retry original and includes it in the final artifact recheck.
+Its three additional DATA controls are prepared but unrun; the 27 passing
+controller controls above belong to preserved revision2. No network execution
+or new original custody is established by preparing this change.
 The previously draft-only native Ω differential producer is now registered as
 a private CoreZk test. Its eight real-proof/malformed-input cases emit the 117
 native field words consumed by the maintained incoming-circuit differential.
@@ -501,6 +509,21 @@ Independent source review accepts the bindings; compilation and execution with
 a current genuine fixture remain pending. This test-source addition requires a
 fresh CoreZk capture. A component fixture and successful hard verification do
 not establish complete-catalog admission or the C12 privacy argument.
+The unused final Ω checkpoint codec, context hash and associated layout metadata
+are removed. Production recovery continues through A/W checkpoints and durable
+RecordedFold; exact Ω transport restoration and its full native decisions are
+unchanged. Fixture assertions now use that transport path, including cancellation,
+length, proof and foreign-claim refusals. Independent source review and scoped
+formatting checks pass; compilation, the seven remaining native unit tests and
+genuine proof replay remain pending. The six-file change is retained in
+`unused-omega-checkpoint-cleanup-1/result.json`, SHA
+`eb822ca535fd9d7921b1265e909b74843dd933260c4db17113fce79c89c4f132`.
+It requires fresh consumed-source capture; the native-profile encoder and circuit
+layout are unchanged, which is not a newly measured fingerprint or proof result.
+The soundness memo now gives the conditional composition for the current eight
+fresh Load suffix calls, retaining failed attempts, exact replay and correlated
+checkpoint state. Current local simulation errors, arbitrary-history endpoint
+privacy and the concrete shared-oracle realization remain unproved; C12 is open.
 Full delivery, monetary-network and physical-phone qualification remain open,
 and server cost is unqualified.
 
