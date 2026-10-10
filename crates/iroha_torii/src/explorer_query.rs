@@ -118,6 +118,57 @@ fn conjunctive_equality<'a>(filter: Option<&'a FilterExpr>, name: &str) -> Optio
     }
 }
 
+/// Decode either the API's raw selector or Norito's checksum-bound DTO spelling.
+/// Both paths retain the native hash marker-bit and literal-checksum checks.
+fn instruction_hash_selector(value: &str) -> Result<HashOf<TransactionEntrypoint>, Error> {
+    if value.starts_with("hash:") {
+        <HashOf<TransactionEntrypoint> as norito::json::JsonObjectKeyOwned>::from_json_key_text(
+            value,
+        )
+        .map_err(|error| invalid("filter", format!("invalid transaction_hash: {error}")))
+    } else {
+        value
+            .parse()
+            .map_err(|error| invalid("filter", format!("invalid transaction_hash: {error}")))
+    }
+}
+
+/// Compare hash identities in the same canonical spelling as the serialized rows.
+/// This changes only equality/membership hash operands, not Boolean structure,
+/// ordered text comparisons, projection, authorization or the cursor digest.
+fn normalize_instruction_hash_identities(expr: &mut FilterExpr) -> Result<(), Error> {
+    fn operand(value: &mut Value) -> Result<(), Error> {
+        if let Value::String(text) = value {
+            let hash = instruction_hash_selector(text)?;
+            *value = norito::json::to_value(&hash)
+                .map_err(|error| invalid("filter", error.to_string()))?;
+        }
+        Ok(())
+    }
+    match expr {
+        FilterExpr::And(children) | FilterExpr::Or(children) => {
+            for child in children {
+                normalize_instruction_hash_identities(child)?;
+            }
+        }
+        FilterExpr::Not(child) => normalize_instruction_hash_identities(child)?,
+        FilterExpr::Eq(field, value) | FilterExpr::Ne(field, value)
+            if field.as_str() == "transaction_hash" =>
+        {
+            operand(value)?
+        }
+        FilterExpr::In(field, values) | FilterExpr::Nin(field, values)
+            if field.as_str() == "transaction_hash" =>
+        {
+            for value in values {
+                operand(value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Synthetic selectors that use maintained indexes or committed instruction semantics.
 /// They are equality-only conjuncts; ordinary DTO fields accept the complete filter AST.
 fn synthetic_fields(spec: &CollectionSpec) -> &'static [&'static str] {
@@ -251,6 +302,13 @@ impl ScanQuery {
             .map(|expr| extract_selectors(expr, synthetic_fields(spec), &mut selectors))
             .transpose()?
             .flatten();
+        if matches!(
+            spec.id,
+            "explorer_instructions" | "explorer_instructions_latest"
+        ) && let Some(filter) = rows.filter.as_mut()
+        {
+            normalize_instruction_hash_identities(filter)?;
+        }
         let plan = prepare(spec, "", &rows, &limits)?;
         let native = explorer::ExplorerCursorQuery {
             cursor: native_cursor,
@@ -504,11 +562,7 @@ async fn execute(
     });
     let transaction_hash = conjunctive_equality(query.rows.filter.as_ref(), "transaction_hash")
         .and_then(Value::as_str)
-        .map(|value| {
-            value
-                .parse()
-                .map_err(|error| invalid("filter", format!("invalid transaction_hash: {error}")))
-        })
+        .map(instruction_hash_selector)
         .transpose()?;
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     let state = app.state.clone();
@@ -649,6 +703,165 @@ mod tests {
         visibility: [u8; 32],
     ) -> Result<ScanQuery, Error> {
         ScanQuery::new(spec, query, visibility, limits())
+    }
+
+    const FAUCET_HEX: &str = "38eb3689fb42390f656ac9e1fa0d02451f1f4f1a1b92c1b074f1c2b6761e8631";
+    const FAUCET_LITERAL: &str =
+        "hash:38EB3689FB42390F656AC9E1FA0D02451F1F4F1A1B92C1B074F1C2B6761E8631#008C";
+    const LOG_LITERAL: &str =
+        "hash:66BF60AB1C762607F02BBDFC834E2D832243EF413D0C24BBFF8EE3D00A2830DB#DB6C";
+
+    fn instruction_scan_page() -> Value {
+        norito::json!({"items":[
+            {"transaction_hash":FAUCET_LITERAL,"index":0,"kind":"Transfer","block":8},
+            {"transaction_hash":LOG_LITERAL,"index":0,"kind":"Log","block":9}
+        ],"pagination":{"next_cursor":"native-next"}})
+    }
+
+    #[test]
+    fn instruction_hash_identity_matches_canonical_rows_and_preserves_cursor_scope() {
+        for spec in [&INSTRUCTIONS, &LATEST_INSTRUCTIONS] {
+            for selector in [
+                FAUCET_HEX.to_owned(),
+                FAUCET_HEX.to_uppercase(),
+                format!("0x{FAUCET_HEX}"),
+                FAUCET_LITERAL.to_owned(),
+            ] {
+                let input = ListQuery::new()
+                    .filter(
+                        field("transaction_hash")
+                            .eq(selector)
+                            .and(field("block").eq(8)),
+                    )
+                    .select([FieldPath::from("kind")]);
+                let query = standalone_scan(spec, input.clone(), [1; 32]).unwrap();
+                let bound = conjunctive_equality(query.rows.filter.as_ref(), "transaction_hash")
+                    .and_then(Value::as_str)
+                    .unwrap();
+                assert_eq!(bound, FAUCET_LITERAL);
+                assert_eq!(
+                    instruction_hash_selector(bound).unwrap(),
+                    FAUCET_HEX.parse().unwrap()
+                );
+                let page = query.page(instruction_scan_page()).unwrap();
+                assert_eq!(
+                    page.items,
+                    vec![
+                        norito::json!({"kind":"Transfer"})
+                            .as_object()
+                            .unwrap()
+                            .clone()
+                    ]
+                );
+                let token = page.next_cursor.unwrap();
+                let mut next = input.clone();
+                next.cursor = Some(token.clone());
+                assert_eq!(
+                    standalone_scan(spec, next.clone(), [1; 32])
+                        .unwrap()
+                        .native
+                        .cursor
+                        .as_deref(),
+                    Some("native-next")
+                );
+                assert!(standalone_scan(spec, next.clone(), [2; 32]).is_err());
+                next.filter = Some(field("transaction_hash").eq(LOG_LITERAL));
+                assert!(standalone_scan(spec, next, [1; 32]).is_err());
+                let other = if spec.id == INSTRUCTIONS.id {
+                    &LATEST_INSTRUCTIONS
+                } else {
+                    &INSTRUCTIONS
+                };
+                let mut other_query = input;
+                other_query.cursor = Some(token);
+                assert!(standalone_scan(other, other_query, [1; 32]).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn instruction_hash_identity_keeps_the_real_committed_log_row() {
+        let raw = "66bf60ab1c762607f02bbdfc834e2d832243ef413d0c24bbff8ee3d00a2830db";
+        for spec in [&INSTRUCTIONS, &LATEST_INSTRUCTIONS] {
+            for selector in [raw, LOG_LITERAL] {
+                let query = standalone_scan(
+                    spec,
+                    ListQuery::new().filter(
+                        field("transaction_hash")
+                            .eq(selector)
+                            .and(field("block").eq(9)),
+                    ),
+                    [1; 32],
+                )
+                .unwrap();
+                let page = query.page(instruction_scan_page()).unwrap();
+                assert_eq!(page.items.len(), 1);
+                assert_eq!(
+                    page.items[0].get("kind").and_then(Value::as_str),
+                    Some("Log")
+                );
+                assert_eq!(
+                    page.items[0]
+                        .get("transaction_hash")
+                        .and_then(Value::as_str),
+                    Some(LOG_LITERAL)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn instruction_hash_identity_keeps_boolean_and_membership_semantics() {
+        let eq = field("transaction_hash").eq(FAUCET_HEX);
+        let cases = [
+            (eq.clone().or(field("kind").eq("Log")), 2),
+            (FilterExpr::Not(Box::new(eq)), 1),
+            (field("transaction_hash").ne(FAUCET_HEX), 1),
+            (
+                FilterExpr::In(
+                    FieldPath::from("transaction_hash"),
+                    vec![Value::String(FAUCET_HEX.into())],
+                ),
+                1,
+            ),
+            (
+                FilterExpr::Nin(
+                    FieldPath::from("transaction_hash"),
+                    vec![Value::String(FAUCET_HEX.into())],
+                ),
+                1,
+            ),
+        ];
+        for (filter, count) in cases {
+            let query =
+                standalone_scan(&INSTRUCTIONS, ListQuery::new().filter(filter), [1; 32]).unwrap();
+            assert!(conjunctive_equality(query.rows.filter.as_ref(), "transaction_hash").is_none());
+            assert_eq!(
+                query.page(instruction_scan_page()).unwrap().items.len(),
+                count
+            );
+        }
+    }
+
+    #[test]
+    fn instruction_hash_identity_rejects_bad_checksum_marker_and_malformed_operands() {
+        for selector in [
+            FAUCET_LITERAL.replace("#008C", "#0000"),
+            "10".repeat(32),
+            "hash:invalid".to_owned(),
+            "bad-raw-hash".to_owned(),
+        ] {
+            for spec in [&INSTRUCTIONS, &LATEST_INSTRUCTIONS] {
+                assert!(
+                    standalone_scan(
+                        spec,
+                        ListQuery::new().filter(field("transaction_hash").eq(selector.clone())),
+                        [1; 32]
+                    )
+                    .is_err()
+                );
+            }
+        }
     }
 
     #[test]

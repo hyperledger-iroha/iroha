@@ -20,7 +20,7 @@ class KagemushaWalletHostNativeV1Test {
 
     @BeforeEach
     fun requireCurrentNativeBridge() {
-        assertTrue(NativeSignerBridge.isNativeAvailable(), "The supplied ABI-27 native bridge must load")
+        assertTrue(NativeSignerBridge.isNativeAvailable(), "The supplied ABI-28 native bridge must load")
         assertEquals(1, KagemushaWalletNativeV1.revision())
     }
 

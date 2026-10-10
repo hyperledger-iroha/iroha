@@ -425,12 +425,12 @@ def test_python_probe_disables_bytecode_in_its_actual_isolated_child(tmp_path: P
         "assert sys.flags.isolated == 1\n"
         "assert sys.dont_write_bytecode\n"
         "def connect_norito_bridge_abi_version():\n"
-        "    return 27\n",
+        "    return 28\n",
         encoding="utf-8",
     )
     assert MODULE.probe_python_abi(
         artifact, ("connect_norito_bridge_abi_version",)
-    ) == 27
+    ) == 28
     assert not (tmp_path / "__pycache__").exists()
 
 
@@ -480,10 +480,12 @@ def test_retired_abi23_manifest_and_schema_are_rejected() -> None:
     }
     MODULE.validate_manifest(manifest)
     for field, retired, expected in (
-        ("bridge_abi_version", 23, "must be exactly 27"),
-        ("bridge_abi_version", 24, "must be exactly 27"),
-        ("bridge_abi_version", 25, "must be exactly 27"),
-        ("bridge_abi_version", 26, "must be exactly 27"),
+        ("bridge_abi_version", 23, "must be exactly 28"),
+        ("bridge_abi_version", 24, "must be exactly 28"),
+        ("bridge_abi_version", 25, "must be exactly 28"),
+        ("bridge_abi_version", 26, "must be exactly 28"),
+        ("bridge_abi_version", 27, "must be exactly 28"),
+        ("schema", "iroha.native-sdk-abi27-artifact.v1", "schema is unsupported"),
         ("schema", "iroha.native-sdk-abi26-artifact.v1", "schema is unsupported"),
         ("schema", "iroha.native-sdk-abi25-artifact.v1", "schema is unsupported"),
         ("schema", "iroha.native-sdk-abi24-artifact.v1", "schema is unsupported"),

@@ -1108,5 +1108,6 @@ fn resign_identity_requires_one_canonical_line() {
     let next = resign_instructions(prior);
     assert!(next.contains(&format!("--replace-expected-hash '{prior}'")));
     assert!(next.contains("--expected-hash-out genesis.expected_hash"));
+    assert!(next.contains("--nexus-context-output nexus-amx-context.v1.bin"));
     assert!(!next.contains(".next"));
 }

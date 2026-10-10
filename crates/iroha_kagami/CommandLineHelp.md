@@ -16,6 +16,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami localnet validate-beacon-launch`↴](#kagami-localnet-validate-beacon-launch)
 * [`kagami dataspace`↴](#kagami-dataspace)
 * [`kagami dataspace up`↴](#kagami-dataspace-up)
+* [`kagami dataspace register-amx`↴](#kagami-dataspace-register-amx)
 * [`kagami dataspace status`↴](#kagami-dataspace-status)
 * [`kagami dataspace networks`↴](#kagami-dataspace-networks)
 * [`kagami context`↴](#kagami-context)
@@ -345,6 +346,7 @@ Run an owner-private local dataspace attached to an installed remote network
 ###### **Subcommands:**
 
 * `up` — Create, fund, register, and select four private validators without supplying configuration
+* `register-amx` — Register a retained inactive AMX instance; explicitly run localnet down first
 * `status` — Observe local validators and independently verified parent attachment separately
 * `networks` — List the independently pinned network profiles supplied by this installation
 
@@ -368,6 +370,31 @@ Create, fund, register, and select four private validators without supplying con
   Default value: `admin`
 * `--name <NAME>` — Store-local context name (defaults to the dataspace alias)
 * `--timeout <TIMEOUT>` — Complete parent authentication, local startup, and attachment budget in seconds
+
+  Default value: `60`
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+
+
+
+## `kagami dataspace register-amx`
+
+Explicit administrative parent AMX registration of one retained private generation. Requires exclusive inactive custody: use `kagami localnet down NAME` before this action, then `kagami localnet up NAME` to restart that same generation. Signing material is selected only by --admin-config; recovery never renews the original fees or UTC deadline.
+
+**Usage:** `kagami dataspace register-amx [OPTIONS] --admin-config <ADMIN_CONFIG> --fee-asset <FEE_ASSET> --max-fee <MAX_FEE> --deadline-unix-ms <DEADLINE_UNIX_MS> <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Exact retained private managed context; no new child is prepared
+
+###### **Options:**
+
+* `--admin-config <ADMIN_CONFIG>` — Explicit parent administrative client configuration, with runtime-only signing custody
+* `--fee-asset <FEE_ASSET>` — Exact parent fee asset; no asset is inferred from the child or SNS owner
+* `--max-fee <MAX_FEE>` — Positive aggregate fee ceiling for the original transaction
+* `--deadline-unix-ms <DEADLINE_UNIX_MS>` — Original exclusive Unix millisecond signing authorization; repeat unchanged on recovery
+* `--timeout <TIMEOUT>` — Fresh I/O budget only, bounded by the original authorization and release
 
   Default value: `60`
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
@@ -717,7 +744,8 @@ Sign the genesis block
 * `--expected-hash-out <PATH>` — Write the canonical checked NetworkId derived from the exact signed consensus-header hash as one line.
 
    Validators and clients must select this same file through `genesis.expected_hash_file` and `network_id_file`, respectively.
-* `--replace-expected-hash <NETWORK_ID>` — Replace the expected-hash file only if it still contains this exact prior NetworkId. Requires all three output paths. The identity is published last as the bundle's commit marker; interrupted publication must be retried with the same prior identity
+* `--nexus-context-output <PATH>` — Publish the exact Nexus/AMX context preimage whose hash the signed genesis commits (`nexus-amx-context.v1.bin`). Validators and public reset inputs consume these bytes
+* `--replace-expected-hash <NETWORK_ID>` — Replace the expected-hash file only if it still contains this exact prior NetworkId. Requires all four output paths. The identity is published last as the bundle's commit marker; interrupted publication must be retried with the same prior identity
 * `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
 
    The final unique topology must be an exact Sumeragi `3f + 1` committee in the range 4..=31.
@@ -729,6 +757,9 @@ Sign the genesis block
 * `--creation-time-ms <MILLISECONDS>` — Deterministic genesis transaction creation-time base in Unix milliseconds.
 
    Omit this for a fresh wall-clock timestamp. Fixture generators should set it so repeated signing produces identical canonical wire bytes.
+* `--amx-global-chain-id <CHAIN_ID>` — Full global chain label selected for the private root's native AMX participant
+* `--amx-global-genesis <PATH>` — Complete original signed global genesis in canonical `SignedBlockWire` format
+* `--amx-global-successor <PATH>` — Genuine global H2 whose exact quorum authenticates that original genesis result
 * `--config <PATH>` — Optional peer config TOML used to derive the DA proof-policy bundle embedded into genesis
 
 
@@ -847,6 +878,7 @@ Verify one exact bound-manifest/signed-genesis/signer/hash bundle
 * `--peer-config <PATH>` — Effective validator configs whose complete roster and policy must reproduce the signed context. Repeat exactly four times in `taira-validator-1` through `-4` order
 * `--genesis-public-key <PUBLIC_KEY>` — Public key of the independently provisioned genesis signer
 * `--expected-hash <HASH>` — Exact signed genesis block-header hash
+* `--nexus-context-output <PATH>` — Publish the exact public Nexus AMX context preimage after all four configurations agree
 
 
 

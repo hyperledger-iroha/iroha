@@ -11225,6 +11225,8 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::AbiTypeNotAllowed { .. } => "abi_type_not_allowed",
         VMError::HostOutputBudgetExceeded { .. } => "host_output_budget_exceeded",
         VMError::AmxBudgetExceeded { .. } => "amx_budget_exceeded",
+        VMError::ReentrantCall => "reentrant_call",
+        VMError::CallDepthExceeded => "call_depth_exceeded",
         VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
     }
 }
