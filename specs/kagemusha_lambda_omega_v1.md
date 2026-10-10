@@ -1159,8 +1159,8 @@ Named tests:
 | G5.2 | Measured Ω = allowlist length; Payment worst case ≤ 10,000 B with the largest σ_send; Credited::Status worst case ≤ 10,000 B |
 | G5.3 | On at least two phone classes, per-sub-proof peak RSS ≤ 0.85 GiB and the fold engine ≤ 1 GiB in total |
 | G5.4 | On the slower phone class, receiver proof CPU on the pre-verified path ≤ 150 ms; cold two decides ≤ 0.8 s on 4 cores |
-| G5.5 | Fold time and energy recorded per operation and device class and published as the lineage budget (proposal §5.3); it gates device-class enablement only |
-| G5.6 | Measured phone 4-core speedup on the Q and A shapes ≥ 2.0×, else published budgets use the pessimistic band |
+| G5.5 | Fold time and energy recorded per operation and measured phone as evidence; nothing gates a device class or model. The proposal §5.3 runtime capacity check uses per-relation bounds computed from the installed relation descriptors and refuses before commit with `NotEnoughStorage` or `NotEnoughMemory` |
+| G5.6 | Measured phone 4-core speedup on the Q and A shapes ≥ 2.0×, else fold-time estimates (this section's tables) use the pessimistic band |
 
 ## 11. Risks
 

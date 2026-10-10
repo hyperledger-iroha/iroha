@@ -11,7 +11,12 @@ minimum package version and a signer set. The Android enrollment arm pins a root
 entries each name a revocation source. No arm carries a hardware selector, a Play Integrity
 field or any other vendor online verdict. This is a first-release replacement: the earlier
 Android arms have no decoder, and the Model, Python projection, SDK consumers and shared
-vectors change together.
+vectors change together, in the coordinated cutover of design
+[§9.1](kagemusha_single_design_proposal.md#91-cutover-sequencing). Until that cutover the
+deployed contract of Iroha `67728cc6f3` stays in force. These are app-attestation and
+issuer-policy changes: the policy frames are issuer inputs that no ledger instruction,
+validation rule or state decodes, and the E1 challenge and credential carry only their
+32-byte digests.
 
 The Native issuer selects and retains two unsigned canonical Norito originals:
 `KagemushaWalletAppPolicyV1` and `KagemushaWalletEnrollmentPolicyV1`. Public clients carry
@@ -157,7 +162,10 @@ source or the operator denylist is `Unavailable`, never a refusal or an admissio
 
 An admitted Android evidence record carries facts HARDWARE_BACKED_KEY, BOOTLOADER_LOCKED,
 VERIFIED_BOOT, APP_SIGNING_IDENTITY and REVOCATION_LIST_CLEAR, plus STRONGBOX for StrongBox and
-PATCH_POLICY_MET when the floor is met. Fact bit 9 is reserved and zero.
+PATCH_POLICY_MET when the floor is met. The issuer never sets fact bit 9
+(PLAY_INTEGRITY_SIGNAL). That is issuer policy; record validation is unchanged here, and
+removing the bit from the Model's masks is the separate validator-facing change that design
+§9.1 schedules.
 
 Nothing else is an Android admission input: no Play Integrity token or verdict, Google
 account, Google Mobile Services, Huawei Mobile Services, app-store installation, exact

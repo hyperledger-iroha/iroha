@@ -7,7 +7,9 @@ admission rule for Android and iPhone, with a pinned root set, a named revocatio
 source per root and an operator denylist, and no Play Integrity or other vendor
 service (§2.2); closed E1 refusal reasons (§2.4); the two abandonment forms of an
 unused enrollment (§3.2); and a pre-commit runtime capacity check in place of
-per-device-class lineage budgets (§§1.1, 5.3).
+per-device-class lineage budgets (§§1.1, 5.3). The revision lands as one
+coordinated cutover (§9.1); until then the deployed contract of Iroha
+`67728cc6f3` stays in force.
 It amends revision 2026-10-05, which applied the owner answers of 2026-10-05:
 the hash families, `credit_id` and
 `proof_digest` (§§3, 4.1, 5.1), the state core and head commitment (§3), the
@@ -806,26 +808,38 @@ after an E1 refusal (§2.4) or an interruption that cannot resume, only while
 Bootstrap has never been selected. Once Bootstrap is selected or commits,
 including an uncertain activation response, recover that incarnation and use
 §6.3; do not abandon funded obligations. Abandonment has two forms, chosen by the
-slot's durable state:
+slot's durable state. The names below are Native's slot statuses
+(`KagemushaWalletSlotStatusV1`). Native's `Pending(marker)` is a selected head
+waiting for its receipt: Bootstrap is selected, so it is never abandoned.
 
-- **Pending (no enrollment marker).** No enrollment marker exists: the slot was
-  selected but no key was generated under it, or key generation was
-  interrupted and the platform cannot establish whether a key exists (as on
-  Android API 26–30, where a missing lookup result is unknown and the one-shot
-  generation grant is spent). Abandonment is local: the provider durably records
-  the slot as abandoned by the holder and never generates, adopts or initializes
-  a key under it again. No E5 can name this slot, because E5 carries the durable
-  generation-zero marker, so no credential or ledger record names it and there is
-  nothing to submit. `abandon()` reports this local form and returns no
-  ledger-control bytes.
-- **Enrolled (enrollment marker still selected).** This includes an issuer
-  refusal and an issued credential whose Bootstrap was never selected.
-  Abandonment commits the terminal Abandoned marker and returns the exact
-  Abandonment frame signed by the payment key. The holder's account submits it in
-  an ordinary transaction; the ledger instruction atomically rejects prior
-  activation and permanently disables activation and loads for that `wallet_id`.
-  No receipt or monetary balance exists to return. Native retains the frame, and
-  the wallet resubmits the exact bytes until finalized inclusion is authenticated.
+- **No marker (Native `Empty` or `IntentOnly`, or an intent whose key is
+  unknown).** No enrollment marker exists. Either the slot was selected but no
+  key was generated under it (`Empty`, or `IntentOnly` with the key
+  definitively absent), or key generation was interrupted and the platform
+  cannot establish whether a key exists. The unknown case has no slot status of
+  its own: on Android API 26–30 a missing lookup result is unknown and the
+  one-shot generation grant is spent, so Native reconciliation of that slot
+  reports `Unavailable`, and the slot can neither continue nor adopt a key.
+  Abandonment is local: the provider durably writes the abandoned-slot record
+  with a holder-abandoned reason. The slot then reconciles to `SlotAbandoned`
+  without a key probe, and no key is ever generated, adopted or initialized
+  under it again. No E5 can name this slot, because E5 carries the durable
+  generation-zero marker, so no credential or ledger record names it and there
+  is nothing to submit. `abandon()` reports this local form and returns no
+  ledger-control bytes. Today Native writes that record only for an expired
+  challenge or a key found without a marker, and `abandon()` refuses a slot
+  without a marker. The holder form is new Native work that the Native owner
+  reviews before it is implemented (§9.1).
+- **Marker (Native `Enrollment`: the generation-zero marker is still
+  current).** This includes an issuer refusal and an issued credential whose
+  Bootstrap was never selected. Abandonment commits the terminal marker with
+  reason Abandoned (Native `Terminal`) and returns the exact Abandonment frame
+  signed by the payment key, as `abandon()` does today. The holder's account
+  submits it in an ordinary transaction; the ledger instruction atomically
+  rejects prior activation and permanently disables activation and loads for
+  that `wallet_id`. No receipt or monetary balance exists to return. Native
+  retains the frame, and the wallet resubmits the exact bytes until finalized
+  inclusion is authenticated.
 
 A fresh enrollment always uses a new issuer challenge, a new slot and a newly
 generated key, so it has a new `wallet_id`. It starts as soon as the abandonment
@@ -1107,9 +1121,14 @@ that moment:
 - memory: memory currently available to the app covers the peak proving memory
   of the operation's step relation and of the lineage relation that folds it.
 
-The authenticated artifact metadata publishes, per relation and never per phone
-model, the measured peak proving memory, fold-witness bytes and fold time. The
-artifact producer measures them when it builds the frozen set. A failed check
+Both bounds come from the installed relations, never from a phone model. The
+proof owner computes each relation's peak proving memory and fold-witness bytes
+from that relation's fixed, authenticated descriptor (its domain size and its
+column and lookup counts) with one conservative formula. The check adds no field
+to the artifact manifest, verifier pack or producer inventory, and needs no
+artifact-producer change. Measured peaks and fold times are recorded as evidence
+(§8); a measurement above the computed bound is a defect in the formula, which
+is fixed in code. A failed check
 refuses the operation before commit with a typed `NotEnoughStorage` or
 `NotEnoughMemory` result, never a device verdict: nothing is debited or
 credited, the receipt or Payment stays deliverable, and the holder retries after
@@ -1547,6 +1566,71 @@ funded old-format value exists there. If it does, that release's verifier
 stays until its holders have unloaded or paid it into the new scheme by their
 own choice; nobody is required to go online for the cutover. Keep no decoder
 fallback beyond that.
+
+### 9.1 Cutover sequencing
+
+Revision 2026-10-10 changes E1 app attestation and issuer policy, the
+wallet–issuer E5/E6 exchange and mobile Native packaging. Its admission changes
+alter no validator-facing ledger wire, ISI or state format, no wallet relation
+or circuit, no artifact producer and no verifier-pack, producer-inventory or
+transport format. The credential, 56-byte evidence record, enrollment challenge
+and Abandonment frame keep their layouts; the 32-byte policy and evidence
+digests they carry name the new preimages. No ledger instruction, validation
+rule or state decodes a policy frame or E5/E6 evidence. The one validation
+change, retiring fact bit 9 (step 4), is scheduled separately with its own
+precondition.
+
+Until the cutover, the deployed contract of Iroha source `67728cc6f3` stays in
+force. That contract is bridge ABI 28; the signed v7 runtime with its
+`firstDeviceAuthentication` selection; and an issuer that requires a Play
+Integrity token and sets fact bit 9 on Android. Nothing in this revision is
+deployed piecemeal. The cutover is one coordinated change, and the release
+driver builds and releases it:
+
+1. **Bridge ABI 28 → 29.** `connect_norito_bridge` deletes the first-device
+   authentication-key C/JNI exports (`first_device_auth_key_v1.rs` and its JNI
+   adapter), its enrollment `prepare_request` takes the Android chain only, and
+   the runtime capacity results of §5.3 become typed. The export inventory
+   changes accordingly. ABI 29 artifacts refuse ABI 28 callers; there is no
+   compatibility export.
+2. **`firstDeviceAuthentication` is removed everywhere at once.** That selection
+   carries a Google OAuth client, a Play Integrity cloud project and a second
+   attested sign-up key. It goes from the signed v7 runtime the release driver
+   composes; from Native installed selection (`installed/selection.rs` and
+   `selection/bpng.rs`); from BPNG Core's runtime projection, together with its
+   Play Integrity secret; from the Android app's first-device bootstrap and
+   schema; and from the iOS runtime decode. Removing one alone breaks startup,
+   because Native refuses a BPNG runtime without the selection today, so the
+   runtime keeps the field until this step.
+3. **E1 policy and issuer.** These land together: the Model's Android app and
+   enrollment arms of the [enrollment policy](kagemusha_wallet_enrollment_policy_v1.md)
+   and the regenerated `fixtures/kagemusha/wallet_enrollment_policy_v1_vectors.json`; the
+   issuer worker, its configuration and the Python verifier admitting under §2.2
+   with no Play Integrity token or hardware selector; the E5 `PlatformEvidenceV1`
+   and E6 `IssuerEvidenceV1` Android arms carrying the chain only; the closed
+   §2.4 refusal codes, exported by Native and relayed unchanged by BPNG Core and
+   the Kotlin and Swift SDKs; and an issuer that never sets fact bit 9. The
+   issuer owner selects the reviewed policy originals (the Google RSA and CA1 SPKI
+   pins, signer set, minimum version and patch floor; the Apple root and App ID)
+   and the operator denylist in this step. The Iroha READMEs that still describe
+   Play Integrity change with their code.
+4. **Fact bit 9 in record validation.** Removing `PLAY_INTEGRITY_SIGNAL` from the
+   Model's defined-facts and Apple-forbidden masks changes the credential
+   validation that every consumer, validators included, performs. It lands only
+   in this cutover's validator release, and only where no credential on that
+   ledger carries bit 9: either none was issued under the deployed issuer, or the
+   cutover resets that network's KAGEMUSHA state (a testnet reset is its cutover,
+   §9). Otherwise bit 9 stays defined in validation, and unset by the issuer,
+   until those credentials are gone.
+5. **Mobile Native rebuild.** The release driver rebuilds Native for the three
+   Android ABIs and the Apple xcframework from the cutover source, and the
+   Android and iOS apps bind ABI 29. No other work package builds, promotes or
+   deploys mobile natives.
+
+Before Native implements this revision, the Native owner reviews it. The
+review covers the §3.2 no-marker abandonment (local, no ledger bytes, a
+holder-abandoned reason) and the rule that a fresh slot does not wait for
+ledger acceptance of an Abandonment.
 
 ## 10. Goals and execution order
 

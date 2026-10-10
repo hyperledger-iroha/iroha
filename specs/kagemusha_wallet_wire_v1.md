@@ -12,7 +12,10 @@ adds two SHA roles to the coordinated Model/Kotlin/Swift digest inventory; typed
 foreign policy carriers and issuer ownership still require migration. Its
 revision 2026-10-10 (Android signer set and minimum version, SPKI root set with a
 revocation source per root, no Play Integrity field) regenerates those vectors, and
-E5 Android evidence is the KeyMint chain only (§3.1). Kotlin
+E5 Android evidence is the KeyMint chain only (§3.1). Both are app-attestation and
+issuer-policy changes that land in the coordinated cutover of
+[proposal §9.1](kagemusha_single_design_proposal.md#91-cutover-sequencing); they
+change no layout in this record that a validator checks. Kotlin
 `org.hyperledger.iroha.sdk.offline.KagemushaWalletWireV1` (`kotlin/core-jvm`) and Swift
 `KagemushaWalletWireV1` (`IrohaSwift`) consume the vectors (§5), the Swift and Kotlin
 peer carriers move envelope frames, the Lineage message included (§6), and the iPhone
@@ -292,9 +295,9 @@ is the body's fields in the order shown.
 | Signer certificate (signed under `kgwcert1`) | `LE16 version ‖ scheme_id ‖ tag role ‖ key ‖ LE64 serial` | Signed by the scheme root. Roles: Enrollment 1, RegulatoryPolicy 3, TimeAnchor 4, Artifact 5. Tag 2 is invalid. Fixed depth one; no validity period or revocation is evaluated offline; the consumer requires the role it needs. Its digest `P(kgwocrt1, ·)` (§1) is what every `*_certificate` field names, a canonical σ-field value. |
 | Certificate set (`kgwcset1`) | `count`, then the certificate digests in set order (one element each) | Frame `{certificates}`: at most 3, unique, strictly ascending by certificate digest (unsigned byte order). Each carrier holds exactly the certificates it needs, with the required roles and scheme. Its digest is `P(kgwcset1, [count, digests…])`, one canonical σ-field value. |
 | Enrollment challenge (`enrollment-challenge`) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ account_digest ‖ app_policy ‖ enrollment_policy ‖ issuer_nonce` | All nonzero. `challenge_digest` is the KeyMint attestation challenge and the App Attest attestation `clientDataHash`. The App Attest enrollment assertion `clientDataHash` is `H("enrollment-key-binding", challenge_digest ‖ payment_key)`. H values go to App Attest unchanged. |
-| Evidence digest (`evidence`) | `tag kind ‖ LE32 count ‖ (LE32 len ‖ bytes)…` | Kinds: AndroidKeyMintTee 1, AndroidKeyMintStrongBox 2, AppleAppAttest 3. Non-empty original items, never rewritten: Android, exactly the KeyMint attestation DER chain, leaf first; Apple, the attestation object, then the fresh key-binding assertion. The attested security level selects the Android kind. No vendor online verdict, decoded token or signing input is an evidence item. Renewal follows its separate evidence contract. |
-| Enrollment platform evidence (E5, frame only) | `PlatformEvidenceV1`: Android `{certificates: [der]}`; Apple `{key_id, attestation, key_binding_assertion}` | The exact originals the phone sends in E5, carried as canonical bytes inside the account-signed request, within the §2 bounds. Android carries the KeyMint chain only: no token or other field. Apple `key_id` is nonzero. The arm must match the selected enrollment policy's platform. The issuer admits the evidence under the [enrollment policy](kagemusha_wallet_enrollment_policy_v1.md) rules. |
-| Issuer-retained evidence (E6, frame only) | `IssuerEvidenceV1`: Android `{certificates: [der]}`; Apple `{attestation, key_binding_assertion}` | The issuer returns, byte for byte, the E5 originals it verified, and the credential's evidence digest is recomputed from them. It adds no issuer-acquired item. |
+| Evidence digest (`evidence`) | `tag kind ‖ LE32 count ‖ (LE32 len ‖ bytes)…` | Kinds: AndroidKeyMintTee 1, AndroidKeyMintStrongBox 2, AppleAppAttest 3. Non-empty original items, never rewritten: Android, exactly the KeyMint attestation DER chain, leaf first; Apple, the attestation object, then the fresh key-binding assertion. The attested security level selects the Android kind. No vendor online verdict, decoded token or signing input is an evidence item. The issuer computes this digest and the wallet recomputes it at E6; a validator sees only the nonzero 32-byte value in the evidence record, whose layout is unchanged. This Android preimage applies from the proposal §9.1 cutover. Renewal follows its separate evidence contract. |
+| Enrollment platform evidence (E5, frame only) | `PlatformEvidenceV1`: Android `{certificates: [der]}`; Apple `{key_id, attestation, key_binding_assertion}` | Wallet-to-issuer exchange only; no ledger instruction, validation rule or state decodes it. The exact originals the phone sends in E5, carried as canonical bytes inside the account-signed request, within the §2 bounds. Android carries the KeyMint chain only: no token or other field. Apple `key_id` is nonzero. The arm must match the selected enrollment policy's platform. The issuer admits the evidence under the [enrollment policy](kagemusha_wallet_enrollment_policy_v1.md) rules. The Android arm changes at the proposal §9.1 cutover. |
+| Issuer-retained evidence (E6, frame only) | `IssuerEvidenceV1`: Android `{certificates: [der]}`; Apple `{attestation, key_binding_assertion}` | Issuer-to-wallet exchange only. The issuer returns, byte for byte, the E5 originals it verified; the credential's evidence digest is recomputed from them before delivery and again at the wallet's E6 intake. It adds no issuer-acquired item. The Android arm changes at the proposal §9.1 cutover. |
 | Evidence record (inline, 56) | `digest ‖ LE64 time_ms ‖ LE32 facts ‖ LE32 os_patch_level ‖ LE32 vendor_patch_level ‖ LE32 boot_patch_level` | Fact bits below; `digest` nonzero. |
 | Regulatory policy (inline, 20) | `LE32 permitted_controls ‖ LE64 blacklist_max_age_ms ‖ LE64 time_anchor_max_response_ms` | Controls: bit 0 BLACKLIST, 1 QUOTAS, 2 ATTESTATION_LEASE; others zero. `blacklist_max_age_ms > 0` requires bit 0. `time_anchor_max_response_ms > 0` iff bit 1, bit 2 or `blacklist_max_age_ms > 0`. The policy is fixed for the incarnation; with bit 1 every quota window a wallet installs is longer than `time_anchor_max_response_ms` (B8, §3.3). |
 | Credential (signed under `kgwcred1`) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ wallet_id ‖ account_digest ‖ payment_key(key) ‖ provider_contract ‖ tag evidence_kind ‖ enrollment_evidence(56) ‖ fresh_evidence(56) ‖ app_policy ‖ regulatory_policy(20) ‖ enrollment_id ‖ LE64 issued_at_ms ‖ LE32 renewal_sequence ‖ LE64 lease_expires_at_ms ‖ issuer_certificate` | Enrollment-role signer. Nonzero bindings; V1 provider contract even without a scheme; `wallet_id` recomputes. Renewal 0 requires `fresh_evidence = enrollment_evidence`; later renewals require `fresh.time_ms ≥ enrollment.time_ms`. `lease_expires_at_ms ≠ 0` iff the lease is permitted. A replacement changes only `fresh_evidence`, `issued_at_ms`, `lease_expires_at_ms` and `issuer_certificate`, and `renewal_sequence` is the predecessor's plus one. |
@@ -304,15 +307,23 @@ is the body's fields in the order shown.
 
 Fact bits: 0 HARDWARE_BACKED_KEY, 1 STRONGBOX, 2 BOOTLOADER_LOCKED, 3 VERIFIED_BOOT,
 4 PATCH_POLICY_MET, 5 APP_SIGNING_IDENTITY, 6 APP_ATTEST_GENUINE_DEVICE,
-7 APP_ATTEST_KEY_BINDING, 8 APP_ATTEST_PRODUCTION, 10 REVOCATION_LIST_CLEAR,
-11 LOCAL_COMPROMISE_CHECKS_CLEAR. Bit 9 is reserved and, with bits 12–31, zero
-in every record. REVOCATION_LIST_CLEAR means no chain certificate was listed by its
-root's revocation source or by the operator denylist at the check.
-Android records never carry 6–8; Apple records never carry 0–5 and have zero
-patch levels. Enrollment evidence requires bits 0, 2, 3 and 5 on Android (plus 1
-for StrongBox; TEE forbids 1) and bits 6 and 7 on Apple. The E1 issuer additionally
-requires bit 10 on Android and bit 8 on Apple, sets bit 4 only when the patch
-floor is met, and sets no other bit.
+7 APP_ATTEST_KEY_BINDING, 8 APP_ATTEST_PRODUCTION, 9 PLAY_INTEGRITY_SIGNAL (retired
+issuer output, below), 10 REVOCATION_LIST_CLEAR, 11 LOCAL_COMPROMISE_CHECKS_CLEAR;
+12–31 are zero. Android records never carry 6–8; Apple records never carry 0–5 or 9
+and have zero patch levels. Enrollment evidence requires bits 0, 2, 3 and 5 on
+Android (plus 1 for StrongBox; TEE forbids 1) and bits 6 and 7 on Apple. These are
+the record-validity rules every consumer, validators included, checks natively;
+this revision does not change them.
+
+Issuer policy (enrollment policy revision 2026-10-10, from the proposal §9.1
+cutover) decides which valid bits an issued record carries. The E1 issuer sets
+exactly the facts it verified: on Android bits 0, 2, 3, 5 and 10, plus 1 for
+StrongBox and 4 when the patch floor is met; on Apple bits 6, 7 and 8. It requires
+bit 10 on Android and bit 8 on Apple, and it never sets bit 9 or bit 11.
+REVOCATION_LIST_CLEAR means no chain certificate was listed by its root's
+revocation source or by the operator denylist at the check. Removing bit 9 from
+the defined-facts and Apple-forbidden masks is a separate, validator-facing Model
+change that proposal §9.1 schedules with its preconditions.
 
 ### 3.1.0 Ledger native verifier installation
 
