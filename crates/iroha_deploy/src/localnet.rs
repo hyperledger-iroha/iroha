@@ -1452,6 +1452,7 @@ fn generate_localnet_runtime<T: Write>(
         None => bootstrap_config,
     };
     let config = parse_localnet_peer_config(&bootstrap_config, None)?;
+    let genesis = append_localnet_native_lane_policy(genesis, &config.nexus)?;
     let da_proof_policies = Some(resolve_localnet_da_proof_policies(&config));
     let confidential_policy_hash =
         iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
@@ -3742,6 +3743,98 @@ fn append_peer_pop(
         .into_builder()
         .next_transaction()
         .set_topology(topology)
+        .build_raw()
+}
+/// Sign the native lane policy of a multi-lane Global catalog into the genesis parameters.
+///
+/// Every non-zero catalog lane becomes a fixed native lane of its catalog dataspace, served by
+/// the complete genesis topology (canonical committee order, genesis PoPs). Only the catalog's
+/// account-matcher routes are carried over; instruction-only routes are not, and a dataspace
+/// without an account route (the Public BPNG dataspace) routes by target dataspace. Without
+/// this policy a dataspace-targeted transaction has no execution route, and light clients
+/// refuse a genesis that does not set exactly one policy (`verify_genesis_dataspace_v1`).
+/// Single-lane catalogs and private roots are unchanged.
+fn append_localnet_native_lane_policy(
+    genesis: RawGenesisTransaction,
+    nexus: &actual::Nexus,
+) -> Result<RawGenesisTransaction> {
+    use iroha_data_model::sumeragi_lanes::{
+        SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
+    };
+    let context = genesis.sumeragi_context_parameters();
+    let mut lanes = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| lane.id != LaneId::new(0))
+        .map(|lane| (lane.id, lane.dataspace_id))
+        .collect::<Vec<_>>();
+    if lanes.is_empty() || context.root_scope != SumeragiRootScope::Global {
+        return Ok(genesis);
+    }
+    lanes.sort_unstable();
+    let parameters = genesis
+        .effective_parameters()
+        .wrap_err("generated localnet genesis must have one structured parameter block")?;
+    ensure!(
+        !parameters
+            .custom()
+            .contains_key(&SumeragiLanePolicy::parameter_id()),
+        "generated localnet genesis already sets a native lane policy"
+    );
+    let mut pops = std::collections::BTreeMap::new();
+    for entry in genesis.transactions().iter().flat_map(|tx| tx.topology()) {
+        let pop = entry.pop_bytes()?.ok_or_else(|| {
+            eyre!(
+                "genesis topology peer {} has no proof of possession",
+                entry.peer
+            )
+        })?;
+        ensure!(
+            pops.insert(entry.peer.clone(), pop).is_none(),
+            "genesis topology repeats peer {}",
+            entry.peer
+        );
+    }
+    ensure!(
+        !pops.is_empty(),
+        "native lane policy requires a genesis topology"
+    );
+    let committee = iroha_core::sumeragi::schedule::canonical_committee(pops.keys().cloned())
+        .map_err(|error| eyre!("genesis topology is not a native lane committee: {error}"))?
+        .into_iter()
+        .map(|peer| SumeragiLaneMember {
+            pop: pops
+                .remove(&peer)
+                .expect("canonical committee keeps topology peers"),
+            peer,
+        })
+        .collect::<Vec<_>>();
+    let mut policy = SumeragiLanePolicy::for_chain(parameters.sumeragi.clone(), context.da_layout);
+    policy.fixed = lanes
+        .into_iter()
+        .map(|(lane, dataspace)| SumeragiFixedLane {
+            lane,
+            dataspace,
+            committee: committee.clone(),
+        })
+        .collect();
+    policy.routes = nexus
+        .routing_policy
+        .rules
+        .iter()
+        .filter(|rule| rule.matcher.account.is_some())
+        .map(|rule| SumeragiLaneRoute {
+            lane: rule.lane,
+            account: rule.matcher.account.clone(),
+            instruction: rule.matcher.instruction.clone(),
+        })
+        .collect();
+    iroha_core::sumeragi::lanes::step::validate_policy(&policy)
+        .map_err(|error| eyre!("generated native lane policy is invalid: {error}"))?;
+    genesis
+        .into_builder()
+        .append_parameter(Parameter::Custom(policy.into_custom_parameter()))
         .build_raw()
 }
 #[cfg(test)]
@@ -7862,6 +7955,9 @@ fn write_localnet_gitignore(out_dir: &Path) -> Result<()> {
 #[cfg(test)]
 #[path = "localnet/client_identity_test_support.rs"]
 mod localnet_test_helpers;
+#[cfg(test)]
+#[path = "localnet/native_lane_policy_tests.rs"]
+mod native_lane_policy_tests;
 #[cfg(test)]
 #[path = "localnet/profile_golden_parity_tests.rs"]
 mod profile_golden_parity_tests;
