@@ -6,7 +6,7 @@ mod registry_refusal_tests;
 #[path = "runtime_dlmm_tests.rs"]
 mod runtime_dlmm_tests;
 #[path = "runtime_wrapper_tests.rs"]
-mod runtime_wrapper_tests;
+pub(crate) mod runtime_wrapper_tests;
 #[path = "signed_original_fixtures.rs"]
 mod signed_original_fixtures;
 use super::*;

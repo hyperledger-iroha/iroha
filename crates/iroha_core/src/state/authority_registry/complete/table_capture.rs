@@ -79,11 +79,6 @@ use musubi_native::{
 };
 
 capture_world_table_once!(
-    capture_public_lane_reward_accruals_once,
-    public_lane_reward_accruals,
-    "world.public_lane_reward_accruals"
-);
-capture_world_table_once!(
     capture_public_lane_stake_custody_once,
     public_lane_stake_custody,
     "world.public_lane_stake_custody"
@@ -971,9 +966,6 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     native_world::capture_settlement_receipts_once::MATERIALIZER,
     native_world::capture_public_lane_validators_once::MATERIALIZER,
     native_world::capture_public_lane_stake_shares_once::MATERIALIZER,
-    native_world::capture_public_lane_rewards_once::MATERIALIZER,
-    native_world::capture_public_lane_reward_claims_once::MATERIALIZER,
-    capture_public_lane_reward_accruals_once::MATERIALIZER,
     capture_public_lane_stake_custody_once::MATERIALIZER,
     native_world::capture_zk_assets_once::MATERIALIZER,
     native_world::capture_elections_once::MATERIALIZER,
@@ -1377,9 +1369,6 @@ mod tests {
             "world.settlement_receipts",
             "world.public_lane_validators",
             "world.public_lane_stake_shares",
-            "world.public_lane_rewards",
-            "world.public_lane_reward_claims",
-            "world.public_lane_reward_accruals",
             "world.public_lane_stake_custody",
             "world.zk_assets",
             "world.elections",

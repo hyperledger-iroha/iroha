@@ -830,12 +830,6 @@ Root {
             max_pending_unbonds_per_share: 8,
             unbonding_delay: 0ns,
             max_slash_bps: 10000,
-            reward_dust_threshold: Quantity(
-                Numeric {
-                    mantissa: 0,
-                    scale: 0,
-                },
-            ),
             stake_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
             stake_escrow_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             slash_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",

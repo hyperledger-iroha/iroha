@@ -1734,7 +1734,6 @@ pub mod isi {
         SocialReward,
         SocialEscrow,
         StakingUnbond,
-        StakingRewardClaim,
         StakingSlash,
         ModerationChallengeRefund,
         ModerationChallengeSlash,
@@ -2118,8 +2117,6 @@ pub mod isi {
         SocialEscrow(Vec<u8>),
         /// Release a matured staking unbond.
         StakingUnbond(Vec<u8>),
-        /// Pay exact signed entitlements from retained staking reward custody.
-        StakingRewardClaim(Vec<u8>),
         /// Apply a mandatory retained staking slash.
         StakingSlash(Vec<u8>),
         /// Slash a retained governance lock.
@@ -2388,12 +2385,6 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::StakingUnbond,
                     NumericAssetTransferControlPolicy::StakingUnbond,
                 ),
-                RetainedNumericAssetMovementPurpose::StakingRewardClaim(binding) => (
-                    "staking-reward-claim",
-                    binding,
-                    NumericAssetTransferSourcePolicy::StakingRewardClaim,
-                    NumericAssetTransferControlPolicy::Enforce,
-                ),
                 RetainedNumericAssetMovementPurpose::StakingSlash(binding) => (
                     "staking-slash",
                     binding,
@@ -2630,9 +2621,6 @@ pub mod isi {
                 NumericAssetTransferSourcePolicy::StakingUnbond => {
                     ("StakingUnbond", SourceDetail::Empty)
                 }
-                NumericAssetTransferSourcePolicy::StakingRewardClaim => {
-                    ("StakingRewardClaim", SourceDetail::Empty)
-                }
                 NumericAssetTransferSourcePolicy::StakingSlash => {
                     ("StakingSlash", SourceDetail::Empty)
                 }
@@ -2772,9 +2760,6 @@ pub mod isi {
                 NumericAssetTransferSourcePolicy::SocialReward => ("SocialReward", Vec::new()),
                 NumericAssetTransferSourcePolicy::SocialEscrow => ("SocialEscrow", Vec::new()),
                 NumericAssetTransferSourcePolicy::StakingUnbond => ("StakingUnbond", Vec::new()),
-                NumericAssetTransferSourcePolicy::StakingRewardClaim => {
-                    ("StakingRewardClaim", Vec::new())
-                }
                 NumericAssetTransferSourcePolicy::StakingSlash => ("StakingSlash", Vec::new()),
                 NumericAssetTransferSourcePolicy::ModerationChallengeRefund => {
                     ("ModerationChallengeRefund", Vec::new())
@@ -4212,93 +4197,7 @@ pub mod isi {
         custody.apply(&mut state_transaction.world);
         Ok(())
     }
-    /// Consume one exact signed reward claim as a fully prepared atomic batch.
-    pub(in crate::smartcontracts::isi) fn execute_verified_staking_reward_payouts(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        capability: crate::smartcontracts::isi::staking::VerifiedStakingRewardPayouts,
-    ) -> Result<(), Error> {
-        let (recipient, binding, payouts) = capability.into_parts();
-        if payouts.is_empty() {
-            return Ok(());
-        }
-        let authorization = NumericAssetMovementAuthorization::retained(
-            &recipient,
-            RetainedNumericAssetMovementPurpose::StakingRewardClaim(binding),
-        );
-        let mut plans = Vec::with_capacity(payouts.len());
-        for (source, destination, amount) in &payouts {
-            if destination.account() != &recipient
-                || source.definition() != destination.definition()
-                || source.scope() != destination.scope()
-                || amount.is_zero()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "retained reward payout does not match the recipient and exact custody scope"
-                        .into(),
-                ));
-            }
-            let plan = PreparedNumericTransferPlan::prepare(
-                state_transaction,
-                &recipient,
-                source.clone(),
-                destination.clone(),
-                amount.clone(),
-                NumericAssetTransferScopePolicy::Ambient,
-                NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
-                NumericAssetTransferSourcePolicy::StakingRewardClaim,
-                NumericAssetTransferControlPolicy::Enforce,
-                NumericAssetDestinationAdmissionPolicy::ExistingAccount,
-            )?;
-            if &plan.source_id != source || &plan.destination_id != destination {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "retained reward payout must preserve both exact signed balance buckets".into(),
-                ));
-            }
-            plans.push(plan);
-        }
-        let batch =
-            PreparedNumericAssetMovementBatch::aggregate(state_transaction, plans, authorization)?;
-        // Composite control stores must be encodable before the first balance write.
-        let mut stores = BTreeMap::<AccountId, AssetTransferControlStoreV1>::new();
-        for (account, _, _, after) in &batch.control_updates {
-            if let Some(record) = after {
-                let store = match stores.entry(account.clone()) {
-                    std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::btree_map::Entry::Vacant(entry) => entry.insert(
-                        load_asset_transfer_control_store(state_transaction, account)?,
-                    ),
-                };
-                if record.is_empty() {
-                    store.remove(&record.asset_definition_id);
-                } else {
-                    store.upsert(record.clone());
-                }
-                if !store.controls.is_empty() {
-                    store.validate_canonical().map_err(|error| {
-                        InstructionExecutionError::InvariantViolation(
-                            format!("reward payout control update is not canonical: {error}")
-                                .into(),
-                        )
-                    })?;
-                    Json::try_new(store.clone()).map_err(|error| {
-                        InstructionExecutionError::InvariantViolation(
-                            format!("reward payout control encoding failed: {error}").into(),
-                        )
-                    })?;
-                }
-            }
-        }
-        let applied = batch.apply(state_transaction)?;
-        for movement in applied {
-            emit_numeric_asset_transfer_events(
-                state_transaction,
-                movement.source_id,
-                movement.destination_id,
-                movement.amount,
-            );
-        }
-        Ok(())
-    }
+
     /// Release one exact matured public-lane unbonding record.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute_staking_unbond_transfer(
@@ -7355,7 +7254,6 @@ pub mod isi {
             | NumericAssetTransferSourcePolicy::SocialReward
             | NumericAssetTransferSourcePolicy::SocialEscrow
             | NumericAssetTransferSourcePolicy::StakingUnbond
-            | NumericAssetTransferSourcePolicy::StakingRewardClaim
             | NumericAssetTransferSourcePolicy::StakingSlash
             | NumericAssetTransferSourcePolicy::ModerationChallengeRefund
             | NumericAssetTransferSourcePolicy::ModerationChallengeSlash
@@ -9127,11 +9025,7 @@ pub mod isi {
             transaction
                 .world
                 .public_lane_stake_reserves
-                .insert(source.clone(), Quantity::from(20_u64));
-            transaction
-                .world
-                .public_lane_reward_reserves
-                .insert(source.clone(), Quantity::from(40_u64));
+                .insert(source.clone(), Quantity::from(60_u64));
             assert!(
                 transaction
                     .world
@@ -9153,8 +9047,8 @@ pub mod isi {
             assert!(transaction.world.assets.get(&destination).is_none());
             transaction
                 .world
-                .public_lane_reward_reserves
-                .insert(source.clone(), Quantity::from(30_u64));
+                .public_lane_stake_reserves
+                .insert(source.clone(), Quantity::from(50_u64));
             transaction
                 .world
                 .apply_prechecked_numeric_asset_transfer_delta_exact(

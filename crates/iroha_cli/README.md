@@ -188,7 +188,6 @@ iroha --config staker.toml --fee-payer authority app staking schedule-unbond \
 iroha --config staker.toml --fee-payer authority app staking finalize-unbond \
   --lane-id 0 --validator "$VALIDATOR" --request-id "$WITHDRAWAL_HASH" --monetary-plan withdrawal-plan.json
 iroha --config recipient.toml --fee-payer authority app staking claim-rewards --lane-id 0 --claim-plan claim-plan.json
-iroha --config treasury.toml --fee-payer authority app staking record-rewards --file epoch-rewards.json
 ```
 
 `bond` supports self stake and delegation. `--staker` defaults to the configured
@@ -208,25 +207,23 @@ unbonding delay. Finalization additionally waits for the consensus liability
 window. Registration, bonding, and finalization require a
 Norito JSON `PublicLaneMonetaryPlanV1`; claims require a
 `PublicLaneRewardClaimPlanV1`. These files bind the target network, expiry,
-exact assets and amounts, and current tenure or reward cursor/record commitments.
+exact assets and amounts, and current tenure or reward beneficiary/claim sequence.
 The CLI rejects mismatched runtime networks, recipients, amounts, or noncanonical
 plans. Core rechecks
 all state preconditions at execution. Plans must use the network's configured
 genesis-pinned global XOR definition at scale 9 and exact custody accounts.
 
-Claim plans contain at most 64 ordered reward record commitments and 64 exact
-sources. A zero payout may advance record processing while preserving unpaid
-dust. Construct canonical plan files from independently authenticated current
-state and refresh them when they expire or become stale. Execution checks
-permissions, maturity, lifecycle and all monetary preconditions.
+Claim plans contain one mandatory exact automatic XOR entitlement, including its
+funding lifecycle, beneficiary revision, custody assets and replay sequence.
+Amounts below the governed minimum remain accrued until enough rewards accumulate.
+Construct canonical plan files from authenticated current state and refresh them
+when they expire or become stale. Execution checks permissions, maturity,
+lifecycle and all monetary preconditions.
 
-`record-rewards` reads a Norito JSON `RecordPublicLaneRewards` object with
-`lane_id`, `epoch`, `reward_asset`, `total_reward`, `shares`, and `metadata`.
-Each share contains `account`, `role` (`"Validator"` or `"Nominator"`), and an
-exact `amount`. The configured fee-sink authority submits the distribution;
-the chain verifies its funding and allocation totals. This command does not
-mint rewards. The existing `register`, `rebind`, `activate`, and `exit`
-commands remain available for their corresponding validator transitions.
+Validator rewards accrue automatically from authenticated service and the historical
+eligible self-stake and nominations. Nominators prepare and sign their own
+`claim-rewards` plan; no validator or treasury payout list is accepted. The
+`register`, `rebind`, `activate`, and `exit` commands manage validator transitions.
 `rebind` requires `--network-id` matching the configured genesis network, `--peer-private-key-file`,
 `--activation-height`, and `--previous-peer-id` to sign replacement-peer
 consent for the exact stored pending tenure and binding. Consent is required

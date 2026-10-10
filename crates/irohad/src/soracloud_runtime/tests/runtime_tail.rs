@@ -92,7 +92,8 @@ fn vm_deferrals_are_local_unavailable_and_never_deterministic_faults() -> Result
         sample_mailbox_message(&bundle, "update", b"retry-me".to_vec()),
     );
     let active = VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity);
-    let allocation = VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow);
+    let allocation =
+        VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow);
     for (error, label) in [
         (active, "execution_deferred"),
         (allocation, "allocation_deferred"),
@@ -123,48 +124,57 @@ fn vm_deferrals_are_local_unavailable_and_never_deterministic_faults() -> Result
     Ok(())
 }
 #[test]
-fn nested_call_faults_remain_distinct_deterministic_mailbox_results_through_metering() -> Result<()>
-{
+fn vm_nested_call_faults_keep_distinct_deterministic_mailbox_labels_when_metered() -> Result<()> {
     let bundle = load_deployment_bundle_fixture()?;
     let request = sample_ordered_mailbox_request(
         &bundle,
         "update",
-        sample_mailbox_message(&bundle, "update", b"nested-call-fault".to_vec()),
+        sample_mailbox_message(&bundle, "update", b"nested-call".to_vec()),
+    );
+    let permission = deterministic_mailbox_failure_result(
+        request.clone(),
+        "permission_denied",
+        SoraServiceHealthStatusV1::Degraded,
     );
     let mut commitments = Vec::new();
-    for (fault, label) in [
+    for (error, label) in [
         (VMError::ReentrantCall, "reentrant_call"),
         (VMError::CallDepthExceeded, "call_depth_exceeded"),
     ] {
-        let mut original_receipt = None;
-        for error in [fault.clone(), VMError::metered(17, fault)] {
+        let expected = deterministic_mailbox_failure_result(
+            request.clone(),
+            label,
+            SoraServiceHealthStatusV1::Degraded,
+        );
+        assert_ne!(
+            expected.runtime_receipt.result_commitment,
+            permission.runtime_receipt.result_commitment,
+            "distinct canonical faults must not collapse into a coarse permission label"
+        );
+        commitments.push(expected.runtime_receipt.result_commitment);
+        let metered = VMError::metered(7, error.clone());
+        assert_eq!(metered.metered_gas(), Some(7));
+        for error in [error, metered] {
             assert_eq!(vm_error_label(&error), label);
             assert_eq!(
                 vm_error_kind(&error),
-                SoracloudRuntimeExecutionErrorKind::Internal
+                SoracloudRuntimeExecutionErrorKind::Internal,
             );
-            let result = ordered_mailbox_vm_failure(request.clone(), &error)
-                .expect("nested-call policy violations are deterministic guest failures");
+            assert!(error.execution_deferral().is_none());
+            let actual = ordered_mailbox_vm_failure(request.clone(), &error)
+                .expect("nested-call refusal is a deterministic runtime result");
+            assert_eq!(actual, expected);
             assert_eq!(
-                result.runtime_state.expect("runtime state").health_status,
+                actual.runtime_state.expect("runtime state").health_status,
                 SoraServiceHealthStatusV1::Degraded
             );
-            assert!(result.state_mutations.is_empty());
-            assert!(result.outbound_mailbox_messages.is_empty());
-            assert!(result.response_bytes.is_empty());
+            assert!(actual.state_mutations.is_empty());
+            assert!(actual.outbound_mailbox_messages.is_empty());
+            assert!(actual.response_bytes.is_empty());
             assert_eq!(
-                result.runtime_receipt.mailbox_message_id,
+                actual.runtime_receipt.mailbox_message_id,
                 Some(request.mailbox_message.message_id)
             );
-            if let Some(original) = original_receipt.as_ref() {
-                assert_eq!(
-                    &result.runtime_receipt, original,
-                    "metering must preserve the canonical failure identity"
-                );
-            } else {
-                commitments.push(result.runtime_receipt.result_commitment);
-                original_receipt = Some(result.runtime_receipt);
-            }
         }
     }
     assert_ne!(
@@ -173,7 +183,6 @@ fn nested_call_faults_remain_distinct_deterministic_mailbox_results_through_mete
     );
     Ok(())
 }
-
 #[test]
 fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
     let state = test_state()?;

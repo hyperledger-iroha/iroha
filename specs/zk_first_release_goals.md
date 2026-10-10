@@ -220,8 +220,10 @@ Two genuine native captures execute all 107 owner/wire printers each, with
 identical output. The applied fixture correction preserves all 105 prior owners
 and all 395 prior wire assignments and adds the reserve-policy owner. The
 KAGEMUSHA verifier-governance owners and instructions and the old KAGEMUSHA data-model
-owners are removed; the current fixture is pruned to 102 typed owners and 1,472 nominal
-identities without a new capture. These component passes do not establish integrated,
+owners and the three retired manual staking reward-record models are removed;
+the current fixture retains 102 typed owners and 1,469 nominal identities. The
+staking update separately captures its current model identities and claim frames;
+this does not constitute a new complete owner capture. These component passes do not establish integrated,
 physical-device or release qualification.
 
 The earlier seventeen-target Core/Kagami compilation passes with stock Rust 1.93.1 on
@@ -250,7 +252,7 @@ not rewrite those outcomes. All four lane time-floor/build-count regressions pas
 The fresh lifetime compile-fail doctest passes; the separate Primitives 333 and
 Norito derive 59 unit, 17 strict-JSON and 32 compiler cases in four UI tests pass.
 Full Mint/Guard/receiver, genuine proof/export and full-State authority remain
-incomplete. The separate current fixture retains 102 typed codec owners and 1,472 nominal
+incomplete. The separate current fixture retains 102 typed codec owners and 1,469 nominal
 identities, preserving every still-active historical hash. Its new ordinary,
 publication and reduced-feature controls remain pending; the preceding capture
 and native component runs do not qualify the merged candidate.

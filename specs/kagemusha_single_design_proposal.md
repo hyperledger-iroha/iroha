@@ -1,7 +1,17 @@
 # KAGEMUSHA — final implementation draft
 
-Status: **canonical implementation target, revision 2026-10-05**. This revision
-applies the owner answers of 2026-10-05: the hash families, `credit_id` and
+Status: **canonical implementation target, revision 2026-10-10**. This revision
+applies the owner directive of 2026-10-10 that every phone whose payment key lives
+in a TEE, StrongBox or Secure Enclave can pay offline: one hardware-attestation
+admission rule for Android and iPhone, with a pinned root set, a named revocation
+source per root and an operator denylist, and no Play Integrity or other vendor
+service (§2.2); closed E1 refusal reasons (§2.4); the two abandonment forms of an
+unused enrollment (§3.2); and a pre-commit runtime capacity check in place of
+per-device-class lineage budgets (§§1.1, 5.3). The revision lands as one
+coordinated cutover (§9.1); until then the deployed contract of Iroha
+`67728cc6f3` stays in force.
+It amends revision 2026-10-05, which applied the owner answers of 2026-10-05:
+the hash families, `credit_id` and
 `proof_digest` (§§3, 4.1, 5.1), the state core and head commitment (§3), the
 credit-digest tree (§3), receiver matching and credential continuity (§§3.2,
 5.1, 5.2), verifying-key selection (§3.2) and proof caps (§8). It also applies
@@ -53,7 +63,7 @@ implementation returns an explicit error rather than reporting a payment complet
 | ID | Requirement | Design rule |
 |---|---|---|
 | R1 | Offline payments | After enrollment and loading, peers need only each other (§5). |
-| R2 | Mainstream phones | Stock Android/vendor equivalents and iPhone, hardware-backed keys, no custom applet (§2). Actual platform evidence and measurements are recorded separately. Activation, loading and receiving require a device class whose published lineage budget is met (§5.3). |
+| R2 | Mainstream phones | Every stock Android phone (with or without Google services, including Huawei, Honor, Meizu, Xiaomi and Samsung) and every iPhone whose payment key is generated in its TEE, StrongBox or Secure Enclave and passes the one §2.2 admission rule; no custom applet, model list or vendor online service. Actual platform evidence and measurements are recorded separately. Every operation runs a pre-commit runtime capacity check on the phone itself (§5.3). |
 | R3 | Load from the ledger | A finalized reserve debit creates one wallet-bound ordinary Load receipt (§6). |
 | R4 | Final device-to-device value, unbounded hops | Send irreversibly transfers value to the bound receiver. Receive makes it immediately and durably owned by the receiver, subject only to the P4 burn exception (§3.2). The value becomes onward-spendable offline once the receiver's local lineage fold reaches its current head, which covers the crediting head; the fold needs no network, counterparty or approval. Only exact Payment replay can finish delivery; no refund or hop ceiling (§§3–5). |
 | R5 | Optional return online | Unload is the holder's choice, available from any folded head (§3.1). Remaining offline has no deadline unless an enabled regulatory control supplies one (§§6–7). |
@@ -180,16 +190,67 @@ platform limitations. Its issuer signature and policy binding are consumed by
 the lineage relation and verified natively by every consumer. Raw attestation chains stay in enrollment records, outside
 peer messages.
 
-- **Android and compatible vendor APIs:** validate the attestation chain
-  to a pinned Google root or adapter-named vendor root, with no certificate on
-  the attestation revocation status list at the time of the check (a leaked key
-  passes until Google lists it; the list is not instantaneous), and the
-  challenge, hardware security level, generated key properties, expected app
-  signing identity, locked device, verified vendor boot and enrollment patch
-  policy. Reject software keys, unlocked/custom boot evidence and identity
-  mismatches. Keep TEE and StrongBox evidence distinct. These fields describe
-  the attested event, not a live runtime examination of every payment.
-  See the [AOSP attestation contract](https://source.android.com/docs/security/features/keystore/attestation).
+**Admission rule.** One rule admits phones on both platforms. A phone may enroll
+at E1, and then Activate, Load, Send, Receive and Unload, if and only if the
+issuer verifies at E1 a vendor hardware attestation proving four things:
+
+1. A fresh, nonexportable P-256 SIGN/SHA-256 payment key was generated inside
+   the phone's isolated secure hardware: on Android StrongBox or the TEE (equal
+   attestation and KeyMint security levels of 1 or 2, origin GENERATED, no
+   USAGE_COUNT_LIMIT or ALL_APPLICATIONS); on iPhone and iPad the Secure
+   Enclave, whose key App Attest binds but does not independently attest (below).
+2. The key is bound to the E1 challenge and to this app. Android: the
+   attested application identity names the app package, a version at or above
+   the policy minimum and only signers in the policy's signer set (1–4 entries,
+   so every released distribution channel can enroll). Apple: production App
+   Attest for the App ID plus a fresh, counter-checked assertion over the
+   payment-key binding digest.
+3. Android only: the hardware-enforced RootOfTrust records a locked
+   bootloader, Verified boot and a nonzero verified-boot key; the boot hash is
+   required only from KeyMint (attestation version 100) on.
+4. The chain ends at a root of the policy's pinned root set, matched by SPKI,
+   and no certificate is listed by that root's named revocation source or by the
+   operator denylist.
+
+The [enrollment policy](kagemusha_wallet_enrollment_policy_v1.md) fixes the
+exact checks, root families, revocation sources and denylist format. Each
+failure has one closed refusal reason (§2.4). Attestation version 1 (Keymaster 2)
+carries no app identity and is refused for that evidence, never by model.
+
+The only on-device preconditions are conditions the holder can fix; they are
+not admission rules: a screen lock or passcode (custody class and Send/Unload
+confirmation, §2.3), unlocked credential storage (retry), custody excluded from
+backup, and enough free storage and memory, checked before each commit (§5.3).
+
+Nothing else gates enrollment or offline payment: no Play Integrity or other
+vendor online verdict, Google account, Google Mobile Services, Huawei Mobile
+Services or other vendor service, app-store installation, exact app version,
+StrongBox-only selection, patch-level refusal, model or device allowlist,
+per-model budget, second attested key or periodic online check. StrongBox versus
+TEE and patch levels are recorded credential facts; they never refuse a phone.
+Registration, enrollment and payment require no vendor account or service.
+
+- **Android and compatible vendor APIs:** validate the KeyMint attestation
+  chain against the policy's root set. Google's RSA root key covers factory and
+  earlier remotely provisioned chains: certificate validity periods are not
+  evaluated under it, per Google's guidance, and revocation is mandatory.
+  Google's Key Attestation CA1 root has its validity evaluated. A vendor's own
+  root, such as Huawei's, is admitted by a reviewed `Vendor` root-set row with
+  its revocation source once a genuine device chain proves that root exists;
+  adding the row is data, not code. A Vendor root that names no published
+  revocation service uses the operator denylist as its revocation source. Every
+  source is read at the time of the check (a leaked key passes until it is
+  listed; lists are not instantaneous). Check the challenge, hardware security
+  level, generated key properties, app identity, locked device and verified
+  vendor boot; record the patch levels against the policy floor. Reject software
+  keys, unlocked or unverified boot evidence, identity mismatches and roots
+  outside the set. Keep TEE and StrongBox evidence distinct; the attested level
+  chooses the kind. The adapter generates the key in StrongBox where the phone
+  declares it and in the TEE otherwise, falling back to the TEE only when
+  StrongBox definitively fails before creating a key; there is no policy-driven
+  selector or refusal plan. These fields describe the attested event, not a live
+  runtime examination of every payment. See the [AOSP attestation
+  contract](https://source.android.com/docs/security/features/keystore/attestation).
 - **iPhone:** create the payment key in the Secure Enclave. Verify App Attest
   and bind its fresh assertion transcript to that payment public key and the
   enrollment challenge. Reject when App Attest is unsupported, the attestation
@@ -200,21 +261,31 @@ peer messages.
   a measurement proving the running OS has no exploit. Stock iOS and correct
   local key creation remain assumptions. See [Apple's validation
   API](https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server).
-- **Other vendor ecosystems:** use an adapter with an explicit equivalent
-  evidence contract. A brand name is not an attestation format. Do not invent
-  Android fields for a platform that lacks them or silently enroll a software
-  key. Such adapter work can proceed alongside the POC.
+- **Other vendor ecosystems:** a platform that does not run Android apps (for
+  example HarmonyOS NEXT with HUKS key attestation) uses an adapter with an
+  explicit equivalent evidence contract under the same four-part rule. A brand
+  name is not an attestation format. Do not invent Android fields for a platform
+  that lacks them or silently enroll a software key. Such adapter work can
+  proceed alongside the POC.
 
-Play Integrity, where used, is an enrollment-time signal recorded in
-`evidence_digest`. Delete the periodic Play Integrity refresh lease and its
-Guard slot; periodic renewal exists only as the optional §7 attestation lease.
-Local root/jailbreak checks supplement these checks; they are not a proof that
-compromise is absent. A positive local check rejects enrollment. After
-enrollment, run the checks before issuing each Request and before Send; a
-positive result rejects that operation and says why. It never deletes state,
-changes the balance or alters committed payments. Preserve custody, delivery
-bytes and recovery access; a detected compromise is outside the security
-assumption, not authority to reverse a Send.
+Enrollment evidence is the platform attestation alone; it records no vendor
+online verdict, and periodic renewal exists only as the optional §7 attestation
+lease. Local root/jailbreak heuristics are not admission or payment rules: the
+attested boot state (Android) and App Attest (iPhone) are the enrollment
+evidence, and a heuristic would refuse genuine phones without proving that
+compromise is absent. A detected compromise is outside the security assumption
+(§2.1); it is never authority to delete state, change the balance, alter
+committed payments or reverse a Send. Preserve custody, delivery bytes and
+recovery access.
+
+Residual risk, stated plainly: a compromised phone holding a leaked factory
+attestation key that is not yet listed can forge TEE evidence for a software key
+and double-spend up to its offline balance until the key is listed. The
+mandatory revocation check at every E1 and the operator denylist bound that
+window; remotely provisioned attestation keys are not exposed to factory key
+leaks. An operator's online service may also decline new Activate and Load
+requests for a wallet whose retained E1 chain is later listed. It never refuses
+Unload and never affects offline acceptance or committed payments.
 
 Renewal, where the attestation lease is enabled, is not a repeat of enrollment:
 platforms attest a key only when it is generated. A renewal carries three
@@ -258,6 +329,62 @@ that silently destroys money when a fingerprint changes. Where a storage class
 requires a device passcode, explain that removing the passcode may destroy its
 custody material; test that lifecycle on each adapter. Apple's storage classes
 have distinct [backup and passcode behavior](https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web).
+
+### 2.4 E1 outcomes and refusal reasons
+
+Every E5 verification ends in exactly one outcome. The issuer retains it with the
+exchange and returns it unchanged on every retry:
+
+- **Issued:** the E6 result with the signed credential (§2.2).
+- **Refused(reason):** exactly one reason from the closed table below. The E1
+  challenge is consumed. Because the attestation binds that challenge, another
+  attempt needs a new challenge, slot and key, after abandoning this one (§3.2).
+- **Unavailable:** a revocation source, the operator denylist, the eligibility
+  provider or issuer storage could not be read. Nothing is decided; the wallet
+  retries the exact retained E5 while E1 is live.
+- **Unknown:** the issuer claimed the exchange but holds no retained result;
+  recovery follows the [eligibility contract](kagemusha_enrollment_eligibility_v1.md)
+  Inspect rules.
+
+| Code | Reason | Platform | Class | Cause |
+|---:|---|---|---|---|
+| 1 | KeyNotInSecureHardware | Android | Phone | The attestation or KeyMint security level is Software, the two levels differ, or attestation version 2 is not TEE. |
+| 2 | AttestationWithoutAppIdentity | Android | Phone | Attestation version 1 (Keymaster 2) has no application identity. |
+| 3 | BootloaderUnlocked | Android | Phone | The RootOfTrust records an unlocked bootloader. |
+| 4 | BootNotVerified | Android | Phone | Boot state is not Verified, the verified-boot key is zero, or a KeyMint boot hash is not 32 nonzero bytes. |
+| 5 | UntrustedAttestationRoot | Both | Phone | The chain does not validate to a root of the policy's root set (Android) or to Apple's App Attestation root (Apple). |
+| 6 | AttestationRevoked | Android | Phone | A chain certificate is listed by its root's revocation source or by the operator denylist. |
+| 7 | AppIdentityMismatch | Both | App | The package, a signer, the App ID or the App Attest environment differs from the app policy. |
+| 8 | AppVersionBelowMinimum | Android | App | The attested package version is below the app policy minimum. |
+| 9 | EvidenceInvalid | Both | Attempt | The evidence is malformed or does not match this attempt: shape, challenge, attested key, key properties, authorization tags (including 405 or 600), App Attest nonce, key identifier, counter or key-binding assertion. |
+| 10 | ChallengeExpired | Both | Attempt | E5 verification began after the E1 challenge lifetime. |
+| 11 | AccountNotApproved | Both | Account | The eligibility provider reports `NotApproved`. |
+| 12 | AccountFrozen | Both | Account | The eligibility provider reports `Frozen`. |
+
+The class tells the wallet what the holder can do; the app owns the wording:
+
+- **Phone:** this phone cannot hold offline value. Abandon the attempt and do
+  not start again on this phone. Online payments are unaffected.
+- **App:** install the released app from an official channel, or update it,
+  then start again.
+- **Attempt:** abandon and start again with a new challenge. A repeat is a
+  defect report, not a device verdict.
+- **Account:** the account's status, not the phone, blocks enrollment; start
+  again after it changes. An eligibility refusal at any online enrollment
+  boundary (pre-key permit, E5, signing or E6 delivery) uses codes 11 and 12.
+
+Codes are a closed `u16` set. Zero and unknown codes are protocol errors, never
+admission. Native exports the set; the issuer worker reports exactly one code
+with each refusal; Core and the SDKs relay it unchanged and never substitute
+free text. Right after key generation, the Android adapter may apply the
+Phone and App checks to its own fresh attestation and report the same codes
+before E5, then abandon (§3.2). The issuer stays authoritative; the adapter
+reports the first failure it finds, which may differ from the issuer's first.
+
+Conditions found on the phone before E5 are not E1 refusals: no screen lock or
+passcode, locked credential storage (retry), no secure hardware or App Attest
+support (Phone class, reported by the platform adapter), and too little storage
+or memory (§5.3).
 
 ## 3. One state, step and lineage relations
 
@@ -529,8 +656,11 @@ check runs.
     case;
   - this step's σ and τ, and every input package's Ω, σ and τ;
   - every signature it owns: the Request and receiver credential only in
-    Λ_recv; ordinary Load receipts in Λ_load; certificates, credentials, and policy,
-    list, time and credential updates in the step that consumes them;
+    Λ_recv; certificates, credentials, and policy, list, time and credential
+    updates in the step that consumes them;
+  - in Λ_load, the exact ordinary receipt terms and replay insertion bound to
+    the credential-authorized Advance. Native BLS finality and receipt-event
+    inclusion are checked before that signature under §6.1, not in Λ_load;
   - the Request's account digests against the credential each belongs to:
     Λ_send checks the payer account digest against the payer's own
     credential, and Λ_recv checks the receiver account digest against the
@@ -641,14 +771,18 @@ Post-commit failure is contained:
   before Advance, and in-circuit only in the receiver's own Λ_recv. Fee terms
   are checked against the payer's own policy.
 - Ordinary Load receipts, certificates, fee schedules, credentials, and policy, list,
-  time and credential updates have no failure branch. The issuer and ledger
-  roles of §2.3 sign them. A peer can relay them but cannot forge or re-encode
+  time and credential updates have no failure branch. The issuer roles of §2.3
+  sign their objects; native BLS finality authenticates ledger Load receipts as
+  specified in §6.1. A peer can relay them but cannot forge or re-encode
   them (§8), so only a verifier defect can make them fail in-circuit. The next
   two rules target that defect.
 - Native and in-circuit verifiers accept exactly the same set for every object
   that Λ verifies after a native check: Ω including its deferred values, σ, τ,
   the Request, Credited evidence, ordinary Load receipts, fee schedules, certificates,
   credentials, and policy, list, time and credential updates.
+  For ordinary Load receipts this equivalence covers canonical transcript and
+  monetary-term binding. Native BLS finality and event inclusion remain the
+  explicit pre-Advance trust boundary of §6.1; Λ does not repeat those checks.
 - Every signature that Λ verifies uses a P-256 gadget that is complete for every
   input the native verifier accepts.
 
@@ -676,14 +810,62 @@ attempt's independent verification cursor and confirms the wallet only after
 authenticating successful inclusion of one retained attempt. That confirmation
 proves activation of the wallet, not successful execution of every envelope.
 An interrupted enrollment resumes the same installation; it never creates two
-initialized heads. Abandonment is allowed only while the enrollment marker is
-still selected and Bootstrap has never committed. It commits a terminal marker
-and records its receipt in a ledger instruction that atomically rejects prior
-activation and permanently disables activation and loads. No receipt or monetary
-balance exists to return. Once Bootstrap commits, including an uncertain
-activation response, recover that incarnation and use §6.3; do not abandon funded
-obligations. Releasing an unused quota allocation requires that terminal evidence
-and does not erase historical quota usage.
+initialized heads. The holder may abandon an unused enrollment, for example
+after an E1 refusal (§2.4) or an interruption that cannot resume, only while
+Bootstrap has never been selected. Once Bootstrap is selected or commits,
+including an uncertain activation response, recover that incarnation and use
+§6.3; do not abandon funded obligations. Abandonment has two forms, chosen by the
+slot's durable state. The names below are Native's slot statuses
+(`KagemushaWalletSlotStatusV1`). Two different Native names say Pending. The
+enrollment progress `EnrollmentProgressV1::Pending`, which Native reports for
+slot status `Empty` or `IntentOnly`, is the no-marker form below; "abandon from
+Pending" means that form. The slot status `Pending(marker)` is a selected head
+waiting for its receipt, and Native reports it as progress `BootstrapSelected`:
+Bootstrap is selected, so it is never abandoned.
+
+- **No marker (Native `Empty` or `IntentOnly`, or an intent whose key is
+  unknown).** No enrollment marker exists. Either the slot was selected but no
+  key was generated under it (`Empty`, or `IntentOnly` with the key
+  definitively absent), or key generation was interrupted and the platform
+  cannot establish whether a key exists. The unknown case has no slot status of
+  its own: on Android API 26–30 a missing lookup result is unknown and the
+  one-shot generation grant is spent, so Native reconciliation of that slot
+  reports `Unavailable`, and the slot can neither continue nor adopt a key.
+  Abandonment is local: the provider durably writes the abandoned-slot record
+  with a holder-abandoned reason. The slot then reconciles to `SlotAbandoned`
+  without a key probe, and no key is ever generated, adopted or initialized
+  under it again. No E5 can name this slot, because E5 carries the durable
+  generation-zero marker, so no credential or ledger record names it and there
+  is nothing to submit. `abandon()` reports this local form and returns no
+  ledger-control bytes. Today Native writes that record only for an expired
+  challenge or a key found without a marker, and `abandon()` refuses a slot
+  without a marker. The holder form is new Native work that the Native owner
+  reviews before it is implemented (§9.1).
+- **Marker (Native `Enrollment`: the generation-zero marker is still
+  current).** This includes an issuer refusal and an issued credential whose
+  Bootstrap was never selected. Abandonment commits the terminal marker with
+  reason Abandoned (Native `Terminal`) and returns the exact Abandonment frame
+  signed by the payment key, as `abandon()` does today. The holder's account
+  submits it in an ordinary transaction; the ledger instruction atomically
+  rejects prior activation and permanently disables activation and loads for
+  that `wallet_id`. No receipt or monetary balance exists to return. Native
+  retains the frame, and the wallet resubmits the exact bytes until finalized
+  inclusion is authenticated.
+
+A fresh enrollment always uses a new issuer challenge, a new slot and a newly
+generated key, so it has a new `wallet_id`. It starts as soon as the abandonment
+is durable on the phone and never waits for ledger acceptance: the ledger keys
+activation by `wallet_id`, and the abandoned incarnation can no longer select
+Bootstrap from this custody. Ledger acceptance of an Abandonment matters only
+for the old `wallet_id`: it permanently disables activation and loads even
+against a restored or compromised copy, and it is the terminal evidence that
+releasing an unused quota allocation requires; that release does not erase
+historical quota usage. Only the marker form can hold such an allocation, and
+only after an issued credential. Until the issuer authenticates finalized
+inclusion of the Abandonment, the old `wallet_id`'s quota share stays reserved
+(§7), so with quota controls enabled the issuer allocates the new wallet's
+share from the remaining allowance. The new enrollment itself still starts at
+once; the no-marker form holds no allocation and has nothing to wait for.
 
 ### 3.3 Stable offline verification
 
@@ -785,7 +967,7 @@ The adapter performs this recoverable sequence:
    - recompute each successor root from the authenticated store and the staged
      update, and require it to equal the root in σ's successor commitment;
      otherwise discard the staging;
-   - reserve the storage of §5.3.
+   - reserve the storage of §5.3 and run its runtime capacity check.
 
    Persist the complete staged capsule with authenticated links to the
    predecessor and operation ID. Flush its data and directory metadata using
@@ -851,7 +1033,7 @@ the monetary interpretation.
 | Offer | Payer advertises its next `s`, amount and supported scheme, and carries its `CredentialV1` (at most 1,024 bytes); its payment key signs the Offer. It is an authenticated session hint, with no debit or credit authority. The receiver verifies the credential natively and authenticates the Offer with it. A delivery retry also opens with an Offer, so the receiver always holds the payer's credential. After the Offer, the payer may send a Lineage message (§8) carrying Ω of its folded head. The receiver verifies it only after an authenticated Offer, rate-limits it, and checks Ω's `wallet_id`, credential digest and `payment_key` against the Offer's credential. |
 | Request | Receiver signs a nonmonetary setup quote containing the exact fields above, with the payer account digest taken from the Offer's credential. With its blacklist control enabled, it issues no Request when its committed list contains that account (§7); the Request records the version and root of that list, or `(0, 0)` when it enforces none, and the receiver retains the gap opening that shows the payer absent. It creates no state transition, receiver ordinal or reserved receive slot. The payer verifies its signature and the receiver credential natively before proving Send (below). |
 | Payment | From a folded head, the payer verifies the Request and the applicable Send policy in one native pre-check, which applies every enabled control (§7) and returns σ_send's control witnesses, and checks `s == next_send`. The Request's payer account digest must be the payer credential's and its receiver account digest the Request receiver credential's; with the payer's blacklist control enabled, its committed list must not contain the receiver's account (§7). It may prove σ_send *speculatively*, after verifying the Request and before the payer confirms; a declined speculative σ_send is discarded and never signed. It natively verifies σ_send and uses the Ω(pred) recorded as self-verified at fold time (§3.1), which is not re-verified on the payment path. It then permanently subtracts `amount + fee`, increments `next_send`, appends to `send_chain` and inserts the credit descriptor in its pending outbox. It commits and retains the full canonical Payment before first release. Payment contains the signed Request body, the payer's `payment_key` and credential digest (both equal to Ω(pred)'s), and the Send package {statement, Ω(pred), σ_send, τ_send}. The receiver's credential, fee schedule and certificates are bound by digest in the Request body, which the receiver holds. |
-| Receive | On a device class whose published lineage budget is met (§5.3), the receiver natively verifies before mutation: the payer credential from the session's Offer, whose digest equals Payment's credential digest, σ_send's statement and `Ω(pred).credential`; Ω(pred), including the decide; the §3.2 consumer checks; σ_send and τ_send; its own bound identity, matched by the Request's receiver `wallet_id` and the `payment_key` of the Request's receiver credential, never by credential-digest equality, so that credential may be an earlier one of this incarnation; the Request it signed, whose payer account digest equals the Offer credential's; and, when that Request records a nonzero blacklist version, that the recorded list is in its blacklist history and, by the retained gap opening, does not contain that payer account, which σ_recv also proves against the recorded root (§7). Its current list and controls neither excuse nor add that check. If Payment's Ω(pred) is byte-identical to a Lineage Ω that the receiver already verified in this session, that verification is reused; otherwise it verifies Ω(pred) in full. It proves σ_recv (precomputed at Request signing, re-proved if its head changed), whose statement and successor commitment exclude the Payment digest (§3), and adds exactly `amount`. In the serialized Advance (§4.2) it checks nonmembership and inserts `credit_id → (amount, receive sequence)` into the permanent consumed-credit map; the Receive receipt also binds the full canonical Payment digest. Show complete only after durable completion. Λ_recv later proves the incoming objects, the map update and the receipt's Payment digest in-circuit and records the digest in the credit-digest root, or takes the burn branch (§3.2). |
+| Receive | After the §5.3 runtime capacity check passes on the receiving phone, the receiver natively verifies before mutation: the payer credential from the session's Offer, whose digest equals Payment's credential digest, σ_send's statement and `Ω(pred).credential`; Ω(pred), including the decide; the §3.2 consumer checks; σ_send and τ_send; its own bound identity, matched by the Request's receiver `wallet_id` and the `payment_key` of the Request's receiver credential, never by credential-digest equality, so that credential may be an earlier one of this incarnation; the Request it signed, whose payer account digest equals the Offer credential's; and, when that Request records a nonzero blacklist version, that the recorded list is in its blacklist history and, by the retained gap opening, does not contain that payer account, which σ_recv also proves against the recorded root (§7). Its current list and controls neither excuse nor add that check. If Payment's Ω(pred) is byte-identical to a Lineage Ω that the receiver already verified in this session, that verification is reused; otherwise it verifies Ω(pred) in full. It proves σ_recv (precomputed at Request signing, re-proved if its head changed), whose statement and successor commitment exclude the Payment digest (§3), and adds exactly `amount`. In the serialized Advance (§4.2) it checks nonmembership and inserts `credit_id → (amount, receive sequence)` into the permanent consumed-credit map; the Receive receipt also binds the full canonical Payment digest. Show complete only after durable completion. Λ_recv later proves the incoming objects, the map update and the receipt's Payment digest in-circuit and records the digest in the credit-digest root, or takes the burn branch (§3.2). |
 | Credited | Optional delivery evidence, in one of two forms. (i) The receiver's Receive package {statement, σ_recv, τ_recv}, whose receipt binds the exact Payment digest; its status is *credited, unfolded*. (ii) A read-only `CreditStatus` against a folded receiver head `h` that covers the credit: {statement(h), proof_digest(h), τ(h), Ω(h), 32-sibling membership opening of `credit_id → (Payment digest, burned flag)` in Ω(h)'s credit-digest root}, with no σ and no Ω(pred); its status is *credited* or *burned*. Credited advances no state. The receiver need not retain it. A payer keeps Credited evidence it consumed as a fold witness until its ArchiveSent step is folded (§4.1). |
 | ArchiveSent | Payer verifies matching Credited evidence (credited or burned) and proves removal of the matching pending outgoing descriptor. It may delete the delivered Payment bytes only after a durable Ω covers the ArchiveSent step on its archive branch (§3.2), and never the copies a fee claim still needs (§6.2). Balance, quotas and consumed-credit entries stay unchanged. |
 
@@ -944,19 +1126,35 @@ fee claims and eventual outbox cleanup. A Request alone promises no reserved
 capacity. Temporary capacity pressure postpones Receive while the immutable
 Payment remains deliverable; it does not cancel that credit. Do not strand an
 already accepted balance because its ancestry is long. Derive proving workspace
-bounds from the fixed relations. Publish in artifact metadata the measured
-memory, storage, and background lineage time, peak memory and energy per
-operation and device class, where a *device class* is a phone model and memory
-tier. A class's lineage
-budget is met when its published Λ peak memory and fold-witness storage for
-the operation's relation fit the device's available app memory and reserved
-storage. A class with no published budget does not meet it. A wallet activates,
-Loads, Receives or commits RefreshPolicy only on a device class whose published
-lineage budget is met; otherwise it refuses before commit, and the receipt or
-Payment stays deliverable. Never rely on platform background-execution time
-for multi-minute proving: folds resume whenever the app runs. Fold-witness
-storage counts toward the reserved capacity. Existing measurements do not yet
-provide those budgets for this design.
+bounds from the fixed relations.
+
+**Runtime capacity check.** Before an operation proves its step, and again in
+§4.2 step 2 before it commits, the wallet checks the phone it is running on, at
+that moment:
+
+- storage: free bytes in its no-backup custody storage cover the reservation
+  above plus the fold witnesses the operation adds until a durable Ω covers it;
+- memory: memory currently available to the app covers the peak proving memory
+  of the operation's step relation and of the lineage relation that folds it.
+
+Both bounds come from the installed relations, never from a phone model. The
+proof owner computes each relation's peak proving memory and fold-witness bytes
+from that relation's fixed, authenticated descriptor (its domain size and its
+column and lookup counts) with one conservative formula. The check adds no field
+to the artifact manifest, verifier pack or producer inventory, and needs no
+artifact-producer change. Measured peaks and fold times are recorded as evidence
+(§8); a measurement above the computed bound is a defect in the formula, which
+is fixed in code. A failed check
+refuses the operation before commit with a typed `NotEnoughStorage` or
+`NotEnoughMemory` result, never a device verdict: nothing is debited or
+credited, the receipt or Payment stays deliverable, and the holder retries after
+freeing storage or memory. Proving that runs out of memory before commit is
+reported the same way and leaves the head unchanged. There is no phone-model
+list, device class, roster or published per-model budget; per-phone latency,
+memory and energy measurements are recorded as evidence (§8), never as an
+admission list. Never rely on platform background-execution time for
+multi-minute proving: folds resume whenever the app runs. Fold-witness storage
+counts toward the reserved capacity.
 
 A receiver may apply a Request-issuance policy (minimum amount, rate limit,
 maximum unfolded backlog). It may fold a contiguous run of unfolded steps in one
@@ -1054,7 +1252,9 @@ finality runs and structural fixtures do not establish those gates.
 a ledger-directed claim with a domain-separated nullifier derived from scheme,
 wallet and redemption ordinal. The ledger verifies the complete committed
 package, including Ω of its predecessor and the §3.2 consumer checks, and pays
-its bound account exactly once at face value. Unload is possible only from a
+the face amount exactly once: the bound account receives it in full when the
+online charge is zero; otherwise the displayed quote's charge is withheld for
+its fixed beneficiary and the account receives the remainder. Unload is possible only from a
 folded head, and its amount is bounded by `balance − burned_total` with
 Ω(pred)'s `burned_total`. Retry returns
 the original result. No timeout restores an uncertain redemption to the wallet.
@@ -1107,7 +1307,8 @@ Move value to another enrolled phone using an ordinary offline payment,
 including full-balance transfer. This uses the same proof and message format
 and requires a folded head (§3.1). A wallet that cannot complete its fold
 cannot move or unload value; no online path unloads an unfolded lineage. The
-§5.3 device gate keeps value from arriving on a device class that cannot fold.
+§5.3 runtime capacity check keeps value from arriving on a phone that lacks the
+memory or storage to fold it.
 Keep the old wallet's key, private state, replay map and unresolved Payment and
 claim bytes. Zero spendable balance does not mean its custody data is disposable.
 
@@ -1322,7 +1523,7 @@ reassembles and validates a complete bounded message before monetary parsing.
 The UX target is **2 seconds p95** from payer confirmation after Request to
 receiver durable completion (P1a). It includes the payer's remaining step-proof
 time, transfer, receiver verification, the receiver step proof and both
-durable commits. Report separately, per device class: the time until the value
+durable commits. Report separately, per measured phone: the time until the value
 is ready to spend onward (fold), and tap-to-done including setup and the
 confirmation dwell. Measure Offer/Request setup, cold startup and payer
 receipt-confirmation latency separately. Schemes with enabled controls report
@@ -1383,6 +1584,74 @@ funded old-format value exists there. If it does, that release's verifier
 stays until its holders have unloaded or paid it into the new scheme by their
 own choice; nobody is required to go online for the cutover. Keep no decoder
 fallback beyond that.
+
+### 9.1 Cutover sequencing
+
+Revision 2026-10-10 changes E1 app attestation and issuer policy, the
+wallet–issuer E5/E6 exchange and mobile Native packaging. Its admission changes
+alter no validator-facing ledger wire, ISI or state format, no wallet relation
+or circuit, no artifact producer and no verifier-pack, producer-inventory or
+transport format. The credential, 56-byte evidence record, enrollment challenge
+and Abandonment frame keep their layouts; the 32-byte policy and evidence
+digests they carry name the new preimages. No ledger instruction, validation
+rule or state decodes a policy frame or E5/E6 evidence. The one validation
+change, retiring fact bit 9 (step 4), is scheduled separately with its own
+precondition.
+
+Until the cutover, the deployed contract of Iroha source `67728cc6f3` stays in
+force. That contract is bridge ABI 28; the signed v7 runtime with its
+`firstDeviceAuthentication` selection; and an issuer that requires a Play
+Integrity token and sets fact bit 9 on Android. Nothing in this revision is
+deployed piecemeal. The cutover is one coordinated change, and the release
+driver builds and releases it:
+
+1. **Bridge ABI 28 → 29.** `connect_norito_bridge` deletes the first-device
+   authentication-key C/JNI exports (`first_device_auth_key_v1.rs` and its JNI
+   adapter), its enrollment `prepare_request` takes the Android chain only, and
+   the runtime capacity results of §5.3 become typed. The export inventory
+   changes accordingly. ABI 29 artifacts refuse ABI 28 callers; there is no
+   compatibility export.
+2. **`firstDeviceAuthentication` is removed everywhere at once.** That selection
+   carries a Google OAuth client, a Play Integrity cloud project and a second
+   attested sign-up key. It goes from the signed v7 runtime the release driver
+   composes; from Native installed selection (`installed/selection.rs` and
+   `selection/bpng.rs`); from BPNG Core's runtime projection, together with its
+   Play Integrity secret; from the Android app's first-device bootstrap and
+   schema; and from the iOS runtime decode. Removing one alone breaks startup,
+   because Native refuses a BPNG runtime without the selection today, so the
+   runtime keeps the field until this step.
+3. **E1 policy and issuer.** These land together: the Model's Android app and
+   enrollment arms of the [enrollment policy](kagemusha_wallet_enrollment_policy_v1.md)
+   and the regenerated `fixtures/kagemusha/wallet_enrollment_policy_v1_vectors.json`; the
+   issuer worker, its configuration and the Python verifier admitting under §2.2
+   with no Play Integrity token or hardware selector; the E5 `PlatformEvidenceV1`
+   and E6 `IssuerEvidenceV1` Android arms carrying the chain only; the closed
+   §2.4 refusal codes, exported by Native and relayed unchanged by BPNG Core and
+   the Kotlin and Swift SDKs; and an issuer that never sets fact bit 9. The
+   issuer owner selects the reviewed policy originals (the Google RSA and CA1 SPKI
+   pins, signer set, minimum version and patch floor; the Apple root and App ID)
+   and the operator denylist in this step. The Iroha READMEs that still describe
+   Play Integrity change with their code.
+4. **Fact bit 9 in record validation.** Removing `PLAY_INTEGRITY_SIGNAL` from the
+   Model's defined-facts and Apple-forbidden masks changes the credential
+   validation that every consumer, validators included, performs. It lands only
+   in this cutover's validator release, and only where no credential on that
+   ledger carries bit 9: either none was issued under the deployed issuer, or the
+   cutover resets that network's KAGEMUSHA state (a testnet reset is its cutover,
+   §9). Otherwise bit 9 stays defined in validation, and unset by the issuer,
+   until those credentials are gone.
+5. **Mobile Native rebuild.** The release driver rebuilds Native for the three
+   Android ABIs and the Apple xcframework from the cutover source, and the
+   Android and iOS apps bind ABI 29. No other work package builds, promotes or
+   deploys mobile natives.
+
+Before Native implements this revision, the Native owner reviews it. The
+review covers the §3.2 no-marker abandonment, which is abandonment from Native
+progress `EnrollmentProgressV1::Pending` (local, no ledger bytes, a
+holder-abandoned reason); the rule that a fresh slot does not wait for ledger
+acceptance of an Abandonment; and the quota-share reservation that lasts until
+that acceptance. Until the review signs off, these rules are the proposed
+design and no Native code implements them.
 
 ## 10. Goals and execution order
 

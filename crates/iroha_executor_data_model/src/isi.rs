@@ -1039,6 +1039,190 @@ pub mod multisig {
         }
 
         #[test]
+        fn multisig_spec_rejects_every_duplicate_field_before_replacement() {
+            let source = json::to_json(&sample_spec()).unwrap();
+            for (name, value) in [
+                ("signatories", "{}"),
+                ("quorum", "1"),
+                ("transaction_ttl_ms", "1"),
+            ] {
+                let duplicate = format!("{{\"{name}\":{value},{}", &source[1..]);
+                let error = json::from_str::<MultisigSpec>(&duplicate)
+                    .expect_err("duplicate multisig spec field must not replace authority");
+                assert!(matches!(error, json::Error::DuplicateField { field } if field == name));
+            }
+            let escaped = format!("{{\"\\u0071uorum\":1,{}", &source[1..]);
+            assert!(matches!(json::from_str::<MultisigSpec>(&escaped),
+                Err(json::Error::DuplicateField { field }) if field == "quorum"));
+        }
+
+        #[test]
+        fn multisig_proposal_rejects_every_duplicate_field_including_null() {
+            let expected = MultisigProposalValue::new(
+                vec![sample_instruction_box()],
+                1,
+                2,
+                BTreeSet::from([fixture_account(4)]),
+                Some(false),
+            );
+            let source = json::to_json(&expected).unwrap();
+            for (name, value) in [
+                ("instructions", "[]"),
+                ("proposed_at_ms", "0"),
+                ("expires_at_ms", "0"),
+                ("approvals", "[]"),
+                ("is_relayed", "null"),
+            ] {
+                let duplicate = format!("{{\"{name}\":{value},{}", &source[1..]);
+                let error = json::from_str::<MultisigProposalValue>(&duplicate)
+                    .expect_err("duplicate multisig proposal field must not replace authority");
+                assert!(matches!(error, json::Error::DuplicateField { field } if field == name));
+            }
+        }
+
+        #[test]
+        fn canonical_multisig_readers_keep_wire_values_required_fields_and_optional_null() {
+            let spec = sample_spec();
+            let source = json::to_json(&spec).unwrap();
+            let decoded = json::from_str::<MultisigSpec>(&source).unwrap();
+            assert_eq!(decoded, spec);
+            assert_eq!(json::to_json(&decoded).unwrap(), source);
+            assert!(matches!(json::from_str::<MultisigSpec>("{}"),
+                Err(json::Error::MissingField { field }) if field == "signatories"));
+            let expected = MultisigProposalValue::new(
+                vec![sample_instruction_box()],
+                1,
+                2,
+                BTreeSet::from([fixture_account(4)]),
+                None,
+            );
+            let source = json::to_json(&expected).unwrap();
+            assert!(source.contains(",\"is_relayed\":null"));
+            let omitted = source.replace(",\"is_relayed\":null", "");
+            for input in [source.as_str(), omitted.as_str()] {
+                let decoded = json::from_str::<MultisigProposalValue>(input).unwrap();
+                assert_eq!(decoded, expected);
+                assert_eq!(json::to_json(&decoded).unwrap(), source);
+            }
+            assert!(matches!(json::from_str::<MultisigProposalValue>("{}"),
+                Err(json::Error::MissingField { field }) if field == "instructions"));
+        }
+
+        fn allocation_limits(bytes: usize) -> norito::DecodeLimits {
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        }
+
+        #[test]
+        fn multisig_signatory_json_preserves_original_refusal_at_every_allocation_limit() {
+            let expected = sample_spec();
+            let source = json::to_json(&expected).unwrap();
+            let (baseline, usage) =
+                norito::core::with_decode_limits_measured(allocation_limits(usize::MAX), || {
+                    json::from_str::<MultisigSpec>(&source)
+                });
+            assert_eq!(baseline.unwrap(), expected);
+            let demand = usage.total_allocated_bytes();
+            assert!(demand > 0);
+            for limit in 0..demand {
+                let error =
+                    norito::core::with_decode_limits_measured(allocation_limits(limit), || {
+                        json::from_str::<MultisigSpec>(&source)
+                    })
+                    .0
+                    .expect_err("every smaller original allocation limit must refuse");
+                let original = error.into_core_error();
+                let Some(norito::core::DecodeResourceError::TotalAllocationExceeded {
+                    attempted,
+                    limit: actual_limit,
+                }) = original.decode_resource_error()
+                else {
+                    panic!(
+                        "signatory account decoding erased original refusal at {limit}: {original:?}"
+                    );
+                };
+                assert_eq!(actual_limit, u64::try_from(limit).unwrap());
+                assert!(attempted > actual_limit);
+            }
+            let (retry, usage) =
+                norito::core::with_decode_limits_measured(allocation_limits(demand), || {
+                    json::from_str::<MultisigSpec>(&source)
+                });
+            assert_eq!(retry.unwrap(), expected);
+            assert_eq!(usage.total_allocated_bytes(), demand);
+            let malformed = source.replacen(&fixture_account(1).to_string(), "invalid-account", 1);
+            let error = json::from_str::<MultisigSpec>(&malformed).unwrap_err();
+            assert!(!error.is_decode_resource_limit());
+        }
+
+        fn assert_metadata_refusal_and_retry<T: std::fmt::Debug + PartialEq>(
+            payload: &Json,
+            expected: &T,
+            decode: impl Fn(&Json) -> Result<T, norito::Error>,
+        ) {
+            let source_pointer = payload.as_ref().as_ptr();
+            let (baseline, usage) =
+                norito::core::with_decode_limits_measured(allocation_limits(usize::MAX), || {
+                    decode(payload)
+                });
+            assert_eq!(&baseline.unwrap(), expected);
+            let demand = usage.total_allocated_bytes();
+            assert!(demand > 0);
+            for limit in [0, 1, demand - 1] {
+                let context = norito::core::DecodeBudgetContext::new(allocation_limits(
+                    demand.checked_mul(4).unwrap(),
+                ));
+                let error = context
+                    .with(|| {
+                        norito::core::with_decode_limits_measured(allocation_limits(limit), || {
+                            decode(payload)
+                        })
+                    })
+                    .0
+                    .expect_err("actual metadata reader must refuse its original inner limit");
+                let Some(norito::core::DecodeResourceError::TotalAllocationExceeded {
+                    attempted,
+                    limit: actual_limit,
+                }) = error.decode_resource_error()
+                else {
+                    panic!("metadata conversion erased original resource fields: {error:?}");
+                };
+                assert_eq!(actual_limit, u64::try_from(limit).unwrap());
+                assert!(attempted > actual_limit);
+                let before_retry = context.consumed_allocated_bytes();
+                assert_eq!(&context.with(|| decode(payload)).unwrap(), expected);
+                assert_eq!(
+                    context.consumed_allocated_bytes() - before_retry,
+                    u64::try_from(demand).unwrap()
+                );
+                assert_eq!(payload.as_ref().as_ptr(), source_pointer);
+            }
+        }
+
+        #[test]
+        fn multisig_spec_metadata_keeps_original_resource_fields_and_same_context_retry() {
+            let expected = sample_spec();
+            let payload = Json::try_new(expected.clone()).unwrap();
+            assert_metadata_refusal_and_retry(&payload, &expected, |value| {
+                MultisigSpec::try_from(value)
+            });
+        }
+
+        #[test]
+        fn multisig_proposal_metadata_keeps_original_resource_fields_and_same_context_retry() {
+            let expected = MultisigProposalValue::new(
+                vec![sample_instruction_box()],
+                1,
+                2,
+                BTreeSet::from([fixture_account(4)]),
+                Some(false),
+            );
+            let payload = Json::try_new(expected.clone()).unwrap();
+            assert_metadata_refusal_and_retry(&payload, &expected, |value| {
+                MultisigProposalValue::try_from(value)
+            });
+        }
+
+        #[test]
         fn multisig_metadata_values_support_bounded_json() {
             let spec = sample_spec();
             let encoded_spec = Json::try_new(spec.clone()).expect("bounded multisig spec JSON");

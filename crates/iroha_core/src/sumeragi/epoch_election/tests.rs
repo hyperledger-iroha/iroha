@@ -84,7 +84,6 @@ fn custody_pool(count: usize) -> (World, ValidatorElectionPolicyV1, Vec<KeyPair>
                 activation_height: 1,
                 election_exit_height: None,
                 deactivation_height: None,
-                last_reward_epoch: None,
             },
         );
         world.public_lane_stake_shares.insert(

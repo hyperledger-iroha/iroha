@@ -629,48 +629,6 @@ object ValidatorStakingNoritoV1 {
         }
     }
 
-    /** Retained reward-processing cursor, including a valid completed epoch zero. */
-    class RewardClaimState private constructor(payload: ByteArray) : Record(payload, 1) {
-        val throughEpoch: Long? = option(0) { decodeUInt(it, 64) }
-
-        companion object {
-            @JvmStatic
-            fun decode(payload: ByteArray): RewardClaimState = RewardClaimState(payload)
-        }
-    }
-
-    /** Exact immutable reward record selected by a signed claim. */
-    class RewardRecordRef private constructor(payload: ByteArray) : Record(payload, 2) {
-        val epoch: Long = u64(0)
-        val recordHash: Bytes = fixed(1, 32)
-
-        companion object {
-            @JvmStatic
-            fun decode(payload: ByteArray): RewardRecordRef = RewardRecordRef(payload)
-        }
-    }
-
-    /** One exact reward custody source, previous accrual and signed payout. */
-    class RewardClaimSource private constructor(payload: ByteArray) : Record(payload, 4) {
-        val sourceAsset: AssetId = AssetId.decode(fields[0])
-        val destinationAsset: AssetId = AssetId.decode(fields[1])
-        val expectedAccrued: Quantity? = option(2, Quantity::decode)
-        val payout: Quantity = Quantity.decode(fields[3])
-
-        init {
-            require(sourceAsset.definition == destinationAsset.definition &&
-                sourceAsset.scopeDataspace == destinationAsset.scopeDataspace &&
-                expectedAccrued?.mantissa?.signum() != 0) {
-                "invalid reward source asset or prior accrual"
-            }
-        }
-
-        companion object {
-            @JvmStatic
-            fun decode(payload: ByteArray): RewardClaimSource = RewardClaimSource(payload)
-        }
-    }
-
     /** Independently accrued fee reward payment bound to its custody and receipt sequence.
      * Native execution authenticates beneficiary ownership and the signing recipient.
      */
@@ -698,18 +656,13 @@ object ValidatorStakingNoritoV1 {
         }
     }
 
-    /** Bounded reward plan with an explicit optional fee reward payment.
-     * Sources retain Rust AssetId order; native execution authenticates the signer and ledger preconditions.
+    /** Exact authenticated claim for automatically accrued funded validator rewards.
+     * Native execution authenticates the signer, beneficiary and custody preconditions.
      */
-    class RewardClaimPlan private constructor(payload: ByteArray) : Record(payload, 6) {
+    class RewardClaimPlan private constructor(payload: ByteArray) : Record(payload, 3) {
         val networkScope: NetworkId?
         val validUntilHeight: Long = u64(1)
-        val expectedState: RewardClaimState? = option(2, RewardClaimState::decode)
-        private val recordValues = vector(3, 64, RewardRecordRef::decode)
-        val records: List<RewardRecordRef> get() = recordValues.toMutableList()
-        private val sourceValues = vector(4, 64, RewardClaimSource::decode)
-        val sources: List<RewardClaimSource> get() = sourceValues.toMutableList()
-        val feeClaim: FeeRewardClaim? = option(5, FeeRewardClaim::decode)
+        val feeClaim: FeeRewardClaim = FeeRewardClaim.decode(fields[2])
 
         init {
             val scope = variant(0)
@@ -722,80 +675,12 @@ object ValidatorStakingNoritoV1 {
                 else -> throw IllegalArgumentException("unknown staking monetary scope")
             }
             require(validUntilHeight != 0L) { "reward plan expiry must be positive" }
-            var previous = expectedState?.throughEpoch
-            for (reward in recordValues) {
-                val prior = previous
-                require(prior == null || unsigned(prior) < unsigned(reward.epoch)) {
-                    "reward epochs must advance the retained cursor"
-                }
-                previous = reward.epoch
-            }
-            var previousSource: AssetId? = null
-            val recipient = sourceValues.firstOrNull()?.destinationAsset?.account
-                ?: feeClaim?.destinationAsset?.account
-            for (source in sourceValues) {
-                require(previousSource == null || assetPrecedes(previousSource, source.sourceAsset)) {
-                    "reward sources must use strict AssetId order"
-                }
-                require(source.destinationAsset.account == recipient) {
-                    "reward plan changes recipient"
-                }
-                previousSource = source.sourceAsset
-            }
-            require(feeClaim == null || feeClaim.destinationAsset.account == recipient) {
-                "fee reward claim changes recipient"
-            }
         }
 
         companion object {
             @JvmStatic
             fun decode(payload: ByteArray): RewardClaimPlan = RewardClaimPlan(payload)
         }
-    }
-
-    // AccountId orders controller fields, not their variable-length Norito frames.
-    // Integer order components use big endian; public keys use algorithm then key bytes.
-    private fun accountOrderKey(payload: ByteArray): List<ByteArray> {
-        val (tag, body) = decodeVariant(payload)
-        return when (tag) {
-            0L -> listOf(byteArrayOf(0), publicKeyOrderKey(body))
-            1L -> {
-                val policy = decodeFields(body, 3)
-                val version = decodeUInt(policy[0], 8)
-                val threshold = decodeUInt(policy[1], 16)
-                require(version == 1L && threshold > 0) { "invalid multisig ordering fields" }
-                val members = decodeVector(policy[2], 65535) { bytes ->
-                    val member = decodeFields(bytes, 2)
-                    val weight = decodeUInt(member[1], 16)
-                    listOf(publicKeyOrderKey(member[0]), byteArrayOf((weight shr 8).toByte(), weight.toByte()))
-                }
-                listOf(byteArrayOf(1), byteArrayOf(version.toByte()),
-                    byteArrayOf((threshold shr 8).toByte(), threshold.toByte())) + members.flatten()
-            }
-            else -> throw IllegalArgumentException("unknown account controller")
-        }
-    }
-
-    private fun publicKeyOrderKey(payload: ByteArray): ByteArray {
-        val decoder = NoritoDecoder(payload, FLAGS)
-        val count = decoder.readUInt(64)
-        require(count in 2..65536) { "invalid public key ordering bytes" }
-        return decodeFixedByteArray(decoder.readBytes(decoder.remaining()), count.toInt()).bytes()
-    }
-
-    private fun assetPrecedes(left: AssetId, right: AssetId): Boolean {
-        val leftAccount = accountOrderKey(left.account.bytes())
-        val rightAccount = accountOrderKey(right.account.bytes())
-        for (index in 0 until minOf(leftAccount.size, rightAccount.size)) {
-            val compared = compareBytes(leftAccount[index], rightAccount[index])
-            if (compared != 0) return compared < 0
-        }
-        if (leftAccount.size != rightAccount.size) return leftAccount.size < rightAccount.size
-        val definition = compareBytes(left.definition.bytes(), right.definition.bytes())
-        if (definition != 0) return definition < 0
-        val lhs = left.scopeDataspace
-        val rhs = right.scopeDataspace
-        return if (lhs == null) rhs != null else rhs != null && unsigned(lhs) < unsigned(rhs)
     }
 
     /** Validator rebind with mandatory replacement-peer consent. */

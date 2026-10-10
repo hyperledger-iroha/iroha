@@ -10146,9 +10146,6 @@ pub struct NexusStaking {
     /// Maximum slash ratio allowed (basis points, 10_000 = 100%).
     #[config(default = "defaults::nexus::staking::MAX_SLASH_BPS")]
     pub max_slash_bps: u16,
-    /// Minimum reward amount paid out; smaller amounts are skipped as dust.
-    #[config(default = "defaults::nexus::staking::reward_dust_threshold()")]
-    pub reward_dust_threshold: Quantity,
     /// Asset definition used for staking bonds (string form).
     #[config(default = "defaults::nexus::staking::stake_asset_id()")]
     pub stake_asset_id: String,
@@ -10168,7 +10165,6 @@ impl_default!(NexusStaking {
     max_pending_unbonds_per_share: defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE,
     unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
     max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-    reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
     stake_asset_id: defaults::nexus::staking::stake_asset_id(),
     stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
     slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
@@ -10182,6 +10178,14 @@ impl NexusStaking {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
                 "nexus.staking.max_validators must be <= {lane_validator_cap} (found {})",
                 self.max_validators
+            )));
+            return None;
+        }
+        let reward_recipient_cap = iroha_data_model::validation_fee_rewards::MAX_REWARD_RECIPIENTS;
+        if self.max_stake_shares_per_validator.get() as usize > reward_recipient_cap {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.staking.max_stake_shares_per_validator must be <= {reward_recipient_cap} to fit one historical reward exposure (found {})",
+                self.max_stake_shares_per_validator
             )));
             return None;
         }
@@ -10212,7 +10216,6 @@ impl NexusStaking {
             max_pending_unbonds_per_share: self.max_pending_unbonds_per_share,
             unbonding_delay: self.unbonding_delay_ms.get(),
             max_slash_bps: self.max_slash_bps,
-            reward_dust_threshold: self.reward_dust_threshold,
             stake_asset_id,
             stake_escrow_account_id: self.stake_escrow_account_id,
             slash_sink_account_id: self.slash_sink_account_id,

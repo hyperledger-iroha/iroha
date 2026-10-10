@@ -150,7 +150,7 @@ specific deployment authentication adapters. Neither the generic selector nor th
 `iroha offline registration-package` command contains a token allowlist or grants enrollment
 from caller-supplied metadata. The package command publishes a fresh immutable source only
 after native verification; importing it cannot change the installed trust root. TODO: qualify
-this new path through actual ledger execution, rebuilt ABI27 C/JNI/Swift/Kotlin artifacts and
+this new path through actual ledger execution, rebuilt ABI28 C/JNI/Swift/Kotlin artifacts and
 wallet reopening. The constructor layout change refuses older native ABI versions.
 
 The actual Rust generator covers both authorities, four purposes and three decisions in
@@ -177,7 +177,7 @@ Independent review of48 actual local compiler depfiles and five build-script out
 broad source-inconclusive classification. These are executable-bound component results, not
 actual provider installation or a complete release candidate. The copied native bridge also
 passes66 installed-selection, custody and layout cases with unchanged runtime sources, including
-the generic application release and asset-independent session configuration. Rebuilt ABI27
+the generic application release and asset-independent session configuration. Rebuilt ABI28
 Swift/JNI delivery remains separate.
 
 The regenerated worker originals pass the full214-case Python suite in37.691s with unchanged

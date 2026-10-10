@@ -490,16 +490,7 @@ fn install_monthly_policy(
         .get_mut()
         .set_parameter(Parameter::Custom(registry.into_custom_parameter()));
     let record = RetailFeeAccountStateV1::enroll(source.clone(), START, 1000).unwrap();
-    let path: StatePath = format!(
-        "retail_fee_v1/{}",
-        hex::encode(Hash::new(source.to_string().as_bytes()).as_ref())
-    )
-    .parse()
-    .unwrap();
-    transaction
-        .world
-        .smart_contract_state
-        .insert(path, norito::to_bytes(&record).unwrap());
+    crate::retail_fee::write_account(&mut transaction.world, &record).unwrap();
 }
 
 /// Build a real executed two-instruction retail transfer and retain all native proof selectors.

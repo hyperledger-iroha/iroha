@@ -166,42 +166,6 @@ fn canonical_transport_preserves_distinct_source_claim_and_outer_opening() {
 }
 
 #[test]
-fn checkpoint_codec_is_canonical_and_fixed_metadata_has_no_variable_size() {
-    let first = Checkpoint {
-        version: 1,
-        source_context: [0; 32],
-        salt: [0; 32],
-        transport: vec![0; 2 * ACCUMULATOR_BYTES + 3],
-    };
-    let first = norito::encode_canonical(&first).unwrap();
-    let second = Checkpoint {
-        version: 1,
-        source_context: [0xff; 32],
-        salt: [0xaa; 32],
-        transport: vec![0x55; 2 * ACCUMULATOR_BYTES + 3],
-    };
-    let second = norito::encode_canonical(&second).unwrap();
-    assert_eq!(first.len(), second.len());
-    let decoded: Checkpoint = norito::decode_canonical_with_limits(
-        &second,
-        norito::canonical_decode_limits(second.len()),
-    )
-    .unwrap();
-    assert_eq!(decoded.source_context, [0xff; 32]);
-    assert_eq!(decoded.salt, [0xaa; 32]);
-    assert_eq!(norito::encode_canonical(&decoded).unwrap(), second);
-    let mut trailing = second;
-    trailing.push(0);
-    assert!(
-        norito::decode_canonical_with_limits::<Checkpoint>(
-            &trailing,
-            norito::canonical_decode_limits(trailing.len())
-        )
-        .is_err()
-    );
-}
-
-#[test]
 fn rebuild_failure_preserves_cancellation_and_refuses_source_authority() {
     use iroha_plonk::keys::KeyError;
     assert_eq!(

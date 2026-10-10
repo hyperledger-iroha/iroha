@@ -1414,9 +1414,6 @@ from .validator_staking import (
     StakingMonetarySlashV1,
     StakingMonetaryPreconditionV1,
     StakingMonetaryPlanV1,
-    StakingRewardClaimStateV1,
-    StakingRewardRecordRefV1,
-    StakingRewardClaimSourceV1,
     StakingFeeRewardClaimV1,
     StakingRewardClaimPlanV1,
     StakingValidatorGenerationV1,
@@ -1424,7 +1421,7 @@ from .validator_staking import (
     StakingEpochAuthorizationV1,
 )
 
-__all__ += ['StakingScopeV1', 'StakingAssetScopeV1', 'StakingAssetIdV1', 'StakingPeerIdV1', 'StakingMonetaryRegistrationV1', 'StakingMonetaryBondV1', 'StakingMonetaryUnbondV1', 'StakingMonetarySlashV1', 'StakingMonetaryPreconditionV1', 'StakingMonetaryPlanV1', 'StakingRewardClaimStateV1', 'StakingRewardRecordRefV1', 'StakingRewardClaimSourceV1', 'StakingFeeRewardClaimV1', 'StakingRewardClaimPlanV1', 'StakingValidatorGenerationV1', 'StakingInstalledBeaconV1', 'StakingEpochAuthorizationV1']
+__all__ += ['StakingScopeV1', 'StakingAssetScopeV1', 'StakingAssetIdV1', 'StakingPeerIdV1', 'StakingMonetaryRegistrationV1', 'StakingMonetaryBondV1', 'StakingMonetaryUnbondV1', 'StakingMonetarySlashV1', 'StakingMonetaryPreconditionV1', 'StakingMonetaryPlanV1', 'StakingFeeRewardClaimV1', 'StakingRewardClaimPlanV1', 'StakingValidatorGenerationV1', 'StakingInstalledBeaconV1', 'StakingEpochAuthorizationV1']
 
 from .validator_staking import (
     StakingPrepareRegistrationV1, StakingPrepareBondV1, StakingPrepareUnbondV1,

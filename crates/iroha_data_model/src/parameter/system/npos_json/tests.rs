@@ -333,18 +333,25 @@ fn admitted_npos_record_moves_exact_original_quantity_backing_and_funded_charge_
 #[test]
 fn admitted_npos_record_refuses_original_capacity_before_field_work_then_retries_same_context() {
     let source = source();
-    let (_, demand) = observed_demand(&source);
-    // Object preflight precedes physical record admission in both destinations.
-    // Its sequence charge survives refusal even though no field is decoded.
-    let preflight_context = DecodeBudgetContext::new(limits(usize::MAX));
-    preflight_context.with(|| {
-        let mut parser = json::Parser::new(&source);
-        parser.preflight_document().unwrap();
-        parser.preflight_object_entries().unwrap();
-    });
-    let preflight = usize::try_from(preflight_context.consumed_allocated_bytes()).unwrap();
-    assert!(preflight > 0 && preflight < demand);
-    let cumulative_demand = demand.checked_add(preflight).unwrap();
+    let (expected, demand) = observed_demand(&source);
+    // The unchanged kernel charges object-entry planning before admitting the
+    // record. Measure that exact prefix independently, without decoding a field.
+    let preflight_demand = {
+        let prefix = DecodeBudgetContext::new(limits(usize::MAX));
+        prefix.with(|| {
+            let mut parser = json::Parser::new(&source);
+            parser.preflight_document().unwrap();
+            assert_eq!(prefix.consumed_allocated_bytes(), 0);
+            let position = parser.position();
+            assert_eq!(parser.preflight_object_entries().unwrap(), 10);
+            assert_eq!(parser.position(), position);
+        });
+        let consumed = usize::try_from(prefix.consumed_allocated_bytes()).unwrap();
+        assert_eq!(consumed, 10);
+        consumed
+    };
+    assert!(preflight_demand < demand);
+    let cumulative_demand = preflight_demand.checked_add(demand).unwrap();
     let record = AdmittedSumeragiNposParameters::allocation_layout().size();
     let control = DecodeBudgetContext::allocation_layout().size();
     let registration_layout = ReleaseRegistration::allocation_layout();
@@ -381,7 +388,8 @@ fn admitted_npos_record_refuses_original_capacity_before_field_work_then_retries
     assert_eq!(budget.reserved_bytes(), before);
     assert_eq!(
         context.consumed_allocated_bytes(),
-        u64::try_from(preflight).unwrap()
+        u64::try_from(preflight_demand).unwrap(),
+        "record refusal consumes only the original preflight, without field charges"
     );
     let mut waiting = release.wait_for_release(&mut registration);
     let mut task = Context::from_waker(Waker::noop());
@@ -398,11 +406,13 @@ fn admitted_npos_record_refuses_original_capacity_before_field_work_then_retries
     assert_eq!(budget.reserved_bytes(), baseline);
     let owner = decode(&source, &budget, &context).unwrap();
     assert!(owner.belongs_to(&budget));
+    assert_eq!(owner.get(), &expected);
     assert_eq!(
         context.consumed_allocated_bytes(),
         u64::try_from(cumulative_demand).unwrap()
     );
     drop(owner);
+    assert_eq!(budget.reserved_bytes(), baseline);
     let exhausted = decode(&source, &budget, &context).unwrap_err();
     assert!(
         matches!(exhausted, SumeragiNposJsonAdmissionError::Json(ref error) if error.is_decode_resource_limit())

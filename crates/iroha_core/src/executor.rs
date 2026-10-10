@@ -12795,19 +12795,24 @@ mod tests {
                 validator,
                 staker: staker.clone(),
                 request_id,
-                monetary_plan: unbond_plan,
+                monetary_plan: unbond_plan.clone(),
             }
             .into(),
             ClaimPublicLaneRewards {
                 lane_id: iroha_model_base::topology::LaneId::SINGLE,
-                account: staker,
+                account: staker.clone(),
                 claim_plan: PublicLaneRewardClaimPlanV1 {
-                    fee_claim: None,
+                    fee_claim: iroha_data_model::nexus::PublicLaneFeeRewardClaimV1 {
+                        lifecycle_seal: [1; 32],
+                        beneficiary_id: staker.clone(),
+                        beneficiary_revision: 0,
+                        source_asset: unbond_plan.source_asset.clone(),
+                        destination_asset: unbond_plan.destination_asset.clone(),
+                        amount: Quantity::one(),
+                        expected_claim_sequence: 0,
+                    },
                     network_scope,
                     valid_until_height: 2,
-                    expected_state: None,
-                    records: Vec::new(),
-                    sources: Vec::new(),
                 },
             }
             .into(),

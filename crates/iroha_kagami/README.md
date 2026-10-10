@@ -69,6 +69,11 @@ store. `down` retains the ledger; `localnet reset local` deliberately retires it
 default localnet when no context has been selected. Use `context list`,
 `context show`, or `context use NAME` to inspect or select retained environments.
 
+For contracts declaring `hajimari`/`始まり`, the deployment result includes the
+canonical hook name and parameter types. Deployment does not invoke that hook;
+run it before other calls or views if it has not already succeeded. Repeat and
+resume results do not infer its current state from the artifact.
+
 `kagami package publish .` explicitly publishes a Musubi package using the retained generated
 developer client and its `dev.universal` namespace intent. Begin may start the default localnet;
 `--resume OPERATION_ID` and `--recover OPERATION_ID` require its existing selected context.
@@ -183,6 +188,9 @@ into the output directory.
 
 `kagami dataspace up ALIAS --network NETWORK`
 - Uses the installed parent profile and retains the original attachment work for recovery.
+- Defaults to the exact alias as its local context name, including valid 63-character labels.
+  `--name` selects an explicit context; managed names allow 1..63 ASCII letters, digits, `-`
+  or `_`, starting with a letter or digit. Kagami and Mochi use the same shared name bound.
 - Failed attachment reports any retained child and parent status separately, plus exact
   `dataspace status` and `localnet logs` actions for the requested context and state store.
   Observation or output failures preserve the original startup error and nonzero result.
@@ -388,14 +396,17 @@ into independently rendered inline settings.
 
 After an intentional genesis change, such as `iroha taira seat-parliament`, use
 `genesis sign --replace-expected-hash '<PRIOR_NETWORK_ID>'` together with
-`--expected-hash-out`, `--out-file`, and `--bound-manifest-out`. Seating prints
+`--expected-hash-out`, `--out-file`, `--bound-manifest-out`, and
+`--nexus-context-output`. Seating prints
 this command with the observed prior identity. Kagami locks and checks the
 owner-held, single-link identity before output writes; a missing, stale, unsafe,
 or concurrently held identity leaves the requested outputs unchanged. Without
 this explicit option, publishing a different identity remains forbidden.
 
-Replacement stages all three outputs, publishes the signed block and bound
-manifest, then publishes the identity last as a commit marker. This is not a
+Replacement stages all four outputs, publishes the signed block, bound
+manifest and the exact Nexus/AMX context preimage committed by the signed
+genesis (`nexus-amx-context.v1.bin`), then publishes the identity last as a
+commit marker. This is not a
 multi-file atomic transaction. After interruption, consumers must reject any
 bundle disagreement; retry the same command with the same prior identity. If
 that prior is already stale, verify the exact signed block, manifest, and

@@ -14,10 +14,12 @@ pub use amx_intents::{
     prepared_amx_relays,
 };
 mod ordinary_writes;
+mod reward_history;
 pub use amx_read::{
     NativeAmxRecordProofErrorV1, NativeAmxRecordProofIssuedV1, NativeAmxRecordProofOwnedV1,
     NativeAmxRecordProofPollV1, NativeAmxRecordProofReadV1,
 };
+pub(crate) use reward_history::{committed_fee_evidence, committed_reward_exposure};
 
 pub(crate) mod lane_payload;
 

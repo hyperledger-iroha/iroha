@@ -312,7 +312,7 @@ class AuthVerifierOwner:
         self.current_time = None
         self.oauth = GoogleServiceAccountTokenProvider(public_policy_original=b64(policy['google_policy_base64'],16384),
             native_policy=self.pi_policy, credential_fd=oauth_fd, trusted_time_interval=self._clock,
-            openssl_path=self.openssl, credential_owner_uid=0)
+            openssl_path=self.openssl, credential_owner_uid=os.geteuid())
         try:
             self.google = GooglePlayIntegrityVerifier(self.oauth)
             self.journal = AuthJournal(directory, directory_fd)

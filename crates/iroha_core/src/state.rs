@@ -132,9 +132,8 @@ use iroha_data_model::{
         FeeSponsorEnrollment, FeeSponsorEnrollmentKey, FeeSponsorProgram, FeeSponsorProgramId,
         FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
         FeeSponsorVault, FeeSponsorVaultKey, LaneCatalog, LaneLifecycleParameterV1,
-        LaneLifecyclePlan, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardClaimStateV1,
-        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus, UniversalAccountId,
+        LaneLifecyclePlan, MAX_ACTIVE_EXECUTION_LANES, PublicLaneStakeShare,
+        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
     },
     nft::{NftEntry, NftValue},
@@ -315,6 +314,8 @@ use crate::{
     },
     governance::parliament::ParliamentAttemptStateV1,
 };
+#[cfg(all(test, feature = "json"))]
+mod account_key_refusal_tests;
 #[cfg(test)]
 mod acquisition_fixture_tests;
 mod axt_source_transfer;
@@ -1371,10 +1372,6 @@ macro_rules! with_world_overlay_fields {
             settlement_receipts,
             public_lane_validators,
             public_lane_stake_shares,
-            public_lane_rewards,
-            public_lane_reward_claims,
-            public_lane_reward_accruals,
-            public_lane_reward_reserves,
             public_lane_stake_custody,
             public_lane_stake_reserves,
             zk_assets,
@@ -4435,19 +4432,6 @@ pub struct WorldData {
     #[norito(skip)]
     pub(crate) public_lane_stake_shares:
         Storage<(LaneId, AccountId, AccountId), PublicLaneStakeShare>,
-    /// Reward records per `(lane_id, epoch)` pair.
-    #[norito(skip)]
-    pub(crate) public_lane_rewards: Storage<(LaneId, u64), PublicLaneRewardRecord>,
-    /// Last completely processed reward record per lane and recipient.
-    #[norito(skip)]
-    pub(crate) public_lane_reward_claims:
-        Storage<(LaneId, AccountId), PublicLaneRewardClaimStateV1>,
-    /// Positive accrued unpaid rewards, independently addressed by their exact source.
-    #[norito(skip)]
-    pub(crate) public_lane_reward_accruals: Storage<(LaneId, AccountId, AssetId), Quantity>,
-    /// Unpaid reward obligations aggregated by exact custody asset; zero rows are absent.
-    #[norito(skip)]
-    pub(crate) public_lane_reward_reserves: Storage<AssetId, Quantity>,
     /// Exact pinned escrow asset and positive held stake for each validator.
     #[norito(skip)]
     pub(crate) public_lane_stake_custody: Storage<(LaneId, AccountId), (AssetId, Quantity)>,
@@ -5443,20 +5427,6 @@ pub struct WorldBlockFields<'world> {
     #[norito(skip)]
     pub(crate) public_lane_stake_shares:
         StorageField<'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
-    /// Public lane reward journal.
-    #[norito(skip)]
-    pub(crate) public_lane_rewards: StorageField<'world, (LaneId, u64), PublicLaneRewardRecord>,
-    /// Last completely processed reward record per lane and recipient.
-    #[norito(skip)]
-    pub(crate) public_lane_reward_claims:
-        StorageField<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
-    /// Positive accrued unpaid rewards, independently addressed by their exact source.
-    #[norito(skip)]
-    pub(crate) public_lane_reward_accruals:
-        StorageField<'world, (LaneId, AccountId, AssetId), Quantity>,
-    /// Unpaid reward obligations aggregated by exact custody asset.
-    #[norito(skip)]
-    pub(crate) public_lane_reward_reserves: StorageField<'world, AssetId, Quantity>,
     /// Exact pinned escrow asset and positive held stake for each validator.
     #[norito(skip)]
     pub(crate) public_lane_stake_custody:
@@ -6257,10 +6227,6 @@ impl WorldBlock<'_> {
             settlement_receipts,
             public_lane_validators,
             public_lane_stake_shares,
-            public_lane_rewards,
-            public_lane_reward_claims,
-            public_lane_reward_accruals,
-            public_lane_reward_reserves,
             public_lane_stake_custody,
             public_lane_stake_reserves,
             zk_assets,
@@ -7105,15 +7071,6 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
         StorageTransaction<'block, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
-    pub(crate) public_lane_rewards:
-        StorageTransaction<'block, (LaneId, u64), PublicLaneRewardRecord>,
-    pub(crate) public_lane_reward_claims:
-        StorageTransaction<'block, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
-    /// Positive accrued unpaid rewards, independently addressed by their exact source.
-    pub(crate) public_lane_reward_accruals:
-        StorageTransaction<'block, (LaneId, AccountId, AssetId), Quantity>,
-    /// Unpaid reward obligations aggregated by exact custody asset.
-    pub(crate) public_lane_reward_reserves: StorageTransaction<'block, AssetId, Quantity>,
     /// Exact pinned escrow asset and positive held stake for each validator.
     pub(crate) public_lane_stake_custody:
         StorageTransaction<'block, (LaneId, AccountId), (AssetId, Quantity)>,
@@ -9404,14 +9361,6 @@ pub struct WorldView<'world> {
         StorageView<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
         StorageView<'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
-    pub(crate) public_lane_rewards: StorageView<'world, (LaneId, u64), PublicLaneRewardRecord>,
-    pub(crate) public_lane_reward_claims:
-        StorageView<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
-    /// Positive accrued unpaid rewards, independently addressed by their exact source.
-    pub(crate) public_lane_reward_accruals:
-        StorageView<'world, (LaneId, AccountId, AssetId), Quantity>,
-    /// Unpaid reward obligations aggregated by exact custody asset.
-    pub(crate) public_lane_reward_reserves: StorageView<'world, AssetId, Quantity>,
     /// Exact pinned escrow asset and positive held stake for each validator.
     pub(crate) public_lane_stake_custody:
         StorageView<'world, (LaneId, AccountId), (AssetId, Quantity)>,
@@ -14561,12 +14510,6 @@ pub(crate) fn public_lane_stake_share_matches_key(
 ) -> bool {
     key.0 == share.lane_id && key.1 == share.validator && key.2 == share.staker
 }
-pub(crate) fn public_lane_reward_record_matches_key(
-    key: &(LaneId, u64),
-    record: &PublicLaneRewardRecord,
-) -> bool {
-    key.0 == record.lane_id && key.1 == record.epoch
-}
 /// Resolve every lane id currently associated with a single validator peer.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn validator_lane_ids_for_peer(
@@ -15391,7 +15334,6 @@ mod stake_snapshot_tests {
             activation_height,
             election_exit_height: deactivation_height,
             deactivation_height,
-            last_reward_epoch: None,
         }
     }
     fn active_lane_validator_record(
@@ -15495,25 +15437,6 @@ mod stake_snapshot_tests {
         share.validator = validator.clone();
         share.staker = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
         assert!(!public_lane_stake_share_matches_key(&key, &share));
-        let reward_asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("publiclane", "universal").expect("reward asset domain"),
-            "recordmatch".parse().expect("reward asset name"),
-        );
-        let reward_key = (LaneId::new(43), 7);
-        let mut reward = PublicLaneRewardRecord {
-            lane_id: reward_key.0,
-            epoch: reward_key.1,
-            asset: AssetId::new(reward_asset_definition, validator),
-            total_reward: iroha_primitives::numeric::Quantity::from(10_u32),
-            shares: Vec::new(),
-            metadata: Metadata::default(),
-        };
-        assert!(public_lane_reward_record_matches_key(&reward_key, &reward));
-        reward.lane_id = LaneId::new(44);
-        assert!(!public_lane_reward_record_matches_key(&reward_key, &reward));
-        reward.lane_id = reward_key.0;
-        reward.epoch = reward_key.1 + 1;
-        assert!(!public_lane_reward_record_matches_key(&reward_key, &reward));
     }
     #[test]
     fn nexus_active_lanes_require_catalog_geometry_and_dataspace_agreement() {
@@ -18289,12 +18212,14 @@ fn parliament_derived_read_indexes_v1<'a>(
 #[path = "state/network_xor.rs"]
 mod network_xor;
 pub(crate) use network_xor::{validate_network_xor_asset, validate_xor_custody_shape};
-#[path = "state/reward_reserves.rs"]
-mod reward_reserves;
-use reward_reserves::validate_public_lane_reward_reserves;
+#[cfg(test)]
+#[path = "state/custody_fixture.rs"]
+mod custody_fixture;
 #[path = "state/stake_reserves.rs"]
 mod stake_reserves;
-pub(crate) use stake_reserves::validate_public_lane_stake_reserves;
+pub(crate) use stake_reserves::{
+    validate_public_lane_stake_reserves, validate_public_lane_stake_reserves_for_restore,
+};
 #[path = "state/validator_committee.rs"]
 pub(crate) mod validator_committee;
 
@@ -18592,21 +18517,6 @@ impl World {
                     "lane {lane_id} validator {validator_id} self stake {} does not match self-supplied bonded share total {self_bonded}",
                     validator.self_stake
                 )).into());
-            }
-        }
-        for ((lane_id, epoch), reward) in self.public_lane_rewards.view().iter() {
-            let mut total = Quantity::zero();
-            for share in &reward.shares {
-                total = total.checked_add(&share.amount).map_err(|_| {
-                    format!("lane {lane_id} epoch {epoch} reward share total overflowed")
-                })?;
-            }
-            if total != reward.total_reward {
-                return Err((format!(
-                    "lane {lane_id} epoch {epoch} reward shares total {total} does not match {}",
-                    reward.total_reward
-                ))
-                .into());
             }
         }
         Ok(())
@@ -20969,14 +20879,6 @@ macro_rules! world_ro_accessors {
             /// Public lane stake shares keyed by `(lane_id, validator, staker)` (read-only).
             storage public_lane_stake_shares:
                 (LaneId, AccountId, AccountId) => PublicLaneStakeShare;
-            /// Public lane reward ledger keyed by `(lane_id, epoch)` (read-only).
-            storage public_lane_rewards: (LaneId, u64) => PublicLaneRewardRecord;
-            /// Last claimed reward epoch keyed by `(lane_id, account, asset_id)` (read-only).
-            storage public_lane_reward_claims: (LaneId, AccountId) => PublicLaneRewardClaimStateV1;
-            /// Accrued unpaid rewards retained separately from the bounded processing cursor.
-            storage public_lane_reward_accruals: (LaneId, AccountId, AssetId) => Quantity;
-            /// Unpaid reward obligations aggregated by exact custody asset.
-            storage public_lane_reward_reserves: AssetId => Quantity;
             /// Exact pinned escrow asset and positive held stake for each validator.
             storage public_lane_stake_custody: (LaneId, AccountId) => (AssetId, Quantity);
             /// Bonded and pending-unbond obligations aggregated by exact pinned escrow asset.
@@ -24691,10 +24593,6 @@ impl WorldTransaction<'_, '_> {
             settlement_receipts: _,
             public_lane_validators: _,
             public_lane_stake_shares: _,
-            public_lane_rewards: _,
-            public_lane_reward_claims: _,
-            public_lane_reward_accruals: _,
-            public_lane_reward_reserves: _,
             public_lane_stake_custody: _,
             public_lane_stake_reserves: _,
             repo_agreements: _,
@@ -24923,10 +24821,6 @@ impl WorldTransaction<'_, '_> {
         self.domain_endorsements_by_domain.apply();
         self.public_lane_validators.apply();
         self.public_lane_stake_shares.apply();
-        self.public_lane_rewards.apply();
-        self.public_lane_reward_claims.apply();
-        self.public_lane_reward_accruals.apply();
-        self.public_lane_reward_reserves.apply();
         self.public_lane_stake_custody.apply();
         self.public_lane_stake_reserves.apply();
         self.repo_agreements.apply();
@@ -25680,12 +25574,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<'block, (LaneId, AccountId, AccountId), PublicLaneStakeShare> {
         &mut self.public_lane_stake_shares
-    }
-    /// Test helper: get mutable access to public lane rewards for direct seeding.
-    pub fn public_lane_rewards_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, (LaneId, u64), PublicLaneRewardRecord> {
-        &mut self.public_lane_rewards
     }
     /// Test helper: get mutable access to stored proof tags for direct seeding.
     pub fn proof_tags_mut_for_testing(
@@ -31098,27 +30986,6 @@ impl State {
         for key in stale_public_lane_stake_share_keys {
             world.public_lane_stake_shares.remove(key);
         }
-        let stale_public_lane_reward_keys =
-            Self::public_lane_reward_keys_for_lanes(&world.public_lane_rewards, lanes_to_reset);
-        for key in stale_public_lane_reward_keys {
-            world.public_lane_rewards.remove(key);
-        }
-        let stale_public_lane_reward_claim_keys = Self::public_lane_reward_claim_keys_for_lanes(
-            &world.public_lane_reward_claims,
-            lanes_to_reset,
-        );
-        for key in stale_public_lane_reward_claim_keys {
-            world.public_lane_reward_claims.remove(key);
-        }
-        let accrual_keys: Vec<_> = world
-            .public_lane_reward_accruals
-            .iter()
-            .filter(|((lane, _, _), _)| lanes_to_reset.contains(lane))
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in accrual_keys {
-            world.public_lane_reward_accruals.remove(key);
-        }
     }
     fn da_pin_intent_index_prune_keys_for_lanes(
         by_ticket: &impl StorageReadOnly<StorageTicketId, DaPinIntentWithLocation>,
@@ -31246,33 +31113,6 @@ impl State {
             })
             .collect()
     }
-    fn public_lane_reward_keys_for_lanes(
-        rewards: &impl StorageReadOnly<(LaneId, u64), PublicLaneRewardRecord>,
-        lanes_to_reset: &BTreeSet<LaneId>,
-    ) -> Vec<(LaneId, u64)> {
-        if lanes_to_reset.is_empty() {
-            return Vec::new();
-        }
-        rewards
-            .iter()
-            .filter_map(|(key, record)| {
-                (lanes_to_reset.contains(&key.0) || lanes_to_reset.contains(&record.lane_id))
-                    .then_some(*key)
-            })
-            .collect()
-    }
-    fn public_lane_reward_claim_keys_for_lanes(
-        reward_claims: &impl StorageReadOnly<(LaneId, AccountId), PublicLaneRewardClaimStateV1>,
-        lanes_to_reset: &BTreeSet<LaneId>,
-    ) -> Vec<(LaneId, AccountId)> {
-        if lanes_to_reset.is_empty() {
-            return Vec::new();
-        }
-        reward_claims
-            .iter()
-            .filter_map(|(key, _)| lanes_to_reset.contains(&key.0).then(|| key.clone()))
-            .collect()
-    }
     fn prune_public_lane_economic_state_for_lanes(&self, lanes_to_reset: &BTreeSet<LaneId>) {
         if lanes_to_reset.is_empty() {
             return;
@@ -31284,43 +31124,6 @@ impl State {
         if !stale_stake_share_keys.is_empty() {
             let mut tx = self.world.public_lane_stake_shares.block();
             for key in stale_stake_share_keys {
-                tx.remove(key);
-            }
-            tx.commit();
-        }
-        let stale_reward_keys = {
-            let rewards = self.world.public_lane_rewards.view();
-            Self::public_lane_reward_keys_for_lanes(&rewards, lanes_to_reset)
-        };
-        if !stale_reward_keys.is_empty() {
-            let mut tx = self.world.public_lane_rewards.block();
-            for key in stale_reward_keys {
-                tx.remove(key);
-            }
-            tx.commit();
-        }
-        let stale_reward_claim_keys = {
-            let reward_claims = self.world.public_lane_reward_claims.view();
-            Self::public_lane_reward_claim_keys_for_lanes(&reward_claims, lanes_to_reset)
-        };
-        if !stale_reward_claim_keys.is_empty() {
-            let mut tx = self.world.public_lane_reward_claims.block();
-            for key in stale_reward_claim_keys {
-                tx.remove(key);
-            }
-            tx.commit();
-        }
-        let accrual_keys: Vec<_> = self
-            .world
-            .public_lane_reward_accruals
-            .view()
-            .iter()
-            .filter(|((lane, _, _), _)| lanes_to_reset.contains(lane))
-            .map(|(key, _)| key.clone())
-            .collect();
-        if !accrual_keys.is_empty() {
-            let mut tx = self.world.public_lane_reward_accruals.block();
-            for key in accrual_keys {
                 tx.remove(key);
             }
             tx.commit();

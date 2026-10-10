@@ -30,9 +30,7 @@ use iroha_plonk::{
     pcs::ipa::PinnedParams,
     transcript::decode_point,
 };
-use iroha_plonk_gadgets::{
-    bytes::p_bytes_native, range::secondary::SecondaryPlan, statement::foreign_limbs,
-};
+use iroha_plonk_gadgets::{range::secondary::SecondaryPlan, statement::foreign_limbs};
 use iroha_plonk_recursion::{
     ACCUMULATOR_BYTES, AccumulatorT, FOLD_WITNESS_BYTES, FoldConfig, FoldInput, FoldWitness, K,
     VESTA_TRIVIAL_GENERATOR, create_fold, verifier::CompactSpans,
@@ -51,7 +49,6 @@ mod tests;
 const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
 const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
 const LINEAGE_DOMAIN: u64 = u64::from_le_bytes(*b"kgwomg_1");
-const CHECKPOINT_CONTEXT_DOMAIN: u64 = u64::from_le_bytes(*b"kgwoctx1");
 
 /// Genuine original artifact/preparation/proof failure; no failure changes custody.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -252,7 +249,7 @@ impl Program {
 
 /// Original installed verifier identity and fixed program, without a retained PK.
 /// No method generates a new artifact key. Proving buffers exist for one attempt only;
-/// preparation, checkpoint layouts and restore paths retain verifier metadata only.
+/// preparation and transport restore paths retain verifier metadata only.
 pub struct Prover {
     program: Program,
     key: SourceBoundVerifyingKeyV2<Ep>,
@@ -264,26 +261,6 @@ fn rebuild_error(error: &RebuildError) -> Error {
     } else {
         Error::Artifact
     }
-}
-
-/// Installed-key-derived canonical final checkpoint layout; no caller-supplied size or kind.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CheckpointLayout {
-    /// Complete installed Omega key digest, including its actual descriptor binding.
-    pub artifact_digest: [u8; 32],
-    /// Exact canonical checkpoint bytes under this original key's proof layout.
-    pub payload_bytes: u32,
-    /// Exact proof || P544 || V544 transport length.
-    pub transport_bytes: u32,
-}
-
-#[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha.kagemusha.final_omega_checkpoint.v1")]
-struct Checkpoint {
-    version: u16,
-    source_context: [u8; 32],
-    salt: [u8; 32],
-    transport: Vec<u8>,
 }
 
 impl Prover {
@@ -395,12 +372,6 @@ impl Prover {
             key: self.key.view(),
         }
     }
-    /// Derive exact checkpoint bounds without reconstructing proving buffers.
-    /// # Errors
-    /// Invalid protocol/key digest or canonical extent overflow.
-    pub fn checkpoint_layout(&self) -> Result<CheckpointLayout, Error> {
-        self.view().checkpoint_layout()
-    }
     /// Prepare through the same borrowed implementation used by installed owners.
     /// # Errors
     /// Invalid source proof/frame/claim, fold or installed identity.
@@ -468,34 +439,6 @@ impl<'a> ProverView<'a> {
     pub fn verifying_key(&self) -> &VerifyingKey<Ep> {
         self.key.verifying_key()
     }
-    /// Derive the exact canonical durable checkpoint size from the installed descriptor.
-    /// # Errors
-    /// Invalid native protocol/key digest or canonical size/codec overflow.
-    pub fn checkpoint_layout(&self) -> Result<CheckpointLayout, Error> {
-        let proof = Protocol::new(self.binding().descriptor())
-            .map_err(|_| Error::Artifact)?
-            .proof_length();
-        let transport = proof
-            .checked_add(2 * ACCUMULATOR_BYTES)
-            .ok_or(Error::Artifact)?;
-        let counting = Checkpoint {
-            version: 1,
-            source_context: [0; 32],
-            salt: [0; 32],
-            transport: vec![0; transport],
-        };
-        let encoded = norito::encode_canonical(&counting).map_err(|_| Error::Artifact)?;
-        Ok(CheckpointLayout {
-            artifact_digest: self
-                .verifying_key()
-                .kagemusha_digest(self.binding())
-                .map_err(|_| Error::Artifact)?
-                .to_repr(),
-            payload_bytes: u32::try_from(encoded.len()).map_err(|_| Error::Artifact)?,
-            transport_bytes: u32::try_from(transport).map_err(|_| Error::Artifact)?,
-        })
-    }
-
     /// Prepare the actual final wrapper from the verified terminal A frame. Every Vesta
     /// slot, source-k and incoming selection is decoded from that same 69-word frame.
     /// # Errors
@@ -608,24 +551,6 @@ impl<'a> ProverView<'a> {
                 }
             })?;
         let public = outer_instances(input.frame[0], &vesta)?;
-        let mut context = omega_key_digest.to_repr().to_vec();
-        context.extend_from_slice(
-            &key.kagemusha_digest(&program.source_binding)
-                .map_err(|_| Error::Artifact)?
-                .to_repr(),
-        );
-        context.extend_from_slice(&salt);
-        context.extend_from_slice(
-            &u32::try_from(input.proof.len())
-                .map_err(|_| Error::Input)?
-                .to_le_bytes(),
-        );
-        context.extend_from_slice(&input.proof);
-        for value in input.frame.iter().chain(&input.public) {
-            context.extend_from_slice(&value.to_repr());
-        }
-        context.extend_from_slice(&input.pallas.to_bytes());
-        let source_context = p_bytes_native::<Fp>(CHECKPOINT_CONTEXT_DOMAIN, &context).to_repr();
         let witness = OmegaWitness {
             key: key.clone(),
             instances: input.frame.to_vec(),
@@ -640,8 +565,6 @@ impl<'a> ProverView<'a> {
             public,
             pallas: input.pallas,
             vesta,
-            salt,
-            source_context,
         })
     }
 }
@@ -668,89 +591,8 @@ pub struct Session<'a> {
     public: Vec<Vec<Fq>>,
     pallas: AccumulatorT<Ep>,
     vesta: AccumulatorT<Eq>,
-    salt: [u8; 32],
-    source_context: [u8; 32],
 }
 impl Session<'_> {
-    /// Exact retained fold salt; restore recreates this same source session with this salt.
-    #[must_use]
-    pub const fn fold_salt(&self) -> [u8; 32] {
-        self.salt
-    }
-
-    /// Encode a canonical durable final checkpoint only after full native restoration.
-    /// # Errors
-    /// Failed original proof/decides, canonical codec or installed layout mismatch.
-    pub fn encode_checkpoint(
-        &self,
-        transport: &[u8],
-        budget: MemoryBudget,
-    ) -> Result<Vec<u8>, Error> {
-        self.encode_checkpoint_cancellable(transport, budget, None)
-    }
-    /// Execute the same native check with an explicit operation signal.
-    /// # Errors
-    /// As the ordinary entry point, or cancellation without a partial verdict.
-    pub fn encode_checkpoint_cancellable(
-        &self,
-        transport: &[u8],
-        budget: MemoryBudget,
-        cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<Vec<u8>, Error> {
-        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
-        self.restore_transport_cancellable(transport, budget, cancellation)?;
-        let bytes = norito::encode_canonical(&Checkpoint {
-            version: 1,
-            source_context: self.source_context,
-            salt: self.salt,
-            transport: transport.to_vec(),
-        })
-        .map_err(|_| Error::Input)?;
-        if bytes.len() != self.owner.checkpoint_layout()?.payload_bytes as usize {
-            return Err(Error::Input);
-        }
-        Ok(bytes)
-    }
-
-    /// Restore canonical bytes under the actual rederived source session and installed key.
-    /// Metadata cannot select another salt, terminal original, artifact or transport size.
-    /// # Errors
-    /// Wrong exact bound/canonical codec/context/salt or failed native proof/claim decisions.
-    pub fn restore_checkpoint(
-        &self,
-        original: &[u8],
-        budget: MemoryBudget,
-    ) -> Result<Output, Error> {
-        self.restore_checkpoint_cancellable(original, budget, None)
-    }
-    /// Execute the same native check with an explicit operation signal.
-    /// # Errors
-    /// As the ordinary entry point, or cancellation without a partial verdict.
-    pub fn restore_checkpoint_cancellable(
-        &self,
-        original: &[u8],
-        budget: MemoryBudget,
-        cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<Output, Error> {
-        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
-        let layout = self.owner.checkpoint_layout()?;
-        if original.len() != layout.payload_bytes as usize {
-            return Err(Error::Input);
-        }
-        let checkpoint: Checkpoint = norito::decode_canonical_with_limits(
-            original,
-            norito::canonical_decode_limits(original.len()),
-        )
-        .map_err(|_| Error::Input)?;
-        if checkpoint.version != 1
-            || checkpoint.source_context != self.source_context
-            || checkpoint.salt != self.salt
-            || checkpoint.transport.len() != layout.transport_bytes as usize
-        {
-            return Err(Error::Input);
-        }
-        self.restore_transport_cancellable(&checkpoint.transport, budget, cancellation)
-    }
     /// Restore the exact canonical final transport after interruption under this same
     /// rederived source session. Claim bytes cannot replace the prepared original P/V.
     /// # Errors

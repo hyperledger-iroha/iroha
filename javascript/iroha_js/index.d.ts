@@ -162,7 +162,7 @@ export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
 export const SM2_DEFAULT_DISTINGUISHED_ID: string;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 27;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 28;
 
 export interface SignedTransactionResult {
   /** Exact canonical VersionedSignedTransaction V1 bytes. */
@@ -12019,7 +12019,7 @@ export function signQuotedIvmProvedTransactionPayload(
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "iroha.validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: 4194304;
-export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 27;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 28;
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA: "iroha.validation_fee.verified_policy_projection.v1";
 
 export function normalizeValidationFeeCheckpointV1(
@@ -13687,12 +13687,6 @@ export interface StakingMonetaryPlanV1 {
   source_asset: StakingAssetIdV1; destination_asset: StakingAssetIdV1;
   amount: string; precondition: StakingMonetaryPreconditionV1;
 }
-export interface StakingRewardClaimStateV1 { through_epoch: StakingUnsignedV1 | null; }
-export interface StakingRewardRecordRefV1 { epoch: StakingUnsignedV1; record_hash: string; }
-export interface StakingRewardClaimSourceV1 {
-  source_asset: StakingAssetIdV1; destination_asset: StakingAssetIdV1;
-  expected_accrued: string | null; payout: string;
-}
 export interface StakingFeeRewardClaimV1 {
   lifecycle_seal: Uint8Array; beneficiary_id: string; beneficiary_revision: StakingUnsignedV1;
   source_asset: StakingAssetIdV1; destination_asset: StakingAssetIdV1;
@@ -13700,8 +13694,7 @@ export interface StakingFeeRewardClaimV1 {
 }
 export interface StakingRewardClaimPlanV1 {
   network_scope: StakingScopeV1; valid_until_height: StakingUnsignedV1;
-  expected_state: StakingRewardClaimStateV1 | null; records: StakingRewardRecordRefV1[];
-  sources: StakingRewardClaimSourceV1[]; fee_claim: StakingFeeRewardClaimV1 | null;
+  fee_claim: StakingFeeRewardClaimV1;
 }
 export interface StakingValidatorGenerationV1 {
   network_id: NetworkId; generation: StakingUnsignedV1; validators: StakingPeerIdV1[];
@@ -13728,7 +13721,7 @@ export type StakingPreparationOperationV1 =
   | { kind: "registration"; value: { validator: string; peer_id: StakingPeerIdV1; amount: string; candidate: boolean } }
   | { kind: "bond"; value: { validator: string; staker: string; amount: string } }
   | { kind: "finalize_unbond"; value: { validator: string; staker: string; request_id: string } }
-  | { kind: "claim_rewards"; value: { recipient: string; upto_epoch: StakingUnsignedV1 | null; max_records: StakingUnsignedV1; accrued_sources: StakingAssetIdV1[] } };
+  | { kind: "claim_rewards"; value: { recipient: string } };
 export interface StakingPreparationRequestV1 { lane_id: StakingUnsignedV1; valid_for_blocks: StakingUnsignedV1; operation: StakingPreparationOperationV1; }
 export interface StakingPreparationBalanceV1 { asset: StakingAssetIdV1; balance: string; stake_reserved: string; rewards_reserved: string; }
 /** Coherent server observation; the reported block identity is not a state proof. */

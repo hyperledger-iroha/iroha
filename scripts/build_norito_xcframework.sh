@@ -1779,8 +1779,8 @@ protocol_abis = re.findall(
     protocol.read_text(encoding="utf-8"),
     re.MULTILINE,
 )
-if header_abis != ["27"]:
-    raise SystemExit("authoritative NoritoBridge public header ABI is not exact 27")
+if header_abis != ["28"]:
+    raise SystemExit("authoritative NoritoBridge public header ABI is not exact 28")
 if bridge_aliases != ["PRIVACY_BRIDGE_ABI_VERSION_V1"]:
     raise SystemExit("NoritoBridge Rust ABI alias is not exact")
 if protocol_abis != header_abis:
@@ -2153,8 +2153,8 @@ for root, directories, files in os.walk(xcframework, followlinks=False):
 
 with manifest_path.open("r", encoding="utf-8") as handle:
     manifest = json.load(handle, object_pairs_hook=object_without_duplicates)
-if manifest.get("native_bridge_abi_version") != 27:
-    raise SystemExit("staged NoritoBridge manifest does not bind exact ABI 27")
+if manifest.get("native_bridge_abi_version") != 28:
+    raise SystemExit("staged NoritoBridge manifest does not bind exact ABI 28")
 hashes = manifest.get("hashes")
 if not isinstance(hashes, dict) or set(hashes) != set(expected_slices):
     raise SystemExit("staged NoritoBridge manifest has a non-canonical slice inventory")

@@ -1954,11 +1954,6 @@ struct CachedSoracloudPreparedContract {
     generation: u64,
     prepared: PreparedContract,
 }
-impl CachedSoracloudPreparedContract {
-    fn entrypoint_pc(&self, name: &str) -> Option<u64> {
-        self.prepared.entrypoint_pc(name)
-    }
-}
 #[derive(Default)]
 struct SoracloudPreparedRuntimeCacheState {
     entries: BTreeMap<Hash, SoracloudPreparedContractEntry>,
@@ -2502,7 +2497,11 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             .expect("handler presence checked above")
             .entrypoint
             .clone();
-        if prepared.entrypoint_descriptor(&entrypoint_name).is_none() {
+        if prepared
+            .prepared
+            .entrypoint_descriptor(&entrypoint_name)
+            .is_none()
+        {
             return Ok(deterministic_mailbox_failure_result(
                 request,
                 "missing_entrypoint",
@@ -2538,7 +2537,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         };
         let (arguments, output_kind) = match prepare_soracloud_invocation(
             &mut vm,
-            &prepared,
+            &prepared.prepared,
             &entrypoint_name,
             SoracloudInvocationInput {
                 body_tlv: &mailbox_payload_tlv,
@@ -8939,6 +8938,7 @@ fn execute_query_local_read(
             )
         })?;
     if prepared
+        .prepared
         .entrypoint_descriptor(context.handler.entrypoint.as_ref())
         .is_none()
     {
@@ -8988,7 +8988,7 @@ fn execute_query_local_read(
         })?;
     let (arguments, output_kind) = prepare_soracloud_invocation(
         &mut vm,
-        &prepared,
+        &prepared.prepared,
         context.handler.entrypoint.as_ref(),
         SoracloudInvocationInput {
             body_tlv: &body_tlv,

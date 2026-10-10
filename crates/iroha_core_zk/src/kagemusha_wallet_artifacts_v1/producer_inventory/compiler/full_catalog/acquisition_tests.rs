@@ -66,8 +66,15 @@ impl Selection {
                 assert!(std::ptr::eq(owner.binding(), expected.key().binding()));
                 assert!(std::ptr::eq(owner.verifying_key(), expected.key().key()));
                 assert_eq!(
-                    owner.checkpoint_layout().unwrap(),
-                    expected.checkpoint_layout()
+                    owner
+                        .verifying_key()
+                        .kagemusha_digest(owner.binding())
+                        .unwrap(),
+                    expected
+                        .key()
+                        .key()
+                        .kagemusha_digest(expected.key().binding())
+                        .unwrap()
                 );
             }
         }

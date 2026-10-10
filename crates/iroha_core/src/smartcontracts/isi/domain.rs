@@ -16,8 +16,8 @@ pub mod isi {
             authority_can_manage_asset_definition_alias,
         },
         state::{
-            WorldReadOnly as _, account_label_is_pii, public_lane_reward_record_matches_key,
-            public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
+            WorldReadOnly as _, account_label_is_pii, public_lane_stake_share_matches_key,
+            public_lane_validator_record_matches_key,
         },
     };
     use iroha_crypto::{Algorithm, PublicKey};
@@ -1791,57 +1791,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some(((lane_id, epoch), _)) = state_transaction
-                .world
-                .public_lane_rewards
-                .iter()
-                .find(|(key, record)| {
-                    public_lane_reward_record_matches_key(key, record)
-                        && (record.asset.account() == &account_id
-                            || record
-                                .shares
-                                .iter()
-                                .any(|share| share.account == account_id))
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it has active public-lane reward ledger state (lane {lane_id}, epoch {epoch}); settle or prune rewards first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some(((lane_id, claimant), _)) = state_transaction
-                .world
-                .public_lane_reward_claims
-                .iter()
-                .find(|((_, claimant), _)| claimant == &account_id)
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it has pending public-lane reward claim state (lane {lane_id}, account {claimant}); clear the retained processing cursor first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
-                .world
-                .public_lane_reward_accruals
-                .iter()
-                .find(|((_, claimant, asset_id), _)| {
-                    claimant == &account_id || asset_id.account() == &account_id
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it has unpaid public-lane reward accrual state as claimant or reward-asset owner (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
             if let Some((feed_id, _)) =
                 state_transaction
                     .world
@@ -2780,37 +2729,6 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!("cannot unregister asset definition {asset_definition_id}: it is the committed network XOR identity").into(),
                 ).into());
-            }
-            if let Some(((lane_id, epoch), _)) = state_transaction
-                .world
-                .public_lane_rewards
-                .iter()
-                .find(|(key, record)| {
-                    public_lane_reward_record_matches_key(key, record)
-                        && record.asset.definition() == &asset_definition_id
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it has active public-lane reward ledger state (lane {lane_id}, epoch {epoch}); settle or prune rewards first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
-                .world
-                .public_lane_reward_accruals
-                .iter()
-                .find(|((_, _, asset_id), _)| asset_id.definition() == &asset_definition_id)
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it has unpaid public-lane reward accrual state (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
-                    )
-                    .into(),
-                )
-                .into());
             }
             let retirement =
                 crate::smartcontracts::isi::asset::isi::QuantityRetirementOwner::retain(
@@ -8496,7 +8414,6 @@ mod tests {
                         activation_height: 1,
                         election_exit_height: None,
                         deactivation_height: None,
-                        last_reward_epoch: None,
                     },
                 );
             },
@@ -8523,7 +8440,6 @@ mod tests {
                         activation_height: 1,
                         election_exit_height: None,
                         deactivation_height: None,
-                        last_reward_epoch: None,
                     },
                 );
                 Unregister::account(account_id.clone())
@@ -8546,188 +8462,40 @@ mod tests {
             },
         );
     }
+
     #[test]
-    fn unregister_account_rejects_when_account_has_public_lane_reward_record_state() {
-        assert_account_unregister_guard(
-            |tx, domain_id, _authority, account_id| {
-                tx.world.public_lane_rewards.insert(
-                    (LaneId::SINGLE, 1),
-                    iroha_data_model::nexus::PublicLaneRewardRecord {
-                        lane_id: LaneId::SINGLE,
-                        epoch: 1,
-                        asset: AssetId::new(
-                            AssetDefinitionId::derive_from_components(
-                                domain_id.clone(),
-                                "fee".parse().unwrap(),
-                            ),
-                            account_id.clone(),
-                        ),
-                        total_reward: Quantity::from(1_u32),
-                        shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
-                            account: account_id.clone(),
-                            role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                            amount: Quantity::from(1_u32),
-                        }],
+    fn unregister_account_ignores_mismatched_public_lane_economic_rows() {
+        with_registered_account_unregistration_candidate(
+            |authority, _domain_id, account_id, tx| {
+                tx.world.public_lane_stake_shares.insert(
+                    (LaneId::SINGLE, account_id.clone(), authority.clone()),
+                    iroha_data_model::nexus::PublicLaneStakeShare {
+                        lane_id: LaneId::new(1),
+                        validator: account_id.clone(),
+                        staker: authority.clone(),
+                        bonded: Quantity::from(1_u32),
+                        pending_unbonds: std::collections::BTreeMap::new(),
                         metadata: Metadata::default(),
                     },
                 );
+                Unregister::account(account_id.clone())
+                    .execute(&authority, tx)
+                    .expect(
+                        "mismatched public-lane economic rows must not block account unregister",
+                    );
+                assert!(
+                    tx.world.accounts.get(&account_id).is_none(),
+                    "account should be unregistered when only malformed economic rows reference it"
+                );
+                assert!(
+                    tx.world
+                        .public_lane_stake_shares
+                        .get(&(LaneId::SINGLE, account_id.clone(), authority))
+                        .is_some(),
+                    "malformed stake-share row remains as stored"
+                );
             },
-            "account with public-lane reward state must not be unregistered",
-            "public-lane reward ledger state",
-            "error should explain reward-state conflict",
         );
-    }
-    #[test]
-    fn unregister_account_rejects_retained_reward_processing_cursor() {
-        with_registered_account_unregistration_candidate(|authority, _, account_id, tx| {
-            let key = (LaneId::SINGLE, account_id.clone());
-            let cursor = iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
-                through_epoch: Some(1),
-            };
-            tx.world
-                .public_lane_reward_claims
-                .insert(key.clone(), cursor);
-            assert!(tx.world.public_lane_reward_accruals.iter().next().is_none());
-            let error = Unregister::account(account_id.clone())
-                .execute(&authority, tx)
-                .expect_err("retained processing cursor keeps its recipient registered");
-            assert!(
-                error.to_string().contains("retained processing cursor"),
-                "{error}"
-            );
-            assert_eq!(tx.world.public_lane_reward_claims.get(&key), Some(&cursor));
-            assert!(tx.world.accounts.get(&account_id).is_some());
-            tx.world.public_lane_reward_claims.remove(key);
-            Unregister::account(account_id.clone())
-                .execute(&authority, tx)
-                .expect("clearing the only retained cursor releases the account");
-            assert!(tx.world.accounts.get(&account_id).is_none());
-        });
-    }
-    #[test]
-    fn unregister_account_rejects_when_account_is_reward_claim_asset_owner() {
-        assert_account_unregister_guard(
-            |tx, domain_id, authority, account_id| {
-                let source = AssetId::new(
-                    AssetDefinitionId::derive_from_components(
-                        domain_id.clone(),
-                        "fee".parse().unwrap(),
-                    ),
-                    account_id.clone(),
-                );
-                tx.world.public_lane_reward_claims.insert(
-                    (LaneId::SINGLE, authority.clone()),
-                    iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
-                        through_epoch: Some(1),
-                    },
-                );
-                tx.world.public_lane_reward_accruals.insert(
-                    (LaneId::SINGLE, authority.clone(), source.clone()),
-                    Quantity::one(),
-                );
-                tx.world
-                    .public_lane_reward_reserves
-                    .insert(source, Quantity::one());
-            },
-            "account referenced by reward-accrual source owner must not be unregistered",
-            "public-lane reward accrual state",
-            "error should explain reward-accrual conflict",
-        );
-    }
-    #[test]
-    fn unregister_asset_definition_preserves_exact_reward_accrual_source() {
-        with_registered_asset_definition_unregistration_candidate(|authority, definition, tx| {
-            let source = AssetId::new(definition.clone(), authority.clone());
-            let key = (LaneId::SINGLE, authority.clone(), source.clone());
-            tx.world
-                .public_lane_reward_accruals
-                .insert(key.clone(), Quantity::one());
-            tx.world
-                .public_lane_reward_reserves
-                .insert(source.clone(), Quantity::one());
-            let error = Unregister::asset_definition(definition.clone())
-                .execute(&authority, tx)
-                .expect_err("positive accrual keeps its exact source definition registered");
-            assert!(
-                error
-                    .to_string()
-                    .contains("public-lane reward accrual state"),
-                "{error}"
-            );
-            assert!(tx.world.asset_definitions.get(&definition).is_some());
-            assert_eq!(
-                tx.world.public_lane_reward_accruals.get(&key),
-                Some(&Quantity::one())
-            );
-            assert_eq!(
-                tx.world.public_lane_reward_reserves.get(&source),
-                Some(&Quantity::one())
-            );
-            tx.world.public_lane_reward_accruals.remove(key);
-            tx.world.public_lane_reward_reserves.remove(source);
-            Unregister::asset_definition(definition.clone())
-                .execute(&authority, tx)
-                .expect("settled accrual releases the source definition");
-            assert!(tx.world.asset_definitions.get(&definition).is_none());
-        });
-    }
-    #[test]
-    fn unregister_account_ignores_mismatched_public_lane_economic_rows() {
-        with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
-            tx.world.public_lane_stake_shares.insert(
-                (LaneId::SINGLE, account_id.clone(), authority.clone()),
-                iroha_data_model::nexus::PublicLaneStakeShare {
-                    lane_id: LaneId::new(1),
-                    validator: account_id.clone(),
-                    staker: authority.clone(),
-                    bonded: Quantity::from(1_u32),
-                    pending_unbonds: std::collections::BTreeMap::new(),
-                    metadata: Metadata::default(),
-                },
-            );
-            tx.world.public_lane_rewards.insert(
-                (LaneId::SINGLE, 1),
-                iroha_data_model::nexus::PublicLaneRewardRecord {
-                    lane_id: LaneId::new(1),
-                    epoch: 1,
-                    asset: AssetId::new(
-                        AssetDefinitionId::derive_from_components(
-                            domain_id.clone(),
-                            "fee".parse().unwrap(),
-                        ),
-                        account_id.clone(),
-                    ),
-                    total_reward: Quantity::from(1_u32),
-                    shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
-                        account: account_id.clone(),
-                        role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                        amount: Quantity::from(1_u32),
-                    }],
-                    metadata: Metadata::default(),
-                },
-            );
-            Unregister::account(account_id.clone())
-                .execute(&authority, tx)
-                .expect("mismatched public-lane economic rows must not block account unregister");
-            assert!(
-                tx.world.accounts.get(&account_id).is_none(),
-                "account should be unregistered when only malformed economic rows reference it"
-            );
-            assert!(
-                tx.world
-                    .public_lane_stake_shares
-                    .get(&(LaneId::SINGLE, account_id.clone(), authority))
-                    .is_some(),
-                "malformed stake-share row remains as stored"
-            );
-            assert!(
-                tx.world
-                    .public_lane_rewards
-                    .get(&(LaneId::SINGLE, 1))
-                    .is_some(),
-                "malformed reward row remains as stored"
-            );
-        });
     }
     #[test]
     fn unregister_account_rejects_when_account_has_repo_agreement_state() {
@@ -11736,85 +11504,7 @@ mod tests {
             "asset definition should remain after rejected unregister"
         );
     }
-    #[test]
-    fn unregister_asset_definition_ignores_mismatched_public_lane_reward_record() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-        let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let asset_definition_id =
-            AssetDefinitionId::derive_from_components(domain_id, "fee".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "fee".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .execute(&authority, &mut tx)
-        .expect("register asset definition");
-        tx.world.public_lane_rewards.insert(
-            (LaneId::SINGLE, 1),
-            iroha_data_model::nexus::PublicLaneRewardRecord {
-                lane_id: LaneId::new(1),
-                epoch: 1,
-                asset: AssetId::new(asset_definition_id.clone(), account_id.clone()),
-                total_reward: Quantity::from(1_u32),
-                shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
-                    account: account_id,
-                    role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                    amount: Quantity::from(1_u32),
-                }],
-                metadata: Metadata::default(),
-            },
-        );
-        let accrual_key = (
-            LaneId::SINGLE,
-            authority.clone(),
-            AssetId::new(asset_definition_id.clone(), authority.clone()),
-        );
-        tx.world
-            .public_lane_reward_accruals
-            .insert(accrual_key.clone(), Quantity::one());
-        let error = Unregister::asset_definition(asset_definition_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("unpaid source must pin its asset definition");
-        assert!(
-            error
-                .to_string()
-                .contains("public-lane reward accrual state")
-        );
-        assert!(
-            tx.world
-                .asset_definitions
-                .get(&asset_definition_id)
-                .is_some()
-        );
-        tx.world.public_lane_reward_accruals.remove(accrual_key);
-        Unregister::asset_definition(asset_definition_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("mismatched public-lane reward row must not block asset definition unregister");
-        assert!(
-            tx.world
-                .asset_definitions
-                .get(&asset_definition_id)
-                .is_none(),
-            "asset definition should be removed when only malformed rewards reference it"
-        );
-        assert!(
-            tx.world
-                .public_lane_rewards
-                .get(&(LaneId::SINGLE, 1))
-                .is_some(),
-            "malformed reward row remains as stored"
-        );
-    }
+
     #[test]
     fn unregister_asset_definition_removes_confidential_state() {
         let mut state = test_state();

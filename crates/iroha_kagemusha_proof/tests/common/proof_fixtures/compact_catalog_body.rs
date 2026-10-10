@@ -241,13 +241,16 @@ impl Program {
         assert_eq!(output.instances, public);
         assert_eq!(output.pallas, *source.pallas);
         assert_eq!(output.vesta, vesta);
-        let payload = session
-            .encode_checkpoint(&output.transport(), MemoryBudget::DEFAULT)
-            .unwrap();
+        let transport = output.transport();
         let restored = session
-            .restore_checkpoint(&payload, MemoryBudget::DEFAULT)
+            .restore_transport(&transport, MemoryBudget::DEFAULT)
             .unwrap();
+        assert_eq!(restored.transport(), transport);
         assert_eq!(restored.proof, output.proof);
+        assert_eq!(restored.instances, output.instances);
+        assert_eq!(restored.pallas, output.pallas);
+        assert_eq!(restored.vesta, output.vesta);
+        assert_eq!(restored.opening, output.opening);
         assert_eq!(output.proof.len(), 3712);
         let opened = accumulate_generator(
             &params,
@@ -277,7 +280,7 @@ impl Program {
             );
         }
         eprintln!(
-            "COMPACT_CATALOG_OUTER terminal={label} catalog_size={} actual_proof=3712 transport=4800 native_original_import=true canonical_checkpoint=true known_unknown_equal=true immutable_key=true decides=2 full_catalog=false release_qualified=false",
+            "COMPACT_CATALOG_OUTER terminal={label} catalog_size={} actual_proof=3712 transport=4800 native_original_import=true native_transport_restore=true known_unknown_equal=true immutable_key=true decides=2 full_catalog=false release_qualified=false",
             self.catalog.len()
         );
         Outer {
@@ -454,7 +457,7 @@ impl BootstrapCatalogSeed {
 }
 
 /// Build a genuine zero-balance receiver under a one-terminal native catalog.
-/// Native original import, exact checkpoint replay and both decisions are checked.
+/// Native original import, exact native transport replay and both decisions are checked.
 pub fn compact_bootstrap_catalog_seed() -> (BootstrapCatalogSeed, Program, RootedBootstrapOmega) {
     let mut receiver = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap_with_identity(
         bootstrap_chain::BootstrapIdentity::Receiver,
@@ -784,7 +787,7 @@ impl Program {
 }
 
 /// Run the retained composition assertions with genuine native Load originals.
-#[allow(dead_code)] // Called by the full-finality qualification fixture once installed.
+#[allow(dead_code)] // Registered by receive_omega; other consumers select shared helpers only.
 pub fn compact_distinct_wallets_share_the_exact_predecessor_catalog(fixture: &LoadFixture) {
     let wallets = compact_payer_load_and_receiver(fixture);
     assert_eq!(wallets.payer.binding, wallets.receiver.binding);
@@ -801,7 +804,7 @@ pub fn compact_distinct_wallets_share_the_exact_predecessor_catalog(fixture: &Lo
 }
 
 /// Run the retained composition assertions with genuine native Load originals.
-#[allow(dead_code)] // Called by the full-finality qualification fixture once installed.
+#[allow(dead_code)] // Registered by receive_omega; other consumers select shared helpers only.
 pub fn compact_payer_load_retains_the_exact_predecessor_catalog(fixture: &LoadFixture) {
     let payer = compact_payer_load(fixture);
     assert_eq!(payer.proof.len(), 3712);

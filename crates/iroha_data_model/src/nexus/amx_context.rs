@@ -74,8 +74,6 @@ pub mod tag {
     pub const STAKING_UNBONDING_DELAY_NS: &str = "nexus.staking.unbonding_delay_ns";
     /// Maximum slash basis points.
     pub const STAKING_MAX_SLASH_BPS: &str = "nexus.staking.max_slash_bps";
-    /// Reward dust threshold.
-    pub const STAKING_REWARD_DUST_THRESHOLD: &str = "nexus.staking.reward_dust_threshold";
     /// Stake asset.
     pub const STAKING_STAKE_ASSET_ID: &str = "nexus.staking.stake_asset_id";
     /// Stake escrow account.
@@ -202,7 +200,7 @@ pub mod tag {
     pub const STAGED_ACTIVE_PUBLIC_LANE_VALIDATORS: &str = "staged.active_public_lane_validators";
 
     /// Fixed-arity fields after the routing rules, in exact preimage order.
-    pub const TAIL: [&str; 67] = [
+    pub const TAIL: [&str; 66] = [
         STAKING_PUBLIC_VALIDATOR_MODE,
         STAKING_RESTRICTED_VALIDATOR_MODE,
         STAKING_MIN_VALIDATOR_STAKE,
@@ -211,7 +209,6 @@ pub mod tag {
         STAKING_MAX_PENDING_UNBONDS_PER_SHARE,
         STAKING_UNBONDING_DELAY_NS,
         STAKING_MAX_SLASH_BPS,
-        STAKING_REWARD_DUST_THRESHOLD,
         STAKING_STAKE_ASSET_ID,
         STAKING_STAKE_ESCROW_ACCOUNT_ID,
         STAKING_SLASH_SINK_ACCOUNT_ID,

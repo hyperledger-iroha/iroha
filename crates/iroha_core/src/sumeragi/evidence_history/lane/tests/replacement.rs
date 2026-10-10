@@ -162,10 +162,14 @@ fn money(chain: &CertifiedTestChain) -> Money {
             .map(|(id, value)| (id.clone(), value.clone()))
             .collect(),
         rewards: world
-            .public_lane_reward_reserves()
+            .assets()
             .iter()
             .filter(|(id, _)| id.definition() == &xor)
-            .map(|(id, value)| (id.clone(), value.clone()))
+            .filter_map(|(id, _)| {
+                let reserved =
+                    crate::validation_fee_rewards::reserved_fee_custody(world, id).unwrap();
+                (!reserved.is_zero()).then(|| (id.clone(), reserved))
+            })
             .collect(),
         supply: world
             .asset_definition(&xor)

@@ -32,7 +32,6 @@ _TYPES = {
     "monetary_bond_plan": StakingMonetaryPlanV1,
     "monetary_unbond_plan": StakingMonetaryPlanV1,
     "monetary_slash_plan": StakingMonetaryPlanV1,
-    "reward_claim_plan": StakingRewardClaimPlanV1,
     "fee_reward_claim_plan": StakingRewardClaimPlanV1,
 }
 
@@ -98,38 +97,28 @@ def test_staking_fee_claim_is_required_and_has_independent_custody_sequence():
     assert fee.source_asset == _plan().destination_asset and fee.destination_asset == _plan().source_asset
     args = dict(plan.__dict__); args.pop("fee_claim")
     with pytest.raises(TypeError): StakingRewardClaimPlanV1(**args)
-    no_fee = StakingRewardClaimPlanV1.from_norito(_ROWS["reward_claim_plan"])
-    assert no_fee.fee_claim is None
-    assert _ROWS["reward_claim_plan"][-2:] == b"\1\0"
-    with pytest.raises((TypeError, ValueError, DecodeError)): StakingRewardClaimPlanV1.from_norito(_ROWS["reward_claim_plan"][:-2])
+    with pytest.raises(TypeError): replace(plan, fee_claim=None)
     for amount in (KotodamaQuantity("0"),):
         with pytest.raises(ValueError): replace(fee, amount=amount)
     with pytest.raises(ValueError): replace(fee, lifecycle_seal=bytes(32))
     with pytest.raises(ValueError): replace(fee, source_asset=replace(fee.source_asset, scope=StakingAssetScopeV1(1)))
-    with pytest.raises(ValueError): replace(plan, fee_claim=replace(fee, destination_asset=fee.source_asset))
-    with pytest.raises(ValueError): replace(plan.sources[0], expected_accrued=KotodamaQuantity("0"))
-    dust = replace(plan, sources=(replace(plan.sources[0], payout=KotodamaQuantity("0")),))
-    assert StakingRewardClaimPlanV1.from_norito(dust.to_norito()).sources[0].payout.mantissa == 0
 
 
-def test_staking_reward_order_bounds_and_immutable_identity_are_preserved():
-    plan = _claim(); source = plan.sources[0]
-    # Rust's Ed25519 custody key starts 0x5b and recipient key starts 0xe2.
-    # This order uses key bytes, not account text or variable frame lengths.
-    second = replace(source, source_asset=source.destination_asset, expected_accrued=None)
-    ordered = replace(plan, sources=(source, second))
-    assert StakingRewardClaimPlanV1.from_norito(ordered.to_norito()).sources == ordered.sources
-    with pytest.raises(ValueError): replace(plan, sources=(second, source))
-    with pytest.raises(ValueError): replace(plan, sources=(source, source))
-    with pytest.raises(ValueError): replace(plan, records=plan.records * 65)
-    with pytest.raises(ValueError): replace(plan, sources=plan.sources * 65)
-    with pytest.raises(ValueError): replace(plan, records=plan.records * 2)
-    body = _fields(plan.to_norito()); body[3] = (65).to_bytes(8, "little")
-    with pytest.raises(ValueError, match="bound"): StakingRewardClaimPlanV1.from_norito(_record(body))
+def test_staking_reward_exact_layout_and_immutable_identity_are_preserved():
+    plan = _claim()
+    for field in ("sources", "records", "expected_state"):
+        with pytest.raises(TypeError): replace(plan, **{field: ()})
+    body = _fields(plan.to_norito())
+    assert len(body) == 3
+    for malformed in (body[:-1], body + [b"\0"], [*body[:2], b"\0"]):
+        with pytest.raises((TypeError, ValueError, DecodeError)):
+            StakingRewardClaimPlanV1.from_norito(_record(malformed))
     raw = bytearray(plan.fee_claim.lifecycle_seal)
     owned = replace(plan.fee_claim, lifecycle_seal=raw); raw[0] ^= 1
     assert owned.lifecycle_seal == plan.fee_claim.lifecycle_seal
     with pytest.raises(FrozenInstanceError): owned.expected_claim_sequence = 0
+    maximum = replace(plan, fee_claim=replace(plan.fee_claim, beneficiary_revision=(1 << 64)-1, expected_claim_sequence=(1 << 64)-1))
+    assert StakingRewardClaimPlanV1.from_norito(maximum.to_norito()).fee_claim.expected_claim_sequence == (1 << 64)-1
 
 
 def test_staking_generation_epoch_bindings_do_not_couple_signing_lifetime():

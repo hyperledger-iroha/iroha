@@ -3046,8 +3046,6 @@ pub struct NexusStaking {
     pub unbonding_delay: Duration,
     /// Maximum slash ratio allowed (basis points, 10_000 = 100%).
     pub max_slash_bps: u16,
-    /// Minimum reward amount paid out; smaller amounts are skipped as dust.
-    pub reward_dust_threshold: Quantity,
     /// Asset definition used for staking bonds (string form).
     pub stake_asset_id: String,
     /// Escrow account that holds bonded stake (string form).
@@ -3067,7 +3065,6 @@ impl_default!(NexusStaking => {
                 defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE,
             unbonding_delay: defaults::nexus::staking::UNBONDING_DELAY,
             max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-            reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
             stake_asset_id: defaults::nexus::staking::stake_asset_id(),
             stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
             slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
@@ -3812,7 +3809,6 @@ struct NexusConsensusStakingV1 {
     max_pending_unbonds_per_share: u32,
     unbonding_delay: NexusConsensusDurationV1,
     max_slash_bps: u16,
-    reward_dust_threshold: Quantity,
     stake_asset_id: String,
     stake_escrow_account_id: String,
     slash_sink_account_id: String,
@@ -4130,7 +4126,6 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             max_pending_unbonds_per_share: nexus.staking.max_pending_unbonds_per_share.get(),
             unbonding_delay: nexus.staking.unbonding_delay.into(),
             max_slash_bps: nexus.staking.max_slash_bps,
-            reward_dust_threshold: nexus.staking.reward_dust_threshold.clone(),
             stake_asset_id: nexus.staking.stake_asset_id.clone(),
             stake_escrow_account_id: nexus.staking.stake_escrow_account_id.clone(),
             slash_sink_account_id: nexus.staking.slash_sink_account_id.clone(),
@@ -5893,10 +5888,6 @@ pub fn sumeragi_nexus_amx_context_preimage(
         &nexus.staking.unbonding_delay.as_nanos(),
     );
     preimage.field(tag::STAKING_MAX_SLASH_BPS, &nexus.staking.max_slash_bps);
-    preimage.field(
-        tag::STAKING_REWARD_DUST_THRESHOLD,
-        &nexus.staking.reward_dust_threshold,
-    );
     preimage.field(tag::STAKING_STAKE_ASSET_ID, &nexus.staking.stake_asset_id);
     preimage.field(
         tag::STAKING_STAKE_ESCROW_ACCOUNT_ID,

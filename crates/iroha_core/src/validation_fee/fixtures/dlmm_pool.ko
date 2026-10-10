@@ -917,40 +917,6 @@ seiyaku DlmmPool {
         return amount_out;
     }
 
-    fn swap_base_for_quote(
-        AccountId trader,
-        AccountId recipient,
-        quantity amount_in,
-        quantity min_out,
-        int require_full_fill,
-    ) -> quantity {
-        return swap_direction(
-            trader: trader,
-            recipient: recipient,
-            amount_in: amount_in,
-            min_out: min_out,
-            require_full_fill: require_full_fill,
-            base_input: 1,
-        );
-    }
-
-    fn swap_quote_for_base(
-        AccountId trader,
-        AccountId recipient,
-        quantity amount_in,
-        quantity min_out,
-        int require_full_fill,
-    ) -> quantity {
-        return swap_direction(
-            trader: trader,
-            recipient: recipient,
-            amount_in: amount_in,
-            min_out: min_out,
-            require_full_fill: require_full_fill,
-            base_input: 0,
-        );
-    }
-
     fn swap_exact_in_impl(
         AccountId trader,
         AccountId recipient,
@@ -959,22 +925,17 @@ seiyaku DlmmPool {
         quantity min_out,
         int require_full_fill,
     ) -> quantity {
-        if input_asset == BaseAsset {
-            return swap_base_for_quote(
-                trader: trader,
-                recipient: recipient,
-                amount_in: amount_in,
-                min_out: min_out,
-                require_full_fill: require_full_fill,
-            );
+        let base_input = input_asset == BaseAsset ? 1 : 0;
+        if base_input == 0 {
+            require(input_asset == QuoteAsset, DlmmPoolError::AssetNotInPool);
         }
-        require(input_asset == QuoteAsset, DlmmPoolError::AssetNotInPool);
-        return swap_quote_for_base(
+        return swap_direction(
             trader: trader,
             recipient: recipient,
             amount_in: amount_in,
             min_out: min_out,
             require_full_fill: require_full_fill,
+            base_input: base_input,
         );
     }
 

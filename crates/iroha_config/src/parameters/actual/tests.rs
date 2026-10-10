@@ -920,7 +920,6 @@ mod tests {
             activation_height: 1,
             election_exit_height: None,
             deactivation_height: None,
-            last_reward_epoch: None,
         };
         ((lane, validator), record)
     }

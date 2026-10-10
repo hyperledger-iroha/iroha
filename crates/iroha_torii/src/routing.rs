@@ -126,9 +126,8 @@ use iroha_data_model::{
     block::{BlockHeader, SharedSignedBlock, SignedBlock, consensus::EvidencePenaltyStatus},
     consensus::ConsensusKeyRecord,
     nexus::{
-        DataSpaceCatalog, LaneLifecycleStatusV1, PublicLaneRewardRecord, PublicLaneStakeShare,
-        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
-        UniversalAccountId,
+        DataSpaceCatalog, LaneLifecycleStatusV1, PublicLaneStakeShare, PublicLaneUnbonding,
+        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
     },
     prelude::*,
     proof::VerifyingKeyId,
@@ -3435,10 +3434,6 @@ use iroha_data_model::events::{
     EventFilterBox,
     pipeline::{BlockEventFilter, TransactionEventFilter, TransactionStatus},
 };
-#[cfg(test)]
-use iroha_data_model::nexus::PublicLaneRewardRole;
-#[cfg(test)]
-use iroha_data_model::nexus::PublicLaneRewardShare;
 #[cfg(test)]
 use sorafs_manifest::PinPolicy as ManifestPinPolicy;
 #[cfg(test)]
@@ -32584,7 +32579,7 @@ fn append_asset_ids_from_instruction(
         asset::AssetId,
         isi::{
             BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, SetAssetKeyValue,
-            TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
+            TransferAssetBatch, TransferBox,
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
@@ -32635,10 +32630,6 @@ fn append_asset_ids_from_instruction(
         push_asset(out, remove.asset());
         return;
     }
-    if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
-        push_asset(out, rewards.reward_asset());
-        return;
-    }
     if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
         if let Ok(MultisigInstructionBox::Propose(propose)) =
             MultisigInstructionBox::try_from(custom.payload())
@@ -32657,7 +32648,7 @@ fn instruction_matches_asset_id(
         asset::AssetId,
         isi::{
             BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, SetAssetKeyValue,
-            TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
+            TransferAssetBatch, TransferBox,
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
@@ -32695,9 +32686,6 @@ fn instruction_matches_asset_id(
     }
     if let Some(remove) = any.downcast_ref::<RemoveAssetKeyValue>() {
         return remove.asset() == expected;
-    }
-    if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
-        return rewards.reward_asset() == expected;
     }
     if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
         if let Ok(MultisigInstructionBox::Propose(propose)) =
@@ -32990,8 +32978,6 @@ pub struct PublicLaneRewardsQueryParams {
     /// Optional asset identifier filter.
     #[norito(default)]
     pub asset_id: Option<String>,
-    #[norito(default)]
-    pub upto_epoch: Option<u64>,
 }
 ( Debug, Default, Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 pub struct NexusDataspacesAccountSummaryQueryParams {
@@ -34133,7 +34119,7 @@ mod tx_query_filter_tests {
     use super::*;
     use iroha_crypto::{Hash, HashOf as GenericHashOf, KeyPair};
     use iroha_data_model::isi::{
-        RemoveAssetKeyValue, SetAssetKeyValue, staking::RecordPublicLaneRewards,
+        RemoveAssetKeyValue, SetAssetKeyValue,
     };
     use iroha_data_model::prelude as dm;
     use iroha_executor_data_model::isi::multisig::{MultisigCancel, MultisigPropose};
@@ -34594,22 +34580,6 @@ mod tx_query_filter_tests {
         let (bob, _) = account_with_key();
         let remove = dm::RemoveKeyValue::account(alice.clone(), "key".parse().unwrap());
         let instruction: dm::InstructionBox = remove.into();
-        assert!(instruction_matches_account_id(&instruction, &alice));
-        assert!(!instruction_matches_account_id(&instruction, &bob));
-    }
-    routing_test! { sync instruction_matches_account_id_matches_public_lane_rewards_asset_account
-        let (alice, _) = account_with_key();
-        let (bob, _) = account_with_key();
-        let reward_asset = dm::AssetId::new(test_asset_definition_id(), alice.clone());
-        let rewards = RecordPublicLaneRewards {
-            lane_id: iroha_model_base::topology::LaneId::SINGLE,
-            epoch: 1,
-            reward_asset,
-            total_reward: 1_u32.into(),
-            shares: Vec::new(),
-            metadata: iroha_model_base::metadata::Metadata::default(),
-        };
-        let instruction: dm::InstructionBox = rewards.into();
         assert!(instruction_matches_account_id(&instruction, &alice));
         assert!(!instruction_matches_account_id(&instruction, &bob));
     }
@@ -56690,19 +56660,14 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         None => None,
     };
     record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS);
-    let upto_epoch = params.upto_epoch.unwrap_or(u64::MAX);
     if !state.is_lane_active_for_authority(lane_id) {
         return lane_items_response(lane_id, Vec::new());
     }
-    let world = state.world_view();
+    let view = state.view();
+    let height = u64::try_from(view.height())
+        .map_err(|_| conversion_error("committed reward height overflow".into()))?;
     let rewards = collect_pending_public_lane_rewards(
-        lane_id,
-        &account_id,
-        upto_epoch,
-        asset_filter.as_ref(),
-        world.public_lane_reward_claims().get(&(lane_id, account_id.clone())),
-        world.public_lane_reward_accruals().iter(),
-        world.public_lane_rewards().iter(),
+        view.world(), height, lane_id, &account_id, asset_filter.as_ref(),
     )?;
     let mut entries = rewards
         .into_iter()
@@ -56739,12 +56704,6 @@ fn public_lane_stake_share_matches_key(
 ) -> bool {
     key.0 == share.lane_id && key.1 == share.validator && key.2 == share.staker
 }
-fn public_lane_reward_record_matches_key(
-    key: &(LaneId, u64),
-    record: &PublicLaneRewardRecord,
-) -> bool {
-    key.0 == record.lane_id && key.1 == record.epoch
-}
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync public_lane_validator_record_matches_key_rejects_mismatched_rows
@@ -56772,7 +56731,6 @@ routing_test! { sync public_lane_validator_record_matches_key_rejects_mismatched
         activation_height: 1,
         election_exit_height: None,
         deactivation_height: None,
-        last_reward_epoch: None,
     };
     assert!(public_lane_validator_record_matches_key(&key, &record));
     record.lane_id = LaneId::new(10);
@@ -56799,7 +56757,6 @@ routing_test! { sync public_lane_validator_projection_distinguishes_election_exi
         stake_account: validator.clone(), total_stake: 100_u64.into(), self_stake: 100_u64.into(),
         metadata: Metadata::default(), status: PublicLaneValidatorStatus::Active,
         activation_height: 21, election_exit_height: Some(41), deactivation_height: None,
-        last_reward_epoch: None,
     };
     let (_, value) = validator_record_to_json(&record);
     assert_eq!(value.get("election_exit_height").and_then(Value::as_u64), Some(41));
@@ -56873,220 +56830,6 @@ routing_test! { sync public_lane_stake_share_matches_key_rejects_mismatched_rows
     assert!(!public_lane_stake_share_matches_key(&key, &share));
 }
 #[cfg(all(test, feature = "app_api"))]
-routing_test! { sync public_lane_reward_record_matches_key_rejects_mismatched_rows
-    let recipient = AccountId::new(
-        checked_routing_fixture_keypair(
-            0x78,
-            Algorithm::Ed25519,
-            "derive public lane reward recipient fixture",
-        )
-        .public_key()
-        .clone(),
-    );
-    let asset = AssetId::new(
-        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa"),
-        recipient.clone(),
-    );
-    let key = (LaneId::new(14), 8);
-    let mut record = PublicLaneRewardRecord {
-        lane_id: key.0,
-        epoch: key.1,
-        asset,
-        total_reward: iroha_primitives::numeric::Quantity::from(3_u32),
-        shares: vec![PublicLaneRewardShare {
-            account: recipient,
-            role: PublicLaneRewardRole::Validator,
-            amount: iroha_primitives::numeric::Quantity::from(3_u32),
-        }],
-        metadata: Metadata::default(),
-    };
-    assert!(public_lane_reward_record_matches_key(&key, &record));
-    record.lane_id = LaneId::new(15);
-    assert!(!public_lane_reward_record_matches_key(&key, &record));
-    record.lane_id = key.0;
-    record.epoch = 9;
-    assert!(!public_lane_reward_record_matches_key(&key, &record));
-}
-#[cfg(all(test, feature = "app_api"))]
-routing_test! { sync collect_pending_public_lane_rewards_includes_unclaimed_epoch_zero
-    let account = AccountId::new(checked_routing_fixture_keypair(
-        0x7D, Algorithm::Ed25519, "derive epoch zero reward fixture",
-    ).public_key().clone());
-    let lane_id = LaneId::SINGLE;
-    let asset = AssetId::new(
-        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bb"), account.clone(),
-    );
-    let mut claims = BTreeMap::new();
-    let rewards = BTreeMap::from([((lane_id, 0), PublicLaneRewardRecord {
-        lane_id, epoch: 0, asset: asset.clone(), total_reward: Quantity::from(25_u64),
-        shares: vec![PublicLaneRewardShare { account: account.clone(), role: PublicLaneRewardRole::Nominator, amount: Quantity::from(25_u64) }],
-        metadata: Metadata::default(),
-    })]);
-    let pending = collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.get(&(lane_id, account.clone())), std::iter::empty(), rewards.iter()).unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].amount, Quantity::from(25_u64));
-    assert_eq!(pending[0].latest_unprocessed_epoch, Some(0));
-    assert_eq!(pending[0].processed_through_epoch, None);
-    claims.insert((lane_id, account.clone()), iroha_data_model::nexus::PublicLaneRewardClaimStateV1 { through_epoch: Some(0) });
-    assert!(collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.get(&(lane_id, account.clone())), std::iter::empty(), rewards.iter()).unwrap().is_empty());
-}
-#[cfg(all(test, feature = "app_api"))]
-routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_reward_rows
-    let account = AccountId::new(
-        checked_routing_fixture_keypair(
-            0x7C,
-            Algorithm::Ed25519,
-            "derive public lane pending reward account fixture",
-        )
-        .public_key()
-        .clone(),
-    );
-    let lane_id = LaneId::new(16);
-    let asset = AssetId::new(
-        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bb"),
-        account.clone(),
-    );
-    let other_asset = AssetId::new(
-        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bc"),
-        account.clone(),
-    );
-    let mut claims = BTreeMap::new();
-    claims.insert((lane_id, account.clone()), iroha_data_model::nexus::PublicLaneRewardClaimStateV1 { through_epoch: Some(1) });
-    let valid_reward = |epoch: u64, amount: u32| PublicLaneRewardRecord {
-        lane_id,
-        epoch,
-        asset: asset.clone(),
-        total_reward: iroha_primitives::numeric::Quantity::from(amount),
-        shares: vec![PublicLaneRewardShare {
-            account: account.clone(),
-            role: PublicLaneRewardRole::Nominator,
-            amount: iroha_primitives::numeric::Quantity::from(amount),
-        }],
-        metadata: Metadata::default(),
-    };
-    let mismatched_reward =
-        |record_lane_id: LaneId, record_epoch: u64, amount: u32| PublicLaneRewardRecord {
-            lane_id: record_lane_id,
-            epoch: record_epoch,
-            asset: asset.clone(),
-            total_reward: iroha_primitives::numeric::Quantity::from(amount),
-            shares: vec![PublicLaneRewardShare {
-                account: account.clone(),
-                role: PublicLaneRewardRole::Nominator,
-                amount: iroha_primitives::numeric::Quantity::from(amount),
-            }],
-            metadata: Metadata::default(),
-        };
-    let mut rewards = BTreeMap::new();
-    rewards.insert((lane_id, 2), valid_reward(2, 5));
-    rewards.insert((lane_id, 3), mismatched_reward(LaneId::new(17), 3, 99));
-    rewards.insert((lane_id, 4), mismatched_reward(lane_id, 40, 99));
-    rewards.insert((lane_id, 5), valid_reward(5, 7));
-    rewards.insert((lane_id, 6), valid_reward(6, 13));
-    rewards.insert(
-        (LaneId::new(18), 1),
-        PublicLaneRewardRecord {
-            lane_id: LaneId::new(18),
-            epoch: 1,
-            asset: other_asset,
-            total_reward: iroha_primitives::numeric::Quantity::from(111_u32),
-            shares: vec![PublicLaneRewardShare {
-                account: account.clone(),
-                role: PublicLaneRewardRole::Nominator,
-                amount: iroha_primitives::numeric::Quantity::from(111_u32),
-            }],
-            metadata: Metadata::default(),
-        },
-    );
-    let pending = collect_pending_public_lane_rewards(
-        lane_id,
-        &account,
-        5,
-        None,
-        claims.get(&(lane_id, account.clone())),
-        std::iter::empty(),
-        rewards.iter(),
-    )
-    .expect("pending reward collection should succeed");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].lane_id, lane_id);
-    assert_eq!(&pending[0].account, &account);
-    assert_eq!(&pending[0].asset, &asset);
-    assert_eq!(pending[0].processed_through_epoch, Some(1));
-    assert_eq!(pending[0].latest_unprocessed_epoch, Some(5));
-    assert_eq!(
-        &pending[0].amount,
-        &iroha_primitives::numeric::Quantity::from(12_u32)
-    );
-}
-#[cfg(all(test, feature = "app_api"))]
-routing_test! { sync collect_pending_public_lane_rewards_retains_processed_dust_by_exact_source
-    let account = AccountId::new(checked_routing_fixture_keypair(
-        0x7E, Algorithm::Ed25519, "derive retained reward recipient",
-    ).public_key().clone());
-    let other = AccountId::new(checked_routing_fixture_keypair(
-        0x7F, Algorithm::Ed25519, "derive second reward custody source",
-    ).public_key().clone());
-    let lane_id = LaneId::new(19);
-    let definition = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bd");
-    let first_source = AssetId::new(definition.clone(), account.clone());
-    let second_source = AssetId::new(definition, other.clone());
-    let claims = BTreeMap::from([(
-        (lane_id, account.clone()),
-        iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
-            through_epoch: Some(100),
-        },
-    )]);
-    let mut accruals = BTreeMap::from([
-        ((lane_id, account.clone(), first_source.clone()), Quantity::from(2_u32)),
-        ((lane_id, other, second_source.clone()), Quantity::from(99_u32)),
-    ]);
-    let reward = |epoch: u64, asset: AssetId, amount: u32| PublicLaneRewardRecord {
-        lane_id,
-        epoch,
-        asset,
-        total_reward: Quantity::from(amount),
-        shares: vec![PublicLaneRewardShare {
-            account: account.clone(),
-            role: PublicLaneRewardRole::Nominator,
-            amount: Quantity::from(amount),
-        }],
-        metadata: Metadata::default(),
-    };
-    let rewards = BTreeMap::from([
-        ((lane_id, 0), reward(0, first_source.clone(), 11)),
-        ((lane_id, 101), reward(101, first_source.clone(), 7)),
-        ((lane_id, 102), reward(102, second_source.clone(), 3)),
-    ]);
-    let pending = collect_pending_public_lane_rewards(
-        lane_id, &account, 101, None, claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
-    ).unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].asset, first_source);
-    assert_eq!(pending[0].processed_through_epoch, Some(100));
-    assert_eq!(pending[0].latest_unprocessed_epoch, Some(101));
-    assert_eq!(pending[0].amount, Quantity::from(9_u32));
-    let dust_only = collect_pending_public_lane_rewards(
-        lane_id, &account, 100, None, claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
-    ).unwrap();
-    assert_eq!(dust_only.len(), 1);
-    assert_eq!(dust_only[0].amount, Quantity::from(2_u32));
-    assert_eq!(dust_only[0].processed_through_epoch, Some(100));
-    assert_eq!(dust_only[0].latest_unprocessed_epoch, None);
-    let filtered = collect_pending_public_lane_rewards(
-        lane_id, &account, 102, Some(&second_source), claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
-    ).unwrap();
-    assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].asset, second_source);
-    assert_eq!(filtered[0].amount, Quantity::from(3_u32));
-    assert_eq!(filtered[0].latest_unprocessed_epoch, Some(102));
-    accruals.remove(&(lane_id, account.clone(), first_source));
-    let paid = collect_pending_public_lane_rewards(
-        lane_id, &account, 100, None, claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
-    ).unwrap();
-    assert!(paid.is_empty(), "a paid source must not remain pending");
-}
-#[cfg(all(test, feature = "app_api"))]
 async fn public_lane_items_payload(response: Response) -> Value {
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -57132,10 +56875,6 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
         )
         .public_key()
         .clone(),
-    );
-    let asset = AssetId::new(
-        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554407a1"),
-        staker.clone(),
     );
     let state = CoreState::new_for_testing(
         iroha_core::state::World::default(),
@@ -57189,7 +56928,6 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
                 activation_height: 1,
                 election_exit_height: None,
                 deactivation_height: None,
-                last_reward_epoch: None,
             },
         );
         stx.world.public_lane_stake_shares_mut_for_testing().insert(
@@ -57200,21 +56938,6 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
                 staker: staker.clone(),
                 bonded: iroha_primitives::numeric::Quantity::from(5_u32),
                 pending_unbonds: BTreeMap::new(),
-                metadata: Metadata::default(),
-            },
-        );
-        stx.world.public_lane_rewards_mut_for_testing().insert(
-            (future_lane, 1),
-            PublicLaneRewardRecord {
-                lane_id: future_lane,
-                epoch: 1,
-                asset,
-                total_reward: iroha_primitives::numeric::Quantity::from(3_u32),
-                shares: vec![PublicLaneRewardShare {
-                    account: staker.clone(),
-                    role: PublicLaneRewardRole::Nominator,
-                    amount: iroha_primitives::numeric::Quantity::from(3_u32),
-                }],
                 metadata: Metadata::default(),
             },
         );
@@ -57250,7 +56973,6 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
         PublicLaneRewardsQueryParams {
             account: Some(staker.to_string()),
             asset_id: None,
-            upto_epoch: None,
         },
         MaybeTelemetry::disabled(),
     )
@@ -57294,13 +57016,6 @@ fn validator_record_to_json(record: &PublicLaneValidatorRecord) -> (String, Valu
             .unwrap_or(Value::Null),
     );
     map.insert("metadata".into(), metadata_to_json(&record.metadata));
-    map.insert(
-        "last_reward_epoch".into(),
-        record
-            .last_reward_epoch
-            .map(Value::from)
-            .unwrap_or(Value::Null),
-    );
     map.insert("authority_source".into(), Value::from("staking"));
     (canonical_validator, Value::Object(map))
 }
@@ -57325,7 +57040,6 @@ fn manifest_validator_to_json(
     map.insert("election_exit_height".into(), Value::Null);
     map.insert("deactivation_height".into(), Value::Null);
     map.insert("metadata".into(), metadata_to_json(&Metadata::default()));
-    map.insert("last_reward_epoch".into(), Value::Null);
     map.insert("authority_source".into(), Value::from("manifest"));
     (canonical_validator, Value::Object(map))
 }
@@ -57386,14 +57100,11 @@ fn pending_reward_to_json(
     map.insert("lane_id".into(), Value::from(u64::from(reward.lane_id)));
     map.insert("account".into(), Value::from(account_literal));
     map.insert("asset".into(), Value::from(reward.asset.to_string()));
-    map.insert(
-        "processed_through_epoch".into(),
-        reward.processed_through_epoch.map_or(Value::Null, Value::from),
-    );
-    map.insert(
-        "latest_unprocessed_epoch".into(),
-        reward.latest_unprocessed_epoch.map_or(Value::Null, Value::from),
-    );
+    map.insert("beneficiary_id".into(), Value::from(reward.beneficiary_id.to_string()));
+    map.insert("beneficiary_revision".into(), Value::from(reward.beneficiary_revision));
+    map.insert("expected_claim_sequence".into(), Value::from(reward.expected_claim_sequence));
+    map.insert("lifecycle_seal".into(), Value::from(hex::encode(reward.lifecycle_seal)));
+    map.insert("claimable".into(), Value::from(reward.claimable));
     map.insert("amount".into(), Value::from(reward.amount.to_string()));
     (
         reward.asset.to_string(),
