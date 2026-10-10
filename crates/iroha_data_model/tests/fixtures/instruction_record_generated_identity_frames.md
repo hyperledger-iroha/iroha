@@ -1,15 +1,20 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for the current instruction records and concrete generic instantiations. Its 331
-type rows preserve 374 populated values and 1,496 complete root, vector, option
+for the current instruction records and concrete generic instantiations. Its 330
+type rows preserve 373 populated values and 1,492 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`4a6568079490fc73ddf6dd052a17fd8f0cc64ba57c2a52acb17b969c0089d2d2`.
-`ClaimPublicLaneRewards` uses the required explicit fee-claim field and canonical
-XOR custody. Its native producer checks all four frame roundtrips; the nominal
-and directional identity hashes are unchanged.
+`2ce498cf8288135055266e99495c828c706ee3162fe10a3c97ba4252c453aea5`.
+`ClaimPublicLaneRewards` contains one mandatory exact authenticated fee claim
+against funded XOR custody. The manual recipient instruction and its record-ledger
+claim fields are removed. The external `staking_reward_identity_capture` native
+producer checks all four current claim frame roundtrips; the nominal and directional
+identity hashes are unchanged. The paired current codec-owner fixture removes the
+three retired reward-record models and retains 102 owners with 1,469 nominal
+identities. Current typed captures confirm unchanged identities for the revised
+validator and pending-reward records; the original 2026-09-27 report stays exact.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding

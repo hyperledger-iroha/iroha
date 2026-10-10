@@ -145,8 +145,7 @@ pub(crate) fn reject_opaque_instruction_authority<'a>(
 fn monetary_staking_wire_id(instruction: &InstructionBox) -> Option<&'static str> {
     use iroha_data_model::isi::staking::{
         BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
-        RecordPublicLaneRewards, RegisterPublicLaneCandidate, RegisterPublicLaneValidator,
-        SlashPublicLaneValidator,
+        RegisterPublicLaneCandidate, RegisterPublicLaneValidator, SlashPublicLaneValidator,
     };
     macro_rules! classify {
         ($($ty:ty),+ $(,)?) => {$(
@@ -161,7 +160,6 @@ fn monetary_staking_wire_id(instruction: &InstructionBox) -> Option<&'static str
         BondPublicLaneStake,
         FinalizePublicLaneUnbond,
         SlashPublicLaneValidator,
-        RecordPublicLaneRewards,
         ClaimPublicLaneRewards,
     );
     None
@@ -382,10 +380,8 @@ mod tests {
     use super::*;
     use iroha_data_model::isi::staking::{
         BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
-        RecordPublicLaneRewards, RegisterPublicLaneCandidate, RegisterPublicLaneValidator,
-        SlashPublicLaneValidator,
+        RegisterPublicLaneCandidate, RegisterPublicLaneValidator, SlashPublicLaneValidator,
     };
-    use iroha_primitives::numeric::Quantity;
 
     #[test]
     fn staking_wire_ids_match_the_canonical_registry() {
@@ -401,42 +397,7 @@ mod tests {
             BondPublicLaneStake => "iroha.instruction.v1::staking::BondPublicLaneStake",
             FinalizePublicLaneUnbond => "iroha.instruction.v1::staking::FinalizePublicLaneUnbond",
             SlashPublicLaneValidator => "iroha.instruction.v1::staking::SlashPublicLaneValidator",
-            RecordPublicLaneRewards => "iroha.instruction.v1::staking::RecordPublicLaneRewards",
             ClaimPublicLaneRewards => "iroha.instruction.v1::staking::ClaimPublicLaneRewards",
-        );
-    }
-
-    #[test]
-    fn opaque_reward_recording_requires_a_signed_instruction() {
-        let reward_asset = iroha_data_model::asset::AssetId::of(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
-                    .expect("test domain"),
-                "xor".parse().expect("test asset name"),
-            ),
-            iroha_test_samples::ALICE_ID.clone(),
-        );
-        let instruction: InstructionBox = RecordPublicLaneRewards {
-            lane_id: iroha_model_base::topology::LaneId::SINGLE,
-            epoch: 0,
-            reward_asset,
-            total_reward: Quantity::zero(),
-            shares: Vec::new(),
-            metadata: iroha_model_base::metadata::Metadata::default(),
-        }
-        .into();
-        assert_eq!(
-            reject_opaque_committee_operations_with(
-                &[instruction],
-                &mut std::collections::BTreeSet::new(),
-                0,
-                &mut |_| Ok(None),
-            ),
-            Err(OpaqueDeferredAuthorityError::StakingOperation {
-                instruction_index: 0,
-                instruction_wire_id: "iroha.instruction.v1::staking::RecordPublicLaneRewards",
-            }
-            .into())
         );
     }
 

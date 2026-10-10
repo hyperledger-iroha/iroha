@@ -3661,10 +3661,6 @@ pub mod nexus {
         pub const UNBONDING_DELAY: Duration = Duration::from_secs(0);
         /// Maximum slash ratio (basis points, 10_000 = 100%).
         pub const MAX_SLASH_BPS: u16 = 10_000;
-        /// Minimum reward amount (base units) that will be paid out; smaller amounts are skipped.
-        pub fn reward_dust_threshold() -> Quantity {
-            Quantity::zero()
-        }
         /// Escrow account that custodies bonded stake.
         pub const STAKE_ESCROW_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
         /// Account that receives slashed stake (treasury/burn sink).

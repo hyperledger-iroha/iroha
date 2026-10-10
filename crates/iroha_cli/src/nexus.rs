@@ -746,19 +746,18 @@ fn format_validator_summary(payload: &Value) -> Result<String> {
     let mut output = String::new();
     writeln!(
         &mut output,
-        "{:<36}  {:<24}  {:<status_width$}  {:<tenure_width$}  {:<20}  {:<11}",
-        "VALIDATOR", "PEER_ID", "STATUS", "TENURE", "STAKE", "LAST_REWARD"
+        "{:<36}  {:<24}  {:<status_width$}  {:<tenure_width$}  {:<20}",
+        "VALIDATOR", "PEER_ID", "STATUS", "TENURE", "STAKE"
     )?;
     for row in rows {
         writeln!(
             &mut output,
-            "{:<36}  {:<24}  {:<status_width$}  {:<tenure_width$}  {:<20}  {:<11}",
+            "{:<36}  {:<24}  {:<status_width$}  {:<tenure_width$}  {:<20}",
             truncate_field(&row.validator, 36),
             truncate_field(&row.peer_id, 24),
             row.status,
             row.tenure,
             truncate_field(&row.stake, 20),
-            truncate_field(&row.last_reward, 11),
         )?;
     }
     Ok(output.trim_end().to_string())
@@ -817,7 +816,6 @@ struct ValidatorRow {
     status: String,
     tenure: String,
     stake: String,
-    last_reward: String,
 }
 fn build_validator_row(entry: &Map) -> ValidatorRow {
     let validator = entry
@@ -839,17 +837,12 @@ fn build_validator_row(entry: &Map) -> ValidatorRow {
         .get("self_stake")
         .map_or_else(|| "-".to_string(), stringify_value);
     let stake = format!("{total_stake} (self {self_stake})");
-    let last_reward = entry
-        .get("last_reward_epoch")
-        .and_then(Value::as_u64)
-        .map_or_else(|| "-".to_string(), |value| value.to_string());
     ValidatorRow {
         validator,
         peer_id,
         status,
         tenure,
         stake,
-        last_reward,
     }
 }
 fn validator_status_label(status: Option<&Value>) -> String {
@@ -1128,7 +1121,6 @@ mod tests {
             ),
             ("activation_height".into(), Value::from(3601u64)),
             ("deactivation_height".into(), Value::from(7201u64)),
-            ("last_reward_epoch".into(), Value::Null),
         ]);
         let payload = Value::Object(Map::from_iter([
             ("lane_id".into(), Value::from(0u64)),

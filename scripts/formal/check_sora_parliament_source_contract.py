@@ -2106,7 +2106,7 @@ def require_signed_deferred_authority_and_native_fees(
         "return iroha_data_model::isi::instruction_wire_id(instruction);",
         "classify!(RegisterPublicLaneCandidate, RegisterPublicLaneValidator,"
         "BondPublicLaneStake, FinalizePublicLaneUnbond, SlashPublicLaneValidator,"
-        "RecordPublicLaneRewards, ClaimPublicLaneRewards,);",
+        "ClaimPublicLaneRewards,);",
     ))
     single = item(authority, "fn reject_opaque_committee_operation(", authority_path)
     require(authority_path, single, (

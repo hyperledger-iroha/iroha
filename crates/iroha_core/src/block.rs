@@ -6392,8 +6392,6 @@ pub(crate) mod valid {
             }
             // Materialize bounded native fee state before admitting customer outputs.
             // Missing parent finality defers the block; it never fabricates service.
-            crate::retail_fee::process_idle_accounts(state_block)
-                .map_err(BlockValidationError::StateStorageAdmission)?;
             crate::validation_fee_rewards::process_finalized_service(
                 state_block,
                 block,
@@ -6410,6 +6408,24 @@ pub(crate) mod valid {
                     Self::execution_context_error(reason)
                 }
             })?;
+            crate::validation_fee_rewards::process_reward_entitlements(state_block).map_err(
+                |error| match error {
+                    crate::state::ExecutionOutputAttemptError::Storage(error) => {
+                        BlockValidationError::StateStorageAdmission(error)
+                    }
+                    crate::state::ExecutionOutputAttemptError::Deferred(reason) => {
+                        BlockValidationError::ExecutionDeferred(reason)
+                    }
+                    crate::state::ExecutionOutputAttemptError::Owner(reason) => {
+                        Self::execution_context_error(reason)
+                    }
+                },
+            )?;
+            // Reserve evidence space for mandatory historical reward progress
+            // before the optional idle-wallet batch. The sweep's own budget
+            // check rolls its batch back when the remaining corpus is full.
+            crate::retail_fee::process_idle_accounts(state_block)
+                .map_err(BlockValidationError::StateStorageAdmission)?;
             let finalize = |state: &mut StateBlock<'_>,
                             source: &SignedBlock,
                             routes: &[crate::queue::RoutingDecision]| {

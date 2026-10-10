@@ -7,8 +7,7 @@ use crate::{
     state::{
         SmartContractCodeUploadChunkKey, SmartContractCodeUploadDescriptor,
         SmartContractCodeUploadKey, WorldTransaction, fee_sponsor_revision_safe_activation_height,
-        nexus_active_lane_dataspace, public_lane_reward_record_matches_key,
-        public_lane_validator_record_matches_key,
+        nexus_active_lane_dataspace, public_lane_validator_record_matches_key,
     },
 };
 use iroha_data_model::smart_contract::manifest::{ContractManifest, ManifestProvenance};
@@ -6585,6 +6584,7 @@ pub mod isi {
         binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
+        crate::validation_fee_rewards::ensure_existing_reward_identities(&state_transaction.world)?;
         validate_validation_fee_payout_lifecycle_runtime_with_effect(
             binding,
             state_transaction,
@@ -17627,37 +17627,6 @@ pub mod isi {
                         format!("cannot unregister domain {domain_id}: asset definition {asset_definition_id} is the committed network XOR identity").into(),
                     ).into());
                 }
-                if let Some(((lane_id, epoch), _)) = state_transaction
-                    .world
-                    .public_lane_rewards
-                    .iter()
-                    .find(|(key, record)| {
-                        public_lane_reward_record_matches_key(key, record)
-                            && record.asset.definition() == asset_definition_id
-                    })
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has active public-lane reward ledger state (lane {lane_id}, epoch {epoch}); settle or prune rewards first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
-                if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
-                    .world
-                    .public_lane_reward_accruals
-                    .iter()
-                    .find(|((_, _, asset_id), _)| asset_id.definition() == asset_definition_id)
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has unpaid public-lane reward accrual state (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
             }
             let domain_dataspace = state_transaction
                 .nexus
@@ -28019,34 +27988,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     .is_some()
             );
         });
-        world_test!(unregister_domain_preserves_exact_reward_accrual_source {
-            let state = blank_state();
-            let domain_id = DomainId::try_new("rewardcustody", "universal").unwrap();
-            state_transaction!(state, block, state_block, stx);
-            Register::domain(Domain::new(domain_id.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "register reward source domain");
-            let definition = AssetDefinitionId::derive_from_components(domain_id.clone(), "reward".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(
-                definition.clone(), "reward", iroha_data_model::asset::AssetBalancePolicy::Global,
-                Some(domain_id.clone()),
-            )).expect_execute(&ALICE_ID, &mut stx, "register exact reward source definition");
-            let source = AssetId::new(definition.clone(), ALICE_ID.clone());
-            let key = (LaneId::SINGLE, ALICE_ID.clone(), source.clone());
-            stx.world.public_lane_reward_accruals.insert(key.clone(), Quantity::one());
-            stx.world.public_lane_reward_reserves.insert(source.clone(), Quantity::one());
-            let error = Unregister::domain(domain_id.clone())
-                .expect_execute_err(&ALICE_ID, &mut stx, "positive source accrual prevents domain deletion");
-            assert_contains!(format!("{error:?}"), "public-lane reward accrual state", "unexpected error: {error}");
-            assert!(stx.world.domains.get(&domain_id).is_some());
-            assert!(stx.world.asset_definitions.get(&definition).is_some());
-            assert_eq!(stx.world.public_lane_reward_accruals.get(&key), Some(&Quantity::one()));
-            assert_eq!(stx.world.public_lane_reward_reserves.get(&source), Some(&Quantity::one()));
-            stx.world.public_lane_reward_accruals.remove(key);
-            stx.world.public_lane_reward_reserves.remove(source);
-            Unregister::domain(domain_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "settled source accrual releases domain");
-            assert!(stx.world.domains.get(&domain_id).is_none());
-        });
+
         world_test!(unregister_domain_preserves_pinned_staking_custody_after_config_change {
             let state = blank_state();
             let domain_id = DomainId::try_new("custody", "universal").unwrap();
@@ -28090,67 +28032,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             assert!(stx.world.domains.get(&domain_id).is_none());
             assert!(stx.world.asset_definitions.get(&definition).is_none());
         });
-        world_test!(unregister_domain_ignores_mismatched_public_lane_reward_record_for_domain_asset {
-            let state = blank_state();
-            let domain_id: DomainId =
-                DomainId::try_new("cleanup", "universal").expect("domain id parses");
-            state_transaction!(state, block, state_block, stx);
-            Register::domain(Domain::new(domain_id.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
-            let reward_def = AssetDefinitionId::derive_from_components(
-                domain_id.clone(),
-                "fee".parse().unwrap(),
-            );
-            Register::asset_definition(AssetDefinition::numeric(
-                reward_def.clone(),
-                "fee",
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                Some(domain_id.clone()),
-            ))
-            .expect_execute(&ALICE_ID, &mut stx, "register cleanup-domain reward definition");
-            stx.world.public_lane_rewards.insert(
-                (LaneId::SINGLE, 1),
-                iroha_data_model::nexus::PublicLaneRewardRecord {
-                    lane_id: LaneId::new(1),
-                    epoch: 1,
-                    asset: AssetId::new(reward_def.clone(), ALICE_ID.clone()),
-                    total_reward: iroha_primitives::numeric::Quantity::from(1_u32),
-                    shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
-                        account: ALICE_ID.clone(),
-                        role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                        amount: iroha_primitives::numeric::Quantity::from(1_u32),
-                    }],
-                    metadata: Metadata::default(),
-                },
-            );
-            let accrual_key = (
-                LaneId::SINGLE, ALICE_ID.clone(), AssetId::new(reward_def.clone(), ALICE_ID.clone()),
-            );
-            stx.world.public_lane_reward_accruals.insert(accrual_key.clone(), Quantity::one());
-            let error = Unregister::domain(domain_id.clone())
-                .expect_execute_err(&ALICE_ID, &mut stx, "unpaid source must pin its asset-definition domain");
-            assert_contains!(format!("{error:?}"), "public-lane reward accrual state", "unexpected error: {error}");
-            assert!(stx.world.domains.get(&domain_id).is_some());
-            assert!(stx.world.asset_definitions.get(&reward_def).is_some());
-            stx.world.public_lane_reward_accruals.remove(accrual_key);
-            Unregister::domain(domain_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "mismatched public-lane reward row must not block domain unregister");
-            assert!(
-                stx.world.domains.get(&domain_id).is_none(),
-                "domain should be removed when only malformed rewards reference its assets"
-            );
-            assert!(
-                stx.world.asset_definitions.get(&reward_def).is_none(),
-                "domain asset definition should be removed"
-            );
-            assert!(
-                stx.world
-                    .public_lane_rewards
-                    .get(&(LaneId::SINGLE, 1))
-                    .is_some(),
-                "malformed reward row remains as stored"
-            );
-        });
+
         world_test!(unregister_domain_retained_asset_refusal_preserves_permissions_and_endorsements_in_same_transaction {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
@@ -28657,36 +28539,8 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     activation_height: 1,
                     election_exit_height: None,
                     deactivation_height: None,
-                    last_reward_epoch: None,
                 },
             );
-            stx.world.public_lane_rewards.insert(
-                (LaneId::SINGLE, 1),
-                iroha_data_model::nexus::PublicLaneRewardRecord {
-                    lane_id: LaneId::SINGLE,
-                    epoch: 1,
-                    asset: AssetId::new(reward_def.clone(), account_id.clone()),
-                    total_reward: iroha_primitives::numeric::Quantity::from(1_u32),
-                    shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
-                        account: ALICE_ID.clone(),
-                        role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                        amount: iroha_primitives::numeric::Quantity::from(1_u32),
-                    }],
-                    metadata: Metadata::default(),
-                },
-            );
-            let reward_source = AssetId::new(reward_def, account_id.clone());
-            stx.world.public_lane_reward_claims.insert(
-                (LaneId::SINGLE, ALICE_ID.clone()),
-                iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
-                    through_epoch: Some(1),
-                },
-            );
-            stx.world.public_lane_reward_accruals.insert(
-                (LaneId::SINGLE, ALICE_ID.clone(), reward_source.clone()),
-                iroha_primitives::numeric::Quantity::one(),
-            );
-            stx.world.public_lane_reward_reserves.insert(reward_source.clone(), iroha_primitives::numeric::Quantity::one());
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "domain unlink should preserve surviving account audit state");
             assert!(
@@ -28697,13 +28551,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 stx.world.accounts.get(&account_id).is_some(),
                 "account should remain materialized"
             );
-            assert_eq!(stx.world.public_lane_reward_claims.get(&(LaneId::SINGLE, ALICE_ID.clone())),
-                Some(&iroha_data_model::nexus::PublicLaneRewardClaimStateV1 { through_epoch: Some(1) }));
-            assert_eq!(stx.world.public_lane_reward_accruals.get(&(LaneId::SINGLE, ALICE_ID.clone(), reward_source.clone())),
-                Some(&iroha_primitives::numeric::Quantity::one()));
-            assert_eq!(stx.world.public_lane_reward_reserves.get(&reward_source),
-                Some(&iroha_primitives::numeric::Quantity::one()));
-
             assert!(
                 stx.world.repo_agreements.get(&repo_id).is_some(),
                 "repo agreement state should remain"
@@ -29356,7 +29203,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     activation_height: 1,
                     election_exit_height: None,
                     deactivation_height: None,
-                    last_reward_epoch: None,
                 },
             );
             let self_share = iroha_data_model::nexus::PublicLaneStakeShare {
@@ -29469,7 +29315,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     activation_height: current_height,
                     election_exit_height: Some(current_height),
                     deactivation_height: Some(current_height),
-                    last_reward_epoch: None,
                 },
             );
 
@@ -29512,7 +29357,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     activation_height: 1,
                     election_exit_height: None,
                     deactivation_height: None,
-                    last_reward_epoch: None,
                 },
             );
 
@@ -29549,7 +29393,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     activation_height: 1,
                     election_exit_height: None,
                     deactivation_height: None,
-                    last_reward_epoch: None,
                 },
             );
             Unregister::<Peer>::peer(peer_id.clone())
@@ -31922,7 +31765,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     activation_height: block_height,
                     election_exit_height: None,
                     deactivation_height: None,
-                    last_reward_epoch: None,
                 },
             );
 

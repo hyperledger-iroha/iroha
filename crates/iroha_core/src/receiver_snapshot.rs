@@ -439,6 +439,20 @@ pub(crate) fn fee_evidence_block_proof_v1(
     ),
     String,
 > {
+    fee_evidence_block_proof_attempt_v1(witness).map_err(|error| error.to_string())
+}
+
+/// Build the original fee corpus while preserving local canonical decode refusals.
+pub(crate) fn fee_evidence_block_proof_attempt_v1(
+    witness: &ExecWitness,
+) -> Result<
+    (
+        iroha_data_model::fee_evidence::FeeEvidenceBlockProofV1,
+        Hash,
+    ),
+    crate::execution_attempt::ExecutionAttemptError<String>,
+> {
+    use crate::execution_attempt::{ExecutionAttemptError, norito_decode_attempt_error};
     use iroha_data_model::{
         execution_witness::{FEE_EVIDENCE_RECORD_TAG_V1, FEE_EVIDENCE_WITNESS_KEY_V1},
         fee_evidence::{FeeEvidenceBlockProofV1, FeeEvidenceRecordV1, FeeEvidenceWitnessProofV1},
@@ -453,8 +467,12 @@ pub(crate) fn fee_evidence_block_proof_v1(
             return Err("duplicate ordinary witness key in native fee evidence".into());
         }
         if entry.key.first() == Some(&FEE_EVIDENCE_RECORD_TAG_V1) {
-            let record: FeeEvidenceRecordV1 = norito::decode_canonical(&entry.value)
-                .map_err(|e| format!("noncanonical native fee record: {e}"))?;
+            let record: FeeEvidenceRecordV1 =
+                norito::decode_canonical(&entry.value).map_err(|error| {
+                    norito_decode_attempt_error(error, |error| {
+                        format!("noncanonical native fee record: {error}")
+                    })
+                })?;
             let mut expected_key = vec![FEE_EVIDENCE_RECORD_TAG_V1];
             expected_key.extend_from_slice(Hash::new(record.key.as_ref().as_bytes()).as_ref());
             if entry.key != expected_key {
@@ -477,14 +495,17 @@ pub(crate) fn fee_evidence_block_proof_v1(
         snapshot_witness: FeeEvidenceWitnessProofV1 {
             key: target.key.clone(),
             value: target.value.clone(),
-            siblings: sparse_smt_siblings(&ordinary, target)?,
+            siblings: sparse_smt_siblings(&ordinary, target)
+                .map_err(ExecutionAttemptError::Rejected)?,
         },
         records,
     };
     if !proof.verify(root) {
         return Err("native fee corpus differs from the authenticated root/count".into());
     }
-    if norito::to_bytes(&proof).map_err(|e| e.to_string())?.len()
+    if norito::to_bytes(&proof)
+        .map_err(|error| norito_decode_attempt_error(error, |error| error.to_string()))?
+        .len()
         > iroha_data_model::fee_evidence::MAX_FEE_EVIDENCE_BLOCK_BYTES_V1
     {
         return Err("native fee corpus exceeds the bounded durable byte budget".into());

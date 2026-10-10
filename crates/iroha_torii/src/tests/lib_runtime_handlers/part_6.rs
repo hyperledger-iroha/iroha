@@ -1550,7 +1550,6 @@ fn seed_authoritative_hosted_http_revision(
                 activation_height: 1,
                 election_exit_height: None,
                 deactivation_height: None,
-                last_reward_epoch: None,
             },
         );
         {
@@ -1839,7 +1838,6 @@ fn seed_hosted_http_public_lane_validator(
                 activation_height: 1,
                 election_exit_height: None,
                 deactivation_height: None,
-                last_reward_epoch: None,
             },
         );
     tx.world_mut_for_testing()

@@ -250,6 +250,19 @@ impl Case {
         }
     }
 
+    /// Bind both codec directions to the current paired owner capture after a first-release change.
+    /// The earlier capture remains retained as historical evidence, not as a retired decoder contract.
+    pub const fn paired_bidirectional<T>(nominal: &'static str) -> Self
+    where
+        T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>,
+    {
+        Self {
+            nominal,
+            assertion: native_capture::assert_current_identity::<T>,
+            capture: native_capture::bidirectional::<T>,
+        }
+    }
+
     /// Assert the captured nominal identity, frame identity, and directional hashes.
     pub fn check(&self) {
         (self.assertion)(self.nominal);

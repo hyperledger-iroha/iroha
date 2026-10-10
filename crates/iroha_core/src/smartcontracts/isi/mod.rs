@@ -572,7 +572,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>,
     dispatch_instruction::<iroha_data_model::isi::staking::FinalizePublicLaneUnbond>,
     dispatch_instruction::<iroha_data_model::isi::staking::SlashPublicLaneValidator>,
-    dispatch_instruction::<iroha_data_model::isi::staking::RecordPublicLaneRewards>,
     dispatch_instruction::<iroha_data_model::isi::staking::ClaimPublicLaneRewards>,
     dispatch_instruction::<iroha_data_model::isi::settlement::SettlementInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::settlement::DvpIsi>,

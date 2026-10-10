@@ -5,9 +5,7 @@ use super::{CertifiedTestChain, TestChainConfig};
 use crate::{
     smartcontracts::Execute,
     state::{StateTransaction, World, WorldReadOnly},
-    validation_fee::{
-        VALIDATION_FEE_POOL_SWAP_ENTRYPOINT,
-    },
+    validation_fee::VALIDATION_FEE_POOL_SWAP_ENTRYPOINT,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -196,7 +194,10 @@ fn minimal_bound_contract_artifact() -> (
                 ],
             },
         ),
-        authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission("Payout".parse().unwrap()),
+        authorization:
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission(
+                "Payout".parse().unwrap(),
+            ),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
         access_hints_complete: None,
@@ -205,7 +206,10 @@ fn minimal_bound_contract_artifact() -> (
     };
     let pool_entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
         name: VALIDATION_FEE_POOL_SWAP_ENTRYPOINT.to_owned(),
-        authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission("SwapQuotePublic".parse().unwrap()),
+        authorization:
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission(
+                "SwapQuotePublic".parse().unwrap(),
+            ),
         ..wrapper_entrypoint.clone()
     };
     let entrypoints = [wrapper_entrypoint, pool_entrypoint];
@@ -486,16 +490,7 @@ fn install_monthly_policy(
         .get_mut()
         .set_parameter(Parameter::Custom(registry.into_custom_parameter()));
     let record = RetailFeeAccountStateV1::enroll(source.clone(), START, 1000).unwrap();
-    let path: StatePath = format!(
-        "retail_fee_v1/{}",
-        hex::encode(Hash::new(source.to_string().as_bytes()).as_ref())
-    )
-    .parse()
-    .unwrap();
-    transaction
-        .world
-        .smart_contract_state
-        .insert(path, norito::to_bytes(&record).unwrap());
+    crate::retail_fee::write_account(&mut transaction.world, &record).unwrap();
 }
 
 /// Build a real executed two-instruction retail transfer and retain all native proof selectors.

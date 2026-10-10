@@ -189,7 +189,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
             include_str!("../../tests/fixtures/native_current_codec_owner_identities.json");
         assert_eq!(
             hex::encode(Sha256::digest(source.as_bytes())),
-            "3f78e3ede2218250f92515bcd7a7e8068a045e9dacc49884356b42aad54ff548"
+            "1b809fde05de75fdec361d76391359a02a360e490870646b74d0b01fbdd9595a"
         );
         let document: Value = json::from_str(source).expect("paired native owner inventory");
         assert_eq!(
@@ -259,9 +259,26 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
                 "duplicate captured owner"
             );
         }
-        assert_eq!(roots.len(), 1_472, "complete current nominal inventory");
+        assert_eq!(roots.len(), 1_469, "complete current nominal inventory");
         result
     })
+}
+
+/// Assert a changed first-release codec against its retained current compiler output.
+pub(super) fn assert_current_identity<T>(nominal: &str)
+where
+    T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>,
+{
+    let actual = bidirectional::<T>(nominal).row();
+    let mut matches = current_owner_fixture()
+        .values()
+        .flat_map(|owner| owner["rows"].as_array().expect("current owner rows"))
+        .filter(|row| row["nominal"].as_str() == Some(nominal));
+    let expected = matches.next().expect("current compiler-captured identity");
+    assert_eq!(&actual, expected);
+    for duplicate in matches {
+        assert_eq!(duplicate, expected, "shared current identities agree");
+    }
 }
 
 /// Compare this exact typed inventory with its separately retained paired native output.
@@ -338,6 +355,23 @@ fn current_owner_inventory_excludes_retired_types_under_every_feature_shape() {
                     .unwrap()
                     .contains("KagemushaVerifier")
             }));
+        } else if name == "iroha_data_model::nexus::staking::captured_staking_schema_tests" {
+            let rows = complete["rows"].as_array().expect("current staking rows");
+            assert_eq!(
+                rows.len(),
+                5,
+                "only current automatic-reward staking models"
+            );
+            for retired in [
+                "PublicLaneRewardShare",
+                "PublicLaneRewardRole",
+                "PublicLaneRewardRecord",
+            ] {
+                assert!(
+                    rows.iter()
+                        .all(|row| !row["nominal"].as_str().unwrap().ends_with(retired))
+                );
+            }
         } else {
             assert_eq!(complete, *owner);
         }

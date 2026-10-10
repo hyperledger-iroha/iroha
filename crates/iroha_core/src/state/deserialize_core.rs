@@ -634,10 +634,6 @@ impl KuraSeed {
             "transactions",
             "public_lane_validators",
             "public_lane_stake_shares",
-            "public_lane_rewards",
-            "public_lane_reward_claims",
-            "public_lane_reward_accruals",
-            "public_lane_reward_reserves",
             "public_lane_stake_custody",
             "public_lane_stake_reserves",
             "space_directory_manifests",
@@ -687,35 +683,6 @@ impl KuraSeed {
             "public_lane_stake_shares",
             public_lane_stake_share_matches_key,
         )?;
-        world.public_lane_rewards =
-            take_required::<snapshot_storage::SnapshotStorage>(&mut map, "public_lane_rewards")?
-                .decode("public_lane_rewards", public_lane_reward_record_matches_key)?;
-        world.public_lane_reward_claims = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut map,
-            "public_lane_reward_claims",
-        )?
-        .decode(
-            "public_lane_reward_claims",
-            |_: &(LaneId, AccountId), value: &PublicLaneRewardClaimStateV1| {
-                value.through_epoch.is_some()
-            },
-        )?;
-        world.public_lane_reward_accruals = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut map,
-            "public_lane_reward_accruals",
-        )?
-        .decode(
-            "public_lane_reward_accruals",
-            |_: &(LaneId, AccountId, AssetId), value: &Quantity| !value.is_zero(),
-        )?;
-        world.public_lane_reward_reserves = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut map,
-            "public_lane_reward_reserves",
-        )?
-        .decode(
-            "public_lane_reward_reserves",
-            |_: &AssetId, value: &Quantity| !value.is_zero(),
-        )?;
         world.public_lane_stake_custody = take_required::<snapshot_storage::SnapshotStorage>(
             &mut map,
             "public_lane_stake_custody",
@@ -732,23 +699,7 @@ impl KuraSeed {
             "public_lane_stake_reserves",
             |_: &AssetId, value: &Quantity| !value.is_zero(),
         )?;
-        validate_public_lane_reward_reserves(&world.view()).map_err(|error| {
-            error.map_rejection(|message| json::Error::InvalidField {
-                field: "public_lane_reward_reserves.blocks".to_owned(),
-                message,
-            })
-        })?;
-        {
-            let previous_world = world.try_block_and_revert(&self.execution_budget)?;
-            validate_public_lane_reward_reserves(&previous_world).map_err(|error| {
-                error.map_rejection(|message| json::Error::InvalidField {
-                    field: "public_lane_reward_reserves.revert".to_owned(),
-                    message,
-                })
-            })?;
-        }
-
-        validate_public_lane_stake_reserves(&world.view()).map_err(|error| {
+        validate_public_lane_stake_reserves_for_restore(&world.view()).map_err(|error| {
             error.map_rejection(|message| json::Error::InvalidField {
                 field: "public_lane_stake_reserves.blocks".to_owned(),
                 message,
@@ -756,7 +707,7 @@ impl KuraSeed {
         })?;
         {
             let previous_world = world.try_block_and_revert(&self.execution_budget)?;
-            validate_public_lane_stake_reserves(&previous_world).map_err(|error| {
+            validate_public_lane_stake_reserves_for_restore(&previous_world).map_err(|error| {
                 error.map_rejection(|message| json::Error::InvalidField {
                     field: "public_lane_stake_reserves.revert".to_owned(),
                     message,
@@ -1468,35 +1419,6 @@ pub(in crate::state) fn decode_world_snapshot_projection_for_testing(
             "public_lane_stake_shares",
             public_lane_stake_share_matches_key,
         )?;
-        world.public_lane_rewards =
-            take_required::<snapshot_storage::SnapshotStorage>(&mut map, "public_lane_rewards")?
-                .decode("public_lane_rewards", public_lane_reward_record_matches_key)?;
-        world.public_lane_reward_claims = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut map,
-            "public_lane_reward_claims",
-        )?
-        .decode(
-            "public_lane_reward_claims",
-            |_: &(LaneId, AccountId), value: &PublicLaneRewardClaimStateV1| {
-                value.through_epoch.is_some()
-            },
-        )?;
-        world.public_lane_reward_accruals = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut map,
-            "public_lane_reward_accruals",
-        )?
-        .decode(
-            "public_lane_reward_accruals",
-            |_: &(LaneId, AccountId, AssetId), value: &Quantity| !value.is_zero(),
-        )?;
-        world.public_lane_reward_reserves = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut map,
-            "public_lane_reward_reserves",
-        )?
-        .decode(
-            "public_lane_reward_reserves",
-            |_: &AssetId, value: &Quantity| !value.is_zero(),
-        )?;
         world.public_lane_stake_custody = take_required::<snapshot_storage::SnapshotStorage>(
             &mut map,
             "public_lane_stake_custody",
@@ -1513,23 +1435,7 @@ pub(in crate::state) fn decode_world_snapshot_projection_for_testing(
             "public_lane_stake_reserves",
             |_: &AssetId, value: &Quantity| !value.is_zero(),
         )?;
-        validate_public_lane_reward_reserves(&world.view()).map_err(|error| {
-            error.map_rejection(|message| json::Error::InvalidField {
-                field: "public_lane_reward_reserves.blocks".to_owned(),
-                message,
-            })
-        })?;
-        {
-            let previous_world = world.try_block_and_revert(execution_budget)?;
-            validate_public_lane_reward_reserves(&previous_world).map_err(|error| {
-                error.map_rejection(|message| json::Error::InvalidField {
-                    field: "public_lane_reward_reserves.revert".to_owned(),
-                    message,
-                })
-            })?;
-        }
-
-        validate_public_lane_stake_reserves(&world.view()).map_err(|error| {
+        validate_public_lane_stake_reserves_for_restore(&world.view()).map_err(|error| {
             error.map_rejection(|message| json::Error::InvalidField {
                 field: "public_lane_stake_reserves.blocks".to_owned(),
                 message,
@@ -1537,7 +1443,7 @@ pub(in crate::state) fn decode_world_snapshot_projection_for_testing(
         })?;
         {
             let previous_world = world.try_block_and_revert(execution_budget)?;
-            validate_public_lane_stake_reserves(&previous_world).map_err(|error| {
+            validate_public_lane_stake_reserves_for_restore(&previous_world).map_err(|error| {
                 error.map_rejection(|message| json::Error::InvalidField {
                     field: "public_lane_stake_reserves.revert".to_owned(),
                     message,

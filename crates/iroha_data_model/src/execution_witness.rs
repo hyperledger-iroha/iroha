@@ -44,6 +44,8 @@ pub enum ExecutionWitnessKeyTagV1 {
     FeeSnapshot = 0xDA,
     /// A canonical retained retail receipt or validator allocation original.
     FeeRecord = 0xDB,
+    /// Bounded historical staking exposure under original certified block custody.
+    RewardExposureArchive = 0xDC,
 }
 
 const fn tagged_fixed_key<const N: usize>(
@@ -82,6 +84,9 @@ pub const FEE_EVIDENCE_WITNESS_KEY_V1: &[u8] = &tagged_fixed_key(
 );
 /// Reserved family for native fee record bytes in an execution witness.
 pub const FEE_EVIDENCE_RECORD_TAG_V1: u8 = ExecutionWitnessKeyTagV1::FeeRecord as u8;
+/// Reserved family for canonical historical staking exposure archive bytes.
+pub const REWARD_EXPOSURE_ARCHIVE_TAG_V1: u8 =
+    ExecutionWitnessKeyTagV1::RewardExposureArchive as u8;
 
 #[cfg(test)]
 mod tests {
@@ -108,6 +113,7 @@ mod tests {
             AmxRecord,
             FeeSnapshot,
             FeeRecord,
+            RewardExposureArchive,
         ];
         let distinct = tags
             .into_iter()
@@ -141,5 +147,7 @@ mod tests {
             "fixed-key prefix selectors must be disjoint"
         );
         assert!(!fixed.contains(&FEE_EVIDENCE_RECORD_TAG_V1));
+        assert!(!fixed.contains(&REWARD_EXPOSURE_ARCHIVE_TAG_V1));
+        assert_eq!(REWARD_EXPOSURE_ARCHIVE_TAG_V1, 0xDC);
     }
 }

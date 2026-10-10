@@ -606,7 +606,6 @@ impl_direct_instruction_box!(crate::isi::staking::BondPublicLaneStake);
 impl_direct_instruction_box!(crate::isi::staking::SchedulePublicLaneUnbond);
 impl_direct_instruction_box!(crate::isi::staking::FinalizePublicLaneUnbond);
 impl_direct_instruction_box!(crate::isi::staking::SlashPublicLaneValidator);
-impl_direct_instruction_box!(crate::isi::staking::RecordPublicLaneRewards);
 impl_direct_instruction_box!(crate::isi::staking::ClaimPublicLaneRewards);
 // Allow direct boxing of confidential parameter registry instructions
 impl_direct_instruction_box!(crate::isi::confidential::PublishPedersenParams);
@@ -2936,8 +2935,8 @@ pub mod prelude {
         staking::{
             ActivatePublicLaneValidator, BondPublicLaneStake, ClaimPublicLaneRewards,
             ExitPublicLaneValidator, FinalizePublicLaneUnbond, RebindPublicLaneValidatorPeer,
-            RecordPublicLaneRewards, RegisterPublicLaneCandidate, RegisterPublicLaneValidator,
-            SchedulePublicLaneUnbond, SlashPublicLaneValidator,
+            RegisterPublicLaneCandidate, RegisterPublicLaneValidator, SchedulePublicLaneUnbond,
+            SlashPublicLaneValidator,
         },
         transfer::{Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox},
         transparent::{

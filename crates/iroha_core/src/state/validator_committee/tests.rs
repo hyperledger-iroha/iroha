@@ -561,7 +561,6 @@ fn committee_retention_extends_exit_and_pending_unbond_liability() {
             activation_height: 1,
             election_exit_height: Some(21),
             deactivation_height: None,
-            last_reward_epoch: None,
         },
     );
     let request = Hash::new(b"retained-unbond");

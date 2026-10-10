@@ -2732,8 +2732,9 @@ The `validator_staking` module exposes immutable `StakingMonetaryPlanV1`,
 `StakingRewardClaimPlanV1`, `StakingValidatorGenerationV1` and
 `StakingEpochAuthorizationV1` values with `from_norito` / `to_norito`. The sole
 compact layout uses the existing Norito codec and mandatory native identity
-validation. Monetary preconditions are typed; `fee_claim` is a required argument
-whose `None` means no fee reward effects. Amounts use `KotodamaQuantity`. These
+validation. Monetary preconditions are typed; `fee_claim` binds one mandatory
+automatic entitlement, its custody, beneficiary revision, and replay sequence.
+Amounts use `KotodamaQuantity`. These
 codecs do not authenticate preparation observations, the network's pinned XOR,
 custody, signatures or finality; those remain execution/evidence checks.
 

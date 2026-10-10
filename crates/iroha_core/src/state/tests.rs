@@ -66,9 +66,8 @@ use iroha_data_model::{
         AxtSourceSuccessReceiptV1, AxtSourceTransferOccurrenceV1, AxtSpendNonceV1,
         DataSpaceCatalog, DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject,
         LaneCatalog, LaneConfig, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
-        LaneStorageProfile, LaneVisibility, ManifestVersion, PublicLaneRewardClaimStateV1,
-        PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding, RemoteSpendIntent,
-        SpendOp,
+        LaneStorageProfile, LaneVisibility, ManifestVersion, PublicLaneUnbonding,
+        RemoteSpendIntent, SpendOp,
     },
     proof::{ProofId, ProofRecord, ProofStatus},
     query::{
@@ -3413,7 +3412,7 @@ fn public_lane_staking_invariant_fixture() -> PublicLaneStakingInvariantFixture 
         .build(&nominator)
         .into_key_value();
     world.accounts.insert(account_id, account);
-    world = reward_reserves::registered_custody_world_for_test(
+    world = custody_fixture::registered_custody_world_for_test(
         world,
         &stake_asset,
         Quantity::from(34_u32),
@@ -3444,7 +3443,6 @@ fn public_lane_staking_invariant_fixture() -> PublicLaneStakingInvariantFixture 
             activation_height: 1,
             election_exit_height: None,
             deactivation_height: None,
-            last_reward_epoch: None,
         },
     );
     world.public_lane_stake_shares.insert(
@@ -4798,7 +4796,7 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         let (id, value) = Account::new(account.clone()).build(&account).into_key_value();
         world.accounts.insert(id, value);
     }
-    world = reward_reserves::registered_custody_world_for_test(
+    world = custody_fixture::registered_custody_world_for_test(
         world,
         &reward_asset,
         Quantity::from(1_480_u64),
@@ -4815,7 +4813,6 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         ));
         parameters.commit();
     }
-    let mismatched_lane = LaneId::new(99);
     let request_id = Hash::new("unbond-request");
     world.public_lane_validators.insert(
         (LaneId::SINGLE, validator.clone()),
@@ -4831,7 +4828,6 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
             activation_height: 1,
             election_exit_height: None,
             deactivation_height: None,
-            last_reward_epoch: Some(7),
         },
     );
     world.public_lane_stake_shares.insert(
@@ -4865,55 +4861,6 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
             metadata: Metadata::default(),
         },
     );
-    world.public_lane_rewards.insert(
-        (LaneId::SINGLE, 7),
-        PublicLaneRewardRecord {
-            lane_id: LaneId::SINGLE,
-            epoch: 7,
-            asset: reward_asset.clone(),
-            total_reward: iroha_primitives::numeric::Quantity::from(77_u32),
-            shares: vec![PublicLaneRewardShare {
-                account: validator.clone(),
-                role: PublicLaneRewardRole::Validator,
-                amount: iroha_primitives::numeric::Quantity::from(77_u32),
-            }],
-            metadata: Metadata::default(),
-        },
-    );
-    let mismatched_record =
-        PublicLaneRewardRecord {
-            lane_id: mismatched_lane,
-            epoch: 9,
-            asset: reward_asset.clone(),
-            total_reward: iroha_primitives::numeric::Quantity::from(88_u32),
-            shares: vec![PublicLaneRewardShare {
-                account: validator.clone(),
-                role: PublicLaneRewardRole::Validator,
-                amount: iroha_primitives::numeric::Quantity::from(88_u32),
-            }],
-            metadata: Metadata::default(),
-        };
-    world
-        .public_lane_reward_claims
-        .insert((LaneId::SINGLE, validator.clone()), PublicLaneRewardClaimStateV1 { through_epoch: Some(6) });
-    let accrual_key = (LaneId::SINGLE, validator.clone(), reward_asset.clone());
-    world.public_lane_reward_accruals.insert(accrual_key.clone(), Quantity::from(3_u32));
-    world.public_lane_reward_reserves.insert(reward_asset.clone(), Quantity::from(80_u32));
-    world.public_lane_rewards.insert(
-        (LaneId::SINGLE, 6),
-        PublicLaneRewardRecord {
-            lane_id: LaneId::SINGLE,
-            epoch: 6,
-            asset: reward_asset.clone(),
-            total_reward: Quantity::from(3_u32),
-            shares: vec![PublicLaneRewardShare {
-                account: validator.clone(),
-                role: PublicLaneRewardRole::Validator,
-                amount: Quantity::from(3_u32),
-            }],
-            metadata: Metadata::default(),
-        },
-    );
     world.public_lane_stake_custody.insert((LaneId::SINGLE, validator.clone()), (reward_asset.clone(), Quantity::from(1_400_u32)));
     world.public_lane_stake_reserves.insert(reward_asset.clone(), Quantity::from(1_400_u32));
     let state = State::new(world, kura, query_handle);
@@ -4926,13 +4873,6 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         let key = (LaneId::SINGLE, validator.clone(), staker.clone());
         let record = block.public_lane_stake_shares.get(&key).unwrap().clone();
         block.public_lane_stake_shares.insert(key, record);
-        let prior = block.public_lane_rewards.get(&(LaneId::SINGLE, 6)).unwrap().clone();
-        block.public_lane_rewards.insert((LaneId::SINGLE, 6), prior);
-        let record = block.public_lane_rewards.get(&(LaneId::SINGLE, 7)).unwrap().clone();
-        block.public_lane_rewards.insert((LaneId::SINGLE, 7), record);
-        block.public_lane_reward_claims.insert((LaneId::SINGLE, validator.clone()), PublicLaneRewardClaimStateV1 { through_epoch: Some(6) });
-        block.public_lane_reward_accruals.insert(accrual_key.clone(), Quantity::from(3_u32));
-        block.public_lane_reward_reserves.insert(reward_asset.clone(), Quantity::from(80_u32));
         block.public_lane_stake_custody.insert((LaneId::SINGLE, validator.clone()), (reward_asset.clone(), Quantity::from(1_400_u32)));
         block.public_lane_stake_reserves.insert(reward_asset.clone(), Quantity::from(1_400_u32));
         block.space_directory_manifests.remove(UniversalAccountId::from_hash(Hash::new(b"absent snapshot manifest")));
@@ -4942,7 +4882,7 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
     let_row! { seed = deserialize::KuraSeed { execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value.clone()) .expect("deserialize state") };
     let roundtrip = norito::json::to_value(&restored).unwrap();
-    for field in ["public_lane_validators", "public_lane_stake_shares", "public_lane_rewards", "public_lane_reward_claims", "public_lane_reward_accruals", "public_lane_reward_reserves", "public_lane_stake_custody", "public_lane_stake_reserves", "space_directory_manifests"] {
+    for field in ["public_lane_validators", "public_lane_stake_shares", "public_lane_stake_custody", "public_lane_stake_reserves", "space_directory_manifests"] {
         assert_eq!(roundtrip.as_object().unwrap().get(field), json_value.as_object().unwrap().get(field),
             "{field} retains its exact current entries, preimages and absence markers");
         assert!(!json_value.as_object().unwrap().get(field).unwrap().as_object().unwrap()
@@ -4965,7 +4905,6 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
             activation_height: 1,
             election_exit_height: None,
             deactivation_height: None,
-            last_reward_epoch: Some(7),
         }
     );
     assert_eq!(
@@ -4975,55 +4914,6 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
             .bonded,
         Quantity::from(900_u32)
     );
-    assert_eq!(
-        view.public_lane_rewards()
-            .get(&(LaneId::SINGLE, 7))
-            .expect("reward")
-            .total_reward,
-        Quantity::from(77_u32)
-    );
-    assert_eq!(
-        view.public_lane_reward_claims()
-            .get(&(LaneId::SINGLE, validator)),
-        Some(&PublicLaneRewardClaimStateV1 { through_epoch: Some(6) })
-    );
-    assert_eq!(
-        view.public_lane_reward_accruals().get(&accrual_key),
-        Some(&Quantity::from(3_u32)),
-        "restoring the processing cursor must retain unpaid exact-source accruals",
-    );
-    assert_eq!(view.public_lane_reward_reserves().get(&reward_asset), Some(&Quantity::from(80_u32)),
-        "reserve covers 77 unprocessed units plus 3 accrued unpaid units");
-    assert!(
-        view.public_lane_rewards()
-            .get(&(LaneId::SINGLE, 8))
-            .is_none(),
-        "snapshot restore must not preserve stale reward storage key rows"
-    );
-    assert!(
-        view.public_lane_rewards()
-            .get(&(mismatched_lane, 9))
-            .is_none(),
-        "snapshot restore must not normalize mismatched reward rows to embedded keys"
-    );
-    drop(view);
-    // Neither an invalid current row nor an invalid retained preimage may be
-    // silently filtered or normalized during authenticated restoration.
-    {
-        let mut block = restored.world.public_lane_rewards.block();
-        block.insert((LaneId::SINGLE, 8), mismatched_record);
-        block.commit();
-    }
-    for retained_undo in [false, true] {
-        if retained_undo {
-            let mut block = restored.world.public_lane_rewards.block();
-            block.remove((LaneId::SINGLE, 8));
-            block.commit();
-        }
-        let error = deserialize_state_snapshot_value(norito::json::to_value(&restored).unwrap())
-            .err().expect("mismatched reward record must reject the whole snapshot");
-        assert!(error.to_string().contains("public_lane_rewards"), "{error}");
-    }
 
 }
 use crate::{
@@ -8792,18 +8682,10 @@ state_test! { sync public_lane_economic_cleanup_keys_treat_key_or_record_lane_as
     let key_owned_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let record_owned_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let retained_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
-    let_row! { reward_asset_definition = AssetDefinitionId::derive_from_components( DomainId::try_new("publiclane", "universal").expect("reward asset domain"), "resetcheck".parse().expect("reward asset name"), ) };
-    let reward_asset = AssetId::new(reward_asset_definition, validator.clone());
     let_row! { stake_record_for = |lane_id: LaneId, staker: AccountId| PublicLaneStakeShare { lane_id, validator: validator.clone(), staker, bonded: iroha_primitives::numeric::Quantity::from(100_u32), pending_unbonds: BTreeMap::new(), metadata: Metadata::default(), } };
-    let_row! { reward_record_for = |lane_id: LaneId, epoch: u64| PublicLaneRewardRecord { lane_id, epoch, asset: reward_asset.clone(), total_reward: iroha_primitives::numeric::Quantity::from(epoch.saturating_add(1)), shares: vec![PublicLaneRewardShare { account: validator.clone(), role: PublicLaneRewardRole::Validator, amount: iroha_primitives::numeric::Quantity::from(epoch.saturating_add(1)), }], metadata: Metadata::default(), } };
     let stake_key_owned = (reset_lane, validator.clone(), key_owned_staker.clone());
     let_row! { stake_record_owned = ( retained_lane, validator.clone(), record_owned_staker.clone(), ) };
     let stake_retained = (retained_lane, validator.clone(), retained_staker.clone());
-    let reward_key_owned = (reset_lane, 1);
-    let reward_record_owned = (retained_lane, 2);
-    let reward_retained = (retained_lane, 3);
-    let claim_reset = (reset_lane, validator.clone());
-    let claim_retained = (retained_lane, retained_staker.clone());
     {
         let mut stake_tx = world.public_lane_stake_shares.block();
         stake_tx.insert(
@@ -8820,38 +8702,14 @@ state_test! { sync public_lane_economic_cleanup_keys_treat_key_or_record_lane_as
         );
         stake_tx.commit();
     }
-    {
-        let mut reward_tx = world.public_lane_rewards.block();
-        reward_tx.insert(reward_key_owned, reward_record_for(retained_lane, 1));
-        reward_tx.insert(reward_record_owned, reward_record_for(reset_lane, 2));
-        reward_tx.insert(reward_retained, reward_record_for(retained_lane, 3));
-        reward_tx.commit();
-    }
-    {
-        let mut claim_tx = world.public_lane_reward_claims.block();
-        claim_tx.insert(claim_reset.clone(), PublicLaneRewardClaimStateV1 { through_epoch: Some(1) });
-        claim_tx.insert(claim_retained.clone(), PublicLaneRewardClaimStateV1 { through_epoch: Some(3) });
-        claim_tx.commit();
-    }
     let lanes_to_reset = BTreeSet::from([reset_lane]);
     let_row! { stake_keys = State::public_lane_stake_share_keys_for_lanes( &world.public_lane_stake_shares.view(), &lanes_to_reset, ) };
-    let_row! { reward_keys = State::public_lane_reward_keys_for_lanes( &world.public_lane_rewards.view(), &lanes_to_reset, ) };
-    let_row! { claim_keys = State::public_lane_reward_claim_keys_for_lanes( &world.public_lane_reward_claims.view(), &lanes_to_reset, ) };
     assert_eq!(
         stake_keys.into_iter().collect::<BTreeSet<_>>(),
         BTreeSet::from([stake_key_owned, stake_record_owned]),
         "stake-share cleanup must include key-owned and embedded-record-owned reset rows"
     );
-    assert_eq!(
-        reward_keys.into_iter().collect::<BTreeSet<_>>(),
-        BTreeSet::from([reward_key_owned, reward_record_owned]),
-        "reward cleanup must include key-owned and embedded-record-owned reset rows"
-    );
-    assert_eq!(
-        claim_keys.into_iter().collect::<BTreeSet<_>>(),
-        BTreeSet::from([claim_reset]),
-        "reward claims have no embedded lane and remain key-owned only"
-    );
+
 }
 state_test! { sync apply_lane_geometry_updates_preserve_instance_across_alias_changes
     let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -8920,7 +8778,7 @@ fn seed_public_lane_validator_with_key_and_record_lanes_for_lifecycle_test(
         | PublicLaneValidatorStatus::Slashed(_) => Some(activation_height.saturating_add(1)),
         PublicLaneValidatorStatus::PendingActivation(_) | PublicLaneValidatorStatus::Active => None,
     };
-    let_row! { record = PublicLaneValidatorRecord { lane_id: record_lane_id, validator: validator.clone(), peer_id: peer_id.clone(), stake_account: validator.clone(), total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), metadata: Metadata::default(), status, activation_height, election_exit_height: deactivation_height, deactivation_height, last_reward_epoch: None, } };
+    let_row! { record = PublicLaneValidatorRecord { lane_id: record_lane_id, validator: validator.clone(), peer_id: peer_id.clone(), stake_account: validator.clone(), total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), metadata: Metadata::default(), status, activation_height, election_exit_height: deactivation_height, deactivation_height, } };
     let mut block = state.world.block();
     block
         .public_lane_validators
@@ -8941,35 +8799,25 @@ fn seed_public_lane_validator_with_key_and_record_lanes_for_lifecycle_test(
     block.commit();
     (validator, peer_id)
 }
-type PublicLaneEconomicKeys = (
-    (LaneId, AccountId, AccountId),
-    (LaneId, u64),
-    (LaneId, AccountId),
-);
+type PublicLaneEconomicKeys = ((LaneId, AccountId, AccountId),);
 fn seed_public_lane_economic_state_for_lifecycle_test(
     state: &State,
     lane_id: LaneId,
-    epoch: u64,
+    _fixture_seed: u64,
 ) -> PublicLaneEconomicKeys {
     seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
-        state, lane_id, lane_id, epoch,
+        state, lane_id, lane_id,
     )
 }
 fn seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
     state: &State,
     key_lane_id: LaneId,
     record_lane_id: LaneId,
-    epoch: u64,
 ) -> PublicLaneEconomicKeys {
     let validator_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let validator = AccountId::new(validator_keypair.public_key().clone());
     let staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
-    let_row! { reward_asset_definition = AssetDefinitionId::derive_from_components( DomainId::try_new("publiclane", "universal").expect("reward asset domain"), format!("reward{epoch}").parse().expect("reward asset name"), ) };
-    let reward_asset = AssetId::new(reward_asset_definition, validator.clone());
     let stake_key = (key_lane_id, validator.clone(), staker.clone());
-    let reward_key = (key_lane_id, epoch);
-    let claim_key = (key_lane_id, validator.clone());
-    let reward_amount = Quantity::from(epoch.saturating_add(1));
     let mut block = state.world.block();
     if key_lane_id == record_lane_id {
         block.public_lane_validators.insert(
@@ -8986,7 +8834,6 @@ fn seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
                 activation_height: 1,
                 election_exit_height: Some(2),
                 deactivation_height: Some(2),
-                last_reward_epoch: None,
             },
         );
     }
@@ -9001,36 +8848,8 @@ fn seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
             metadata: Metadata::default(),
         },
     );
-    block.public_lane_rewards.insert(
-        reward_key,
-        PublicLaneRewardRecord {
-            lane_id: record_lane_id,
-            epoch,
-            asset: reward_asset.clone(),
-            total_reward: reward_amount.clone(),
-            shares: vec![PublicLaneRewardShare {
-                account: validator.clone(),
-                role: PublicLaneRewardRole::Validator,
-                amount: reward_amount,
-            }],
-            metadata: Metadata::default(),
-        },
-    );
-    block.public_lane_reward_claims.insert(
-        claim_key.clone(),
-        PublicLaneRewardClaimStateV1 {
-            through_epoch: epoch.checked_sub(1),
-        },
-    );
-    if let Some(previous_epoch) = epoch.checked_sub(1) {
-        let mut processed = block.public_lane_rewards.get(&reward_key).unwrap().clone();
-        processed.epoch = previous_epoch;
-        block
-            .public_lane_rewards
-            .insert((key_lane_id, previous_epoch), processed);
-    }
     block.commit();
-    (stake_key, reward_key, claim_key)
+    (stake_key,)
 }
 fn assert_public_lane_economic_state_presence(
     state: &State,
@@ -9043,18 +8862,6 @@ fn assert_public_lane_economic_state_presence(
         expected_present,
         "public lane stake-share presence mismatch for {:?}",
         keys.0
-    );
-    assert_eq!(
-        view.public_lane_rewards().get(&keys.1).is_some(),
-        expected_present,
-        "public lane reward-record presence mismatch for {:?}",
-        keys.1
-    );
-    assert_eq!(
-        view.public_lane_reward_claims().get(&keys.2).is_some(),
-        expected_present,
-        "public lane reward-claim presence mismatch for {:?}",
-        keys.2
     );
 }
 fn record_public_lane_staking_status_for_test(lane_id: LaneId, bonded: &Quantity) {
@@ -9215,7 +9022,6 @@ state_test! { sync apply_lane_lifecycle_rejects_exited_validator_before_deactiva
             activation_height: 1,
             election_exit_height: Some(100),
             deactivation_height: Some(100),
-            last_reward_epoch: None,
         },
     );
     world_block.commit();
@@ -9387,7 +9193,7 @@ state_test! { sync apply_lane_lifecycle_rejects_economic_custody_with_embedded_r
             retire: Vec::new(),
         })
         .expect("seed lifecycle lanes");
-    let_row! { embedded_reset_keys = seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test( &state, retained_lane, retired_lane, 179, ) };
+    let_row! { embedded_reset_keys = seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test( &state, retained_lane, retired_lane, ) };
     let_row! { retained_keys = seed_public_lane_economic_state_for_lifecycle_test(&state, retained_lane, 180) };
     let error = state
         .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
@@ -9406,18 +9212,6 @@ state_test! { sync apply_lane_lifecycle_rejects_economic_custody_with_embedded_r
             .get(&embedded_reset_keys.0)
             .is_some(),
         "rejected lifecycle reset must preserve embedded-lane stake custody"
-    );
-    assert!(
-        view.public_lane_rewards()
-            .get(&embedded_reset_keys.1)
-            .is_some(),
-        "rejected lifecycle reset must preserve embedded-lane rewards"
-    );
-    assert!(
-        view.public_lane_reward_claims()
-            .get(&embedded_reset_keys.2)
-            .is_some(),
-        "reward claims carry no embedded lane and must remain owned by their storage key"
     );
     assert_public_lane_economic_state_presence(&state, &retained_keys, true);
     crate::status::reset_nexus_economics_for_tests();
@@ -11297,7 +11091,7 @@ state_test! { sync emergency_fast_restored_config_preserves_staking_owner_and_cu
             .build(&validator)
             .into_key_value();
         world.accounts.insert(id, account);
-        world = reward_reserves::registered_custody_world_for_test(
+        world = custody_fixture::registered_custody_world_for_test(
             world,
             &custody_asset,
             Quantity::from(100_u64),
@@ -12634,7 +12428,7 @@ state_test! { sync configured_lane_lifecycle_rejects_economic_custody_with_embed
     let_row! { initial_lane_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: reset_lane, alias: "embedded-reset".to_string(), ..LaneConfig::default() }, LaneConfig { id: retained_lane, dataspace_id: retained, alias: "embedded-retained".to_string(), ..LaneConfig::default() }, ], ) .expect("initial lane catalog") };
     let_row! { initial_nexus = iroha_config::parameters::actual::Nexus { lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog( &initial_lane_catalog, ), lane_catalog: initial_lane_catalog, dataspace_catalog: dataspace_catalog.clone(), ..Default::default() } };
     let_row! { state = State::new_with_nexus_for_testing(World::default(), initial_nexus, query_handle) };
-    let_row! { embedded_reset_keys = seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test( &state, retained_lane, reset_lane, 177, ) };
+    let_row! { embedded_reset_keys = seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test( &state, retained_lane, reset_lane, ) };
     let_row! { retained_keys = seed_public_lane_economic_state_for_lifecycle_test(&state, retained_lane, 178) };
     let_row! { updated_lane_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: reset_lane, dataspace_id: rebound, alias: "embedded-reset".to_string(), ..LaneConfig::default() }, LaneConfig { id: retained_lane, dataspace_id: retained, alias: "embedded-retained".to_string(), ..LaneConfig::default() }, ], ) .expect("updated lane catalog") };
     let_row! { updated_nexus = iroha_config::parameters::actual::Nexus { lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog( &updated_lane_catalog, ), lane_catalog: updated_lane_catalog, dataspace_catalog, ..Default::default() } };
@@ -12656,18 +12450,6 @@ state_test! { sync configured_lane_lifecycle_rejects_economic_custody_with_embed
             .get(&embedded_reset_keys.0)
             .is_some(),
         "rejected set_nexus reset must preserve embedded-lane stake custody"
-    );
-    assert!(
-        view.public_lane_rewards()
-            .get(&embedded_reset_keys.1)
-            .is_some(),
-        "rejected set_nexus reset must preserve embedded-lane rewards"
-    );
-    assert!(
-        view.public_lane_reward_claims()
-            .get(&embedded_reset_keys.2)
-            .is_some(),
-        "reward claims carry no embedded lane and must remain owned by their storage key"
     );
     assert_public_lane_economic_state_presence(&state, &retained_keys, true);
     crate::status::reset_nexus_economics_for_tests();
@@ -13517,7 +13299,6 @@ fn insert_active_public_lane_validator_for_test(
             activation_height: 0,
             election_exit_height: None,
             deactivation_height: None,
-            last_reward_epoch: None,
         },
     );
     world_block.public_lane_stake_shares.insert(
@@ -13770,7 +13551,6 @@ state_test! { sync lane_relay_validator_pool_uses_stake_when_no_manifest
             activation_height: 0,
             election_exit_height: None,
             deactivation_height: None,
-            last_reward_epoch: None,
         },
     );
     wb.commit();
@@ -14266,7 +14046,6 @@ state_test! { sync lifecycle_rejects_full_dataspace_retirement_with_exited_pendi
                 activation_height: 0,
                 election_exit_height: Some(2),
                 deactivation_height: Some(2),
-                last_reward_epoch: None,
             },
         );
         world.public_lane_stake_shares.insert(
@@ -14774,7 +14553,6 @@ state_test! { sync authoritative_lane_peers_for_stake_elected_lane_require_prese
                     activation_height: 0,
                     election_exit_height: None,
                     deactivation_height: None,
-                    last_reward_epoch: None,
                 },
             );
         }
@@ -15610,7 +15388,6 @@ state_test! { sync authoritative_lane_validators_ignore_stale_stake_records_for_
             activation_height: 1,
             election_exit_height: None,
             deactivation_height: None,
-            last_reward_epoch: None,
         },
     );
     wb.commit();
@@ -24369,7 +24146,7 @@ state_test! { large_stack mailbox_and_receipt_restore_validates_consensus_execut
             .build(&ALICE_ID)
             .into_key_value();
         world.accounts.insert(account_id, account);
-        world = reward_reserves::registered_custody_world_for_test(
+        world = custody_fixture::registered_custody_world_for_test(
             world,
             &stake_asset,
             Quantity::from(1_u64),
@@ -24402,7 +24179,6 @@ state_test! { large_stack mailbox_and_receipt_restore_validates_consensus_execut
                 activation_height: 1,
                 election_exit_height: None,
                 deactivation_height: None,
-                last_reward_epoch: None,
             },
         );
         world.public_lane_stake_shares.insert(

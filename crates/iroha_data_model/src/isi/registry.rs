@@ -1317,6 +1317,17 @@ mod tests {
         assert!(registry.contains(settlement::SettlementInstructionBox::WIRE_ID));
     }
     #[test]
+    fn instruction_registry_has_no_manual_reward_publisher() {
+        let registry = default();
+        assert!(!registry.contains("iroha.instruction.v1::staking::RecordPublicLaneRewards"));
+        assert!(
+            registry
+                .wire_id("iroha_data_model::isi::staking::RecordPublicLaneRewards")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn instruction_registry_registers_and_decodes_standalone_surface() {
         let registry = default();
         let expected = [
@@ -1339,7 +1350,6 @@ mod tests {
             std::any::type_name::<crate::isi::staking::SchedulePublicLaneUnbond>(),
             std::any::type_name::<crate::isi::staking::FinalizePublicLaneUnbond>(),
             std::any::type_name::<crate::isi::staking::SlashPublicLaneValidator>(),
-            std::any::type_name::<crate::isi::staking::RecordPublicLaneRewards>(),
             std::any::type_name::<crate::isi::staking::ClaimPublicLaneRewards>(),
         ];
         for type_name in expected {
@@ -1394,7 +1404,6 @@ mod tests {
             lane_id: iroha_model_base::topology::LaneId::SINGLE,
             account: account(0xA4),
             claim_plan: crate::nexus::PublicLaneRewardClaimPlanV1 {
-                fee_claim: None,
                 network_scope: crate::nexus::PublicLaneMonetaryScopeV1::Network(
                     crate::NetworkId::from_genesis_hash(
                         iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
@@ -1403,19 +1412,15 @@ mod tests {
                     ),
                 ),
                 valid_until_height: 20,
-                expected_state: Some(crate::nexus::PublicLaneRewardClaimStateV1 {
-                    through_epoch: Some(8),
-                }),
-                records: vec![crate::nexus::PublicLaneRewardRecordRefV1 {
-                    epoch: 9,
-                    record_hash: iroha_crypto::Hash::new(b"registry reward fixture record"),
-                }],
-                sources: vec![crate::nexus::PublicLaneRewardClaimSourceV1 {
+                fee_claim: crate::nexus::PublicLaneFeeRewardClaimV1 {
+                    lifecycle_seal: [1; 32],
+                    beneficiary_id: account(0xA4),
+                    beneficiary_revision: 0,
                     source_asset: AssetId::new(asset_definition_id(), account(0xA5)),
                     destination_asset: AssetId::new(asset_definition_id(), account(0xA4)),
-                    expected_accrued: None,
-                    payout: Quantity::from(1_u64),
-                }],
+                    amount: Quantity::from(1_u64),
+                    expected_claim_sequence: 0,
+                },
             },
         });
     }

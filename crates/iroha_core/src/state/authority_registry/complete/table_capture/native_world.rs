@@ -257,16 +257,6 @@ capture_world_table_once!(
     "world.public_lane_stake_shares"
 );
 capture_world_table_once!(
-    pub(super) capture_public_lane_rewards_once,
-    public_lane_rewards,
-    "world.public_lane_rewards"
-);
-capture_world_table_once!(
-    pub(super) capture_public_lane_reward_claims_once,
-    public_lane_reward_claims,
-    "world.public_lane_reward_claims"
-);
-capture_world_table_once!(
     pub(super) capture_zk_assets_once,
     zk_assets,
     "world.zk_assets"

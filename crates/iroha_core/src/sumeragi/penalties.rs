@@ -1187,7 +1187,6 @@ pub(crate) fn seed_penalty_validator_for_tests(
                     activation_height: 1,
                     election_exit_height: None,
                     deactivation_height: None,
-                    last_reward_epoch: None,
                 },
             )
             .is_none(),

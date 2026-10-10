@@ -1455,11 +1455,6 @@ record!(
     "iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer"
 );
 record!(
-    staking_record_public_lane_rewards,
-    crate::isi::staking::RecordPublicLaneRewards,
-    "iroha_data_model::isi::staking::RecordPublicLaneRewards"
-);
-record!(
     staking_register_public_lane_validator,
     crate::isi::staking::RegisterPublicLaneValidator,
     "iroha_data_model::isi::staking::RegisterPublicLaneValidator"

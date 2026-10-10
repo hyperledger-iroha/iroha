@@ -5065,7 +5065,7 @@ or endpoint-reported transaction status.
 
 Canonical staking values are available through `encodeValidatorStakingValueV1`
 and `decodeValidatorStakingValueV1` on the root and `norito` exports. The typed
-monetary preconditions, bounded reward records (including required explicit
+monetary preconditions, automatic reward entitlements (with mandatory exact
 `fee_claim`), signing generations and epoch authorizations use the Rust shared
 fixtures. Amounts remain exact decimal strings and unsigned heights accept
 `bigint`; native identity validation is mandatory. These are bare value codecs,
