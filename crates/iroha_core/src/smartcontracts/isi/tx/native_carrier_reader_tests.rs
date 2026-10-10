@@ -705,3 +705,263 @@ fn genesis_status_prefix_requires_actual_h2_and_refuses_substituted_successor() 
         }
     }
 }
+
+#[test]
+fn event_carrier_reads_recent_certified_source_under_original_finite_work() {
+    let mut chain = chain();
+    while chain.height() < 5 {
+        chain.commit(Vec::new());
+    }
+    let height = NonZeroUsize::new(usize::try_from(chain.height()).unwrap()).unwrap();
+    let source_heights = [1, chain.height(), chain.height() - 1];
+    let bytes: u64 = source_heights
+        .into_iter()
+        .map(|height| {
+            u64::try_from(chain.committed(height).block().encode_wire().unwrap().len()).unwrap()
+        })
+        .sum();
+    let target = chain.committed(chain.height()).block().clone();
+    let output_work = u64::try_from(
+        target
+            .network_entrypoint_count()
+            .max(target.execution_outputs().len())
+            .max(1),
+    )
+    .unwrap();
+    let work = u64::try_from(source_heights.len()).unwrap() + output_work;
+    let pool = chain.state().ivm_execution_budget();
+    chain.kura().reset_canonical_query_reads_for_test();
+    let (result, relations) = crate::sumeragi::certified_chain::relation_counts::measure(|| {
+        chain
+            .state()
+            .read_finalized_event_carrier(height, work, bytes)
+    });
+    if let Err(error) = &result {
+        assert!(
+            matches!(
+                error,
+                crate::state::FinalizedEventReadError::Execution(
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(
+                        QueryExecutionFail::GasBudgetExceeded
+                    )
+                )
+            ),
+            "finite event source refusal must retain the actual GasBudgetExceeded category: {error:?}",
+        );
+    }
+    let carrier = result.expect(
+        "current block-event projection must not spend its finite source allowance on the completed genesis prefix",
+    );
+    assert_eq!(carrier.work_items(), work);
+    assert_eq!(carrier.wire_bytes(), bytes);
+    assert_eq!(
+        chain.kura().canonical_query_reads_for_test(),
+        (source_heights.len(), bytes)
+    );
+    assert_eq!(
+        relations.qcs,
+        [chain.height()],
+        "the actual target QC must still run"
+    );
+    assert!(carrier.block().belongs_to(&pool));
+    assert_eq!(carrier.block().hash(), target.hash());
+    assert_eq!(
+        carrier.block().encode_wire().unwrap(),
+        target.encode_wire().unwrap()
+    );
+}
+
+// Spend exactly one real durable metadata acquisition before entering either actual
+// State reader. Its cumulative decoder remains installed across both later refusals.
+fn assert_state_carrier_metadata_refusal_is_local(event: bool, cause: &str) {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use ivm::error::ExecutionDeferral;
+
+    let mut chain = chain();
+    while chain.height() < 3 {
+        chain.commit(Vec::new());
+    }
+    let height = NonZeroUsize::new(3).unwrap();
+    let original = chain.committed(3);
+    let expected = original.block_hash();
+    let original_wire = original.block().encode_wire().unwrap();
+    let (work, bytes) = bounds(&chain, 3);
+    let limits = |allocation| {
+        norito::DecodeLimits::new(1_000_000, 48 * 1024 * 1024, 1_000_000, allocation, 64)
+    };
+    let probe = norito::core::DecodeBudgetContext::new(limits(48 * 1024 * 1024));
+    probe.with(|| {
+        chain
+            .kura()
+            .native_frame_read(3, expected)
+            .unwrap()
+            .unwrap();
+    });
+    let marker_work = probe.consumed_allocated_bytes();
+    assert!(
+        marker_work > 0,
+        "the actual original durable marker has codec work"
+    );
+    let context =
+        norito::core::DecodeBudgetContext::new(limits(usize::try_from(marker_work).unwrap()));
+    let frames = chain.state().ivm_execution_budget();
+    let budget = crate::state::CanonicalHistoryReadBudget::new(frames.clone(), context.clone());
+    budget.with(|| {
+        chain
+            .kura()
+            .native_frame_read(3, expected)
+            .unwrap()
+            .unwrap();
+    });
+    assert_eq!(context.consumed_allocated_bytes(), marker_work);
+    let charge = frames.reserved_bytes();
+    chain.kura().reset_canonical_query_reads_for_test();
+    let read = || {
+        if event {
+            budget
+                .with(|| {
+                    chain
+                        .state()
+                        .read_finalized_event_carrier(height, work, bytes)
+                })
+                .map_err(|error| match error {
+                    crate::state::FinalizedEventReadError::Execution(error) => error,
+                    error => panic!(
+                        "stable original State capture must precede metadata refusal: {error:?}"
+                    ),
+                })
+        } else {
+            chain
+                .state()
+                .read_finalized_execution_carrier_with_read_budget(height, work, bytes, &budget)
+        }
+    };
+    for _ in 0..2 {
+        let error = read().expect_err("the original exhausted marker context cannot read a body");
+        let ExecutionAttemptError::Deferred(ref original) = error else {
+            panic!("{cause}: {error:?}");
+        };
+        assert_eq!(
+            original.reason(),
+            ExecutionDeferral::ActiveMemoryCapacity,
+            "{cause}: {error:?}"
+        );
+        assert!(
+            original.allocation_refusal().is_none(),
+            "a codec ceiling cannot invent a pool release"
+        );
+        assert_eq!(context.consumed_allocated_bytes(), marker_work);
+        assert_eq!(frames.reserved_bytes(), charge);
+        assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+    }
+    let retry_context = norito::core::DecodeBudgetContext::new(limits(48 * 1024 * 1024));
+    let retry_budget =
+        crate::state::CanonicalHistoryReadBudget::new(frames.clone(), retry_context.clone());
+    let carrier = if event {
+        retry_budget
+            .with(|| {
+                chain
+                    .state()
+                    .read_finalized_event_carrier(height, work, bytes)
+            })
+            .unwrap()
+    } else {
+        chain
+            .state()
+            .read_finalized_execution_carrier_with_read_budget(height, work, bytes, &retry_budget)
+            .unwrap()
+    };
+    assert!(carrier.block().belongs_to(&frames));
+    assert_eq!(carrier.block().hash(), expected);
+    assert_eq!(carrier.block().encode_wire().unwrap(), original_wire);
+    assert!(retry_context.consumed_allocated_bytes() > marker_work);
+    drop(carrier);
+    assert_eq!(frames.reserved_bytes(), charge);
+    // A distinct later attempt never resets the original exhausted cumulative owner.
+    assert_eq!(context.consumed_allocated_bytes(), marker_work);
+}
+
+#[test]
+fn full_prefix_carrier_preserves_original_cumulative_metadata_refusal() {
+    assert_state_carrier_metadata_refusal_is_local(
+        false,
+        "original full-prefix metadata refusal must remain local before body acquisition",
+    );
+}
+
+#[test]
+fn event_carrier_preserves_original_cumulative_metadata_refusal() {
+    assert_state_carrier_metadata_refusal_is_local(
+        true,
+        "original event metadata refusal must remain local before body acquisition",
+    );
+}
+
+#[test]
+fn bounded_native_extent_preserves_original_cumulative_metadata_refusal() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use ivm::error::ExecutionDeferral;
+
+    let chain = chain();
+    let (expected, expected_wire_len) = {
+        let target = chain.committed(2);
+        (
+            target.block_hash(),
+            target.block().encode_wire().unwrap().len(),
+        )
+    };
+    let limits = |allocation| {
+        norito::DecodeLimits::new(1_000_000, 48 * 1024 * 1024, 1_000_000, allocation, 64)
+    };
+    let probe = norito::core::DecodeBudgetContext::new(limits(48 * 1024 * 1024));
+    probe.with(|| {
+        chain
+            .kura()
+            .native_frame_read(2, expected)
+            .unwrap()
+            .unwrap();
+    });
+    let marker_work = probe.consumed_allocated_bytes();
+    assert!(marker_work > 0);
+    let context =
+        norito::core::DecodeBudgetContext::new(limits(usize::try_from(marker_work).unwrap()));
+    context.with(|| {
+        chain
+            .kura()
+            .native_frame_read(2, expected)
+            .unwrap()
+            .unwrap();
+    });
+    let pool = chain.state().ivm_execution_budget();
+    let charge = pool.reserved_bytes();
+    chain.kura().reset_canonical_query_reads_for_test();
+    for _ in 0..2 {
+        let error = context
+            .with(|| {
+                crate::sumeragi::certified_chain::bounded_native_carrier_extent(
+                    &chain.state().view(),
+                    2,
+                    usize::try_from(crate::kura::STRICT_INIT_MAX_BLOCK_BYTES).unwrap(),
+                )
+            })
+            .expect_err("the original marker context cannot admit another extent");
+        let ExecutionAttemptError::Deferred(ref original) = error else {
+            panic!("original bounded native extent metadata refusal must remain local: {error:?}");
+        };
+        assert_eq!(original.reason(), ExecutionDeferral::ActiveMemoryCapacity);
+        assert!(original.allocation_refusal().is_none());
+        assert_eq!(context.consumed_allocated_bytes(), marker_work);
+        assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+        assert_eq!(pool.reserved_bytes(), charge);
+    }
+    let actual = crate::sumeragi::certified_chain::bounded_native_carrier_extent(
+        &chain.state().view(),
+        2,
+        usize::try_from(crate::kura::STRICT_INIT_MAX_BLOCK_BYTES).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(actual, expected_wire_len);
+    assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+    assert_eq!(context.consumed_allocated_bytes(), marker_work);
+    assert_eq!(pool.reserved_bytes(), charge);
+}

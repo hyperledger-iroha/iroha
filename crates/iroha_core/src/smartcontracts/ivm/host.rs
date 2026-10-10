@@ -7,6 +7,9 @@
 //! uniformly and prevents direct world state mutations from the VM.
 //!
 //! Helper syscalls that do not touch WSV are forwarded to the IVM default host.
+mod contract_calls;
+pub(crate) mod contract_event;
+mod native_events;
 mod tlv_transport;
 
 use super::cache::PreparedContractCache;
@@ -26,6 +29,11 @@ use crate::{
     },
 };
 use iroha_crypto::{Hash, HashOf, PublicKey, streaming::TransportCapabilityResolutionSnapshot};
+#[cfg(test)]
+use iroha_data_model::smart_contract::entrypoint::EntrypointValueAtomV1;
+use iroha_data_model::smart_contract::manifest::{
+    ContractPermissionScopeV1, EntrypointAuthorizationV1,
+};
 #[cfg(test)]
 use iroha_data_model::soracloud::SORACLOUD_HOST_REQUEST_VERSION_V1;
 use iroha_data_model::{
@@ -72,14 +80,7 @@ use iroha_data_model::{
         nft::prelude::FindNftById,
         parameters::{FetchSize, Pagination, QueryParams, Sorting},
     },
-    smart_contract::{
-        ContractAddress, ContractAlias, ContractInstance,
-        entrypoint::{
-            EntrypointArgumentFieldV1, EntrypointArgumentRecordV1, EntrypointArgumentSchemaV1,
-            EntrypointValueAtomV1, EntrypointValueKindV1, EntrypointValueTypeNodeV1,
-            EntrypointValueTypeV1, entrypoint_argument_schema_hash_v1,
-        },
-    },
+    smart_contract::{ContractAddress, ContractAlias, ContractInstance},
     soracloud::{
         SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
     },
@@ -89,7 +90,9 @@ use iroha_data_model::{
     },
     zk::{BackendTag, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
+#[cfg(test)]
 use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_executor_data_model::permission::smart_contract::CanUseContractPermission;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
@@ -133,7 +136,6 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-use tlv_transport::NestedReturnTransport;
 const AXT_PROOF_CACHE_HIT: &str = "hit";
 const AXT_PROOF_CACHE_MISS: &str = "miss";
 const AXT_PROOF_CACHE_EXPIRED: &str = "expired";
@@ -588,6 +590,8 @@ impl HostExecutionClass {
             return Err(ivm::VMError::PermissionDenied);
         }
         if matches!(self, Self::View | Self::LocalViewDebug)
+            // Typed calls enforce the admitted target's view class before execution.
+            && number != ivm::syscalls::SYSCALL_CALL_CONTRACT
             && matches!(
                 ivm::syscalls::syscall_access(number),
                 ivm::syscalls::SyscallAccess::StateWrite
@@ -612,6 +616,8 @@ pub struct CoreHostImpl<QS> {
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     nested_contract_call_depth: usize,
+    // Fixed V1 call-stack capacity; identity checks include every active ancestor.
+    nested_contract_ancestors: [Option<ContractAddress>; MAX_NESTED_CONTRACT_CALL_DEPTH],
     default: ivm::host::DefaultHost,
     codec_host: IvmCodecHost,
     access_log_enabled: bool,
@@ -620,7 +626,7 @@ pub struct CoreHostImpl<QS> {
     stark_config: iroha_config::parameters::actual::Stark,
     pipa_r_config: iroha_config::parameters::actual::PipaR,
     crypto: Arc<iroha_config::parameters::actual::Crypto>,
-    queued: Vec<QueuedInstruction>,
+    queued: Vec<QueuedEffect>,
     instruction_queue_limits: HostOutputLimits,
     instruction_queue_count: u64,
     instruction_queue_encoded_bytes: u64,
@@ -1099,6 +1105,57 @@ fn execute_optional_singular_query_on_state<R: StateReadOnly>(
         Err(error) => Err(map_query_execution_error(&error)),
     }
 }
+// The filter's original decoded graph is consumed by the synchronous ephemeral
+// query while this owner remains alive. Its allocation allowance is never moved
+// to a different pool or released before the query drops its input.
+struct CoreQueryAccountFilter {
+    account: Option<AccountId>,
+    _reservation: Option<iroha_allocation::AllocationReservation>,
+}
+impl CoreQueryAccountFilter {
+    fn decode(vm: &IVM, pointer: u64) -> Result<Self, ivm::VMError> {
+        let tlv = vm.validate_tlv(pointer)?;
+        if tlv.type_id != PointerType::AccountId {
+            return Err(ivm::VMError::DecodeError);
+        }
+        let limits = norito::canonical_decode_limits(tlv.payload.len());
+        let mut reservation =
+            vm.allocation_budget()
+                .map(|budget| {
+                    budget.try_reserve_bytes(limits.max_total_allocated_bytes().saturating_add(
+                        norito::core::DecodeBudgetContext::allocation_layout().size(),
+                    ))
+                })
+                .transpose()
+                .map_err(ivm::VMError::AllocationDeferred)?;
+        let unavailable =
+            || ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable);
+        let context = match reservation.as_mut() {
+            Some(reservation) => norito::core::DecodeBudgetContext::from_reservation(
+                limits,
+                reservation,
+            )
+            .map_err(|error| match error {
+                iroha_allocation::PrepaidSharedError::Reservation(_) => {
+                    ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::LocalInvariantViolation)
+                }
+                iroha_allocation::PrepaidSharedError::Allocator { .. } => unavailable(),
+            })?,
+            None => norito::core::DecodeBudgetContext::new(limits),
+        };
+        let account = context
+            .with(|| norito::decode_canonical_with_limits(tlv.payload, limits))
+            .map_err(|error| match error {
+                norito::Error::AllocationFailed { .. } => unavailable(),
+                _ => ivm::VMError::DecodeError,
+            })?;
+        drop(context);
+        Ok(Self {
+            account: Some(account),
+            _reservation: reservation,
+        })
+    }
+}
 #[derive(Copy, Clone)]
 struct QueryGasContext {
     base: u64,
@@ -1345,12 +1402,12 @@ pub trait QueryStateRefOps {
     ///
     /// Returns [`ValidationFail`] when the authority is missing or lacks the
     /// named entrypoint permission.
-    fn enforce_named_contract_entrypoint_permission(
+    fn enforce_named_contract_entrypoint_authorization(
         &self,
         authority: &AccountId,
         contract_address: &ContractAddress,
         entrypoint: &str,
-        permission: Option<&str>,
+        permission: &EntrypointAuthorizationV1,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>>;
     /// Validate that a nested target is executable and not awaiting a lifecycle hook.
     ///
@@ -2182,16 +2239,16 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             }
         }
     }
-    fn enforce_named_contract_entrypoint_permission(
+    fn enforce_named_contract_entrypoint_authorization(
         &self,
         authority: &AccountId,
         contract_address: &ContractAddress,
         entrypoint: &str,
-        permission: Option<&str>,
+        permission: &EntrypointAuthorizationV1,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         match *self {
             QueryStateRef::View(view) => {
-                crate::executor::enforce_named_contract_entrypoint_permission(
+                crate::executor::enforce_named_contract_entrypoint_authorization(
                     view.world(),
                     authority,
                     contract_address,
@@ -2200,7 +2257,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
                 )
             }
             QueryStateRef::QueryView(view) => {
-                crate::executor::enforce_named_contract_entrypoint_permission(
+                crate::executor::enforce_named_contract_entrypoint_authorization(
                     view.world(),
                     authority,
                     contract_address,
@@ -2209,7 +2266,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
                 )
             }
             QueryStateRef::Block(block) => {
-                crate::executor::enforce_named_contract_entrypoint_permission(
+                crate::executor::enforce_named_contract_entrypoint_authorization(
                     block.world(),
                     authority,
                     contract_address,
@@ -2218,7 +2275,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
                 )
             }
             QueryStateRef::Transaction(tx) => {
-                crate::executor::enforce_named_contract_entrypoint_permission(
+                crate::executor::enforce_named_contract_entrypoint_authorization(
                     tx.world(),
                     authority,
                     contract_address,
@@ -2393,7 +2450,7 @@ impl AmxBudgetViolation {
 }
 /// Execution artifacts extracted from a host run that can be applied to state later.
 pub(crate) struct HostExecutionArtifacts {
-    queued: Vec<QueuedInstruction>,
+    queued: Vec<QueuedEffect>,
     entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     confidential_gas_delta: u64,
     completed_axt: Vec<axt::HostAxtState>,
@@ -2401,17 +2458,63 @@ pub(crate) struct HostExecutionArtifacts {
     durable_state_authorizations:
         BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,
 }
-#[derive(Clone)]
-pub(crate) struct QueuedInstruction {
-    pub(crate) instruction: InstructionBox,
+/// One effect in the exact order produced by a contract and all nested calls.
+pub(crate) struct QueuedEffect {
+    pub(crate) payload: QueuedEffectPayload,
     pub(crate) authority: AccountId,
     pub(crate) contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     pub(crate) entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
 }
-impl core::fmt::Debug for QueuedInstruction {
+/// Canonical effect owner. Emission backing and its original allocation charges
+/// cannot be copied or separated while passing through execution and replay.
+#[derive(Debug)]
+pub(crate) enum QueuedEffectPayload {
+    Instruction(InstructionBox),
+    Emission(contract_event::OwnedContractEmission),
+}
+impl QueuedEffect {
+    pub(crate) fn instructions(effects: &[Self]) -> impl ExactSizeIterator<Item = &InstructionBox> {
+        struct Instructions<'a> {
+            effects: std::slice::Iter<'a, QueuedEffect>,
+            remaining: usize,
+        }
+        impl<'a> Iterator for Instructions<'a> {
+            type Item = &'a InstructionBox;
+            fn next(&mut self) -> Option<Self::Item> {
+                let instruction = self.effects.find_map(QueuedEffect::instruction)?;
+                self.remaining -= 1;
+                Some(instruction)
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (self.remaining, Some(self.remaining))
+            }
+        }
+        impl ExactSizeIterator for Instructions<'_> {}
+        Instructions {
+            effects: effects.iter(),
+            remaining: effects
+                .iter()
+                .filter(|effect| effect.instruction().is_some())
+                .count(),
+        }
+    }
+    pub(crate) fn instruction(&self) -> Option<&InstructionBox> {
+        match &self.payload {
+            QueuedEffectPayload::Instruction(instruction) => Some(instruction),
+            QueuedEffectPayload::Emission(_) => None,
+        }
+    }
+    fn into_instruction(self) -> Option<InstructionBox> {
+        match self.payload {
+            QueuedEffectPayload::Instruction(instruction) => Some(instruction),
+            QueuedEffectPayload::Emission(_) => None,
+        }
+    }
+}
+impl core::fmt::Debug for QueuedEffect {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("QueuedInstruction")
-            .field("instruction", &self.instruction)
+        f.debug_struct("QueuedEffect")
+            .field("payload", &self.payload)
             .field("authority", &self.authority)
             .field(
                 "has_contract_runtime_context",
@@ -2424,11 +2527,11 @@ impl core::fmt::Debug for QueuedInstruction {
             .finish()
     }
 }
-impl PartialEq<InstructionBox> for QueuedInstruction {
+impl PartialEq<InstructionBox> for QueuedEffect {
     fn eq(&self, other: &InstructionBox) -> bool {
         self.contract_runtime_context.is_none()
             && self.entrypoint_authorization.is_none()
-            && self.instruction == *other
+            && self.instruction() == Some(other)
     }
 }
 #[derive(Clone)]
@@ -2448,7 +2551,7 @@ struct NestedContractCallJournal {
 enum NestedContractCallOutcome {
     Commit,
     Rollback,
-    RollbackViewPreservingReads,
+    RollbackPreservingReads,
 }
 struct NestedContractCallHostSnapshot {
     authority: AccountId,
@@ -2481,12 +2584,22 @@ struct NestedContractCallHostSnapshot {
 impl HostExecutionArtifacts {
     fn validate_queued_authorization(
         world: &impl WorldReadOnly,
-        queued: &QueuedInstruction,
+        queued: &QueuedEffect,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
-        match (
+        Self::validate_effect_authorization(
+            world,
+            &queued.authority,
             queued.contract_runtime_context.as_ref(),
             queued.entrypoint_authorization.as_ref(),
-        ) {
+        )
+    }
+    fn validate_effect_authorization(
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+        runtime_context: Option<&ContractRuntimeExecutionContext>,
+        authorization: Option<&ContractEntrypointAuthorizationSnapshot>,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+        match (runtime_context, authorization) {
             (Some(context), Some(authorization)) => {
                 let live_subject = crate::smartcontracts::code::bound_contract_subject_from_world(
                     world,
@@ -2502,7 +2615,7 @@ impl HostExecutionArtifacts {
                     || context.contract_address != authorization.contract_address
                     || context.contract_alias != authorization.contract_alias
                     || context.entrypoint != authorization.entrypoint
-                    || queued.authority != context.contract_subject
+                    || *authority != context.contract_subject
                 {
                     return Err(ValidationFail::NotPermitted(
                         "queued contract effect does not match its immutable authorization snapshot"
@@ -2571,7 +2684,7 @@ impl HostExecutionArtifacts {
     pub(crate) fn queued_instructions(&self) -> Vec<InstructionBox> {
         self.queued
             .iter()
-            .map(|queued| queued.instruction.clone())
+            .filter_map(|queued| queued.instruction().cloned())
             .collect()
     }
     pub(crate) fn queued_instructions_by_authority(
@@ -2579,10 +2692,12 @@ impl HostExecutionArtifacts {
     ) -> BTreeMap<AccountId, Vec<InstructionBox>> {
         let mut grouped = BTreeMap::new();
         for queued in &self.queued {
-            grouped
-                .entry(queued.authority.clone())
-                .or_insert_with(Vec::new)
-                .push(queued.instruction.clone());
+            if let Some(instruction) = queued.instruction() {
+                grouped
+                    .entry(queued.authority.clone())
+                    .or_insert_with(Vec::new)
+                    .push(instruction.clone());
+            }
         }
         grouped
     }
@@ -2591,12 +2706,16 @@ impl HostExecutionArtifacts {
     pub(crate) fn queued_instructions_with_authority(&self) -> Vec<(AccountId, InstructionBox)> {
         self.queued
             .iter()
-            .map(|queued| (queued.authority.clone(), queued.instruction.clone()))
+            .filter_map(|queued| {
+                queued
+                    .instruction()
+                    .map(|instruction| (queued.authority.clone(), instruction.clone()))
+            })
             .collect()
     }
     fn seed_queued_call_hash_if_missing(
         tx: &mut StateTransaction<'_, '_>,
-        queued: &[QueuedInstruction],
+        queued: &[QueuedEffect],
     ) -> Result<(), ValidationFail> {
         if tx.tx_call_hash.is_some() || queued.is_empty() {
             return Ok(());
@@ -2609,12 +2728,17 @@ impl HostExecutionArtifacts {
         })?;
         bytes.extend_from_slice(execution_identity.as_ref());
         for queued in queued {
+            let Some(instruction) = queued.instruction() else {
+                return Err(ValidationFail::InternalError(
+                    "contract emission is missing its invocation execution owner".into(),
+                ));
+            };
             let authority = encode_canonical_norito(&queued.authority).map_err(|error| {
                 ValidationFail::InternalError(format!(
                     "failed to encode queued authority for call_hash seed: {error}"
                 ))
             })?;
-            let instruction = encode_canonical_norito(&queued.instruction).map_err(|error| {
+            let instruction = encode_canonical_norito(instruction).map_err(|error| {
                 ValidationFail::InternalError(format!(
                     "failed to encode queued instruction for call_hash seed: {error}"
                 ))
@@ -2727,32 +2851,68 @@ impl HostExecutionArtifacts {
         )
         .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         crate::deferred_authority::reject_opaque_instruction_authority(
-            self.queued.iter().map(|queued| &queued.instruction),
+            self.queued.iter().filter_map(QueuedEffect::instruction),
             tx,
         )
         .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         // The actual consumed group must fit before its first call-hash,
         // confidential-work, instruction, AXT or durable-state effect is applied.
-        tx.admit_host_execution_effects(self.queued.iter().map(|queued| &queued.instruction))?;
+        if let Some((contract_address, pending)) = lifecycle_completion {
+            crate::smartcontracts::code::validate_contract_lifecycle_state_completion(
+                &tx.world,
+                &tx.execution_budget(),
+                contract_address,
+                pending,
+                &self.durable_state_overlay,
+            )
+            .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
+        }
+        tx.admit_host_execution_effects(QueuedEffect::instructions(&self.queued))?;
         Self::seed_queued_call_hash_if_missing(tx, &self.queued)?;
         if self.confidential_gas_delta > 0 {
             tx.record_confidential_gas_delta(self.confidential_gas_delta);
         }
         let executor = tx.world.executor.clone();
-        for queued in &self.queued {
+        let mut executed = Vec::new();
+        for queued in self.queued {
+            let QueuedEffect {
+                payload,
+                authority: effect_authority,
+                contract_runtime_context,
+                entrypoint_authorization,
+            } = queued;
             if let Some(authorization) = self.entrypoint_authorization.as_ref() {
                 authorization
                     .validate_for_authority(&tx.world, authority)
                     .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             }
-            Self::validate_queued_authorization(&tx.world, queued)
-                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
-            executor.execute_instruction_with_contract_runtime_context(
-                tx,
-                &queued.authority,
-                queued.instruction.clone(),
-                queued.contract_runtime_context.as_ref(),
-            )?;
+            Self::validate_effect_authorization(
+                &tx.world,
+                &effect_authority,
+                contract_runtime_context.as_ref(),
+                entrypoint_authorization.as_ref(),
+            )
+            .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
+            match payload {
+                QueuedEffectPayload::Instruction(instruction) => {
+                    executor.execute_instruction_with_contract_runtime_context(
+                        tx,
+                        &effect_authority,
+                        instruction.clone(),
+                        contract_runtime_context.as_ref(),
+                    )?;
+                    executed.push(instruction);
+                }
+                QueuedEffectPayload::Emission(emission) => {
+                    Self::validate_emission_provenance(
+                        &tx.world,
+                        &emission.value,
+                        contract_runtime_context.as_ref(),
+                        entrypoint_authorization.as_ref(),
+                    )?;
+                    tx.record_contract_emission(emission)?;
+                }
+            }
             // A leaf can revoke its own permission or alter its binding in its final effect. Check
             // the selected root and the just-executed leaf before advancing or committing any
             // other artifact.
@@ -2761,8 +2921,13 @@ impl HostExecutionArtifacts {
                     .validate_for_authority(&tx.world, authority)
                     .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             }
-            Self::validate_queued_authorization(&tx.world, queued)
-                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
+            Self::validate_effect_authorization(
+                &tx.world,
+                &effect_authority,
+                contract_runtime_context.as_ref(),
+                entrypoint_authorization.as_ref(),
+            )
+            .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         }
         if let Some(authorization) = self.entrypoint_authorization.as_ref() {
             authorization
@@ -2773,11 +2938,14 @@ impl HostExecutionArtifacts {
         // committed. A helper contract can otherwise stage a deactivate/reactivate ABA while a
         // hajimari or kaizen hook is still running.
         if let Some((contract_address, pending)) = lifecycle_completion {
-            crate::smartcontracts::code::validate_contract_lifecycle_completion(
+            crate::smartcontracts::code::validate_contract_lifecycle_state_completion(
                 &tx.world,
+                &tx.execution_budget(),
                 contract_address,
                 pending,
-            )?;
+                &self.durable_state_overlay,
+            )
+            .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         }
         // Queued effects may revoke the selected permission or change a contract binding. Check
         // every durable snapshot as a set before recording any additional artifact or writing the
@@ -2807,11 +2975,7 @@ impl HostExecutionArtifacts {
                 }
             }
         }
-        Ok(self
-            .queued
-            .into_iter()
-            .map(|queued| queued.instruction)
-            .collect())
+        Ok(executed)
     }
 }
 #[allow(clippy::cast_possible_truncation)]
@@ -2923,6 +3087,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
+            nested_contract_ancestors: std::array::from_fn(|_| None),
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -3053,6 +3218,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
+            nested_contract_ancestors: std::array::from_fn(|_| None),
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -3137,6 +3303,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
+            nested_contract_ancestors: std::array::from_fn(|_| None),
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -4842,9 +5009,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
     /// Drain queued ISIs collected during the last VM run.
     pub fn drain_instructions(&mut self) -> Vec<InstructionBox> {
-        self.drain_queued_instructions()
+        self.drain_queued_effects()
             .into_iter()
-            .map(|queued| queued.instruction)
+            .filter_map(QueuedEffect::into_instruction)
             .collect()
     }
     /// Configure the aggregate output budget from consensus parameters.
@@ -4986,17 +5153,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             true
         }
     }
-    fn drain_queued_instructions(&mut self) -> Vec<QueuedInstruction> {
+    fn drain_queued_effects(&mut self) -> Vec<QueuedEffect> {
         self.flush_pending_fastpq_batch();
         mem::take(&mut self.queued)
     }
-    fn drain_queued_instructions_with_fallback(
+    fn drain_queued_effects_with_fallback(
         &mut self,
         fallback: Option<ContractRuntimeExecutionContext>,
-    ) -> Vec<QueuedInstruction> {
+    ) -> Vec<QueuedEffect> {
         let fallback = fallback.or_else(|| self.current_contract_runtime_context.clone());
         let authorization_fallback = self.current_entrypoint_authorization.clone();
-        self.drain_queued_instructions()
+        self.drain_queued_effects()
             .into_iter()
             .map(|mut queued| {
                 if queued.contract_runtime_context.is_none() {
@@ -5009,11 +5176,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             })
             .collect()
     }
-    pub(crate) fn drain_queued_instructions_with_contract_runtime_context(
+    pub(crate) fn drain_queued_effects_with_contract_runtime_context(
         &mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
-    ) -> Vec<QueuedInstruction> {
-        self.drain_queued_instructions_with_fallback(contract_runtime_context)
+    ) -> Vec<QueuedEffect> {
+        self.drain_queued_effects_with_fallback(contract_runtime_context)
     }
     /// Drain durable contract-state writes collected during the last VM run.
     pub fn drain_durable_state_overlay(&mut self) -> BTreeMap<StatePath, Option<Vec<u8>>> {
@@ -5123,23 +5290,107 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.instruction_queue_violation
             .map_or(Ok(()), |violation| Err(violation.into_vm_error()))
     }
+    /// Discard a completed root invocation's effects when its outer Result is Err.
+    ///
+    /// The VM's protected return has already validated the complete signed callable
+    /// schema. The result table and consumed gas remain available to the caller;
+    /// read dependencies survive because they selected this recoverable outcome.
+    ///
+    /// # Errors
+    /// Rejects an invalid result, unfinished nested frame, or exceeded output budget.
+    pub fn finish_contract_result(&mut self, vm: &IVM) -> Result<bool, ivm::VMError> {
+        self.ensure_output_budget()?;
+        let Some(context) = self.current_contract_runtime_context.as_ref() else {
+            return Ok(false);
+        };
+        if self.nested_contract_call_depth != 0 || !self.nested_contract_call_journals.is_empty() {
+            return Err(ivm::VMError::ExecutionDeferred(
+                ivm::error::ExecutionDeferral::LocalInvariantViolation,
+            ));
+        }
+        let descriptor = vm
+            .contract_interface()
+            .and_then(|interface| {
+                interface
+                    .entrypoints
+                    .iter()
+                    .find(|entrypoint| entrypoint.name == context.entrypoint)
+            })
+            .ok_or(ivm::VMError::InvalidMetadata)?;
+        self.finish_result_schema(vm, descriptor.return_schema.as_ref())
+    }
+    /// Apply recoverable Result rollback to an explicitly selected local debug call.
+    ///
+    /// Local debugging has no deployed identity; the selector chooses its descriptor
+    /// from the loaded artifact. This never makes local effects committable.
+    ///
+    /// # Errors
+    /// Rejects non-debug hosts, unknown selectors, invalid results, or output overruns.
+    pub fn finish_local_contract_result(
+        &mut self,
+        vm: &IVM,
+        selector: &str,
+    ) -> Result<bool, ivm::VMError> {
+        self.ensure_output_budget()?;
+        if !matches!(
+            self.execution_class,
+            HostExecutionClass::LocalContractDebug | HostExecutionClass::LocalViewDebug
+        ) {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        let descriptor = vm
+            .contract_interface()
+            .and_then(|interface| {
+                interface
+                    .entrypoints
+                    .iter()
+                    .find(|entrypoint| entrypoint.name == selector)
+            })
+            .ok_or(ivm::VMError::InvalidMetadata)?;
+        self.finish_result_schema(vm, descriptor.return_schema.as_ref())
+    }
+    fn finish_result_schema(
+        &mut self,
+        vm: &IVM,
+        schema: Option<&iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1>,
+    ) -> Result<bool, ivm::VMError> {
+        let schema = schema.ok_or(ivm::VMError::InvalidMetadata)?;
+        if !ivm::sum::entrypoint_return_is_error(vm, schema)? {
+            return Ok(false);
+        }
+        self.queued.clear();
+        self.durable_state_overlay.clear();
+        self.durable_state_authorizations.clear();
+        self.completed_axt.clear();
+        self.fastpq_batch_entries = None;
+        self.state_access_log.write_keys.clear();
+        self.state_access_log.state_writes.clear();
+        Ok(true)
+    }
     pub(crate) fn into_execution_artifacts(
         mut self,
+        contract_runtime_context: Option<ContractRuntimeExecutionContext>,
+    ) -> Result<HostExecutionArtifacts, ValidationFail> {
+        self.take_execution_artifacts(contract_runtime_context)
+    }
+    fn take_execution_artifacts(
+        &mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) -> Result<HostExecutionArtifacts, ValidationFail> {
         self.ensure_output_budget()
             .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
         self.ensure_execution_artifacts_are_committable()?;
         self.ensure_view_execution_has_no_effect_artifacts()?;
-        let queued = self.drain_queued_instructions_with_fallback(contract_runtime_context);
+        let queued = self.drain_queued_effects_with_fallback(contract_runtime_context);
         self.validate_queued_for_zk(
             &queued
                 .iter()
-                .map(|queued| queued.instruction.clone())
+                .filter_map(|queued| queued.instruction().cloned())
                 .collect::<Vec<_>>(),
         )?;
-        let confidential_gas_delta =
-            crate::gas::sum_confidential_gas_costs(queued.iter().map(|queued| &queued.instruction));
+        let confidential_gas_delta = crate::gas::sum_confidential_gas_costs(
+            queued.iter().filter_map(QueuedEffect::instruction),
+        );
         let completed_axt = mem::take(&mut self.completed_axt);
         let durable_state_overlay = mem::take(&mut self.durable_state_overlay);
         let durable_state_authorizations = mem::take(&mut self.durable_state_authorizations);
@@ -5173,100 +5424,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         authority: &AccountId,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
-        self.ensure_execution_artifacts_are_committable()?;
-        self.ensure_view_execution_has_no_effect_artifacts()?;
-        let queued =
-            self.drain_queued_instructions_with_fallback(contract_runtime_context.cloned());
-        self.validate_queued_for_zk(
-            &queued
-                .iter()
-                .map(|queued| queued.instruction.clone())
-                .collect::<Vec<_>>(),
-        )?;
-        let has_contract_effect = queued.iter().any(|queued| {
-            queued.contract_runtime_context.is_some() || queued.entrypoint_authorization.is_some()
-        }) || self
-            .durable_state_authorizations
-            .values()
-            .any(Option::is_some);
-        let root_authorization = self.current_entrypoint_authorization.as_ref();
-        if has_contract_effect && root_authorization.is_none() {
-            return Err(ValidationFail::NotPermitted(
-                "contract execution is missing its root authorization snapshot".to_owned(),
-            ));
-        }
-        if let Some(root) = root_authorization {
-            if !root.is_root() {
-                return Err(ValidationFail::NotPermitted(
-                    "contract execution root authorization contains a parent invocation".to_owned(),
-                ));
-            }
-            root.validate_for_authority(&tx.world, authority)
-                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
-            if queued
-                .iter()
-                .filter_map(|queued| queued.entrypoint_authorization.as_ref())
-                .chain(
-                    self.durable_state_authorizations
-                        .values()
-                        .filter_map(Option::as_ref),
-                )
-                .any(|authorization| !authorization.descends_from(root))
-            {
-                return Err(ValidationFail::NotPermitted(
-                    "contract effect authorization does not retain the root invocation chain"
-                        .to_owned(),
-                ));
-            }
-        }
-        for queued in &queued {
-            HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)
-                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
-        }
-        HostExecutionArtifacts::validate_durable_authorizations(
-            &tx.world,
-            &self.durable_state_overlay,
-            &self.durable_state_authorizations,
-        )
-        .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
-        HostExecutionArtifacts::seed_queued_call_hash_if_missing(tx, &queued)?;
-        let confidential_gas_delta =
-            crate::gas::sum_confidential_gas_costs(queued.iter().map(|queued| &queued.instruction));
-        if confidential_gas_delta > 0 {
-            tx.record_confidential_gas_delta(confidential_gas_delta);
-        }
-        let executor = tx.world.executor.clone();
-        for queued in &queued {
-            HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)
-                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
-            executor.execute_instruction_with_contract_runtime_context(
-                tx,
-                &queued.authority,
-                queued.instruction.clone(),
-                queued
-                    .contract_runtime_context
-                    .as_ref()
-                    .or(contract_runtime_context),
-            )?;
-            if let Some(root) = self.current_entrypoint_authorization.as_ref() {
-                root.validate_for_authority(&tx.world, authority)
-                    .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
-            }
-            HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)
-                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
-        }
-        HostExecutionArtifacts::validate_durable_authorizations(
-            &tx.world,
-            &self.durable_state_overlay,
-            &self.durable_state_authorizations,
-        )
-        .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
-        self.flush_completed_axt(tx)?;
-        self.flush_durable_state(tx)?;
-        Ok(queued
-            .into_iter()
-            .map(|queued| queued.instruction)
-            .collect())
+        self.take_execution_artifacts(contract_runtime_context.cloned())?
+            .apply_to_transaction(tx, authority)
     }
     fn journal_durable_state_before_write(&mut self, key: &StatePath) {
         if self.nested_contract_call_journals.is_empty() {
@@ -5534,30 +5693,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             tally: tally.clone(),
         })
     }
-    fn vrf_epoch_seed_response(
-        &self,
-        request: &ivm::vrf::VrfEpochSeedRequest,
-    ) -> ivm::vrf::VrfEpochSeedResponse {
-        let resolved = self
-            .vrf_epoch_seeds
-            .get(&request.epoch)
-            .map(|seed| (request.epoch, *seed))
-            .or_else(|| {
-                if request.fallback_to_latest {
-                    self.vrf_epoch_seeds
-                        .iter()
-                        .next_back()
-                        .map(|(epoch, seed)| (*epoch, *seed))
-                } else {
-                    None
-                }
-            });
-        let (found, epoch, seed) = resolved
-            .map_or((false, request.epoch, [0; 32]), |(epoch, seed)| {
-                (true, epoch, seed)
-            });
-        ivm::vrf::VrfEpochSeedResponse { found, epoch, seed }
-    }
     fn sysvar_gas(payload_len: usize) -> u64 {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
     }
@@ -5653,15 +5788,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let scope = self.durable_state_scope_prefix();
         let request =
             ivm::state_scan::StateScanRequest::decode(vm, scope.as_deref().unwrap_or("local"))?;
-        Self::ensure_contract_state_read_allowed(&request.map)?;
+        Self::ensure_contract_state_read_allowed(request.map())?;
         if scope.is_none() {
-            self.ensure_raw_durable_state_path_allowed(&request.map)?;
+            self.ensure_raw_durable_state_path_allowed(request.map())?;
         }
-        let map = request.map.clone();
+        let map = request.map().clone();
         let prefix = format!("{}{}/", scope.as_deref().unwrap_or(""), map.as_ref());
         let after = request
-            .after
-            .as_ref()
+            .after()
             .map(|key| format!("{}{}", scope.as_deref().unwrap_or(""), key.as_ref()));
         prefix
             .trim_end_matches('/')
@@ -6699,12 +6833,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             output_violation_before,
         } = snapshot;
         if self.nested_contract_call_journals.len() != journal_depth.saturating_add(1) {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::ExecutionDeferred(
+                ivm::error::ExecutionDeferral::LocalInvariantViolation,
+            ));
         }
-        let journal = self
-            .nested_contract_call_journals
-            .pop()
-            .ok_or(ivm::VMError::DecodeError)?;
+        let journal =
+            self.nested_contract_call_journals
+                .pop()
+                .ok_or(ivm::VMError::ExecutionDeferred(
+                    ivm::error::ExecutionDeferral::LocalInvariantViolation,
+                ))?;
         self.authority = authority;
         self.execution_class = execution_class;
         self.local_debug_artifacts |= local_debug_artifacts;
@@ -6715,17 +6853,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.fastpq_batch_entries = fastpq_batch_entries;
         if matches!(outcome, NestedContractCallOutcome::Commit) {
             if !self.default.commit_forwarded_call(default) {
-                return Err(ivm::VMError::DecodeError);
+                return Err(ivm::VMError::ExecutionDeferred(
+                    ivm::error::ExecutionDeferral::LocalInvariantViolation,
+                ));
             }
             return Ok(());
         }
         if !self.default.rollback_forwarded_call(default) {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::ExecutionDeferred(
+                ivm::error::ExecutionDeferral::LocalInvariantViolation,
+            ));
         }
-        let preserve_reads = matches!(
-            outcome,
-            NestedContractCallOutcome::RollbackViewPreservingReads
-        );
+        let preserve_reads = matches!(outcome, NestedContractCallOutcome::RollbackPreservingReads);
         let preserved_read_items = if preserve_reads {
             journal
                 .new_read_keys
@@ -6815,56 +6954,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         Ok(())
     }
-    fn encode_nested_contract_return(
-        vm: &IVM,
-        schema: &iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1,
-        max_record_bytes: usize,
-    ) -> Result<Vec<u8>, ivm::VMError> {
-        let record = crate::smartcontracts::ivm::return_value::encode_entrypoint_return_record_bytes_bounded(
-            vm,
-            schema,
-            max_record_bytes,
-        )
-        .map_err(
-            crate::smartcontracts::ivm::return_value::EntrypointReturnDecodeError::into_nested_vm_error,
-        )?;
-        let complete_boundary_bytes = record
-            .len()
-            .checked_add(
-                iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1,
-            )
-            .ok_or(ivm::VMError::DecodeError)?;
-        if complete_boundary_bytes
-            > iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_BOUNDARY_BYTES
-        {
-            return Err(ivm::VMError::DecodeError);
-        }
-        Ok(record)
-    }
-    fn affordable_nested_return_record_bytes(
-        vm: &IVM,
-        reserved_gas: u64,
-        child_gas_consumed: u64,
-        request_gas: u64,
-    ) -> usize {
-        let available_host_gas = if reserved_gas == 0 {
-            vm.remaining_gas()
-        } else {
-            reserved_gas.saturating_sub(child_gas_consumed)
-        };
-        let response_gas = available_host_gas.saturating_sub(request_gas);
-        let envelope_gas = ivm::gas::SYSCALL_GAS_PER_BYTE.saturating_mul(
-            u64::try_from(
-                iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1,
-            )
-            .unwrap_or(u64::MAX),
-        );
-        let record_gas = response_gas.saturating_sub(envelope_gas);
-        let per_byte = ivm::gas::SYSCALL_GAS_PER_BYTE.max(1);
-        usize::try_from(record_gas / per_byte)
-            .unwrap_or(usize::MAX)
-            .min(iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
-    }
     fn resolve_bound_contract_dispatch_identity_by_address(
         &self,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -6890,6 +6979,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         Ok(Some((
             crate::smartcontracts::code::BoundContractIdentity {
+                lifecycle_revision: record.lifecycle_revision,
                 contract_address: record.contract_address.clone(),
                 contract_alias: record.contract_alias.clone(),
                 contract_alias_binding: record.contract_alias_binding.clone(),
@@ -6940,502 +7030,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     .saturating_mul(u64::try_from(artifact_bytes).unwrap_or(u64::MAX)),
             )
     }
-    fn quantity_entrypoint_type() -> EntrypointValueTypeV1 {
-        EntrypointValueTypeV1 {
-            nodes: vec![EntrypointValueTypeNodeV1::Leaf(
-                EntrypointValueKindV1::Quantity,
-            )],
-        }
-    }
-    fn quantity2_argument_schema() -> EntrypointArgumentSchemaV1 {
-        EntrypointArgumentSchemaV1 {
-            fields: vec![
-                EntrypointArgumentFieldV1 {
-                    name: "amount_in".to_owned(),
-                    ty: Self::quantity_entrypoint_type(),
-                },
-                EntrypointArgumentFieldV1 {
-                    name: "min_out".to_owned(),
-                    ty: Self::quantity_entrypoint_type(),
-                },
-            ],
-        }
-    }
-    fn rollback_typed_contract_call(
-        &mut self,
-        vm: &mut IVM,
-        snapshot: NestedContractCallHostSnapshot,
-        original_contract_pointer: u64,
-        gas: u64,
-        error: ivm::VMError,
-    ) -> Result<u64, ivm::VMError> {
-        // The typed syscall owns r10 until the exact return has been decoded.
-        // Restore the caller-visible register before any fallible host cleanup
-        // so no child output can survive even if rollback itself reports an
-        // invariant violation.
-        vm.set_register(10, original_contract_pointer);
-        self.finish_nested_contract_call(snapshot, NestedContractCallOutcome::Rollback)
-            .map_err(|rollback| ivm::VMError::metered(gas, rollback))?;
-        Err(ivm::VMError::metered(gas, error))
-    }
-    fn decode_quantity_return_envelope(payload: &[u8]) -> Result<Vec<u8>, ivm::VMError> {
-        let return_record =
-            crate::smartcontracts::ivm::return_value::decode_entrypoint_return_record(
-                &Self::quantity_entrypoint_type(),
-                payload,
-            )
-            .map_err(|_| ivm::VMError::DecodeError)?;
-        let [EntrypointValueAtomV1::Pointer(quantity_envelope)] = return_record.atoms.as_slice()
-        else {
-            return Err(ivm::VMError::DecodeError);
-        };
-        ivm::numeric_tlv::decode_quantity_bytes(quantity_envelope)?;
-        Ok(quantity_envelope.clone())
-    }
-    /// Execute the first production compiler-owned nested-call profile.
-    ///
-    /// The syscall accepts only two canonical `Quantity` pointers and builds
-    /// the exact declaration-ordered argument record itself. The callee's
-    /// signed manifest then authenticates that record against the selected
-    /// literal entrypoint, while the exact `Quantity` return schema is checked
-    /// before the result is published to the caller.
-    fn handle_call_contract_quantity2(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-        let amount_in = Self::decode_quantity(vm, vm.register(12))?;
-        let min_out = Self::decode_quantity(vm, vm.register(13))?;
-        let amount_in_envelope = ivm_abi::numeric_tlv::encode_quantity(&amount_in)?;
-        let min_out_envelope = ivm_abi::numeric_tlv::encode_quantity(&min_out)?;
-        let schema = Self::quantity2_argument_schema();
-        let schema_bytes = Self::encode_norito_payload(&schema)?;
-        let record = EntrypointArgumentRecordV1 {
-            schema_hash: entrypoint_argument_schema_hash_v1(&schema_bytes),
-            atoms: vec![
-                EntrypointValueAtomV1::Pointer(amount_in_envelope),
-                EntrypointValueAtomV1::Pointer(min_out_envelope),
-            ],
-        };
-        let record_bytes = Self::encode_norito_payload(&record)?;
-        let record_pointer = Self::alloc_norito_bytes(vm, &record_bytes)?;
-        vm.set_register(12, record_pointer);
-        let original_contract_pointer = vm.register(10);
-        let typed_call_snapshot = self.snapshot_nested_contract_call();
-        let call_gas = match self.handle_call_contract(vm) {
-            Ok(gas) => gas,
-            Err(error) => {
-                vm.set_register(10, original_contract_pointer);
-                self.finish_nested_contract_call(
-                    typed_call_snapshot,
-                    NestedContractCallOutcome::Rollback,
-                )?;
-                return Err(error);
-            }
-        };
-        let return_pointer = vm.register(10);
-        if return_pointer == 0 {
-            return self.rollback_typed_contract_call(
-                vm,
-                typed_call_snapshot,
-                original_contract_pointer,
-                call_gas,
-                ivm::VMError::DecodeError,
-            );
-        }
-        let return_payload =
-            match Self::decode_pointer_tlv(vm, return_pointer, PointerType::NoritoBytes) {
-                Ok(tlv) => tlv.payload.to_vec(),
-                Err(error) => {
-                    return self.rollback_typed_contract_call(
-                        vm,
-                        typed_call_snapshot,
-                        original_contract_pointer,
-                        call_gas,
-                        error,
-                    );
-                }
-            };
-        let quantity_envelope = match Self::decode_quantity_return_envelope(&return_payload) {
-            Ok(envelope) => envelope,
-            Err(error) => {
-                return self.rollback_typed_contract_call(
-                    vm,
-                    typed_call_snapshot,
-                    original_contract_pointer,
-                    call_gas,
-                    error,
-                );
-            }
-        };
-        let quantity_pointer = match vm.alloc_host_tlv(&quantity_envelope) {
-            Ok(pointer) => pointer,
-            Err(error) => {
-                return self.rollback_typed_contract_call(
-                    vm,
-                    typed_call_snapshot,
-                    original_contract_pointer,
-                    call_gas,
-                    error,
-                );
-            }
-        };
-        self.finish_nested_contract_call(typed_call_snapshot, NestedContractCallOutcome::Commit)
-            .map_err(|error| ivm::VMError::metered(call_gas, error))?;
-        vm.set_register(10, quantity_pointer);
-        Ok(call_gas)
-    }
-    fn handle_call_contract(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-        if self.nested_contract_call_depth >= MAX_NESTED_CONTRACT_CALL_DEPTH {
-            return Err(ivm::VMError::metered(
-                ivm::gas::G_CALL_CONTRACT,
-                ivm::VMError::PermissionDenied,
-            ));
-        }
-        if self.current_contract_runtime_context.is_none()
-            || self.current_entrypoint_authorization.is_none()
-        {
-            return Err(ivm::VMError::metered(
-                ivm::gas::G_CALL_CONTRACT,
-                ivm::VMError::PermissionDenied,
-            ));
-        }
-        // Quote from typed envelope shapes and bounded declared lengths before copying, decoding,
-        // querying, or allocating. Digest authentication remains in post-debit execution. All
-        // three request registers are public-boundary inputs in ZK mode: even a private zero in
-        // r12 must not select the no-argument call shape.
-        vm.ensure_public_register(10)
-            .map_err(|error| ivm::VMError::metered(ivm::gas::G_CALL_CONTRACT, error))?;
-        let contract_bytes = quote_tlv_payload_len_at(vm, vm.register(10), PointerType::Blob)
-            .map_err(|error| ivm::VMError::metered(ivm::gas::G_CALL_CONTRACT, error))?;
-        let after_contract =
-            ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, contract_bytes, 0);
-        vm.ensure_public_register(11)
-            .map_err(|error| ivm::VMError::metered(after_contract, error))?;
-        let entrypoint_bytes = quote_tlv_payload_len_at(vm, vm.register(11), PointerType::Blob)
-            .map_err(|error| ivm::VMError::metered(after_contract, error))?;
-        let argument_pointer = vm.register(12);
-        vm.ensure_public_register(12).map_err(|error| {
-            ivm::VMError::metered(
-                ivm::gas::syscall_byte_gas(
-                    ivm::gas::G_CALL_CONTRACT,
-                    contract_bytes.saturating_add(entrypoint_bytes),
-                    0,
-                ),
-                error,
-            )
-        })?;
-        let argument_bytes = if argument_pointer == 0 {
-            0
-        } else {
-            let bytes = quote_tlv_payload_len_at(vm, argument_pointer, PointerType::NoritoBytes)
-                .map_err(|error| {
-                    ivm::VMError::metered(
-                        ivm::gas::syscall_byte_gas(
-                            ivm::gas::G_CALL_CONTRACT,
-                            contract_bytes.saturating_add(entrypoint_bytes),
-                            0,
-                        ),
-                        error,
-                    )
-                })?;
-            if bytes
-                > iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES
-            {
-                return Err(ivm::VMError::metered(
-                    ivm::gas::syscall_byte_gas(
-                        ivm::gas::G_CALL_CONTRACT,
-                        contract_bytes.saturating_add(entrypoint_bytes),
-                        0,
-                    ),
-                    ivm::VMError::DecodeError,
-                ));
-            }
-            bytes
-        };
-        let request_bytes = contract_bytes
-            .saturating_add(entrypoint_bytes)
-            .saturating_add(argument_bytes);
-        let request_gas = ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0);
-        ivm::host::preflight_reserved_syscall_gas(vm, request_gas)?;
-        if vm.remaining_gas() < request_gas {
-            return Err(ivm::VMError::OutOfGas);
-        }
-        let caller_context = self
-            .current_contract_runtime_context
-            .clone()
-            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
-        let contract_literal_blob = Self::decode_tlv_blob(vm, vm.register(10))
-            .map_err(|error| ivm::VMError::metered(request_gas, error))?;
-        let contract_literal = String::from_utf8(contract_literal_blob)
-            .map_err(|_| ivm::VMError::metered(request_gas, ivm::VMError::DecodeError))?;
-        let contract_address = contract_literal
-            .parse::<iroha_data_model::smart_contract::ContractAddress>()
-            .map_err(|_| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
-        let entrypoint_blob = Self::decode_tlv_blob(vm, vm.register(11))
-            .map_err(|error| ivm::VMError::metered(request_gas, error))?;
-        let entrypoint = String::from_utf8(entrypoint_blob)
-            .map_err(|_| ivm::VMError::metered(request_gas, ivm::VMError::DecodeError))?;
-        if entrypoint.trim().is_empty() {
-            return Err(ivm::VMError::metered(
-                request_gas,
-                ivm::VMError::PermissionDenied,
-            ));
-        }
-        let reserved_gas = vm.syscall_reserved_gas();
-        let (identity, contract_subject, artifact_bytes) = self
-            .resolve_bound_contract_dispatch_identity_by_address(&contract_address)
-            .map_err(|error| ivm::VMError::metered(request_gas, error))?
-            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
-        let request_gas = Self::nested_contract_host_gas(request_bytes, artifact_bytes, 0);
-        // Cache warmth is local process state and cannot affect consensus gas.
-        // Charge the same content-sized preparation work before either a hit
-        // or a miss can load/prepare the artifact or build a runtime template.
-        ivm::host::preflight_reserved_syscall_gas(vm, request_gas)?;
-        if vm.remaining_gas() < request_gas {
-            return Err(ivm::VMError::OutOfGas);
-        }
-        // The dispatcher escrows this state-dependent syscall's entire budget.
-        // Nested preparation and execution both spend from that same escrow.
-        let child_gas_limit = if reserved_gas == 0 {
-            vm.remaining_gas().saturating_sub(request_gas)
-        } else {
-            reserved_gas.saturating_sub(request_gas)
-        };
-        let prepared_contract = self
-            .prepare_nested_contract(&identity)
-            .map_err(|error| ivm::VMError::metered(request_gas, error))?;
-        if prepared_contract.artifact().len() != artifact_bytes {
-            return Err(ivm::VMError::metered(
-                request_gas,
-                ivm::VMError::InvalidMetadata,
-            ));
-        }
-        let descriptor = prepared_contract
-            .entrypoint_descriptor(&entrypoint)
-            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
-        let permission =
-            crate::executor::nested_contract_entrypoint_permission(descriptor, &entrypoint)
-                .map_err(|error| ivm::VMError::metered(request_gas, map_validation_fail(&error)))?;
-        let child_heap_limit = {
-            let state_ref = self.query_state.get().ok_or_else(|| {
-                ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied)
-            })?;
-            state_ref
-                .ensure_contract_entrypoint_lifecycle(
-                    &identity.contract_address,
-                    identity.code_hash,
-                    descriptor.kind,
-                )
-                .map_err(|error| ivm::VMError::metered(request_gas, map_validation_fail(&error)))?;
-            if permission.is_some() {
-                state_ref
-                    .enforce_named_contract_entrypoint_permission(
-                        &caller_context.contract_subject,
-                        &identity.contract_address,
-                        &entrypoint,
-                        permission.as_deref(),
-                    )
-                    .map_err(|error| {
-                        ivm::VMError::metered(
-                            request_gas,
-                            error.into_vm_error(|error| map_validation_fail(&error)),
-                        )
-                    })?;
-            }
-            state_ref.smart_contract_heap_limit()
-        };
-        // The target identity, lifecycle state, and selected permission are authoritative before
-        // the potentially attacker-sized argument record is copied or canonically decoded.
-        let argument_record = if argument_pointer == 0 {
-            None
-        } else {
-            let tlv = Self::decode_pointer_tlv(vm, argument_pointer, PointerType::NoritoBytes)
-                .map_err(|error| ivm::VMError::metered(request_gas, error))?;
-            Some(tlv.payload.to_vec())
-        };
-        let arguments = match (descriptor.argument_schema.as_ref(), argument_record) {
-            (None, None) => None,
-            (Some(_), Some(record)) => Some(
-                iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(record)
-                    .map_err(|_| ivm::VMError::metered(request_gas, ivm::VMError::NoritoInvalid))?,
-            ),
-            (Some(_), None) | (None, Some(_)) => {
-                return Err(ivm::VMError::metered(
-                    request_gas,
-                    ivm::VMError::DecodeError,
-                ));
-            }
-        };
-        let invocation = iroha_data_model::transaction::executable::ContractInvocation {
-            contract_address: identity.contract_address.clone(),
-            expected_code_hash: identity.code_hash,
-            entrypoint,
-            arguments,
-        };
-        let entrypoint_name = invocation.entrypoint.clone();
-        let call_context =
-            crate::executor::parse_prepared_nested_contract_invocation_execution_context(
-                &invocation,
-                prepared_contract.as_ref(),
-                identity.contract_alias.clone(),
-                contract_subject,
-                child_gas_limit,
-            )
-            .map_err(|err| ivm::VMError::metered(request_gas, map_validation_fail(&err)))?;
-        let callee_context = call_context
-            .runtime_context()
-            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
-        let callee_authorization = ContractEntrypointAuthorizationSnapshot::new(
-            caller_context.contract_subject.clone(),
-            entrypoint_name.clone(),
-            permission,
-            &identity,
-        )
-        .with_parent(self.current_entrypoint_authorization.clone());
-        let entrypoint_is_view = matches!(
-            descriptor.kind,
-            iroha_data_model::smart_contract::manifest::EntryPointKind::View
-        );
-        let return_schema = prepared_contract
-            .entrypoint_descriptor(&entrypoint_name)
-            .and_then(|descriptor| descriptor.return_schema.clone())
-            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::DecodeError))?;
-        // Fund the complete public return envelope before child entry. Its exact backing is
-        // partitioned from this original credit after execution, without another pool admission.
-        let return_transport = NestedReturnTransport::reserve(
-            self.prepared_contract_cache.execution_budget(),
-            Self::affordable_nested_return_record_bytes(vm, reserved_gas, 0, request_gas),
-        )?;
-        let mut child_vm = self
-            .prepared_contract_cache
-            .checkout_runtime(
-                prepared_contract.as_ref(),
-                child_gas_limit,
-                child_heap_limit,
-            )
-            .map_err(|error| ivm::VMError::metered(request_gas, error))?;
-        if let Some(entrypoint_pc) = call_context.entrypoint_pc() {
-            let code_len = child_vm.memory.code_len();
-            child_vm.set_register(1, code_len);
-            child_vm
-                .set_program_counter(entrypoint_pc)
-                .map_err(|err| ivm::VMError::metered(request_gas, err))?;
-        }
-        child_vm.set_gas_limit(child_gas_limit);
-        if let Some(argument_record) = call_context.prepared_argument_record() {
-            argument_record
-                .precharge_vm(&mut child_vm)
-                .map_err(|error| ivm::VMError::metered(request_gas, error))?;
-        }
-        let mut snapshot = Some(self.snapshot_nested_contract_call());
-        self.authority = caller_context.contract_subject.clone();
-        self.execution_class = if entrypoint_is_view {
-            HostExecutionClass::View
-        } else {
-            HostExecutionClass::Contract
-        };
-        self.current_contract_runtime_context = Some(callee_context);
-        self.current_entrypoint_authorization = Some(callee_authorization);
-        self.args = None;
-        self.entrypoint_argument_record = call_context.prepared_argument_record().cloned();
-        self.fastpq_batch_entries = None;
-        self.nested_contract_call_depth += 1;
-        // The parent instruction keeps its own reservation while every nested
-        // VM consumes the same source-owned completed-cycle allowance.
-        let run_result = child_vm.run_with_host_and_parent_cycle_budget(self, vm);
-        self.nested_contract_call_depth -= 1;
-        let child_gas_consumed = child_gas_limit.saturating_sub(child_vm.remaining_gas());
-        let actual_gas = |base: u64| {
-            if reserved_gas == 0 {
-                base
-            } else {
-                base.saturating_add(child_gas_consumed)
-            }
-        };
-        if reserved_gas == 0 {
-            vm.set_syscall_spendable_gas(child_vm.remaining_gas().saturating_add(request_gas));
-        }
-        match run_result {
-            Ok(()) => {
-                let max_return_record_bytes = Self::affordable_nested_return_record_bytes(
-                    vm,
-                    reserved_gas,
-                    child_gas_consumed,
-                    request_gas,
-                );
-                let encoded_return = match Self::encode_nested_contract_return(
-                    &child_vm,
-                    &return_schema,
-                    max_return_record_bytes,
-                ) {
-                    Ok(encoded_return) => encoded_return,
-                    Err(err) => {
-                        self.finish_nested_contract_call(
-                            snapshot.take().ok_or(ivm::VMError::DecodeError)?,
-                            NestedContractCallOutcome::Rollback,
-                        )
-                        .map_err(|error| ivm::VMError::metered(actual_gas(request_gas), error))?;
-                        return Err(ivm::VMError::metered(actual_gas(request_gas), err));
-                    }
-                };
-                let return_bytes = encoded_return.len();
-                let return_boundary_bytes = return_bytes.saturating_add(
-                    iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1,
-                );
-                let return_gas = Self::nested_contract_host_gas(
-                    request_bytes,
-                    artifact_bytes,
-                    return_boundary_bytes,
-                );
-                let total_gas = actual_gas(return_gas);
-                if let Err(error) = ivm::host::preflight_reserved_syscall_gas(vm, total_gas) {
-                    self.finish_nested_contract_call(
-                        snapshot.take().ok_or(ivm::VMError::DecodeError)?,
-                        NestedContractCallOutcome::Rollback,
-                    )
-                    .map_err(|rollback_error| ivm::VMError::metered(total_gas, rollback_error))?;
-                    return Err(error);
-                }
-                let ptr = match return_transport.publish(vm, &encoded_return) {
-                    Ok(ptr) => ptr,
-                    Err(err) => {
-                        let rollback = self.finish_nested_contract_call(
-                            snapshot.take().ok_or(ivm::VMError::DecodeError)?,
-                            NestedContractCallOutcome::Rollback,
-                        );
-                        // Allocator refusal abandons the whole attempt even if cleanup fails.
-                        if err.execution_deferral().is_some() {
-                            return Err(err.into_unmetered());
-                        }
-                        rollback.map_err(|rollback_error| {
-                            ivm::VMError::metered(total_gas, rollback_error)
-                        })?;
-                        return Err(ivm::VMError::metered(total_gas, err));
-                    }
-                };
-                vm.set_register(10, ptr);
-                let outcome = if entrypoint_is_view {
-                    NestedContractCallOutcome::RollbackViewPreservingReads
-                } else {
-                    NestedContractCallOutcome::Commit
-                };
-                self.finish_nested_contract_call(
-                    snapshot.take().ok_or(ivm::VMError::DecodeError)?,
-                    outcome,
-                )
-                .map_err(|error| ivm::VMError::metered(total_gas, error))?;
-                Ok(total_gas)
-            }
-            Err(err) => {
-                let rollback = self.finish_nested_contract_call(
-                    snapshot.take().ok_or(ivm::VMError::DecodeError)?,
-                    NestedContractCallOutcome::Rollback,
-                );
-                // The outer attempt must retry even if rollback also detects an error.
-                if err.execution_deferral().is_some() {
-                    return Err(err.into_unmetered());
-                }
-                rollback.map_err(|error| ivm::VMError::metered(actual_gas(request_gas), error))?;
-                Err(ivm::VMError::metered(actual_gas(request_gas), err))
-            }
-        }
+    fn contract_address_is_active(&self, address: &ContractAddress) -> bool {
+        self.current_contract_runtime_context
+            .as_ref()
+            .is_some_and(|context| context.contract_address == *address)
+            || self.nested_contract_ancestors[..self.nested_contract_call_depth]
+                .iter()
+                .flatten()
+                .any(|ancestor| ancestor == address)
     }
     const QUERY_GAS_BASE_SINGULAR: u64 = ivm::gas::LEDGER_QUERY_GAS_BASE_SINGULAR;
     const QUERY_GAS_BASE_ITERABLE: u64 = ivm::gas::LEDGER_QUERY_GAS_BASE_ITERABLE;
@@ -8412,7 +8014,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         tag: CoreQueryEntityTagV1,
         offset: u64,
         limit: u64,
+        account: Option<AccountId>,
     ) -> Result<QueryRequest, ivm::VMError> {
+        if account.is_some() && tag != CoreQueryEntityTagV1::Asset {
+            return Err(ivm::VMError::DecodeError);
+        }
         let fetch_size = NonZeroU64::new(limit).ok_or(ivm::VMError::DecodeError)?;
         let window_size = NonZeroU64::new(limit.checked_add(1).ok_or(ivm::VMError::DecodeError)?)
             .ok_or(ivm::VMError::DecodeError)?;
@@ -8442,6 +8048,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 Account,
                 iroha_data_model::query::account::prelude::FindAccounts,
                 Account
+            ),
+            CoreQueryEntityTagV1::Asset if account.is_some() => request_for!(
+                Asset,
+                iroha_data_model::query::asset::prelude::FindAssetsByAccountId::new(
+                    account.ok_or(ivm::VMError::DecodeError)?
+                ),
+                Asset
             ),
             CoreQueryEntityTagV1::Asset => request_for!(
                 Asset,
@@ -8639,9 +8252,30 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .checked_add(limit_i64)
             .ok_or(ivm::VMError::DecodeError)?;
         let offset_u64 = u64::try_from(offset).map_err(|_| ivm::VMError::DecodeError)?;
-        let request = Self::core_query_page_request(tag, offset_u64, limit)?;
+        vm.ensure_public_register(13)?;
+        let owner_pointer = vm.register(13);
+        let (mut filter, filter_gas) = if owner_pointer == 0 {
+            (None, 0)
+        } else {
+            if tag != CoreQueryEntityTagV1::Asset {
+                return Err(ivm::VMError::DecodeError);
+            }
+            let payload_bytes =
+                quote_tlv_payload_len_at(vm, owner_pointer, PointerType::AccountId)?;
+            let gas = 32_u64.saturating_add(u64::try_from(payload_bytes).unwrap_or(u64::MAX));
+            ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+            if gas > vm.remaining_gas() {
+                return Err(ivm::VMError::OutOfGas);
+            }
+            let filter = CoreQueryAccountFilter::decode(vm, owner_pointer)
+                .map_err(|error| ivm::VMError::metered(gas, error))?;
+            (Some(filter), gas)
+        };
+        let account = filter.as_mut().and_then(|filter| filter.account.take());
+        let request = Self::core_query_page_request(tag, offset_u64, limit, account)?;
         let gas_remaining = vm.remaining_gas();
-        let gas_ctx = QueryGasContext::from_request(&request);
+        let mut gas_ctx = QueryGasContext::from_request(&request);
+        gas_ctx.base = gas_ctx.base.saturating_add(filter_gas);
         let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
         if budget.max_items() == 0 {
             return Err(ivm::VMError::OutOfGas);
@@ -8893,13 +8527,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
     fn queue_instruction(&mut self, instr: InstructionBox) -> u64 {
         let gas = crate::gas::meter_instruction(&instr);
-        let queued = QueuedInstruction {
-            instruction: instr,
+        let queued = QueuedEffect {
+            payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(instr),
             authority: self.effect_authority(),
             contract_runtime_context: self.current_contract_runtime_context.clone(),
             entrypoint_authorization: self.current_entrypoint_authorization.clone(),
         };
-        if self.try_reserve_serialized_output(&queued.instruction, 1) {
+        if self.try_reserve_serialized_output(queued.instruction().expect("instruction effect"), 1)
+        {
             self.queued.push(queued);
         }
         gas
@@ -8943,8 +8578,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn enqueue_fastpq_batch(&mut self, entries: Vec<TransferAssetBatchEntry>) {
         // Entries are accounted incrementally by `push_fastpq_batch_entry` so
         // a long unfinished batch cannot grow without bound.
-        self.queued.push(QueuedInstruction {
-            instruction: InstructionBox::from(TransferAssetBatch::new(entries)),
+        self.queued.push(QueuedEffect {
+            payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
+                InstructionBox::from(TransferAssetBatch::new(entries)),
+            ),
             authority: self.effect_authority(),
             contract_runtime_context: self.current_contract_runtime_context.clone(),
             entrypoint_authorization: self.current_entrypoint_authorization.clone(),
@@ -9657,6 +9294,10 @@ impl<QS> CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
                 | ivm::syscalls::SYSCALL_STATE_PATH_FROM_NAME
                 | ivm::syscalls::SYSCALL_STATE_MAP_KEY_AT
+                | ivm::syscalls::SYSCALL_VALUE_ENCODE
+                | ivm::syscalls::SYSCALL_BLOB_CONCAT
+                | ivm::syscalls::SYSCALL_UTF8_VALIDATE
+                | ivm::syscalls::SYSCALL_VALUE_TO_STRING
                 | ivm::syscalls::SYSCALL_STATE_VALUE_ENCODE
                 | ivm::syscalls::SYSCALL_STATE_VALUE_DECODE
                 | ivm::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
@@ -9841,14 +9482,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS => {
                 if let Some(context) = self.current_contract_runtime_context.as_ref() {
-                    if let Some(payload_len) =
-                        Self::norito_encoded_len_exact(&context.contract_address)
-                            .and_then(|len| usize::try_from(len).ok())
-                    {
-                        Some(Self::sysvar_gas(payload_len))
-                    } else {
-                        Some(ivm::host::reserve_available_syscall_gas(vm)?)
-                    }
+                    Some(Self::sysvar_gas(context.contract_address.as_str().len()))
                 } else {
                     Some(Self::sysvar_gas(0))
                 }
@@ -9861,33 +9495,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
+            ivm::syscalls::SYSCALL_EMIT_CONTRACT_EVENT => Some(self.quote_contract_event(vm)?),
             ivm::syscalls::SYSCALL_CALL_CONTRACT => {
-                vm.ensure_public_register(10)?;
-                quote_tlv_payload_len_at(vm, vm.register(10), PointerType::Blob)?;
-                vm.ensure_public_register(11)?;
-                quote_tlv_payload_len_at(vm, vm.register(11), PointerType::Blob)?;
-                vm.ensure_public_register(12)?;
-                if vm.register(12) != 0 {
-                    let bytes =
-                        quote_tlv_payload_len_at(vm, vm.register(12), PointerType::NoritoBytes)?;
-                    if bytes
-                        > iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES
-                    {
-                        return Err(ivm::VMError::DecodeError);
-                    }
-                }
-                Some(ivm::host::reserve_available_syscall_gas(vm)?)
-            }
-            ivm::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2 => {
-                for (register, pointer_type) in [
-                    (10, PointerType::Blob),
-                    (11, PointerType::Blob),
-                    (12, PointerType::Quantity),
-                    (13, PointerType::Quantity),
-                ] {
-                    vm.ensure_public_register(register)?;
-                    quote_tlv_payload_len_at(vm, vm.register(register), pointer_type)?;
-                }
+                Self::quote_contract_call_descriptors(vm)?;
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
             ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
@@ -9898,9 +9508,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
                 Some(ivm::host::quote_zk_batch_at(vm, vm.register(10), self.zk_gas_schedule)?.gas)
             }
+            ivm::syscalls::SYSCALL_VRF_EPOCH_SEED => {
+                vm.ensure_public_register(10)?;
+                Some(ivm::vrf::epoch_seed_gas(
+                    self.vrf_epoch_seeds.contains_key(&vm.register(10)),
+                ))
+            }
             ivm::syscalls::SYSCALL_ZK_ROOTS_GET
             | ivm::syscalls::SYSCALL_ZK_VOTE_GET_TALLY
-            | ivm::syscalls::SYSCALL_VRF_EPOCH_SEED
             | ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS => {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
@@ -10513,29 +10128,31 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let instr = InstructionBox::from(isi);
                     Ok(self.queue_instruction(instr))
                 }
-                ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
-                | ivm::syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT => {
+                ivm::syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION
+                | ivm::syscalls::SYSCALL_REVOKE_CONTRACT_PERMISSION => {
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
-                    let selector_tlv = vm.validate_tlv(vm.register(11))?;
-                    if selector_tlv.type_id != PointerType::Blob {
-                        return Err(ivm::VMError::NoritoInvalid);
-                    }
-                    let entrypoint = core::str::from_utf8(selector_tlv.payload)
-                        .map_err(|_| ivm::VMError::DecodeError)?;
-                    if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
-                        return Err(ivm::VMError::DecodeError);
+                    let declaration_name: iroha_model_base::name::Name =
+                        Self::decode_tlv_typed(vm, vm.register(11), PointerType::Name)?;
+                    let interface = vm
+                        .contract_interface()
+                        .ok_or(ivm::VMError::PermissionDenied)?;
+                    if !interface.permissions.iter().any(|declaration| {
+                        declaration.name == declaration_name
+                            && matches!(declaration.scope, ContractPermissionScopeV1::Instance)
+                    }) {
+                        return Err(ivm::VMError::PermissionDenied);
                     }
                     let contract = self
                         .current_contract_runtime_context
                         .as_ref()
                         .map(|context| context.contract_address.clone())
                         .ok_or(ivm::VMError::PermissionDenied)?;
-                    let permission = Permission::from(CanInvokeContractEntrypoint {
+                    let permission = Permission::from(CanUseContractPermission {
                         contract,
-                        entrypoint: entrypoint.to_owned(),
+                        permission: declaration_name,
                     });
-                    let instruction = if number == ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+                    let instruction = if number == ivm::syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION
                     {
                         InstructionBox::from(Grant::account_permission(permission, account))
                     } else {
@@ -11205,54 +10822,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     Ok(gas)
                 }
                 ivm::syscalls::SYSCALL_VRF_EPOCH_SEED => {
-                    use ivm::vrf::VrfEpochSeedRequest;
-                    const OK: u64 = 0;
-                    const ERR_TYPE: u64 = 1;
-                    const ERR_DECODE: u64 = 2;
-                    const ERR_OOM: u64 = 3;
-                    let ptr = vm.register(10);
-                    let tlv = vm.validate_tlv(ptr)?;
-                    let input_len = tlv.payload.len();
-                    let gas = Self::state_query_gas(input_len);
-                    if tlv.type_id != PointerType::NoritoBytes {
-                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                        vm.set_register(10, 0);
-                        vm.set_register(11, ERR_TYPE);
-                        return Ok(gas);
-                    }
-                    let req: VrfEpochSeedRequest = match decode_canonical_norito(tlv.payload) {
-                        Ok(req) => req,
-                        Err(_) => {
-                            ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                            vm.set_register(10, 0);
-                            vm.set_register(11, ERR_DECODE);
-                            return Ok(gas);
-                        }
-                    };
-                    let resp = self.vrf_epoch_seed_response(&req);
-                    let body = Self::encode_norito_payload(&resp)?;
-                    let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
-                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    let body_len = Self::len_to_u32(body.len())?;
-                    let mut out = Vec::with_capacity(7 + body.len() + 32);
-                    out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                    out.push(1);
-                    out.extend_from_slice(&body_len.to_be_bytes());
-                    out.extend_from_slice(&body);
-                    let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                    out.extend_from_slice(&h);
-                    match vm.alloc_host_tlv(&out) {
-                        Ok(p) => {
-                            vm.set_register(10, p);
-                            vm.set_register(11, OK);
-                        }
-                        Err(error) if error.execution_deferral().is_some() => return Err(error),
-                        Err(_) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, ERR_OOM);
-                        }
-                    }
-                    Ok(gas)
+                    let epoch = vm.register(10);
+                    ivm::vrf::publish_epoch_seed(vm, self.vrf_epoch_seeds.get(&epoch))
                 }
                 ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
                 | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION
@@ -11485,8 +11056,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         vm.set_register(10, 0);
                         return Ok(Self::sysvar_gas(0));
                     };
-                    let payload = Self::encode_norito_payload(&context.contract_address)?;
-                    let ptr = Self::alloc_norito_bytes(vm, &payload)?;
+                    let payload = context.contract_address.as_str().as_bytes();
+                    let ptr = Self::alloc_tlv_payload(vm, PointerType::Blob, payload)?;
                     vm.set_register(10, ptr);
                     Ok(Self::sysvar_gas(payload.len()))
                 }
@@ -11572,10 +11143,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let payload = Self::encode_norito_payload(&instance)?;
                     Self::finish_direct_singular_query_payload(vm, gas_remaining, payload)
                 }
+                ivm::syscalls::SYSCALL_EMIT_CONTRACT_EVENT => self.emit_contract_event(vm),
                 ivm::syscalls::SYSCALL_CALL_CONTRACT => self.handle_call_contract(vm),
-                ivm::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2 => {
-                    self.handle_call_contract_quantity2(vm)
-                }
                 ivm::syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
                 ivm::syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
                 ivm::syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(vm),
@@ -11628,9 +11197,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
 mod pointer_abi_tests {
     use super::{
         tests::{
-            begin_axt_envelope, contract_test_state, fixture_public_key_from_seed,
-            grant_named_permission_to_account, install_contract, make_policy_snapshot, norito_blob,
-            opaque_proof_blob_for, proof_blob_for, quantity_frame, store_quantity, store_tlv,
+            begin_axt_envelope, bind_artifact_test_signed_root, contract_test_state,
+            fixture_public_key_from_seed, grant_named_permission_to_account, install_contract,
+            make_policy_snapshot, norito_blob, opaque_proof_blob_for, proof_blob_for,
+            quantity_frame, store_quantity, store_tlv,
         },
         *,
     };
@@ -11720,8 +11290,9 @@ mod pointer_abi_tests {
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),
             "outer".to_owned(),
-            None,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             &crate::smartcontracts::code::BoundContractIdentity {
+                lifecycle_revision: 1,
                 contract_address: contract.clone(),
                 contract_alias: None,
                 contract_alias_binding: None,
@@ -11737,7 +11308,7 @@ mod pointer_abi_tests {
             result,
             Err(ivm::VMError::metered(
                 ivm::gas::G_CALL_CONTRACT,
-                ivm::VMError::PermissionDenied,
+                ivm::VMError::CallDepthExceeded,
             ))
         );
         assert_eq!(
@@ -11753,12 +11324,12 @@ mod pointer_abi_tests {
             &state,
             &authority,
             r#"
-seiyaku StateBackedBinding {
-  kotoage fn execute() -> int authorize("CanExecuteContract") {
+seiyaku StateBackedBinding { permission CanExecuteContract; permission CanInspectContract;
+  kotoage fn execute() authorize(CanExecuteContract) -> int {
     return 7;
   }
 
-  view fn inspect() -> int authorize("CanInspectContract") {
+  view fn inspect() authorize(CanInspectContract) -> int {
     return 8;
   }
 }
@@ -11814,8 +11385,10 @@ seiyaku StateBackedBinding {
         assert_eq!(authorization.code_hash, record.code_hash);
         assert_eq!(authorization.entrypoint, "execute");
         assert_eq!(
-            authorization.permission.as_deref(),
-            Some("CanExecuteContract")
+            authorization.authorization,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission(
+                "CanExecuteContract".parse().unwrap()
+            )
         );
         host.bind_authorized_deployed_contract_view_runtime_context(
             &view,
@@ -11846,8 +11419,10 @@ seiyaku StateBackedBinding {
         assert_eq!(authorization.code_hash, record.code_hash);
         assert_eq!(authorization.entrypoint, "inspect");
         assert_eq!(
-            authorization.permission.as_deref(),
-            Some("CanInspectContract")
+            authorization.authorization,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission(
+                "CanInspectContract".parse().unwrap()
+            )
         );
     }
     #[test]
@@ -11858,14 +11433,14 @@ seiyaku StateBackedBinding {
             &state,
             &authority,
             r#"
-seiyaku ReadOnlyBinding {
+seiyaku ReadOnlyBinding { permission CanInspectContract;
   state int missing;
 
   hajimari() {
     missing = 0;
   }
 
-  view fn inspect() -> int authorize("CanInspectContract") {
+  view fn inspect() authorize(CanInspectContract) -> int {
     return 8;
   }
 }
@@ -11899,12 +11474,13 @@ seiyaku ReadOnlyBinding {
             .iter()
             .copied()
             .filter(|syscall| {
-                matches!(
-                    ivm_sys::syscall_access(*syscall),
-                    ivm_sys::SyscallAccess::StateWrite
-                        | ivm_sys::SyscallAccess::LedgerWrite
-                        | ivm_sys::SyscallAccess::Dynamic
-                )
+                *syscall != ivm_sys::SYSCALL_CALL_CONTRACT
+                    && matches!(
+                        ivm_sys::syscall_access(*syscall),
+                        ivm_sys::SyscallAccess::StateWrite
+                            | ivm_sys::SyscallAccess::LedgerWrite
+                            | ivm_sys::SyscallAccess::Dynamic
+                    )
             })
             .collect::<Vec<_>>();
         assert!(
@@ -11954,8 +11530,9 @@ seiyaku ReadOnlyBinding {
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),
             "execute".to_owned(),
-            None,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             &crate::smartcontracts::code::BoundContractIdentity {
+                lifecycle_revision: 1,
                 contract_address: contract_address.clone(),
                 contract_alias: None,
                 contract_alias_binding: None,
@@ -12118,8 +11695,9 @@ seiyaku ReadOnlyBinding {
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),
             "execute".to_owned(),
-            None,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             &crate::smartcontracts::code::BoundContractIdentity {
+                lifecycle_revision: 1,
                 contract_address: contract_address.clone(),
                 contract_alias: None,
                 contract_alias_binding: None,
@@ -12150,7 +11728,7 @@ seiyaku ReadOnlyBinding {
             "the local debug guard must run before execution identity is seeded"
         );
         assert_eq!(host.queued.len(), 1, "the guard must run before draining");
-        assert_eq!(host.queued[0].instruction, attempted);
+        assert_eq!(host.queued[0].instruction(), Some(&attempted));
         let error = match host.into_execution_artifacts(None) {
             Err(error) => error,
             Ok(_) => panic!("local debug artifacts must never be exported"),
@@ -12176,8 +11754,9 @@ seiyaku ReadOnlyBinding {
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),
             "inspect".to_owned(),
-            None,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             &crate::smartcontracts::code::BoundContractIdentity {
+                lifecycle_revision: 1,
                 contract_address: contract_address.clone(),
                 contract_alias: None,
                 contract_alias_binding: None,
@@ -12214,7 +11793,7 @@ seiyaku ReadOnlyBinding {
             "the view guard must run before execution identity is seeded"
         );
         assert_eq!(host.queued.len(), 1, "the guard must run before draining");
-        assert_eq!(host.queued[0].instruction, attempted);
+        assert_eq!(host.queued[0].instruction(), Some(&attempted));
         let error = match host.into_execution_artifacts(None) {
             Err(error) => error,
             Ok(_) => panic!("a view must never export a retained effect"),
@@ -12242,8 +11821,11 @@ seiyaku ReadOnlyBinding {
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),
             "inspect".to_owned(),
-            Some("CanInspectContract".to_owned()),
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission(
+                "CanInspectContract".parse().unwrap(),
+            ),
             &crate::smartcontracts::code::BoundContractIdentity {
+                lifecycle_revision: 1,
                 contract_address: contract.clone(),
                 contract_alias: None,
                 contract_alias_binding: None,
@@ -12268,8 +11850,10 @@ seiyaku ReadOnlyBinding {
         assert_eq!(authorization.code_hash, code_hash);
         assert_eq!(authorization.entrypoint, "inspect");
         assert_eq!(
-            authorization.permission.as_deref(),
-            Some("CanInspectContract")
+            authorization.authorization,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission(
+                "CanInspectContract".parse().unwrap()
+            )
         );
     }
     #[test]
@@ -12280,12 +11864,12 @@ seiyaku ReadOnlyBinding {
             &state,
             &authority,
             r#"
-seiyaku LegitimateBinding {
-  kotoage fn execute() -> int authorize("CanExecuteContract") {
+seiyaku LegitimateBinding { permission CanExecuteContract; permission CanInspectContract;
+  kotoage fn execute() authorize(CanExecuteContract) -> int {
     return 1;
   }
 
-  view fn inspect() -> int authorize("CanInspectContract") {
+  view fn inspect() authorize(CanInspectContract) -> int {
     return 2;
   }
 }
@@ -12296,8 +11880,8 @@ seiyaku LegitimateBinding {
             &state,
             &authority,
             r#"
-seiyaku PrivilegedBinding {
-  kotoage fn administer() -> int authorize("CanAdministerContract") {
+seiyaku PrivilegedBinding { permission CanAdministerContract;
+  kotoage fn administer() authorize(CanAdministerContract) -> int {
     return 3;
   }
 }
@@ -12451,8 +12035,9 @@ seiyaku PrivilegedBinding {
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority,
             "inspect".to_owned(),
-            None,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             &crate::smartcontracts::code::BoundContractIdentity {
+                lifecycle_revision: 1,
                 contract_address: contract.clone(),
                 contract_alias: None,
                 contract_alias_binding: None,
@@ -13441,6 +13026,9 @@ seiyaku PrivilegedBinding {
                 code_hash,
             ),
             manifest: ContractManifest {
+                events: Vec::new(),
+                enum_types: Vec::new(),
+                permissions: Vec::new(),
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(abi_hash),
@@ -13950,6 +13538,7 @@ seiyaku PrivilegedBinding {
         let mut tx = block.transaction();
         tx.current_dataspace_id = Some(own);
         tx.world.current_dataspace_id = Some(own);
+        bind_artifact_test_signed_root(&mut tx, &authority);
         let mut host = CoreHost::new(authority.clone());
         let mut vm = ivm::IVM::new(1_000);
         let pointer = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
@@ -13963,7 +13552,8 @@ seiyaku PrivilegedBinding {
         assert!(
             error
                 .to_string()
-                .contains("reviewed private-root scope owner")
+                .contains("reviewed private-root scope owner"),
+            "{error:?}"
         );
         assert!(tx.world.accounts.get(&account).is_none());
     }
@@ -15006,9 +14596,9 @@ seiyaku PrivilegedBinding {
             nft_id,
             owner,
         )));
-        assert_eq!(host.queued[0].instruction, expected_register);
+        assert_eq!(host.queued[0].instruction(), Some(&expected_register));
         assert_eq!(host.queued[0].authority, contract_subject);
-        assert_eq!(host.queued[1].instruction, expected_transfer);
+        assert_eq!(host.queued[1].instruction(), Some(&expected_transfer));
         assert_eq!(host.queued[1].authority, host.queued[0].authority);
         assert_ne!(
             host.queued[1].authority, caller,
@@ -15304,6 +14894,7 @@ mod tests {
         ivm::host::state_value_gas(norito_blob(&state_path_for_test(path)).len(), value_len)
     }
     include!("host/core_codec_and_contract_tests.rs");
+    include!("host/native_event_tests.rs");
 
     #[test]
     fn remote_spend_asset_scope_respects_registered_balance_policy() {
@@ -15335,9 +14926,9 @@ mod tests {
             &state,
             &authority,
             r#"
-seiyaku RuntimeBinding {
-  kotoage fn update() authorize("CanUpdateContract") {}
-  view fn inspect() -> int { return 1; }
+seiyaku RuntimeBinding { permission CanUpdateContract;
+  kotoage fn update() authorize(CanUpdateContract) {}
+  view fn inspect() authorize(anyone) -> int { return 1; }
 }
 "#,
             0,
@@ -15346,17 +14937,18 @@ seiyaku RuntimeBinding {
             &state,
             &authority,
             r#"
-seiyaku StaleRuntimeBinding {
-  kotoage fn update() authorize("CanUpdateContract") {}
+seiyaku StaleRuntimeBinding { permission CanUpdateContract;
+  kotoage fn update() authorize(CanUpdateContract) {}
 }
 "#,
             1,
         );
-        grant_named_permission_to_account(
+        grant_contract_entrypoint_to_account(
             &state,
             &authority,
             authority.clone(),
-            "CanUpdateContract",
+            &contract_address,
+            "update",
         );
         let view = state.view();
         let identity =
@@ -15422,9 +15014,10 @@ seiyaku StaleRuntimeBinding {
             host.current_entrypoint_authorization
                 .as_ref()
                 .expect("call authorization")
-                .permission
-                .as_deref(),
-            Some("CanUpdateContract")
+                .authorization,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission(
+                "CanUpdateContract".parse().unwrap()
+            )
         );
         host.bind_authorized_deployed_contract_view_runtime_context(
             &view,
@@ -15465,10 +15058,50 @@ seiyaku StaleRuntimeBinding {
         account_id: AccountId,
         permission_name: &str,
     ) {
-        assert_ne!(
-            permission_name, "CanInvokeContractEntrypoint",
-            "scoped contract permissions require an exact deployed address and selector"
-        );
+        let permissions: Vec<Permission> = {
+            let view = state.view();
+            let world = view.world();
+            let mut tokens = Vec::new();
+            for (address, code_hash) in world.contract_instances().iter() {
+                let artifact = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                    address, *code_hash,
+                )
+                .unwrap();
+                let Some(manifest) = world.contract_manifests().get(&artifact) else {
+                    continue;
+                };
+                for declaration in &manifest.permissions {
+                    if declaration.name.as_ref() != permission_name {
+                        continue;
+                    }
+                    tokens.push(match &declaration.scope {
+                        ContractPermissionScopeV1::Instance => CanUseContractPermission {
+                            contract: address.clone(),
+                            permission: declaration.name.clone(),
+                        }
+                        .into(),
+                        ContractPermissionScopeV1::Chain { permission_name } => {
+                            Permission::new(permission_name.to_string(), Json::new(()))
+                        }
+                    });
+                }
+            }
+            tokens.sort();
+            tokens.dedup();
+            assert!(
+                tokens.len() <= 1,
+                "ambiguous fixture permission requires an explicit contract address"
+            );
+            if tokens.is_empty() {
+                assert!(
+                    permission_name != "CanInvokeContractEntrypoint"
+                        && permission_name != "CanUseContractPermission",
+                    "scoped contract permissions require an exact deployed address and selector"
+                );
+                tokens.push(Permission::new(permission_name.to_owned(), Json::new(())));
+            }
+            tokens
+        };
         let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
@@ -15486,22 +15119,17 @@ seiyaku StaleRuntimeBinding {
                 .execute(authority, &mut tx)
                 .expect("register permission holder account");
         }
-        if !tx
-            .world
-            .account_permissions
-            .get(&account_id)
-            .is_some_and(|permissions| {
-                permissions
-                    .iter()
-                    .any(|permission| permission.name() == permission_name)
-            })
-        {
-            Grant::account_permission(
-                Permission::new(permission_name.to_owned(), Json::new(())),
-                account_id,
-            )
-            .execute(authority, &mut tx)
-            .expect("grant named contract permission");
+        for permission in permissions {
+            if !tx
+                .world
+                .account_permissions
+                .get(&account_id)
+                .is_some_and(|held| held.contains(&permission))
+            {
+                Grant::account_permission(permission, account_id.clone())
+                    .execute(authority, &mut tx)
+                    .expect("grant declared contract permission fixture");
+            }
         }
         tx.apply();
         block
@@ -15520,11 +15148,54 @@ seiyaku StaleRuntimeBinding {
             !entrypoint.is_empty() && entrypoint.trim() == entrypoint,
             "fixture entrypoint selectors must use a non-empty canonical spelling"
         );
-        let permission: Permission = CanInvokeContractEntrypoint {
-            contract: contract.clone(),
-            entrypoint: entrypoint.to_owned(),
-        }
-        .into();
+        let permission: Permission = {
+            let view = state.view();
+            let hash = *view
+                .world()
+                .contract_instances()
+                .get(contract)
+                .expect("installed instance");
+            let artifact =
+                iroha_data_model::smart_contract::ContractArtifactId::for_address(contract, hash)
+                    .unwrap();
+            let manifest = view
+                .world()
+                .contract_manifests()
+                .get(&artifact)
+                .expect("signed manifest");
+            let entry = manifest
+                .entrypoints
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|entry| entry.name == entrypoint)
+                .expect("declared entrypoint");
+            match &entry.authorization {
+                EntrypointAuthorizationV1::Anyone => return,
+                EntrypointAuthorizationV1::RuntimeLifecycle => CanInvokeContractEntrypoint {
+                    contract: contract.clone(),
+                    entrypoint: entrypoint.to_owned(),
+                }
+                .into(),
+                EntrypointAuthorizationV1::Permission(name) => {
+                    let declaration = manifest
+                        .permissions
+                        .iter()
+                        .find(|item| &item.name == name)
+                        .expect("declared permission");
+                    match &declaration.scope {
+                        ContractPermissionScopeV1::Instance => CanUseContractPermission {
+                            contract: contract.clone(),
+                            permission: name.clone(),
+                        }
+                        .into(),
+                        ContractPermissionScopeV1::Chain { permission_name } => {
+                            Permission::new(permission_name.to_string(), Json::new(()))
+                        }
+                    }
+                }
+            }
+        };
         let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
@@ -15840,21 +15511,6 @@ seiyaku StaleRuntimeBinding {
             }),
         }
     }
-    fn store_contract_arguments_from_json(
-        vm: &mut IVM,
-        state: &State,
-        contract_address: &ContractAddress,
-        entrypoint: &str,
-        payload: &Json,
-    ) -> (u64, usize) {
-        encoded_contract_arguments_from_json(state, contract_address, entrypoint, payload).map_or(
-            (0, 0),
-            |record| {
-                let len = record.len();
-                (store_tlv(vm, PointerType::NoritoBytes, &record), len)
-            },
-        )
-    }
     fn install_alias_payout_contract(
         state: &State,
         authority: &AccountId,
@@ -15863,18 +15519,18 @@ seiyaku StaleRuntimeBinding {
     ) -> ContractAddress {
         let source = format!(
             r#"
-seiyaku AliasPayout {{
+seiyaku AliasPayout {{ permission AssetOps;
   state AssetDefinitionId SettlementAsset;
 
   hajimari(AssetDefinitionId settlement_asset) {{
     SettlementAsset = settlement_asset;
   }}
 
-  kotoage fn bind(AssetDefinitionId settlement_asset) authorize("AssetOps") {{
+  kotoage fn bind(AssetDefinitionId settlement_asset) authorize(AssetOps) {{
     SettlementAsset = settlement_asset;
   }}
 
-  kotoage fn pay(quantity amount) -> quantity authorize("AssetOps") {{
+  kotoage fn pay(quantity amount) authorize(AssetOps) -> quantity {{
     let merchant = {recipient_expr};
     ledger::asset::transfer(source: context::authority(), destination: merchant, asset_definition: SettlementAsset, amount: amount, dataspace: DataSpaceId::parse("0"));
     return amount;
@@ -15885,6 +15541,178 @@ seiyaku AliasPayout {{
         let contract = install_contract(state, authority, &source, nonce);
         grant_asset_ops_to_account(state, authority, authority.clone());
         contract
+    }
+    fn bind_nested_caller<QS: Default + QueryStateAccess>(
+        host: &mut CoreHostImpl<QS>,
+        vm: &mut IVM,
+        state: &impl StateReadOnly,
+        authority: &AccountId,
+        caller: &ContractAddress,
+    ) {
+        let identity = crate::smartcontracts::code::fetch_bound_contract_identity(state, caller)
+            .unwrap()
+            .unwrap();
+        let artifact = ContractArtifactId::new(caller.dataspace_id().unwrap(), identity.code_hash);
+        let manifest = state.world().contract_manifests().get(&artifact).unwrap();
+        let entries = manifest.entrypoints.as_ref().unwrap();
+        let entry = entries.iter().find(|entry| entry.name == "main").or_else(|| entries.iter().find(|entry| !matches!(entry.authorization, iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::RuntimeLifecycle))).unwrap();
+        vm.load_program(state.world().contract_code().get(&artifact).unwrap())
+            .unwrap();
+        vm.select_entrypoint(&entry.name).unwrap();
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_address: caller.clone(),
+            contract_subject: caller.subject_id(),
+            contract_alias: identity.contract_alias.clone(),
+            entrypoint: entry.name.clone(),
+        }));
+        host.execution_class =
+            if entry.kind == iroha_data_model::smart_contract::manifest::EntryPointKind::View {
+                HostExecutionClass::View
+            } else {
+                HostExecutionClass::Contract
+            };
+        host.set_contract_entrypoint_authorization(Some(
+            ContractEntrypointAuthorizationSnapshot::new(
+                authority.clone(),
+                entry.name.clone(),
+                entry.authorization.clone(),
+                &identity,
+            ),
+        ));
+    }
+
+    fn store_typed_contract_call(
+        vm: &mut IVM,
+        state: &State,
+        target: &ContractAddress,
+        selector: &str,
+        payload: &Json,
+    ) -> [u64; 6] {
+        let gas = vm.remaining_gas();
+        let view = state.view();
+        let code_hash = *view
+            .world()
+            .contract_instances()
+            .get(target)
+            .expect("installed callee");
+        let artifact = ContractArtifactId::new(target.dataspace_id().unwrap(), code_hash);
+        let manifest = view
+            .world()
+            .contract_manifests()
+            .get(&artifact)
+            .expect("authenticated callee manifest");
+        let entries = manifest.entrypoints.as_ref().unwrap();
+        let ordinal = entries
+            .iter()
+            .position(|entry| entry.name == selector)
+            .unwrap_or(usize::MAX);
+        let entry = entries.get(ordinal);
+        let result_words = entry
+            .and_then(|entry| entry.return_schema.as_ref())
+            .and_then(|schema| schema.word_count())
+            .unwrap_or(1);
+        let (argument_base, argument_words, result_base) =
+            if let Some(schema) = entry.and_then(|entry| entry.argument_schema.as_ref()) {
+                let record =
+                    ivm_abi::arguments::encode_argument_record_from_json(schema, payload).unwrap();
+                let prepared = ivm::prepare_argument_record_with_gas_limit(
+                    schema,
+                    Arc::<[u8]>::from(record),
+                    u64::MAX,
+                )
+                .unwrap();
+                prepared.precharge_vm(vm).unwrap();
+                prepared.install_call_arguments(vm, result_words).unwrap();
+                (vm.register(10), vm.register(11), vm.register(12))
+            } else {
+                (0, 0, vm.alloc_heap((result_words * 8) as u64).unwrap())
+            };
+        let address = store_tlv(vm, PointerType::Blob, target.as_ref().as_bytes());
+        let binding = ivm_abi::contract_call::ContractCallBindingV1 {
+            code_hash,
+            entrypoint: u32::try_from(ordinal).unwrap_or(u32::MAX),
+        };
+        let binding = store_tlv(vm, PointerType::NoritoBytes, &binding.to_bytes().unwrap());
+        // Preparing fixture memory is not part of the measured host invocation.
+        vm.set_gas_limit(gas);
+        let registers = [
+            address,
+            binding,
+            argument_base,
+            argument_words,
+            result_base,
+            result_words as u64,
+        ];
+        for (index, word) in registers.iter().enumerate() {
+            vm.set_register(10 + index, *word);
+        }
+        registers
+    }
+
+    fn typed_contract_request_bytes(
+        state: &State,
+        target: &ContractAddress,
+        selector: &str,
+    ) -> usize {
+        let view = state.view();
+        let code_hash = *view.world().contract_instances().get(target).unwrap();
+        let artifact = ContractArtifactId::new(target.dataspace_id().unwrap(), code_hash);
+        let manifest = view.world().contract_manifests().get(&artifact).unwrap();
+        let entrypoint = manifest
+            .entrypoints
+            .as_ref()
+            .unwrap()
+            .iter()
+            .position(|entry| entry.name == selector)
+            .unwrap();
+        let binding = ivm_abi::contract_call::ContractCallBindingV1 {
+            code_hash,
+            entrypoint: entrypoint as u32,
+        };
+        target.as_ref().len() + binding.to_bytes().unwrap().len()
+    }
+
+    fn typed_dispatch_setup_gas() -> u64 {
+        use ivm::{
+            encoding::wide,
+            instruction::wide::{arithmetic, system},
+        };
+        authenticated_test_probe_setup_gas()
+            + (0..6)
+                .map(|index| {
+                    ivm::gas::cost_of(wide::encode_ri(arithmetic::ADDI, 10 + index, 18 + index, 0))
+                        .unwrap()
+                })
+                .sum::<u64>()
+            + ivm::gas::cost_of(wide::encode_sys(
+                system::SCALL,
+                ivm_sys::SYSCALL_CALL_CONTRACT as u8,
+            ))
+            .unwrap()
+    }
+
+    fn captured_nested_result(
+        vm: &IVM,
+        schema: &iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1,
+    ) -> iroha_data_model::smart_contract::entrypoint::EntrypointReturnRecordV1 {
+        ivm::value_record::capture_value_record(
+            vm,
+            schema,
+            vm.register(14),
+            vm.register(15) as usize,
+        )
+        .expect("canonical typed A9 result table")
+    }
+    fn render_nested_result(
+        vm: &IVM,
+        kind: iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1,
+    ) -> norito::json::Value {
+        let schema = exact_return_type(kind);
+        ivm::value_record::render_entrypoint_return_record(
+            &schema,
+            &captured_nested_result(vm, &schema),
+        )
+        .unwrap()
     }
     fn call_contract_syscall(
         state: &State,
@@ -15926,113 +15754,18 @@ seiyaku AliasPayout {{
         host.set_prepared_contract_cache(prepared_cache);
         host.set_query_state(&view);
         host.set_durable_state_snapshot_from_world(view.world());
-        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
-            contract_address: caller_contract.clone(),
-            contract_subject: caller_contract.subject_id(),
-            contract_alias: None,
-            entrypoint: "invoke".to_owned(),
-        }));
-        let caller_code_hash = *view
-            .world()
-            .contract_instances()
-            .get(caller_contract)
-            .expect("installed caller contract binding");
-        host.set_contract_entrypoint_authorization(Some(
-            ContractEntrypointAuthorizationSnapshot::new(
-                outer_authority.clone(),
-                "invoke".to_owned(),
-                None,
-                &crate::smartcontracts::code::BoundContractIdentity {
-                    contract_address: caller_contract.clone(),
-                    contract_alias: None,
-                    contract_alias_binding: None,
-                    code_hash: caller_code_hash,
-                },
-            ),
-        ));
         let mut vm = IVM::new(1_000_000);
-        vm.load_program(&ivm::ProgramMetadata::default().encode())
-            .expect("load metadata-only program");
-        let target_ptr = store_tlv(
-            &mut vm,
-            PointerType::Blob,
-            callee_contract.as_ref().as_bytes(),
-        );
-        let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, entrypoint.as_bytes());
-        let (payload_ptr, _) = store_contract_arguments_from_json(
-            &mut vm,
-            state,
-            callee_contract,
-            entrypoint,
-            &payload,
-        );
-        vm.set_register(10, target_ptr);
-        vm.set_register(11, entrypoint_ptr);
-        vm.set_register(12, payload_ptr);
+        bind_nested_caller(&mut host, &mut vm, &view, outer_authority, caller_contract);
+        let registers =
+            store_typed_contract_call(&mut vm, state, callee_contract, entrypoint, &payload);
         let result = host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm);
+        assert_eq!(
+            (10..16).map(|index| vm.register(index)).collect::<Vec<_>>(),
+            registers,
+            "A9 preserves all input descriptors"
+        );
         let durable_state_overlay = host.drain_durable_state_overlay();
         (result, vm, durable_state_overlay)
-    }
-    fn call_contract_quantity2_syscall(
-        state: &State,
-        outer_authority: &AccountId,
-        caller_contract: &ContractAddress,
-        callee_contract: &ContractAddress,
-        entrypoint: &str,
-        amount_in: &Quantity,
-        min_out: &Quantity,
-    ) -> (
-        Result<u64, ivm::VMError>,
-        IVM,
-        BTreeMap<StatePath, Option<Vec<u8>>>,
-        u64,
-    ) {
-        let view = state.view();
-        let mut host = CoreHostImpl::new(outer_authority.clone());
-        host.set_query_state(&view);
-        host.set_durable_state_snapshot_from_world(view.world());
-        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
-            contract_address: caller_contract.clone(),
-            contract_subject: caller_contract.subject_id(),
-            contract_alias: None,
-            entrypoint: "invoke".to_owned(),
-        }));
-        let caller_code_hash = *view
-            .world()
-            .contract_instances()
-            .get(caller_contract)
-            .expect("installed caller contract binding");
-        host.set_contract_entrypoint_authorization(Some(
-            ContractEntrypointAuthorizationSnapshot::new(
-                outer_authority.clone(),
-                "invoke".to_owned(),
-                None,
-                &crate::smartcontracts::code::BoundContractIdentity {
-                    contract_address: caller_contract.clone(),
-                    contract_alias: None,
-                    contract_alias_binding: None,
-                    code_hash: caller_code_hash,
-                },
-            ),
-        ));
-        let mut vm = IVM::new(1_000_000);
-        vm.load_program(&ivm::ProgramMetadata::default().encode())
-            .expect("load metadata-only program");
-        let target_ptr = store_tlv(
-            &mut vm,
-            PointerType::Blob,
-            callee_contract.as_ref().as_bytes(),
-        );
-        let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, entrypoint.as_bytes());
-        let amount_in_ptr = store_quantity(&mut vm, amount_in);
-        let min_out_ptr = store_quantity(&mut vm, min_out);
-        vm.set_register(10, target_ptr);
-        vm.set_register(11, entrypoint_ptr);
-        vm.set_register(12, amount_in_ptr);
-        vm.set_register(13, min_out_ptr);
-        let result = host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT_QUANTITY2, &mut vm);
-        let durable_state_overlay = host.drain_durable_state_overlay();
-        (result, vm, durable_state_overlay, target_ptr)
     }
     fn call_contract_syscall_access_log(
         state: &State,
@@ -16046,51 +15779,11 @@ seiyaku AliasPayout {{
         let mut host = CoreHostImpl::new(outer_authority.clone()).with_access_logging();
         host.set_query_state(&view);
         host.set_durable_state_snapshot_from_world(view.world());
-        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
-            contract_address: caller_contract.clone(),
-            contract_subject: caller_contract.subject_id(),
-            contract_alias: None,
-            entrypoint: "invoke".to_owned(),
-        }));
-        let caller_code_hash = *view
-            .world()
-            .contract_instances()
-            .get(caller_contract)
-            .expect("installed caller contract binding");
-        host.set_contract_entrypoint_authorization(Some(
-            ContractEntrypointAuthorizationSnapshot::new(
-                outer_authority.clone(),
-                "invoke".to_owned(),
-                None,
-                &crate::smartcontracts::code::BoundContractIdentity {
-                    contract_address: caller_contract.clone(),
-                    contract_alias: None,
-                    contract_alias_binding: None,
-                    code_hash: caller_code_hash,
-                },
-            ),
-        ));
         host.begin_tx(&ivm::parallel::StateAccessSet::default())
-            .expect("begin nested access log");
+            .unwrap();
         let mut vm = IVM::new(1_000_000);
-        vm.load_program(&ivm::ProgramMetadata::default().encode())
-            .expect("load metadata-only program");
-        let target_ptr = store_tlv(
-            &mut vm,
-            PointerType::Blob,
-            callee_contract.as_ref().as_bytes(),
-        );
-        let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, entrypoint.as_bytes());
-        let (payload_ptr, _) = store_contract_arguments_from_json(
-            &mut vm,
-            state,
-            callee_contract,
-            entrypoint,
-            &payload,
-        );
-        vm.set_register(10, target_ptr);
-        vm.set_register(11, entrypoint_ptr);
-        vm.set_register(12, payload_ptr);
+        bind_nested_caller(&mut host, &mut vm, &view, outer_authority, caller_contract);
+        store_typed_contract_call(&mut vm, state, callee_contract, entrypoint, &payload);
         let result = host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm);
         let access_log = host.finish_tx().expect("finish nested access log");
         (result, access_log)
@@ -16120,6 +15813,74 @@ seiyaku AliasPayout {{
             None,
         )
     }
+    fn install_nested_dispatch_fixture(
+        state: &State,
+        authority: &AccountId,
+        caller: &ContractAddress,
+    ) {
+        use ivm::{encoding::wide, instruction::wide::arithmetic};
+        let mut code = Vec::new();
+        // The generic authenticated probe owns its root result table. Separate
+        // staging registers preserve all six typed-call operands across root setup.
+        for index in 0..6 {
+            code.extend_from_slice(
+                &wide::encode_ri(arithmetic::ADDI, 10 + index, 18 + index, 0).to_le_bytes(),
+            );
+        }
+        code.extend_from_slice(
+            &wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                ivm_sys::SYSCALL_CALL_CONTRACT as u8,
+            )
+            .to_le_bytes(),
+        );
+        let program = build_authenticated_test_contract_program(&code, 0, false);
+        rebind_test_contract_program(state, authority, caller, program);
+    }
+
+    fn rebind_test_contract_program(
+        state: &State,
+        authority: &AccountId,
+        caller: &ContractAddress,
+        program: Vec<u8>,
+    ) {
+        let verified =
+            ivm::verify_contract_artifact(&program).expect("admit exact typed dispatch fixture");
+        let view = state.view();
+        if view.world().contract_instances().get(caller) == Some(&verified.code_hash) {
+            return;
+        }
+        let revision = view
+            .world()
+            .contract_subject_bindings()
+            .get(caller)
+            .unwrap()
+            .lifecycle
+            .revision;
+        let height = u64::try_from((view.height() + 1).max(2))
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let previous = view.latest_block_hash();
+        drop(view);
+        let signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
+        let manifest = verified
+            .manifest
+            .try_signed(
+                signing.context(),
+                signing.max_frame_bytes(),
+                &fixture_signing_keypair(authority),
+            )
+            .unwrap();
+        let mut block = state.block(BlockHeader::new(height, previous, None, 0, 0));
+        let mut tx = block.transaction();
+        let hash =
+            register_code_bytes(authority, DataSpaceId::UNIVERSAL, program, &mut tx).unwrap();
+        register_manifest(authority, DataSpaceId::UNIVERSAL, manifest, &mut tx).unwrap();
+        activate_instance(authority, caller.clone(), revision, hash, &mut tx).unwrap();
+        tx.apply();
+        block.commit_world_overlay_for_testing().unwrap();
+    }
     fn dispatch_call_contract_syscall_with_cycle_budget(
         state: &State,
         outer_authority: &AccountId,
@@ -16135,61 +15896,21 @@ seiyaku AliasPayout {{
         BTreeMap<StatePath, Option<Vec<u8>>>,
         u64,
     ) {
+        install_nested_dispatch_fixture(state, outer_authority, caller_contract);
         let view = state.view();
         let mut host = CoreHostImpl::new(outer_authority.clone());
         host.set_query_state(&view);
         host.set_durable_state_snapshot_from_world(view.world());
-        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
-            contract_address: caller_contract.clone(),
-            contract_subject: caller_contract.subject_id(),
-            contract_alias: None,
-            entrypoint: "invoke".to_owned(),
-        }));
-        let caller_code_hash = *view
-            .world()
-            .contract_instances()
-            .get(caller_contract)
-            .expect("installed caller contract binding");
-        host.set_contract_entrypoint_authorization(Some(
-            ContractEntrypointAuthorizationSnapshot::new(
-                outer_authority.clone(),
-                "invoke".to_owned(),
-                None,
-                &crate::smartcontracts::code::BoundContractIdentity {
-                    contract_address: caller_contract.clone(),
-                    contract_alias: None,
-                    contract_alias_binding: None,
-                    code_hash: caller_code_hash,
-                },
-            ),
-        ));
-        let mut code = Vec::new();
-        code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_CALL_CONTRACT).expect("syscall id fits in u8"),
-            )
-            .to_le_bytes(),
-        );
-        let mut vm = IVM::new(gas_limit);
-        vm.load_program(&build_authenticated_test_contract_program(&code, 0, false))
-            .expect("load CALL_CONTRACT program");
-        let target_ptr = store_tlv(
-            &mut vm,
-            PointerType::Blob,
-            callee_contract.as_ref().as_bytes(),
-        );
-        let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, entrypoint.as_bytes());
-        let (payload_ptr, _) = store_contract_arguments_from_json(
-            &mut vm,
-            state,
-            callee_contract,
-            entrypoint,
-            &payload,
-        );
+        let mut vm = IVM::new(gas_limit.max(1_000_000));
+        bind_nested_caller(&mut host, &mut vm, &view, outer_authority, caller_contract);
+        let registers =
+            store_typed_contract_call(&mut vm, state, callee_contract, entrypoint, &payload);
+        for (index, value) in registers.iter().enumerate() {
+            vm.set_register(18 + index, *value);
+        }
+        let target_ptr = registers[0];
         vm.set_register(14, target_ptr);
-        vm.set_register(15, entrypoint_ptr);
-        vm.set_register(16, payload_ptr);
+        vm.set_gas_limit(gas_limit);
         let result = match cycle_budget {
             Some(budget) => vm.run_with_host_and_cycle_budget(&mut host, budget),
             None => vm.run_with_host(&mut host),
@@ -16207,7 +15928,7 @@ seiyaku AliasPayout {{
             state,
             authority,
             r#"
-seiyaku TypedPoolViews {
+seiyaku TypedPoolViews { permission AssetOps;
   state AssetDefinitionId QuoteAsset;
   state AccountId PoolAccount;
 
@@ -16216,16 +15937,16 @@ seiyaku TypedPoolViews {
     PoolAccount = initial_pool_account;
   }
 
-  kotoage fn bind(AssetDefinitionId bound_quote_asset, AccountId bound_pool_account) authorize("AssetOps") {
+  kotoage fn bind(AssetDefinitionId bound_quote_asset, AccountId bound_pool_account) authorize(AssetOps) {
     QuoteAsset = bound_quote_asset;
     PoolAccount = bound_pool_account;
   }
 
-  view fn quote_asset() -> AssetDefinitionId {
+  view fn quote_asset() authorize(anyone) -> AssetDefinitionId {
     return QuoteAsset;
   }
 
-  view fn pool_account() -> AccountId {
+  view fn pool_account() authorize(anyone) -> AccountId {
     return PoolAccount;
   }
 }
@@ -16237,7 +15958,7 @@ seiyaku TypedPoolViews {
             authority,
             r#"
 seiyaku OuterCaller {
-  view fn main() -> int { return 0; }
+  view fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             1,
@@ -16271,6 +15992,7 @@ seiyaku OuterCaller {
         (outer_caller, pool_contract)
     }
     include!("host/core_query_execution_tests.rs");
+    include!("host/query_account_filter_tests.rs");
     include!("host/core_query_pagination_tests.rs");
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -16650,15 +16372,15 @@ seiyaku OuterCaller {
             billing_host
                 .queued
                 .first()
-                .map(|queued| &queued.instruction),
+                .and_then(QueuedEffect::instruction),
             Some(&expected_transfer),
             "ten accumulated units at two units of price must bill exactly twenty"
         );
         assert_eq!(billing_host.queued.len(), 5);
         assert_eq!(
             billing_gas,
-            billing_host.queued.iter().fold(0_u64, |gas, instruction| {
-                gas.saturating_add(crate::gas::meter_instruction(&instruction.instruction))
+            QueuedEffect::instructions(&billing_host.queued).fold(0_u64, |gas, instruction| {
+                gas.saturating_add(crate::gas::meter_instruction(instruction))
             })
         );
         let mut expected_billed_state = subscription_state.clone();
@@ -16672,7 +16394,10 @@ seiyaku OuterCaller {
             Json::new(expected_billed_state),
         ));
         assert_eq!(
-            billing_host.queued.get(1).map(|queued| &queued.instruction),
+            billing_host
+                .queued
+                .get(1)
+                .and_then(QueuedEffect::instruction),
             Some(&expected_billed_set)
         );
         let expected_invoice = SubscriptionInvoice {
@@ -16692,7 +16417,10 @@ seiyaku OuterCaller {
             Json::new(expected_invoice),
         ));
         assert_eq!(
-            billing_host.queued.get(2).map(|queued| &queued.instruction),
+            billing_host
+                .queued
+                .get(2)
+                .and_then(QueuedEffect::instruction),
             Some(&expected_invoice_set)
         );
         let delta = SubscriptionUsageDelta {
@@ -17327,8 +17055,9 @@ seiyaku OuterCaller {
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority,
             "dispatch_ballot".to_owned(),
-            None,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             &crate::smartcontracts::code::BoundContractIdentity {
+                lifecycle_revision: 1,
                 contract_address: contract_address.clone(),
                 contract_alias: None,
                 contract_alias_binding: None,
@@ -17547,13 +17276,13 @@ seiyaku OuterCaller {
     fn by_call_bytes_param_can_coexist_with_canonical_asset_operation() {
         let authority = (*ALICE_ID).clone();
         let source = r#"
-seiyaku BurnWithMemo {
+seiyaku BurnWithMemo { permission AssetTransferRole;
   kotoage fn burn_with_memo(
     AccountId sender,
     AssetDefinitionId settlement_asset,
     quantity amount,
     bytes memo
-  ) authorize("AssetTransferRole") {
+  ) authorize(AssetTransferRole) {
     ledger::asset::burn(account: sender, asset_definition: settlement_asset, amount: amount);
   }
 }
@@ -17627,8 +17356,8 @@ seiyaku BurnWithMemo {
     #[test]
     fn kotodama_source_rejects_opaque_instruction_submission() {
         let source = r#"
-seiyaku OpaqueInstructionSubmission {
-  kotoage fn submit(bytes record_instruction) authorize("AssetTransferRole") {
+seiyaku OpaqueInstructionSubmission { permission AssetTransferRole;
+  kotoage fn submit(bytes record_instruction) authorize(AssetTransferRole) {
     execute_instruction(record_instruction);
   }
 }
@@ -17670,6 +17399,9 @@ seiyaku OpaqueInstructionSubmission {
         let payload = norito::to_bytes(&instruction).expect("encode instruction");
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
         let contract_interface = ivm::EmbeddedContractInterfaceV1 {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: vec![iroha_data_model::smart_contract::manifest::ContractPermissionDescriptorV1 {name:"CanSubmitBallot".parse().unwrap(),scope:iroha_data_model::smart_contract::manifest::ContractPermissionScopeV1::Instance}],
             callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "CodeLiteralBallotHarness".to_owned(),
             compiler_fingerprint: "iroha-core-host-tests".to_owned(),
@@ -17686,7 +17418,7 @@ seiyaku OpaqueInstructionSubmission {
                 return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
                     nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
                 }),
-                permission: Some("CanSubmitBallot".to_owned()),
+                authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission("CanSubmitBallot".parse().unwrap()),
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: None,
@@ -17753,7 +17485,7 @@ seiyaku OpaqueInstructionSubmission {
         assert_eq!(vm.call_result_word_count().unwrap(), 1);
         assert_eq!(vm.public_call_result_word(0).unwrap(), 0);
         assert_eq!(host.queued.len(), 1);
-        assert_eq!(host.queued[0].instruction, instruction);
+        assert_eq!(host.queued[0].instruction(), Some(&instruction));
         assert!(host.queued[0].contract_runtime_context.is_some());
         assert!(host.queued[0].entrypoint_authorization.is_some());
     }
@@ -19458,7 +19190,7 @@ seiyaku OpaqueInstructionSubmission {
         assert_eq!(resolved, merchant_account_id);
     }
     #[test]
-    fn call_contract_syscall_returns_schema_bound_typed_norito_record() {
+    fn call_contract_syscall_returns_exact_schema_bound_typed_table() {
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -19466,7 +19198,7 @@ seiyaku OpaqueInstructionSubmission {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -19476,29 +19208,13 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  view fn value() -> int {
+  view fn value() authorize(anyone) -> int {
     return 42;
   }
 }
 "#,
             1,
         );
-        let callee_artifact_bytes = {
-            let view = state.view();
-            let code_hash = *view
-                .world()
-                .contract_instances()
-                .get(&callee_contract)
-                .expect("installed callee contract binding");
-            view.world()
-                .contract_code()
-                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
-                    callee_contract.dataspace_id().unwrap(),
-                    code_hash,
-                ))
-                .expect("installed callee contract artifact")
-                .len()
-        };
         let (result, vm, durable_state_overlay) = call_contract_syscall(
             &state,
             &authority,
@@ -19510,29 +19226,10 @@ seiyaku Callee {
         let gas = result.expect("call_contract syscall should succeed");
         assert!(gas > 0);
         assert!(durable_state_overlay.is_empty());
-        let tlv = vm
-            .memory
-            .validate_tlv(vm.register(10))
-            .expect("returned NoritoBytes tlv");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let request_bytes = callee_contract.as_ref().as_bytes().len() + "value".len();
-        let return_boundary_bytes = tlv.payload.len().saturating_add(
-            iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1,
-        );
-        let expected_gas = CoreHost::nested_contract_host_gas(
-            request_bytes,
-            callee_artifact_bytes,
-            return_boundary_bytes,
-        );
-        assert_eq!(gas, expected_gas);
         let schema = exact_return_type(
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
         );
-        let record = crate::smartcontracts::ivm::return_value::decode_entrypoint_return_record(
-            &schema,
-            tlv.payload,
-        )
-        .expect("decode typed return record");
+        let record = captured_nested_result(&vm, &schema);
         let schema_bytes = norito::to_bytes(&schema).expect("encode return schema");
         assert_eq!(
             record.schema_hash,
@@ -19558,175 +19255,291 @@ seiyaku Callee {
         );
     }
     #[test]
-    fn call_contract_quantity2_returns_exact_quantity() {
-        let authority: AccountId = fixture_account("alice");
+    fn generic_contract_call_returns_exact_quantity() {
+        let authority = fixture_account("alice");
         let state = contract_test_state(&authority);
-        let caller_contract = install_contract(
+        let caller = install_contract(
             &state,
             &authority,
-            r#"
-seiyaku Caller {
-  view fn main() -> int { return 0; }
-}
-"#,
+            "seiyaku Caller { kotoage fn main() authorize(anyone) {} }",
             0,
         );
-        let callee_contract = install_contract(
+        let callee = install_contract(
             &state,
             &authority,
-            r#"
-seiyaku Callee {
-  view fn quote(quantity amount_in, quantity min_out) -> quantity {
-    return amount_in;
-  }
-}
-"#,
+            "seiyaku Callee { view fn quote(quantity amount_in, quantity min_out) authorize(anyone) -> quantity { amount_in } }",
             1,
         );
-        let amount_in = Quantity::from(10_u32);
-        let min_out = Quantity::from(7_u32);
-        let (result, vm, durable_state_overlay, target_ptr) = call_contract_quantity2_syscall(
+        let (result, vm, effects) = call_contract_syscall(
             &state,
             &authority,
-            &caller_contract,
-            &callee_contract,
+            &caller,
+            &callee,
             "quote",
-            &amount_in,
-            &min_out,
+            Json::from(norito::json!({"amount_in":"10", "min_out":"7"})),
         );
-        assert!(result.expect("typed quantity call should succeed") > 0);
-        assert!(durable_state_overlay.is_empty());
-        assert_ne!(
-            vm.register(10),
-            target_ptr,
-            "success must publish the canonical quantity result",
-        );
-        let tlv = vm
-            .memory
-            .validate_tlv(vm.register(10))
-            .expect("returned Quantity TLV");
-        assert_eq!(tlv.type_id, PointerType::Quantity);
-        assert_eq!(decode_quantity_leaf(&vm, vm.register(10)), amount_in,);
-    }
-    #[test]
-    fn call_contract_quantity2_rejects_wrong_argument_schema_without_output() {
-        let authority: AccountId = fixture_account("alice");
-        let state = contract_test_state(&authority);
-        let caller_contract = install_contract(
-            &state,
-            &authority,
-            r#"
-seiyaku Caller {
-  view fn main() -> int { return 0; }
-}
-"#,
-            0,
-        );
-        let callee_contract = install_contract(
-            &state,
-            &authority,
-            r#"
-seiyaku Callee {
-  view fn quote(quantity other_amount, quantity min_out) -> quantity {
-    return other_amount;
-  }
-}
-"#,
-            1,
-        );
-        let (result, vm, durable_state_overlay, target_ptr) = call_contract_quantity2_syscall(
-            &state,
-            &authority,
-            &caller_contract,
-            &callee_contract,
-            "quote",
-            &Quantity::from(10_u32),
-            &Quantity::from(7_u32),
-        );
-        assert!(
-            result.is_err(),
-            "field-name schema mismatch must fail closed"
-        );
-        assert!(durable_state_overlay.is_empty());
+        assert!(result.unwrap() > 0);
+        assert!(effects.is_empty());
+        let pointer = vm.load_u64(vm.register(14)).unwrap();
         assert_eq!(
-            vm.register(10),
-            target_ptr,
-            "failed typed call must restore r10 instead of exposing child output",
+            vm.validate_tlv(pointer).unwrap().type_id,
+            PointerType::Quantity
+        );
+        assert_eq!(decode_quantity_leaf(&vm, pointer), Quantity::from(10u32));
+        assert_eq!(
+            vm.validate_tlv(vm.register(10)).unwrap().payload,
+            callee.as_ref().as_bytes(),
+            "typed calls preserve the target register"
         );
     }
     #[test]
-    fn call_contract_quantity2_rolls_back_state_on_wrong_return_schema() {
-        let authority: AccountId = fixture_account("alice");
+    fn generic_contract_call_rejects_wrong_argument_type_without_output() {
+        let authority = fixture_account("alice");
         let state = contract_test_state(&authority);
-        let caller_contract = install_contract(
+        let caller = install_contract(
             &state,
             &authority,
-            r#"
-seiyaku Caller {
-  view fn main() -> int { return 0; }
-}
-"#,
+            "seiyaku Caller { kotoage fn main() authorize(anyone) {} }",
             0,
         );
-        let callee_contract = install_contract(
+        let callee = install_contract(
             &state,
             &authority,
-            r#"
-seiyaku Callee {
-  state int counter;
-
-  hajimari() {
-    counter = 0;
-  }
-
-  kotoage fn quote(quantity amount_in, quantity min_out) -> int authorize("AssetOps") {
-    counter = 9;
-    return 1;
-  }
-}
-"#,
+            "seiyaku Callee { view fn quote(quantity amount_in, quantity min_out) authorize(anyone) -> quantity { amount_in } }",
             1,
         );
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
-        let (result, vm, durable_state_overlay, target_ptr) = call_contract_quantity2_syscall(
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+        bind_nested_caller(&mut host, &mut vm, &view, &authority, &caller);
+        let registers = store_typed_contract_call(
+            &mut vm,
             &state,
-            &authority,
-            &caller_contract,
-            &callee_contract,
+            &callee,
             "quote",
-            &Quantity::from(10_u32),
-            &Quantity::from(7_u32),
+            &Json::from(norito::json!({"amount_in":"10","min_out":"7"})),
         );
-        let error = result.expect_err("non-Quantity return schema must fail closed");
-        assert!(matches!(error.as_unmetered(), ivm::VMError::DecodeError));
+        let wrong = vm
+            .alloc_host_tlv(&ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(10)).unwrap())
+            .unwrap();
+        vm.store_u64(registers[2], wrong).unwrap();
         assert!(
-            durable_state_overlay.is_empty(),
-            "post-child return decoding failure must roll back all child writes",
+            host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
+                .is_err()
         );
+        assert!(host.durable_state_overlay.is_empty());
+        assert!(host.queued.is_empty());
         assert_eq!(
-            vm.register(10),
-            target_ptr,
-            "failed return decoding must not publish a child result",
+            (10..16).map(|index| vm.register(index)).collect::<Vec<_>>(),
+            registers
         );
+        assert_eq!(vm.load_u64(registers[4]), Ok(0));
     }
     #[test]
-    fn call_contract_quantity2_rejects_wrong_return_schema_atom_and_pointer_type() {
+    fn generic_contract_call_rejects_stale_return_schema_binding_before_state_changes() {
+        let authority = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller = install_contract(
+            &state,
+            &authority,
+            "seiyaku Caller { kotoage fn main() authorize(anyone) {} }",
+            0,
+        );
+        let callee = install_contract(
+            &state,
+            &authority,
+            "seiyaku Callee { state int counter; hajimari() {counter=0;} kotoage fn quote(quantity amount_in, quantity min_out) authorize(anyone) -> int { counter=9; return 1; } }",
+            1,
+        );
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        host.set_durable_state_snapshot_from_world(view.world());
+        let mut vm = IVM::new(1_000_000);
+        bind_nested_caller(&mut host, &mut vm, &view, &authority, &caller);
+        let registers = store_typed_contract_call(
+            &mut vm,
+            &state,
+            &callee,
+            "quote",
+            &Json::from(norito::json!({"amount_in":"10","min_out":"7"})),
+        );
+        let mut binding = ivm_abi::contract_call::ContractCallBindingV1::from_bytes(
+            vm.validate_tlv(registers[1]).unwrap().payload,
+        )
+        .unwrap();
+        binding.code_hash = Hash::new(b"different authenticated Quantity result artifact");
+        let changed = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &binding.to_bytes().unwrap(),
+        );
+        vm.set_register(11, changed);
+        assert!(matches!(
+            host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
+                .unwrap_err()
+                .as_unmetered(),
+            ivm::VMError::PermissionDenied
+        ));
+        assert!(host.durable_state_overlay.is_empty());
+        assert!(host.queued.is_empty());
+        assert_eq!(vm.register(10), registers[0]);
+        assert_eq!(vm.load_u64(registers[4]), Ok(0));
+    }
+    #[test]
+    fn typed_contract_call_rejects_forged_caller_scope_before_authorization() {
+        let authority = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller = install_contract(
+            &state,
+            &authority,
+            "seiyaku Caller { kotoage fn main() authorize(anyone) {} }",
+            0,
+        );
+        let callee = install_contract(
+            &state,
+            &authority,
+            "seiyaku Child { view fn read() authorize(anyone) -> bool {true} }",
+            1,
+        );
+        for case in 0..4 {
+            let view = state.view();
+            let mut host = CoreHostImpl::new(authority.clone());
+            host.set_query_state(&view);
+            let mut vm = IVM::new(1_000_000);
+            bind_nested_caller(&mut host, &mut vm, &view, &authority, &caller);
+            let registers =
+                store_typed_contract_call(&mut vm, &state, &callee, "read", &Json::new(()));
+            match case {
+                0 => {
+                    host.current_contract_runtime_context
+                        .as_mut()
+                        .unwrap()
+                        .contract_subject = authority.clone()
+                }
+                1 => {
+                    host.current_contract_runtime_context
+                        .as_mut()
+                        .unwrap()
+                        .entrypoint = "forged".into()
+                }
+                2 => host.authority = fixture_account("bob"),
+                3 => {
+                    host.current_entrypoint_authorization
+                        .as_mut()
+                        .unwrap()
+                        .code_hash = Hash::new(b"forged caller artifact")
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
+                        .unwrap_err()
+                        .as_unmetered(),
+                    ivm::VMError::PermissionDenied
+                ),
+                "case {case}"
+            );
+            assert_eq!(vm.load_u64(registers[4]), Ok(0));
+            assert!(host.queued.is_empty());
+            assert!(host.durable_state_overlay.is_empty());
+        }
+    }
+
+    #[test]
+    fn typed_contract_call_rejects_private_witness_callee_before_execution() {
+        let authority = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller = install_contract(
+            &state,
+            &authority,
+            "seiyaku Caller { kotoage fn main() authorize(anyone) {} }",
+            0,
+        );
+        let callee = install_contract(
+            &state,
+            &authority,
+            "seiyaku PrivateCallee { kotoage fn main() authorize(anyone) {} }",
+            1,
+        );
+        let syscall = ivm::encoding::wide::encode_sys(
+            ivm::instruction::wide::system::SCALL,
+            ivm_sys::SYSCALL_GET_PRIVATE_INPUT as u8,
+        );
+        let program = build_authenticated_test_contract_program(&syscall.to_le_bytes(), 0, true);
+        assert_eq!(
+            ivm::prepare_contract(Arc::<[u8]>::from(program.clone()))
+                .unwrap()
+                .entrypoint_requires_private_inputs("main"),
+            Some(true)
+        );
+        rebind_test_contract_program(&state, &authority, &callee, program);
+        let (result, vm, effects) =
+            call_contract_syscall(&state, &authority, &caller, &callee, "main", Json::new(()));
+        assert!(matches!(
+            result.unwrap_err().as_unmetered(),
+            ivm::VMError::PermissionDenied
+        ));
+        assert!(effects.is_empty());
+        assert_eq!(vm.load_u64(vm.register(14)), Ok(0));
+    }
+
+    #[test]
+    fn typed_contract_call_preserves_view_restriction_before_child_effects() {
+        let authority = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller = install_contract(
+            &state,
+            &authority,
+            "seiyaku Caller { view fn main() authorize(anyone) {} }",
+            0,
+        );
+        let callee = install_contract(
+            &state,
+            &authority,
+            "seiyaku Callee { state StateMap<int,int> Values; view fn read() authorize(anyone) -> bool { true } kotoage fn write() authorize(anyone) { Values[1] = 9; } }",
+            1,
+        );
+        let (read, vm, effects) =
+            call_contract_syscall(&state, &authority, &caller, &callee, "read", Json::new(()));
+        read.expect("a view may call another authenticated view");
+        assert_eq!(
+            render_nested_result(
+                &vm,
+                iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Bool
+            ),
+            norito::json!(true)
+        );
+        assert!(effects.is_empty());
+        let (result, vm, effects) =
+            call_contract_syscall(&state, &authority, &caller, &callee, "write", Json::new(()));
+        assert!(matches!(
+            result.unwrap_err().as_unmetered(),
+            ivm::VMError::PermissionDenied
+        ));
+        assert!(effects.is_empty());
+        assert_eq!(vm.load_u64(vm.register(14)), Ok(0));
+    }
+
+    #[test]
+    fn canonical_quantity_return_record_rejects_wrong_schema_atom_and_pointer_type() {
         use iroha_data_model::smart_contract::entrypoint::{
             EntrypointReturnRecordV1, entrypoint_return_schema_hash_v1,
         };
-        let quantity_schema = CoreHost::quantity_entrypoint_type();
-        let quantity_schema_hash = entrypoint_return_schema_hash_v1(
-            &norito::to_bytes(&quantity_schema).expect("encode Quantity schema"),
+        let quantity_schema = exact_return_type(
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Quantity,
         );
+        let quantity_schema_hash =
+            entrypoint_return_schema_hash_v1(&norito::encode_canonical(&quantity_schema).unwrap());
         let int_schema = exact_return_type(
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
         );
-        let int_schema_hash = entrypoint_return_schema_hash_v1(
-            &norito::to_bytes(&int_schema).expect("encode Int schema"),
-        );
-        let int_envelope =
-            ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(1)).expect("encode Int TLV");
-        let malformed = [
+        let int_schema_hash =
+            entrypoint_return_schema_hash_v1(&norito::encode_canonical(&int_schema).unwrap());
+        let int_envelope = ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(1)).unwrap();
+        for (label, record) in [
             (
                 "wrong schema",
                 EntrypointReturnRecordV1 {
@@ -19748,21 +19561,20 @@ seiyaku Callee {
                     atoms: vec![EntrypointValueAtomV1::Pointer(int_envelope)],
                 },
             ),
-        ];
-        for (label, record) in malformed {
-            let payload = norito::to_bytes(&record).expect("encode malformed return record");
+        ] {
             assert!(
-                matches!(
-                    CoreHost::decode_quantity_return_envelope(&payload),
-                    Err(ivm::VMError::DecodeError)
-                ),
-                "{label} must fail closed",
+                ivm::value_record::decode_entrypoint_return_record(
+                    &quantity_schema,
+                    &norito::encode_canonical(&record).unwrap()
+                )
+                .is_err(),
+                "{label} must fail closed"
             );
         }
     }
     fn completed_unit_return_vm() -> IVM {
         let program = kotodama_lang::compiler::Compiler::new()
-            .compile_source("seiyaku ReturnBoundary { view fn main() { () } }")
+            .compile_source("seiyaku ReturnBoundary { view fn main() authorize(anyone) { () } }")
             .expect("compile root result-table fixture");
         let metadata = ivm::ProgramMetadata::parse(&program).unwrap();
         let entry = metadata
@@ -19805,15 +19617,14 @@ seiyaku Callee {
         );
         for private_descriptor in [true, false] {
             vm.registers.set_tag(10, private_descriptor);
+            let error = ivm::value_record::quote_completed_return_record(&vm, &schema, u64::MAX)
+                .expect_err("private payload must not be returned");
             assert_eq!(
-                CoreHost::encode_nested_contract_return(
-                    &vm,
-                    &schema,
-                    iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
-                ),
-                Err(ivm::VMError::PrivacyViolation),
+                error.as_unmetered(),
+                &ivm::VMError::PrivacyViolation,
                 "private payload rejection must depend on completed table memory, not register tags"
             );
+            assert!(error.metered_gas().is_some_and(|gas| gas > 0));
         }
     }
     #[test]
@@ -19841,14 +19652,10 @@ seiyaku Callee {
                 EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Blob),
             ],
         };
-        assert_eq!(
-            CoreHost::encode_nested_contract_return(
-                &vm,
-                &schema,
-                MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
-            ),
-            Err(ivm::VMError::DecodeError)
-        );
+        let error = ivm::value_record::quote_completed_return_record(&vm, &schema, u64::MAX)
+            .expect_err("repeated pointers exceed the canonical return record bound");
+        assert_eq!(error.as_unmetered(), &ivm::VMError::DecodeError);
+        assert!(error.metered_gas().is_some_and(|gas| gas > 0));
     }
     #[test]
     fn nested_contract_return_rejects_unaffordable_payload_before_clone() {
@@ -19868,39 +19675,10 @@ seiyaku Callee {
         let schema = EntrypointValueTypeV1 {
             nodes: vec![EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Blob)],
         };
-        assert_eq!(
-            CoreHost::encode_nested_contract_return(&vm, &schema, 1024),
-            Err(ivm::VMError::OutOfGas)
-        );
-    }
-    #[test]
-    fn nested_return_transport_cap_fills_one_clean_boundary_allocation() {
-        use iroha_data_model::smart_contract::entrypoint::{
-            ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1, MAX_ENTRYPOINT_BOUNDARY_BYTES,
-            MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
-        };
-        assert_eq!(
-            MAX_ENTRYPOINT_RETURN_RECORD_BYTES + ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1,
-            MAX_ENTRYPOINT_BOUNDARY_BYTES
-        );
-        let payload = vec![0x5A; MAX_ENTRYPOINT_RETURN_RECORD_BYTES];
-        let mut exact_vm = IVM::new(10_000);
-        let pointer = CoreHost::alloc_norito_bytes(&mut exact_vm, &payload)
-            .expect("the exact complete boundary must fit a clean caller heap");
-        assert_eq!(pointer, ivm::Memory::HEAP_START);
-        let tlv = exact_vm
-            .validate_tlv(pointer)
-            .expect("validate exact-boundary return TLV");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        assert_eq!(tlv.payload.len(), MAX_ENTRYPOINT_RETURN_RECORD_BYTES);
-        let mut oversized_vm = IVM::new(10_000);
-        assert_eq!(
-            CoreHost::alloc_norito_bytes(
-                &mut oversized_vm,
-                &vec![0x5A; MAX_ENTRYPOINT_RETURN_RECORD_BYTES + 1],
-            ),
-            Err(ivm::VMError::OutOfMemory)
-        );
+        let error = ivm::value_record::quote_completed_return_record(&vm, &schema, 1024)
+            .expect_err("unaffordable return is rejected before cloning");
+        assert_eq!(error.as_unmetered(), &ivm::VMError::OutOfGas);
+        assert_eq!(error.metered_gas(), Some(1024));
     }
     #[test]
     fn repeated_nested_calls_reuse_prepared_artifact_and_warmed_runtime() {
@@ -19918,7 +19696,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -19928,7 +19706,7 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  view fn value() -> int { return 42; }
+  view fn value() authorize(anyone) -> int { return 42; }
 }
 "#,
             1,
@@ -19998,7 +19776,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Callee {
-  view fn value() -> int { return 42; }
+  view fn value() authorize(anyone) -> int { return 42; }
 }
 "#,
             7,
@@ -20036,7 +19814,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -20046,17 +19824,13 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  view fn value() -> int { return 42; }
+  view fn value() authorize(anyone) -> int { return 42; }
 }
 "#,
             1,
         );
         let payload = Json::new(());
-        let request_bytes = callee_contract
-            .as_ref()
-            .as_bytes()
-            .len()
-            .saturating_add("value".len());
+        let request_bytes = typed_contract_request_bytes(&state, &callee_contract, "value");
         let gas_limit = 1_000_000;
         let (result, vm, durable_state_overlay, _) = dispatch_call_contract_syscall(
             &state,
@@ -20069,17 +19843,12 @@ seiyaku Callee {
         );
         result.expect("dispatched nested call should succeed");
         assert!(durable_state_overlay.is_empty());
-        let tlv = vm
-            .memory
-            .validate_tlv(authenticated_test_probe_result(&vm))
-            .expect("returned NoritoBytes tlv");
-        let value = decode_nested_return(
-            tlv.payload,
+        let value = render_nested_result(
+            &vm,
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
         );
         assert_eq!(value, norito::json!("42"));
-        let host_overhead =
-            ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, tlv.payload.len());
+        let host_overhead = ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0);
         assert!(
             gas_limit.saturating_sub(vm.remaining_gas()) > host_overhead,
             "outer opcode and child execution gas must be charged in addition to host overhead",
@@ -20094,7 +19863,7 @@ seiyaku Callee {
             &authority,
             r#"
     seiyaku Caller {
-      view fn main() -> int { return 0; }
+      kotoage fn main() authorize(anyone) -> int { return 0; }
     }
     "#,
             0,
@@ -20103,12 +19872,12 @@ seiyaku Callee {
             &state,
             &authority,
             r#"
-    seiyaku Callee {
+    seiyaku Callee { permission AssetOps;
       state int counter;
 
       hajimari() { counter = 0; }
 
-      kotoage fn write() -> int authorize("AssetOps") {
+      kotoage fn write() authorize(AssetOps) -> int {
         counter = 9;
         return counter;
       }
@@ -20120,17 +19889,14 @@ seiyaku Callee {
         let payload = Json::new(());
         let request_gas = ivm::gas::syscall_byte_gas(
             ivm::gas::G_CALL_CONTRACT,
-            callee_contract
-                .as_ref()
-                .as_bytes()
-                .len()
-                .saturating_add("write".len()),
+            typed_contract_request_bytes(&state, &callee_contract, "write"),
             0,
         );
-        // After authenticated staging, SCALL leaves one gas for nested execution.
-        let gas_limit = authenticated_test_probe_setup_gas()
+        // After authenticated staging and request validation, only one gas remains
+        // for artifact preparation; the child cannot execute or publish effects.
+        let gas_limit = typed_dispatch_setup_gas()
             .saturating_add(request_gas)
-            .saturating_add(6);
+            .saturating_add(1);
         let (result, vm, durable_state_overlay, target_ptr) = dispatch_call_contract_syscall(
             &state,
             &authority,
@@ -20165,13 +19931,13 @@ seiyaku Callee {
             r#"
 seiyaku Caller {
   error enum CalleeError { #[message("Caller explanation")] ForcedFailure = 1 }
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
         );
         let callee_source = r#"
-seiyaku Callee {
+seiyaku Callee { permission AssetOps;
   error enum CalleeError {
     #[message("Callee rejected the operation")]
     ForcedFailure = 1,
@@ -20181,7 +19947,7 @@ seiyaku Callee {
 
   hajimari() { counter = 0; }
 
-  kotoage fn fail_after_write() -> int authorize("AssetOps") {
+  kotoage fn fail_after_write() authorize(AssetOps) -> int {
     counter = 9;
     require(false, CalleeError::ForcedFailure);
     return 0;
@@ -20202,11 +19968,7 @@ seiyaku Callee {
         let payload = Json::new(());
         let request_gas = ivm::gas::syscall_byte_gas(
             ivm::gas::G_CALL_CONTRACT,
-            callee_contract
-                .as_ref()
-                .as_bytes()
-                .len()
-                .saturating_add("fail_after_write".len()),
+            typed_contract_request_bytes(&state, &callee_contract, "fail_after_write"),
             0,
         );
         let gas_limit = 1_000_000;
@@ -20262,7 +20024,7 @@ seiyaku Callee {
         );
     }
     #[test]
-    fn call_contract_syscall_enforces_callee_entrypoint_permission() {
+    fn call_contract_syscall_enforces_callee_entrypoint_authorization() {
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -20270,7 +20032,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -20279,8 +20041,8 @@ seiyaku Caller {
             &state,
             &authority,
             r#"
-seiyaku Callee {
-  view fn value() -> int authorize("AssetOps") {
+seiyaku Callee { permission AssetOps;
+  view fn value() authorize(AssetOps) -> int {
     return 42;
   }
 }
@@ -20314,13 +20076,8 @@ seiyaku Callee {
         );
         result.expect("protected nested entrypoint should run after grant");
         assert!(durable_state_overlay.is_empty());
-        let tlv = vm
-            .memory
-            .validate_tlv(vm.register(10))
-            .expect("returned NoritoBytes tlv");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let value = decode_nested_return(
-            tlv.payload,
+        let value = render_nested_result(
+            &vm,
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
         );
         assert_eq!(value, norito::json!("42"));
@@ -20334,7 +20091,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -20377,7 +20134,7 @@ seiyaku Lifecycle {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -20389,7 +20146,7 @@ seiyaku Caller {
 seiyaku AwaitingHajimari {
   hajimari() {}
 
-  view fn value() -> int {
+  view fn value() authorize(anyone) -> int {
     return 42;
   }
 }
@@ -20420,7 +20177,7 @@ seiyaku AwaitingHajimari {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -20430,7 +20187,7 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku HeldCallee {
-  view fn value(int input) -> int { return input; }
+  view fn value(int input) authorize(anyone) -> int { return input; }
 }
 "#,
             1,
@@ -20483,15 +20240,33 @@ seiyaku HeldCallee {
         block
             .commit_world_overlay_for_testing()
             .expect("commit the emergency hold without advancing height");
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        host.set_durable_state_snapshot_from_world(view.world());
+        let mut vm = IVM::new(1_000_000);
+        bind_nested_caller(&mut host, &mut vm, &view, &authority, &caller_contract);
         ivm::reset_argument_record_decode_count();
-        let (result, _, durable_state_overlay) = call_contract_syscall(
+        let registers = store_typed_contract_call(
+            &mut vm,
             &state,
-            &authority,
-            &caller_contract,
             &callee_contract,
             "value",
-            Json::from(norito::json!({ "input": "42" })),
+            &Json::from(norito::json!({ "input": "42" })),
         );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            1,
+            "fixture preparation decodes its canonical record"
+        );
+        // Measure only actual nested dispatch, after the fixture populated its typed table.
+        ivm::reset_argument_record_decode_count();
+        let result = host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm);
+        assert_eq!(
+            (10..16).map(|index| vm.register(index)).collect::<Vec<_>>(),
+            registers
+        );
+        let durable_state_overlay = host.drain_durable_state_overlay();
         let error = result.expect_err("nested calls must reject an actively held callee");
         assert!(matches!(
             error.as_unmetered(),
@@ -20513,7 +20288,7 @@ seiyaku HeldCallee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -20523,7 +20298,7 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  view fn who_called() -> AccountId {
+  view fn who_called() authorize(anyone) -> AccountId {
     return context::authority();
   }
 }
@@ -20539,12 +20314,8 @@ seiyaku Callee {
             Json::new(()),
         );
         result.expect("call_contract syscall should succeed");
-        let tlv = vm
-            .memory
-            .validate_tlv(vm.register(10))
-            .expect("returned NoritoBytes tlv");
-        let returned = decode_nested_return(
-            tlv.payload,
+        let returned = render_nested_result(
+            &vm,
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::AccountId,
         );
         assert_eq!(
@@ -20571,14 +20342,8 @@ seiyaku Callee {
             Json::new(()),
         );
         asset_result.expect("typed asset view should execute");
-        let asset_return = asset_vm
-            .memory
-            .validate_tlv(asset_vm.register(10))
-            .expect("typed asset view NoritoBytes");
-        assert_eq!(asset_return.type_id, PointerType::NoritoBytes);
         assert_eq!(
-            decode_nested_return(
-                asset_return.payload,
+            render_nested_result(&asset_vm,
                 iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::AssetDefinitionId,
             ),
             norito::json::Value::from(asset_definition.to_string()),
@@ -20593,14 +20358,9 @@ seiyaku Callee {
             Json::new(()),
         );
         account_result.expect("typed account view should execute");
-        let account_return = account_vm
-            .memory
-            .validate_tlv(account_vm.register(10))
-            .expect("typed account view NoritoBytes");
-        assert_eq!(account_return.type_id, PointerType::NoritoBytes);
         assert_eq!(
-            decode_nested_return(
-                account_return.payload,
+            render_nested_result(
+                &account_vm,
                 iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::AccountId,
             ),
             norito::json::Value::from(authority.to_string()),
@@ -20630,12 +20390,8 @@ seiyaku Callee {
             Json::new(()),
         );
         result.expect("typed account view should execute");
-        let returned = vm
-            .memory
-            .validate_tlv(vm.register(10))
-            .expect("typed account view NoritoBytes");
-        let account = decode_nested_return(
-            returned.payload,
+        let account = render_nested_result(
+            &vm,
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::AccountId,
         );
         assert_eq!(account, norito::json::Value::from(authority.to_string()));
@@ -20655,8 +20411,8 @@ seiyaku Callee {
             &state,
             &authority,
             r#"
-seiyaku ViewCaller {
-  kotoage fn main() -> int authorize("NestedView") { return 0; }
+seiyaku ViewCaller { permission NestedView;
+  kotoage fn main() authorize(NestedView) -> int { return 0; }
 }
 "#,
             0,
@@ -20665,18 +20421,18 @@ seiyaku ViewCaller {
             &state,
             &authority,
             r#"
-seiyaku EffectfulView {
+seiyaku EffectfulView { permission NestedView;
   state int Counter;
 
   hajimari() {
     Counter = 0;
   }
 
-  kotoage fn seed(int value) authorize("NestedView") {
+  kotoage fn seed(int value) authorize(NestedView) {
     Counter = value;
   }
 
-  kotoage fn increment_then_return() -> int authorize("NestedView") {
+  kotoage fn increment_then_return() authorize(NestedView) -> int {
     Counter = Counter + 1;
     return Counter;
   }
@@ -20684,8 +20440,27 @@ seiyaku EffectfulView {
 "#,
             1,
         );
-        grant_named_permission_to_account(&state, &authority, authority.clone(), "NestedView");
-        grant_named_permission_to_account(&state, &authority, caller.subject_id(), "NestedView");
+        grant_contract_entrypoint_to_account(
+            &state,
+            &authority,
+            authority.clone(),
+            &caller,
+            "main",
+        );
+        grant_contract_entrypoint_to_account(
+            &state,
+            &authority,
+            authority.clone(),
+            &callee,
+            "seed",
+        );
+        grant_contract_entrypoint_to_account(
+            &state,
+            &authority,
+            caller.subject_id(),
+            &callee,
+            "increment_then_return",
+        );
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let seed_payload = Json::from_str_norito(r#"{"value":"5"}"#).expect("seed payload");
         execute_contract_call_transaction(
@@ -20747,11 +20522,13 @@ seiyaku EffectfulView {
                 Json::new(()),
             );
             result.expect("the embedded kotoage entrypoint remains transaction-capable");
-            let returned = vm
-                .memory
-                .validate_tlv(vm.register(10))
-                .expect("entrypoint result NoritoBytes");
-            assert_eq!(decode_nested_int(returned.payload), 6);
+            assert_eq!(
+                render_nested_result(
+                    &vm,
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int
+                ),
+                norito::json!("6")
+            );
             assert!(
                 !durable_state_overlay.is_empty(),
                 "a forged external view label must not roll back an embedded kotoage effect",
@@ -20763,18 +20540,18 @@ seiyaku EffectfulView {
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let source = r#"
-seiyaku StoredAccountView {
+seiyaku StoredAccountView { permission AssetOps;
   state AccountId Stored;
 
   hajimari(AccountId account_id) {
     Stored = account_id;
   }
 
-  kotoage fn bind(AccountId account_id) authorize("AssetOps") {
+  kotoage fn bind(AccountId account_id) authorize(AssetOps) {
     Stored = account_id;
   }
 
-  view fn stored() -> AccountId {
+  view fn stored() authorize(anyone) -> AccountId {
     return Stored;
   }
 }
@@ -20845,7 +20622,7 @@ seiyaku StoredAccountView {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -20854,7 +20631,7 @@ seiyaku Caller {
             &state,
             &authority,
             r#"
-seiyaku Callee {
+seiyaku Callee { permission AssetOps;
   state int backlog;
   state int safe_mode;
 
@@ -20863,7 +20640,7 @@ seiyaku Callee {
     safe_mode = 0;
   }
 
-  kotoage fn report(int backlog_value, int safe_mode_value) authorize("AssetOps") {
+  kotoage fn report(int backlog_value, int safe_mode_value) authorize(AssetOps) {
     backlog = backlog_value;
     safe_mode = safe_mode_value;
   }
@@ -20890,16 +20667,12 @@ seiyaku Callee {
             ivm::IvmStackPolicy::V1.stack_limit_for_gas(1_000_000),
             "nested execution must use the canonical V1 guest-stack policy",
         );
-        let returned = vm.memory.validate_tlv(vm.register(10)).unwrap();
-        assert_eq!(returned.type_id, PointerType::NoritoBytes);
         let schema = iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
             nodes: vec![
                 iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit,
             ],
         };
-        let record =
-            super::super::return_value::decode_entrypoint_return_record(&schema, returned.payload)
-                .unwrap();
+        let record = captured_nested_result(&vm, &schema);
         assert_eq!(
             super::super::return_value::render_entrypoint_return_record(&schema, &record).unwrap(),
             norito::json::Value::Null,
@@ -20925,11 +20698,11 @@ seiyaku Callee {
         let caller_contract = install_contract(
             &state,
             &authority,
-            "seiyaku Caller { view fn main() -> int { return 0; } }",
+            "seiyaku Caller { kotoage fn main() authorize(anyone) -> int { return 0; } }",
             0,
         );
         let source = r#"
-seiyaku Callee {
+seiyaku Callee { permission AssetOps;
   error enum ReceiptError { Refused = 7 }
   struct Receipt {
     () marker;
@@ -20946,7 +20719,7 @@ seiyaku Callee {
     };
   }
   fn reload() -> Receipt { return Stored; }
-  kotoage fn roundtrip(Receipt value) -> Receipt authorize("AssetOps") {
+  kotoage fn roundtrip(Receipt value) authorize(AssetOps) -> Receipt {
     Stored = value;
     return reload();
   }
@@ -20987,11 +20760,7 @@ seiyaku Callee {
             .as_ref()
             .unwrap();
         assert_eq!(schema.word_count(), Some(5));
-        let returned = vm.memory.validate_tlv(vm.register(10)).unwrap();
-        assert_eq!(returned.type_id, PointerType::NoritoBytes);
-        let record =
-            super::super::return_value::decode_entrypoint_return_record(schema, returned.payload)
-                .unwrap();
+        let record = captured_nested_result(&vm, schema);
         assert_eq!(
             super::super::return_value::render_entrypoint_return_record(schema, &record).unwrap(),
             expected,
@@ -21012,7 +20781,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -21021,7 +20790,7 @@ seiyaku Caller {
             &state,
             &authority,
             r#"
-seiyaku Callee {
+seiyaku Callee { permission AssetOps;
   error enum CalleeError {
     ForcedFailure = 1,
   }
@@ -21032,7 +20801,7 @@ seiyaku Callee {
     counter = 0;
   }
 
-  kotoage fn fail_after_write() -> int authorize("AssetOps") {
+  kotoage fn fail_after_write() authorize(AssetOps) -> int {
     counter = 9;
     require(false, CalleeError::ForcedFailure);
     return 0;
@@ -21065,7 +20834,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn main() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -21074,14 +20843,14 @@ seiyaku Caller {
             &state,
             &authority,
             r#"
-seiyaku Callee {
+seiyaku Callee { permission AssetOps;
   state int counter;
 
   hajimari() {
     counter = 0;
   }
 
-  kotoage fn write_then_return() -> bytes authorize("AssetOps") {
+  kotoage fn write_then_return() authorize(AssetOps) -> bytes {
     counter = 9;
     return b"\xff";
   }
@@ -21134,46 +20903,19 @@ seiyaku Callee {
         );
         grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
         let view = state.view();
-        let caller_context = ContractRuntimeExecutionContext {
-            contract_address: caller_contract.clone(),
-            contract_subject: caller_contract.subject_id(),
-            contract_alias: None,
-            entrypoint: "invoke".to_owned(),
-        };
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
         host.set_durable_state_snapshot_from_world(view.world());
-        host.set_contract_runtime_context(Some(caller_context.clone()));
-        let caller_code_hash = *view
-            .world()
-            .contract_instances()
-            .get(&caller_contract)
-            .expect("installed caller contract binding");
-        host.set_contract_entrypoint_authorization(Some(
-            ContractEntrypointAuthorizationSnapshot::new(
-                authority.clone(),
-                caller_context.entrypoint.clone(),
-                None,
-                &crate::smartcontracts::code::BoundContractIdentity {
-                    contract_address: caller_contract.clone(),
-                    contract_alias: None,
-                    contract_alias_binding: None,
-                    code_hash: caller_code_hash,
-                },
-            ),
-        ));
         let mut vm = IVM::new(1_000_000);
-        vm.load_program(&ivm::ProgramMetadata::default().encode())
-            .expect("load metadata-only program");
-        let target_ptr = store_tlv(
+        bind_nested_caller(&mut host, &mut vm, &view, &authority, &caller_contract);
+        let caller_context = host.current_contract_runtime_context.clone().unwrap();
+        store_typed_contract_call(
             &mut vm,
-            PointerType::Blob,
-            callee_contract.as_ref().as_bytes(),
+            &state,
+            &callee_contract,
+            "write_then_return",
+            &Json::new(()),
         );
-        let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, b"write_then_return");
-        vm.set_register(10, target_ptr);
-        vm.set_register(11, entrypoint_ptr);
-        vm.set_register(12, 0);
         let err = host
             .syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
             .expect_err("invalid UTF-8 must fail typed return validation");
@@ -21206,145 +20948,140 @@ seiyaku Callee {
         assert!(host.queued.is_empty());
     }
     #[test]
-    fn call_contract_syscall_accepts_only_exact_public_norito_argument_records() {
-        let authority: AccountId = fixture_account("alice");
+    fn call_contract_syscall_accepts_only_exact_public_authenticated_typed_tables() {
+        let authority = fixture_account("alice");
         let state = contract_test_state(&authority);
-        let caller_contract = install_contract(
+        let caller = install_contract(
             &state,
             &authority,
-            r#"
-seiyaku Caller {
-  view fn main() -> int { return 0; }
-}
-"#,
+            "seiyaku Caller { kotoage fn main() authorize(anyone) {} }",
             0,
         );
-        let callee_contract = install_contract(
+        let callee = install_contract(
             &state,
             &authority,
-            r#"
-seiyaku Callee {
-  view fn no_args() -> int { return 1; }
-  view fn echo(int value) -> int { return value; }
-}
-"#,
+            "seiyaku Callee { view fn no_args() authorize(anyone) -> int {1} view fn echo(int value) authorize(anyone) -> int {value} }",
             1,
         );
-        let payload = Json::from(norito::json!({ "value": "7" }));
-        let valid_record =
-            encoded_contract_arguments_from_json(&state, &callee_contract, "echo", &payload)
-                .expect("parameterized entrypoint record");
-        let mut wrong_record: iroha_data_model::smart_contract::entrypoint::EntrypointArgumentRecordV1 =
-            norito::decode_from_bytes(&valid_record).expect("decode test argument record");
-        wrong_record.schema_hash[0] ^= 0x80;
-        let wrong_record = norito::to_bytes(&wrong_record).expect("encode wrong-schema record");
-        let invoke = |entrypoint: &str,
-                      argument: Option<(PointerType, &[u8])>,
-                      private_register: Option<usize>|
-         -> Result<u64, ivm::VMError> {
+        let invoke = |selector: &str, change: &dyn Fn(&mut IVM, [u64; 6])| {
             let view = state.view();
             let mut host = CoreHostImpl::new(authority.clone());
             host.set_query_state(&view);
-            host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
-                contract_address: caller_contract.clone(),
-                contract_subject: caller_contract.subject_id(),
-                contract_alias: None,
-                entrypoint: "invoke".to_owned(),
-            }));
-            let caller_code_hash = *view
-                .world()
-                .contract_instances()
-                .get(&caller_contract)
-                .expect("installed caller contract binding");
-            host.set_contract_entrypoint_authorization(Some(
-                ContractEntrypointAuthorizationSnapshot::new(
-                    authority.clone(),
-                    "invoke".to_owned(),
-                    None,
-                    &crate::smartcontracts::code::BoundContractIdentity {
-                        contract_address: caller_contract.clone(),
-                        contract_alias: None,
-                        contract_alias_binding: None,
-                        code_hash: caller_code_hash,
-                    },
-                ),
-            ));
             let mut vm = IVM::new(1_000_000);
-            vm.load_program(&ivm::ProgramMetadata::default().encode())
-                .expect("load metadata-only caller");
-            let target = store_tlv(
+            bind_nested_caller(&mut host, &mut vm, &view, &authority, &caller);
+            let registers = store_typed_contract_call(
                 &mut vm,
-                PointerType::Blob,
-                callee_contract.as_ref().as_bytes(),
+                &state,
+                &callee,
+                selector,
+                &Json::from(norito::json!({"value":"7"})),
             );
-            let selector = store_tlv(&mut vm, PointerType::Blob, entrypoint.as_bytes());
-            let argument = argument.map_or(0, |(pointer_type, bytes)| {
-                store_tlv(&mut vm, pointer_type, bytes)
-            });
-            vm.set_register(10, target);
-            vm.set_register(11, selector);
-            vm.set_register(12, argument);
-            if let Some(private_register) = private_register {
-                vm.set_zk_mode(true)
-                    .expect("private lifecycle cleanup succeeds");
-                vm.registers.set_tag(private_register, true);
-            }
-            host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
+            change(&mut vm, registers);
+            ivm::reset_argument_record_decode_count();
+            let result = host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm);
+            assert_eq!(
+                ivm::argument_record_decode_count(),
+                0,
+                "typed VM calls never decode a transported argument record"
+            );
+            (result, vm)
         };
-        ivm::reset_argument_record_decode_count();
-        invoke(
-            "echo",
-            Some((PointerType::NoritoBytes, &valid_record)),
-            None,
-        )
-        .expect("exact argument record must execute");
+        let (result, vm) = invoke("echo", &|_, _| {});
+        result.unwrap();
         assert_eq!(
-            ivm::argument_record_decode_count(),
-            1,
-            "the VM-to-VM argument record must be decoded exactly once"
+            render_nested_result(
+                &vm,
+                iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int
+            ),
+            norito::json!("7")
         );
-        let legacy_json = norito_blob(&payload);
-        for (label, entrypoint, argument) in [
-            (
-                "legacy JSON transport",
-                "echo",
-                Some((PointerType::Json, legacy_json.as_slice())),
-            ),
-            ("missing parameter record", "echo", None),
-            (
-                "unexpected zero-parameter record",
-                "no_args",
-                Some((PointerType::NoritoBytes, valid_record.as_slice())),
-            ),
-        ] {
-            let error = invoke(entrypoint, argument, None)
-                .expect_err("non-canonical nested argument transport must fail");
+        for case in 0..7 {
+            let (result, vm) = invoke(
+                if case == 1 { "no_args" } else { "echo" },
+                &|vm, registers| match case {
+                    0 => {
+                        vm.set_register(12, 0);
+                        vm.set_register(13, 0);
+                    }
+                    1 => {
+                        let table = vm.alloc_heap(8).unwrap();
+                        vm.store_u64(table, 0).unwrap();
+                        vm.set_register(12, table);
+                        vm.set_register(13, 1);
+                    }
+                    2 => {
+                        vm.set_register(13, 2);
+                    }
+                    3 => {
+                        vm.set_register(15, 2);
+                    }
+                    4 => {
+                        let json = store_tlv(
+                            vm,
+                            PointerType::Json,
+                            &norito_blob(&Json::from(norito::json!({"value":"7"}))),
+                        );
+                        vm.set_register(12, json);
+                    }
+                    5 => {
+                        let target = store_tlv(vm, PointerType::Blob, b"echo");
+                        vm.set_register(11, target);
+                    }
+                    6 => {
+                        let address = store_tlv(
+                            vm,
+                            PointerType::Blob,
+                            &[b'a';
+                                iroha_data_model::smart_contract::CONTRACT_ADDRESS_LITERAL_LEN_V1
+                                    + 1],
+                        );
+                        vm.set_register(10, address);
+                    }
+                    _ => unreachable!(),
+                },
+            );
+            let error = result
+                .expect_err("malformed typed tables or retired selector/JSON transport must fail");
             assert!(
-                matches!(
-                    error.as_unmetered(),
-                    ivm::VMError::DecodeError
-                        | ivm::VMError::NoritoInvalid
-                        | ivm::VMError::PermissionDenied
-                ),
-                "{label} produced unexpected error: {error:?}"
+                error.execution_deferral().is_none(),
+                "case {case}: {error:?}"
+            );
+            assert_eq!(
+                vm.load_u64(vm.register(14)),
+                Ok(0),
+                "case {case} published no output"
             );
         }
-        let error = invoke(
-            "echo",
-            Some((PointerType::NoritoBytes, wrong_record.as_slice())),
-            None,
-        )
-        .expect_err("schema-substituted nested argument record must fail");
-        assert!(
-            matches!(error.as_unmetered(), ivm::VMError::PermissionDenied),
-            "a schema-authentication mismatch must fail closed: {error:?}"
-        );
-        for private_register in [10, 11, 12] {
-            let error = invoke("no_args", None, Some(private_register))
-                .expect_err("private call inputs must not cross the host boundary");
+        for wrong_ordinal in [false, true] {
+            let (result, _) = invoke("echo", &|vm, registers| {
+                let mut binding = ivm_abi::contract_call::ContractCallBindingV1::from_bytes(
+                    vm.validate_tlv(registers[1]).unwrap().payload,
+                )
+                .unwrap();
+                if wrong_ordinal {
+                    binding.entrypoint = u32::MAX;
+                } else {
+                    binding.code_hash = Hash::new(b"substituted schema artifact");
+                }
+                let pointer = store_tlv(vm, PointerType::NoritoBytes, &binding.to_bytes().unwrap());
+                vm.set_register(11, pointer);
+            });
+            assert!(matches!(
+                result.unwrap_err().as_unmetered(),
+                ivm::VMError::PermissionDenied
+            ));
+        }
+        for register in 10..16 {
+            let (result, _) = invoke("no_args", &|vm, _| {
+                vm.set_zk_mode(true).unwrap();
+                vm.registers.set_tag(register, true);
+            });
             assert!(
-                matches!(error.as_unmetered(), ivm::VMError::PrivacyViolation),
-                "private r{private_register} produced unexpected error: {error:?}"
+                matches!(
+                    result.unwrap_err().as_unmetered(),
+                    ivm::VMError::PrivacyViolation
+                ),
+                "private r{register}"
             );
         }
     }
@@ -21380,54 +21117,42 @@ seiyaku Callee {
     #[test]
     fn call_contract_syscall_checks_affordability_before_state_lookup_or_decode() {
         let authority: AccountId = fixture_account("alice");
-        let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
+        let state = contract_test_state(&authority);
+        let caller = install_contract(
+            &state,
+            &authority,
+            "seiyaku Caller { kotoage fn main() authorize(anyone) {} }",
+            0,
+        );
+        let address = ContractAddress::derive(
+            state.view().network_id(),
             &authority,
             404,
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive unavailable target address");
-        let selector = "missing";
-        let request_bytes = contract_address
-            .as_ref()
-            .as_bytes()
-            .len()
-            .saturating_add(selector.len());
-        let request_gas = ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0);
-        let mut host = CoreHost::new(authority.clone());
-        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
-            contract_address: contract_address.clone(),
-            contract_subject: contract_address.subject_id(),
-            contract_alias: None,
-            entrypoint: "invoke".to_owned(),
-        }));
-        host.set_contract_entrypoint_authorization(Some(
-            ContractEntrypointAuthorizationSnapshot::new(
-                authority.clone(),
-                "invoke".to_owned(),
-                None,
-                &crate::smartcontracts::code::BoundContractIdentity {
-                    contract_address: contract_address.clone(),
-                    contract_alias: None,
-                    contract_alias_binding: None,
-                    code_hash: Hash::new(b"unavailable caller contract"),
-                },
-            ),
-        ));
-        let mut vm = IVM::new(request_gas.saturating_sub(1));
-        vm.load_program(&ivm::ProgramMetadata::default().encode())
-            .expect("load metadata-only caller");
-        let target = store_tlv(
-            &mut vm,
-            PointerType::Blob,
-            contract_address.as_ref().as_bytes(),
+        let binding = ivm_abi::contract_call::ContractCallBindingV1 {
+            code_hash: Hash::new(b"unavailable callee"),
+            entrypoint: 0,
+        }
+        .to_bytes()
+        .unwrap();
+        let request_gas = ivm::gas::syscall_byte_gas(
+            ivm::gas::G_CALL_CONTRACT,
+            address.as_ref().len() + binding.len(),
+            0,
         );
-        let selector = store_tlv(&mut vm, PointerType::Blob, selector.as_bytes());
-        vm.set_register(10, target);
-        vm.set_register(11, selector);
-        vm.set_register(12, 0);
+        let mut host = CoreHost::new(authority.clone());
+        let mut vm = IVM::new(1_000_000);
+        // Bind the genuine caller but deliberately leave query_state absent.
+        bind_nested_caller(&mut host, &mut vm, &state.view(), &authority, &caller);
+        let target = store_tlv(&mut vm, PointerType::Blob, address.as_ref().as_bytes());
+        let binding = store_tlv(&mut vm, PointerType::NoritoBytes, &binding);
+        let result = vm.alloc_heap(8).unwrap();
+        for (index, word) in [target, binding, 0, 0, result, 1].into_iter().enumerate() {
+            vm.set_register(10 + index, word);
+        }
+        vm.set_gas_limit(request_gas.saturating_sub(1));
         ivm::reset_argument_record_decode_count();
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm),
@@ -21435,6 +21160,8 @@ seiyaku Callee {
             "unaffordable calls must fail before the absent query state is consulted"
         );
         assert_eq!(ivm::argument_record_decode_count(), 0);
+        assert!(host.queued.is_empty());
+        assert_eq!(vm.load_u64(result).unwrap(), 0);
     }
     // Low-level artifact authorization tests bind a genuine signed Halt root.
     // They exercise artifact authority snapshots, not correspondence to that
@@ -21477,7 +21204,10 @@ seiyaku Callee {
             .expect("bind exact signed artifact test root");
     }
 
-    fn bind_artifact_test_signed_root(tx: &mut StateTransaction<'_, '_>, authority: &AccountId) {
+    pub(super) fn bind_artifact_test_signed_root(
+        tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+    ) {
         let source = artifact_test_signed_root(tx.network_id, authority);
         bind_artifact_test_source_root(tx, &source);
     }
@@ -21517,7 +21247,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> int { return 0; }
+  kotoage fn open_position() authorize(anyone) -> int { return 0; }
 }
 "#,
             0,
@@ -21526,10 +21256,10 @@ seiyaku Caller {
             &state,
             &authority,
             r#"
-seiyaku Callee {
+seiyaku Callee { permission AssetOps;
   kotoage fn pull_into_vault(AccountId target,
                              AssetDefinitionId asset,
-                             quantity amount) -> quantity authorize("AssetOps") {
+                             quantity amount) authorize(AssetOps) -> quantity {
     ledger::asset::transfer(source: context::authority(), destination: target, asset_definition: asset, amount: amount, dataspace: DataSpaceId::parse("0"));
     return amount;
   }
@@ -21561,27 +21291,21 @@ seiyaku Callee {
         host.set_query_state(&view);
         host.set_durable_state_snapshot_from_world(view.world());
         host.set_contract_runtime_context(Some(caller_context.clone()));
-        let caller_code_hash = *view
-            .world()
-            .contract_instances()
-            .get(&caller_contract)
-            .expect("installed caller contract binding");
         host.set_contract_entrypoint_authorization(Some(
             ContractEntrypointAuthorizationSnapshot::new(
                 authority.clone(),
                 caller_context.entrypoint.clone(),
-                None,
-                &crate::smartcontracts::code::BoundContractIdentity {
-                    contract_address: caller_contract.clone(),
-                    contract_alias: None,
-                    contract_alias_binding: None,
-                    code_hash: caller_code_hash,
-                },
+                iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
+                &crate::smartcontracts::code::fetch_bound_contract_identity(
+                    &view,
+                    &caller_contract,
+                )
+                .expect("read live caller identity")
+                .expect("installed caller"),
             ),
         ));
         let mut vm = IVM::new(1_000_000);
-        vm.load_program(&ivm::ProgramMetadata::default().encode())
-            .expect("load metadata-only program");
+        bind_nested_caller(&mut host, &mut vm, &view, &authority, &caller_contract);
         let amount = Quantity::from(3_u32);
         let from_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
         let to_ptr = store_tlv(
@@ -21614,22 +21338,13 @@ seiyaku Callee {
             "asset": nested_asset,
             "amount": "3"
         }));
-        let target_ptr = store_tlv(
-            &mut vm,
-            PointerType::Blob,
-            callee_contract.as_ref().as_bytes(),
-        );
-        let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, b"pull_into_vault");
-        let (payload_ptr, _) = store_contract_arguments_from_json(
+        store_typed_contract_call(
             &mut vm,
             &state,
             &callee_contract,
             "pull_into_vault",
             &nested_payload,
         );
-        vm.set_register(10, target_ptr);
-        vm.set_register(11, entrypoint_ptr);
-        vm.set_register(12, payload_ptr);
         host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
             .expect("nested call should succeed");
         let artifacts = host
@@ -21811,12 +21526,12 @@ seiyaku Callee {
         use sha2::{Digest as _, Sha256};
         assert_eq!(
             Hash::new(ALIAS_CASES_V1).to_string(),
-            "4e9083f1ea067d8ec4571b483caf75770015af96af9c5f8184c0551906d6e1f3",
+            "207caca5e78d7fab0112a2239473188d396d004498bb71b534f9780cc272c615",
             "the alias contract case fixture must retain its pinned Iroha digest"
         );
         assert_eq!(
             hex::encode(Sha256::digest(ALIAS_CASES_V1)),
-            "357f2acc3eb6f2833d9193a62e9c06a07fd909721516c4703e6209b6a41e518c",
+            "3cca3543420745decad1f2ea55f8118f850a8362abe8b31bae4fc2f86f96ecf0",
             "the alias contract case fixture must retain its pinned SHA-256 digest"
         );
         let fixture: AliasContractCaseFileV1 = norito::json::from_slice(ALIAS_CASES_V1)
@@ -22257,7 +21972,7 @@ seiyaku Callee {
             &fixture.state,
             &fixture.authority,
             &fixture_signing_keypair(&fixture.authority),
-            contract_invocation_from_json(&fixture.state, contract, "pay", &pay_payload),
+            contract_invocation_from_json(&fixture.state, contract.clone(), "pay", &pay_payload),
             ivm_cache,
         );
         if case.setup == AliasContractSetupV1::DomainPermissionOnly {
@@ -22285,15 +22000,49 @@ seiyaku Callee {
             AliasContractSetupV1::DomainlessWithoutPermission
                 | AliasContractSetupV1::DomainWithoutPermission
         ) {
-            assert!(
-                matches!(
-                    result,
-                    Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
-                        iroha_data_model::ValidationFail::NotPermitted(_)
-                    ))
-                ),
+            use iroha_data_model::executor::fault::{
+                IvmFaultKindV1, IvmFaultPositionV1, IvmInvocationSelectorV1,
+            };
+            let Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                iroha_data_model::ValidationFail::IvmFault(fault),
+            )) = &result
+            else {
+                panic!("{result_message}: {result:?}");
+            };
+            assert_eq!(
+                fault.kind,
+                IvmFaultKindV1::PermissionDenied,
                 "{result_message}"
             );
+            let view = fixture.state.view();
+            let identity =
+                crate::smartcontracts::code::fetch_bound_contract_identity(&view, &contract)
+                    .expect("read exact alias fixture binding")
+                    .expect("alias fixture remains installed");
+            let artifact = ContractArtifactId::new(
+                contract.dataspace_id().expect("fixture dataspace"),
+                identity.code_hash,
+            );
+            let selector = view
+                .world()
+                .contract_manifests()
+                .get(&artifact)
+                .expect("authenticated fixture manifest")
+                .entrypoints
+                .as_ref()
+                .expect("fixture entrypoint table")
+                .iter()
+                .position(|entry| entry.name == "pay")
+                .expect("fixture pay selector");
+            assert_eq!(fault.site.code_hash, identity.code_hash);
+            assert_eq!(
+                fault.site.selector,
+                IvmInvocationSelectorV1::Entrypoint(u32::try_from(selector).unwrap()),
+            );
+            assert!(matches!(
+                fault.site.position,
+                IvmFaultPositionV1::Execute { .. }
+            ));
         } else {
             assert!(result.is_err(), "{result_message}");
         }
@@ -22457,12 +22206,14 @@ seiyaku Callee {
         let source_call = Hash::from(source.hash_as_entrypoint());
         let mut stx = block.transaction_for_fastpq_testing(source_call);
         let artifacts = HostExecutionArtifacts {
-            queued: vec![QueuedInstruction {
-                instruction: InstructionBox::from(Transfer::asset_quantity(
-                    source_asset_id.clone(),
-                    1_u32,
-                    recipient.clone(),
-                )),
+            queued: vec![QueuedEffect {
+                payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
+                    InstructionBox::from(Transfer::asset_quantity(
+                        source_asset_id.clone(),
+                        1_u32,
+                        recipient.clone(),
+                    )),
+                ),
                 authority: nested_authority.clone(),
                 contract_runtime_context: None,
                 entrypoint_authorization: None,
@@ -22523,8 +22274,10 @@ seiyaku Callee {
         let confidential_gas_delta = crate::gas::confidential_gas_cost(&instruction);
         assert!(confidential_gas_delta > 0);
         let artifacts = HostExecutionArtifacts {
-            queued: vec![QueuedInstruction {
-                instruction: instruction.clone(),
+            queued: vec![QueuedEffect {
+                payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
+                    instruction.clone(),
+                ),
                 authority: authority.clone(),
                 contract_runtime_context: None,
                 entrypoint_authorization: None,
@@ -22543,15 +22296,23 @@ seiyaku Callee {
         let mut transaction = block.transaction();
 
         bind_artifact_test_signed_root(&mut transaction, &authority);
-        artifacts
+        let error = artifacts
             .apply_to_transaction(&mut transaction, &authority)
-            .expect_err("restricted initial executor must reject the queued proof");
+            .expect_err("the proof references a missing verifying key");
+        assert!(
+            matches!(error,
+                ValidationFail::InstructionFailed(
+                    iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(ref message)
+                ) if message.contains("registered verifying key reference")
+            ),
+            "{error:?}"
+        );
         transaction
             .finish_execution_effect_budget()
             .expect("close artifact test root");
 
-        assert_eq!(transaction.zk_confidential_ops_in_tx, 0);
-        assert_eq!(transaction.zk_verify_calls_in_tx, 0);
+        assert_eq!(transaction.zk_confidential_ops_in_tx, 1);
+        assert_eq!(transaction.zk_verify_calls_in_tx, 1);
         assert_eq!(
             transaction.confidential_gas_used_in_tx, confidential_gas_delta,
             "host-artifact gas must be retained before queued execution can reject"
@@ -22561,11 +22322,23 @@ seiyaku Callee {
         let mut mutable_host = CoreHost::new(authority.clone());
         mutable_host.queue_instruction(instruction);
         let mut mutable_host_transaction = block.transaction();
-        mutable_host
+        bind_artifact_test_signed_root(&mut mutable_host_transaction, &authority);
+        let error = mutable_host
             .apply_queued(&mut mutable_host_transaction, &authority)
-            .expect_err("restricted initial executor must reject the mutable host queue");
-        assert_eq!(mutable_host_transaction.zk_confidential_ops_in_tx, 0);
-        assert_eq!(mutable_host_transaction.zk_verify_calls_in_tx, 0);
+            .expect_err("the queued proof references a missing verifying key");
+        assert!(
+            matches!(error,
+                ValidationFail::InstructionFailed(
+                    iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(ref message)
+                ) if message.contains("registered verifying key reference")
+            ),
+            "{error:?}"
+        );
+        mutable_host_transaction
+            .finish_execution_effect_budget()
+            .expect("close artifact test root");
+        assert_eq!(mutable_host_transaction.zk_confidential_ops_in_tx, 1);
+        assert_eq!(mutable_host_transaction.zk_verify_calls_in_tx, 1);
         assert_eq!(
             mutable_host_transaction.confidential_gas_used_in_tx, confidential_gas_delta,
             "mutable-host gas must be retained before queued execution can reject"
@@ -22664,7 +22437,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku DurableOwner {
-  view fn inspect() -> int { return 0; }
+  view fn inspect() authorize(anyone) -> int { return 0; }
 }
 "#,
             411,
@@ -22678,7 +22451,7 @@ seiyaku DurableOwner {
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),
             "inspect".to_owned(),
-            None,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             &identity,
         );
         let foreign_digest = hex::encode(Hash::new(b"foreign durable owner").as_ref());
@@ -22722,11 +22495,13 @@ seiyaku DurableOwner {
     #[test]
     fn identical_queued_artifacts_do_not_reuse_call_hash_across_committed_fragments() {
         let authority = fixture_account("alice");
-        let queued = vec![QueuedInstruction {
-            instruction: InstructionBox::from(Log::new(
-                iroha_logger::Level::INFO,
-                "identical internal artifact".to_owned(),
-            )),
+        let queued = vec![QueuedEffect {
+            payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
+                InstructionBox::from(Log::new(
+                    iroha_logger::Level::INFO,
+                    "identical internal artifact".to_owned(),
+                )),
+            ),
             authority,
             contract_runtime_context: None,
             entrypoint_authorization: None,
@@ -23563,19 +23338,19 @@ seiyaku DurableOwner {
         )
         .expect("derive contract address");
         let source = r#"
-            seiyaku AddressState {
+            seiyaku AddressState { permission WriteState;
                 state bytes Stored;
 
                 hajimari() {
                     Stored = b"";
                 }
 
-                kotoage fn capture() -> int authorize("WriteState") {
+                kotoage fn capture() authorize(WriteState) -> int {
                     Stored = context::seiyaku_address();
                     return 1;
                 }
 
-                view fn read() -> bytes {
+                view fn read() authorize(anyone) -> bytes {
                     return Stored;
                 }
             }
@@ -23607,6 +23382,10 @@ seiyaku DurableOwner {
         let mut vm = IVM::new(u64::MAX);
         vm.load_program(&program)
             .expect("load typed bytes contract");
+        assert_eq!(
+            host.prepare_syscall(ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS, &vm),
+            Ok(CoreHost::sysvar_gas(contract_address.as_str().len()))
+        );
         vm.set_register(1, vm.memory.code_len());
         vm.set_program_counter(entry_pc("capture"))
             .expect("seek capture entrypoint");
@@ -23648,12 +23427,24 @@ seiyaku DurableOwner {
             .expect("validate bytes return");
         assert_eq!(returned.type_id, PointerType::Blob);
         assert_eq!(returned.version, 1);
-        assert_eq!(
-            returned.payload,
-            norito::to_bytes(&contract_address)
-                .expect("encode expected contract address")
-                .as_slice()
-        );
+        assert_eq!(returned.payload, contract_address.as_str().as_bytes());
+    }
+    fn encode_fixture_int_map_key(value: i128) -> Vec<u8> {
+        use ivm_abi::state_value::{
+            StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
+            StateValueSchemaV1, state_value_schema_hash_v1,
+        };
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+        };
+        let envelope =
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(value))
+                .unwrap();
+        norito::encode_canonical(&StateValueRecordV1 {
+            schema_hash: state_value_schema_hash_v1(&norito::encode_canonical(&schema).unwrap()),
+            atoms: vec![StateValueAtomV1::Pointer(envelope)],
+        })
+        .unwrap()
     }
     #[test]
     fn production_typed_state_map_scans_and_writes_validate_cntr() {
@@ -23668,11 +23459,11 @@ seiyaku DurableOwner {
         )
         .expect("derive contract address");
         let source = r#"
-            seiyaku TypedMapState {
+            seiyaku TypedMapState { permission WriteState;
                 state StateMap<int, bytes> BytesMap;
                 state StateMap<int, int> IntMap;
 
-                kotoage fn write() -> int authorize("WriteState") {
+                kotoage fn write() authorize(WriteState) -> int {
                     BytesMap[1] = b"canonical";
                     return 1;
                 }
@@ -23748,8 +23539,7 @@ seiyaku DurableOwner {
             })
             .expect("compiler-emitted bytes record")
             .clone();
-        let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(1))
-            .expect("encode canonical map key");
+        let key = encode_fixture_int_map_key(1);
         let wrong_path: StatePath = format!("IntMap/{}", hex::encode(key))
             .parse()
             .expect("canonical typed child path");
@@ -23800,9 +23590,7 @@ seiyaku DurableOwner {
             entrypoint: "main".to_owned(),
         };
         let base: iroha_model_base::name::Name = "ValidationFeeConversion".parse().expect("base");
-        let encoded_key =
-            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(0))
-                .expect("integer key");
+        let encoded_key = encode_fixture_int_map_key(0);
         let relative_key =
             ivm::host::canonical_state_map_path(&base, &encoded_key).expect("canonical map path");
         let scope = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
@@ -23833,7 +23621,7 @@ seiyaku DurableOwner {
         let source = r#"
             seiyaku ValidationFeeConversionReader {
                 state StateMap<int, quantity> ValidationFeeConversion;
-                view fn main() -> quantity {
+                view fn main() authorize(anyone) -> quantity {
                     let quantity zero = 0;
                     return ValidationFeeConversion.get(0).unwrap_or(zero);
                 }
@@ -24981,134 +24769,65 @@ seiyaku DurableOwner {
         );
     }
     #[test]
-    fn vrf_epoch_seed_syscall_reports_missing_with_fallback() {
-        let world = World::new();
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        super::pointer_abi_tests::establish_authenticated_axt_ledger_time(&state, 1);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
-        let mut vm = IVM::new(10_000);
-        let req = ivm::vrf::VrfEpochSeedRequest {
-            epoch: 7,
-            fallback_to_latest: false,
-        };
-        let req_bytes = norito_blob(&req);
-        let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &req_bytes);
-        vm.set_register(10, req_ptr);
-        let quote = host
-            .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &vm)
-            .expect("quote vrf epoch seed");
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
-            .expect("vrf epoch seed");
-        assert_eq!(vm.register(11), 0);
-        let out_ptr = vm.register(10);
-        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
-        assert_eq!(
-            gas,
-            CoreHost::state_query_gas(req_bytes.len().saturating_add(tlv.payload.len()))
-        );
-        assert_eq!(quote, vm.remaining_gas());
-        assert!(gas <= quote);
-        let resp: ivm::vrf::VrfEpochSeedResponse =
-            norito::decode_from_bytes(tlv.payload).expect("decode response");
-        assert!(!resp.found);
-        assert_eq!(resp.epoch, 7);
-        assert_eq!(resp.seed, [0; 32]);
-        let fallback_req = ivm::vrf::VrfEpochSeedRequest {
-            epoch: 99,
-            fallback_to_latest: true,
-        };
-        let fallback_bytes = norito_blob(&fallback_req);
-        let fallback_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &fallback_bytes);
-        vm.set_register(10, fallback_ptr);
-        let quote = host
-            .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &vm)
-            .expect("quote vrf epoch seed fallback");
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
-            .expect("vrf epoch seed fallback");
-        assert_eq!(vm.register(11), 0);
-        let out_ptr = vm.register(10);
-        let tlv = vm
-            .memory
-            .validate_tlv(out_ptr)
-            .expect("fallback output tlv");
-        assert_eq!(
-            gas,
-            CoreHost::state_query_gas(fallback_bytes.len().saturating_add(tlv.payload.len()))
-        );
-        assert_eq!(quote, vm.remaining_gas());
-        assert!(gas <= quote);
-        let resp: ivm::vrf::VrfEpochSeedResponse =
-            norito::decode_from_bytes(tlv.payload).expect("decode fallback response");
-        assert!(!resp.found);
-        assert_eq!(resp.epoch, 99);
-        assert_eq!(resp.seed, [0; 32]);
-    }
-    #[test]
-    fn vrf_epoch_seed_syscall_reports_missing_without_fallback() {
-        let world = World::new();
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        super::pointer_abi_tests::establish_authenticated_axt_ledger_time(&state, 1);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
-        let mut vm = IVM::new(10_000);
-        let req = ivm::vrf::VrfEpochSeedRequest {
-            epoch: 42,
-            fallback_to_latest: false,
-        };
-        let req_bytes = norito_blob(&req);
-        let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &req_bytes);
-        vm.set_register(10, req_ptr);
-        let quote = host
-            .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &vm)
-            .expect("quote missing vrf epoch seed");
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
-            .expect("vrf epoch seed missing");
-        assert_eq!(vm.register(11), 0);
-        let out_ptr = vm.register(10);
-        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
-        assert_eq!(
-            gas,
-            CoreHost::state_query_gas(req_bytes.len().saturating_add(tlv.payload.len()))
-        );
-        assert_eq!(quote, vm.remaining_gas());
-        assert!(gas <= quote);
-        let resp: ivm::vrf::VrfEpochSeedResponse =
-            norito::decode_from_bytes(tlv.payload).expect("decode response");
-        assert!(!resp.found);
-        assert_eq!(resp.epoch, 42);
-        assert_eq!(resp.seed, [0u8; 32]);
-    }
-    #[test]
-    fn vrf_epoch_seed_quote_matches_malformed_and_wrong_type_error_responses() {
-        let host = CoreHost::new(fixture_account("alice"));
-        for (pointer_type, payload) in [
-            (PointerType::Blob, vec![0x01, 0x02, 0x03]),
-            (PointerType::NoritoBytes, vec![0xff, 0x80, 0x00]),
+    fn vrf_epoch_seed_syscall_reads_only_the_exact_epoch() {
+        let mut host = CoreHost::new(fixture_account("alice"));
+        host.vrf_epoch_seeds.insert(7, [0x42; 32]);
+        host.vrf_epoch_seeds.insert(99, [0xA5; 32]);
+        for (epoch, expected) in [
+            (0, None),
+            (7, Some([0x42; 32])),
+            (8, None),
+            (99, Some([0xA5; 32])),
+            (u64::MAX, None),
         ] {
             let mut vm = IVM::new(10_000);
-            let pointer = store_tlv(&mut vm, pointer_type, &payload);
-            vm.set_register(10, pointer);
+            vm.set_register(10, epoch);
+            vm.set_register(11, 71);
             let quote = host
                 .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &vm)
-                .expect("quote malformed VRF request");
-            let mut execution_host = CoreHost::new(fixture_account("alice"));
-            let actual = execution_host
+                .unwrap();
+            let gas = host
                 .syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
-                .expect("malformed VRF requests return an error response");
-            assert_eq!(actual, CoreHost::state_query_gas(payload.len()));
-            assert_eq!(quote, vm.remaining_gas());
-            assert!(actual <= quote);
-            assert_eq!(vm.register(10), 0);
-            assert_ne!(vm.register(11), 0);
+                .unwrap();
+            assert_eq!(quote, ivm::vrf::epoch_seed_gas(expected.is_some()));
+            assert_eq!(gas, quote);
+            assert_eq!(vm.register(11), 71);
+            match expected {
+                Some(seed) => {
+                    let result = vm.validate_tlv(vm.register(10)).unwrap();
+                    assert_eq!(result.type_id, PointerType::Blob);
+                    assert_eq!(result.payload, seed);
+                }
+                None => assert_eq!(
+                    vm.register(10),
+                    0,
+                    "an absent epoch cannot fall back to another seed"
+                ),
+            }
         }
+    }
+    #[test]
+    fn vrf_epoch_seed_syscall_without_seed_snapshot_is_absent() {
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        super::pointer_abi_tests::establish_authenticated_axt_ledger_time(&state, 1);
+        let mut host = CoreHost::from_state(fixture_account("alice"), &state).unwrap();
+        let mut vm = IVM::new(10_000);
+        vm.set_register(10, 42);
+        vm.set_register(11, 71);
+        let quote = host
+            .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &vm)
+            .unwrap();
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
+                .unwrap(),
+            quote
+        );
+        assert_eq!(quote, ivm::vrf::epoch_seed_gas(false));
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), 71);
     }
     #[test]
     fn zk_vote_tally_syscall_reads_world_snapshot() {
@@ -26030,7 +25749,7 @@ seiyaku DurableOwner {
             .compile_source_with_manifest(
                 r#"
 seiyaku PreparedBoundaryArguments {
-  view fn invoke(bytes small, bytes payload) -> bytes {
+  view fn invoke(bytes small, bytes payload) authorize(anyone) -> bytes {
     let _small = small;
     return payload;
   }

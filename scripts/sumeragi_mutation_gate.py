@@ -899,9 +899,28 @@ CORE_MUTATIONS = [
       ["sumeragi::lanes::store::publication_tests::lane_merge_wake_binding_preserves_original_queue_and_pool_across_retry"]),
     m("HC199", "completed certified lane payload: discard original source and output on same-scope build retry",
       ["sumeragi::executor::payload_owner::tests::completed_certified_lane_payload_keeps_original_output_across_same_scope_build_retry"]),
+    m("HC201", "block-event execution source: repeat the completed genesis prefix under the original finite allowance",
+      ["smartcontracts::isi::tx::native_carrier_reader_tests::event_carrier_reads_recent_certified_source_under_original_finite_work"]),
+    m("HC202", "block-event State capture: spin across original publication instead of returning its actual release",
+      ["state::event_carrier_tests::event_carrier_returns_from_original_writer_refusal_without_waiting"]),
 
 
 
+
+    m("HC203", "status actor prelude: spin on original State publication instead of returning its local refusal",
+      ["telemetry::tests::classified_status_tests::status_prelude_refuses_original_publication_before_service_deadline",
+       "telemetry::tests::classified_status_tests::status_final_world_sample_refuses_publication_after_verified_chunk"]),
+    m("HC204", "initial native AMX certification: discard the original genesis acquisition on constructor refusal",
+      ["query::native_receipts::amx_read::issuer_tests::public_amx_initial_shell_refusal_retains_original_genesis_frame_without_reread"]),
+    m("HC205", "authenticated genesis scope: repeat completed metadata decoding after canonical epoch validation",
+      ["sumeragi::certified_chain::tests::signed_genesis_initialization_does_not_repeat_completed_scope_decode"]),
+
+    m("HC206", "native carrier preflight: erase original cumulative durable metadata refusal",
+      ["smartcontracts::isi::tx::native_carrier_reader_tests::full_prefix_carrier_preserves_original_cumulative_metadata_refusal",
+       "smartcontracts::isi::tx::native_carrier_reader_tests::event_carrier_preserves_original_cumulative_metadata_refusal",
+       "smartcontracts::isi::tx::native_carrier_reader_tests::bounded_native_extent_preserves_original_cumulative_metadata_refusal",
+       "state::block_proofs::native_proof_reader_tests::native_block_proof_preserves_original_cumulative_metadata_refusal",
+       "sumeragi::finality::compact_source::tests::compact_source_preserves_original_cumulative_metadata_refusal_before_body_io"]),
 
 ]
 
@@ -929,6 +948,17 @@ MODEL_MUTATIONS = [
       ["sumeragi_amx::tests::sumeragi_amx_expiry_refusal_and_unwind_preserve_original_pending_graph"]),
     m("DM9", "AMX record encoding: erase the original physical allocation refusal",
       ["sumeragi_amx::tests::sumeragi_amx_encoding_keeps_exact_physical_allocator_refusal"]),
+    m("DM10", "pinned genesis: repeat completed canonical authentication over the original body",
+      ["sumeragi_finality::genesis_dataspace::tests::pinned_signed_genesis_uses_one_original_decode_and_retains_metadata"]),
+    m("DM11", "pinned genesis: erase original binary decoder refusal provenance",
+      ["sumeragi_finality::genesis_dataspace::tests::pinned_signed_genesis_preserves_original_binary_refusal"]),
+    m("DM12", "pinned genesis: erase original signed JSON decoder refusal provenance",
+      ["sumeragi_finality::genesis_dataspace::tests::pinned_signed_genesis_preserves_original_json_refusal_and_retry"]),
+    m("DM13", "consensus fingerprint: reopen completed authenticated metadata",
+      ["sumeragi_finality::tests::consensus_fingerprint_reuses_original_authenticated_metadata_under_one_pass_budget"]),
+    m("DM14", "initial chain parameters: reopen constructor-authenticated metadata",
+      ["sumeragi_finality::tests::initial_chain_parameters_reuses_constructor_authenticated_metadata_under_one_pass_budget"]),
+
 
 ]
 
@@ -985,6 +1015,9 @@ DEPLOY_MUTATIONS = [
        "bootstrap::amx_sources::tests::managed_amx_sources_reopen_preserves_original_native_pair_and_directory_without_new_reads"]),
     m("DEP6", "Administrative AMX registration: accept a substituted original child or signer",
       ["attachment::amx_registration::tests::original_amx_administrator_child_fees_time_and_checkpoint_survive_reopen_and_refuse_substitution"]),
+    m("DEP7", "signed service profile: reconstruct completed original authenticated genesis metadata",
+      ["localnet::private_root::tests::private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen"]),
+
 ]
 
 

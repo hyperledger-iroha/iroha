@@ -269,10 +269,13 @@ fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock
         Some(policy),
     )
     .unwrap();
-    let mut current = crate::sumeragi::epoch::genesis_epoch(&genesis).unwrap();
+    let mut current = crate::sumeragi::epoch::authenticated_genesis(&genesis)
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
     assert_eq!(current.authorization.last_height, 6);
     let network = NetworkId::from_genesis_hash(genesis.hash());
-    let instance = root_instance(&genesis, "sumeragi-certified-test-chain").unwrap();
+    let instance =
+        crate::sumeragi::node::root_instance(&genesis, "sumeragi-certified-test-chain").unwrap();
     // This certificate-transcript fixture does not execute NPoS transitions. Its test-only
     // proposal builder uses the original signed root-routing metadata. Project only that
     // exact genesis parameter into its routing World; absence never implies Global.

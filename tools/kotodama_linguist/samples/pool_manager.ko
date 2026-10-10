@@ -1,5 +1,6 @@
 // Representative liquidity-pool seiyaku for Kotodama grammar validation.
 seiyaku PoolManager {
+    permission Admin;
     state StateMap<Name, AccountId> PoolAccount;
     state StateMap<Name, quantity> ReserveA;
     state StateMap<Name, quantity> ReserveB;
@@ -16,7 +17,7 @@ seiyaku PoolManager {
         Name pool,
         quantity amount_a,
         quantity amount_b,
-    ) -> quantity authorize("Admin") {
+    ) authorize(Admin) -> quantity {
         let quantity zero = 0;
         let reserve_a = ReserveA.get_or_insert(pool, zero);
         let reserve_b = ReserveB.get_or_insert(pool, zero);

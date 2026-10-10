@@ -9,12 +9,12 @@ use crate::state::{
     block_field::AggregatePublication,
 };
 use iroha_allocation::AllocationBudget;
+use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinition, AssetDefinitionDirectHomeV1, AssetDefinitionId},
     domain::Domain,
 };
-use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use iroha_model_base::domain::DomainId;
 use mv::storage::FrozenStorageImages;
 use std::collections::BTreeSet;
@@ -142,8 +142,7 @@ mod direct_home_admission_tests {
         kura::Kura,
         query::store::LiveQueryStore,
         state::{
-            State,
-            authority_registry::grouped_ownership::asset_definition_test_support as fixture,
+            State, authority_registry::grouped_ownership::asset_definition_test_support as fixture,
         },
     };
     use iroha_data_model::block::BlockHeader;

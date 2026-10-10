@@ -12,7 +12,7 @@ fn load(vm: &mut IVM, program: &[u8], context: &str) {
 }
 fn compile(body: &str) -> Vec<u8> {
     let src = format!(
-        "seiyaku RoleOperation {{ kotoage fn main() authorize(\"ManageRoles\") {{\n{body}\n}} }}"
+        "seiyaku RoleOperation {{ permission ManageRoles;  kotoage fn main() authorize(ManageRoles) {{\n{body}\n}} }}"
     );
     let c = KotodamaCompiler::new();
     c.compile_source(&src).expect("compile")

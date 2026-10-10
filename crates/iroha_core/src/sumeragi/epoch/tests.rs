@@ -86,7 +86,9 @@ fn signed_genesis_fixes_complete_generation_epoch_seed_and_proofs() {
         SumeragiConsensusMode::Npos,
     ] {
         let genesis = genesis_fixture(mode, 10, false);
-        let context = genesis_epoch(&genesis).unwrap();
+        let context = authenticated_genesis(&genesis)
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
         assert_eq!(
             context.network_id,
             NetworkId::from_genesis_hash(genesis.hash())
@@ -109,12 +111,22 @@ fn signed_genesis_fixes_complete_generation_epoch_seed_and_proofs() {
 fn signed_genesis_rejects_short_or_repeated_epoch_authority() {
     for length in [1, 2] {
         assert!(
-            genesis_epoch(&genesis_fixture(SumeragiConsensusMode::Npos, length, false)).is_err()
+            authenticated_genesis(&genesis_fixture(SumeragiConsensusMode::Npos, length, false))
+                .map(|genesis| genesis.into_parts().0)
+                .is_err()
         );
     }
-    assert!(genesis_epoch(&genesis_fixture(SumeragiConsensusMode::Npos, 10, true)).is_err());
-    let first = genesis_epoch(&genesis_fixture(SumeragiConsensusMode::Npos, 10, false)).unwrap();
-    let changed = genesis_epoch(&genesis_fixture(SumeragiConsensusMode::Npos, 11, false)).unwrap();
+    assert!(
+        authenticated_genesis(&genesis_fixture(SumeragiConsensusMode::Npos, 10, true))
+            .map(|genesis| genesis.into_parts().0)
+            .is_err()
+    );
+    let first = authenticated_genesis(&genesis_fixture(SumeragiConsensusMode::Npos, 10, false))
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
+    let changed = authenticated_genesis(&genesis_fixture(SumeragiConsensusMode::Npos, 11, false))
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
     assert_ne!(first.context_id().unwrap(), changed.context_id().unwrap());
     assert_ne!(first.network_id, changed.network_id);
 }

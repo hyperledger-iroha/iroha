@@ -68,6 +68,20 @@ impl NativeCommitCertificateDataV1 {
     }
 }
 
+// Preserve the existing physical-copy Allocation category while classifying original
+// metadata/codec refusal before mapping a deterministic unavailable source.
+fn storage_error(height: NonZeroU64, error: crate::kura::Error) -> Error {
+    if matches!(&error, crate::kura::Error::NativeFrameAllocation(_)) {
+        return Error::Allocation;
+    }
+    Error::Source(
+        crate::execution_attempt::kura_read_attempt_error(error, |_| ChainReadError::NotInView {
+            height: height.get(),
+        })
+        .into(),
+    )
+}
+
 /// Read one State-pinned durable native frame and copy its original certificate.
 ///
 /// No historical prefix is traversed and no quorum, execution, epoch or current
@@ -108,7 +122,7 @@ pub fn read_commit_certificate(
     let source = view
         .kura()
         .native_frame_read(height.get(), expected)
-        .map_err(|_| unavailable())?
+        .map_err(|error| storage_error(height, error))?
         .ok_or_else(unavailable)?;
     let extent = usize::try_from(source.wire_len()).map_err(|_| unavailable())?;
     if extent == 0 || extent > MAX_FINALITY_BLOCK_BYTES {
@@ -117,13 +131,7 @@ pub fn read_commit_certificate(
     check_deadline(deadline)?;
     let bytes = source
         .read_original(source.wire_len(), budget)
-        .map_err(|error| {
-            if matches!(error, crate::kura::Error::NativeFrameAllocation(_)) {
-                Error::Allocation
-            } else {
-                unavailable()
-            }
-        })?
+        .map_err(|error| storage_error(height, error))?
         .ok_or_else(unavailable)?;
     check_deadline(deadline)?;
     let _selector_charge = budget
@@ -225,6 +233,93 @@ mod tests {
             SumeragiFinalityVerifier::new(&signed, view.chain_id().as_str(), genesis.committee)
                 .unwrap();
         SumeragiCommitVerifierV1::new(&native).unwrap()
+    }
+
+    #[test]
+    fn compact_source_preserves_original_cumulative_metadata_refusal_before_body_io() {
+        with_chain(2, check_metadata_refusal);
+    }
+
+    #[inline(never)]
+    fn check_metadata_refusal(chain: &CertifiedTestChain) {
+        use ivm::error::ExecutionDeferral;
+        let expected = chain.committed(2).block_hash();
+        let bound = |allocation| {
+            norito::DecodeLimits::new(1_000_000, 48 * 1024 * 1024, 1_000_000, allocation, 64)
+        };
+        let probe = norito::core::DecodeBudgetContext::new(bound(48 * 1024 * 1024));
+        probe.with(|| {
+            chain
+                .kura()
+                .native_frame_read(2, expected)
+                .unwrap()
+                .unwrap();
+        });
+        let marker_work = probe.consumed_allocated_bytes();
+        assert!(marker_work > 0);
+        let budget = AllocationBudget::new(64 << 20);
+        // Primed: preflight itself refuses. Unprimed: preflight spends the complete
+        // allowance, then read_original's real repeated marker refuses before bytes.
+        for primed in [true, false] {
+            let context = norito::core::DecodeBudgetContext::new(bound(
+                usize::try_from(marker_work).unwrap(),
+            ));
+            if primed {
+                context.with(|| {
+                    chain
+                        .kura()
+                        .native_frame_read(2, expected)
+                        .unwrap()
+                        .unwrap();
+                });
+            }
+            chain.kura().reset_canonical_query_reads_for_test();
+            for _ in 0..2 {
+                let result = context.with(|| {
+                    read_commit_certificate(
+                        &chain.state().view(),
+                        NonZeroU64::new(2).unwrap(),
+                        &budget,
+                        deadline(),
+                    )
+                });
+                let error = match result {
+                    Err(error) => error,
+                    Ok(_) => panic!(
+                        "exhausted original marker scope cannot complete certificate acquisition"
+                    ),
+                };
+                let Error::Source(ProofError::Deferred(ref original)) = error else {
+                    panic!(
+                        "original compact certificate metadata refusal must remain local before body acquisition: {error:?}"
+                    );
+                };
+                assert_eq!(original.reason(), ExecutionDeferral::ActiveMemoryCapacity);
+                assert!(original.allocation_refusal().is_none());
+                assert_eq!(context.consumed_allocated_bytes(), marker_work);
+                assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+                assert_eq!(budget.reserved_bytes(), 0);
+            }
+        }
+        let data = read_commit_certificate(
+            &chain.state().view(),
+            NonZeroU64::new(2).unwrap(),
+            &budget,
+            deadline(),
+        )
+        .unwrap();
+        assert_eq!(
+            data.certificate().commit_qc,
+            chain
+                .committed(2)
+                .block()
+                .commit_certificate()
+                .unwrap()
+                .commit_qc()
+        );
+        assert!(budget.reserved_bytes() > 0);
+        drop(data);
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 
     #[test]

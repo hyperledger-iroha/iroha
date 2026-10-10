@@ -9355,6 +9355,23 @@ pub(crate) mod tests {
             &TimeSource::new_fixed(now),
         )
     }
+    fn encode_fixture_int_map_key(value: i128) -> Vec<u8> {
+        use ivm_abi::state_value::{
+            StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
+            StateValueSchemaV1, state_value_schema_hash_v1,
+        };
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+        };
+        let envelope =
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(value))
+                .unwrap();
+        norito::encode_canonical(&StateValueRecordV1 {
+            schema_hash: state_value_schema_hash_v1(&norito::encode_canonical(&schema).unwrap()),
+            atoms: vec![StateValueAtomV1::Pointer(envelope)],
+        })
+        .unwrap()
+    }
     /// Decode the current schema-bound durable `int` record, including its pointer envelope.
     fn decode_stored_state_int(stored: &[u8]) -> i128 {
         use ivm::state_value::{
@@ -10029,10 +10046,10 @@ pub(crate) mod tests {
         let account = Account::new(authority.clone()).build(&authority);
         let mut world = World::with([domain], [account], []);
         let source = r#"
-seiyaku GuardedOverlay {
+seiyaku GuardedOverlay { permission CanWriteGuardedOverlay;
   state StateMap<int, int> Values;
 
-  kotoage fn write(int value) authorize("CanWriteGuardedOverlay") {
+  kotoage fn write(int value) authorize(CanWriteGuardedOverlay) {
     Values[0] = value;
   }
 }
@@ -10209,7 +10226,7 @@ seiyaku GuardedOverlay {
                 .insert(authority.clone(), permissions);
         }
         let source = r#"
-seiyaku DynamicAccessCounter {
+seiyaku DynamicAccessCounter { permission CanEnactGovernance;
   state StateMap<int, int> Counters;
 
   fn bump_hidden(int key, int delta) {
@@ -10217,12 +10234,12 @@ seiyaku DynamicAccessCounter {
     Counters[key] = current + delta;
   }
 
-  kotoage fn bump_direct(int key, int delta) authorize("CanEnactGovernance") {
+  kotoage fn bump_direct(int key, int delta) authorize(CanEnactGovernance) {
     let current = Counters.get(key).unwrap_or(0);
     Counters[key] = current + delta;
   }
 
-  kotoage fn bump_via_helper(int key, int delta) authorize("CanEnactGovernance") {
+  kotoage fn bump_via_helper(int key, int delta) authorize(CanEnactGovernance) {
     bump_hidden(key: key, delta: delta);
   }
 }
@@ -10366,9 +10383,7 @@ seiyaku DynamicAccessCounter {
             results.iter().all(Result::is_ok),
             "both co-batched contract calls must succeed: {results:?}"
         );
-        let encoded_key =
-            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
-                .expect("encode canonical StateMap int key");
+        let encoded_key = encode_fixture_int_map_key(7);
         let logical_path = format!("Counters/{}", hex::encode(encoded_key));
         let scope_id = contract_address.to_string();
         let scope_digest = hex::encode(Hash::new(scope_id.as_bytes()).as_ref());
@@ -10416,7 +10431,7 @@ seiyaku DynamicAccessCounter {
                 .insert(authority.clone(), permissions);
         }
         let source = r#"
-seiyaku DynamicTarget {
+seiyaku DynamicTarget { permission CanEnactGovernance;
   error enum DynamicTargetError {
     SelectorClosed = 1,
   }
@@ -10424,20 +10439,20 @@ seiyaku DynamicTarget {
   state StateMap<int, int> Selector;
   state StateMap<int, int> Counters;
 
-  kotoage fn choose(int key) authorize("CanEnactGovernance") {
+  kotoage fn choose(int key) authorize(CanEnactGovernance) {
     Selector[0] = key;
   }
 
-  kotoage fn set_selected(int value) authorize("CanEnactGovernance") {
+  kotoage fn set_selected(int value) authorize(CanEnactGovernance) {
     let key = Selector.get(0).unwrap_or(1);
     Counters[key] = value;
   }
 
-  kotoage fn set_direct(int key, int value) authorize("CanEnactGovernance") {
+  kotoage fn set_direct(int key, int value) authorize(CanEnactGovernance) {
     Counters[key] = value;
   }
 
-  kotoage fn guarded_set(int value) authorize("CanEnactGovernance") {
+  kotoage fn guarded_set(int value) authorize(CanEnactGovernance) {
     require(Selector.get(0).unwrap_or(0) == 2, DynamicTargetError::SelectorClosed);
     Counters[3] = value;
   }
@@ -10640,9 +10655,7 @@ seiyaku DynamicTarget {
             results.iter().all(Result::is_ok),
             "all dynamic-target calls must succeed: {results:?}"
         );
-        let encoded_key =
-            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(2))
-                .expect("encode canonical StateMap int key");
+        let encoded_key = encode_fixture_int_map_key(2);
         let logical_path = format!("Counters/{}", hex::encode(encoded_key));
         let scope_digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
         let scoped_path: StatePath = format!("sc/{scope_digest}/{logical_path}")
@@ -10658,9 +10671,7 @@ seiyaku DynamicTarget {
             counter, 7,
             "a key selected during live re-execution must retain source-order conflict semantics"
         );
-        let guarded_key =
-            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(3))
-                .expect("encode canonical guarded StateMap int key");
+        let guarded_key = encode_fixture_int_map_key(3);
         let guarded_path: StatePath =
             format!("sc/{scope_digest}/Counters/{}", hex::encode(guarded_key))
                 .parse()

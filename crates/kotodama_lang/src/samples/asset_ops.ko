@@ -1,5 +1,6 @@
 seiyaku AssetOps {
-    kotoage fn execute() authorize("Admin") {
+    permission Admin;
+    kotoage fn execute() authorize(Admin) {
         // Typed pointer‑ABI arguments via constructors
         let alice = context::authority();
         let bob = context::authority();

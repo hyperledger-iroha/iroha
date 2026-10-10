@@ -275,6 +275,7 @@ function subtreeEnd(nodes, start, path) {
       case "Leaf":
       case "Unit":
       case "Error":
+      case "Enum":
       case "StateCursor":
         break;
       default:
@@ -371,13 +372,14 @@ function canonicalNode(nodes, start, value, path, depth) {
       return canonicalLeaf(node.value?.kind, value, path);
     case "Unit":
       return value === null ? null : argumentFailure(path, "unit as null", value);
-    case "Error": {
+    case "Error":
+    case "Enum": {
       const variants = (node.value?.variants ?? []).map((variant) => variant.name);
       return typeof value === "string" && variants.includes(value)
         ? value
         : argumentFailure(
           path,
-          `an error variant name of \`${node.value?.identity}\` (one of ${variants.map((name) => `\`${name}\``).join(", ")})`,
+          `an ${node.kind === "Enum" ? "enum" : "error"} variant name of \`${node.value?.identity}\` (one of ${variants.map((name) => `\`${name}\``).join(", ")})`,
           value,
         );
     }

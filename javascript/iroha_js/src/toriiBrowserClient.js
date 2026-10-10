@@ -86,7 +86,6 @@ const FIELD_SINCE_TIMESTAMP_MS = "sinceTimestampMs";
 const FIELD_UNTIL_TIMESTAMP_MS = "untilTimestampMs";
 const FIELD_CONTRACT_ADDRESS = "contractAddress";
 const WIRE_FIELD_CONTRACT_ADDRESS = "contract_address";
-const FIELD_CONTRACT_ALIAS = "contractAlias";
 const WIRE_FIELD_CONTRACT_ALIAS = "contract_alias";
 const WIRE_FIELD_SINCE_TIMESTAMP_MS = "since_timestamp_ms";
 const WIRE_FIELD_UNTIL_TIMESTAMP_MS = "until_timestamp_ms";
@@ -163,9 +162,6 @@ const CONTRACT_EVENT_FILTER_OPTION_KEYS = new Set([
   FIELD_AUTHORITY,
   FIELD_CONTRACT_ADDRESS,
   WIRE_FIELD_CONTRACT_ADDRESS,
-  FIELD_CONTRACT_ALIAS,
-  WIRE_FIELD_CONTRACT_ALIAS,
-  "module",
   "eventKind",
   "event_kind",
   "participant",
@@ -821,11 +817,11 @@ function normalizeLedgerEntryHash(value, context) {
 }
 
 /** The only provenance Torii's call-derived contract-event feed reports. */
-const CONTRACT_EVENT_PROVENANCE = "derived";
+const CONTRACT_EVENT_PROVENANCE = "emitted";
 
 function normalizeContractEventFilterParams(options, context) {
   const provenance = normalizeOptionalString(options.provenance, `${context}.provenance`);
-  // Contract-event rows are derived from committed calls; nothing is contract-emitted.
+  // Only committed native emissions are exposed in contract event history.
   if (provenance !== undefined && provenance !== CONTRACT_EVENT_PROVENANCE) {
     rejectType(`${context}.provenance must be ${CONTRACT_EVENT_PROVENANCE}`);
   }
@@ -835,11 +831,6 @@ function normalizeContractEventFilterParams(options, context) {
       optionAlias(options, FIELD_CONTRACT_ADDRESS, WIRE_FIELD_CONTRACT_ADDRESS),
       `${context}.contractAddress`,
     ),
-    contract_alias: normalizeOptionalString(
-      optionAlias(options, FIELD_CONTRACT_ALIAS, WIRE_FIELD_CONTRACT_ALIAS),
-      `${context}.contractAlias`,
-    ),
-    module: normalizeOptionalString(options.module, `${context}.module`),
     event_kind: normalizeOptionalString(
       optionAlias(options, "eventKind", "event_kind"),
       `${context}.eventKind`,

@@ -8788,11 +8788,10 @@ fn validate_genesis_execution_offline(
             "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {expected_block_cadence_ms} ms"
         )));
     }
-    let epoch = iroha_data_model::sumeragi_finality::genesis_epoch(&genesis.0)
+    let authenticated = iroha_data_model::sumeragi_finality::authenticated_genesis(&genesis.0)
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
-    let metadata =
-        iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&genesis.0)
-            .map_err(|error| Report::new(MainError::Config).attach(error))?;
+    let metadata = authenticated.metadata();
+    let epoch = authenticated.into_parts().0;
     // The native genesis path checked the exact signed epoch and both policy commitments
     // against original execution before publishing this disposable State.
     let execution_policy_hash = Hash::prehashed(metadata.sumeragi_context.execution_policy_hash);

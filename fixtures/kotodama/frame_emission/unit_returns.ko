@@ -1,4 +1,4 @@
-seiyaku UnitFrameReturns {
+seiyaku UnitFrameReturns { permission WriteState;
     state int trace;
     hajimari() {
         trace = 0;
@@ -120,7 +120,7 @@ seiyaku UnitFrameReturns {
         return;
     }
 
-    kotoage fn main() -> ((), (), int) authorize("WriteState") {
+    kotoage fn main() authorize(WriteState) -> ((), (), int) {
         let left = compute(0);
         let right = compute(1);
         return (left, right, trace);

@@ -1189,7 +1189,7 @@ class RetryTests(unittest.TestCase):
             ("--onboarding-token", 1),
             ("--inrou-stage-dir", 1),
             ("--validator-unit", 4),
-            ("--edge-unit", 1),
+            ("--native-edge-capability", 1),
             ("--known-hosts", 1),
         )
         args = []
@@ -1199,6 +1199,16 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(actual, args)
         self.assertEqual(len(grouped["--validator-client-config"]), 4)
         self.assertEqual(len(grouped["--validator-operator-key"]), 1)
+        self.assertEqual(len(grouped["--native-edge-capability"]), 1)
+        retired_edge = list(args)
+        retired_edge[retired_edge.index("--native-edge-capability")] = "--edge-unit"
+        with self.assertRaisesRegex(retry.RetryError, "order differs"):
+            retry.local_arguments(json.dumps(retired_edge).encode(), "full_inrou")
+        missing_capability = list(args)
+        offset = missing_capability.index("--native-edge-capability")
+        del missing_capability[offset:offset + 2]
+        with self.assertRaisesRegex(retry.RetryError, "closure required"):
+            retry.local_arguments(json.dumps(missing_capability).encode(), "full_inrou")
         apply_arguments = actual[:actual.index("--validator-unit")]
         self.assertIn("--validator-operator-key", apply_arguments)
         missing_key = list(args)
@@ -1510,7 +1520,7 @@ class BeaconArgumentTests(unittest.TestCase):
         inputs = {flag: ["/path/" + flag[2:]] for flag in (
             "--runtime-client-config", "--validator-client-config", "--validator-operator-key",
             "--onboarding-token", "--inrou-stage-dir", "--public-inputs", "--validator-unit",
-            "--edge-unit", "--beacon-inputs", "--beacon-validator-unit")}
+            "--native-edge-capability", "--beacon-inputs", "--beacon-validator-unit")}
         for scope in ("core_testnet", "full_inrou"):
             result = retry.apply_arguments(inputs, scope)
             self.assertNotIn("--maintenance-admin-config",result)
@@ -1518,7 +1528,7 @@ class BeaconArgumentTests(unittest.TestCase):
             self.assertNotIn("--epoch-supervisor-plan",result)
             self.assertNotIn("--epoch-seed-source",result)
             self.assertEqual("--inrou-stage-dir" in result, scope == "full_inrou")
-            for flag in ("--public-inputs", "--validator-unit", "--edge-unit", "--beacon-inputs", "--beacon-validator-unit"):
+            for flag in ("--public-inputs", "--validator-unit", "--native-edge-capability", "--beacon-inputs", "--beacon-validator-unit"):
                 self.assertNotIn(flag, result)
 
 
@@ -1633,11 +1643,15 @@ class CoreScopeTests(unittest.TestCase):
         for flag, count in (("--public-inputs", 1), ("--runtime-client-config", 1),
                             ("--validator-client-config", 4), ("--validator-operator-key", 1),
                             ("--onboarding-token", 1), ("--validator-unit", 4),
-                            ("--edge-unit", 1), ("--known-hosts", 1)):
+                            ("--native-edge-capability", 1), ("--known-hosts", 1)):
             args += [flag, *[f"/public/{flag[2:]}-{index}" for index in range(count)]]
         actual, grouped = retry.local_arguments(json.dumps(args).encode(), "core_testnet")
         self.assertEqual(actual, args)
         self.assertNotIn("--inrou-stage-dir", grouped)
+        retired_edge = list(args)
+        retired_edge[retired_edge.index("--native-edge-capability")] = "--edge-unit"
+        with self.assertRaisesRegex(retry.RetryError, "order differs"):
+            retry.local_arguments(json.dumps(retired_edge).encode(), "core_testnet")
         apply_args = actual[actual.index("--runtime-client-config"):actual.index("--validator-unit")]
         self.assertNotIn("--public-inputs", apply_args)
         full = list(args)
@@ -1756,7 +1770,7 @@ class WorkflowTests(unittest.TestCase):
             ("--validator-operator-key", 1),
             ("--onboarding-token", 1),
             ("--validator-unit", 4),
-            ("--edge-unit", 1),
+            ("--native-edge-capability", 1),
             ("--known-hosts", 1),
         ):
             paths = [
@@ -1877,7 +1891,7 @@ class WorkflowTests(unittest.TestCase):
     ):
         self.calls.append(phase)
         if phase == "apply":
-            for forbidden in ("--beacon-inputs", "--beacon-validator-unit", "--beacon-genesis-manifest", "--public-inputs", "--validator-unit", "--edge-unit"):
+            for forbidden in ("--beacon-inputs", "--beacon-validator-unit", "--beacon-genesis-manifest", "--public-inputs", "--validator-unit", "--native-edge-capability"):
                 self.assertNotIn(forbidden, argv)
         self.assertNotIn("--inventory-draft",argv)
         self.assertNotIn("--http-operator-key-sha256",argv)

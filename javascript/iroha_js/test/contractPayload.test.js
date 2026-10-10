@@ -113,7 +113,7 @@ test("schema-aware arguments reject inexact values with the argument path", () =
         name: "order",
         ty: {
           nodes: [
-            { kind: "Struct", value: { name: "Order", fields: ["lines", "memo"] } },
+            { kind: "Struct", value: { name: "Fixture::Order", fields: ["lines", "memo"] } },
             { kind: "List", value: { capacity: 4 } },
             { kind: "Leaf", value: { kind: "Quantity", value: null } },
             { kind: "Option", value: null },

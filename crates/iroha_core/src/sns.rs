@@ -1437,7 +1437,9 @@ pub fn seed_genesis_alias_bootstrap(
         parameter::Parameter,
     };
 
-    iroha_data_model::sumeragi_finality::genesis_epoch(block).map_err(sns_genesis_read_error)?;
+    iroha_data_model::sumeragi_finality::authenticated_genesis(block)
+        .map(|genesis| genesis.into_parts().0)
+        .map_err(sns_genesis_read_error)?;
     let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(block)
         .map_err(sns_genesis_read_error)?;
     if let SumeragiRootScope::Dataspace { .. } = metadata.sumeragi_context.root_scope {

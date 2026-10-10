@@ -5838,6 +5838,7 @@ pub mod isi {
                 .get_mut(&contract_address)
                 .expect("Parliament deployment installed lifecycle binding");
             binding.lifecycle.active_code_hash = Some(key);
+            binding.lifecycle.retained_code_hash = Some(key);
             binding.lifecycle.clone()
         };
         crate::smartcontracts::code::set_pending_contract_lifecycle(
@@ -6516,16 +6517,18 @@ pub mod isi {
                 ));
             }
             for (permission, holder, _) in validation_fee_runtime_permissions(
+                state_transaction,
                 &previous.payout_binding,
                 &previous.payout_binding.pool_contract_address,
-            ) {
+            )? {
                 state_transaction
                     .world
                     .remove_account_permission(&holder, &permission);
                 state_transaction.invalidate_permission_cache_for_account(&holder);
             }
         }
-        let permissions = validation_fee_runtime_permissions(binding, &pool_contract_address);
+        let permissions =
+            validation_fee_runtime_permissions(state_transaction, binding, &pool_contract_address)?;
         install_derived_validation_fee_runtime_permissions_with_validation(
             permissions,
             state_transaction,
@@ -6536,34 +6539,37 @@ pub mod isi {
         Ok(())
     }
     fn validation_fee_runtime_permissions(
+        state_transaction: &StateTransaction<'_, '_>,
         binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
         pool_contract_address: &iroha_data_model::smart_contract::ContractAddress,
-    ) -> Vec<(Permission, AccountId, &'static str)> {
-        vec![
+    ) -> Result<Vec<(Permission, AccountId, &'static str)>, Error> {
+        Ok(vec![
             (
-                iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                    contract: binding.contract_address.clone(),
-                    entrypoint: binding.entrypoint.to_string(),
-                }
-                .into(),
+                crate::validation_fee::payout_contract_permission(
+                    state_transaction,
+                    &binding.contract_address,
+                    &binding.code_hash,
+                    binding.entrypoint.as_ref(),
+                )?,
                 binding.treasury_account_id.clone(),
-                "the wrapper payout selector",
+                "the wrapper payout permission",
             ),
             (
-                iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                    contract: pool_contract_address.clone(),
-                    entrypoint: crate::validation_fee::VALIDATION_FEE_POOL_SWAP_ENTRYPOINT.to_owned(),
-                }
-                .into(),
+                crate::validation_fee::payout_contract_permission(
+                    state_transaction,
+                    pool_contract_address,
+                    &binding.pool_code_hash,
+                    crate::validation_fee::VALIDATION_FEE_POOL_SWAP_ENTRYPOINT,
+                )?,
                 binding.treasury_account_id.clone(),
-                "the pool swap selector",
+                "the pool swap permission",
             ),
             (
                 validation_fee_payout_effect_permission(binding),
                 binding.pool_vault_account_id.clone(),
                 "the wrapper DS asset transfer effect",
             ),
-        ]
+        ])
     }
     fn validate_validation_fee_payout_lifecycle_runtime(
         binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
@@ -6624,11 +6630,14 @@ pub mod isi {
                 != iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage
             || !matching_entrypoints[0].params.is_empty()
             || matching_entrypoints[0].argument_schema.is_some()
-            || matching_entrypoints[0].permission.as_deref()
-                != Some(crate::validation_fee::VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION)
+            || crate::validation_fee::dedicated_payout_permission(
+                &record.manifest,
+                binding.entrypoint.as_ref(),
+            )
+            .is_none()
         {
             return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee payout lifecycle requires one argument-free autonomous entrypoint protected by exact contract-selector authorization"
+                "validation-fee payout lifecycle requires one argument-free autonomous entrypoint protected by a dedicated instance permission"
                     .into(),
             ).into());
         }
@@ -6759,8 +6768,11 @@ pub mod isi {
         if matching_pool_entrypoints.len() != 1
             || matching_pool_entrypoints[0].kind
                 != iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage
-            || matching_pool_entrypoints[0].permission.as_deref()
-                != Some(crate::validation_fee::VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION)
+            || crate::validation_fee::dedicated_payout_permission(
+                &pool_record.manifest,
+                crate::validation_fee::VALIDATION_FEE_POOL_SWAP_ENTRYPOINT,
+            )
+            .is_none()
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle requires one exact protected public pool swap selector"
@@ -6768,7 +6780,7 @@ pub mod isi {
             ).into());
         }
         for (permission, required_holder, permission_label) in
-            validation_fee_runtime_permissions(binding, &pool_contract_address)
+            validation_fee_runtime_permissions(state_transaction, binding, &pool_contract_address)?
         {
             if require_derived_permissions {
                 require_sole_direct_validation_fee_runtime_permission_holder(
@@ -6778,17 +6790,19 @@ pub mod isi {
                     permission_label,
                 )?;
             } else {
-                let prior_holder = validation_fee_policy_registry(state_transaction)?
+                let prior_holder = match validation_fee_policy_registry(state_transaction)?
                     .and_then(|registry| registry.payout_policies.head().cloned())
-                    .and_then(|entry| {
-                        validation_fee_runtime_permissions(
-                            &entry.payout_binding,
-                            &entry.payout_binding.pool_contract_address,
-                        )
-                        .into_iter()
-                        .find(|(prior, _, _)| prior == &permission)
-                        .map(|(_, holder, _)| holder)
-                    });
+                {
+                    Some(entry) => validation_fee_runtime_permissions(
+                        state_transaction,
+                        &entry.payout_binding,
+                        &entry.payout_binding.pool_contract_address,
+                    )?
+                    .into_iter()
+                    .find(|(prior, _, _)| prior == &permission)
+                    .map(|(_, holder, _)| holder),
+                    None => None,
+                };
                 require_absent_validation_fee_runtime_permission(
                     state_transaction,
                     &permission,
@@ -6845,6 +6859,44 @@ pub mod isi {
             // idempotent when same
             return Ok(());
         }
+        let retained = state_transaction
+            .world
+            .contract_subject_bindings
+            .get(&contract_address)
+            .expect("binding checked before activation")
+            .lifecycle
+            .retained_code_hash;
+        let suspended_pending = crate::smartcontracts::code::pending_contract_lifecycle(
+            &state_transaction.world,
+            &contract_address,
+        )
+        .map_err(|error| InstructionExecutionError::InvariantViolation(error.to_string().into()))?;
+        if let Some(pending) = suspended_pending {
+            if retained != Some(pending.code_hash()) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "pending lifecycle differs from retained artifact".into(),
+                ));
+            }
+            if key != pending.code_hash() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "contract instance cannot replace code while hajimari/始まり or kaizen/改善 is pending".into(),
+                ));
+            }
+        }
+        if let Some(previous_code_hash) = retained.filter(|previous| *previous != key) {
+            crate::smartcontracts::code::contract_upgrade_added_scalars(
+                &state_transaction.world,
+                &state_transaction.execution_budget(),
+                &contract_address,
+                previous_code_hash,
+                key,
+            )
+            .map_err(|error| {
+                state_transaction.attempt_error_to_instruction_error(error.map_rejection(|error| {
+                    InstructionExecutionError::InvariantViolation(error.to_string().into())
+                }))
+            })?;
+        }
         if existing.is_some()
             && crate::validation_fee::is_enacted_validation_fee_payout_contract(
                 state_transaction,
@@ -6855,22 +6907,7 @@ pub mod isi {
                 "an enacted validation-fee payout lifecycle pins this contract code".into(),
             ));
         }
-        if existing.is_some()
-            && crate::smartcontracts::code::pending_contract_lifecycle(
-                &state_transaction.world,
-                &contract_address,
-            )
-            .map_err(|error| {
-                InstructionExecutionError::InvariantViolation(error.to_string().into())
-            })?
-            .is_some()
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                    "contract instance cannot perform kaizen/改善 while hajimari/始まり or kaizen/改善 is pending"
-                        .into(),
-                ));
-        }
-        let pending_lifecycle_kind = match existing {
+        let pending_lifecycle_kind = match retained {
             None if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
                 entrypoints.iter().any(|entrypoint| {
                     entrypoint.kind
@@ -6884,12 +6921,13 @@ pub mod isi {
                 ))
             }
             Some(previous_code_hash)
-                if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-                    entrypoints.iter().any(|entrypoint| {
-                        entrypoint.kind
+                if previous_code_hash != key
+                    && manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
+                        entrypoints.iter().any(|entrypoint| {
+                            entrypoint.kind
                             == iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen
-                    })
-                }) =>
+                        })
+                    }) =>
             {
                 Some((
                     iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen,
@@ -6898,7 +6936,7 @@ pub mod isi {
             }
             None | Some(_) => None,
         };
-        let pending_lifecycle = pending_lifecycle_kind
+        let pending_lifecycle = suspended_pending.or(pending_lifecycle_kind
             .map(|(kind, previous_code_hash)| {
                 crate::smartcontracts::code::new_pending_contract_lifecycle(
                     state_transaction,
@@ -6911,7 +6949,7 @@ pub mod isi {
             .transpose()
             .map_err(|error| {
                 InstructionExecutionError::InvariantViolation(error.to_owned().into())
-            })?;
+            })?);
         if let Some(previous_code_hash) = existing {
             let previous_trigger_ids: Vec<TriggerId> = state_transaction
                 .world
@@ -6971,6 +7009,7 @@ pub mod isi {
                 .get_mut(&contract_address)
                 .expect("binding checked before activation");
             binding.lifecycle.active_code_hash = Some(key);
+            binding.lifecycle.retained_code_hash = Some(key);
             if advance_revision {
                 binding.lifecycle.revision =
                     binding.lifecycle.revision.checked_add(1).ok_or_else(|| {
@@ -7616,7 +7655,6 @@ pub mod isi {
                 InvalidParameterError::SmartContract("contract instance is not active".into()),
             ));
         };
-        crate::smartcontracts::code::set_pending_contract_lifecycle(state_transaction, &key, None);
         {
             let binding = state_transaction
                 .world
@@ -21253,6 +21291,7 @@ pub mod isi {
                     BOB_ID.clone(),
                 );
                 binding.lifecycle.active_code_hash = Some(active_code_hash);
+                binding.lifecycle.retained_code_hash = Some(active_code_hash);
                 seed.world
                     .contract_subject_bindings
                     .insert(contract_address.clone(), binding);
@@ -21404,6 +21443,7 @@ pub mod isi {
                     ALICE_ID.clone(),
                 );
                 binding.lifecycle.active_code_hash = Some(active_code_hash);
+                binding.lifecycle.retained_code_hash = Some(active_code_hash);
                 seed.world
                     .contract_subject_bindings
                     .insert(contract_address.clone(), binding);
@@ -21584,6 +21624,7 @@ pub mod isi {
                     ALICE_ID.clone(),
                 );
                 binding.lifecycle.active_code_hash = Some(active_code_hash);
+                binding.lifecycle.retained_code_hash = Some(active_code_hash);
                 binding.lifecycle.revision = 2;
                 binding.lifecycle.emergency_hold = Some(prior_hold.clone());
                 seed.world
@@ -25325,6 +25366,9 @@ pub mod isi {
                 abi_version: 1,
             };
             let interface = ivm::EmbeddedContractInterfaceV1 {
+                events: Vec::new(),
+                enum_types: Vec::new(),
+                permissions: Vec::new(),
                 callables: vec![ivm::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
@@ -25346,7 +25390,7 @@ pub mod isi {
                     return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
                         nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
                     }),
-                    permission: None,
+                    authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
                     read_keys: Vec::new(),
                     write_keys: Vec::new(),
                     access_hints_complete: None,
@@ -25386,8 +25430,8 @@ pub mod isi {
             let (artifact, _) = kotodama_lang::compiler::Compiler::new()
                 .compile_source_with_manifest(
                     r#"
-seiyaku GovernanceLifecycle {
-  kotoage fn run() authorize("CanEnactGovernance") {}
+seiyaku GovernanceLifecycle { permission CanEnactGovernance;
+  kotoage fn run() authorize(CanEnactGovernance) {}
   hajimari() {}
   trigger governance_wake -> run {
     on time pre_commit;
@@ -25644,6 +25688,9 @@ seiyaku GovernanceLifecycle {
                 .contract_code
                 .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, valid_hash), valid_artifact_for_stub);
             let stub = ContractManifest {
+                events: Vec::new(),
+                enum_types: Vec::new(),
+                permissions: Vec::new(),
                 seiyaku_name: None,
                 code_hash: Some(valid_hash),
                 abi_hash: Some(abi_hash),
@@ -34037,6 +34084,9 @@ seiyaku GovernanceLifecycle {
             grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
             let code_hash = Hash::new(b"protected-contract");
             let manifest = ContractManifest {
+                events: Vec::new(),
+                enum_types: Vec::new(),
+                permissions: Vec::new(),
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: None,

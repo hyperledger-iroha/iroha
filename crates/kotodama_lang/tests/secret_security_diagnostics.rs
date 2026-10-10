@@ -98,10 +98,10 @@ fn compiler_session_rejects_every_public_secret_flow_with_exact_diagnostics() {
 }
 #[test]
 fn approved_all_secret_commitment_checks_and_builds() {
-    let source = r#"seiyaku Privacy {
+    let source = r#"seiyaku Privacy { permission UsePrivacy;
     hajimari() {}
     kaizen() {}
-    kotoage fn commitment() -> int authorize("UsePrivacy") {
+    kotoage fn commitment() authorize(UsePrivacy) -> int {
         let Secret<int> value = crypto::private_input(0);
         let Secret<int> blinding = crypto::private_input(1);
         return crypto::valcom(left: value, right: blinding);

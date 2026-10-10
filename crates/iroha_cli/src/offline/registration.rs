@@ -8,7 +8,7 @@ use iroha_core_zk::kagemusha_wallet_registration_v1::{
 use iroha_data_model::{
     kagemusha::{KAGEMUSHA_WALLET_SCHEME_MAX_BYTES_V1, KagemushaWalletSchemeV1},
     sumeragi_finality::{
-        FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier, genesis_epoch,
+        FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier, authenticated_genesis,
     },
 };
 use iroha_fs::{FileSnapshot, PrivateDirectory, SealedPrivateFile};
@@ -132,7 +132,7 @@ fn genesis_verifier(bytes: &[u8], chain_id: &str) -> Result<SumeragiFinalityVeri
     let block = iroha_genesis::decode_signed_genesis(&proof.block_wire)?;
     // The caller already pinned the complete original. The existing native reader verifies
     // its block/transaction signatures, commitments and signed epoch before selecting a root.
-    let epoch = genesis_epoch(&block)?;
+    let epoch = authenticated_genesis(&block).map(|genesis| genesis.into_parts().0)?;
     let validators = epoch
         .committee
         .iter()

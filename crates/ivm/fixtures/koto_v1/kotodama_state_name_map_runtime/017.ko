@@ -19,7 +19,7 @@
                 };
             }
 
-            view fn main() -> bool {
+            view fn main() authorize(anyone) -> bool {
                 let current = Tranches.get(Name::parse("t1")).unwrap_or(empty_tranche());
                 let missing = Tranches.get(Name::parse("missing")).unwrap_or(empty_tranche());
                 return current.status == 7

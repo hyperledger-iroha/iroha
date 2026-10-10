@@ -497,6 +497,9 @@ impl<'a> CstAstLowerer<'a> {
             TokenKind::String(s) => Expr::String(s.clone()),
             TokenKind::Bytes(bytes) => Expr::Bytes(bytes.clone()),
             TokenKind::Ident(name) => self.parse_named_primary(tok.clone(), name.clone())?,
+            TokenKind::Permission => {
+                self.parse_named_primary(tok.clone(), "permission".to_owned())?
+            }
             TokenKind::If => {
                 self.pos = self.pos.saturating_sub(1);
                 let statement_context =
@@ -797,7 +800,9 @@ impl<'a> CstAstLowerer<'a> {
             self.syntax_finish(syntax_literal, start);
             result
         } else if self.peek(TokenKind::LParen) {
-            if let Some(message) = removed_free_helper_message(&name) {
+            if name.contains("::")
+                && let Some(message) = removed_free_helper_message(&name)
+            {
                 let mut error =
                     self.coded_error(ident_token, removed_free_helper_code(&name), message);
                 if let Some(replacement) = retired_trigger_alias_replacement(&name) {
@@ -1082,7 +1087,25 @@ impl<'a> CstAstLowerer<'a> {
                 } else {
                     None
                 };
-                Ok((name, self.parse_expr()?))
+                let expression = if self.peek(TokenKind::LBrace) {
+                    let start = self.current_start();
+                    let syntax_record = self.syntax_start(SyntaxKind::ArgumentRecord, start);
+                    self.bump();
+                    let fields = self.parse_struct_literal_fields()?;
+                    self.expect(TokenKind::RBrace)?;
+                    self.syntax_finish(syntax_record, start);
+                    let range = TextRange::new(start, self.previous_end(start));
+                    self.source_expression(
+                        AstNodeKind::Expression,
+                        range,
+                        Expr::ArgumentRecord {
+                            fields: fields.into_inner(),
+                        },
+                    )
+                } else {
+                    self.parse_expr()?
+                };
+                Ok((name, expression))
             })();
             if let Some(syntax_named) = syntax_named {
                 self.syntax_finish(syntax_named, argument_start);

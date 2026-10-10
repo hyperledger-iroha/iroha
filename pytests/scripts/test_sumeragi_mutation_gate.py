@@ -2606,6 +2606,11 @@ MODEL_NAMES = {
     "DM7": "amx_prepare_streaming_allocations::native_transfer_effects_stream_exact_monetary_fields_without_heap_allocations",
     "DM8": "sumeragi_amx::tests::sumeragi_amx_expiry_refusal_and_unwind_preserve_original_pending_graph",
     "DM9": "sumeragi_amx::tests::sumeragi_amx_encoding_keeps_exact_physical_allocator_refusal",
+    "DM10": "sumeragi_finality::genesis_dataspace::tests::pinned_signed_genesis_uses_one_original_decode_and_retains_metadata",
+    "DM11": "sumeragi_finality::genesis_dataspace::tests::pinned_signed_genesis_preserves_original_binary_refusal",
+    "DM12": "sumeragi_finality::genesis_dataspace::tests::pinned_signed_genesis_preserves_original_json_refusal_and_retry",
+    "DM13": "sumeragi_finality::tests::consensus_fingerprint_reuses_original_authenticated_metadata_under_one_pass_budget",
+    "DM14": "sumeragi_finality::tests::initial_chain_parameters_reuses_constructor_authenticated_metadata_under_one_pass_budget",
 }
 MODEL_ALLOCATION_OBSERVER = "amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind"
 
@@ -2709,7 +2714,7 @@ def test_original_begin_depth_mutation_bypasses_only_its_participant_payload_con
     assert source[end:].startswith('                let deadline = fixed_field::<u64, _>')
 
 
-@pytest.mark.parametrize("selected", [None, "DM1", "DM4", "DM5", "DM6", "DM7", "DM8", "DM9"])
+@pytest.mark.parametrize("selected", [None, "DM1", "DM4", "DM5", "DM6", "DM7", "DM8", "DM9", "DM10", "DM11", "DM12", "DM13", "DM14"])
 def test_model_actual_cargo_argv_profile_and_isolated_environment(monkeypatch, tmp_path, selected):
     captured = {}
     class Process:
@@ -2849,6 +2854,11 @@ def model_build_script(tmp_path_factory):
     (True, "DM7", "", True, True), (False, "DM7", "", True, False),
     (True, "DM8", "", True, True), (False, "DM8", "", True, False),
     (True, "DM9", "", True, True), (False, "DM9", "", True, False),
+    (True, "DM10", "", True, True), (False, "DM10", "", True, False),
+    (True, "DM11", "", True, True), (False, "DM11", "", True, False),
+    (True, "DM12", "", True, True), (False, "DM12", "", True, False),
+    (True, "DM13", "", True, True), (False, "DM13", "", True, False),
+    (True, "DM14", "", True, True), (False, "DM14", "", True, False),
     (True, "unknown_rule", "", False, False), (True, "HC1", "", False, False),
     (False, None, '--cfg\x1fsumeragi_model_mutation="DM1"', False, False),
     (True, "DM1", '--cfg\x1fsumeragi_model_mutation="DM2"', False, False),
@@ -2862,6 +2872,8 @@ def test_model_build_script_selects_only_registered_owned_test_cfg(model_build_s
     if mutation is not None: environment["SUMERAGI_MODEL_MUTATION"] = mutation
     result = subprocess.run([str(model_build_script)], cwd=ROOT / "crates/iroha_data_model", env=environment, capture_output=True, text=True, check=False)
     assert (result.returncode == 0) == accepted, result.stderr
+    expected_values = ", ".join(f'"{identifier}"' for identifier in MODEL_NAMES)
+    assert f"cargo:rustc-check-cfg=cfg(sumeragi_model_mutation, values({expected_values}))" in result.stdout
     assert (f'cargo:rustc-cfg=sumeragi_model_mutation="{mutation}"' in result.stdout) == emitted
     for prefix in ("sumeragi_mutation", "sumeragi_core_mutation", "sumeragi_daemon_mutation"):
         assert f"cargo:rustc-cfg={prefix}=" not in result.stdout
@@ -3023,6 +3035,7 @@ def test_managed_bootstrap_owned_registry_has_real_hooks_and_original_named_cont
             "DEP4": "managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publication",
             "DEP5": "managed_amx_sources_reopen_refuses_identical_g1_h2_replacement_without_http_repair",
             "DEP6": "original_amx_administrator_child_fees_time_and_checkpoint_survive_reopen_and_refuse_substitution",
+            "DEP7": "private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen",
         },
     }
     for owner, package, _, cfg, environment in MANAGED_BOOTSTRAP_OWNERS:
@@ -3232,10 +3245,15 @@ def managed_bootstrap_compiler_build_script(request, tmp_path_factory):
     (True, "", "", True, False), (True, "first", "", True, True),
     (True, "unknown", "", False, False), (False, None, "injected", False, False),
     (True, "first", "injected", False, False),
+    (False, "last", "", True, False), (True, "last", "", True, True),
 ])
 def test_managed_bootstrap_compiler_build_script_selects_only_registered_owning_cfg(managed_bootstrap_compiler_build_script, feature, selection, flags, accepted, emitted):
     (owner, package, prefix, cfg, environment), executable = managed_bootstrap_compiler_build_script
-    identifier = prefix + "1" if selection == "first" else selection
+    build = (ROOT / "crates" / package / "build.rs").read_text()
+    ids = re.search(r'const IDS: &\[&str\] = &\[(.*?)\];', build, re.S)
+    assert ids is not None
+    declared = re.findall(r'"([A-Z]+[0-9]+)"', ids.group(1))
+    identifier = prefix + "1" if selection == "first" else declared[-1] if selection == "last" else selection
     variables = dict(os.environ)
     variables.pop("CARGO_FEATURE_MUTATION_TESTING", None)
     variables.pop(environment, None)
@@ -3247,7 +3265,8 @@ def test_managed_bootstrap_compiler_build_script_selects_only_registered_owning_
     result = subprocess.run([str(executable)], cwd=ROOT / "crates" / package, env=variables, capture_output=True, text=True, check=False)
     assert (result.returncode == 0) == accepted, result.stderr
     assert (f'cargo:rustc-cfg={cfg}="{identifier}"' in result.stdout) == emitted
-    assert "cargo:rustc-check-cfg=" in result.stdout
+    values = ", ".join(f'"{identifier}"' for identifier in declared)
+    assert f'cargo:rustc-check-cfg=cfg({cfg}, values({values}))' in result.stdout
 
 @pytest.mark.parametrize("owner,package,prefix,cfg,environment", UNIT_TEST_MUTATION_OWNERS)
 @pytest.mark.parametrize("forwarded", [False, True])
@@ -4600,4 +4619,173 @@ def test_completed_lane_payload_mutation_has_one_actual_owner_and_exact_native_c
     rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
     assert len(rows) == 1 and selector in rows[0]
     native = (core / "sumeragi/executor/payload_owner.rs").read_text()
+    assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
+
+
+
+def test_block_event_reader_mutation_has_one_actual_owner_and_exact_native_control():
+    mid = "HC201"
+    selector = "smartcontracts::isi::tx::native_carrier_reader_tests::event_carrier_reads_recent_certified_source_under_original_finite_work"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"state.rs"}
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and selector in rows[0]
+    native = (core / "smartcontracts/isi/tx/native_carrier_reader_tests.rs").read_text()
+    assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
+
+
+
+def test_block_event_view_refusal_mutation_has_one_actual_owner_and_exact_native_control():
+    mid = "HC202"
+    selector = "state::event_carrier_tests::event_carrier_returns_from_original_writer_refusal_without_waiting"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"state.rs"}
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and selector in rows[0]
+    native = (core / "state/event_carrier_tests.rs").read_text()
+    assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
+
+
+def test_status_prelude_mutation_has_one_actual_actor_owner_and_exact_native_controls():
+    mid = "HC203"
+    selectors = (
+        "telemetry::tests::classified_status_tests::status_prelude_refuses_original_publication_before_service_deadline",
+        "telemetry::tests::classified_status_tests::status_final_world_sample_refuses_publication_after_verified_chunk",
+    )
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == selectors and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"telemetry.rs"}
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and all(selector in rows[0] for selector in selectors)
+    native = (core / "telemetry/classified_status_tests.rs").read_text()
+    for selector in selectors:
+        assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
+
+
+def test_initial_amx_acquisition_mutation_has_original_public_reader_control():
+    mid = "HC204"
+    selector = "query::native_receipts::amx_read::issuer_tests::public_amx_initial_shell_refusal_retains_original_genesis_frame_without_reread"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"sumeragi/certified_chain/amx_initialization.rs"}
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and selector in rows[0]
+    native = (core / "query/native_receipts/amx_read/issuer_tests.rs").read_text()
+    assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
+
+
+def test_authenticated_genesis_scope_mutation_has_original_reader_control():
+    mid = "HC205"
+    selector = "sumeragi::certified_chain::tests::signed_genesis_initialization_does_not_repeat_completed_scope_decode"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"sumeragi/certified_chain.rs"}
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and selector in rows[0]
+    native = (core / "sumeragi/certified_chain/tests.rs").read_text()
+    assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
+
+
+def test_pinned_genesis_model_mutations_have_original_public_reader_controls():
+    controls = {
+        "DM10": "pinned_signed_genesis_uses_one_original_decode_and_retains_metadata",
+        "DM11": "pinned_signed_genesis_preserves_original_binary_refusal",
+        "DM12": "pinned_signed_genesis_preserves_original_json_refusal_and_retry",
+    }
+    model = ROOT / "crates/iroha_data_model/src"
+    for mid, name in controls.items():
+        selector = "sumeragi_finality::genesis_dataspace::tests::" + name
+        rule = gate.index_mutations(gate.MODEL_MUTATIONS)[mid]
+        assert rule.tests == (selector,) and not rule.scenarios
+        assert gate.has_switch(mid, model=True)
+        owners = {p.relative_to(model).as_posix() for p in model.rglob("*.rs")
+                  if f'sumeragi_model_mutation = "{mid}"' in p.read_text()}
+        assert owners == {"sumeragi_finality/genesis.rs"}
+        for family in ({}, {"core": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+            assert not gate.has_switch(mid, **family)
+        rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+        assert len(rows) == 1 and selector in rows[0]
+        native = (model / "sumeragi_finality/genesis_dataspace_tests.rs").read_text()
+        assert "fn " + name + "(" in native
+
+
+def test_native_carrier_metadata_mutation_has_actual_state_reader_controls():
+    mid = "HC206"
+    selectors = (
+        "smartcontracts::isi::tx::native_carrier_reader_tests::full_prefix_carrier_preserves_original_cumulative_metadata_refusal",
+        "smartcontracts::isi::tx::native_carrier_reader_tests::event_carrier_preserves_original_cumulative_metadata_refusal",
+        "smartcontracts::isi::tx::native_carrier_reader_tests::bounded_native_extent_preserves_original_cumulative_metadata_refusal",
+        "state::block_proofs::native_proof_reader_tests::native_block_proof_preserves_original_cumulative_metadata_refusal",
+        "sumeragi::finality::compact_source::tests::compact_source_preserves_original_cumulative_metadata_refusal_before_body_io",
+    )
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == selectors and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"execution_attempt.rs"}
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and all(selector in rows[0] for selector in selectors)
+    natives = "\n".join((core / path).read_text() for path in (
+        "smartcontracts/isi/tx/native_carrier_reader_tests.rs",
+        "state/block_proofs.rs", "sumeragi/finality/compact_source.rs",
+    ))
+    assert all("fn " + selector.rsplit("::", 1)[1] + "(" in natives for selector in selectors)
+
+
+def test_deploy_completed_genesis_metadata_mutation_has_original_profile_owner():
+    mid = "DEP7"
+    selector = "localnet::private_root::tests::private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen"
+    rule = gate.index_mutations(gate.DEPLOY_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, deploy=True)
+    source = ROOT / "crates/iroha_deploy"
+    owners = {p.relative_to(source / "src").as_posix() for p in (source / "src").rglob("*.rs")
+              if f'sumeragi_deploy_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"localnet/service_authorities.rs"}
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"core": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    build = (source / "build.rs").read_text()
+    ids = re.search(r'const IDS: &\[&str\] = &\[(.*?)\];', build, re.S)
+    assert ids is not None and mid in re.findall(r'"(DEP[0-9]+)"', ids.group(1))
+    assert 'println!("cargo:rustc-check-cfg=cfg({CFG}, values({values}))")' in build
+    assert 'let values = IDS' in build
+    row = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(row) == 1 and selector in row[0]
+    native = (source / "src/localnet/private_root.rs").read_text()
     assert "fn " + selector.rsplit("::", 1)[1] + "(" in native

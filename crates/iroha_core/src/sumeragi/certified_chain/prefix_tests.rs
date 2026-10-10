@@ -713,3 +713,74 @@ fn admitted_prefix_finish_preserves_original_pool_refusal_and_certificate_error_
         original.current_epoch_context()
     );
 }
+
+#[test]
+fn walk_parent_link_retains_original_body_and_exact_native_continuity_without_result_copy() {
+    with_native_chain(assert_walk_parent_link_retains_original_body);
+}
+
+fn assert_walk_parent_link_retains_original_body(
+    chain: &CertifiedTestChain,
+    _: HashOf<TransactionEntrypoint>,
+) {
+    let source = frame(chain, 2);
+    let budget = iroha_allocation::AllocationBudget::new(
+        iroha_data_model::block::SharedSignedBlock::allocation_layout().size(),
+    );
+    let original = iroha_data_model::block::SharedSignedBlock::reserve(&budget)
+        .unwrap()
+        .initialize(source.as_ref().clone());
+    drop(source);
+    let parent = read_frame(original.clone(), 2).unwrap();
+    let child = read_frame(frame(chain, 3), 3).unwrap();
+    let mut link = WalkParentLink::from_committed(&parent);
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        &link.block,
+        &original
+    ));
+    assert!(link.block.belongs_to(&budget));
+    assert_eq!(link.is_extended_by(&child), child.extends(&parent));
+    assert!(link.is_extended_by(&child));
+    let original_pointer: *const SignedBlock = &*original;
+    drop(parent);
+    drop(original);
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    assert!(std::ptr::eq::<SignedBlock>(&*link.block, original_pointer));
+    assert!(link.is_extended_by(&child));
+
+    link.height = u64::MAX;
+    assert!(
+        !link.is_extended_by(&child),
+        "height overflow cannot extend"
+    );
+    link.height = 1;
+    assert!(
+        !link.is_extended_by(&child),
+        "a skipped height cannot extend"
+    );
+    link.height = 2;
+    let core_hash = link.core_hash;
+    link.core_hash.0[0] ^= 1;
+    assert!(
+        !link.is_extended_by(&child),
+        "the exact native parent hash is required"
+    );
+    link.core_hash = core_hash;
+    let result = link.result;
+    link.result.0[0] ^= 1;
+    assert!(
+        !link.is_extended_by(&child),
+        "the exact parent result is required"
+    );
+    link.result = result;
+    let block = std::mem::replace(&mut link.block, frame(chain, 1));
+    assert!(
+        !link.is_extended_by(&child),
+        "the original iroha parent body is required"
+    );
+    link.block = block;
+    assert!(link.is_extended_by(&child));
+    assert!(!link.is_extended_by(&read_frame(frame(chain, 4), 4).unwrap()));
+    drop(link);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

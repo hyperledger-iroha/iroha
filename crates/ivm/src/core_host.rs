@@ -1245,9 +1245,9 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_STATE_SCAN => {
                 let request =
                     crate::state_scan::StateScanRequest::decode(vm, &self.state_instance)?;
-                let map = request.map.clone();
+                let map = request.map().clone();
                 let prefix = format!("{}/", map.as_ref());
-                let after = request.after.clone();
+                let after = request.after().cloned();
                 let mut page = crate::state_scan::StateScanPage::new(request);
                 for key in self
                     .state
@@ -1509,6 +1509,10 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_DECODE_ARGUMENT_RECORD => {
                 crate::argument_record::decode_argument_record(vm)
             }
+            syscalls::SYSCALL_VALUE_ENCODE
+            | syscalls::SYSCALL_BLOB_CONCAT
+            | syscalls::SYSCALL_UTF8_VALIDATE
+            | syscalls::SYSCALL_VALUE_TO_STRING => crate::value_utilities::execute(number, vm),
             syscalls::SYSCALL_STATE_VALUE_ENCODE => {
                 crate::state_value_runtime::encode_state_value(vm, Self::resolve_code_tlv_addr)
             }
@@ -2147,6 +2151,9 @@ mod tests {
     }
     fn state_interface(name: &str, ty: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
         EmbeddedContractInterfaceV1 {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             callables: vec![ivm_abi::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
@@ -2168,7 +2175,8 @@ mod tests {
                 return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
                     nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
                 }),
-                permission: None,
+                authorization:
+                    iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: Some(true),
@@ -2338,7 +2346,8 @@ mod tests {
             .expect("state fixture has one entrypoint");
         if write {
             entrypoint.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage;
-            entrypoint.permission = Some("Execute".to_owned());
+            entrypoint.authorization =
+                iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone;
             entrypoint.write_keys.push(access_key);
         } else {
             entrypoint.read_keys.push(access_key);
@@ -2618,7 +2627,7 @@ mod tests {
         assert_eq!(vm.register(10), 2);
     }
     #[test]
-    fn bool_state_map_keys_keep_canonical_zero_one_carriers_and_gas() {
+    fn bool_state_map_keys_keep_canonical_records_and_gas() {
         let mut host = CoreHost::new();
         let mut vm = IVM::new(u64::MAX);
         load_state_map_schema(&mut vm, "flags", EmbeddedStateType::Bool);
@@ -2631,8 +2640,11 @@ mod tests {
         let mut entries = Vec::new();
         let mut gas_charges = Vec::new();
 
-        for key in [0_i64, 1_i64] {
-            let carrier = norito::to_bytes(&key).expect("canonical Bool carrier");
+        for key in [false, true] {
+            let carrier = state_value_record(
+                &EmbeddedStateType::Bool,
+                vec![ivm_abi::state_value::StateValueAtomV1::Bool(key)],
+            );
             let key_ptr = vm
                 .alloc_host_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &carrier))
                 .expect("allocate Bool key");
@@ -2667,7 +2679,7 @@ mod tests {
         assert_eq!(gas_charges[0], gas_charges[1]);
 
         let paths_before = host.state_paths();
-        for malformed in [2_i64, -1_i64] {
+        for malformed in [0_i64, 1_i64, 2_i64, -1_i64] {
             let bytes = norito::to_bytes(&malformed).expect("canonical i64");
             assert_eq!(
                 build_typed_map_path(&mut vm, &mut host, "flags", &bytes),
@@ -2724,9 +2736,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         load_state_map_schema(&mut vm, "orders", EmbeddedStateType::Int);
         let base: Name = "orders".parse().expect("map base");
-        let key =
-            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(-7))
-                .expect("encode canonical int key");
+        let key = int_state_value_record(-7);
         let path = crate::host::canonical_state_map_path(&base, &key).expect("canonical path");
         let page = norito::to_bytes(&vec![path]).expect("encode state key page");
         let page_ptr = vm
@@ -2815,9 +2825,8 @@ mod tests {
     #[test]
     fn state_map_numeric_key_ingress_rejects_missing_schema_and_invalid_frames() {
         use crate::numeric::PointerAbiFaultV1;
-        use iroha_primitives::{bigint::BigInt, numeric::Numeric, numeric_abi::IntValueV1};
-        let canonical_int =
-            ivm_abi::numeric_tlv::encode_int(&BigInt::one()).expect("encode canonical integer key");
+        use iroha_primitives::{numeric::Numeric, numeric_abi::IntValueV1};
+        let canonical_int = int_state_value_record(1);
         let mut schemaless_vm = IVM::new(u64::MAX);
         assert_eq!(
             build_typed_map_path(
@@ -2832,20 +2841,34 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         load_state_map_schema(&mut vm, "values", EmbeddedStateType::Int);
         let mut host = CoreHost::new();
-        assert!(matches!(
+        assert_eq!(
             build_typed_map_path(&mut vm, &mut host, "values", &[0x11]),
+            Err(VMError::NoritoInvalid),
+            "the key carrier itself must be a canonical record"
+        );
+        let truncated = state_value_record(
+            &EmbeddedStateType::Int,
+            vec![ivm_abi::state_value::StateValueAtomV1::Pointer(vec![0x11])],
+        );
+        assert!(matches!(
+            build_typed_map_path(&mut vm, &mut host, "values", &truncated),
             Err(VMError::PointerAbiFault(
                 PointerAbiFaultV1::TruncatedEnvelope
             ))
         ));
         assert!(matches!(
-            decode_typed_map_page_key(&mut vm, &mut host, "values", &[0x11]),
+            decode_typed_map_page_key(&mut vm, &mut host, "values", &truncated),
             Err(VMError::PointerAbiFault(
                 PointerAbiFaultV1::TruncatedEnvelope
             ))
         ));
-        let decimal = ivm_abi::numeric_tlv::encode_decimal(&Numeric::one())
-            .expect("encode cross-typed decimal key");
+        let decimal = state_value_record(
+            &EmbeddedStateType::Int,
+            vec![ivm_abi::state_value::StateValueAtomV1::Pointer(
+                ivm_abi::numeric_tlv::encode_decimal(&Numeric::one())
+                    .expect("encode cross-typed decimal key"),
+            )],
+        );
         assert_eq!(
             build_typed_map_path(&mut vm, &mut host, "values", &decimal),
             Err(VMError::PointerAbiFault(PointerAbiFaultV1::WrongType))
@@ -2861,7 +2884,12 @@ mod tests {
         let noncanonical_frame =
             norito::core::frame_bare_with_header_flags::<IntValueV1>(&noncanonical_body, 0)
                 .expect("build structurally valid noncanonical integer frame");
-        let noncanonical = make_pointer_tlv(PointerType::Int, &noncanonical_frame);
+        let noncanonical = state_value_record(
+            &EmbeddedStateType::Int,
+            vec![ivm_abi::state_value::StateValueAtomV1::Pointer(
+                make_pointer_tlv(PointerType::Int, &noncanonical_frame),
+            )],
+        );
         assert_eq!(
             build_typed_map_path(&mut vm, &mut host, "values", &noncanonical),
             Err(VMError::PointerAbiFault(PointerAbiFaultV1::NonCanonical))
@@ -2872,8 +2900,7 @@ mod tests {
             "iteration must not surface a noncanonical persisted key"
         );
         let base: Name = "values".parse().expect("map base");
-        let canonical_zero =
-            ivm_abi::numeric_tlv::encode_int(&BigInt::zero()).expect("encode canonical zero key");
+        let canonical_zero = int_state_value_record(0);
         let canonical_path = crate::host::canonical_state_map_path(&base, &canonical_zero)
             .expect("build canonical zero path");
         let canonical_value = bytes_state_value_record(b"canonical");
@@ -2890,7 +2917,7 @@ mod tests {
     }
     #[test]
     fn state_map_nonnumeric_keys_remain_schema_bound_and_canonical() {
-        let blob_key = make_pointer_tlv(PointerType::Blob, b"opaque bytes");
+        let blob_key = bytes_state_value_record(b"opaque bytes");
         let mut bytes_vm = IVM::new(u64::MAX);
         load_state_map_schema(&mut bytes_vm, "values", EmbeddedStateType::Bytes);
         let bytes_path =
@@ -2901,9 +2928,14 @@ mod tests {
             format!("values/{}", hex::encode(&blob_key))
         );
         let name: Name = "alice".parse().expect("name key");
-        let name_key = make_pointer_tlv(
-            PointerType::Name,
-            &norito::to_bytes(&name).expect("encode name key"),
+        let name_key = state_value_record(
+            &EmbeddedStateType::Name,
+            vec![ivm_abi::state_value::StateValueAtomV1::Pointer(
+                make_pointer_tlv(
+                    PointerType::Name,
+                    &norito::to_bytes(&name).expect("encode name key"),
+                ),
+            )],
         );
         let mut name_vm = IVM::new(u64::MAX);
         load_state_map_schema(&mut name_vm, "values", EmbeddedStateType::Name);
@@ -2956,8 +2988,7 @@ mod tests {
                 panic!("scan syscall {syscall:#x} rejected map base: {error}")
             });
         }
-        let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::zero())
-            .expect("encode canonical map key");
+        let key = int_state_value_record(0);
         let path = crate::host::canonical_state_map_path(&base, &key).expect("map child path");
         set_raw_state_path(&mut vm, &mut host, &path, &valid_value)
             .expect("canonical typed map value");
@@ -2999,8 +3030,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let mut host = CoreHost::new();
         let base: Name = "values".parse().expect("map base");
-        let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::one())
-            .expect("encode canonical map key");
+        let key = int_state_value_record(1);
         let path = crate::host::canonical_state_map_path(&base, &key).expect("map child path");
         host.insert_state_value(path.as_ref(), b"preexisting-untyped");
         load_state_map_schema(&mut vm, base.as_ref(), EmbeddedStateType::Int);
@@ -4011,9 +4041,7 @@ mod tests {
         let base_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &base_bytes))
             .expect("alloc base");
-        let key_bytes =
-            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
-                .expect("encode canonical int key");
+        let key_bytes = int_state_value_record(7);
         let key_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &key_bytes))
             .expect("alloc key");
@@ -4184,10 +4212,18 @@ mod tests {
             .parse()
             .expect("maximum map base");
         let key_payload_len = syscalls::STATE_MAP_MAX_KEY_BYTES;
-        let key_payload = make_pointer_tlv(
-            PointerType::Blob,
-            &vec![fill; key_payload_len - TLV_ENVELOPE_OVERHEAD],
-        );
+        // Account for the canonical record as well as its nested pointer frame.
+        let mut low = 0;
+        let mut high = key_payload_len;
+        while low < high {
+            let middle = (low + high + 1) / 2;
+            if bytes_state_value_record(&vec![fill; middle]).len() <= key_payload_len {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        let key_payload = bytes_state_value_record(&vec![fill; low]);
         assert_eq!(key_payload.len(), key_payload_len);
         let path = crate::host::canonical_state_map_path(&base, &key_payload)
             .expect("maximum bounded map path");

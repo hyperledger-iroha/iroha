@@ -35,14 +35,18 @@ pub enum ResolvedSymbolKind {
     Function,
     /// A user-defined struct.
     Struct,
-    /// A declared error-code namespace.
-    ErrorEnum,
+    /// Contract-owned native event payload declaration.
+    Event,
+    /// A declared nominal enum namespace.
+    Enum,
     /// A durable state declaration.
     State,
     /// A typed constant declaration.
     Const,
     /// A trigger declaration.
     Trigger,
+    /// An explicitly declared authorization permission.
+    Permission,
 }
 /// Resolved declaration retained before semantic typing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,10 +103,10 @@ pub enum ResolvedValueTarget {
     State(SymbolId),
     /// Source constant declaration.
     Const(SymbolId),
-    /// Stable declared error code.
-    ErrorCode(u32),
+    /// Stable declared nominal variant code.
+    VariantCode(u32),
     /// Three-segment variant path authenticated by the locked type import graph.
-    ImportedErrorVariant,
+    ImportedVariant,
     /// Compiler-owned value such as a rounding mode or JSON null.
     Intrinsic,
     /// State supplied by an explicitly typed standalone-test target.
@@ -117,8 +121,8 @@ pub enum ResolvedTypeTarget {
     Builtin,
     /// User-defined struct declaration.
     Struct(SymbolId),
-    /// Nominal payloadless error enum declaration.
-    ErrorEnum(SymbolId),
+    /// Nominal payloadless enum declaration.
+    Enum(SymbolId),
     /// Struct supplied by an explicitly typed standalone-test target.
     ExternalStruct,
     /// Two-segment type path authenticated by the locked package export graph.
@@ -356,6 +360,9 @@ impl ResolvedProgram {
             .collect();
         for file in &included {
             self.program
+                .permissions
+                .extend(file.program.permissions.iter().cloned());
+            self.program
                 .exports
                 .extend(file.program.exports.iter().cloned());
             self.program
@@ -544,10 +551,12 @@ fn symbol_kind(kind: DeclarationKind) -> Option<ResolvedSymbolKind> {
         DeclarationKind::SourceUnit => ResolvedSymbolKind::SourceUnit,
         DeclarationKind::Function => ResolvedSymbolKind::Function,
         DeclarationKind::Struct => ResolvedSymbolKind::Struct,
-        DeclarationKind::ErrorEnum => ResolvedSymbolKind::ErrorEnum,
+        DeclarationKind::Event => ResolvedSymbolKind::Event,
+        DeclarationKind::Enum => ResolvedSymbolKind::Enum,
         DeclarationKind::State => ResolvedSymbolKind::State,
         DeclarationKind::Const => ResolvedSymbolKind::Const,
         DeclarationKind::Trigger => ResolvedSymbolKind::Trigger,
+        DeclarationKind::Permission => ResolvedSymbolKind::Permission,
         DeclarationKind::Parameter => return None,
     })
 }
@@ -587,7 +596,7 @@ fn builtin_type(name: &str) -> bool {
 }
 fn explicit_import_call(name: &str) -> bool {
     name.split_once("::").is_some_and(|(alias, symbol)| {
-        !alias.is_empty() && !symbol.is_empty() && !symbol.contains("::")
+        !alias.is_empty() && symbol.split("::").all(|part| !part.is_empty())
     })
 }
 #[cfg(test)]
@@ -598,6 +607,32 @@ mod tests {
         source::{FrontendBudget, SourceId},
         spanned_ast::AstNodeKind,
     };
+    #[test]
+    fn declared_helper_names_resolve_before_retired_builtin_guidance() {
+        for name in ["get_int", "expect", "is_some", "min", "authority"] {
+            let text = format!(
+                "module Calls {{ fn {name}(int value) -> int {{ value }} fn use_name() -> int {{ {name}(3) }} }}"
+            );
+            let source = SourceFile::new(SourceId(90), "calls.ko", text);
+            let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
+                .expect("declared helper source parses");
+            resolve(ast, &source).unwrap_or_else(|diagnostics| panic!("{name}: {diagnostics:?}"));
+        }
+        let (source, diagnostics) = resolve_text(
+            "missing.ko",
+            "module Missing { fn call() { get_int(1); } }",
+            false,
+        );
+        assert_eq!(diagnostics.diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics.diagnostics[0].code, "K2002");
+        assert_eq!(diagnostics.diagnostics[0].phase, DiagnosticPhase::Resolve);
+        assert!(
+            diagnostics.diagnostics[0]
+                .message
+                .contains("json.get_int(key)")
+        );
+        assert_eq!(primary_spellings(&source, &diagnostics), ["get_int"]);
+    }
     fn primary_spellings(source: &SourceFile, diagnostics: &DiagnosticBundle) -> Vec<String> {
         diagnostics
             .diagnostics
@@ -633,7 +668,7 @@ mod tests {
         for imports in [false, true] {
             let (source, diagnostics) = resolve_text(
                 "builtin.ko",
-                "seiyaku B { view fn who() -> AccountId { return context::caller(); } }",
+                "seiyaku B { view fn who() authorize(anyone) -> AccountId { return context::caller(); } }",
                 imports,
             );
             let diagnostic = &diagnostics.diagnostics[0];
@@ -654,7 +689,7 @@ mod tests {
         }
         let (_, retired) = resolve_text(
             "retired.ko",
-            "seiyaku R { view fn which() -> Name { return context::entrypoint(); } }",
+            "seiyaku R { view fn which() authorize(anyone) -> Name { return context::entrypoint(); } }",
             true,
         );
         let help = retired.diagnostics[0]
@@ -681,10 +716,10 @@ mod tests {
             "seiyaku V { error enum VaultError { ZeroDeposit = 1 } fn f() { require(true, VaultError::ZeroDepsit); } }",
             false,
         );
-        assert_eq!(variant.diagnostics[0].code, "E_UNKNOWN_ERROR_VARIANT");
+        assert_eq!(variant.diagnostics[0].code, "E_UNKNOWN_ENUM_VARIANT");
         assert_eq!(
             variant.diagnostics[0].message,
-            "error enum `VaultError` has no variant `ZeroDepsit`"
+            "enum `VaultError` has no variant `ZeroDepsit`"
         );
         assert_eq!(
             variant.diagnostics[0]
@@ -705,7 +740,7 @@ mod tests {
     }
     #[test]
     fn shadowing_names_the_declaration_as_spelled_without_cascading() {
-        let text = "誓約 Stake {\n    言挙げ fn stake(quantity value) authorize(\"Stake\") {\n        let _ = value;\n    }\n    view fn quote(quantity stake) -> quantity {\n        return stake + stake;\n    }\n}";
+        let text = "誓約 Stake { permission Staker; \n    言挙げ fn stake(quantity value) authorize(Staker) {\n        let _ = value;\n    }\n    view fn quote(quantity stake) authorize(anyone) -> quantity {\n        return stake + stake;\n    }\n}";
         let (source, diagnostics) = resolve_text("stake.ko", text, false);
         assert_eq!(diagnostics.diagnostics.len(), 1, "{diagnostics:?}");
         let diagnostic = &diagnostics.diagnostics[0];
@@ -725,15 +760,24 @@ mod tests {
     #[test]
     fn declaration_keywords_echo_the_written_spelling() {
         assert_eq!(
-            declaration_keyword(DeclarationKind::Function, Some("kotoage fn f() {}")),
+            declaration_keyword(
+                DeclarationKind::Function,
+                Some("kotoage fn f() authorize(anyone) {}")
+            ),
             "kotoage"
         );
         assert_eq!(
-            declaration_keyword(DeclarationKind::Function, Some("言挙げ fn f() {}")),
+            declaration_keyword(
+                DeclarationKind::Function,
+                Some("言挙げ fn f() authorize(anyone) {}")
+            ),
             "言挙げ"
         );
         assert_eq!(
-            declaration_keyword(DeclarationKind::Function, Some("view fn f() {}")),
+            declaration_keyword(
+                DeclarationKind::Function,
+                Some("view fn f() authorize(anyone) {}")
+            ),
             "view fn"
         );
         assert_eq!(
@@ -766,11 +810,11 @@ mod tests {
         assert!(outside.emptied.is_empty());
     }
     #[test]
-    fn import_call_shape_accepts_exactly_two_identifier_segments() {
-        for accepted in ["math::add", "math_v1::add_2"] {
+    fn import_call_shape_accepts_nonempty_qualified_identifier_paths() {
+        for accepted in ["math::add", "math_v1::add_2", "math::nested::add"] {
             assert!(explicit_import_call(accepted), "{accepted}");
         }
-        for rejected in ["add", "math::", "::add", "math::nested::add"] {
+        for rejected in ["add", "math::", "::add", "math::::add", "math::nested::"] {
             assert!(!explicit_import_call(rejected), "{rejected}");
         }
     }
@@ -1465,13 +1509,13 @@ fn unknown_value_diagnostic(
     span: Option<SourceSpan>,
 ) -> Diagnostic {
     if let Some((namespace, variant)) = name.rsplit_once("::")
-        && globals.errors.contains_key(namespace)
+        && globals.enums.contains_key(namespace)
     {
         let prefix = format!("{namespace}::");
         let suggestion = suggestions::closest_name(
             variant,
             globals
-                .error_codes
+                .variant_codes
                 .keys()
                 .filter_map(|code| code.strip_prefix(prefix.as_str())),
         )
@@ -1481,9 +1525,9 @@ fn unknown_value_diagnostic(
         });
         return with_suggestion(
             Diagnostic::error(
-                "E_UNKNOWN_ERROR_VARIANT",
+                "E_UNKNOWN_ENUM_VARIANT",
                 DiagnosticPhase::Resolve,
-                format!("error enum `{namespace}` has no variant `{variant}`"),
+                format!("enum `{namespace}` has no variant `{variant}`"),
                 span,
             ),
             suggestion,
@@ -1499,7 +1543,7 @@ fn unknown_value_diagnostic(
                 .keys()
                 .chain(globals.states.keys())
                 .chain(globals.consts.keys())
-                .chain(globals.error_codes.keys())
+                .chain(globals.variant_codes.keys())
                 .chain(globals.external_states.iter())
                 .chain(globals.external_consts.iter())
                 .map(String::as_str),
@@ -1557,7 +1601,7 @@ fn resolve_type(
     source: &SourceFile,
     fact: &TypeUseFact,
     structs: &BTreeMap<String, SymbolId>,
-    errors: &BTreeMap<String, SymbolId>,
+    enums: &BTreeMap<String, SymbolId>,
     external_structs: &BTreeSet<String>,
     resolve_imports: bool,
 ) -> Result<ResolvedTypeUse, Box<Diagnostic>> {
@@ -1565,8 +1609,8 @@ fn resolve_type(
         ResolvedTypeTarget::Builtin
     } else if let Some(symbol) = structs.get(&fact.name) {
         ResolvedTypeTarget::Struct(*symbol)
-    } else if let Some(symbol) = errors.get(&fact.name) {
-        ResolvedTypeTarget::ErrorEnum(*symbol)
+    } else if let Some(symbol) = enums.get(&fact.name) {
+        ResolvedTypeTarget::Enum(*symbol)
     } else if external_structs.contains(&fact.name) {
         ResolvedTypeTarget::ExternalStruct
     } else if resolve_imports && explicit_import_call(&fact.name) {
@@ -1578,7 +1622,7 @@ fn resolve_type(
                 .iter()
                 .copied()
                 .chain(structs.keys().map(String::as_str))
-                .chain(errors.keys().map(String::as_str))
+                .chain(enums.keys().map(String::as_str))
                 .chain(external_structs.iter().map(String::as_str)),
         );
         return Err(Box::new(with_suggestion(
@@ -1608,17 +1652,18 @@ fn resolve_type(
 struct GlobalTargets {
     all: BTreeMap<String, SymbolId>,
     structs: BTreeMap<String, SymbolId>,
-    errors: BTreeMap<String, SymbolId>,
+    enums: BTreeMap<String, SymbolId>,
     functions: BTreeMap<String, SymbolId>,
     states: BTreeMap<String, SymbolId>,
     consts: BTreeMap<String, SymbolId>,
-    error_codes: BTreeMap<String, u32>,
+    permissions: BTreeSet<String>,
+    variant_codes: BTreeMap<String, u32>,
     resolve_import_calls: bool,
     external_functions: BTreeSet<String>,
     external_states: BTreeSet<String>,
     external_structs: BTreeSet<String>,
     external_consts: BTreeSet<String>,
-    external_error_codes: BTreeMap<String, u32>,
+    external_variant_codes: BTreeMap<String, u32>,
     /// Declared spelling and name range of each source-unit declaration.
     declarations: BTreeMap<String, GlobalDeclaration>,
 }
@@ -1637,10 +1682,12 @@ struct GlobalDeclaration {
 fn declaration_keyword(kind: DeclarationKind, text: Option<&str>) -> String {
     let fixed = match kind {
         DeclarationKind::Struct => Some("struct"),
-        DeclarationKind::ErrorEnum => Some("error enum"),
+        DeclarationKind::Event => Some("event"),
+        DeclarationKind::Enum => None,
         DeclarationKind::State => Some("state"),
         DeclarationKind::Const => Some("const"),
         DeclarationKind::Trigger => Some("trigger"),
+        DeclarationKind::Permission => Some("permission"),
         DeclarationKind::Parameter => Some("parameter"),
         DeclarationKind::Function | DeclarationKind::SourceUnit => None,
     };
@@ -1653,6 +1700,8 @@ fn declaration_keyword(kind: DeclarationKind, text: Option<&str>) -> String {
         .filter(|word| !word.is_empty());
     for word in words {
         match word {
+            "error" => return "error enum".to_owned(),
+            "enum" => return "enum".to_owned(),
             "view" => return "view fn".to_owned(),
             "fn" | "module" => return word.to_owned(),
             word if crate::glossary::by_spelling(word).is_some() => return word.to_owned(),
@@ -2032,11 +2081,12 @@ impl<'a> HirLowerer<'a> {
             Some(ResolvedValueTarget::State(*symbol))
         } else if let Some(symbol) = self.globals.consts.get(name) {
             Some(ResolvedValueTarget::Const(*symbol))
-        } else if let Some(code) = self.globals.error_codes.get(name) {
-            Some(ResolvedValueTarget::ErrorCode(*code))
+        } else if let Some(code) = self.globals.variant_codes.get(name) {
+            Some(ResolvedValueTarget::VariantCode(*code))
         } else if kotodama_surface::source_policy::V1_ROUNDING_PATHS.contains(&name)
             || kotodama_surface::builtins::Builtin::nominal_value(name)
                 .is_some_and(kotodama_surface::builtins::Builtin::is_nominal_path)
+            || self.globals.permissions.contains(name)
             || name == "null"
             || crate::testing::REJECTION_SELECTORS.contains(&name)
         {
@@ -2050,12 +2100,12 @@ impl<'a> HirLowerer<'a> {
                 explicit_import_call(namespace) && !variant.is_empty()
             })
         {
-            Some(ResolvedValueTarget::ImportedErrorVariant)
+            Some(ResolvedValueTarget::ImportedVariant)
         } else {
             self.globals
-                .external_error_codes
+                .external_variant_codes
                 .get(name)
-                .map(|code| ResolvedValueTarget::ErrorCode(*code))
+                .map(|code| ResolvedValueTarget::VariantCode(*code))
         };
         if target.is_none() {
             let diagnostic =
@@ -2071,8 +2121,8 @@ impl<'a> HirLowerer<'a> {
     ) -> Option<ResolvedTypeTarget> {
         if builtin_type(name) {
             Some(ResolvedTypeTarget::Builtin)
-        } else if let Some(symbol) = self.globals.errors.get(name) {
-            Some(ResolvedTypeTarget::ErrorEnum(*symbol))
+        } else if let Some(symbol) = self.globals.enums.get(name) {
+            Some(ResolvedTypeTarget::Enum(*symbol))
         } else if self.globals.external_structs.contains(name) {
             Some(ResolvedTypeTarget::ExternalStruct)
         } else if self.globals.resolve_import_calls && explicit_import_call(name) {
@@ -2208,7 +2258,7 @@ impl<'a> HirLowerer<'a> {
                     }
                     self.wrap_block(&mut function.body, scope, &mut visible);
                 }
-                Item::Struct(definition) => {
+                Item::Struct(definition) | Item::Event(definition) => {
                     for (_, ty) in &mut definition.fields {
                         let current = std::mem::replace(ty, TypeExpr::Const(0));
                         *ty = self.wrap_type(current, root);
@@ -2227,13 +2277,27 @@ impl<'a> HirLowerer<'a> {
                     declaration.ty = self.wrap_type(current, root);
                 }
                 Item::Trigger(declaration) => {
+                    if let crate::ast::TriggerFilter::Time(
+                        crate::ast::TriggerTimeFilter::Schedule {
+                            start_ms,
+                            period_ms,
+                        },
+                    ) = &mut declaration.filter
+                    {
+                        for expression in std::iter::once(start_ms).chain(period_ms) {
+                            let expression = expression.as_mut();
+                            let current =
+                                std::mem::replace(expression, Expr::IntLiteral(BigInt::zero()));
+                            *expression = self.wrap_expr(current, root, &root_visible);
+                        }
+                    }
                     for entry in &mut declaration.metadata {
                         let current =
                             std::mem::replace(&mut entry.value, Expr::IntLiteral(BigInt::zero()));
                         entry.value = self.wrap_expr(current, root, &root_visible);
                     }
                 }
-                Item::ErrorEnum(_) => {}
+                Item::Enum(_) => {}
             }
         }
         for fixture in &mut program.fixtures {
@@ -2316,6 +2380,39 @@ pub(crate) fn resolve_recovering(
         reduced,
     }))
 }
+/// Recover a project unit with the exact include/import declaration environment.
+/// This is used only after strict project resolution has already failed.
+pub(crate) fn resolve_with_imports_recovering(
+    ast: SpannedProgram,
+    source: &SourceFile,
+    external: &ExternalResolutionEnvironment,
+) -> Result<ResolvedProgram, Box<RecoveredResolution>> {
+    let diagnostics =
+        match resolve_with_imports_and_external_environment(ast.clone(), source, external) {
+            Ok(program) => return Ok(program),
+            Err(diagnostics) => diagnostics,
+        };
+    let (reduced, emptied) = match empty_failing_bodies(ast, &diagnostics) {
+        Ok((reduced, emptied)) => (
+            resolve_with_imports_and_external_environment(reduced, source, external).ok(),
+            emptied,
+        ),
+        Err(unchanged) => {
+            crate::ast::drop_program_iterative(unchanged.program);
+            (None, BTreeSet::new())
+        }
+    };
+    Err(Box::new(RecoveredResolution {
+        diagnostics,
+        emptied: if reduced.is_some() {
+            emptied
+        } else {
+            BTreeSet::new()
+        },
+        reduced,
+    }))
+}
+
 /// Empty the bodies of functions that contain resolution failures and drop the
 /// parser facts that belonged to those bodies. Returns the program unchanged
 /// when a failure lies outside every function body, so the caller can release
@@ -2413,11 +2510,13 @@ fn empty_failing_bodies(
 /// Names exported by one typed standalone-test target for fail-closed resolution.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExternalResolutionEnvironment {
+    pub(crate) contracts: BTreeMap<String, crate::semantic::ImportedContractInterface>,
     pub(crate) functions: BTreeSet<String>,
     pub(crate) states: BTreeSet<String>,
     pub(crate) structs: BTreeSet<String>,
     pub(crate) consts: BTreeSet<String>,
-    pub(crate) error_codes: BTreeMap<String, u32>,
+    pub(crate) permissions: BTreeSet<String>,
+    pub(crate) variant_codes: BTreeMap<String, u32>,
 }
 /// Resolve a standalone test source against its target's typed interface.
 pub(crate) fn resolve_with_external_environment(
@@ -2466,7 +2565,7 @@ fn resolve_with_imports_and_externals_inner(
     let mut symbols = Vec::new();
     let mut globals = BTreeMap::<String, (SymbolId, &DeclarationFact)>::new();
     let mut structs = BTreeMap::<String, SymbolId>::new();
-    let mut errors = BTreeMap::<String, SymbolId>::new();
+    let mut enums = BTreeMap::<String, SymbolId>::new();
     let mut functions = BTreeMap::<String, SymbolId>::new();
     let mut states = BTreeMap::<String, SymbolId>::new();
     let mut consts = BTreeMap::<String, SymbolId>::new();
@@ -2516,11 +2615,11 @@ fn resolve_with_imports_and_externals_inner(
             DeclarationKind::Function => {
                 functions.insert(fact.name.clone(), id);
             }
-            DeclarationKind::Struct => {
+            DeclarationKind::Struct | DeclarationKind::Event => {
                 structs.insert(fact.name.clone(), id);
             }
-            DeclarationKind::ErrorEnum => {
-                errors.insert(fact.name.clone(), id);
+            DeclarationKind::Enum => {
+                enums.insert(fact.name.clone(), id);
             }
             DeclarationKind::State => {
                 states.insert(fact.name.clone(), id);
@@ -2528,7 +2627,9 @@ fn resolve_with_imports_and_externals_inner(
             DeclarationKind::Const => {
                 consts.insert(fact.name.clone(), id);
             }
-            DeclarationKind::SourceUnit | DeclarationKind::Trigger => {}
+            DeclarationKind::SourceUnit
+            | DeclarationKind::Trigger
+            | DeclarationKind::Permission => {}
             DeclarationKind::Parameter => unreachable!("parameters were handled above"),
         }
         symbols.push(ResolvedSymbol {
@@ -2550,7 +2651,7 @@ fn resolve_with_imports_and_externals_inner(
             .find(|fact| fact.kind == kind && fact.name == name)
             .and_then(|fact| ast.facts.source_map.source_range(fact.node))
     };
-    let mut error_codes = BTreeMap::new();
+    let mut variant_codes = BTreeMap::new();
     for descriptor in [
         ivm_abi::error_types::list_error_type(),
         ivm_abi::error_types::numeric_error_type(),
@@ -2561,12 +2662,12 @@ fn resolve_with_imports_and_externals_inner(
             .next()
             .expect("builtin error name");
         for variant in &descriptor.variants {
-            error_codes.insert(format!("{name}::{}", variant.name), variant.code);
+            variant_codes.insert(format!("{name}::{}", variant.name), variant.code);
         }
     }
     for item in &ast.program.items {
         match item {
-            Item::Struct(definition) => {
+            Item::Struct(definition) | Item::Event(definition) => {
                 let mut fields = BTreeSet::new();
                 for (field, _) in &definition.fields {
                     if !fields.insert(field.as_str()) {
@@ -2583,7 +2684,7 @@ fn resolve_with_imports_and_externals_inner(
                     }
                 }
             }
-            Item::ErrorEnum(definition) => {
+            Item::Enum(definition) => {
                 let mut variants = BTreeSet::new();
                 for variant in &definition.variants {
                     if !variants.insert(variant.name.as_str()) {
@@ -2591,14 +2692,14 @@ fn resolve_with_imports_and_externals_inner(
                             "E_DUPLICATE_DECLARATION",
                             DiagnosticPhase::Resolve,
                             format!(
-                                "error variant `{}` is declared more than once in `{}`",
+                                "enum variant `{}` is declared more than once in `{}`",
                                 variant.name, definition.name
                             ),
-                            declaration_source(&definition.name, DeclarationKind::ErrorEnum)
+                            declaration_source(&definition.name, DeclarationKind::Enum)
                                 .map(|range| SourceSpan::from_range(source, range.range)),
                         ));
                     }
-                    error_codes.insert(
+                    variant_codes.insert(
                         format!("{}::{}", definition.name, variant.name),
                         variant.code,
                     );
@@ -2614,7 +2715,7 @@ fn resolve_with_imports_and_externals_inner(
             source,
             fact,
             &structs,
-            &errors,
+            &enums,
             &external.structs,
             resolve_import_calls,
         ) {
@@ -2673,6 +2774,15 @@ fn resolve_with_imports_and_externals_inner(
                 target,
             });
         } else {
+            if let Some(message) = crate::parser::removed_free_helper_message(&fact.name) {
+                diagnostics.push(Diagnostic::error(
+                    "K2002",
+                    DiagnosticPhase::Resolve,
+                    message,
+                    ast.facts.source_map.source_span(source, fact.name_node),
+                ));
+                continue;
+            }
             let suggestion = suggestions::closest_name(
                 &fact.name,
                 functions
@@ -2696,6 +2806,37 @@ fn resolve_with_imports_and_externals_inner(
                 suggestion,
                 None,
             ));
+        }
+    }
+    let permission_names = ast
+        .program
+        .permissions
+        .iter()
+        .map(|declaration| declaration.name.as_str())
+        .chain(external.permissions.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    for authorization in &ast.facts.authorizations {
+        let name = authorization.name.as_str();
+        if name != "anyone" && !permission_names.contains(name) {
+            let suggestion =
+                crate::diagnostic::suggest::closest(name, permission_names.iter().copied());
+            let mut diagnostic = Diagnostic::error(
+                "E_UNKNOWN_PERMISSION",
+                DiagnosticPhase::Resolve,
+                format!("authorization references undeclared permission `{name}`"),
+                ast.facts
+                    .source_map
+                    .source_span(source, authorization.name_node),
+            );
+            diagnostic.help = Some(match suggestion {
+                Some(candidate) => format!(
+                    "did you mean `{candidate}`? Permission names must be explicitly declared by this seiyaku"
+                ),
+                None => format!(
+                    "declare `permission {name};` or explicitly import a chain permission; use `authorize(anyone)` for open access"
+                ),
+            });
+            diagnostics.push(diagnostic);
         }
     }
     let mut parameter_sources = BTreeMap::new();
@@ -2748,17 +2889,24 @@ fn resolve_with_imports_and_externals_inner(
             .map(|(name, (id, _))| (name.clone(), *id))
             .collect(),
         structs,
-        errors,
+        enums,
         functions,
         states,
         consts,
-        error_codes,
+        permissions: ast
+            .program
+            .permissions
+            .iter()
+            .map(|permission| permission.name.clone())
+            .chain(external.permissions.iter().cloned())
+            .collect(),
+        variant_codes,
         resolve_import_calls,
         external_functions: external.functions.clone(),
         external_states: external.states.clone(),
         external_structs: external.structs.clone(),
         external_consts: external.consts.clone(),
-        external_error_codes: external.error_codes.clone(),
+        external_variant_codes: external.variant_codes.clone(),
     };
     let SpannedProgram { program, facts } = ast;
     let (program, mut arena, lower_diagnostics) = HirLowerer::new(

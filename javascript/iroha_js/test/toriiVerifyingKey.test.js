@@ -696,7 +696,7 @@ test("listVerifyingKeys rejects compatibility option aliases", async () => {
 
 test("getVerifyingKey validates and returns the canonical payload", async () => {
   const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/zk/vk/halo2%2Fipa/vk_main`);
+    assert.equal(url, `${BASE_URL}/v1/zk/vk/pipa-r%2Fpasta/vk_main`);
     return createResponse({
       status: 200,
       jsonData: {

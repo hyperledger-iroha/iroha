@@ -1306,3 +1306,60 @@ fn original_walk_keeps_semantic_gas_rejection_and_refunds_partial_coordinates() 
         "abandonment releases the exact funded backing"
     );
 }
+
+#[test]
+fn state_certificate_consuming_completion_waits_for_original_walk_and_refunds_receipts() {
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let latest_id = chain.committed(5).id();
+    let ancestor_id = chain.committed(2).id();
+    let reader = CertifiedChain::new(&view).unwrap();
+    let pool = view.execution_budget();
+    let baseline = pool.reserved_bytes();
+    for refused in [true, false] {
+        let mut work_left = 5_u64 - u64::from(refused);
+        let mut completed = false;
+        let (result, observed) = relation_counts::measure(|| {
+            reader.certified_with_ancestor_from_execution_into(
+                NonZeroUsize::new(5).unwrap(),
+                |work, _| {
+                    work_left = work_left.checked_sub(work).ok_or(
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(
+                            ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                        ),
+                    )?;
+                    Ok(())
+                },
+                |latest| {
+                    assert_eq!(latest.id(), latest_id);
+                    Ok(NonZeroUsize::new(2))
+                },
+                |latest, ancestor| {
+                    completed = true;
+                    assert_eq!(latest.id(), latest_id);
+                    assert_eq!(ancestor.as_ref().map(|block| block.id()), Some(ancestor_id));
+                    (latest.id(), ancestor.as_ref().map(|block| block.id()))
+                },
+            )
+        });
+        assert_eq!(work_left, 0);
+        assert_eq!(completed, !refused);
+        assert_eq!(
+            pool.reserved_bytes(),
+            baseline,
+            "completed or refused receipt ownership retires to its original pool"
+        );
+        if refused {
+            assert!(matches!(
+                result,
+                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+            ));
+            assert_eq!(observed.frames, [5, 4, 3, 2]);
+            assert_eq!(observed.qcs, [5]);
+        } else {
+            assert_eq!(result.unwrap(), (latest_id, Some(ancestor_id)));
+            assert_eq!(observed.frames, [5, 4, 3, 2, 1]);
+            assert_eq!(observed.qcs, [5, 2]);
+        }
+    }
+}

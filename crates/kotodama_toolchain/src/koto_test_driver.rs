@@ -5,11 +5,15 @@
 #[cfg(test)]
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _};
 use ed25519_dalek::{Signer as _, SigningKey};
+use iroha_data_model::executor::fault::{IvmFaultPositionV1, IvmFaultV1};
 use iroha_data_model::prelude::Mintable;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::{AssetBalanceScope, AssetId},
-    smart_contract::ContractAddress,
+    smart_contract::{
+        ContractAddress,
+        manifest::{ContractPermissionScopeV1, EntryPointKind, EntrypointAuthorizationV1},
+    },
 };
 use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::{domain::DomainId, name::Name};
@@ -47,16 +51,22 @@ use norito::json::{self, Value};
 use std::{
     any::Any,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    fmt::Write as _,
     fs,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
 };
+#[path = "koto_test_driver_upgrade.rs"]
+mod fixture_upgrade;
 #[path = "koto_test_driver_source_set.rs"]
 mod source_set;
 #[path = "koto_test_driver_trace.rs"]
 mod trace_capture;
+#[cfg(test)]
+#[path = "koto_test_driver_vrf.rs"]
+mod vrf_fixture_tests;
 use source_set::discover_declared_suite_from_source_set;
 pub use source_set::{
     declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
@@ -102,7 +112,7 @@ pub enum KotoTestReportFormat {
     Human,
     /// One JSON document (or, for `trace`, one JSON object per executed instruction).
     Json,
-    /// JUnit XML (`run` only).
+    /// `JUnit` XML (`run` only).
     Junit,
 }
 /// Complete `koto test` invocation after command-line parsing.
@@ -110,14 +120,11 @@ pub enum KotoTestReportFormat {
 pub struct KotoTestCliOptions {
     /// Selected action.
     pub action: KotoTestAction,
-    /// Seiyaku with inline tests or a standalone `*.test.ko` module; `None` with `project` runs
-    /// the project's root.
+    /// Seiyaku with inline tests or a standalone `*.test.ko` module.
     pub source: Option<PathBuf>,
     /// Directory that logical source names are relative to. Defaults to the nearest directory
     /// containing both the test module and its `koto_test` target.
     pub source_root: Option<PathBuf>,
-    /// Locked project manifest supplying the module graph.
-    pub project: Option<PathBuf>,
     /// Test-name substring (or exact name with [`Self::exact`]).
     pub filter: Option<String>,
     /// Require [`Self::filter`] to match the complete test name.
@@ -132,7 +139,7 @@ pub struct KotoTestCliOptions {
     pub zk_enabled: bool,
     /// Report format written to stdout.
     pub format: KotoTestReportFormat,
-    /// Additional JUnit XML report file.
+    /// Additional `JUnit` XML report file.
     pub junit: Option<PathBuf>,
     /// Print a per-kotoage gas table after the results.
     pub gas_report: bool,
@@ -145,7 +152,6 @@ impl KotoTestCliOptions {
             action,
             source: None,
             source_root: None,
-            project: None,
             filter: None,
             exact: false,
             jobs: 1,
@@ -313,6 +319,7 @@ struct DiscoveredSuite {
     /// `const` declarations visible to fixture arguments.
     fixture_consts: HashMap<String, Expr>,
     sources: Vec<SourceModuleUnit>,
+    artifacts: Vec<kotodama_lang::linker::SourceContractArtifact>,
     source_root: Option<PathBuf>,
 }
 struct DiscoveredTestModule {
@@ -341,6 +348,10 @@ struct CompiledSuite {
     fixtures: HashMap<String, FixtureDecl>,
     fixture_sites: HashMap<String, FixtureSite>,
     fixture_consts: HashMap<String, Expr>,
+    /// Immutable admitted compiled dependencies captured with this suite.
+    artifacts: BTreeMap<String, ivm::PreparedContract>,
+    /// Source owner for resolving fixture-relative artifact paths.
+    source_root: Option<PathBuf>,
     /// Functions of the runtime seiyaku, or of a pure unit-test target, keyed to runtime PCs.
     coverage_functions: Vec<CoverageFunction>,
     /// Declared seiyaku functions with no code of their own in the profiled artifact.
@@ -366,7 +377,7 @@ struct RuntimeEntrypoint {
     pc: u64,
     argument_schema: Option<EntrypointArgumentSchemaV1>,
     return_schema: ivm_abi::entrypoint::EntrypointValueTypeV1,
-    permission: Option<String>,
+    authorization: EntrypointAuthorizationV1,
 }
 #[derive(Clone)]
 struct CompiledTestCase {
@@ -460,7 +471,7 @@ enum FailureKind {
     Trap,
 }
 impl FailureKind {
-    /// Stable machine-readable spelling used in JSON and JUnit reports.
+    /// Stable machine-readable spelling used in JSON and `JUnit` reports.
     const fn slug(self) -> &'static str {
         match self {
             Self::Assertion => "assertion",
@@ -497,6 +508,7 @@ impl FailureKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TestFailure {
     kind: FailureKind,
+    fault: Option<IvmFaultV1>,
     /// `path:line:column` (or `path:line`) of the failing site, when known.
     location: Option<String>,
     /// One-line description following the kind label.
@@ -508,6 +520,7 @@ impl TestFailure {
     fn new(kind: FailureKind, message: impl Into<String>) -> Self {
         Self {
             kind,
+            fault: None,
             location: None,
             message: message.into(),
             details: Vec::new(),
@@ -639,6 +652,8 @@ impl KotoTestRunRequestV1 {
 /// discovery is disabled when this graph is used.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KotoTestModuleGraphV1 {
+    /// Immutable compiled contract artifacts owned by this exact source root.
+    pub artifacts: Vec<kotodama_lang::linker::SourceContractArtifact>,
     /// Explicit companion files shared by the target and selected test sources.
     pub sources: Vec<SourceModuleUnit>,
     /// Direct aliases visible to the declared test root.
@@ -665,12 +680,25 @@ pub struct KotoTestRunErrorV1 {
     pub phase: KotoTestRunPhaseV1,
     /// Human-readable diagnostic detail suitable for a frontend error record.
     pub message: String,
+    /// Canonical compiler diagnostics, including source locations and fixes, when available.
+    pub diagnostics: Option<DiagnosticBundle>,
 }
 impl KotoTestRunErrorV1 {
     fn new(phase: KotoTestRunPhaseV1, message: impl Into<String>) -> Self {
         Self {
             phase,
             message: message.into(),
+            diagnostics: None,
+        }
+    }
+    fn from_suite(phase: KotoTestRunPhaseV1, error: SuiteError) -> Self {
+        match error {
+            SuiteError::Diagnostics(diagnostics) => Self {
+                phase: KotoTestRunPhaseV1::Compilation,
+                message: diagnostics.render_human(),
+                diagnostics: Some(diagnostics),
+            },
+            error => Self::new(phase, error),
         }
     }
 }
@@ -693,7 +721,9 @@ pub struct KotoTestCaseOutcomeV1 {
     pub line: u32,
     /// Whether VM execution completed successfully.
     pub passed: bool,
-    /// Stable rendered VM diagnostic for a failed case.
+    /// Canonical execution fault with authenticated origin, absent for application rejections.
+    pub fault: Option<IvmFaultV1>,
+    /// Rendered VM diagnostic for a failed case.
     pub failure: Option<String>,
 }
 /// One complete, deterministically ordered Kotodama test report.
@@ -739,7 +769,7 @@ pub fn run_tests_structured_v1(
 ) -> Result<KotoTestRunReportV1, KotoTestRunErrorV1> {
     validate_structured_request(request)?;
     let suite = discover_suite(&request.target)
-        .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
+        .map_err(|error| KotoTestRunErrorV1::from_suite(KotoTestRunPhaseV1::Discovery, error))?;
     run_discovered_suite_structured(request, suite, None)
 }
 /// Run one explicitly declared test root against an exact locked module graph.
@@ -761,7 +791,9 @@ pub fn run_tests_structured_with_modules_v1(
         let path = fs::canonicalize(&request.target).map_err(|error| error.to_string())?;
         let (source, program) = parse_program_file(&path)?;
         if program.test_target.is_some() {
-            return Err("exact module graphs require a directly declared test root".to_owned());
+            return Err(SuiteError::Invalid(
+                "exact module graphs require a directly declared test root".to_owned(),
+            ));
         }
         let source_root = path.parent().map(Path::to_path_buf);
         finalize_suite_with_sources(
@@ -770,10 +802,11 @@ pub fn run_tests_structured_with_modules_v1(
             program,
             Vec::new(),
             modules.sources.clone(),
+            modules.artifacts.clone(),
             source_root,
         )
     })()
-    .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
+    .map_err(|error| KotoTestRunErrorV1::from_suite(KotoTestRunPhaseV1::Discovery, error))?;
     run_discovered_suite_structured(request, suite, Some(modules))
 }
 /// Run one caller-supplied test root against an exact locked module graph.
@@ -833,16 +866,19 @@ fn run_discovered_suite_structured(
             "no Kotodama tests matched the requested filter",
         ));
     }
-    let compiled = match modules {
-        Some(modules) => compile_suite_with_modules_for_chain(
-            &suite,
-            modules,
-            request.zk_enabled,
-            request.chain_discriminant,
-        ),
-        None => compile_suite_for_chain(&suite, request.zk_enabled, request.chain_discriminant),
-    }
-    .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Compilation, error))?;
+    let compiled = modules
+        .map_or_else(
+            || compile_suite_for_chain(&suite, request.zk_enabled, request.chain_discriminant),
+            |modules| {
+                compile_suite_with_modules_for_chain(
+                    &suite,
+                    modules,
+                    request.zk_enabled,
+                    request.chain_discriminant,
+                )
+            },
+        )
+        .map_err(|error| KotoTestRunErrorV1::from_suite(KotoTestRunPhaseV1::Compilation, error))?;
     let results = execute_suite_for_chain(
         &compiled,
         TraceMode::Off,
@@ -863,6 +899,7 @@ fn run_discovered_suite_structured(
                 name: result.name,
                 line,
                 passed: result.passed,
+                fault: result.failure.as_ref().and_then(|failure| failure.fault),
                 failure: result.failure.as_ref().map(TestFailure::render),
             })
         })
@@ -919,6 +956,7 @@ fn validate_structured_source(root: &SourceModuleUnit) -> Result<(), String> {
         ));
     }
     ModuleBuildGraph::fingerprint(&SourceLinkRequest {
+        artifacts: Vec::new(),
         sources: Vec::new(),
         root: root.clone(),
         imports: Vec::new(),
@@ -961,9 +999,18 @@ fn filter_and_order_structured_tests(tests: &mut Vec<TestCase>, request: &KotoTe
         }
     });
 }
+/// Local diagnostic event only: it carries no chain provenance and cannot be committed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CapturedTestEvent {
+    name: Name,
+    payload: iroha_data_model::smart_contract::entrypoint::EntrypointReturnRecordV1,
+}
 struct KotoTestHost {
     inner: WsvHost,
+    /// Bounded local owner of argument/return captures retained across nested VMs.
+    record_budget: iroha_allocation::AllocationBudget,
     actors: HashMap<String, FixtureActor>,
+    events: Vec<CapturedTestEvent>,
     base_public_inputs: BTreeMap<Name, Vec<u8>>,
     entrypoints: HashMap<String, RuntimeEntrypoint>,
     program: Option<ivm::PreparedContract>,
@@ -971,6 +1018,7 @@ struct KotoTestHost {
     last_failure: Option<TestFailure>,
     supplemental_trace: Option<ivm::zk::RuntimeTraceCapture>,
     lifecycle: Lifecycle,
+    fixture_upgrade_staged: bool,
     /// Seiyaku calls made so far, for gas reporting.
     calls: Vec<EntrypointCall>,
     context: Arc<SourceContext>,
@@ -985,7 +1033,7 @@ const CURRENT_CALLER: &str = "current caller";
 const NESTED_GAS_LIMIT: u64 = u64::MAX;
 /// Run the VM-backed Kotodama test harness for the unified `koto test` command.
 ///
-/// Reports are written to stdout in the requested format; a JUnit file is written in addition when
+/// Reports are written to stdout in the requested format; a `JUnit` file is written in addition when
 /// requested.
 ///
 /// # Errors
@@ -1018,41 +1066,12 @@ pub fn run_cli(options: KotoTestCliOptions) -> Result<(), KotoTestCliError> {
             "JUnit output is available for `koto test run` only",
         ));
     }
-    let project = options
-        .project
-        .as_deref()
-        .map(kotodama_lang::driver::load_source_project_manifest)
-        .transpose()
-        .map_err(|error| match error {
-            kotodama_lang::driver::BuildError::Io { .. } => {
-                KotoTestCliError::new(Kind::Io, error.to_string())
-            }
-            error => match error.into_diagnostics() {
-                Ok(diagnostics) => KotoTestCliError::new(Kind::Compile, diagnostics.render_human()),
-                Err(error) => KotoTestCliError::new(Kind::Compile, format!("error: {error}")),
-            },
-        })?;
-    let mut source_root = options.source_root.clone();
-    let mut source = options.source.clone();
-    if let Some(project) = &project {
-        source_root = project
-            .manifest
-            .as_ref()
-            .and_then(|manifest| manifest.path().parent().map(Path::to_path_buf));
-        if source.is_none() {
-            source = source_root
-                .as_ref()
-                .map(|root| root.join(&project.graph.root.source_name));
-        }
-    }
-    let source = source.ok_or_else(|| {
-        KotoTestCliError::new(
-            Kind::Usage,
-            "koto test expects a source (a seiyaku or a `*.test.ko` module) or --project",
-        )
-    })?;
-    let mut suite =
-        discover_suite_with_root(&source, source_root.as_deref()).map_err(SuiteError::into_cli)?;
+    let source = options.source.as_ref().ok_or_else(|| KotoTestCliError::new(
+        Kind::Usage,
+        "koto test expects a seiyaku or standalone test module source; use musubi test for a project",
+    ))?;
+    let mut suite = discover_suite_with_root(source, options.source_root.as_deref())
+        .map_err(SuiteError::into_cli)?;
     filter_and_order_tests(&mut suite.tests, &options);
     if options.action == KotoTestAction::List {
         return print_test_list(&suite, options.format);
@@ -1060,39 +1079,19 @@ pub fn run_cli(options: KotoTestCliOptions) -> Result<(), KotoTestCliError> {
     if suite.tests.is_empty() {
         return Err(KotoTestCliError::new(
             Kind::Usage,
-            match &options.filter {
-                Some(filter) => format!(
-                    "no Kotodama tests in {} match the filter `{filter}`",
-                    display_path(&source)
-                ),
-                None => "no Kotodama tests matched the requested filter".to_owned(),
-            },
+            options.filter.as_ref().map_or_else(
+                || "no Kotodama tests matched the requested filter".to_owned(),
+                |filter| {
+                    format!(
+                        "no Kotodama tests in {} match the filter `{filter}`",
+                        display_path(source)
+                    )
+                },
+            ),
         ));
     }
-    let compiled = if let Some(project) = project {
-        let mut sources = project.graph.sources;
-        for source in &suite.sources {
-            if !sources
-                .iter()
-                .any(|known| known.source_name == source.source_name)
-            {
-                sources.push(source.clone());
-            }
-        }
-        compile_suite_with_modules_for_chain(
-            &suite,
-            &KotoTestModuleGraphV1 {
-                sources,
-                imports: project.graph.imports,
-                packages: project.graph.packages,
-            },
-            options.zk_enabled,
-            options.chain_discriminant,
-        )
-    } else {
-        compile_suite_for_chain(&suite, options.zk_enabled, options.chain_discriminant)
-    }
-    .map_err(|error| localize_suite_diagnostics(&suite, error).into_cli())?;
+    let compiled = compile_suite_for_chain(&suite, options.zk_enabled, options.chain_discriminant)
+        .map_err(|error| localize_suite_diagnostics(&suite, error).into_cli())?;
     let trace_mode = match options.action {
         KotoTestAction::Run => TraceMode::Off,
         KotoTestAction::Coverage => TraceMode::PcOnly,
@@ -1126,8 +1125,8 @@ pub fn run_cli(options: KotoTestCliOptions) -> Result<(), KotoTestCliError> {
         }
         KotoTestAction::List => unreachable!("list exits before execution"),
     }
-    if let Some(path) = &options.junit {
-        fs::write(path, render_test_junit(&suite, &results, options.seed)).map_err(|error| {
+    if let Some(path) = options.junit {
+        fs::write(&path, render_test_junit(&suite, &results, options.seed)).map_err(|error| {
             KotoTestCliError::new(
                 Kind::Io,
                 format!("write JUnit report {}: {error}", path.display()),
@@ -1182,6 +1181,11 @@ pub fn check_test_module_v1(
 ///
 /// Developer frontends use this before dispatching filtered runs so a filter
 /// that matches a test in one file does not fail early on an unrelated file.
+///
+/// # Errors
+///
+/// Returns an error for unreadable sources, invalid target bindings, parsing failures,
+/// or a target and its companion modules that declare no tests.
 pub fn discover_test_names(path: &Path) -> Result<Vec<String>, String> {
     let suite = discover_suite(path)?;
     Ok(suite.tests.into_iter().map(|test| test.name).collect())
@@ -1267,10 +1271,12 @@ fn discover_declared_suite(path: &Path) -> Result<DiscoveredSuite, SuiteError> {
             input_path.display()
         )));
     }
-    Ok(finalize_suite(input_path, source, program, Vec::new())?)
+    finalize_suite(input_path, source, program, Vec::new())
 }
-fn discover_declared_suite_from_source(root: &SourceModuleUnit) -> Result<DiscoveredSuite, String> {
-    discover_declared_suite_from_source_set(root, None, &[])
+fn discover_declared_suite_from_source(
+    root: &SourceModuleUnit,
+) -> Result<DiscoveredSuite, SuiteError> {
+    discover_declared_suite_from_source_set(root, None, &[], &[])
 }
 fn discover_suite_from_target(
     path: &Path,
@@ -1282,13 +1288,13 @@ fn discover_suite_from_target(
     for test in &standalone_tests {
         validate_standalone_test_program(&test.path, path, &test.program)?;
     }
-    Ok(finalize_suite_files(
+    finalize_suite_files(
         path.to_path_buf(),
         target_source,
         target_program,
         standalone_tests,
         source_root,
-    )?)
+    )
 }
 fn discover_suite_from_standalone_test(
     test_path: &Path,
@@ -1305,7 +1311,7 @@ fn discover_suite_from_standalone_test(
     let target_path = resolve_target_path(test_path, &target_decl.target)?;
     let (target_source, target_program) = parse_program_file(&target_path)?;
     validate_standalone_test_program(test_path, &target_path, &test_program)?;
-    Ok(finalize_suite_files(
+    finalize_suite_files(
         target_path,
         target_source,
         target_program,
@@ -1315,14 +1321,14 @@ fn discover_suite_from_standalone_test(
             program: test_program,
         }],
         source_root,
-    )?)
+    )
 }
 fn finalize_suite(
     target_path: PathBuf,
     target_source: String,
     target_program: Program,
     test_modules: Vec<DiscoveredTestModule>,
-) -> Result<DiscoveredSuite, String> {
+) -> Result<DiscoveredSuite, SuiteError> {
     finalize_suite_files(
         target_path,
         target_source,
@@ -1337,7 +1343,7 @@ fn finalize_suite_files(
     target_program: Program,
     test_modules: Vec<DiscoveredTestModule>,
     explicit_root: Option<&Path>,
-) -> Result<DiscoveredSuite, String> {
+) -> Result<DiscoveredSuite, SuiteError> {
     let source_root = explicit_root
         .map(Path::canonicalize)
         .transpose()
@@ -1348,7 +1354,7 @@ fn finalize_suite_files(
                 .then(|| target_path.parent().map(Path::to_path_buf))
                 .flatten()
         });
-    let sources = if let Some(root) = source_root.as_deref() {
+    let inventory = if let Some(root) = source_root.as_deref() {
         let logical = |path: &Path| {
             kotodama_lang::driver::logical_source_name(path, root).map_err(|_| {
                 format!(
@@ -1368,17 +1374,18 @@ fn finalize_suite_files(
                 source: module.source.clone(),
             });
         }
-        kotodama_lang::driver::load_source_companions(&entries, root, &BTreeMap::new())
-            .map_err(|error| error.to_string())?
+        kotodama_lang::driver::load_source_inventory(&entries, root, &BTreeMap::new())
+            .map_err(suite_build_error)?
     } else {
-        Vec::new()
+        kotodama_lang::driver::SourceInventory::default()
     };
     finalize_suite_with_sources(
         target_path,
         target_source,
         target_program,
         test_modules,
-        sources,
+        inventory.sources,
+        inventory.artifacts,
         source_root,
     )
 }
@@ -1388,14 +1395,19 @@ fn finalize_suite_with_sources(
     target_program: Program,
     test_modules: Vec<DiscoveredTestModule>,
     sources: Vec<SourceModuleUnit>,
+    artifacts: Vec<kotodama_lang::linker::SourceContractArtifact>,
     source_root: Option<PathBuf>,
-) -> Result<DiscoveredSuite, String> {
+) -> Result<DiscoveredSuite, SuiteError> {
     let mut tests = Vec::new();
     let mut test_names = HashSet::new();
-    let source_name = |path: &Path| match source_root.as_deref() {
-        Some(root) => kotodama_lang::driver::logical_source_name(path, root)
-            .map_err(|error| error.to_string()),
-        None => Ok(path.display().to_string()),
+    let source_name = |path: &Path| {
+        source_root.as_deref().map_or_else(
+            || Ok(path.display().to_string()),
+            |root| {
+                kotodama_lang::driver::logical_source_name(path, root)
+                    .map_err(|error| error.to_string())
+            },
+        )
     };
     let mut included_programs = Vec::new();
     collect_included_test_programs(
@@ -1427,10 +1439,10 @@ fn finalize_suite_with_sources(
         collect_tests_into(program, &included_path(name), &mut test_names, &mut tests)?;
     }
     if tests.is_empty() {
-        return Err(format!(
+        return Err(SuiteError::Invalid(format!(
             "no #[test] Kotodama functions were found for {}; tests live in a `*.test.ko` module that declares `koto_test {{ target: \"...\" }}`, so pass that module to `koto test`",
             display_path(&target_path)
-        ));
+        )));
     }
     let fixtures = build_fixture_map(
         &target_program
@@ -1477,6 +1489,7 @@ fn finalize_suite_with_sources(
         fixture_sites,
         fixture_consts,
         sources,
+        artifacts,
         source_root,
     })
 }
@@ -1537,7 +1550,7 @@ fn collect_included_test_programs(
     sources: &[SourceModuleUnit],
     visited: &mut BTreeSet<String>,
     output: &mut Vec<(String, Program)>,
-) -> Result<(), String> {
+) -> Result<(), SuiteError> {
     let mut pending = vec![(source_name.to_owned(), program.directives.clone())];
     while let Some((name, directives)) = pending.pop() {
         for directive in directives {
@@ -1545,7 +1558,7 @@ fn collect_included_test_programs(
                 continue;
             };
             let name = kotodama_lang::linker::resolve_source_path(&name, &path)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| SuiteError::Diagnostics(error.into_diagnostics()))?;
             if !visited.insert(name.clone()) {
                 continue;
             }
@@ -1560,12 +1573,18 @@ fn collect_included_test_programs(
             );
             let program =
                 parser::parse_fragment_source(&file, kotodama_lang::source::FrontendBudget::v1())
-                    .map_err(|diagnostics| diagnostics.render_human())?;
+                    .map_err(SuiteError::Diagnostics)?;
             pending.push((name.clone(), program.directives.clone()));
             output.push((name, program));
         }
     }
     Ok(())
+}
+fn suite_build_error(error: kotodama_lang::driver::BuildError) -> SuiteError {
+    match error.into_diagnostics() {
+        Ok(diagnostics) => SuiteError::Diagnostics(diagnostics),
+        Err(error) => SuiteError::Invalid(error.to_string()),
+    }
 }
 fn parse_program_file(path: &Path) -> Result<(String, Program), SuiteError> {
     let src = read_source_file(path)
@@ -1700,13 +1719,13 @@ fn validate_standalone_test_items(test_path: &Path, program: &Program) -> Result
                     ));
                 }
             }
-            Item::State(_) | Item::Trigger(_) => {
+            Item::State(_) | Item::Trigger(_) | Item::Event(_) => {
                 return Err(format!(
-                    "{} may not declare durable state or triggers",
+                    "{} may not declare durable state, triggers or events",
                     test_path.display()
                 ));
             }
-            Item::Struct(_) | Item::ErrorEnum(_) | Item::Const(_) => {}
+            Item::Struct(_) | Item::Enum(_) | Item::Const(_) => {}
         }
     }
     Ok(())
@@ -1760,11 +1779,12 @@ fn compile_suite_for_chain(
     zk_enabled: bool,
     chain_discriminant: u16,
 ) -> Result<CompiledSuite, SuiteError> {
-    if !suite.sources.is_empty() {
+    if !suite.sources.is_empty() || !suite.artifacts.is_empty() {
         return compile_suite_with_modules_for_chain(
             suite,
             &KotoTestModuleGraphV1 {
                 sources: suite.sources.clone(),
+                artifacts: suite.artifacts.clone(),
                 ..KotoTestModuleGraphV1::default()
             },
             zk_enabled,
@@ -1802,7 +1822,13 @@ fn compile_suite_for_chain(
     let outputs = CompilerSession::new(test_opts)
         .build_test_sources(&target, &test_modules)
         .map_err(SuiteError::Diagnostics)?;
-    prepare_compiled_suite(suite, outputs, source_files, chain_discriminant)
+    prepare_compiled_suite(
+        suite,
+        outputs,
+        source_files,
+        chain_discriminant,
+        &suite.artifacts,
+    )
 }
 fn compile_suite_with_modules_for_chain(
     suite: &DiscoveredSuite,
@@ -1860,6 +1886,7 @@ fn compile_suite_with_modules_for_chain(
     let outputs = ModuleBuildGraph::default()
         .build_test_project_with_sources(
             SourceLinkRequest {
+                artifacts: modules.artifacts.clone(),
                 sources: modules.sources.clone(),
                 root: SourceModuleUnit {
                     source_name: source_name.clone(),
@@ -1878,15 +1905,35 @@ fn compile_suite_with_modules_for_chain(
             &source_name,
         )
         .map_err(SuiteError::Diagnostics)?;
-    prepare_compiled_suite(suite, outputs, source_files, chain_discriminant)
+    prepare_compiled_suite(
+        suite,
+        outputs,
+        source_files,
+        chain_discriminant,
+        &modules.artifacts,
+    )
 }
 fn prepare_compiled_suite(
     suite: &DiscoveredSuite,
     outputs: TestCompileOutput,
     source_files: SourceFiles,
     chain_discriminant: u16,
+    artifacts: &[kotodama_lang::linker::SourceContractArtifact],
 ) -> Result<CompiledSuite, SuiteError> {
     let internal = |message: String| SuiteError::Invalid(message);
+    let artifacts = artifacts
+        .iter()
+        .map(|artifact| {
+            ivm::prepare_contract(Arc::from(artifact.artifact.clone()))
+                .map(|prepared| (artifact.source_name.clone(), prepared))
+                .map_err(|error| {
+                    internal(format!(
+                        "invalid captured fixture artifact `{}`: {error}",
+                        artifact.source_name
+                    ))
+                })
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     let test_output = outputs.suite;
     let test_contract_interface = test_output.contract_interface().clone();
     let test_report = test_output.report;
@@ -1943,7 +1990,7 @@ fn prepare_compiled_suite(
                             .return_schema
                             .clone()
                             .expect("validated runtime return schema"),
-                        permission: entry.permission.clone(),
+                        authorization: entry.authorization.clone(),
                     },
                 )
             })
@@ -1963,7 +2010,7 @@ fn prepare_compiled_suite(
     for entry in &suite_artifact.report.budget_report {
         test_pcs
             .entry(entry.function_name.clone())
-            .or_insert(test_pc_base.saturating_add(entry.pc_start));
+            .or_insert_with(|| test_pc_base.saturating_add(entry.pc_start));
     }
     let tests = suite
         .tests
@@ -1985,12 +2032,12 @@ fn prepare_compiled_suite(
         .collect::<Result<Vec<_>, SuiteError>>()?;
     let source_names = suite_artifact
         .report
-        .source_map
-        .iter()
+        .symbolized_source_map()
+        .into_iter()
         .chain(
             runtime
                 .iter()
-                .flat_map(|runtime| runtime.report.source_map.iter()),
+                .flat_map(|runtime| runtime.report.symbolized_source_map()),
         )
         .filter_map(|entry| {
             entry
@@ -2004,13 +2051,15 @@ fn prepare_compiled_suite(
         seiyaku_name: suite.target_program.unit.name.clone(),
         files: source_files,
         source_names,
-        harness: suite_artifact.report.source_map.clone(),
+        harness: suite_artifact.report.symbolized_source_map(),
         harness_base: suite_artifact.pc_base,
         runtime: runtime
             .as_ref()
-            .map(|runtime| runtime.report.source_map.clone())
+            .map(|runtime| runtime.report.symbolized_source_map())
             .unwrap_or_default(),
         runtime_base: runtime.as_ref().map_or(0, |runtime| runtime.pc_base),
+        runtime_hash: runtime.as_ref().map(|runtime| runtime.report.artifact_hash),
+        harness_hash: Some(suite_artifact.report.artifact_hash),
     });
     let (profile_report, profile_pc_base) = profile_source(&suite_artifact, runtime.as_ref());
     let mut coverage_functions =
@@ -2030,6 +2079,8 @@ fn prepare_compiled_suite(
         fixtures: suite.fixtures.clone(),
         fixture_sites: suite.fixture_sites.clone(),
         fixture_consts: suite.fixture_consts.clone(),
+        artifacts,
+        source_root: suite.source_root.clone(),
         coverage_functions,
         codeless_functions,
         context,
@@ -2244,8 +2295,21 @@ fn harness_failure(
     let diagnostic = vm.last_diagnostic();
     let trap = diagnostic.map(|diagnostic| diagnostic.trap_kind);
     let mut failure = classify_vm_error(error, trap);
-    let function = diagnostic
-        .and_then(|diagnostic| compiled.context.harness_function(diagnostic.pc))
+    failure.fault = vm.execution_fault(error, IvmFaultPositionV1::ReturnValidation);
+    let source_pc = match failure.fault {
+        Some(fault) if Some(fault.site.code_hash) == compiled.context.harness_hash => {
+            match fault.site.position {
+                IvmFaultPositionV1::Execute { pc_offset } => {
+                    Some(compiled.context.harness_base.saturating_add(pc_offset))
+                }
+                _ => None,
+            }
+        }
+        Some(_) => None,
+        None => diagnostic.map(|diagnostic| diagnostic.pc),
+    };
+    let function = source_pc
+        .and_then(|pc| compiled.context.harness_function(pc))
         .map(|entry| entry.function_name.clone());
     if failure.kind == FailureKind::Assertion {
         // `test::assert`/`test::assert_eq` report through the host-private assertion helper and
@@ -2266,6 +2330,10 @@ fn harness_failure(
     }
     failure.at(Some(test_site))
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the structured failure and authenticated fault origin inline without allocating an extra error box."
+)]
 fn build_host_for_fixture(
     compiled: &CompiledSuite,
     fixture_name: Option<&str>,
@@ -2304,13 +2372,27 @@ fn build_host_for_fixture(
                 )
             };
             if let Some(closest) = closest_name(name, &declared) {
-                message.push_str(&format!("; did you mean `{closest}`?"));
+                let _ = write!(message, "; did you mean `{closest}`?");
             }
             TestFailure::new(FailureKind::Harness, message)
         })?;
         let site = compiled.fixture_sites.get(name);
+        let source_name = site
+            .map(|site| {
+                compiled.source_root.as_deref().map_or_else(
+                    || Ok(site.path.display().to_string()),
+                    |root| {
+                        kotodama_lang::driver::logical_source_name(&site.path, root)
+                            .map_err(|error| error.to_string())
+                    },
+                )
+            })
+            .transpose()
+            .map_err(|error| TestFailure::new(FailureKind::Harness, error))?;
         let environment = FixtureEnvironment {
             consts: &compiled.fixture_consts,
+            artifacts: &compiled.artifacts,
+            source_name: source_name.as_deref(),
             chain_discriminant: compiled.chain_discriminant,
         };
         for (index, action) in fixture.actions.iter().enumerate() {
@@ -2397,12 +2479,24 @@ fn apply_fixture_action(
                 action.args.len()
             ))
         }
-        "grant_seiyaku_kotoage_permission" => {
+        "grant_seiyaku_permission" => {
+            expect_arg_count(action, 2)?;
+            let account = eval_fixture_account_or_actor(&action.args[0], host)?;
+            let name = eval_string_expr(&action.args[1])?
+                .parse::<Name>()
+                .map_err(|error| format!("invalid declared permission name: {error}"))?;
+            let permission = host.declared_permission(&name)?;
+            host.inner_mut().wsv.grant_permission(&account, permission);
+            Ok(())
+        }
+        "grant_seiyaku_lifecycle_permission" => {
             expect_arg_count(action, 2)?;
             let account = eval_fixture_account_or_actor(&action.args[0], host)?;
             let entrypoint = eval_string_expr(&action.args[1])?;
-            if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
-                return Err("requires a non-empty canonical kotoage name".to_owned());
+            if !host.entrypoints.get(&entrypoint).is_some_and(|entry| {
+                entry.authorization == EntrypointAuthorizationV1::RuntimeLifecycle
+            }) {
+                return Err("requires a declared lifecycle hook name".to_owned());
             }
             let permission = PermissionToken::ContractEntrypoint {
                 contract: host.contract_address.clone(),
@@ -2518,11 +2612,11 @@ fn apply_fixture_action(
                 "failed to set balance `{amount}` for `{account}` on `{asset}`"
             ))
         }
-        "set_account_detail" => {
+        "set_account_metadata" => {
             expect_arg_count(action, 3)?;
             let account = eval_fixture_account_or_actor(&action.args[0], host)?;
             let key = eval_string_expr(&action.args[1])?;
-            let value = eval_detail_bytes(&action.args[2])?;
+            let value = eval_metadata_bytes(&action.args[2])?;
             let caller = host.caller_subject();
             let inner = host.inner_mut();
             inner.wsv.add_account_unchecked(account.clone());
@@ -2535,12 +2629,44 @@ fn apply_fixture_action(
                 return Ok(());
             }
             Err(format!(
-                "failed to set account detail `{key}` for `{account}`"
+                "failed to set account metadata `{key}` for `{account}`"
             ))
+        }
+        "upgrade_from" => {
+            expect_arg_count(action, 1)?;
+            let relative = eval_string_expr(&action.args[0])?;
+            let name = kotodama_lang::linker::resolve_contract_artifact_path(
+                environment
+                    .source_name
+                    .ok_or("fixture source identity is missing")?,
+                &relative,
+            )
+            .map_err(|error| error.to_string())?;
+            let prior = environment.artifacts.get(&name).ok_or_else(|| {
+                format!("compiled artifact `{name}` is absent from the captured suite inventory")
+            })?;
+            host.upgrade_fixture_from(prior)
+        }
+        "vrf_epoch_seed" => {
+            expect_arg_count(action, 2)?;
+            let epoch = eval_u64_expr(&action.args[0], environment)?;
+            let seed = eval_seed_expr(&action.args[1])?;
+            host.inner_mut().wsv.set_vrf_epoch_seed_fixture(epoch, seed);
+            Ok(())
         }
         "state_set" => {
             expect_arg_count(action, 2)?;
-            let path = eval_string_expr(&action.args[0])?;
+            let logical = eval_string_expr(&action.args[0])?;
+            let path = if host.program.is_some() {
+                let logical = logical
+                    .parse()
+                    .map_err(|error| format!("invalid state path: {error}"))?;
+                ivm::mock_wsv::contract_state_path(&host.contract_address, &logical)
+                    .map_err(|error| error.to_string())?
+                    .to_string()
+            } else {
+                logical
+            };
             let value = eval_state_payload_expr(&action.args[1])?;
             host.inner_mut()
                 .wsv
@@ -2554,19 +2680,19 @@ fn apply_fixture_action(
             public_inputs.insert(name, value);
             Ok(())
         }
-        other => Err(match closest_name(other, FIXTURE_ACTIONS) {
-            Some(closest) => {
-                format!("unknown fixture action `{other}`; did you mean `{closest}`?")
-            }
-            None => format!(
-                "unknown fixture action `{other}`; the fixture actions are {}",
-                FIXTURE_ACTIONS
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        }),
+        other => Err(closest_name(other, FIXTURE_ACTIONS).map_or_else(
+            || {
+                format!(
+                    "unknown fixture action `{other}`; the fixture actions are {}",
+                    FIXTURE_ACTIONS
+                        .iter()
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            },
+            |closest| format!("unknown fixture action `{other}`; did you mean `{closest}`?"),
+        )),
     }
 }
 /// Every fixture action the runner understands, in documentation order.
@@ -2578,16 +2704,21 @@ const FIXTURE_ACTIONS: &[&str] = &[
     "register_domain",
     "register_asset_definition",
     "set_balance",
-    "set_account_detail",
+    "set_account_metadata",
     "grant_permission",
-    "grant_seiyaku_kotoage_permission",
+    "grant_seiyaku_permission",
+    "grant_seiyaku_lifecycle_permission",
     "grant_seiyaku_effect_permission",
     "grant_seiyaku_transfer_effect_permission",
     "state_set",
+    "upgrade_from",
+    "vrf_epoch_seed",
     "public_input",
 ];
 /// Compile-time values visible to fixture arguments.
 struct FixtureEnvironment<'a> {
+    artifacts: &'a BTreeMap<String, ivm::PreparedContract>,
+    source_name: Option<&'a str>,
     /// `const` declarations of the target and test modules, by name.
     consts: &'a HashMap<String, Expr>,
     /// Chain discriminant used to derive named actors.
@@ -2735,6 +2866,7 @@ fn eval_constant_number(
 struct KotoTestHostSnapshot {
     inner: Box<dyn Any + Send>,
     actors: HashMap<String, FixtureActor>,
+    events: Vec<CapturedTestEvent>,
     last_failure: Option<TestFailure>,
     supplemental_trace: Option<ivm::zk::RuntimeTraceCapture>,
     lifecycle: Lifecycle,
@@ -2742,12 +2874,14 @@ struct KotoTestHostSnapshot {
 /// Lifecycle of the seiyaku under test, modelled on the chain's activation rules.
 ///
 /// Activating code that declares `hajimari`/`始まり` stages one transition that must be consumed
-/// by an explicit call before any other call or view is accepted. The harness runs exactly one
-/// code version, so no `kaizen`/`改善` transition is ever pending.
+/// by an explicit call before any other call or view is accepted. An `upgrade_from` fixture
+/// replaces an admitted prior artifact and stages the current code's `kaizen`/`改善` hook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lifecycle {
     /// `hajimari` is declared and has not run yet.
     PendingHajimari,
+    /// Replacement code declares `kaizen`, which has not completed successfully.
+    PendingKaizen,
     /// The seiyaku accepts calls.
     Active,
 }
@@ -2776,9 +2910,29 @@ impl KotoTestHost {
         } else {
             Lifecycle::Active
         };
+        if let Some(prepared) = &program {
+            let mut control = iroha_data_model::smart_contract::ContractLifecycleControlV1::direct(
+                inner.caller_subject(),
+            );
+            control.active_code_hash = Some(prepared.code_hash());
+            control.retained_code_hash = Some(prepared.code_hash());
+            inner
+                .install_contract_fixture(
+                    contract_address.clone(),
+                    prepared.artifact().to_vec(),
+                    control,
+                    (lifecycle == Lifecycle::PendingHajimari).then_some(EntryPointKind::Hajimari),
+                )
+                .expect("already admitted runtime artifact forms a valid local fixture");
+            inner
+                .set_contract_fixture_state_scope(Some(contract_address.clone()))
+                .expect("the admitted root fixture owns the test state namespace");
+        }
         Self {
             inner,
+            record_budget: iroha_allocation::AllocationBudget::new(16 * 1024 * 1024),
             actors: HashMap::new(),
+            events: Vec::new(),
             base_public_inputs: BTreeMap::new(),
             entrypoints,
             program,
@@ -2786,11 +2940,21 @@ impl KotoTestHost {
             last_failure: None,
             supplemental_trace: None,
             lifecycle,
+            fixture_upgrade_staged: false,
             calls: Vec::new(),
             context,
             pending_call_site: None,
             active_call_site: None,
         }
+    }
+    #[cfg(test)]
+    fn fixture_state(&self, logical: &str) -> Option<Vec<u8>> {
+        if self.program.is_none() {
+            return self.inner.wsv.sc_get(logical);
+        }
+        let logical = logical.parse().ok()?;
+        let scoped = ivm::mock_wsv::contract_state_path(&self.contract_address, &logical).ok()?;
+        self.inner.wsv.sc_get(scoped.as_ref())
     }
     fn inner_mut(&mut self) -> &mut WsvHost {
         &mut self.inner
@@ -2803,6 +2967,28 @@ impl KotoTestHost {
     }
     fn contract_subject(&self) -> AccountId {
         self.contract_address.subject_id()
+    }
+    fn declared_permission(&self, name: &Name) -> Result<PermissionToken, String> {
+        let declaration = self
+            .program
+            .as_ref()
+            .and_then(|program| {
+                program
+                    .contract_interface()
+                    .permissions
+                    .iter()
+                    .find(|declaration| declaration.name == *name)
+            })
+            .ok_or_else(|| format!("seiyaku has no declared permission `{name}`"))?;
+        Ok(match &declaration.scope {
+            ContractPermissionScopeV1::Instance => PermissionToken::ContractPermission {
+                contract: self.contract_address.clone(),
+                permission: name.clone(),
+            },
+            ContractPermissionScopeV1::Chain { permission_name } => {
+                PermissionToken::Custom(permission_name.to_string())
+            }
+        })
     }
     fn actor_account(&self, alias: &str) -> Option<AccountId> {
         self.actors.get(alias).map(|actor| actor.account.clone())
@@ -2931,19 +3117,6 @@ impl KotoTestHost {
             }
         }
     }
-    fn decode_json_arg(vm: &IVM, reg: usize) -> Result<Json, ivm::VMError> {
-        let ptr = vm.register(reg);
-        if ptr == 0 {
-            return Err(ivm::VMError::NoritoInvalid);
-        }
-        let tlv = vm.validate_tlv(ptr)?;
-        match tlv.type_id {
-            PointerType::Json | PointerType::NoritoBytes | PointerType::Blob => {
-                norito::decode_canonical(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
-            }
-            _ => Err(ivm::VMError::NoritoInvalid),
-        }
-    }
     fn decode_bytes_arg(vm: &IVM, reg: usize) -> Result<Vec<u8>, ivm::VMError> {
         let ptr = vm.register(reg);
         if ptr == 0 {
@@ -2982,11 +3155,11 @@ impl KotoTestHost {
                 .join(", ")
         );
         if let Some(closest) = closest_name(alias, &declared) {
-            message.push_str(&format!("; did you mean `{closest}`?"));
+            let _ = write!(message, "; did you mean `{closest}`?");
         }
         message
     }
-    /// Describe the caller for messages: `actor \`alice\`` or `the current caller`.
+    /// Describe the caller for messages: ``actor `alice` `` or `the current caller`.
     fn describe_caller(actor_alias: &str) -> String {
         if actor_alias == CURRENT_CALLER {
             "the current caller".to_owned()
@@ -3004,21 +3177,26 @@ impl KotoTestHost {
         };
         let seiyaku = &self.context.seiyaku_name;
         match (entrypoint, self.lifecycle) {
-            ("hajimari", Lifecycle::PendingHajimari) => None,
-            ("hajimari", Lifecycle::Active) => Some(format!(
+            ("hajimari", Lifecycle::PendingHajimari) | ("kaizen", Lifecycle::PendingKaizen) => None,
+            ("hajimari", _) => Some(format!(
                 "{} of seiyaku `{seiyaku}` already ran; a consumed lifecycle hook cannot be replayed",
                 label("hajimari")
             )),
-            // TODO: model an in-place code replacement (for example a `koto_test` field naming
-            // the previous code version) so a suite can stage kaizen and test its migration.
             ("kaizen", _) => Some(format!(
-                "{} runs only after an active seiyaku's code is replaced in place; `koto test` runs one code version of `{seiyaku}`, so no kaizen transition is pending",
+                "{} runs only after an active seiyaku's code is replaced in place; no kaizen transition is pending for `{seiyaku}`",
                 label("kaizen")
             )),
-            (_, Lifecycle::PendingHajimari) => Some(format!(
-                "seiyaku `{seiyaku}` has a pending {} transition; invoke `hajimari` before `{entrypoint}`",
-                label("hajimari")
-            )),
+            (_, Lifecycle::PendingHajimari | Lifecycle::PendingKaizen) => {
+                let hook = if self.lifecycle == Lifecycle::PendingHajimari {
+                    "hajimari"
+                } else {
+                    "kaizen"
+                };
+                Some(format!(
+                    "seiyaku `{seiyaku}` has a pending {} transition; invoke `{hook}` before `{entrypoint}`",
+                    label(hook)
+                ))
+            }
             (_, Lifecycle::Active) => None,
         }
     }
@@ -3028,7 +3206,7 @@ impl KotoTestHost {
         vm: &mut IVM,
         expectation: Option<&kotodama_lang::testing::RejectionExpectation>,
         accepted: &[kotodama_lang::testing::RejectionExpectation],
-        observed: TestFailure,
+        observed: &TestFailure,
         entrypoint: &str,
     ) -> Result<u64, ivm::VMError> {
         let expected = expectation.expect("rejection expectation");
@@ -3057,10 +3235,10 @@ impl KotoTestHost {
         use kotodama_lang::testing::RejectionExpectation;
         self.clear_test_error();
         let expectation = if expect_reject {
-            if vm.register(14) != 0 || vm.register(15) != 0 {
+            if vm.register(15) != 0 {
                 return self.fail_harness("rejection expectation has nonzero reserved operands");
             }
-            let bytes = Self::decode_bytes_arg(vm, 13)?;
+            let bytes = Self::decode_bytes_arg(vm, 14)?;
             if bytes.len() > 64 * 1024 {
                 return self.fail_harness("rejection expectation exceeds the test metadata budget");
             }
@@ -3094,12 +3272,13 @@ impl KotoTestHost {
         let entrypoint = Self::decode_alias_arg(vm, 11, "kotoage").map_err(|error| {
             ivm::error::preserve_execution_deferral(error, ivm::VMError::NoritoInvalid)
         })?;
-        let payload = Self::decode_json_arg(vm, 12)?;
-        let result_table = if expect_reject { 0 } else { vm.register(13) };
+        let argument_table = vm.register(12);
+        let argument_words = usize::try_from(vm.register(13)).unwrap_or(usize::MAX);
+        let result_table = if expect_reject { 0 } else { vm.register(14) };
         let return_arity = if expect_reject {
             1
         } else {
-            usize::try_from(vm.register(14)).unwrap_or(TEST_MAX_RETURN_VALUES + 1)
+            usize::try_from(vm.register(15)).unwrap_or(TEST_MAX_RETURN_VALUES + 1)
         };
         if return_arity == 0 || return_arity > TEST_MAX_RETURN_VALUES {
             return self.fail_harness(format!(
@@ -3122,105 +3301,124 @@ impl KotoTestHost {
                     vm,
                     expectation.as_ref(),
                     &[],
-                    failure,
+                    &failure,
                     &entrypoint,
                 );
             }
             return self.fail_test(failure);
         }
-        if let Some(permission_name) = runtime_entrypoint.permission.as_deref() {
-            let permission = if permission_name == "CanInvokeContractEntrypoint" {
+        let fixture_actor = if actor_alias == CURRENT_CALLER {
+            format!("AccountId::parse(\"{}\")", actor.account)
+        } else {
+            format!("\"{actor_alias}\"")
+        };
+        let required_permission = match &runtime_entrypoint.authorization {
+            EntrypointAuthorizationV1::Anyone => None,
+            EntrypointAuthorizationV1::RuntimeLifecycle => Some((
+                "runtime lifecycle".to_owned(),
                 PermissionToken::ContractEntrypoint {
                     contract: self.contract_address.clone(),
                     entrypoint: entrypoint.clone(),
-                }
-            } else {
-                // Core represents every other declaration as the exact name with an empty
-                // payload. Fixture shorthand may construct scoped effect tokens, which must
-                // never substitute for this distinct authorization token.
-                PermissionToken::Custom(permission_name.to_owned())
-            };
-            if !self.inner.wsv.has_permission(&actor.account, &permission) {
-                let failure = TestFailure::new(
-                    FailureKind::PermissionDenied,
-                    format!(
-                        "{caller} lacks the `{permission_name}` permission that `{entrypoint}` declares in `authorize(...)`"
-                    ),
-                )
-                .detail(if actor_alias == CURRENT_CALLER {
-                    format!("help: call through a fixture actor granted it: `grant_permission(\"<actor>\", \"{permission_name}\");`")
-                } else {
-                    format!("help: add `grant_permission(\"{actor_alias}\", \"{permission_name}\");` to the test's fixture")
-                });
-                if expect_reject {
-                    return self.accept_expected_rejection(
-                        vm,
-                        expectation.as_ref(),
-                        &[RejectionExpectation::PermissionDenied],
-                        failure,
-                        &entrypoint,
-                    );
-                }
-                return self.fail_test(failure);
+                },
+                format!("grant_seiyaku_lifecycle_permission({fixture_actor}, \"{entrypoint}\");"),
+            )),
+            EntrypointAuthorizationV1::Permission(name) => {
+                let permission = match self.declared_permission(name) {
+                    Ok(permission) => permission,
+                    Err(message) => return self.fail_harness(message),
+                };
+                Some((
+                    name.to_string(),
+                    permission,
+                    format!("grant_seiyaku_permission({fixture_actor}, \"{name}\");"),
+                ))
             }
+        };
+        if let Some((permission_name, permission, fixture_grant)) = required_permission
+            && !self.inner.wsv.has_permission(&actor.account, &permission)
+        {
+            let failure = TestFailure::new(
+                FailureKind::PermissionDenied,
+                format!(
+                    "{caller} lacks the `{permission_name}` permission required by `{entrypoint}`"
+                ),
+            )
+            .detail(format!(
+                "help: grant the exact declared permission in the test fixture: `{fixture_grant}`"
+            ));
+            if expect_reject {
+                return self.accept_expected_rejection(
+                    vm,
+                    expectation.as_ref(),
+                    &[RejectionExpectation::PermissionDenied],
+                    &failure,
+                    &entrypoint,
+                );
+            }
+            return self.fail_test(failure);
         }
         let Some(program) = self.program.as_ref() else {
             return self.fail_harness(format!("`{entrypoint}` has no compiled runtime artifact"));
         };
-        let mut nested_inputs = self.base_public_inputs.clone();
-        let encoded_payload = match runtime_entrypoint.argument_schema.as_ref() {
-            Some(schema) => {
-                ivm_abi::arguments::encode_argument_record_from_json_detailed(schema, &payload)
-                    .map(Some)
-                    .map_err(|error| {
-                        let declared = schema
-                            .fields
-                            .iter()
-                            .map(|field| field.name.as_str())
-                            .collect::<Vec<_>>();
-                        match kotodama_lang::testing::undeclared_argument_keys_hint(
-                            &declared,
-                            payload.get(),
-                        ) {
-                            Some(hint) => format!("{error}; {hint}"),
-                            None => error.to_string(),
-                        }
-                    })
-            }
-            None if payload.get() == "{}" => Ok(None),
-            None => Err(format!(
-                "`{entrypoint}` takes no arguments, so its argument object must be `{{}}`; found {}",
-                payload.get()
-            )),
+        let nested_inputs = self.base_public_inputs.clone();
+        let mut boundary_gas = 0u64;
+        let captured_arguments = match runtime_entrypoint.argument_schema.as_ref() {
+            Some(schema) => ivm::value_record::quote_argument_record(
+                vm,
+                schema,
+                argument_table,
+                argument_words,
+                vm.remaining_gas(),
+            )
+            .and_then(|quote| {
+                boundary_gas = quote.gas;
+                ivm::value_record::capture_argument_record_funded(
+                    vm,
+                    schema,
+                    argument_table,
+                    argument_words,
+                    &self.record_budget,
+                )
+                .map(Some)
+            }),
+            None if argument_table == 0 && argument_words == 0 => Ok(None),
+            None => Err(ivm::VMError::DecodeError),
         };
-        let encoded_payload = match encoded_payload {
-            Ok(encoded) => encoded,
-            Err(reason) => {
+        let captured_arguments = match captured_arguments {
+            Ok(captured) => captured,
+            Err(error) if error.execution_deferral().is_some() => return Err(error),
+            Err(error) => {
+                let reason = if runtime_entrypoint.argument_schema.is_none() {
+                    format!(
+                        "`{entrypoint}` takes no arguments, so its argument table must have zero base and zero words"
+                    )
+                } else {
+                    format!("invalid canonical argument table: {error}")
+                };
                 let failure = TestFailure::new(
                     FailureKind::Arguments,
                     format!("{caller} calling `{entrypoint}`: {reason}"),
                 )
-                .detail(format!("arguments: {}", payload.get()));
+                .detail(format!(
+                    "argument table: {argument_words} words at {argument_table:#x}"
+                ));
                 if expect_reject {
                     return self.accept_expected_rejection(
                         vm,
                         expectation.as_ref(),
                         &[RejectionExpectation::InvalidArguments],
-                        failure,
+                        &failure,
                         &entrypoint,
                     );
                 }
                 return self.fail_test(failure);
             }
         };
-        if let Some(encoded_payload) = encoded_payload {
-            let trigger_name: Name = "trigger_event_json"
-                .parse()
-                .map_err(|_| ivm::VMError::DecodeError)?;
-            nested_inputs.insert(
-                trigger_name,
-                make_tlv(PointerType::NoritoBytes, &encoded_payload),
-            );
+        if !expect_reject {
+            if runtime_entrypoint.return_schema.word_count() != Some(return_arity) {
+                return Err(ivm::VMError::DecodeError);
+            }
+            ivm::value_record::validate_return_destination(vm, result_table, return_arity)?;
         }
         let mut nested_vm = vm.try_new_in_same_memory_pool(NESTED_GAS_LIMIT)?;
         nested_vm.reset()?;
@@ -3232,8 +3430,32 @@ impl KotoTestHost {
             ivm::error::preserve_execution_deferral(error, ivm::VMError::DecodeError)
         })?;
         nested_vm.set_program_counter(runtime_entrypoint.pc)?;
+        let actual_return_words = runtime_entrypoint
+            .return_schema
+            .word_count()
+            .ok_or(ivm::VMError::DecodeError)?;
+        if let Some(captured) = captured_arguments.as_ref() {
+            ivm::value_record::install_captured_arguments(
+                captured,
+                runtime_entrypoint
+                    .argument_schema
+                    .as_ref()
+                    .expect("captured parameter schema"),
+                &mut nested_vm,
+                actual_return_words,
+                &self.record_budget,
+            )?;
+        } else {
+            ivm::value_record::install_empty_captured_arguments(
+                &mut nested_vm,
+                actual_return_words,
+            )?;
+        }
+        drop(captured_arguments);
+
         nested_vm.set_trace_mode(vm.trace_mode());
         nested_vm.set_max_cycles(0);
+        let event_checkpoint = self.events.len();
         let rollback = self
             .inner
             .checkpoint()
@@ -3247,9 +3469,10 @@ impl KotoTestHost {
             return self.fail_harness(message);
         }
         self.inner.set_public_inputs(nested_inputs);
-        let nested_outcome = match nested_vm.run_with_host(&mut self.inner) {
+        let nested_outcome = match nested_vm.run_with_host(self) {
             Err(error) if error.execution_deferral().is_some() => {
                 self.inner.restore(rollback.as_ref())?;
+                self.events.truncate(event_checkpoint);
                 self.inner.clear_contract_runtime_context(previous_caller);
                 self.restore_public_inputs();
                 return Err(error);
@@ -3260,6 +3483,7 @@ impl KotoTestHost {
             Ok(steps) => steps,
             Err(error) => {
                 self.inner.restore(rollback.as_ref())?;
+                self.events.truncate(event_checkpoint);
                 self.inner.clear_contract_runtime_context(previous_caller);
                 self.restore_public_inputs();
                 return Err(error);
@@ -3274,6 +3498,7 @@ impl KotoTestHost {
         match nested_outcome {
             Ok(()) if expect_reject => {
                 self.inner.restore(rollback.as_ref())?;
+                self.events.truncate(event_checkpoint);
                 self.fail_test(
                     TestFailure::new(
                         FailureKind::Expectation,
@@ -3285,21 +3510,76 @@ impl KotoTestHost {
                                 .description()
                         ),
                     )
-                    .detail(format!("arguments: {}", payload.get())),
+                    .detail(format!("argument table: {argument_words} words")),
                 )
             }
             Ok(()) => {
-                if let Err(error) = ivm::koto_test_return::transfer_return(
-                    &nested_vm,
-                    vm,
-                    &runtime_entrypoint.return_schema,
-                    return_arity,
-                    result_table,
-                ) {
+                let transfer = (|| {
+                    let quote = ivm::value_record::quote_completed_return_record(
+                        &nested_vm, &runtime_entrypoint.return_schema,
+                        vm.remaining_gas().saturating_sub(boundary_gas),
+                    )?;
+                    boundary_gas = boundary_gas.checked_add(quote.gas)
+                        .ok_or(ivm::VMError::OutOfGas)?;
+                    let captured = ivm::value_record::capture_completed_return_funded(
+                        &nested_vm, &runtime_entrypoint.return_schema, &self.record_budget,
+                    )?;
+                    let cost = ivm::value_record::transfer_return_record_funded(
+                        &captured, &runtime_entrypoint.return_schema, vm,
+                        result_table, return_arity,
+                        vm.remaining_gas().saturating_sub(boundary_gas),
+                        &self.record_budget,
+                    )?;
+                    boundary_gas = boundary_gas.checked_add(cost).ok_or(ivm::VMError::OutOfGas)?;
+                    vm.set_register(10, result_table);
+                    vm.set_register(11, return_arity as u64);
+                    Ok::<(), ivm::VMError>(())
+                })();
+                if let Err(error) = transfer {
+                    vm.inherit_execution_fault(
+                        &nested_vm,
+                        &error,
+                        IvmFaultPositionV1::ReturnValidation,
+                    );
                     self.inner.restore(rollback.as_ref())?;
+                    self.events.truncate(event_checkpoint);
+                    self.inner.clear_contract_runtime_context(previous_caller);
+                    self.restore_public_inputs();
                     return Err(error);
                 }
-                if entrypoint == "hajimari" {
+                // A returned Err is recoverable data, but all state and ledger effects
+                // of that invocation are discarded. Transfer has validated the complete
+                // public value before this classification; its owned return survives.
+                let returned_error = match ivm::sum::entrypoint_return_is_error(
+                    &nested_vm,
+                    &runtime_entrypoint.return_schema,
+                ) {
+                    Ok(returned_error) => returned_error,
+                    Err(error) => {
+                        vm.inherit_execution_fault(
+                            &nested_vm,
+                            &error,
+                            IvmFaultPositionV1::ReturnValidation,
+                        );
+                        self.inner.restore(rollback.as_ref())?;
+                        self.events.truncate(event_checkpoint);
+                        self.inner.clear_contract_runtime_context(previous_caller);
+                        self.restore_public_inputs();
+                        return Err(error);
+                    }
+                };
+                if returned_error {
+                    self.inner.restore(rollback.as_ref())?;
+                    self.events.truncate(event_checkpoint);
+                } else if matches!(entrypoint.as_str(), "hajimari" | "kaizen") {
+                    let kind = if entrypoint == "hajimari" { EntryPointKind::Hajimari } else { EntryPointKind::Kaizen };
+                    if let Err(error) = self.inner.finish_contract_fixture_hook(&self.contract_address, kind) {
+                        self.inner.restore(rollback.as_ref())?;
+                        self.events.truncate(event_checkpoint);
+                        self.inner.clear_contract_runtime_context(previous_caller);
+                        self.restore_public_inputs();
+                        return Err(error);
+                    }
                     self.lifecycle = Lifecycle::Active;
                 }
                 self.inner.clear_contract_runtime_context(previous_caller);
@@ -3308,6 +3588,7 @@ impl KotoTestHost {
             }
             Err(err) if expect_reject => {
                 self.inner.restore(rollback.as_ref())?;
+                self.events.truncate(event_checkpoint);
                 let expected = expectation.as_ref().expect("rejection expectation");
                 if !expected.matches_runtime(
                     &err,
@@ -3316,36 +3597,62 @@ impl KotoTestHost {
                         .map(|diagnostic| diagnostic.trap_kind),
                 ) {
                     let observed = self.context.classify_runtime_failure(&nested_vm, &err);
-                    return self.fail_test(
-                        TestFailure::new(
-                            FailureKind::Expectation,
-                            format!(
-                                "expected {caller} calling `{entrypoint}` to reject with {}",
-                                expected.description()
-                            ),
-                        )
-                        .detail(format!("observed: {}", observed.render())),
-                    );
+                    let mut mismatch = TestFailure::new(
+                        FailureKind::Expectation,
+                        format!(
+                            "expected {caller} calling `{entrypoint}` to reject with {}",
+                            expected.description()
+                        ),
+                    )
+                    .detail(format!("observed: {}", observed.render()));
+                    mismatch.fault = observed.fault;
+                    return self.fail_test(mismatch);
                 }
                 vm.set_register(10, 0);
                 Ok(0)
             }
             Err(err) => {
                 self.inner.restore(rollback.as_ref())?;
+                self.events.truncate(event_checkpoint);
                 let failure = self
                     .context
                     .classify_runtime_failure(&nested_vm, &err)
                     .detail(format!(
-                        "while {caller} called `{entrypoint}` with arguments {}",
-                        payload.get()
+                        "while {caller} called `{entrypoint}` with {argument_words} argument words"
                     ));
                 self.fail_test(failure)
             }
-        }
+        }.map(|cost: u64| cost.saturating_add(boundary_gas))
     }
 }
 impl IVMHost for KotoTestHost {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
+        if number == ivm::syscalls::SYSCALL_EMIT_CONTRACT_EVENT {
+            let ordinal =
+                usize::try_from(vm.register(10)).map_err(|_| ivm::VMError::DecodeError)?;
+            let words = usize::try_from(vm.register(12)).map_err(|_| ivm::VMError::DecodeError)?;
+            let event = vm
+                .contract_interface()
+                .and_then(|interface| interface.events.get(ordinal))
+                .ok_or(ivm::VMError::DecodeError)?;
+            return ivm::value_record::quote_value_record(
+                vm,
+                &event.payload_type,
+                vm.register(11),
+                words,
+                vm.remaining_gas(),
+            )
+            .map(|quote| quote.gas);
+        }
+        if matches!(
+            number,
+            TEST_SYSCALL_INVOKE_ENTRYPOINT_AS | TEST_SYSCALL_EXPECT_REJECT_AS
+        ) {
+            // Argument and returned active values determine the exact copying
+            // work. Reserve caller gas before any nested mutation; the helper
+            // returns the actual funded capture/materialization cost.
+            return ivm::host::reserve_available_syscall_gas_at_least(vm, 0);
+        }
         if ivm::syscalls::is_koto_test_syscall(number) {
             Ok(0)
         } else {
@@ -3367,6 +3674,38 @@ impl IVMHost for KotoTestHost {
             return outcome;
         }
         match number {
+            ivm::syscalls::SYSCALL_CALL_CONTRACT => {
+                let outcome = self.inner.syscall(number, vm);
+                self.events
+                    .extend(self.inner.drain_contract_events().into_iter().map(|event| {
+                        CapturedTestEvent {
+                            name: event.name().clone(),
+                            payload: event.payload().clone(),
+                        }
+                    }));
+                outcome
+            }
+            ivm::syscalls::SYSCALL_EMIT_CONTRACT_EVENT => {
+                let ordinal =
+                    usize::try_from(vm.register(10)).map_err(|_| ivm::VMError::DecodeError)?;
+                let words =
+                    usize::try_from(vm.register(12)).map_err(|_| ivm::VMError::DecodeError)?;
+                let event = vm
+                    .contract_interface()
+                    .and_then(|interface| interface.events.get(ordinal))
+                    .ok_or(ivm::VMError::DecodeError)?;
+                let payload = ivm::value_record::capture_value_record(
+                    vm,
+                    &event.payload_type,
+                    vm.register(11),
+                    words,
+                )?;
+                self.events.push(CapturedTestEvent {
+                    name: event.name.clone(),
+                    payload,
+                });
+                Ok(0)
+            }
             TEST_SYSCALL_CALL_SITE => self.record_call_site(vm),
             TEST_SYSCALL_ASSERT_FAILED => self.assertion_failed(vm),
             TEST_SYSCALL_SET_BLOCK_HEIGHT => {
@@ -3415,6 +3754,7 @@ impl IVMHost for KotoTestHost {
         Some(Box::new(KotoTestHostSnapshot {
             inner,
             actors: self.actors.clone(),
+            events: self.events.clone(),
             last_failure: self.last_failure.clone(),
             supplemental_trace: self.supplemental_trace.clone(),
             lifecycle: self.lifecycle,
@@ -3425,9 +3765,11 @@ impl IVMHost for KotoTestHost {
             .downcast_ref::<KotoTestHostSnapshot>()
             .ok_or(ivm::VMError::HostUnavailable)?;
         self.inner.restore(snapshot.inner.as_ref())?;
-        self.actors = snapshot.actors.clone();
-        self.last_failure = snapshot.last_failure.clone();
-        self.supplemental_trace = snapshot.supplemental_trace.clone();
+        self.actors.clone_from(&snapshot.actors);
+        self.events.clone_from(&snapshot.events);
+        self.last_failure.clone_from(&snapshot.last_failure);
+        self.supplemental_trace
+            .clone_from(&snapshot.supplemental_trace);
         self.lifecycle = snapshot.lifecycle;
         Ok(())
     }
@@ -3581,13 +3923,12 @@ impl KotoTestHost {
         let Ok(tlv) = vm.validate_tlv(pointer) else {
             return "<unreadable message>".to_owned();
         };
-        match tlv.type_id {
-            PointerType::Blob => String::from_utf8_lossy(tlv.payload).into_owned(),
-            _ => {
-                let envelope = make_tlv(tlv.type_id, tlv.payload);
-                self.render_leaf(StateValueKindV1::Int, &envelope)
-                    .unwrap_or_else(|_| "<unreadable message>".to_owned())
-            }
+        if tlv.type_id == PointerType::Blob {
+            String::from_utf8_lossy(tlv.payload).into_owned()
+        } else {
+            let envelope = make_tlv(tlv.type_id, tlv.payload);
+            self.render_leaf(StateValueKindV1::Int, &envelope)
+                .unwrap_or_else(|_| "<unreadable message>".to_owned())
         }
     }
     /// Render one state value in Kotodama literal syntax.
@@ -3607,6 +3948,20 @@ impl KotoTestHost {
             }
             StateValueNodeV1::Error(error) => match atoms.next() {
                 Some(StateValueAtomV1::ErrorCode(code)) => {
+                    let enum_name = error
+                        .identity
+                        .rsplit("::")
+                        .next()
+                        .unwrap_or(&error.identity);
+                    Ok(error.variant(*code).map_or_else(
+                        || format!("{enum_name}::<code {code}>"),
+                        |variant| format!("{enum_name}::{}", variant.name),
+                    ))
+                }
+                _ => Err(truncated()),
+            },
+            StateValueNodeV1::Enum(error) => match atoms.next() {
+                Some(StateValueAtomV1::EnumCode(code)) => {
                     let enum_name = error
                         .identity
                         .rsplit("::")
@@ -3726,7 +4081,7 @@ impl KotoTestHost {
                     norito::decode_canonical(payload).map_err(|error| error.to_string())?;
                 let mut rendered = parsed("AccountId", account.to_string());
                 if let Some(alias) = self.actor_alias(&account) {
-                    rendered.push_str(&format!(" /* actor \"{alias}\" */"));
+                    let _ = write!(rendered, " /* actor \"{alias}\" */");
                 } else if account == self.contract_subject() {
                     rendered.push_str(" /* seiyaku_subject */");
                 }
@@ -3852,7 +4207,7 @@ fn kotodama_string_literal(text: &str) -> String {
             '\t' => literal.push_str("\\t"),
             '\0' => literal.push_str("\\0"),
             character if character.is_control() => {
-                literal.push_str(&format!("\\u{{{:x}}}", u32::from(character)));
+                let _ = write!(literal, "\\u{{{:x}}}", u32::from(character));
             }
             character => literal.push(character),
         }
@@ -3868,7 +4223,9 @@ fn kotodama_bytes_literal(bytes: &[u8]) -> String {
             b'\\' => literal.push_str("\\\\"),
             b'"' => literal.push_str("\\\""),
             0x20..=0x7e => literal.push(char::from(*byte)),
-            other => literal.push_str(&format!("\\x{other:02x}")),
+            other => {
+                let _ = write!(literal, "\\x{other:02x}");
+            }
         }
     }
     literal.push('"');
@@ -3905,6 +4262,8 @@ struct SourceContext {
     harness_base: u64,
     runtime: Vec<ivm_abi::metadata::EmbeddedSourceMapEntryV1>,
     runtime_base: u64,
+    runtime_hash: Option<iroha_crypto::Hash>,
+    harness_hash: Option<iroha_crypto::Hash>,
 }
 impl SourceContext {
     /// Context with no source maps, for hosts built outside a compiled suite.
@@ -3918,6 +4277,8 @@ impl SourceContext {
             harness_base: 0,
             runtime: Vec::new(),
             runtime_base: 0,
+            runtime_hash: None,
+            harness_hash: None,
         }
     }
     fn lookup(
@@ -3964,7 +4325,7 @@ impl SourceContext {
             );
         format!("{path}:{}:{}", entry.source.line, entry.source.column)
     }
-    /// `in \`withdraw\` (contracts/vault.ko:15:5)` for a seiyaku PC.
+    /// ``in `withdraw` (contracts/vault.ko:15:5)`` for a seiyaku PC.
     fn runtime_site(&self, pc: u64) -> Option<String> {
         self.runtime_function(pc).map(|entry| {
             format!(
@@ -3981,8 +4342,21 @@ impl SourceContext {
         // Nominal aborts end execution without a trap snapshot; the stopped PC still names the
         // aborting function.
         let pc = diagnostic.map_or_else(|| vm.pc(), |diagnostic| diagnostic.pc);
-        let site = self.runtime_site(pc);
+        let fault = vm.execution_fault(error, IvmFaultPositionV1::ReturnValidation);
+        let site = match fault {
+            Some(fault) if Some(fault.site.code_hash) == self.runtime_hash => {
+                match fault.site.position {
+                    IvmFaultPositionV1::Execute { pc_offset } => {
+                        self.runtime_site(self.runtime_base.saturating_add(pc_offset))
+                    }
+                    _ => None,
+                }
+            }
+            Some(_) => None,
+            None => self.runtime_site(pc),
+        };
         let mut failure = classify_vm_error(error, trap);
+        failure.fault = fault;
         if let Some(site) = site {
             failure.message = if failure.message.is_empty() {
                 site
@@ -4282,7 +4656,7 @@ fn eval_seed_expr(expr: &Expr) -> Result<[u8; 32], String> {
         }
     };
     <[u8; 32]>::try_from(bytes.as_slice())
-        .map_err(|_| format!("actor seed must be exactly 32 bytes, got {}", bytes.len()))
+        .map_err(|_| format!("seed must be exactly 32 bytes, got {}", bytes.len()))
 }
 fn eval_account_expr(expr: &Expr) -> Result<AccountId, String> {
     match expr {
@@ -4422,17 +4796,18 @@ fn eval_permission_expr(expr: &Expr, host: &KotoTestHost) -> Result<PermissionTo
         )),
     }
 }
-fn eval_detail_bytes(expr: &Expr) -> Result<Vec<u8>, String> {
+fn eval_metadata_bytes(expr: &Expr) -> Result<Vec<u8>, String> {
     match expr {
-        Expr::String(raw) => Ok(raw.as_bytes().to_vec()),
+        Expr::String(raw) | Expr::DecimalLiteral(raw) | Expr::Ident(raw) => {
+            Ok(raw.as_bytes().to_vec())
+        }
         Expr::IntLiteral(value) => Ok(value.to_string().into_bytes()),
-        Expr::DecimalLiteral(raw) | Expr::Ident(raw) => Ok(raw.as_bytes().to_vec()),
         Expr::Bool(value) => Ok(value.to_string().into_bytes()),
         Expr::Call { name, args, .. } if name == "Json::parse" => {
             Ok(eval_json_payload(args)?.into_bytes())
         }
         other => Err(format!(
-            "unsupported account detail value: {}",
+            "unsupported account metadata value: {}",
             describe_expr(other)
         )),
     }
@@ -4594,10 +4969,12 @@ fn make_norito_envelope<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>
     Ok(make_tlv(PointerType::NoritoBytes, &bytes))
 }
 fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
+    // All callers pass bounded source literals, canonical fixture values, or VM-validated TLVs.
+    let payload_len = u32::try_from(payload.len()).expect("test pointer payload exceeds V1 bound");
     let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
     out.push(1);
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(&payload_len.to_be_bytes());
     out.extend_from_slice(payload);
     let hash: [u8; 32] = iroha_crypto::Hash::new(payload).into();
     out.extend_from_slice(&hash);
@@ -4654,7 +5031,7 @@ fn parse_permission_token_name(
             rest,
         )?));
     }
-    if let Some(rest) = raw.strip_prefix("set_account_detail:") {
+    if let Some(rest) = raw.strip_prefix("set_account_metadata:") {
         return Ok(PermissionToken::SetAccountDetail(parse_account_literal(
             rest,
         )?));
@@ -4789,7 +5166,7 @@ fn parse_permission_token_json(
         "set_account_quorum" => Ok(PermissionToken::SetAccountQuorum(parse_account_literal(
             target("target")?,
         )?)),
-        "set_account_detail" => Ok(PermissionToken::SetAccountDetail(parse_account_literal(
+        "set_account_metadata" => Ok(PermissionToken::SetAccountDetail(parse_account_literal(
             target("target")?,
         )?)),
         "mint_asset" => Ok(PermissionToken::MintAsset(
@@ -4848,7 +5225,7 @@ fn group_digits(value: u64) -> String {
     let digits = value.to_string();
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             grouped.push(',');
         }
         grouped.push(digit);
@@ -5012,6 +5389,7 @@ fn emit_test_results(
 fn failure_json(failure: &TestFailure) -> Value {
     json::object(vec![
         ("kind".to_owned(), Value::from(failure.kind.slug())),
+        ("fault".to_owned(), norito::json!(failure.fault)),
         (
             "location".to_owned(),
             failure.location.clone().map_or(Value::Null, Value::from),
@@ -5125,10 +5503,10 @@ fn render_test_junit(suite: &DiscoveredSuite, results: &[TestRunResult], seed: u
             result.cycles()
         );
         if let Some(failure) = &result.failure {
-            let headline = match &failure.location {
-                Some(location) => format!("{} at {location}", failure.kind.label()),
-                None => failure.kind.label().to_owned(),
-            };
+            let headline = failure.location.as_ref().map_or_else(
+                || failure.kind.label().to_owned(),
+                |location| format!("{} at {location}", failure.kind.label()),
+            );
             let _ = writeln!(
                 output,
                 "    <failure type=\"{}\" message=\"{}\">{}</failure>",
@@ -5302,6 +5680,10 @@ fn function_hit(function: &CoverageFunction, executed_pcs: &HashSet<u64>) -> boo
         .iter()
         .any(|pc| function.pc_start <= *pc && *pc < function.pc_end)
 }
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Coverage percentages are display-only floating-point ratios; exact execution counters remain u64."
+)]
 fn percentage(numerator: u64, denominator: u64) -> f64 {
     if denominator == 0 {
         100.0
@@ -5320,10 +5702,8 @@ struct TraceStep<'a> {
 }
 /// Split a test's trace into the test function's steps and each seiyaku call's steps.
 ///
-/// TODO: attribute each step to its statement's source line. The compiler's hash-keyed source
-/// map is function-granular (`EmbeddedSourceMapEntryV1` covers one function's PC range), so steps
-/// name their function's declaration site; a statement-level line table needs IR instructions to
-/// carry source ranges through SSA and register allocation into code generation.
+/// Statement locations survive SSA and inlining in the compiler's hash-bound source map.
+/// Compiler-generated prologues and epilogues retain their containing function's location.
 fn trace_steps<'a>(compiled: &'a CompiledSuite, result: &TestRunResult) -> Vec<TraceStep<'a>> {
     let context = &compiled.context;
     let mut steps = Vec::new();

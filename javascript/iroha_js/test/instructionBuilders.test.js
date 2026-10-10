@@ -2326,6 +2326,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
   const signatureCanonical = signature.split(":")[1].toUpperCase();
   const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
     manifest: {
+      permissions: [{ name: "can_upgrade", scope: { kind: "Instance", value: null } }], events: [], enum_types: [],
       seiyakuName: "Ledger",
       codeHash: codeHashBytes,
       abiHash: abiHashBytes,
@@ -2356,13 +2357,13 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
           name: "upgrade_ledger",
           kind: "Kotoage",
           ...UNIT_RETURN_DESCRIPTOR,
-          permission: "can_upgrade",
+          authorization: { kind: "Permission", value: "can_upgrade" },
         },
       ],
       states: [
         { name: "Balances", typeName: "StateMap<AccountId, quantity>" },
         { name: "Votes", typeName: "StateMap<Name, bool>" },
-        { name: "amount", typeName: "Transfer{amount: quantity}" },
+        { name: "amount", typeName: "Fixture::Transfer{amount: quantity}" },
       ],
       errorTypes: [
         { identity: "LedgerError", variants: [{ name: "amount", code: 7 }] },
@@ -2385,6 +2386,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
   const expected = universalArtifactInstruction({
     RegisterSmartContractCode: {
       manifest: {
+        permissions: [{ name: "can_upgrade", scope: { kind: "Instance", value: null } }], events: [], enum_types: [],
         seiyaku_name: "Ledger",
         code_hash: normalizedHashHex(codeHashBytes),
         abi_hash: normalizedHashHex(abiHashBytes),
@@ -2418,7 +2420,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
             argument_schema: null,
             return_type: "()",
             return_schema: { nodes: [{ kind: "Unit", value: null }] },
-            permission: "can_upgrade",
+            authorization: { kind: "Permission", value: "can_upgrade" },
             read_keys: [],
             write_keys: [],
             access_hints_complete: null,
@@ -2429,7 +2431,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         states: [
           { name: "Balances", type_name: "StateMap<AccountId, quantity>" },
           { name: "Votes", type_name: "StateMap<Name, bool>" },
-          { name: "amount", type_name: "Transfer{amount: quantity}" },
+          { name: "amount", type_name: "Fixture::Transfer{amount: quantity}" },
         ],
         error_types: [
           { identity: "LedgerError", variants: [{ name: "amount", code: 7 }] },
@@ -2453,6 +2455,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
   const expectedDecoded = universalArtifactInstruction({
     RegisterSmartContractCode: {
       manifest: {
+        permissions: [], events: [], enum_types: [],
         ...expected.RegisterSmartContractCode.manifest,
       },
     },
@@ -2466,14 +2469,14 @@ baseTest("smart-contract manifests reject unknown V1 feature bits", () => {
   assert.throws(
     () =>
       buildRegisterSmartContractCodeInstruction(universalArtifactInput({
-        manifest: { featuresBitmap: 4 },
+        manifest: { permissions: [], events: [], enum_types: [], featuresBitmap: 4 },
       })),
     /featuresBitmap contains unsupported Kotodama V1 feature bits/u,
   );
   assert.throws(
     () =>
       buildRegisterSmartContractCodeInstruction(universalArtifactInput({
-        manifest: { features_bitmap: "4" },
+        manifest: { permissions: [], events: [], enum_types: [], features_bitmap: "4" },
       })),
     /featuresBitmap contains unsupported Kotodama V1 feature bits/u,
   );
@@ -2483,6 +2486,7 @@ baseTest("smart-contract dynamic access hints enforce the exact V1 contract", ()
   const buildWithHint = (hint) =>
     buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
+        permissions: [], events: [], enum_types: [],
         states: [
           { name: "Balances", typeName: "StateMap<AccountId, quantity>" },
           { name: "amount", typeName: "StateMap<AccountId, quantity>" },
@@ -2590,6 +2594,7 @@ baseTest("smart-contract dynamic access hints resolve declared StateMaps per lis
   }) =>
     buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
+        permissions: [], events: [], enum_types: [],
         states,
         accessSetHints: { dynamicReads, dynamicWrites },
       },
@@ -2666,9 +2671,11 @@ baseTest("smart-contract parameter and state type aliases must agree", () => {
   const build = (param, state) =>
     buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
+        permissions: [], events: [], enum_types: [],
         entrypoints: [{
           name: "read",
           kind: "View",
+          authorization: { kind: "Anyone", value: null },
           ...UNIT_RETURN_DESCRIPTOR,
           params: [{ name: "amount", ...param }],
           argumentSchema: {
@@ -2713,7 +2720,7 @@ baseTest("smart-contract manifest type declarations reject retired numeric names
     assert.throws(
       () =>
         buildRegisterSmartContractCodeInstruction(universalArtifactInput({
-          manifest: { seiyakuName },
+          manifest: { permissions: [], events: [], enum_types: [], seiyakuName },
         })),
       /seiyakuName must be a canonical Kotodama V1 type declaration identifier/u,
     );
@@ -2728,6 +2735,7 @@ baseTest("smart-contract manifest type declarations reject retired numeric names
       () =>
         buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
+            permissions: [], events: [], enum_types: [],
             states: [{ name: "Balances", typeName }],
           },
         })),
@@ -2739,6 +2747,7 @@ baseTest("smart-contract manifest type declarations reject retired numeric names
       () =>
         buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
+            permissions: [], events: [], enum_types: [],
             errorTypes: [{ identity: namespace, variants: [{ name: "Denied", code: 7 }] }],
           },
         })),
@@ -2761,6 +2770,7 @@ baseTest("smart-contract manifest type declarations reject retired numeric names
       () =>
         buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
+            permissions: [], events: [], enum_types: [],
             accessSetHints: {
               readKeys: [],
               writeKeys: [],
@@ -2785,9 +2795,11 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
   };
   const valid = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
     manifest: {
+      permissions: [], events: [], enum_types: [],
       entrypoints: [{
         name: "read",
         kind: "View",
+        authorization: { kind: "Anyone", value: null },
         params: [{ name: "amount", typeName: "quantity" }],
         argumentSchema: {
           fields: [{ name: "amount", ty: quantity }],
@@ -2807,9 +2819,11 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
       () =>
         buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
+            permissions: [], events: [], enum_types: [],
             entrypoints: [{
               name: "read",
               kind: "View",
+              authorization: { kind: "Anyone", value: null },
               params: [{ name: "value", typeName: retired }],
               argumentSchema: {
                 fields: [{ name: "value", ty: quantity }],
@@ -2823,9 +2837,11 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
       () =>
         buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
+            permissions: [], events: [], enum_types: [],
             entrypoints: [{
               name: "read",
               kind: "View",
+              authorization: { kind: "Anyone", value: null },
               returnType: retired,
               returnSchema: quantity,
             }],
@@ -2839,9 +2855,11 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
     () =>
       buildRegisterSmartContractCodeInstruction(universalArtifactInput({
         manifest: {
+          permissions: [], events: [], enum_types: [],
           entrypoints: [{
             name: "read",
             kind: "View",
+            authorization: { kind: "Anyone", value: null },
             params: [{ name: "value", typeName: "quantity" }],
           }],
         },
@@ -2852,9 +2870,11 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
     () =>
       buildRegisterSmartContractCodeInstruction(universalArtifactInput({
         manifest: {
+          permissions: [], events: [], enum_types: [],
           entrypoints: [{
             name: "read",
             kind: "View",
+            authorization: { kind: "Anyone", value: null },
             returnType: "quantity",
           }],
         },
@@ -2867,10 +2887,14 @@ baseTest("smart-contract entrypoint kinds use only the V1 interface names", () =
   for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
     const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
+        permissions: [{ name: "can_run", scope: { kind: "Instance", value: null } }], events: [], enum_types: [],
         entrypoints: [{
           name: canonical === "Hajimari" ? "hajimari" : canonical === "Kaizen" ? "kaizen" : "run",
           kind: canonical,
-          permission: canonical === "Kotoage" ? "can_run" : null,
+          authorization: {
+            kind: canonical === "Kotoage" ? "Permission" : canonical === "View" ? "Anyone" : "RuntimeLifecycle",
+            value: canonical === "Kotoage" ? "can_run" : null,
+          },
           ...UNIT_RETURN_DESCRIPTOR,
         }],
       },
@@ -2886,7 +2910,8 @@ baseTest("smart-contract entrypoint kinds use only the V1 interface names", () =
       () =>
         buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
-            entrypoints: [{ name: "legacy", kind: retired }],
+            permissions: [], events: [], enum_types: [],
+            entrypoints: [{ name: "legacy", kind: retired, authorization: { kind: "Anyone", value: null } }],
           },
         })),
       /must be one of 'Kotoage', 'View', 'Hajimari', or 'Kaizen'/,
@@ -2898,10 +2923,14 @@ baseTest("smart-contract branded entrypoint kinds preserve their Norito tag orde
   for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
     const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
+        permissions: [{ name: "can_run", scope: { kind: "Instance", value: null } }], events: [], enum_types: [],
         entrypoints: [{
           name: canonical === "Hajimari" ? "hajimari" : canonical === "Kaizen" ? "kaizen" : "run",
           kind: canonical,
-          permission: canonical === "Kotoage" ? "can_run" : null,
+          authorization: {
+            kind: canonical === "Kotoage" ? "Permission" : canonical === "View" ? "Anyone" : "RuntimeLifecycle",
+            value: canonical === "Kotoage" ? "can_run" : null,
+          },
           ...UNIT_RETURN_DESCRIPTOR,
         }],
       },
@@ -2918,10 +2947,12 @@ baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tape
   const build = (nodes) =>
     buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
+        permissions: [], events: [], enum_types: [],
         entrypoints: [
           {
             name: "read",
             kind: "View",
+            authorization: { kind: "Anyone", value: null },
             returnType: analyzeEntrypointValueTypeV1({ nodes }).canonicalName,
             returnSchema: { nodes },
           },
@@ -2930,7 +2961,7 @@ baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tape
     }));
 
   const pair = [
-    { kind: "Struct", value: { name: "Pair", fields: ["left", "right"] } },
+    { kind: "Struct", value: { name: "Fixture::Pair", fields: ["left", "right"] } },
     leaf("Int"),
     leaf("Bool"),
   ];
@@ -3003,7 +3034,7 @@ baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tape
       [leaf("NftId"), leaf("AccountId"), leaf("Json")],
     ],
   ]) {
-    const canonical = [{ kind: "Struct", value: { name, fields } }, ...children];
+    const canonical = [{ kind: "Struct", value: { name: `kotodama::${name}`, fields } }, ...children];
     assert.doesNotThrow(() => build(canonical));
     const forged = structuredClone(canonical);
     forged[1].value.kind = "Bool";

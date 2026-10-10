@@ -44,20 +44,46 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
     }
     /// Parse the next object key without materializing its value.
     pub fn next_key(&mut self) -> Result<Option<KeyRef<'a>>, Error> {
+        self.next_key_with(|parser| parser.parse_key())
+    }
+    /// Read the next key while preserving an original escaped-text admission owner.
+    ///
+    /// The ordinary object lifecycle/colon/escape checks remain shared. Unescaped
+    /// text is borrowed from the original source; only escaped text invokes the
+    /// exact initialized destination callback. This adds no duplicate, unknown-field
+    /// or record policy and funds no enclosing source, record/control or diagnostic.
+    ///
+    /// # Errors
+    /// Preserves original JSON syntax and the caller's exact typed refusal.
+    pub fn next_key_with_buffer<B, E>(
+        &mut self,
+        allocate: impl FnOnce(usize) -> Result<B, E>,
+    ) -> Result<Option<KeyRef<'a, B>>, E>
+    where
+        B: AsMut<[u8]>,
+        E: From<Error>,
+    {
+        self.next_key_with(|parser| parser.parse_key_with_buffer(allocate))
+    }
+    fn next_key_with<K, E: From<Error>>(
+        &mut self,
+        parse: impl FnOnce(&mut Parser<'a>) -> Result<K, E>,
+    ) -> Result<Option<K>, E> {
         if self.finished {
             return Ok(None);
         }
         if self.value_pending {
             return Err(Error::Message(
                 "attempted to read a new key before consuming the previous value".into(),
-            ));
+            )
+            .into());
         }
         self.reject_trailing_comma()?;
         if self.parser.try_consume_char(b'}')? {
             self.finished = true;
             return Ok(None);
         }
-        let key = self.parser.parse_key()?;
+        let key = parse(self.parser)?;
         self.after_comma = false;
         self.value_pending = true;
         Ok(Some(key))

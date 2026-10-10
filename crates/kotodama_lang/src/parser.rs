@@ -191,18 +191,6 @@ fn expected_token_spelling(kind: &TokenKind) -> String {
         })
         .map_or_else(|| "token".to_owned(), |spelling| format!("`{spelling}`"))
 }
-/// `snake_case` name as `UpperCamelCase`, used to suggest a permission name.
-fn upper_camel(name: &str) -> String {
-    name.split('_')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut characters = part.chars();
-            characters.next().map_or_else(String::new, |first| {
-                first.to_uppercase().chain(characters).collect()
-            })
-        })
-        .collect()
-}
 /// `text` with its first character lowercased, for embedding a glossary
 /// sentence after a colon.
 fn lowercase_first(text: &str) -> String {
@@ -277,9 +265,12 @@ fn expected_syntax_kind(kind: &TokenKind) -> Option<SyntaxKind> {
         TokenKind::Continue => SyntaxKind::KwContinue,
         TokenKind::State => SyntaxKind::KwState,
         TokenKind::Struct => SyntaxKind::KwStruct,
+        TokenKind::Event => SyntaxKind::KwEvent,
+        TokenKind::Emit => SyntaxKind::KwEmit,
         TokenKind::Error => SyntaxKind::KwError,
         TokenKind::Enum => SyntaxKind::KwEnum,
         TokenKind::Authorize => SyntaxKind::KwAuthorize,
+        TokenKind::Permission => SyntaxKind::KwPermission,
         TokenKind::Trigger => SyntaxKind::KwTrigger,
         TokenKind::If => SyntaxKind::KwIf,
         TokenKind::Match => SyntaxKind::KwMatch,
@@ -523,11 +514,19 @@ struct PendingIfFrame {
     condition: Option<PendingExpr>,
     then_branch: PendingBlock,
 }
+type ProgramParts = (
+    Vec<Item>,
+    Vec<FixtureDecl>,
+    Vec<SourceDirective>,
+    Vec<ExportDecl>,
+    Vec<crate::ast::PermissionDecl>,
+);
 struct PendingProgramParts {
     items: Vec<Item>,
     fixtures: Vec<FixtureDecl>,
     directives: Vec<SourceDirective>,
     exports: Vec<ExportDecl>,
+    permissions: Vec<crate::ast::PermissionDecl>,
 }
 impl PendingProgramParts {
     fn new() -> Self {
@@ -536,6 +535,7 @@ impl PendingProgramParts {
             fixtures: Vec::new(),
             directives: Vec::new(),
             exports: Vec::new(),
+            permissions: Vec::new(),
         }
     }
     fn push_item(&mut self, item: Item) {
@@ -544,19 +544,13 @@ impl PendingProgramParts {
     fn push_fixture(&mut self, fixture: FixtureDecl) {
         self.fixtures.push(fixture);
     }
-    fn into_inner(
-        mut self,
-    ) -> (
-        Vec<Item>,
-        Vec<FixtureDecl>,
-        Vec<SourceDirective>,
-        Vec<ExportDecl>,
-    ) {
+    fn into_inner(mut self) -> ProgramParts {
         (
             std::mem::take(&mut self.items),
             std::mem::take(&mut self.fixtures),
             std::mem::take(&mut self.directives),
             std::mem::take(&mut self.exports),
+            std::mem::take(&mut self.permissions),
         )
     }
 }
@@ -575,6 +569,7 @@ impl Drop for PendingProgramParts {
             fixtures: std::mem::take(&mut self.fixtures),
             directives: std::mem::take(&mut self.directives),
             exports: std::mem::take(&mut self.exports),
+            permissions: std::mem::take(&mut self.permissions),
         });
     }
 }
@@ -1217,7 +1212,9 @@ impl<'a> CstAstLowerer<'a> {
                             | TokenKind::Hajimari
                             | TokenKind::Kaizen
                             | TokenKind::Struct
+                            | TokenKind::Event
                             | TokenKind::Error
+                            | TokenKind::Enum
                             | TokenKind::Const
                             | TokenKind::State
                             | TokenKind::Trigger
@@ -1254,11 +1251,21 @@ impl<'a> CstAstLowerer<'a> {
                 | TokenKind::Kaizen,
             ) => SyntaxKind::FunctionItem,
             Some(TokenKind::Struct) => SyntaxKind::StructItem,
-            Some(TokenKind::Error) => SyntaxKind::ErrorEnumItem,
+            Some(TokenKind::Event) => SyntaxKind::EventItem,
+            Some(TokenKind::Error | TokenKind::Enum) => SyntaxKind::EnumItem,
             Some(TokenKind::Const) => SyntaxKind::ConstItem,
             Some(TokenKind::State) => SyntaxKind::StateItem,
             Some(TokenKind::Trigger) => SyntaxKind::TriggerItem,
             Some(TokenKind::Include) => SyntaxKind::IncludeItem,
+            Some(TokenKind::Import)
+                if self
+                    .tokens
+                    .get(cursor + 1)
+                    .is_some_and(|token| token.kind == TokenKind::Permission) =>
+            {
+                SyntaxKind::PermissionItem
+            }
+            Some(TokenKind::Permission) => SyntaxKind::PermissionItem,
             Some(TokenKind::Import) => SyntaxKind::ImportItem,
             Some(TokenKind::Ident(name)) if name == "fixture" => SyntaxKind::FixtureItem,
             Some(TokenKind::Ident(name)) if name == "koto_test" => SyntaxKind::TestTargetItem,
@@ -1294,6 +1301,7 @@ impl<'a> CstAstLowerer<'a> {
             owner,
             name,
             kind,
+            documentation: String::new(),
         });
     }
     fn record_type_use(&mut self, name: String, range: TextRange) {
@@ -1608,10 +1616,11 @@ impl<'a> CstAstLowerer<'a> {
             drop(parts);
             return Err(self.trailing_source_error(token, &unit_name));
         }
-        let (items, fixtures, directives, exports) = parts.into_inner();
+        let (items, fixtures, directives, exports, permissions) = parts.into_inner();
         Ok(Program {
             unit,
             items,
+            permissions,
             directives,
             exports,
             test_target: self.test_target.take(),
@@ -1695,7 +1704,7 @@ impl<'a> CstAstLowerer<'a> {
     fn peek_n_ident(&self, offset: usize) -> bool {
         matches!(
             self.tokens.get(self.pos + offset).map(|token| &token.kind),
-            Some(TokenKind::Ident(_))
+            Some(TokenKind::Ident(_) | TokenKind::Permission)
         )
     }
     /// Whether the function head starting at the cursor declares
@@ -1769,7 +1778,7 @@ impl<'a> CstAstLowerer<'a> {
         token: &Token,
         unit: SourceUnitKind,
     ) -> (Box<ParseError>, Option<ItemRecovery>) {
-        const ITEMS: &str = "`fn`, `kotoage fn`/`言挙げ fn`, `view fn`, `hajimari`/`始まり`, `kaizen`/`改善`, `trigger`, `struct`, `error enum`, `const` or `state`";
+        const ITEMS: &str = "`fn`, `kotoage fn`/`言挙げ fn`, `view fn`, `hajimari`/`始まり`, `kaizen`/`改善`, `trigger`, `struct`, `enum`, `error enum`, `const` or `state`";
         let next = self.tokens.get(self.pos + 1).map(|token| &token.kind);
         let in_module = unit == SourceUnitKind::Module;
         if let TokenKind::Ident(word) = &token.kind {
@@ -1786,7 +1795,7 @@ impl<'a> CstAstLowerer<'a> {
                                 self.spelling(token)
                             ),
                         )
-                        .with_help("a module shares functions, structs, error enums and constants with `export`; public `kotoage fn` (also `言挙げ fn`) and `view fn` functions belong to a seiyaku")
+                        .with_help("a module shares functions, structs, enums and constants with `export`; public `kotoage fn` (also `言挙げ fn`) and `view fn` functions belong to a seiyaku")
                         .with_fix(token.range, "export");
                         return (error, Some(ItemRecovery::Function(FunctionKind::Private)));
                     }
@@ -1794,7 +1803,7 @@ impl<'a> CstAstLowerer<'a> {
                         let mut error = self
                             .english_word_error(token, keyword, "a public state-changing function")
                             .with_help(
-                                "public functions are `kotoage fn` (also `言挙げ fn`; submitted in a transaction, may write state, requires `authorize(\"Permission\")`) or `view fn` (read-only); plain `fn` is private to the unit",
+                                "public functions are `kotoage fn` (also `言挙げ fn`; submitted in a transaction, may write state, requires an explicit `authorize(...)`) or `view fn` (read-only); plain `fn` is private to the unit",
                             );
                         let view = ParseFix {
                             range: token.range,
@@ -1862,7 +1871,7 @@ impl<'a> CstAstLowerer<'a> {
         }
         let error = self
             .expected_error(token.clone(), &format!("a declaration ({ITEMS})"))
-            .with_help("a seiyaku contains state, functions, lifecycle hooks, triggers, structs, error enums and constants; statements belong inside a function body");
+            .with_help("a seiyaku contains state, functions, lifecycle hooks, triggers, structs, enums and constants; statements belong inside a function body");
         (error, None)
     }
     /// `E_DECLARATION_SHAPE` for `kotoage view fn` / `view kotoage fn`.
@@ -1898,7 +1907,7 @@ impl<'a> CstAstLowerer<'a> {
             Some(name.to_owned()),
             FunctionModifiers {
                 kind,
-                permission: None,
+                authorization: None,
                 is_test: attrs.is_test,
                 test_fixture: attrs.test_fixture.clone(),
             },
@@ -2327,7 +2336,7 @@ impl<'a> CstAstLowerer<'a> {
                 .with_fix(token.range, canonical);
         }
         self.expected_error(self.current_token(), "`::` and a variant name")
-            .with_help("`match` arms name the variants of an `Option`, `Result` or `error enum`, for example `Option::some(value)` or `MyError::Unauthorized`")
+            .with_help("`match` arms name the variants of an `Option`, `Result`, `enum` or `error enum`, for example `Option::some(value)` or `MyError::Unauthorized`")
     }
     /// Skip to the end of the current match arm: the next `,` or the match's
     /// closing `}` at the arm's own nesting level.
@@ -2371,10 +2380,11 @@ impl<'a> CstAstLowerer<'a> {
     fn parse_fragment_program(&mut self) -> ParseResult<Program> {
         let (unit, parts) = self.parse_source_unit(SourceUnitKind::Fragment)?;
         self.expect(TokenKind::EOF)?;
-        let (items, fixtures, directives, exports) = parts.into_inner();
+        let (items, fixtures, directives, exports, permissions) = parts.into_inner();
         Ok(Program {
             unit,
             items,
+            permissions,
             directives,
             exports,
             test_target: self.test_target.take(),
@@ -2415,6 +2425,15 @@ impl<'a> CstAstLowerer<'a> {
             let syntax_item = self.syntax_start(item_kind, declaration_start);
             let result = (|| -> ParseResult<()> {
                 let attrs = self.parse_function_attributes()?;
+                if self.peek(TokenKind::Permission)
+                    || (self.peek(TokenKind::Import) && self.peek_n(1, TokenKind::Permission))
+                {
+                    if kind == SourceUnitKind::Module || !attrs.is_empty() {
+                        return Err(self.coded_error(self.current_token(), "E_PERMISSION_DECLARATION", "permissions belong to a seiyaku or an included declaration file and cannot carry attributes"));
+                    }
+                    parts.permissions.push(self.parse_permission_decl()?);
+                    return Ok(());
+                }
                 if self.peek(TokenKind::Include) || self.peek(TokenKind::Import) {
                     if !attrs.is_empty() {
                         let token = self.current_token();
@@ -2447,17 +2466,19 @@ impl<'a> CstAstLowerer<'a> {
                     if !matches!(
                         self.tokens.get(self.pos).map(|token| &token.kind),
                         Some(
-                            TokenKind::Fn | TokenKind::Struct | TokenKind::Error | TokenKind::Const
+                            TokenKind::Fn
+                                | TokenKind::Struct
+                                | TokenKind::Error
+                                | TokenKind::Enum
+                                | TokenKind::Const
                         )
                     ) {
                         return Err(self
                             .expected_error(
                                 self.current_token(),
-                                "`fn`, `struct`, `error enum` or `const` after `export`",
+                                "`fn`, `struct`, `enum`, `error enum` or `const` after `export`",
                             )
-                            .with_help(
-                                "modules export functions, structs, error enums and constants",
-                            ));
+                            .with_help("modules export functions, structs, enums and constants"));
                     }
                     Some(token.range)
                 } else {
@@ -2492,12 +2513,24 @@ impl<'a> CstAstLowerer<'a> {
                     if !attrs.is_empty() {
                         return Err(attributes_error(self));
                     }
-                    parts.push_item(self.parse_struct_def()?);
-                } else if self.peek(TokenKind::Error) {
+                    parts.push_item(self.parse_product_def(false)?);
+                } else if self.peek(TokenKind::Event) {
                     if !attrs.is_empty() {
                         return Err(attributes_error(self));
                     }
-                    parts.push_item(self.parse_error_enum_def()?);
+                    if kind == SourceUnitKind::Module {
+                        return Err(module_error(
+                            self,
+                            "native events",
+                            "events belong to the seiyaku that emits them; declare the event and emitting helpers there",
+                        ));
+                    }
+                    parts.push_item(self.parse_product_def(true)?);
+                } else if self.peek(TokenKind::Error) || self.peek(TokenKind::Enum) {
+                    if !attrs.is_empty() {
+                        return Err(attributes_error(self));
+                    }
+                    parts.push_item(self.parse_enum_def()?);
                 } else if self.peek(TokenKind::Const) {
                     if !attrs.is_empty() {
                         return Err(attributes_error(self));
@@ -2562,7 +2595,7 @@ impl<'a> CstAstLowerer<'a> {
                             None,
                             FunctionModifiers {
                                 kind: FunctionKind::Private,
-                                permission: None,
+                                authorization: None,
                                 is_test: attrs.is_test,
                                 test_fixture: attrs.test_fixture,
                             },
@@ -2622,7 +2655,7 @@ impl<'a> CstAstLowerer<'a> {
                             } else {
                                 FunctionKind::View
                             },
-                            permission: None,
+                            authorization: None,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
@@ -2708,7 +2741,7 @@ impl<'a> CstAstLowerer<'a> {
                                 None,
                                 FunctionModifiers {
                                     kind: function_kind,
-                                    permission: None,
+                                    authorization: None,
                                     is_test: attrs.is_test,
                                     test_fixture: attrs.test_fixture,
                                 },
@@ -2736,8 +2769,8 @@ impl<'a> CstAstLowerer<'a> {
                         .expect("an exported declaration was parsed")
                     {
                         Item::Function(value) => &value.name,
-                        Item::Struct(value) => &value.name,
-                        Item::ErrorEnum(value) => &value.name,
+                        Item::Struct(value) | Item::Event(value) => &value.name,
+                        Item::Enum(value) => &value.name,
                         Item::Const(value) => &value.name,
                         Item::State(_) | Item::Trigger(_) => {
                             unreachable!("export kind was checked before parsing")
@@ -2776,6 +2809,40 @@ impl<'a> CstAstLowerer<'a> {
     }
     fn parse_source_directive(&mut self, item_index: usize) -> ParseResult<SourceDirective> {
         let keyword = self.bump();
+        if keyword.kind == TokenKind::Import && self.peek_ident_n(0, "type") {
+            self.bump();
+            let identity_token = self.bump();
+            let TokenKind::String(identity) = identity_token.kind.clone() else {
+                return Err(
+                    self.expected_error(identity_token, "a quoted canonical nominal type identity")
+                );
+            };
+            if !self.peek_ident_n(0, "from") {
+                let token = self.bump();
+                return Err(self.expected_error(token, "`from` followed by the contract namespace"));
+            }
+            self.bump();
+            let contract = self.expect_ident()?;
+            self.expect(TokenKind::As)?;
+            let alias = self.expect_ident()?;
+            self.expect(TokenKind::Semicolon)?;
+            return Ok(SourceDirective {
+                kind: SourceDirectiveKind::ContractTypeImport {
+                    identity,
+                    contract,
+                    alias,
+                },
+                item_index,
+                source: SourceRange::new(
+                    self.facts.source_map.source(),
+                    TextRange::new(keyword.range.start, self.previous_end(keyword.range.start)),
+                ),
+            });
+        }
+        let contract = keyword.kind == TokenKind::Import && self.peek(TokenKind::Seiyaku);
+        if contract {
+            self.bump();
+        }
         let path_token = self.bump();
         let TokenKind::String(path) = path_token.kind.clone() else {
             return Err(self
@@ -2795,9 +2862,11 @@ impl<'a> CstAstLowerer<'a> {
             SourceDirectiveKind::Include { path }
         } else {
             self.expect(TokenKind::As)?;
-            SourceDirectiveKind::Import {
-                path,
-                alias: self.expect_ident()?,
+            let alias = self.expect_ident()?;
+            if contract {
+                SourceDirectiveKind::ContractImport { path, alias }
+            } else {
+                SourceDirectiveKind::Import { path, alias }
             }
         };
         self.expect(TokenKind::Semicolon)?;
@@ -2810,16 +2879,21 @@ impl<'a> CstAstLowerer<'a> {
             ),
         })
     }
-    fn parse_error_enum_def(&mut self) -> ParseResult<Item> {
-        let node = self.begin_node(AstNodeKind::ErrorEnum, self.current_start());
-        self.expect(TokenKind::Error)?;
+    fn parse_enum_def(&mut self) -> ParseResult<Item> {
+        let node = self.begin_node(AstNodeKind::Enum, self.current_start());
+        let kind = if self.peek(TokenKind::Error) {
+            self.bump();
+            EnumKind::Error
+        } else {
+            EnumKind::Data
+        };
         self.expect(TokenKind::Enum)?;
         let (name, name_token) = self.expect_ident_token()?;
         self.record_declaration(
             node,
             name.clone(),
             name_token.range,
-            DeclarationKind::ErrorEnum,
+            DeclarationKind::Enum,
             None,
         );
         self.expect(TokenKind::LBrace)?;
@@ -2827,6 +2901,11 @@ impl<'a> CstAstLowerer<'a> {
         let mut names = std::collections::HashSet::new();
         let mut codes = std::collections::HashSet::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            if kind == EnumKind::Data && self.peek(TokenKind::Hash) {
+                return Err(self.coded_error(self.current_token(), "E_ENUM_MESSAGE",
+                    "ordinary enum variants cannot declare error messages")
+                    .with_help("use `error enum` only for raisable failures; ordinary enum variants contain only a name and explicit code"));
+            }
             let message = self.parse_error_message_attribute()?;
             let variant_token = self.tokens[self.pos].clone();
             let variant_name = self.expect_ident()?;
@@ -2836,9 +2915,9 @@ impl<'a> CstAstLowerer<'a> {
                     .coded_error(
                         variant_token,
                         "K1001",
-                        format!("error variant `{duplicate}` is declared more than once"),
+                        format!("enum variant `{duplicate}` is declared more than once"),
                     )
-                    .with_help("give every variant of an error enum a distinct name"));
+                    .with_help("give every variant of an enum a distinct name"));
             }
             self.expect(TokenKind::Equal)?;
             let code_token = self.bump();
@@ -2851,13 +2930,13 @@ impl<'a> CstAstLowerer<'a> {
                         self.coded_error(
                             code_token.clone(),
                             "K1001",
-                            "error codes are integers in the range 1..=4294967295",
+                            "enum codes are integers in the range 1..=4294967295",
                         )
                         .with_help("each variant needs a nonzero code that fits in 32 bits, for example `Unauthorized = 1`")
                     })?,
                 _ => {
                     return Err(self
-                        .expected_error(code_token, "an integer error code in the range 1..=4294967295")
+                        .expected_error(code_token, "an integer enum code in the range 1..=4294967295")
                         .with_help("each variant needs an explicit code, for example `Unauthorized = 1`"));
                 }
             };
@@ -2866,11 +2945,11 @@ impl<'a> CstAstLowerer<'a> {
                     .coded_error(
                         variant_token,
                         "K1001",
-                        format!("error code {code} is already used by another variant"),
+                        format!("enum code {code} is already used by another variant"),
                     )
-                    .with_help("error codes identify failures on the ledger, so every variant needs a distinct code"));
+                    .with_help("enum codes identify failures on the ledger, so every variant needs a distinct code"));
             }
-            variants.push(ErrorVariant {
+            variants.push(EnumVariant {
                 name: variant_name,
                 code,
                 message,
@@ -2880,7 +2959,7 @@ impl<'a> CstAstLowerer<'a> {
             } else if !self.peek(TokenKind::RBrace) {
                 let token = self.tokens[self.pos].clone();
                 let mut error =
-                    self.expected_error(token.clone(), "`,` or `}` after the error variant");
+                    self.expected_error(token.clone(), "`,` or `}` after the enum variant");
                 if let Some(previous) = self
                     .pos
                     .checked_sub(1)
@@ -2897,11 +2976,15 @@ impl<'a> CstAstLowerer<'a> {
         if variants.is_empty() {
             let token = self.tokens[self.pos.saturating_sub(1)].clone();
             return Err(self
-                .coded_error(token, "K1001", format!("error enum `{name}` declares no variants"))
+                .coded_error(token, "K1001", format!("enum `{name}` declares no variants"))
                 .with_help("declare at least one variant with an explicit nonzero code, for example `Unauthorized = 1`"));
         }
         self.finish_node(node);
-        Ok(Item::ErrorEnum(ErrorEnumDef { name, variants }))
+        Ok(Item::Enum(EnumDef {
+            name,
+            kind,
+            variants,
+        }))
     }
     fn parse_error_message_attribute(&mut self) -> ParseResult<Option<String>> {
         let mut message = None;
@@ -2966,7 +3049,18 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::Arrow)?;
         let call = self.parse_trigger_call()?;
         self.expect(TokenKind::LBrace)?;
-        let mut filter: Option<TriggerFilter> = None;
+        let mut filters = PendingValues::new(|filter: TriggerFilter| {
+            if let TriggerFilter::Time(TriggerTimeFilter::Schedule {
+                start_ms,
+                period_ms,
+            }) = filter
+            {
+                crate::ast::drop_expression_iterative(*start_ms);
+                if let Some(period_ms) = period_ms {
+                    crate::ast::drop_expression_iterative(*period_ms);
+                }
+            }
+        });
         let mut repeats: Option<TriggerRepeats> = None;
         let mut authority: Option<String> = None;
         let mut metadata = PendingValues::new(|entry: TriggerMetadataEntry| {
@@ -2985,10 +3079,10 @@ impl<'a> CstAstLowerer<'a> {
             };
             match field_name.as_str() {
                 "on" => {
-                    if filter.is_some() {
+                    if filters.len() != 0 {
                         return Err(self.duplicate_trigger_field(field_tok));
                     }
-                    filter = Some(self.parse_trigger_filter()?);
+                    filters.push(self.parse_trigger_filter()?);
                     if self.peek(TokenKind::Semicolon) {
                         self.bump();
                     }
@@ -3022,7 +3116,7 @@ impl<'a> CstAstLowerer<'a> {
             }
         }
         self.expect(TokenKind::RBrace)?;
-        let filter = filter.ok_or_else(|| {
+        let filter = filters.into_inner().pop().ok_or_else(|| {
             self.coded_error(
                 name_token.clone(),
                 "K1001",
@@ -3046,20 +3140,13 @@ impl<'a> CstAstLowerer<'a> {
         }))
     }
     fn parse_trigger_call(&mut self) -> ParseResult<TriggerCall> {
-        let first = self.expect_ident()?;
+        let (entrypoint, token) = self.expect_ident_token()?;
         if self.peek(TokenKind::ColonColon) {
-            self.bump();
-            let entrypoint = self.expect_ident()?;
-            Ok(TriggerCall {
-                namespace: Some(first),
-                entrypoint,
-            })
-        } else {
-            Ok(TriggerCall {
-                namespace: None,
-                entrypoint: first,
-            })
+            return Err(self.coded_error(token, "E_TRIGGER_TARGET_NAMESPACE",
+                "trigger callbacks must name a local kotoage function")
+                .with_help("namespaced callbacks require an authenticated seiyaku interface; use a local `kotoage fn` callback"));
         }
+        Ok(TriggerCall { entrypoint })
     }
     fn parse_trigger_filter(&mut self) -> ParseResult<TriggerFilter> {
         let kind = self.expect_ident()?;
@@ -3165,17 +3252,29 @@ impl<'a> CstAstLowerer<'a> {
             "pre_commit" => Ok(TriggerTimeFilter::PreCommit),
             "schedule" => {
                 self.expect(TokenKind::LParen)?;
-                let start_ms = self.parse_u64_literal("schedule start_ms")?;
-                let period_ms = if self.peek(TokenKind::Comma) {
+                let mut start_ms =
+                    PendingExpr::new(self.parse_trigger_schedule_argument("start_ms")?);
+                let mut period_ms = if self.peek(TokenKind::Comma) {
                     self.bump();
-                    Some(self.parse_u64_literal("schedule period_ms")?)
+                    if self.peek(TokenKind::RParen) {
+                        None
+                    } else {
+                        Some(PendingExpr::new(
+                            self.parse_trigger_schedule_argument("period_ms")?,
+                        ))
+                    }
                 } else {
                     None
                 };
+                if period_ms.is_some() && self.peek(TokenKind::Comma) {
+                    self.bump();
+                }
                 self.expect(TokenKind::RParen)?;
+                let start_ms = start_ms.take();
+                let period_ms = period_ms.as_mut().map(PendingExpr::take);
                 Ok(TriggerTimeFilter::Schedule {
-                    start_ms,
-                    period_ms,
+                    start_ms: Box::new(start_ms),
+                    period_ms: period_ms.map(Box::new),
                 })
             }
             _ => Err(self.expected_error(
@@ -3183,6 +3282,16 @@ impl<'a> CstAstLowerer<'a> {
                 "a time filter (`pre_commit` or `schedule(...)`)",
             )),
         }
+    }
+    fn parse_trigger_schedule_argument(&mut self, label: &str) -> ParseResult<Expr> {
+        let token = self.bump();
+        if !matches!(&token.kind, TokenKind::Ident(name) if name == label) {
+            return Err(self.coded_error(token, "E_TRIGGER_SCHEDULE_ARGUMENT",
+                format!("schedule requires the `{label}:` argument label"))
+                .with_help("write `schedule(start_ms: START, period_ms: 60_000)`; times are compile-time integer expressions in milliseconds"));
+        }
+        self.expect(TokenKind::Colon)?;
+        self.parse_expr()
     }
     fn parse_trigger_repeats(&mut self) -> ParseResult<TriggerRepeats> {
         if self.peek_ident_n(0, "indefinitely") {
@@ -3424,16 +3533,31 @@ impl<'a> CstAstLowerer<'a> {
             actions: actions.into_inner(),
         })
     }
-    fn parse_struct_def(&mut self) -> ParseResult<Item> {
+    fn parse_product_def(&mut self, event: bool) -> ParseResult<Item> {
         // struct Name { Type field; ... }
-        let node = self.begin_node(AstNodeKind::Struct, self.current_start());
-        self.expect(TokenKind::Struct)?;
+        let node = self.begin_node(
+            if event {
+                AstNodeKind::Event
+            } else {
+                AstNodeKind::Struct
+            },
+            self.current_start(),
+        );
+        self.expect(if event {
+            TokenKind::Event
+        } else {
+            TokenKind::Struct
+        })?;
         let (name, name_token) = self.expect_ident_token()?;
         self.record_declaration(
             node,
             name.clone(),
             name_token.range,
-            DeclarationKind::Struct,
+            if event {
+                DeclarationKind::Event
+            } else {
+                DeclarationKind::Struct
+            },
             None,
         );
         self.expect(TokenKind::LBrace)?;
@@ -3468,10 +3592,66 @@ impl<'a> CstAstLowerer<'a> {
         }
         self.expect(TokenKind::RBrace)?;
         self.finish_node(node);
-        Ok(Item::Struct(super::ast::StructDef {
+        let definition = super::ast::StructDef {
             name,
             fields: fields.into_inner(),
-        }))
+        };
+        Ok(if event {
+            Item::Event(definition)
+        } else {
+            Item::Struct(definition)
+        })
+    }
+    fn parse_permission_decl(&mut self) -> ParseResult<PermissionDecl> {
+        let node = self.begin_node(AstNodeKind::Permission, self.current_start());
+        let imported = self.peek(TokenKind::Import);
+        if imported {
+            self.bump();
+        }
+        self.expect(TokenKind::Permission)?;
+        let chain_permission = if imported {
+            let token = self.bump();
+            let TokenKind::String(name) = &token.kind else {
+                return Err(self.expected_error(token, "a chain permission string literal"));
+            };
+            if name.parse::<iroha_model_base::name::Name>().is_err() {
+                return Err(self.coded_error(
+                    token,
+                    "E_PERMISSION_DECLARATION",
+                    "the imported chain permission must be a valid nonempty Name",
+                ));
+            }
+            let name = name.clone();
+            self.expect(TokenKind::As)?;
+            Some(name)
+        } else {
+            None
+        };
+        let (name, token) = self.expect_ident_token()?;
+        if name == "anyone"
+            || !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(
+                &name,
+            )
+        {
+            return Err(self.coded_error(
+                token,
+                "E_PERMISSION_DECLARATION",
+                "a permission declaration needs a canonical identifier other than `anyone`",
+            ));
+        }
+        self.record_declaration(
+            node,
+            name.clone(),
+            token.range,
+            DeclarationKind::Permission,
+            None,
+        );
+        self.expect(TokenKind::Semicolon)?;
+        self.finish_node(node);
+        Ok(PermissionDecl {
+            name,
+            chain_permission,
+        })
     }
     fn parse_state_decl(&mut self) -> ParseResult<Item> {
         // Canonical V1 form: `state Type name;`.
@@ -3654,12 +3834,7 @@ impl<'a> CstAstLowerer<'a> {
                 .and_modify(|known| *known = None)
                 .or_insert_with(|| Some(parameter_names));
             let mut ret_ty = None;
-            if self.peek(TokenKind::Arrow) {
-                self.bump();
-                ret_ty = Some(PendingType::new(self.parse_type_expr()?));
-            }
-            // Caller authorization is mandatory for mutating public kotoage
-            // and optional for read-only views.
+            let mut return_clause = None;
             let mut authorize_clause: Option<TextRange> = None;
             while !self.peek(TokenKind::LBrace) && !self.peek(TokenKind::EOF) {
                 if self.peek(TokenKind::Authorize) {
@@ -3670,43 +3845,21 @@ impl<'a> CstAstLowerer<'a> {
                     ) {
                         let clause = self.skip_balanced_clause(&authorize);
                         let hook = role_spelling.clone().unwrap_or_else(|| name.clone());
-                        self.report(
-                            self.coded_error(
-                                authorize,
-                                "E_LIFECYCLE_AUTHORIZATION",
-                                format!(
-                                    "`{hook}` cannot declare `authorize(...)`: lifecycle hooks are authorized by the runtime"
-                                ),
-                            )
+                        self.report(self.coded_error(authorize, "E_LIFECYCLE_AUTHORIZATION",
+                            format!("`{hook}` cannot declare `authorize(...)`: lifecycle hooks are authorized by the runtime"))
                             .reported_at(clause)
-                            .with_help("activation and in-place replacement are authorized by the runtime's `CanInvokeContractEntrypoint` check on the deploying transaction; remove the clause")
-                            .with_fix(self.leading_space_range(clause), ""),
-                        )?;
+                            .with_help("remove the clause; lifecycle authority is checked by the runtime")
+                            .with_fix(self.leading_space_range(clause), ""))?;
                         continue;
                     }
                     self.expect(TokenKind::LParen)?;
                     let permission_token = self.bump();
                     let perm = match permission_token.kind.clone() {
-                        TokenKind::String(permission) if !permission.trim().is_empty() => {
-                            permission
-                        }
-                        TokenKind::String(_) => {
-                            return Err(self
-                                .coded_error(
-                                    permission_token,
-                                    "K1001",
-                                    "the permission name in `authorize(...)` must not be blank",
-                                )
-                                .with_help("name the permission a caller must hold, for example `authorize(\"CanIncrement\")`"));
-                        }
-                        _ => {
-                            return Err(self
-                                .expected_error(
-                                    permission_token,
-                                    "a permission string literal such as `\"CanIncrement\"`",
-                                )
-                                .with_help("the permission is a string literal naming what a caller must hold"));
-                        }
+                        TokenKind::Ident(permission) => permission,
+                        TokenKind::String(_) => return Err(self.coded_error(permission_token,
+                            "E_AUTHORIZATION_STRING", "authorization requires a declared permission identifier or `anyone`, not a string")
+                            .with_help("declare `permission Admin;` and write `authorize(Admin)`, or explicitly choose `authorize(anyone)`")),
+                        _ => return Err(self.expected_error(permission_token, "a declared permission identifier or `anyone`")),
                     };
                     self.expect(TokenKind::RParen)?;
                     let clause = TextRange::new(
@@ -3714,60 +3867,64 @@ impl<'a> CstAstLowerer<'a> {
                         self.previous_end(authorize.range.start),
                     );
                     if !matches!(modifiers.kind, FunctionKind::Kotoage | FunctionKind::View) {
-                        let previous = &self.tokens[self.pos.saturating_sub(1)];
-                        return Err(ParseError::at_range(
-                            clause,
-                            previous.line,
-                            previous.column,
-                            "K1001",
-                            format!("`authorize(...)` is only valid on public functions; `{name}` is a private `fn`"),
-                        )
-                        .with_help(format!(
-                            "only public functions check their caller: write `kotoage fn {name}` (also `言挙げ fn`) for a state-changing public function or `view fn {name}` for a read-only one; private `fn` helpers run with the authority of the function that calls them"
-                        )));
+                        return Err(self.coded_error(authorize, "K1001", format!("`authorize(...)` is only valid on public functions; `{name}` is a private `fn`"))
+                            .reported_at(clause).with_help("private helpers run with their caller's authority; remove the clause"));
                     }
                     if let Some(first) = authorize_clause {
-                        let previous = &self.tokens[self.pos.saturating_sub(1)];
-                        return Err(ParseError::at_range(
-                            clause,
-                            previous.line,
-                            previous.column,
-                            "K1001",
-                            format!("function `{name}` declares `authorize(...)` twice"),
-                        )
-                        .with_label(first, "first `authorize(...)` clause")
-                        .with_help("a function names exactly one permission")
-                        .with_fix(self.leading_space_range(clause), ""));
+                        return Err(self
+                            .coded_error(
+                                authorize,
+                                "K1001",
+                                format!("function `{name}` declares `authorize(...)` twice"),
+                            )
+                            .reported_at(clause)
+                            .with_label(first, "first `authorize(...)` clause")
+                            .with_help("a function declares exactly one authorization policy")
+                            .with_fix(self.leading_space_range(clause), ""));
                     }
+                    if let Some(return_range) = return_clause {
+                        let return_range: TextRange = return_range;
+                        let return_text =
+                            &self.source[return_range.start as usize..return_range.end as usize];
+                        let clause_text = &self.source[clause.start as usize..clause.end as usize];
+                        let separator =
+                            &self.source[return_range.end as usize..clause.start as usize];
+                        self.report(
+                            self.coded_error(
+                                authorize,
+                                "E_AUTHORIZE_POSITION",
+                                "`authorize(...)` comes before the return type",
+                            )
+                            .reported_at(TextRange::new(return_range.start, clause.end))
+                            .with_help(
+                                "write `kotoage fn name(params) authorize(Admin) -> Type { ... }`",
+                            )
+                            .with_fix(
+                                TextRange::new(return_range.start, clause.end),
+                                format!("{clause_text}{separator}{return_text}"),
+                            ),
+                        )?;
+                    }
+                    let name_node = self.facts.source_map.allocate_owned(
+                        AstNodeKind::Name,
+                        permission_token.range,
+                        self.current_function,
+                    );
+                    self.facts
+                        .authorizations
+                        .push(crate::spanned_ast::AuthorizationFact {
+                            name_node,
+                            name: perm.clone(),
+                        });
                     authorize_clause = Some(clause);
-                    modifiers.permission = Some(perm);
-                } else if let Some(clause) = authorize_clause
-                    && self.peek(TokenKind::Arrow)
-                    && ret_ty.is_none()
-                {
-                    // `authorize("P") -> int`: the return type comes first.
+                    modifiers.authorization = Some(perm);
+                } else if self.peek(TokenKind::Arrow) && ret_ty.is_none() {
                     let arrow = self.bump();
-                    let ty = self.parse_type_expr()?;
-                    let type_end = self.previous_end(arrow.range.end);
-                    let return_text = self
-                        .source
-                        .get(arrow.range.start as usize..type_end as usize)
-                        .unwrap_or("")
-                        .to_owned();
-                    let clause_text = self
-                        .source
-                        .get(clause.start as usize..clause.end as usize)
-                        .unwrap_or("")
-                        .to_owned();
-                    ret_ty = Some(PendingType::new(ty));
-                    self.report(
-                        ParseError::at(&arrow, "E_AUTHORIZE_POSITION", format!(
-                            "the return type comes before `authorize(...)`: write `{return_text} {clause_text}`"
-                        ))
-                        .reported_at(TextRange::new(clause.start, type_end))
-                        .with_help("a function head reads `kotoage fn name(params) -> Type authorize(\"Permission\") { ... }`")
-                        .with_fix(TextRange::new(clause.start, type_end), format!("{return_text} {clause_text}")),
-                    )?;
+                    ret_ty = Some(PendingType::new(self.parse_type_expr()?));
+                    return_clause = Some(TextRange::new(
+                        arrow.range.start,
+                        self.previous_end(arrow.range.end),
+                    ));
                 } else {
                     let tok = self.current_token();
                     if let TokenKind::Ident(word) = &tok.kind
@@ -3775,39 +3932,29 @@ impl<'a> CstAstLowerer<'a> {
                     {
                         return Err(self.keyword_typo_error(&tok, "authorize"));
                     }
-                    let mut error = self.expected_error(
+                    return Err(self.expected_error(
                         tok,
-                        "`authorize(\"Permission\")` or the function body `{`",
-                    );
-                    if matches!(modifiers.kind, FunctionKind::Kotoage) {
-                        error = error.with_help("a kotoage head ends with its permission: `kotoage fn name(params) -> Type authorize(\"Permission\") {`");
-                    }
-                    self.bump();
-                    return Err(error);
+                        "`authorize(Admin)`, a return type, or the function body `{`",
+                    ));
                 }
             }
-            if modifiers.kind == FunctionKind::Kotoage
-                && modifiers.permission.is_none()
+            if matches!(modifiers.kind, FunctionKind::Kotoage | FunctionKind::View)
+                && modifiers.authorization.is_none()
                 && !role_recovered
             {
-                let spelling = role_spelling
-                    .clone()
-                    .unwrap_or_else(|| "kotoage".to_owned());
-                let insertion = TextRange::empty(self.previous_end(declaration_start));
-                self.report(
-                    self.coded_error(
-                        self.current_token(),
-                        "E_KOTOAGE_AUTHORIZATION_MISSING",
-                        format!(
-                            "{spelling} function `{name}` requires `authorize(\"Permission\")` before its body"
-                        ),
-                    )
+                let spelling = role_spelling.clone().unwrap_or_else(|| "public".to_owned());
+                let insertion = TextRange::empty(
+                    return_clause.map_or(self.previous_end(declaration_start), |range| range.start),
+                );
+                let code = if modifiers.kind == FunctionKind::View {
+                    "E_VIEW_AUTHORIZATION_MISSING"
+                } else {
+                    "E_KOTOAGE_AUTHORIZATION_MISSING"
+                };
+                self.report(self.coded_error(self.current_token(), code,
+                    format!("{spelling} function `{name}` requires an explicit `authorize(...)` policy"))
                     .reported_at(insertion)
-                    .with_help(format!(
-                        "name the permission a caller must hold, for example `authorize(\"Can{}\")`; if `{name}` only reads state, declare it `view fn` instead",
-                        upper_camel(&name)
-                    )),
-                )?;
+                    .with_help("use a declared permission such as `authorize(Admin)`, or explicitly allow every caller with `authorize(anyone)`"))?;
             }
             let body = self.parse_block()?;
             Ok(Item::Function(Function {
@@ -3920,6 +4067,8 @@ impl<'a> CstAstLowerer<'a> {
                 | TokenKind::Hajimari
                 | TokenKind::Kaizen
                 | TokenKind::Struct
+                | TokenKind::Event
+                | TokenKind::Enum
                 | TokenKind::Trigger
                 | TokenKind::Seiyaku
                 | TokenKind::Module
@@ -3929,12 +4078,35 @@ impl<'a> CstAstLowerer<'a> {
                 | TokenKind::Const
                 | TokenKind::Hash,
             ) => true,
+            Some(TokenKind::Permission) => self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|token| matches!(token.kind, TokenKind::Ident(_))),
             Some(TokenKind::Error) => self.peek_n(1, TokenKind::Enum),
             Some(TokenKind::State) => !self.peek_n(1, TokenKind::ColonColon),
             _ => false,
         }
     }
     fn parse_block_element(&mut self) -> ParseResult<ParsedBlockElement> {
+        if self.peek(TokenKind::Emit) {
+            let statement_start = self.current_start();
+            let owner = self.begin_node(AstNodeKind::Statement, statement_start);
+            self.bump();
+            let mut payload = PendingExpr::new(self.parse_expr()?);
+            if !matches!(payload.as_ref().kind(), Expr::StructLiteral { .. }) {
+                return Err(self.coded_error(
+                    self.current_token(),
+                    "E_EVENT_PAYLOAD",
+                    "emit requires a declared event record: `emit Event { field: value };`",
+                ));
+            }
+            self.expect(TokenKind::Semicolon)?;
+            return Ok(ParsedBlockElement::Statement(self.finish_owned_statement(
+                owner,
+                TextRange::new(statement_start, self.previous_end(statement_start)),
+                Statement::Emit(payload.take()),
+            )));
+        }
         if self.peek(TokenKind::Let) || self.peek(TokenKind::Var) {
             let statement_start = self.current_start();
             let owner = self.begin_node(AstNodeKind::Statement, statement_start);
@@ -4622,7 +4794,7 @@ impl<'a> CstAstLowerer<'a> {
                     namespace_token,
                     "an `Option::`, `Result::` or error-variant pattern",
                 )
-                .with_help("`match` arms name the variants of an `Option`, `Result` or `error enum`; branch on a `bool` or number with `if`/`else`"));
+                .with_help("`match` arms name the variants of an `Option`, `Result`, `enum` or `error enum`; branch on a `bool` or number with `if`/`else`"));
         };
         if !self.peek(TokenKind::ColonColon) {
             return Err(self.bare_pattern_error(&namespace_token, &namespace));
@@ -4633,7 +4805,7 @@ impl<'a> CstAstLowerer<'a> {
         let TokenKind::Ident(mut variant_name) = variant_token.kind.clone() else {
             return Err(self.expected_error(variant_token, "a variant name after `::`"));
         };
-        if self.peek(TokenKind::ColonColon) {
+        while self.peek(TokenKind::ColonColon) {
             self.bump();
             namespace.push_str("::");
             namespace.push_str(&variant_name);
@@ -4681,13 +4853,13 @@ impl<'a> CstAstLowerer<'a> {
                     namespace.clone(),
                     TextRange::new(namespace_token.range.start, namespace_end),
                 );
-                SumVariant::Error {
+                SumVariant::Nominal {
                     namespace,
                     variant: variant_name,
                 }
             }
         };
-        let binding = if matches!(variant, SumVariant::OptionNone | SumVariant::Error { .. }) {
+        let binding = if matches!(variant, SumVariant::OptionNone | SumVariant::Nominal { .. }) {
             if self.peek(TokenKind::LParen) {
                 let token = self.bump();
                 let clause = self.skip_balanced_clause(&token);
@@ -4831,6 +5003,7 @@ impl<'a> CstAstLowerer<'a> {
         let tok = self.bump();
         match &tok.kind {
             TokenKind::Ident(name) => Ok((name.clone(), tok.clone())),
+            TokenKind::Permission => Ok(("permission".to_owned(), tok.clone())),
             _ => {
                 let is_keyword = crate::lexer::v1_keyword_spelling(&tok.kind).is_some();
                 let mut error = self
@@ -4862,6 +5035,7 @@ impl<'a> CstAstLowerer<'a> {
             TokenKind::Trigger if self.peek(TokenKind::ColonColon) => Ok("trigger".to_owned()),
             TokenKind::Seiyaku if self.peek(TokenKind::ColonColon) => Ok("seiyaku".to_owned()),
             TokenKind::Kotoage => Ok("kotoage".to_owned()),
+            TokenKind::Permission => Ok("permission".to_owned()),
             _ => {
                 let mut error = self.expected_error(tok, "a path segment after `::`");
                 error.expected = Some(SyntaxKind::Ident);
@@ -5439,7 +5613,7 @@ impl<'a> CstAstLowerer<'a> {
     }
     fn parse_type_path(&mut self) -> ParseResult<(String, Token)> {
         let (mut name, mut token) = self.expect_ident_token()?;
-        if self.peek(TokenKind::ColonColon) {
+        while self.peek(TokenKind::ColonColon) {
             self.bump();
             let (member, member_token) = self.expect_ident_token()?;
             name.push_str("::");
@@ -5449,16 +5623,14 @@ impl<'a> CstAstLowerer<'a> {
         Ok((name, token))
     }
     fn struct_pattern_starts_here(&self) -> bool {
-        matches!(
-            self.tokens.get(self.pos).map(|token| &token.kind),
-            Some(TokenKind::Ident(_))
-        ) && (self.peek_n(1, TokenKind::LBrace)
-            || (self.peek_n(1, TokenKind::ColonColon)
-                && matches!(
-                    self.tokens.get(self.pos + 2).map(|token| &token.kind),
-                    Some(TokenKind::Ident(_))
-                )
-                && self.peek_n(3, TokenKind::LBrace)))
+        if !self.peek_n_ident(0) {
+            return false;
+        }
+        let mut offset = 1;
+        while self.peek_n(offset, TokenKind::ColonColon) && self.peek_n_ident(offset + 1) {
+            offset += 2;
+        }
+        self.peek_n(offset, TokenKind::LBrace)
     }
     fn typed_local_starts_here(&self) -> bool {
         if self.struct_pattern_starts_here() {
@@ -5466,7 +5638,7 @@ impl<'a> CstAstLowerer<'a> {
         }
         if matches!(
             self.tokens.get(self.pos).map(|token| &token.kind),
-            Some(TokenKind::Ident(_))
+            Some(TokenKind::Ident(_) | TokenKind::Permission)
         ) && self.peek_n(1, TokenKind::ColonColon)
         {
             return true;
@@ -5732,7 +5904,9 @@ impl<'a> CstAstLowerer<'a> {
             &token.kind,
             TokenKind::Hash
                 | TokenKind::Struct
+                | TokenKind::Event
                 | TokenKind::Error
+                | TokenKind::Enum
                 | TokenKind::Const
                 | TokenKind::State
                 | TokenKind::Trigger
@@ -5745,6 +5919,7 @@ impl<'a> CstAstLowerer<'a> {
                 | TokenKind::Module
                 | TokenKind::Include
                 | TokenKind::Import
+                | TokenKind::Permission
                 | TokenKind::Export
         ) || matches!(
             &token.kind,
@@ -5896,6 +6071,7 @@ fn block_expression_flow(expression: &Expr) -> BlockExpressionFlow {
                     pending.push(Pending::Block(then_branch));
                 }
                 Statement::Expr(expression)
+                | Statement::Emit(expression)
                 | Statement::Let {
                     value: expression, ..
                 }
@@ -6063,7 +6239,7 @@ fn removed_method_helper_code(name: &str) -> &'static str {
         "K1001"
     }
 }
-fn removed_free_helper_message(name: &str) -> Option<&'static str> {
+pub(crate) fn removed_free_helper_message(name: &str) -> Option<&'static str> {
     match name {
         "ledger::trigger::create" => Some(
             "`ledger::trigger::create` is not part of Kotodama V1; use `ledger::trigger::register`",
@@ -6145,7 +6321,7 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-fn removed_free_helper_code(name: &str) -> &'static str {
+pub(crate) fn removed_free_helper_code(name: &str) -> &'static str {
     if retired_trigger_alias_replacement(name).is_some() {
         "E_RETIRED_TRIGGER_ALIAS"
     } else if matches!(
@@ -6663,11 +6839,38 @@ mod tests {
         );
     }
     #[test]
+    fn ordinary_enums_use_explicit_codes_and_reject_error_messages_and_payloads() {
+        let program =
+            parse("module Data { export enum Status { Active = 1, Paused = 4294967295 } }")
+                .expect("ordinary exported enum");
+        let Item::Enum(definition) = &program.items[0] else {
+            panic!("enum declaration");
+        };
+        assert_eq!(definition.kind, EnumKind::Data);
+        assert_eq!(definition.variants[1].code, u32::MAX);
+        for declaration in [
+            "enum Empty {}",
+            "enum Zero { A = 0 }",
+            "enum Duplicate { A = 1, B = 1 }",
+            "enum Duplicate { A = 1, A = 2 }",
+            "enum Missing { A }",
+            "enum Wide { A = 4294967296 }",
+            "enum Payload { A(int value) = 1 }",
+            "enum Generic<T> { A = 1 }",
+            "enum Message { #[message(\"Not a rejection\")] A = 1 }",
+        ] {
+            assert!(
+                parse(&format!("module Data {{ {declaration} }}")).is_err(),
+                "{declaration}"
+            );
+        }
+    }
+    #[test]
     fn error_enum_requires_explicit_unique_nonzero_u32_codes() {
         let program =
             parse("seiyaku Errors { error enum Payment { Unauthorized = 1001, Expired = 1002 } }")
                 .expect("parse stable error enum");
-        let Item::ErrorEnum(errors) = &program.items[0] else {
+        let Item::Enum(errors) = &program.items[0] else {
             panic!("expected error enum")
         };
         assert_eq!(errors.name, "Payment");
@@ -6716,13 +6919,13 @@ mod tests {
     #[test]
     fn parse_canonical_seiyaku_surface_and_preserve_identity() {
         let src = r#"
-        seiyaku Payments {
+        seiyaku Payments { permission Submit;
             state int counter;
             struct Pair { int left; int right; }
             hajimari() { counter = 0; }
             kaizen() {}
-            kotoage fn submit(AccountId who, quantity amount) authorize("Submit") {}
-            view fn read(Name key) -> int { return counter; }
+            kotoage fn submit(AccountId who, quantity amount) authorize(Submit) {}
+            view fn read(Name key) authorize(anyone) -> int { return counter; }
             fn helper(int left, int right) -> int { return left + right; }
         }
         "#;
@@ -6740,12 +6943,15 @@ mod tests {
         assert_eq!(functions.len(), 5);
         assert_eq!(functions[0].name, "hajimari");
         assert_eq!(functions[0].modifiers.kind, FunctionKind::Hajimari);
-        assert_eq!(functions[0].modifiers.permission, None);
+        assert_eq!(functions[0].modifiers.authorization, None);
         assert_eq!(functions[1].name, "kaizen");
         assert_eq!(functions[1].modifiers.kind, FunctionKind::Kaizen);
-        assert_eq!(functions[1].modifiers.permission, None);
+        assert_eq!(functions[1].modifiers.authorization, None);
         assert_eq!(functions[2].modifiers.kind, FunctionKind::Kotoage);
-        assert_eq!(functions[2].modifiers.permission.as_deref(), Some("Submit"));
+        assert_eq!(
+            functions[2].modifiers.authorization.as_deref(),
+            Some("Submit")
+        );
         assert_eq!(functions[3].modifiers.kind, FunctionKind::View);
         assert_eq!(functions[4].modifiers.kind, FunctionKind::Private);
     }
@@ -6775,13 +6981,13 @@ mod tests {
     fn parse_canonical_context_and_ledger_namespaces() {
         let program = parse(
             r#"
-            seiyaku Payments {
+            seiyaku Payments { permission TransferAsset;
                 kotoage fn transfer(
                     AccountId recipient,
                     AssetDefinitionId asset,
                     quantity amount,
                     DataSpaceId dataspace
-                ) authorize("TransferAsset") {
+                ) authorize(TransferAsset) {
                     let sender = context::authority();
                     ledger::asset::transfer(
                         source: sender,
@@ -6816,8 +7022,8 @@ mod tests {
     fn keyword_tokens_are_admitted_only_in_required_namespace_positions() {
         let program = parse(
             r#"
-            seiyaku Controls {
-                kotoage fn update(Name path, Name trigger_id) authorize("Control") {
+            seiyaku Controls { permission Control;
+                kotoage fn update(Name path, Name trigger_id) authorize(Control) {
                     state::set(path, 1);
                     ledger::trigger::set_enabled(trigger_id, true);
                 }
@@ -6854,10 +7060,10 @@ mod tests {
     fn english_declaration_spellings_are_rejected() {
         for source in [
             "contract Legacy {}",
-            "seiyaku Legacy { entry fn run() authorize(\"Run\") {} }",
+            "seiyaku Legacy { entry fn run() authorize(anyone) {} }",
             "seiyaku Legacy { init() {} }",
             "seiyaku Legacy { upgrade() {} }",
-            "seiyaku Legacy { kotoage fn run() permission(Admin) {} }",
+            "seiyaku Legacy { kotoage fn run() authorize(anyone) permission(Admin) {} }",
         ] {
             parse(source).expect_err("English declaration spelling must be rejected");
         }
@@ -6865,14 +7071,14 @@ mod tests {
     #[test]
     fn branded_keywords_are_contextual_namespace_segments_only() {
         for source in [
-            "module M { fn f() { context::kotoage(); ledger::seiyaku::grant_kotoage(); test::invoke_kotoage(kotoage: \"run\", arguments: Json::parse(\"{}\")); } }",
-            "module M { fn f() { context::言挙げ(); ledger::誓約::grant_kotoage(); test::invoke_kotoage(言挙げ: \"run\", arguments: Json::parse(\"{}\")); } }",
+            "module M { fn f() { context::kotoage(); ledger::seiyaku::grant_permission(); test::invoke_kotoage(kotoage: \"run\", arguments: {}); } }",
+            "module M { fn f() { context::言挙げ(); ledger::誓約::grant_permission(); test::invoke_kotoage(言挙げ: \"run\", arguments: {}); } }",
         ] {
             parse(source).expect("branded capability path must parse");
         }
         for source in [
             "module M { fn f() { kotoage(); } }",
-            "module M { fn f() { seiyaku::grant_kotoage(); } }",
+            "module M { fn f() { seiyaku::grant_permission(); } }",
             "module M { fn f() { let kotoage = 1; } }",
             "module M { fn f() { let seiyaku = 1; } }",
         ] {
@@ -6884,7 +7090,7 @@ mod tests {
         for source in [
             "誓約 Demo {}",
             "seiyaku Demo { 始まり() {} }",
-            "seiyaku Demo { 言挙げ fn run() authorize(\"Run\") {} }",
+            "seiyaku Demo { permission Run;  言挙げ fn run() authorize(Run) {} }",
             "seiyaku Demo { 改善() {} }",
         ] {
             parse(source).expect("branded Japanese declaration syntax must parse");
@@ -6908,7 +7114,7 @@ mod tests {
             "module M { const VALUE = 1; }",
             "seiyaku C { state value: int; }",
             "module M { struct Pair { value: int; } }",
-            "seiyaku C { kotoage fn f() authorize(Admin) {} }",
+            "seiyaku C { kotoage fn f() authorize(\"Admin\") {} }",
         ] {
             parse(source).expect_err("legacy declaration shape must fail");
         }
@@ -7077,8 +7283,8 @@ mod tests {
     #[test]
     fn modules_reject_deployable_contract_items() {
         for body in [
-            "kotoage fn run() {}",
-            "view fn read() -> int { return 1; }",
+            "kotoage fn run() authorize(anyone) {}",
+            "view fn read() authorize(anyone) -> int { return 1; }",
             "hajimari() {}",
             "kaizen() {}",
             "state int value;",
@@ -7159,8 +7365,8 @@ mod tests {
     #[test]
     fn parse_function_modifiers_are_preserved() {
         let src = r#"
-        seiyaku Demo {
-            kotoage fn foo() authorize("Admin") {}
+        seiyaku Demo { permission Admin;
+            kotoage fn foo() authorize(Admin) {}
         }
         "#;
         let prog = parse(src).expect("parse modifiers");
@@ -7174,25 +7380,70 @@ mod tests {
             .expect("function present");
         assert_eq!(func.name, "foo");
         assert_eq!(func.modifiers.kind, FunctionKind::Kotoage);
-        assert_eq!(func.modifiers.permission.as_deref(), Some("Admin"));
+        assert_eq!(func.modifiers.authorization.as_deref(), Some("Admin"));
     }
     #[test]
     fn kotoage_authorization_is_a_parse_time_grammar_requirement() {
-        for source in [
-            "seiyaku Demo { kotoage fn run() {} }",
-            "誓約 Demo { 言挙げ fn run() {} }",
-            "seiyaku Demo { kotoage fn run() -> int { return 1; } }",
+        for (source, code) in [
+            (
+                "seiyaku Demo { kotoage fn run() {} }",
+                "E_KOTOAGE_AUTHORIZATION_MISSING",
+            ),
+            (
+                "誓約 Demo { 言挙げ fn run() -> int { 1 } }",
+                "E_KOTOAGE_AUTHORIZATION_MISSING",
+            ),
+            (
+                "seiyaku Demo { view fn read() -> int { 1 } }",
+                "E_VIEW_AUTHORIZATION_MISSING",
+            ),
         ] {
-            let error = parse(source).expect_err("kotoage without authorization must not parse");
-            assert!(error.contains("E_KOTOAGE_AUTHORIZATION_MISSING"), "{error}");
+            let error = parse(source).expect_err("public functions need explicit authorization");
+            assert!(error.contains(code), "{error}");
             assert!(
-                error.contains("requires `authorize(\"Permission\")` before its body"),
+                error.contains("requires an explicit `authorize(...)` policy"),
                 "{error}"
             );
-            assert!(!error.contains("K2004"), "{error}");
         }
-        parse("seiyaku Demo { view fn read() -> int { return 1; } }")
-            .expect("public views remain valid without source authorization");
+        parse("seiyaku Demo { view fn read() authorize(anyone) -> int { 1 } }")
+            .expect("explicit open view");
+    }
+    #[test]
+    fn authorization_declarations_and_order_are_explicit() {
+        let source = r#"誓約 Payments { permission Admin; import permission "CanSetParameters" as ChainAdmin;
+            言挙げ fn write() authorize(Admin) -> int { 1 }
+            view fn read() authorize(ChainAdmin) -> int { 2 }
+            kotoage fn open() authorize(anyone) {} 始まり() {} kaizen() {}
+        }"#;
+        let program = parse(source).expect("mixed spellings with explicit authorization");
+        assert_eq!(program.permissions.len(), 2);
+        assert_eq!(program.permissions[0].name, "Admin");
+        assert_eq!(
+            program.permissions[1].chain_permission.as_deref(),
+            Some("CanSetParameters")
+        );
+        for (source, code) in [
+            (
+                r#"seiyaku C { kotoage fn f() authorize("Admin") {} }"#,
+                "E_AUTHORIZATION_STRING",
+            ),
+            (
+                "seiyaku C { permission Admin; kotoage fn f() -> int authorize(Admin) { 1 } }",
+                "E_AUTHORIZE_POSITION",
+            ),
+            ("module M { permission Admin; }", "E_PERMISSION_DECLARATION"),
+            (
+                "seiyaku C { permission anyone; }",
+                "E_PERMISSION_DECLARATION",
+            ),
+            (
+                "seiyaku C { permission permission; }",
+                "E_PERMISSION_DECLARATION",
+            ),
+        ] {
+            let error = parse(source).expect_err("invalid permission grammar");
+            assert!(error.contains(code), "{error}");
+        }
     }
     include!("parser/tests/numeric_literal_tests.rs");
     #[test]
@@ -7615,13 +7866,14 @@ mod tests {
         assert!(err.contains("state cannot be passed as a parameter"));
     }
     #[test]
-    fn parse_rejects_removed_free_map_helpers() {
-        let err = parse_module("fn f(StateMap<int, int> m) { let _x = get_or(m, 1, 7); }")
-            .expect_err("free get_or should be rejected");
-        assert!(
-            err.contains("map.get(key)") && err.contains(".unwrap_or(default)"),
-            "unexpected error: {err}"
-        );
+    fn bare_helpers_are_deferred_to_name_resolution() {
+        for source in [
+            "fn f(StateMap<int, int> m) { let _x = get_or(m, 1, 7); }",
+            "fn f(Json ev) { let _x = get_int(ev, Name::parse(\"n\")); }",
+            "fn f(Option<int> value) { let _x = is_some(value); }",
+        ] {
+            parse_module(source).expect("bare names may refer to declared private helpers");
+        }
     }
     #[test]
     fn state_map_get_method_preserves_call_form_for_resolution() {
@@ -7656,33 +7908,6 @@ mod tests {
         };
         assert_eq!(method, STATE_MAP_GET_INTRINSIC);
         assert_eq!(free, "get");
-    }
-    #[test]
-    fn parse_rejects_removed_free_json_helpers() {
-        let err = parse_module("fn f(Json ev) { let _x = get_int(ev, Name::parse(\"n\")); }")
-            .expect_err("free get_int should be rejected");
-        assert!(err.contains("json.get_int(key)"), "unexpected error: {err}");
-    }
-    #[test]
-    fn parse_rejects_free_sum_type_helpers() {
-        for expression in [
-            "is_some(value)",
-            "unwrap_or(value, 0)",
-            "option_some(1)",
-            "result_err(1)",
-            "state_map_get(map, 1)",
-        ] {
-            let error = parse_module(&format!(
-                "fn f(Option<int> value, StateMap<int, int> map) {{ let _x = {expression}; }}"
-            ))
-            .expect_err("flat sum/state helper must be rejected by the V1 parser");
-            assert!(
-                error.contains("method-only")
-                    || error.contains("not part of Kotodama V1")
-                    || error.contains("compiler-internal"),
-                "unexpected error for `{expression}`: {error}"
-            );
-        }
     }
     #[test]
     fn parse_rejects_removed_method_map_aliases() {
@@ -7741,8 +7966,8 @@ mod tests {
         let authority = sample_account_literal();
         let src = format!(
             r#"
-        seiyaku C {{
-            kotoage fn run() authorize("Run") {{}}
+        seiyaku C {{ permission Run;
+            kotoage fn run() authorize(Run) {{}}
             trigger wake -> run {{
                 on time pre_commit;
                 repeats 3;
@@ -7766,6 +7991,50 @@ mod tests {
         assert!(matches!(trigger.filter, TriggerFilter::Time(_)));
         assert_eq!(trigger.authority.as_deref(), Some(authority.as_str()));
         assert_eq!(trigger.metadata.len(), 3);
+    }
+    #[test]
+    fn malformed_trigger_drops_schedule_expressions_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let expression = std::iter::repeat_n("1", 4_000).collect::<Vec<_>>().join(" + ");
+                let source = format!(
+                    "seiyaku Clock {{ kotoage fn run() authorize(anyone) {{}} trigger tick -> run {{ on time schedule(start_ms: {expression}); invalid_field; }} }}"
+                );
+                assert!(parse(&source).is_err(), "malformed trigger is rejected without recursive cleanup");
+            })
+            .expect("spawn bounded-stack trigger parser")
+            .join()
+            .expect("trigger schedule cleanup is iterative");
+    }
+    #[test]
+    fn trigger_schedule_requires_canonical_labels() {
+        for arguments in [
+            "0",
+            "0, 1_000",
+            "start_ms: 0, 1_000",
+            "period_ms: 1_000",
+            "start_ms: 0, start_ms: 1_000",
+        ] {
+            let source = format!(
+                "seiyaku Clock {{ kotoage fn run() authorize(anyone) {{}} trigger wake -> run {{ on time schedule({arguments}); }} }}"
+            );
+            let error = parse(&source).expect_err("labels and declaration order are mandatory");
+            assert!(
+                error.contains("E_TRIGGER_SCHEDULE_ARGUMENT"),
+                "{arguments}: {error}"
+            );
+        }
+        for arguments in [
+            "start_ms: 0",
+            "start_ms: 0,",
+            "start_ms: 0, period_ms: 1_000,",
+        ] {
+            let source = format!(
+                "seiyaku Clock {{ kotoage fn run() authorize(anyone) {{}} trigger wake -> run {{ on time schedule({arguments}); }} }}"
+            );
+            parse(&source).unwrap_or_else(|error| panic!("{arguments}: {error}"));
+        }
     }
     #[test]
     fn trigger_declarations_require_arrow_target_syntax() {
@@ -7802,8 +8071,8 @@ mod tests {
         ] {
             let src = format!(
                 r#"
-            seiyaku C {{
-                kotoage fn run() authorize("Run") {{}}
+            seiyaku C {{ permission Run;
+                kotoage fn run() authorize(Run) {{}}
                 trigger wake -> run {{
                     on time pre_commit;
                     repeats 1;
@@ -7828,8 +8097,8 @@ mod tests {
         ] {
             let src = format!(
                 r#"
-            seiyaku C {{
-                kotoage fn run() authorize("Run") {{}}
+            seiyaku C {{ permission Run;
+                kotoage fn run() authorize(Run) {{}}
                 trigger wake -> run {{
                     on time pre_commit;
                     repeats {repeats};
@@ -7844,8 +8113,8 @@ mod tests {
     #[test]
     fn parse_trigger_decl_with_data_filter() {
         let src = r#"
-        seiyaku C {
-            kotoage fn run() authorize("Run") {}
+        seiyaku C { permission Run;
+            kotoage fn run() authorize(Run) {}
             trigger wake -> run {
                 on data any;
             }
@@ -7874,8 +8143,8 @@ mod tests {
         let asset_definition = sample_asset_definition_literal();
         let src = format!(
             r#"
-        seiyaku C {{
-            kotoage fn run() authorize("Run") {{}}
+        seiyaku C {{ permission Run;
+            kotoage fn run() authorize(Run) {{}}
             trigger wake -> run {{
                 on data asset added {{
                     asset_definition "{asset_definition}";
@@ -7909,8 +8178,8 @@ mod tests {
     #[test]
     fn parse_trigger_decl_rejects_nondeterministic_pipeline_filter() {
         let src = r#"
-        seiyaku C {
-            kotoage fn run() authorize("Run") {}
+        seiyaku C { permission Run;
+            kotoage fn run() authorize(Run) {}
             trigger wake -> run {
                 on pipeline merge;
             }
@@ -7926,5 +8195,26 @@ mod tests {
             source::{FrontendBudget, SourceFile, SourceId},
         };
         include!("parser/tests/diagnostics.rs");
+    }
+    #[test]
+    fn native_events_share_product_fields_but_require_emit_record_statements() {
+        let source = "誓約 Events { event Transfer { int first; int second; } 言挙げ fn run() authorize(anyone) { emit Transfer { second: 2, first: 1 }; } }";
+        let program = parse(source).unwrap();
+        assert!(matches!(program.items[0], Item::Event(_)));
+        let Item::Function(function) = &program.items[1] else {
+            panic!("event entrypoint")
+        };
+        assert!(matches!(
+            function.body.statements[0].kind(),
+            Statement::Emit(_)
+        ));
+        assert_eq!(program.clone(), program);
+        for invalid in [
+            "module Library { event Note { int value; } }",
+            "seiyaku Events { event Note {} fn bad() { emit 1; } }",
+            "seiyaku Events { event Note { int value; } fn bad() { emit Note { value: 1, value: 2 }; } }",
+        ] {
+            assert!(parse(invalid).is_err(), "{invalid}");
+        }
     }
 }

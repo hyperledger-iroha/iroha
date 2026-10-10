@@ -5,13 +5,16 @@ blocks from four validators. The manifest pins their bytes, block hashes,
 complete World root and execution tip. Strict replay must reproduce every
 stored certificate and the pinned State.
 
-The current genesis uses the compiled SCCP profiles and confidential-policy digest,
-and omits the retired `kagemusha_mint_finality` parameter. This history was
-regenerated through `capture_pinned_first_release_history` with the current strict
-genesis model and four real validators. Its digest is recorded in
-`specs/first_release_history_cutover.json`. Earlier signed frames with a different
-policy digest or the retired field are rejected; no compatibility decoder is kept.
-This local fixture cutover does not reset or change a live network.
+The genesis uses the compiled SCCP profiles and confidential-policy digest,
+and omits the retired `kagemusha_mint_finality` parameter. Its certified World schema
+includes the canonical `world.asset_definition_direct_homes` table. Adding that
+table changes the schema commitment even when it has no rows and requires a fresh
+genesis cutover. This history was generated through
+`capture_pinned_first_release_history` with the current strict genesis model and
+four real validators. Its digest is recorded in
+`specs/first_release_history_cutover.json`. Strict replay rejects certificates made
+under the previous World schema; no compatibility decoder or root translation is
+kept. This local fixture cutover does not reset or change a live network.
 
 The producer, replay check and regeneration procedure are defined in
 [`specs/first_release_history_cutover.md`](../../../specs/first_release_history_cutover.md).

@@ -1,5 +1,11 @@
-#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Multi-lane routing and storage provisioning regression.
+// Canonical multi-lane storage and routing fixtures, owned by the Core library tests.
+use crate::{
+    kura::Kura,
+    query::store::LiveQueryStore,
+    queue::{ConfigLaneRouter, LaneRouter},
+    state::{State, World},
+    tx::AcceptedTransaction,
+};
 use eyre::Result;
 use iroha_config::{
     base::WithOrigin,
@@ -11,13 +17,6 @@ use iroha_config::{
         },
         defaults,
     },
-};
-use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
-    queue::{ConfigLaneRouter, LaneRouter},
-    state::{State, World},
-    tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
@@ -69,7 +68,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "governance".to_owned(),
                 description: Some("Governance & parliament traffic".to_owned()),
-                visibility: LaneVisibility::Restricted,
+                visibility: LaneVisibility::Public,
                 lane_type: Some("governance".to_owned()),
                 governance: None,
                 settlement: None,
@@ -87,7 +86,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "zk".to_owned(),
                 description: Some("Zero-knowledge attachments".to_owned()),
-                visibility: LaneVisibility::Restricted,
+                visibility: LaneVisibility::Public,
                 lane_type: Some("attachments".to_owned()),
                 governance: None,
                 settlement: None,
@@ -144,7 +143,7 @@ fn autoscale_elastic_lane(id: LaneId, created_height: u64) -> LaneConfigMetadata
         AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
         created_height.to_string(),
     );
-    LaneConfigMetadata {
+    let mut lane = LaneConfigMetadata {
         id,
         shard_id: None,
         dataspace_id: DataSpaceId::UNIVERSAL,
@@ -161,7 +160,9 @@ fn autoscale_elastic_lane(id: LaneId, created_height: u64) -> LaneConfigMetadata
         scheduler: None,
         settlement_buffer: None,
         metadata,
-    }
+    };
+    crate::state::attach_synthetic_autoscale_committee_for_test(&mut lane);
+    lane
 }
 fn install_state_nexus(
     lane_catalog: LaneCatalog,
@@ -185,21 +186,22 @@ fn install_state_nexus(
         nexus.autoscale.max_lane_id_exclusive =
             NonZeroU32::new(max_lane_id_exclusive).expect("autoscale max lanes must be nonzero");
     }
-    *state.nexus.write() = nexus;
+    state.install_synthetic_routing_snapshot_for_testing(nexus);
     Ok(state)
 }
 fn new_state(kura: Arc<Kura>) -> State {
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
+    // Keep the exact fallible constructor used by the former dependent-crate fixture;
+    // Core's convenience constructor additionally installs synthetic active markers.
+    State::try_new(
+        crate::state::AllocationBudget::new(defaults::pipeline::IVM_EXECUTION_MAX_BYTES),
         World::default(),
         kura,
         query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::default(), kura, query);
-    state
+        #[cfg(feature = "telemetry")]
+        crate::telemetry::StateTelemetry::default(),
+    )
+    .expect("test fixture durable State startup journals must validate")
 }
 fn seed_committed_height(state: &mut State, height: u64) {
     for idx in 0..height {
@@ -567,7 +569,9 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
     ));
     let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
     seed_committed_height(&mut state, 7);
-    state.nexus.write().autoscale.enabled = false;
+    let mut nexus = state.nexus_snapshot();
+    nexus.autoscale.enabled = false;
+    state.install_synthetic_routing_snapshot_for_testing(nexus);
     let (authority, keypair) = gen_account_in("nexus");
     let network_id = *state.network_id_ref();
     let mut lanes_seen = std::collections::BTreeSet::new();

@@ -2,6 +2,7 @@
 // seiyaku/誓約, kotoage/言挙げ and hajimari/始まり are the same keywords in either
 // spelling, and both spellings may be mixed in one file.
 seiyaku Scaffold {
+    permission Increment;
     error enum ScaffoldError {
         ZeroStep = 1,
     }
@@ -14,14 +15,14 @@ seiyaku Scaffold {
     }
 
     // A kotoage changes durable state and always states who may invoke it.
-    // `musubi call` grants this scoped entrypoint permission to the deploying account.
-    kotoage fn increment(int step) authorize("CanInvokeContractEntrypoint") {
+    // The instance owner grants Increment before the caller invokes this entrypoint.
+    kotoage fn increment(int step) authorize(Increment) {
         require(step > 0, ScaffoldError::ZeroStep);
         count = count + step;
     }
 
     // Views are read-only and public.
-    view fn current() -> int {
+    view fn current() authorize(anyone) -> int {
         return count;
     }
 }

@@ -1853,6 +1853,14 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         owner: UseOwner::Roots(&["fee_evidence_record_root"]),
     },
     ConstructionUse {
+        path: "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1/load_finality.rs",
+        uses: &[("MerkleTree", 1)],
+        owner: UseOwner::Other(
+            Use::Test,
+            "Shape-only native Load finality roundtrip fixture; its single event tree supplies a test proof and grants no State or finality authority",
+        ),
+    },
+    ConstructionUse {
         path: "crates/iroha_data_model/src/kaigi.rs",
         uses: &[("MerkleTree", 2)],
         owner: UseOwner::Accumulator("kaigi_roster_root"),
@@ -1861,6 +1869,14 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         path: "crates/iroha_data_model/src/lib.rs",
         uses: &[("MerkleTree", 1)],
         owner: UseOwner::Other(Use::Name, "Prelude re-export of the Merkle tree type"),
+    },
+    ConstructionUse {
+        path: "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1/load_finality.rs",
+        uses: &[("MerkleTree", 1)],
+        owner: UseOwner::Other(
+            Use::Test,
+            "Shape-only counted event path fixture in the native Load finality canonical encoding tests; it creates no verified certificate or State-content commitment",
+        ),
     },
     ConstructionUse {
         path: "crates/iroha_data_model/src/nexus/privacy.rs",
@@ -2151,56 +2167,77 @@ impl SourceScan {
     /// Panic with every unlisted or stale item: the completeness check of the inventory.
     fn require_complete(&self) {
         assert!(
-            self.unlisted_domains.is_empty(),
-            "domain literals that the inventory does not classify. List each exactly: under \
-             `domains` of a ROOTS entry (with owner task and disposition) when it belongs to a \
-             commitment over State content, under an application accumulator, or under \
-             OTHER_DOMAINS (state_table_inventory_domains.rs) with its reviewed use:\n{}",
-            self.unlisted_domains
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-        assert!(
-            self.unlisted_uses.is_empty(),
-            "uses of a Merkle, multiset or accumulator construction that the inventory does \
-             not list with this count. Review each and update CONSTRUCTION_USES:\n{}",
-            self.unlisted_uses
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-        assert!(
-            self.stale_domains.is_empty(),
-            "listed domain literals that no scanned source holds: {:?}",
-            self.stale_domains
-        );
-        assert!(
-            self.stale_uses.is_empty(),
-            "listed construction uses that the sources do not have: {:?}",
-            self.stale_uses
-        );
-        assert!(
-            self.unlisted_functions.is_empty(),
-            "functions that take a State or World reader and return a hash-bearing value, and \
-             that the inventory does not list with this count. Review what each digests and \
-             list it in STATE_HASH_FUNCTIONS (state_table_inventory_functions.rs): under the \
-             ROOTS entry it computes or serves, under an application accumulator, or with its \
-             reviewed use:\n{}",
-            self.unlisted_functions
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-        assert!(
-            self.stale_functions.is_empty(),
-            "listed State-reading hash functions that the sources do not have: {:?}",
-            self.stale_functions
+            self.unlisted_domains.is_empty()
+                && self.unlisted_uses.is_empty()
+                && self.stale_domains.is_empty()
+                && self.stale_uses.is_empty()
+                && self.unlisted_functions.is_empty()
+                && self.stale_functions.is_empty(),
+            "State inventory source discrepancies (review every category):\n\
+             Unclassified domains: {:?}\n\
+             Unlisted or changed construction uses: {:?}\n\
+             Stale domains: {:?}\n\
+             Stale construction uses: {:?}\n\
+             Unlisted or changed State-reading hash functions: {:?}\n\
+             Stale State-reading hash functions: {:?}\n\
+             Classify exact domains under ROOTS, an application accumulator or OTHER_DOMAINS; \
+             review construction uses in CONSTRUCTION_USES and State-reading hash functions \
+             in STATE_HASH_FUNCTIONS. Remove entries only after confirming their source retired.",
+            self.unlisted_domains,
+            self.unlisted_uses,
+            self.stale_domains,
+            self.stale_uses,
+            self.unlisted_functions,
+            self.stale_functions,
         );
     }
+}
+
+#[test]
+fn source_scan_reports_all_discrepancies_and_refuses_each_category() {
+    let mut combined = SourceScan::default();
+    for category in 0..6 {
+        let mut isolated = SourceScan::default();
+        for scan in [&mut combined, &mut isolated] {
+            match category {
+                0 => {
+                    scan.unlisted_domains.insert("unlisted-domain".into());
+                }
+                1 => {
+                    scan.unlisted_uses.insert("unlisted-construction".into());
+                }
+                2 => {
+                    scan.stale_domains.insert("stale-domain");
+                }
+                3 => {
+                    scan.stale_uses.insert("stale-construction".into());
+                }
+                4 => {
+                    scan.unlisted_functions.insert("unlisted-function".into());
+                }
+                5 => {
+                    scan.stale_functions.insert("stale-function".into());
+                }
+                _ => unreachable!(),
+            }
+        }
+        assert!(std::panic::catch_unwind(|| isolated.require_complete()).is_err());
+    }
+    let error = std::panic::catch_unwind(|| combined.require_complete()).unwrap_err();
+    let message = error
+        .downcast_ref::<String>()
+        .expect("formatted inventory diagnostic");
+    for item in [
+        "unlisted-domain",
+        "unlisted-construction",
+        "stale-domain",
+        "stale-construction",
+        "unlisted-function",
+        "stale-function",
+    ] {
+        assert!(message.contains(item), "missing {item}: {message}");
+    }
+    SourceScan::default().require_complete();
 }
 
 /// Classify the domain literals and construction uses of `sources` (path and text).

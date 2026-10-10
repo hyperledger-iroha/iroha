@@ -1,4 +1,4 @@
-seiyaku LargeFrameTrap {
+seiyaku LargeFrameTrap { permission WriteState;
     state int trace;
     hajimari() {
         trace = 0;
@@ -8,7 +8,7 @@ seiyaku LargeFrameTrap {
         trace = trace + 1;
     }
 
-    kotoage fn main() -> (
+    kotoage fn main() authorize(WriteState) -> (
         int,
         int,
         int,
@@ -60,7 +60,7 @@ seiyaku LargeFrameTrap {
         int,
         int,
         int
-    ) authorize("WriteState") {
+    ) {
         let seed = trace;
         let a1 = seed + 1;
         let a2 = seed + 2;

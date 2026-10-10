@@ -672,7 +672,12 @@ pub(crate) fn read_finalized_execution_carrier(
     // untrusted until the actual native certificates authenticate all these same frames.
     let target = kura
         .native_frame_read(height_u64, expected_hash)
-        .map_err(canonical_transaction_history_error)?
+        .map_err(|error| {
+            crate::execution_attempt::kura_read_attempt_error(
+                error,
+                canonical_transaction_history_error,
+            )
+        })?
         .ok_or_else(|| canonical_transaction_history_error("native carrier is unavailable"))?;
     let target_wire_bytes = target.wire_len();
     if target_wire_bytes > max_bytes {
@@ -734,6 +739,86 @@ pub(crate) fn read_finalized_execution_carrier(
     Ok(FinalizedExecutionCarrier {
         block,
         wire_bytes: verified.source_wire_bytes,
+        work_items: work,
+    })
+}
+
+/// Read one event-only carrier from the actual immutable State source.
+///
+/// Exact target metadata precedes every body read. The descriptor remains owned through
+/// the same bounded ancestry/QC verifier and output join; this does not alter the
+/// original full-prefix or deterministic history reader.
+/// # Errors
+/// Preserves original source/decode/refusal causes, unavailable or substituted source,
+/// invalid finality and unchanged finite source/output limits.
+pub(crate) fn read_finalized_event_carrier(
+    source: crate::state::CanonicalHistorySource<'_>,
+    kura: &crate::kura::Kura,
+    chain_id: &iroha_model_base::chain::ChainId,
+    network: iroha_data_model::NetworkId,
+    height: NonZeroUsize,
+    expected_hash: HashOf<BlockHeader>,
+    max_work: u64,
+    max_bytes: u64,
+) -> Result<
+    FinalizedExecutionCarrier,
+    crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>,
+> {
+    if max_work == 0 || max_bytes == 0 {
+        return Err(QueryExecutionFail::GasBudgetExceeded.into());
+    }
+    let target = kura
+        .native_frame_read(
+            u64::try_from(height.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
+            expected_hash,
+        )
+        .map_err(|error| {
+            crate::execution_attempt::kura_read_attempt_error(
+                error,
+                canonical_transaction_history_error,
+            )
+        })?
+        .ok_or_else(|| canonical_transaction_history_error("native carrier is unavailable"))?;
+    let target_wire_bytes = target.wire_len();
+    if target_wire_bytes > max_bytes {
+        return Err(QueryExecutionFail::GasBudgetExceeded.into());
+    }
+    let (verified, source_blocks, wire_bytes) =
+        crate::sumeragi::certified_chain::read_event_execution(
+            source, chain_id, network, height, &target, max_work, max_bytes,
+        )?;
+    let block = verified.block().clone();
+    if block.hash() != expected_hash {
+        return Err(canonical_transaction_history_error(
+            "requested execution is outside its original State hash cut",
+        )
+        .into());
+    }
+    let work = u64::try_from(
+        block
+            .network_entrypoint_count()
+            .max(block.execution_outputs().len())
+            .max(1),
+    )
+    .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?
+    .checked_add(source_blocks)
+    .filter(|work| *work <= max_work)
+    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+    if block
+        .execution_context()
+        .is_some_and(|context| !context.has_current_version())
+    {
+        return Err(canonical_transaction_history_error(
+            "retired merge carrier is not a Network source",
+        )
+        .into());
+    }
+    block
+        .validate_output_merkle_cache()
+        .map_err(canonical_transaction_history_error)?;
+    Ok(FinalizedExecutionCarrier {
+        block,
+        wire_bytes,
         work_items: work,
     })
 }

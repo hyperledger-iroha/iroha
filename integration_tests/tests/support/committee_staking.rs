@@ -546,35 +546,64 @@ pub(super) async fn submit_signed(
     instruction: InstructionBox,
     applied: bool,
 ) -> Result<SignedTransaction> {
-    let account = client.account_client();
-    let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
-        vec![instruction],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    ))?;
-    let quote = account
-        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
-        .await?;
-    ensure!(
-        payload
-            .fee_payment
-            .has_same_payer_and_gas_bound(&quote.intent),
-        "fee quote changed the selected monetary-plan signer"
-    );
-    payload.fee_payment = quote.intent;
-    let transaction = account.sign_transaction(payload)?;
-    let result = account.submit_transaction_and_wait(&transaction).await;
-    if applied {
-        result.wrap_err("signed monetary transaction failed")?;
-    } else {
+    let deadline = Instant::now() + WAIT;
+    committee_status::submit_async_until(client.client().clone(), deadline, |bounded| async move {
+        let account = bounded.account_client()?;
+        let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
+            vec![instruction],
+            FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        ))?;
+        let quote = account
+            .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
         ensure!(
-            result.is_err(),
-            "rejected monetary operation unexpectedly applied"
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed the selected monetary-plan signer"
         );
-    }
-    // A submission error alone is not rejection evidence; the caller must find the
-    // exact signed input and its rejected Network output in authenticated finality.
-    Ok(transaction)
+        payload.fee_payment = quote.intent;
+        let transaction = account.sign_transaction(payload)?;
+        let result = account.submit_transaction_and_wait(&transaction).await;
+        if applied {
+            result.wrap_err("signed monetary transaction failed")?;
+            bounded
+                .wait_until_transaction_applied_local(
+                    transaction.hash(),
+                    iroha::client::TransactionWaitOptions {
+                        timeout: deadline.saturating_duration_since(Instant::now()),
+                        poll_interval: POLL,
+                    },
+                )
+                .await?;
+        } else {
+            let error = result
+                .err()
+                .ok_or_else(|| eyre!("rejected monetary operation unexpectedly applied"))?;
+            let Some(failure) = error.chain().find_map(|cause| {
+                cause.downcast_ref::<iroha::client::TransactionFinalityFailure>()
+            }) else {
+                return Err(error)
+                    .wrap_err("signed monetary rejection lacks exact global State completion");
+            };
+            if failure.response().status.kind != "Rejected" {
+                return Err(error)
+                    .wrap_err("signed monetary operation did not reach State Rejected");
+            }
+            committee_status::observe_rejected_until(
+                bounded,
+                transaction.hash(),
+                failure,
+                deadline,
+            )
+            .await?;
+        }
+        // Local status is only a readback fence. Exact rejected Network output, fee and
+        // monetary effects still come from the independently authenticated native chain.
+        Ok(transaction)
+    })
+    .await
 }
 
 fn require_only_accounted_input(

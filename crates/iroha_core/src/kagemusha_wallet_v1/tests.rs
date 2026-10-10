@@ -657,5 +657,5 @@ fn uncommitted_world_row_cannot_supply_receipt_recovery() {
     ));
 }
 
-mod wsv_tests;
 mod home_scope_tests;
+mod wsv_tests;

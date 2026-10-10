@@ -9,7 +9,7 @@ use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
-    sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier, genesis_epoch},
+    sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier, authenticated_genesis},
 };
 use norito::json::{Map, Value};
 use std::str::FromStr as _;
@@ -731,7 +731,9 @@ impl Selection {
         }
         // This actual native reader verifies the full original block/transaction signatures,
         // commitments, PoPs and every signed initial-epoch/schedule parameter.
-        let epoch = genesis_epoch(&genesis).map_err(|_| invalid())?;
+        let epoch = authenticated_genesis(&genesis)
+            .map(|genesis| genesis.into_parts().0)
+            .map_err(|_| invalid())?;
         // Each independently selected application format owns its exact mode label.
         // The BPNG v7 renderer signs short labels; CBSI signs protocol tags.
         let mode = match (trust.authority, epoch.mode.is_permissioned()) {

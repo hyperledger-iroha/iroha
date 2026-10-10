@@ -546,6 +546,10 @@ pub struct FeeErrorDetails {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii_shared::ErrorDetails")]
 pub struct ErrorDetails {
+    /// Canonical deterministic IVM fault, excluding application errors and local refusals.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub ivm_fault: Option<iroha_data_model::executor::fault::IvmFaultV1>,
     /// Public surface layer that produced the error (for example `cli`, `torii`, or `mcp`).
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -646,7 +650,8 @@ impl ErrorDetails {
     /// Return whether this details payload carries any structured fields.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.layer.is_none()
+        self.ivm_fault.is_none()
+            && self.layer.is_none()
             && self.reject_code.is_none()
             && self.queue.is_none()
             && self.retry_after_seconds.is_none()
@@ -2180,6 +2185,36 @@ mod tests {
         assert_eq!(fee.available.as_deref(), Some("4"));
         assert_eq!(fee.observation_height, Some(42));
     }
+    #[test]
+    fn error_envelope_preserves_the_bounded_runtime_fault() {
+        use iroha_data_model::executor::fault::{
+            IvmFaultKindV1, IvmFaultPositionV1, IvmFaultSiteV1, IvmFaultV1, IvmInvocationSelectorV1,
+        };
+        let fault = IvmFaultV1 {
+            kind: IvmFaultKindV1::ReentrantCall,
+            site: IvmFaultSiteV1 {
+                code_hash: iroha_crypto::Hash::new(b"contract"),
+                selector: IvmInvocationSelectorV1::Entrypoint(2),
+                position: IvmFaultPositionV1::Execute { pc_offset: 12 },
+            },
+        };
+        let envelope =
+            ErrorEnvelope::new("ivm_fault", fault.to_string()).with_details(ErrorDetails {
+                ivm_fault: Some(fault),
+                ..Default::default()
+            });
+        let native = norito::to_bytes(&envelope).unwrap();
+        let json = norito::json::to_vec(&envelope).unwrap();
+        for decoded in [
+            norito::decode_from_bytes::<ErrorEnvelope>(&native).unwrap(),
+            norito::json::from_slice::<ErrorEnvelope>(&json).unwrap(),
+        ] {
+            let details = decoded.details.unwrap();
+            assert!(!details.is_empty());
+            assert_eq!(details.ivm_fault, Some(fault));
+        }
+    }
+
     #[test]
     fn error_envelope_roundtrip_preserves_exact_asset_absence() {
         let account = AccountId::new(checked_test_keypair(0x38).public_key().clone());

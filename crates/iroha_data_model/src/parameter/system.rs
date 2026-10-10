@@ -17,6 +17,9 @@ use norito::json::{self, JsonDeserialize, JsonSerialize};
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
+
+mod npos_json;
+pub use npos_json::{AdmittedSumeragiNposParameters, SumeragiNposJsonAdmissionError};
 /// Maximum governed IVM heap size in bytes for ABI V1.
 ///
 /// The ABI V1 address map reserves the half-open range `0x0010_0000..0x0020_0000` for the heap.
@@ -952,8 +955,7 @@ impl core::fmt::Display for Parameter {
     }
 }
 
-#[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
-#[norito(deny_unknown_fields)]
+#[derive(norito::derive::JsonSerialize)]
 struct SumeragiNposParametersJson {
     xor_asset_definition_id: crate::asset::AssetDefinitionId,
     epoch_seed: [u8; 32],
@@ -969,23 +971,6 @@ struct SumeragiNposParametersJson {
 
 impl From<SumeragiNposParameters> for SumeragiNposParametersJson {
     fn from(value: SumeragiNposParameters) -> Self {
-        Self {
-            xor_asset_definition_id: value.xor_asset_definition_id,
-            epoch_seed: value.epoch_seed,
-            max_validators: value.max_validators,
-            min_self_bond: value.min_self_bond,
-            min_nomination_bond: value.min_nomination_bond,
-            finality_margin_blocks: value.finality_margin_blocks,
-            evidence_horizon_blocks: value.evidence_horizon_blocks,
-            activation_lag_blocks: value.activation_lag_blocks,
-            slashing_delay_blocks: value.slashing_delay_blocks,
-            epoch_length_blocks: value.epoch_length_blocks,
-        }
-    }
-}
-
-impl From<SumeragiNposParametersJson> for SumeragiNposParameters {
-    fn from(value: SumeragiNposParametersJson) -> Self {
         Self {
             xor_asset_definition_id: value.xor_asset_definition_id,
             epoch_seed: value.epoch_seed,
@@ -1068,13 +1053,8 @@ impl JsonSerialize for SumeragiNposParameters {
 
 impl JsonDeserialize for SumeragiNposParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
-        let value = Self::from(SumeragiNposParametersJson::json_deserialize(parser)?);
-        value
-            .validate()
-            .map_err(|message| json::Error::InvalidField {
-                field: "SumeragiNposParameters".to_owned(),
-                message: message.to_owned(),
-            })?;
+        let value = npos_json::decode_ordinary(parser)?;
+        npos_json::validate_outer(&value)?;
         Ok(value)
     }
 }

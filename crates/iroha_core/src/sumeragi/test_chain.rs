@@ -479,17 +479,21 @@ impl CertifiedTestChain {
         .map_err(|error| invalid(format!("original prepared manifest: {error:#}")))?;
         let genesis = validated_genesis.block().clone();
         let chain_id = manifest.chain_id().clone();
-        let epoch = super::epoch::genesis_epoch(&genesis).map_err(|error| {
-            match crate::execution_attempt::genesis_read_attempt_error(error, |error| {
-                invalid(error.to_string())
-            }) {
-                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
-                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => StartFailure {
-                    error: TestChainError::Deferred(reason),
-                    state: Arc::clone(&state),
-                },
-            }
-        })?;
+        let epoch = super::epoch::authenticated_genesis(&genesis)
+            .map(|genesis| genesis.into_parts().0)
+            .map_err(|error| {
+                match crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+                    invalid(error.to_string())
+                }) {
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        StartFailure {
+                            error: TestChainError::Deferred(reason),
+                            state: Arc::clone(&state),
+                        }
+                    }
+                }
+            })?;
         if state.chain_id_ref() != &chain_id
             || state.view().network_id() != &epoch.network_id
             || !std::ptr::eq(state.kura(), kura.as_ref())

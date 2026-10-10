@@ -59,11 +59,7 @@ impl<'kura> NativeCarrierAcquisition<'kura> {
 
     pub(super) fn original_source(&mut self) -> Result<(), ExecutionAttemptError<ChainReadError>> {
         let height = self.index.get() as u64;
-        let current = self
-            .kura
-            .native_frame_read(height, self.expected)
-            .map_err(|error| native_read_error(height, error))?
-            .ok_or_else(|| self.unavailable())?;
+        let current = self.current_source()?;
         if let Some(original) = &self.source {
             if !original.same_original_slot(&current) {
                 return Err(self.unavailable().into());
@@ -82,6 +78,28 @@ impl<'kura> NativeCarrierAcquisition<'kura> {
                 reason: "native finality carrier exceeds its bounded extent".into(),
             }
             .into());
+        }
+        Ok(())
+    }
+
+    fn current_source(
+        &self,
+    ) -> Result<crate::kura::NativeFrameRead<'kura>, ExecutionAttemptError<ChainReadError>> {
+        let height = self.index.get() as u64;
+        self.kura
+            .native_frame_read(height, self.expected)
+            .map_err(|error| native_read_error(height, error))?
+            .ok_or_else(|| self.unavailable().into())
+    }
+
+    // A delivered body still owns its exact original raw acquisition. This checks only
+    // current slot/object membership; it neither calls complete again nor rereads bytes.
+    pub(super) fn recheck_original_source(
+        &self,
+    ) -> Result<(), ExecutionAttemptError<ChainReadError>> {
+        let original = self.source.as_ref().ok_or_else(|| self.unavailable())?;
+        if !original.same_original_slot(&self.current_source()?) {
+            return Err(self.unavailable().into());
         }
         Ok(())
     }

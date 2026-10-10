@@ -77,7 +77,9 @@ fn standalone_epoch_parse_keeps_exact_two_context_bound_and_fresh_custody() {
     let mut peers = UnavailablePeers::start(&fixture.prepared);
     assert!(fixture.owner.authority.checkpoint_import_scope().is_none());
     let context =
-        iroha_data_model::sumeragi_finality::genesis_epoch(fixture.native.chain.genesis()).unwrap();
+        iroha_data_model::sumeragi_finality::authenticated_genesis(fixture.native.chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
     let mut cold = EpochValidationScope::new();
     let original_charge = epoch_charge(&mut cold, &context);
     assert!(original_charge > 0);

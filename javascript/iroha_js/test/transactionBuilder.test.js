@@ -2183,6 +2183,7 @@ test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () 
         feePayment: AUTHORITY_FEE_PAYMENT,
         artifactId: { dataspaceId: "18446744073709551615", codeHash: Buffer.alloc(32, 0xab) },
         manifest: {
+          permissions: [], events: [], enum_types: [],
           codeHash: Buffer.alloc(32, 0xab),
           compilerFingerprint: "rustc",
         },

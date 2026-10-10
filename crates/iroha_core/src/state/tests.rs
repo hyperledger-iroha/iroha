@@ -1425,8 +1425,8 @@ state_test! { sync trigger_batch_contract_calls_advance_nft_sequence
     };
     use iroha_test_samples::ALICE_KEYPAIR;
     let_row! { (program, manifest) = kotodama_lang::compiler::Compiler::new() .compile_source_with_manifest( r#"
-seiyaku SequentialNfts {
-  kotoage fn run() authorize("CanInvokeContractEntrypoint") {
+seiyaku SequentialNfts { permission CanInvokeContractEntrypoint;
+  kotoage fn run() authorize(CanInvokeContractEntrypoint) {
 ledger::nft::create_for_all_users();
   }
 }
@@ -1993,6 +1993,7 @@ state_test! { sync contract_lifecycle_survives_state_snapshot_and_preserves_cano
         Some(ContractLifecycleOwnerV1::Account(pending_owner.clone()));
     binding.lifecycle.parliament_delegation = ContractParliamentDelegationV1::Lifecycle;
     binding.lifecycle.active_code_hash = Some(active_code_hash);
+    binding.lifecycle.retained_code_hash = Some(active_code_hash);
     binding.lifecycle.revision = 7;
     binding.lifecycle.emergency_hold = Some(ContractEmergencyHoldV1 {
         incident_digest: [0xA1; 32],
@@ -8743,8 +8744,8 @@ state_test! { sync lanes_requiring_state_reset_tracks_shard_mapping_changes
 state_test! { sync lanes_requiring_state_reset_tracks_storage_profile_and_visibility_changes
     let storage_lane_id = LaneId::new(1);
     let visibility_lane_id = LaneId::new(2);
-    let_row! { previous_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: storage_lane_id, alias: "storage-policy".to_string(), storage: LaneStorageProfile::FullReplica, ..LaneConfig::default() }, LaneConfig { id: visibility_lane_id, alias: "visibility-policy".to_string(), visibility: LaneVisibility::Public, ..LaneConfig::default() }, ], ) .expect("previous catalog") };
-    let_row! { current_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: storage_lane_id, alias: "storage-policy".to_string(), storage: LaneStorageProfile::SplitReplica, ..LaneConfig::default() }, LaneConfig { id: visibility_lane_id, alias: "visibility-policy".to_string(), visibility: LaneVisibility::Restricted, ..LaneConfig::default() }, ], ) .expect("current catalog") };
+    let_row! { previous_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: storage_lane_id, alias: "storage-policy".to_string(), storage: LaneStorageProfile::FullReplica, ..LaneConfig::default() }, LaneConfig { id: visibility_lane_id, dataspace_id: DataSpaceId::new(2), alias: "visibility-policy".to_string(), visibility: LaneVisibility::Public, ..LaneConfig::default() }, ], ) .expect("previous catalog") };
+    let_row! { current_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: storage_lane_id, alias: "storage-policy".to_string(), storage: LaneStorageProfile::SplitReplica, ..LaneConfig::default() }, LaneConfig { id: visibility_lane_id, dataspace_id: DataSpaceId::new(2), alias: "visibility-policy".to_string(), visibility: LaneVisibility::Restricted, ..LaneConfig::default() }, ], ) .expect("current catalog") };
     let previous = RuntimeLaneConfig::from_catalog(&previous_catalog);
     let current = RuntimeLaneConfig::from_catalog(&current_catalog);
     assert_eq!(
@@ -14400,16 +14401,17 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
     let prospective_owner = LaneId::new(1);
     let current_owner = LaneId::new(2);
     let shared_dataspace = DataSpaceId::new(9);
-    let initial_nexus = iroha_config::parameters::actual::Nexus {
+    let prospective_dataspace = DataSpaceId::new(10);
+    let mut initial_nexus = iroha_config::parameters::actual::Nexus {
         lane_catalog: LaneCatalog::new(
             nonzero!(3_u32),
             vec![
                 LaneConfig::default(),
                 LaneConfig {
                     id: prospective_owner,
-                    alias: "restricted-prospective-owner".to_owned(),
-                    dataspace_id: shared_dataspace,
-                    visibility: LaneVisibility::Restricted,
+                    alias: "public-prospective-owner".to_owned(),
+                    dataspace_id: prospective_dataspace,
+                    visibility: LaneVisibility::Public,
                     ..LaneConfig::default()
                 },
                 LaneConfig {
@@ -14421,7 +14423,7 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
                 },
             ],
         )
-        .expect("mixed-visibility shared-dataspace catalog"),
+        .expect("public lanes in separate registered dataspaces"),
         dataspace_catalog: DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -14430,10 +14432,17 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
                 description: None,
                 fault_tolerance: 1,
             },
+            DataSpaceMetadata {
+                id: prospective_dataspace,
+                alias: "prospective-staking".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
         ])
-        .expect("shared-dataspace lifecycle dataspace catalog"),
+        .expect("both prospective and current staking dataspaces are registered"),
         ..iroha_config::parameters::actual::Nexus::default()
     };
+    initial_nexus.lane_config = RuntimeLaneConfig::from_catalog(&initial_nexus.lane_catalog);
     let mut state = State::new_with_nexus_for_testing(
         World::default(), initial_nexus, LiveQueryStore::start_test(),
     );
@@ -14450,6 +14459,14 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
     assert_eq!(
         nexus_staking_authority_lane_at_height(current_owner, &nexus_before, 0),
         Some(current_owner)
+    );
+    assert_eq!(
+        nexus_active_lane_dataspace_at_height(prospective_owner, &nexus_before, 0),
+        Some(prospective_dataspace)
+    );
+    assert_eq!(
+        nexus_active_lane_dataspace_at_height(current_owner, &nexus_before, 0),
+        Some(shared_dataspace)
     );
     let validator_before = state
         .world
@@ -14480,6 +14497,9 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
         nexus_after.staking.restricted_validator_mode,
         nexus_before.staking.restricted_validator_mode
     );
+    assert_eq!(nexus_after.lane_catalog, nexus_before.lane_catalog);
+    assert_eq!(nexus_after.dataspace_catalog, nexus_before.dataspace_catalog);
+    assert!(lane_config_entries_match(&nexus_after.lane_config, &nexus_before.lane_config));
     let world = state.world.view();
     assert_eq!(
         world
@@ -14506,13 +14526,46 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
         None,
         "the restored intermediate configuration has no staking owner"
     );
-    let mut reenabled = all_admin;
-    reenabled.staking.restricted_validator_mode =
+    let mut reenabled = all_admin.clone();
+    reenabled.staking.public_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
+    // Visibility is uniform within each dataspace. The valid lower-lane takeover
+    // moves only the prospective owner into the current public dataspace.
+    reenabled.lane_catalog = LaneCatalog::new(
+        all_admin.lane_catalog.lane_count(),
+        all_admin.lane_catalog.lanes().iter().map(|lane| {
+            if lane.id == prospective_owner {
+                LaneConfig { dataspace_id: shared_dataspace, ..lane.clone() }
+            } else {
+                lane.clone()
+            }
+        }).collect(),
+    ).expect("reenabled shared dataspace remains uniformly public");
+    reenabled.lane_config = RuntimeLaneConfig::from_catalog(&reenabled.lane_catalog);
+    assert_eq!(
+        nexus_staking_authority_lane_at_height(current_owner, &reenabled, 0),
+        Some(prospective_owner),
+        "the lower public sibling would replace the restored no-owner configuration"
+    );
+    assert_eq!(
+        nexus_active_lane_dataspace_at_height(prospective_owner, &reenabled, 0),
+        Some(shared_dataspace)
+    );
+    let mut reset_lanes = lanes_requiring_state_reset(&all_admin.lane_config, &reenabled.lane_config);
+    reset_lanes.extend(lanes_requiring_consensus_reset(&all_admin.lane_catalog, &reenabled.lane_catalog));
+    assert_eq!(reset_lanes, BTreeSet::from([prospective_owner]));
     let mut restored = restored;
+    assert!(matches!(
+        restored.set_nexus(reenabled.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    // The ordinary setter retains the immutable configured baseline. Exercise the
+    // same inner publication guard before any geometry change, independently of
+    // that earlier refusal; only the unoccupied prospective lane needs a reset.
+    let configured_catalog = restored.nexus_snapshot().configured_lane_catalog;
     let err = restored
-        .set_nexus(reenabled)
-        .expect_err("re-enabling a different owner must reject legacy live state");
+        .set_nexus_with_configured_lane_catalog(reenabled, configured_catalog, None)
+        .expect_err("re-enabling a different owner must reject restored live state");
     assert!(matches!(
         err,
         LaneLifecycleError::UnsafeRetirement { lane, reason }
@@ -14521,9 +14574,26 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
     ));
     let restored_nexus = restored.nexus_snapshot();
     assert_eq!(
-        restored_nexus.staking.restricted_validator_mode,
+        restored_nexus.staking.public_validator_mode,
         iroha_config::parameters::actual::LaneValidatorMode::AdminManaged,
         "rejected owner re-enable must preserve the no-owner configuration"
+    );
+    assert_eq!(
+        restored_nexus.staking.restricted_validator_mode,
+        all_admin.staking.restricted_validator_mode
+    );
+    assert_eq!(restored_nexus.lane_catalog, all_admin.lane_catalog);
+    assert_eq!(restored_nexus.dataspace_catalog, all_admin.dataspace_catalog);
+    assert!(lane_config_entries_match(&restored_nexus.lane_config, &all_admin.lane_config));
+    assert_eq!(
+        nexus_staking_authority_lane_at_height(current_owner, &restored_nexus, 0),
+        None
+    );
+    let world = restored.world.view();
+    assert_eq!(
+        world.public_lane_validators().get(&(current_owner, validator_before.validator.clone())),
+        Some(&validator_before),
+        "rejected re-enable must preserve the exact restored live owner row"
     );
 }
 
@@ -14579,34 +14649,65 @@ state_test! { sync set_nexus_rejects_live_single_lane_stake_owner_reassignment
         &keypair,
         1_000_000,
     );
+    let nexus_before = state.nexus_snapshot();
+    let validator_before = state
+        .world
+        .public_lane_validators
+        .view()
+        .get(&(LaneId::SINGLE, validator.clone()))
+        .expect("live single-lane validator")
+        .clone();
+    let replacement_dataspace = DataSpaceId::new(1);
     let mut prospective = iroha_config::parameters::actual::Nexus {
         lane_catalog: LaneCatalog::new(
             nonzero!(2_u32),
             vec![
-                LaneConfig::default(),
+                LaneConfig {
+                    dataspace_id: replacement_dataspace,
+                    ..LaneConfig::default()
+                },
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "prospective-staking-owner".to_owned(),
                     dataspace_id: DataSpaceId::UNIVERSAL,
-                    visibility: LaneVisibility::Restricted,
+                    visibility: LaneVisibility::Public,
                     ..LaneConfig::default()
                 },
             ],
         )
-        .expect("prospective shared-dataspace catalog"),
+        .expect("prospective public dataspace catalogs"),
+        dataspace_catalog: DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: replacement_dataspace,
+                alias: "retained-single-lane".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("prospective registered dataspaces"),
         ..Default::default()
     };
-    prospective.staking.public_validator_mode =
-        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
-    prospective.staking.restricted_validator_mode =
-        iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
+    prospective.lane_config = RuntimeLaneConfig::from_catalog(&prospective.lane_catalog);
+    prospective.routing_policy.default_lane = LaneId::new(1);
+    assert_eq!(
+        nexus_staking_authority_lane_at_height(LaneId::SINGLE, &nexus_before, 0),
+        Some(LaneId::SINGLE)
+    );
+    assert_eq!(
+        nexus_staking_authority_lane_at_height(LaneId::new(1), &prospective, 0),
+        Some(LaneId::new(1)),
+        "the prospective universal dataspace has a different staking owner"
+    );
 
     assert!(matches!(
         state.set_nexus(prospective.clone()),
         Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
     ));
     let configured_catalog = state.nexus_snapshot().configured_lane_catalog;
-    // Validate the semantic restriction independently of the earlier immutable-baseline guard.
+    // Universal lanes are public and share their validator mode, so moving its
+    // lowest owner requires changing SINGLE's physical dataspace. Validate the
+    // live-custody reset guard independently of the immutable-baseline guard.
     let err = state
         .set_nexus_with_configured_lane_catalog(prospective, configured_catalog, None)
         .expect_err("assigning a different owner must not strand live SINGLE stake");
@@ -14614,9 +14715,18 @@ state_test! { sync set_nexus_rejects_live_single_lane_stake_owner_reassignment
         err,
         LaneLifecycleError::UnsafeRetirement { lane, reason }
             if lane == LaneId::SINGLE
-                && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON
+                && reason == LIVE_LANE_STAKING_CUSTODY_REASON
     ));
+    assert_eq!(state.nexus_snapshot().lane_catalog, nexus_before.lane_catalog);
+    assert_eq!(state.nexus_snapshot().dataspace_catalog, nexus_before.dataspace_catalog);
     let world = state.world.view();
+    assert_eq!(
+        world
+            .public_lane_validators()
+            .get(&(LaneId::SINGLE, validator.clone())),
+        Some(&validator_before),
+        "rejected physical owner reassignment must preserve the exact live row"
+    );
     assert!(
         world
             .public_lane_validators()
@@ -26871,6 +26981,9 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
     assert!(step.0.is_empty());
     transaction.world.contract_manifests.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, generic_code_hash),
         iroha_data_model::smart_contract::manifest::ContractManifest {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             seiyaku_name: None,
             code_hash: Some(generic_code_hash),
             abi_hash: Some(Hash::prehashed(ivm::syscalls::compute_abi_hash(
@@ -26952,8 +27065,8 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
     const REQUIRED_PERMISSION: &str = "raw_trigger_run";
     let trigger_id: TriggerId = "protected_raw_callback".parse().expect("trigger id");
     let_row! { src = r#"
-        seiyaku ProtectedRawTrigger {
-          kotoage fn main(int marker, Json event) authorize("raw_trigger_run") {
+        seiyaku ProtectedRawTrigger { permission raw_trigger_run;
+          kotoage fn main(int marker, Json event) authorize(raw_trigger_run) {
             let _marker = marker;
             ledger::account::set_metadata(
               account: context::seiyaku_subject(),
@@ -27338,8 +27451,8 @@ state_test! { sync identityless_raw_trigger_rejects_before_event_argument_decode
     let state = blank_state();
     let trigger_id: TriggerId = "identityless_raw_callback".parse().expect("trigger id");
     let_row! { program = kotodama_lang::compiler::Compiler::new() .compile_source( r#"
-seiyaku IdentitylessRawCallback {
-  kotoage fn main(Json ev) authorize("identityless_raw_callback_run") {
+seiyaku IdentitylessRawCallback { permission identityless_raw_callback_run;
+  kotoage fn main(Json ev) authorize(identityless_raw_callback_run) {
 let _ev = ev;
   }
 }
@@ -27404,43 +27517,42 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
     });
     use crate::smartcontracts::code::{activate_instance, register_code_bytes, register_manifest};
     use iroha_data_model::{
-        events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+        events::execute_trigger::ExecuteTriggerEvent,
         smart_contract::ContractAddress,
-        transaction::{
-            Executable,
-            executable::{ContractArgumentRecord, ContractInvocation},
-        },
-        trigger::{
-            Trigger,
-            action::{Action, Repeats},
-        },
     };
     use iroha_test_samples::ALICE_KEYPAIR;
     use kotodama_lang::compiler::Compiler as KotodamaCompiler;
     let state = authenticate_trigger_fixture(blank_state());
     const REQUIRED_PERMISSION: &str = "contract_trigger_run";
     let_row! { src = r#"
-        seiyaku ProtectedContractCallTrigger {
-          kotoage fn run(int marker) authorize("contract_trigger_run") {
-            let _marker = marker;
+        seiyaku ProtectedContractCallTrigger { permission contract_trigger_run;
+          error enum TriggerProbeError { UnexpectedMarker = 1 }
+          kotoage fn run(int marker) authorize(contract_trigger_run) {
+            require(marker == 9, TriggerProbeError::UnexpectedMarker);
             ledger::account::set_metadata(
               account: context::seiyaku_subject(),
               key: Name::parse("contract_trigger_marker"),
-              value: Json::parse("{\"authorized\":true}")
+              value: context::trigger_event()
             );
           }
 
           trigger protected_contract_callback -> run {
             on execute trigger protected_contract_callback;
           }
+          kotoage fn capture() authorize(anyone) {
+            ledger::account::set_metadata(
+              account: context::seiyaku_subject(),
+              key: Name::parse("zero_parameter_event"),
+              value: context::trigger_event()
+            );
+          }
+          trigger capture_contract_callback -> capture {
+            on execute trigger capture_contract_callback;
+          }
         }
     "# };
     let_row! { (code, mut manifest) = KotodamaCompiler::new() .compile_source_with_manifest(src) .expect("compile contract-call trigger probe") };
-    let parsed = ivm::ProgramMetadata::parse(&code).expect("parse trigger contract artifact");
-    let_row! { argument_schema = parsed .contract_interface .as_ref() .and_then(|interface| { interface .entrypoints .iter() .find(|entrypoint| entrypoint.name == "run") }) .and_then(|entrypoint| entrypoint.argument_schema.as_ref()) .expect("parameterized trigger callback schema") };
-    let_row! { callback_arguments = ivm_abi::arguments::encode_argument_record_from_json( argument_schema, &Json::from(norito::json!({ "marker": "9" })), ) .expect("encode trigger callback arguments") };
-    let_row! { callback_arguments = ContractArgumentRecord::try_new(callback_arguments) .expect("bounded trigger callback arguments") };
-    let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
+    let trigger_id: TriggerId = "protected_contract_callback".parse().unwrap();
     let_row! { contract_address = ContractAddress::derive(state.network_id_ref(), &ALICE_ID, 0, DataSpaceId::UNIVERSAL) .expect("derive contract address") };
     let contract_subject = contract_address.subject_id();
     let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("completed original State read").expect("original trigger parent").as_ref().clone()) };
@@ -27471,10 +27583,13 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
         );
         activate_instance(&ALICE_ID, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate contract instance");
-        let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( Executable::ContractCall(ContractInvocation { contract_address: contract_address.clone(), expected_code_hash: code_hash, entrypoint: "run".to_owned(), arguments: Some(callback_arguments), }), Repeats::Indefinitely, ALICE_ID.clone(), ExecuteTriggerEventFilter::new() .for_trigger(trigger_id.clone()) .under_authority(ALICE_ID.clone()), ) .expect("trigger action fixture satisfies validation invariants"), ) };
-        Register::trigger(trigger)
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        let callback = stx.world.triggers.by_call_triggers().get(&trigger_id)
+            .expect("activation registers the signed manifest callback");
+        let ExecutableRef::ContractCall(invocation) = callback.executable() else {
+            panic!("activated callback is a typed contract invocation");
+        };
+        assert!(invocation.arguments.is_none());
+        assert_eq!(callback.authority(), &contract_subject);
         stx.apply_callback_for_testing().expect("capture successful component callbacks");
         state_block.commit_world_overlay_for_testing().unwrap();
     }
@@ -27483,7 +27598,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
         let mut state_block = state.block(block2.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
         let_row! { metadata_marker: Name = "contract_trigger_marker" .parse() .expect("valid ContractCall trigger metadata marker") };
-        let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: ALICE_ID.clone(), args: Json::from_raw_json(r#"{"condition_code":7}"#.to_owned()) .expect("valid trigger arguments JSON"), } };
+        let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: contract_subject.clone(), args: Json::from_raw_json(r#"{"marker":"9"}"#.to_owned()) .expect("valid trigger arguments JSON"), } };
         let denied_events_before = stx.world.external_event_buf.len();
         ivm::reset_argument_record_decode_count();
         let_row! { denied = stx .execute_called_trigger(&trigger_id, &event) .expect_err("trigger authority without the entrypoint permission must be denied") };
@@ -27514,10 +27629,18 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
             denied_events_before,
             "denied ContractCall trigger must emit no completion event"
         );
-        let callback_permission = Permission::new(REQUIRED_PERMISSION.into(), Json::new(()));
-        Grant::account_permission(callback_permission.clone(), ALICE_ID.clone())
+        let callback_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanUseContractPermission {
+            contract: contract_address.clone(),
+            permission: REQUIRED_PERMISSION.parse().unwrap(),
+        }.into();
+        Grant::account_permission(callback_permission.clone(), contract_subject.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant trigger entrypoint permission");
+        let mut malformed_event = event.clone();
+        malformed_event.args = Json::from(norito::json!({"marker": 9}));
+        assert!(stx.execute_called_trigger(&trigger_id, &malformed_event).is_err(),
+            "typed callback arguments reject noncanonical numeric JSON");
+        ivm::reset_argument_record_decode_count();
         stx.execute_called_trigger(&trigger_id, &event)
             .expect("granted contract-call trigger should consume its canonical arguments");
         assert_eq!(
@@ -27526,6 +27649,17 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
             "authorized ContractCall trigger arguments must be prepared exactly once"
         );
         let_row! { authorized_marker = stx .world .account(&contract_subject) .expect("ContractCall trigger contract subject account") .metadata() .get(&metadata_marker) .cloned() .expect("authorized trigger writes its metadata marker") };
+        assert_eq!(authorized_marker, event.args, "context retains the exact firing payload");
+        let capture_id: TriggerId = "capture_contract_callback".parse().unwrap();
+        let capture_event = ExecuteTriggerEvent {
+            trigger_id: capture_id.clone(), authority: contract_subject.clone(),
+            args: Json::from(norito::json!({"note": "no callback parameters"})),
+        };
+        stx.execute_called_trigger(&capture_id, &capture_event)
+            .expect("zero-parameter callback preserves its event context");
+        assert_eq!(stx.world.account(&contract_subject).unwrap().metadata()
+            .get(&"zero_parameter_event".parse::<Name>().unwrap()), Some(&capture_event.args));
+
         {
             let binding = stx
                 .world
@@ -27590,7 +27724,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
                 .checked_add(1)
                 .expect("test lifecycle revision advances");
         }
-        Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
+        Revoke::account_permission(callback_permission.clone(), contract_subject.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("revoke trigger entrypoint permission");
         let revoked_events_before = stx.world.external_event_buf.len();
@@ -27623,7 +27757,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
             revoked_events_before,
             "revoked ContractCall trigger must emit no completion event"
         );
-        Grant::account_permission(callback_permission, ALICE_ID.clone())
+        Grant::account_permission(callback_permission, contract_subject.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("restore trigger entrypoint permission");
         stx.world
@@ -27691,7 +27825,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
     let trigger_id: TriggerId = "alias_json_transfer".parse().unwrap();
     let_row! { banking_label = AccountAlias::new( "banking".parse().expect("banking label"), Some(AccountAliasDomain::new(domain_id.name().clone())), DataSpaceId::UNIVERSAL, ) };
     let_row! { src = r#"
-        seiyaku AliasTransfer {
+        seiyaku AliasTransfer { permission alias_transfer_run;
           error enum AliasTransferError {
             UnexpectedKind = 1,
             UnexpectedOperation = 2,
@@ -27708,7 +27842,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
             AccountId account_id,
             DomainId account_domain,
             quantity amount,
-          ) authorize("alias_transfer_run") {
+          ) authorize(alias_transfer_run) {
             require(kind == Name::parse("asset_change"), AliasTransferError::UnexpectedKind);
             require(op == Name::parse("added"), AliasTransferError::UnexpectedOperation);
             require(amount > 0, AliasTransferError::NonPositiveAmount);

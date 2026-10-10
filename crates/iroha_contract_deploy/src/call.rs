@@ -1,9 +1,16 @@
 //! Exact, locally authorized contract calls using the native deployment journal store.
 use super::*;
 use iroha::client::ContractCallDraftIntent;
-use iroha::data_model::{smart_contract::manifest::EntryPointKind, transaction::Executable};
+use iroha::data_model::{
+    smart_contract::manifest::{
+        ContractPermissionScopeV1, EntryPointKind, EntrypointAuthorizationV1,
+    },
+    transaction::Executable,
+};
 use iroha_crypto::Signature;
-use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_executor_data_model::permission::smart_contract::{
+    CanInvokeContractEntrypoint, CanUseContractPermission,
+};
 use norito::json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 const ARGUMENT_BYTES: usize = 64 * 1024;
@@ -627,11 +634,13 @@ impl ContractCallService {
         }
         let verified = ivm_artifact_admission::verify_contract_artifact(artifact)?;
         if let Some(permission) = required_permission(&verified, intent)?
-            && permission.name() == "CanInvokeContractEntrypoint"
             && !authorization::read_effective_permissions(&self.client, &self.config.account)?
                 .contains(&permission)
         {
-            return Ok(CallSimulation::RequiresSelfGrant);
+            if permission.name() == "CanInvokeContractEntrypoint" {
+                return Ok(CallSimulation::RequiresSelfGrant);
+            }
+            return Err(missing_call_permission(&permission, &self.config.account));
         }
         let response = self.client.client().post_contract_call_simulate_json(
             &self.config.account,
@@ -677,10 +686,7 @@ impl ContractCallService {
                 authorization::read_effective_permissions(&self.client, &self.config.account)?;
             if !held.contains(&permission) {
                 if permission.name() != "CanInvokeContractEntrypoint" {
-                    return Err(eyre!(
-                        "contract requires the exact permission `{}`; no broader permission is granted by call",
-                        permission.name()
-                    ));
+                    return Err(missing_call_permission(&permission, &self.config.account));
                 }
                 let metadata = Metadata::default();
                 request.authorization.require_signing()?;
@@ -1016,6 +1022,15 @@ fn transaction_record(name: &str, signed: &SignedTransaction) -> TransactionReco
         norito_hex: hex::encode(signed.encode_versioned()),
     }
 }
+fn missing_call_permission(permission: &Permission, account: &AccountId) -> eyre::Report {
+    match norito::json::to_string(permission) {
+        Ok(token) => eyre!(
+            "caller lacks the exact required permission {token}; have an authorized owner or token holder submit this JSON with `iroha account permission grant --id {account}` before calling"
+        ),
+        Err(error) => eyre!("failed to render the required permission: {error}"),
+    }
+}
+
 fn required_permission(
     artifact: &ivm_artifact_admission::VerifiedContractArtifact,
     intent: &ContractCallDraftIntent,
@@ -1031,22 +1046,37 @@ fn required_permission(
         .iter()
         .find(|entry| entry.name == intent.invocation.entrypoint)
         .ok_or_else(|| eyre!("entrypoint is absent from the verified local artifact"))?;
-    let permission = match descriptor.kind {
-        EntryPointKind::View => return Err(eyre!("read-only entrypoints use `musubi view`")),
-        EntryPointKind::Kotoage => descriptor.permission.as_deref(),
-        EntryPointKind::Hajimari | EntryPointKind::Kaizen => Some("CanInvokeContractEntrypoint"),
-    };
-    Ok(permission.map(|permission| {
-        if permission == "CanInvokeContractEntrypoint" {
+    if descriptor.kind == EntryPointKind::View {
+        return Err(eyre!("read-only entrypoints use `musubi view`"));
+    }
+    Ok(match &descriptor.authorization {
+        EntrypointAuthorizationV1::Anyone => None,
+        EntrypointAuthorizationV1::RuntimeLifecycle => Some(
             CanInvokeContractEntrypoint {
                 contract: intent.invocation.contract_address.clone(),
                 entrypoint: intent.invocation.entrypoint.clone(),
             }
-            .into()
-        } else {
-            Permission::new(permission.to_owned(), Json::new(()))
+            .into(),
+        ),
+        EntrypointAuthorizationV1::Permission(name) => {
+            let declaration = artifact
+                .contract_interface
+                .permissions
+                .iter()
+                .find(|declaration| declaration.name == *name)
+                .ok_or_else(|| eyre!("entrypoint refers to undeclared permission `{name}`"))?;
+            Some(match &declaration.scope {
+                ContractPermissionScopeV1::Instance => CanUseContractPermission {
+                    contract: intent.invocation.contract_address.clone(),
+                    permission: name.clone(),
+                }
+                .into(),
+                ContractPermissionScopeV1::Chain { permission_name } => {
+                    Permission::new(permission_name.to_string(), Json::new(()))
+                }
+            })
         }
-    }))
+    })
 }
 fn validate_plan(prepared: &PreparedContractCall, config: &Config) -> Result<()> {
     let plan = &prepared.plan;

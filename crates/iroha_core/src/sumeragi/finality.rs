@@ -2,6 +2,8 @@
 
 mod compact_source;
 mod cursor;
+mod interval;
+mod proof_destination;
 pub use compact_source::{
     NativeCommitCertificateDataV1, NativeCommitCertificateReadErrorV1, read_commit_certificate,
 };
@@ -9,6 +11,11 @@ pub use cursor::{
     NativeCurrentFinalityV1, NativeFinalityAtHeightV1, NativeFinalityCursorErrorV1,
     NativeFinalityCursorV1,
 };
+pub use interval::{
+    NativeFinalityProofInterval, NativeFinalityProofIntervalError,
+    NativeFinalityProofIntervalLimits, NativeFinalityProofSource, build_proof_interval,
+};
+pub use proof_destination::ProofDestinationError;
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
@@ -427,16 +434,8 @@ pub fn build_attestation(
     let (genesis_finality_proof, finality_proof) = {
         let proof_chain =
             CertifiedChain::new(view).map_err(|error| Error::GenesisFinalityProof(error.into()))?;
-        let native_genesis = proof_chain
-            .certified(1)
-            .map_err(|error| Error::GenesisFinalityProof(error.into()))?;
-        let genesis_decision = GenesisDecision {
-            block_hash: native_genesis.block_hash(),
-            core_hash: native_genesis.core_hash(),
-            result: native_genesis.result(),
-        };
-        let genesis =
-            proof_from_certified(native_genesis, 1).map_err(Error::GenesisFinalityProof)?;
+        let (genesis_decision, genesis) =
+            attestation_genesis_proof(&proof_chain).map_err(Error::GenesisFinalityProof)?;
         let tip = if height == 1 {
             genesis.clone()
         } else if height > 2 && !norito::core::decode_limits_active() {
@@ -471,6 +470,22 @@ struct GenesisDecision {
     result: iroha_sumeragi::types::Hash32,
 }
 
+// Only the portable proof and its Copy source coordinates leave this genesis phase.
+// The consumed native receipt's large stack slots retire before the tip walk begins.
+#[inline(never)]
+fn attestation_genesis_proof<V: StateReadOnly>(
+    chain: &CertifiedChain<'_, V>,
+) -> Result<(GenesisDecision, SumeragiFinalityProof), ProofError> {
+    let native_genesis = chain.certified(1)?;
+    let decision = GenesisDecision {
+        block_hash: native_genesis.block_hash(),
+        core_hash: native_genesis.core_hash(),
+        result: native_genesis.result(),
+    };
+    let proof = proof_from_certified(native_genesis, 1)?;
+    Ok((decision, proof))
+}
+
 // Current statements retain every native ancestry read, but need not independently
 // reverify each intervening local QC after that execution was published into State.
 // Generic proof, checkpoint and sequential export keep their full-prefix contracts.
@@ -485,11 +500,12 @@ fn current_execution_proof<V: StateReadOnly>(
         .ok_or(ChainReadError::NotInView { height })?;
     // The existing single reverse walk retains bounded receipts and uses the original
     // State allocation pool. No codec scope, allowance or imported trust is installed.
-    let (tip, anchor) = chain
-        .certified_with_ancestor_from_execution(
+    chain
+        .certified_with_ancestor_from_execution_into(
             target,
             |_, _| Ok(()),
             |_| Ok(std::num::NonZeroUsize::new(2)),
+            |tip, anchor| finish_current_execution_proof(tip, anchor, height, genesis),
         )
         .map_err(|error| match error {
             crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
@@ -498,7 +514,19 @@ fn current_execution_proof<V: StateReadOnly>(
             crate::execution_attempt::ExecutionAttemptError::Deferred(local) => {
                 ProofError::Deferred(local)
             }
-        })?;
+        })?
+}
+
+// Receipt unpacking, genesis joining and portable projection run only after the original
+// reverse walk has returned. No target/ancestor Result tuple occupies its decoder ancestry.
+// The parameter order preserves anchor-before-tip retirement on an early refusal.
+#[inline(never)]
+fn finish_current_execution_proof(
+    tip: CertifiedBlock,
+    anchor: Option<CertifiedBlock>,
+    height: u64,
+    genesis: GenesisDecision,
+) -> Result<SumeragiFinalityProof, ProofError> {
     let anchor = anchor.ok_or(ProofError::UnverifiedCommittee(2))?;
     if anchor.height() != 2
         || anchor.block().header().prev_block_hash() != Some(genesis.block_hash)

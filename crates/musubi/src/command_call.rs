@@ -418,6 +418,7 @@ fn requested_entrypoint(args: &CallArgs) -> Result<&str, Diagnostic> {
 /// Build the called contract online; only the dependency lock policy is caller-selected.
 fn call_build_args(args: &CallArgs) -> BuildArgs {
     BuildArgs {
+        profile: "production".into(),
         selection: args.selection.clone(),
         mode: GraphModeArgs {
             locked: args.locked,

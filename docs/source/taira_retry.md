@@ -136,7 +136,7 @@ The preceding assembly's `native-local-args.json` is a closed, ordered path
 list: `--public-inputs`, `--runtime-client-config`, four
 `--validator-client-config` paths, `--validator-operator-key`,
 `--onboarding-token`, optional `--inrou-stage-dir` for full scope, four
-`--validator-unit` paths, `--edge-unit`, and `--known-hosts`. The public bundle
+`--validator-unit` paths, `--native-edge-capability`, and `--known-hosts`. The public bundle
 remains `<prep>/public-inputs`. Retired epoch worker plans, administrator flags,
 and separate seed batches are rejected. Validator signer custody stays protected
 through retry and public-import cleanup.

@@ -8,7 +8,7 @@ use crate::{
     },
     parameter::system::ConsensusMode,
     sumeragi_finality::{
-        GenesisReadError, SignedGenesisPinsV1, WorldStateElementKindV1, WorldStateSnapshotEntryV1,
+        FinalityReadError, SignedGenesisPinsV1, WorldStateElementKindV1, WorldStateSnapshotEntryV1,
         WorldStateSnapshotV1, authenticate_signed_genesis_v1,
         test_fixtures::{
             NativeFinalityFixture, NexusAmxContextFixture, fixture_dataspace_id,
@@ -96,7 +96,7 @@ fn signed_genesis_authenticates_only_against_every_exact_pin() {
         assert!(
             matches!(
                 authenticate_signed_genesis_v1(wire, &changed),
-                Err(GenesisReadError::Invalid(_))
+                Err(FinalityReadError::Invalid(_))
             ),
             "{changed:?}"
         );
@@ -145,6 +145,193 @@ fn signed_genesis_authenticates_only_against_every_exact_pin() {
     let mut changed = pins;
     changed.signed_genesis_sha256 = Sha256::digest(&trailing).into();
     refused(changed, &trailing);
+}
+
+// These contexts fund their exact shared counter controls. The preexisting Model
+// decoder and portable authority graphs are not claimed to be fully physically funded.
+fn original_pinned_genesis_debits(
+    wire: &[u8],
+    pool: &iroha_allocation::AllocationBudget,
+) -> (
+    usize,
+    usize,
+    crate::sumeragi::epoch::ValidatorEpochContextV1,
+) {
+    let limits = norito::canonical_decode_limits(wire.len());
+    let context = norito::core::DecodeBudgetContext::try_new_owned(limits, pool).unwrap();
+    let (body, epoch) = context.with(|| {
+        let block = norito::core::with_decode_limits_scope(limits, || {
+            crate::block::decode_framed_signed_block(wire)
+        })
+        .unwrap();
+        let body = usize::try_from(context.consumed_allocated_bytes()).unwrap();
+        let epoch = crate::sumeragi_finality::authenticated_genesis(&block)
+            .unwrap()
+            .into_parts()
+            .0;
+        (body, epoch)
+    });
+    let complete = usize::try_from(context.consumed_allocated_bytes()).unwrap();
+    assert!(
+        complete > body && body > 0,
+        "original binary and signed JSON decoders must both run"
+    );
+    drop(context);
+    assert_eq!(pool.reserved_bytes(), 0);
+    (body, complete, epoch)
+}
+
+fn pinned_genesis_limits(wire: &[u8], allocation: usize) -> norito::DecodeLimits {
+    let limits = norito::canonical_decode_limits(wire.len());
+    norito::DecodeLimits::new(
+        limits.max_sequence_elements(),
+        limits.max_field_bytes(),
+        limits.max_total_elements(),
+        allocation,
+        limits.max_nesting_depth(),
+    )
+}
+
+#[test]
+fn pinned_signed_genesis_uses_one_original_decode_and_retains_metadata() {
+    let fixture = NativeFinalityFixture::start(CHAIN);
+    let (wire, pins) = pins(&fixture);
+    let expected_metadata =
+        crate::sumeragi_finality::signed_genesis_consensus_metadata(fixture.genesis()).unwrap();
+    let pool = iroha_allocation::AllocationBudget::new(
+        norito::core::DecodeBudgetContext::allocation_layout().size(),
+    );
+    let (_, complete, expected_epoch) = original_pinned_genesis_debits(&wire, &pool);
+    let context = norito::core::DecodeBudgetContext::try_new_owned(
+        pinned_genesis_limits(&wire, complete),
+        &pool,
+    )
+    .unwrap();
+    let result = context.with(|| authenticate_signed_genesis_v1(&wire, &pins));
+    assert!(
+        result.is_ok(),
+        "pinned genesis must retain its one original canonical decode: {:?}",
+        result.as_ref().err()
+    );
+    let original = result.unwrap();
+    assert_eq!(original.epoch(), &expected_epoch);
+    assert_eq!(original.metadata(), &expected_metadata);
+    assert_eq!(original.pins(), &pins);
+    assert_eq!(original.block().encode_wire().unwrap(), wire);
+    assert_eq!(original.validators().len(), pins.roster.len());
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        u64::try_from(complete).unwrap()
+    );
+    drop(original);
+    drop(context);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+fn original_error_in_chain<'a, T: std::error::Error + 'static>(
+    mut error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a T> {
+    loop {
+        if let Some(original) = error.downcast_ref::<T>() {
+            return Some(original);
+        }
+        error = error.source()?;
+    }
+}
+
+#[test]
+fn pinned_signed_genesis_preserves_original_binary_refusal() {
+    let fixture = NativeFinalityFixture::start(CHAIN);
+    let (wire, pins) = pins(&fixture);
+    let pool = iroha_allocation::AllocationBudget::new(
+        norito::core::DecodeBudgetContext::allocation_layout().size(),
+    );
+    let limits = pinned_genesis_limits(&wire, 0);
+    let reference = norito::core::DecodeBudgetContext::try_new_owned(limits, &pool).unwrap();
+    let cause = reference
+        .with(|| {
+            norito::core::with_decode_limits_scope(
+                norito::canonical_decode_limits(wire.len()),
+                || crate::block::decode_framed_signed_block(&wire),
+            )
+        })
+        .unwrap_err();
+    assert_eq!(
+        cause.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    let expected = cause.into_error().decode_resource_error().unwrap();
+    drop(reference);
+    assert_eq!(pool.reserved_bytes(), 0);
+    let context = norito::core::DecodeBudgetContext::try_new_owned(limits, &pool).unwrap();
+    let error = context
+        .with(|| authenticate_signed_genesis_v1(&wire, &pins))
+        .unwrap_err();
+    let original = original_error_in_chain::<norito::core::DecodeAttemptError>(&error);
+    assert!(
+        original.is_some_and(
+            |cause| cause.kind() == norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        ),
+        "pinned genesis must preserve its original binary refusal: {error:?}"
+    );
+    let actual = original_error_in_chain::<norito::core::Error>(&error)
+        .unwrap()
+        .decode_resource_error()
+        .unwrap();
+    assert_eq!(
+        actual, expected,
+        "original decoder refusal fields must survive pin authentication"
+    );
+    drop(context);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn pinned_signed_genesis_preserves_original_json_refusal_and_retry() {
+    let fixture = NativeFinalityFixture::start(CHAIN);
+    let (wire, pins) = pins(&fixture);
+    let pool = iroha_allocation::AllocationBudget::new(
+        norito::core::DecodeBudgetContext::allocation_layout().size(),
+    );
+    let (body, complete, _) = original_pinned_genesis_debits(&wire, &pool);
+    let context =
+        norito::core::DecodeBudgetContext::try_new_owned(pinned_genesis_limits(&wire, body), &pool)
+            .unwrap();
+    let error = context
+        .with(|| authenticate_signed_genesis_v1(&wire, &pins))
+        .unwrap_err();
+    assert!(
+        matches!(
+            original_error_in_chain::<norito::json::Error>(&error),
+            Some(norito::json::Error::DecodeResourceLimit)
+        ),
+        "pinned genesis must preserve its original signed JSON refusal: {error:?}"
+    );
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        u64::try_from(body).unwrap()
+    );
+    drop(context);
+    assert_eq!(pool.reserved_bytes(), 0);
+    // A separately admitted read of the same untouched original succeeds. This does
+    // not claim resumable partial Model graphs or reset a refused attempt's counters.
+    let retry = norito::core::DecodeBudgetContext::try_new_owned(
+        pinned_genesis_limits(&wire, complete),
+        &pool,
+    )
+    .unwrap();
+    let original = retry
+        .with(|| authenticate_signed_genesis_v1(&wire, &pins))
+        .unwrap();
+    assert_eq!(original.block().encode_wire().unwrap(), wire);
+    assert_eq!(original.pins(), &pins);
+    assert_eq!(
+        retry.consumed_allocated_bytes(),
+        u64::try_from(complete).unwrap()
+    );
+    drop(original);
+    drop(retry);
+    assert_eq!(pool.reserved_bytes(), 0);
 }
 
 #[test]

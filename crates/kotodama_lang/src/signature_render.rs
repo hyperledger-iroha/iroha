@@ -28,6 +28,8 @@ pub struct RenderParameter<'a> {
 pub struct SourceDeclaration<'a> {
     /// Declaration kind.
     pub kind: FunctionKind,
+    /// Authored Markdown from the attached `///` block.
+    pub documentation: Option<&'a str>,
     /// Keyword spelling written at the declaration site (`言挙げ`, `kotoage`, `view`,
     /// `始まり`, ...). `None` renders the romanized spelling for branded kinds.
     pub keyword: Option<&'a str>,
@@ -38,7 +40,7 @@ pub struct SourceDeclaration<'a> {
     /// Canonical return type; `()` is omitted from the rendered header.
     pub return_type: &'a str,
     /// Declared caller authorization.
-    pub permission: Option<&'a str>,
+    pub authorization: Option<&'a str>,
     /// Whether the function is a local `#[test]`.
     pub is_test: bool,
     /// Fixture bound by `#[test(fixture = ...)]`.
@@ -85,7 +87,7 @@ fn keyword_spelling(kind: FunctionKind, written: Option<&str>) -> Option<String>
 
 /// Render a declaration header exactly as V1 source spells it, without its body.
 ///
-/// `言挙げ fn increment(int delta) -> int authorize("CanIncrementCounter")`,
+/// `言挙げ fn increment(int delta) authorize(CanIncrementCounter) -> int`,
 /// `始まり()`, `view fn total() -> int`, `#[test] fn checks_total()`.
 #[must_use]
 pub fn source_declaration(declaration: &SourceDeclaration<'_>) -> String {
@@ -117,12 +119,12 @@ pub fn source_declaration(declaration: &SourceDeclaration<'_>) -> String {
     rendered.push('(');
     rendered.push_str(&parameters);
     rendered.push(')');
+    if let Some(authorization) = declaration.authorization {
+        rendered.push_str(&format!(" authorize({authorization})"));
+    }
     if declaration.return_type != "()" {
         rendered.push_str(" -> ");
         rendered.push_str(declaration.return_type);
-    }
-    if let Some(permission) = declaration.permission {
-        rendered.push_str(&format!(" authorize({permission:?})"));
     }
     rendered
 }
@@ -133,6 +135,9 @@ pub fn source_documentation(declaration: &SourceDeclaration<'_>) -> String {
     let keyword = keyword_spelling(declaration.kind, declaration.keyword);
     let branded = keyword.as_deref().and_then(glossary::by_spelling);
     let mut lines = Vec::new();
+    if let Some(authored) = declaration.documentation.filter(|text| !text.is_empty()) {
+        lines.push(authored.to_owned());
+    }
     if declaration.is_test {
         lines.push(
             "Local `#[test]` function run by `koto test`; it is never compiled into a deployable artifact."
@@ -160,12 +165,13 @@ pub fn source_documentation(declaration: &SourceDeclaration<'_>) -> String {
         _ => {}
     }
     match declaration.kind {
-        FunctionKind::Kotoage | FunctionKind::View => lines.push(match declaration.permission {
-            Some(permission) => format!("Authorization: callers need `{permission}`."),
+        FunctionKind::Kotoage | FunctionKind::View => lines.push(match declaration.authorization {
+            Some("anyone") => "Authorization: anyone may call this function.".to_owned(),
+            Some(authorization) => format!("Authorization: callers need the declared permission `{authorization}`."),
             None => "Authorization: public.".to_owned(),
         }),
         FunctionKind::Hajimari | FunctionKind::Kaizen => lines.push(
-            "Authorization: callers need the runtime `CanInvokeContractEntrypoint` permission for this hook of this seiyaku; lifecycle hooks never declare `authorize`."
+            "Authorization: callers need the runtime `CanInvokeContractEntrypoint` authorization for this hook of this seiyaku; lifecycle hooks never declare `authorize`."
                 .to_owned(),
         ),
         FunctionKind::Private => {}
@@ -265,15 +271,16 @@ mod tests {
         kind: FunctionKind,
         keyword: Option<&'a str>,
         parameters: &'a [RenderParameter<'a>],
-        permission: Option<&'a str>,
+        authorization: Option<&'a str>,
     ) -> SourceDeclaration<'a> {
         SourceDeclaration {
+            documentation: None,
             kind,
             keyword,
             name: "increment",
             parameters,
             return_type: "int",
-            permission,
+            authorization,
             is_test: false,
             fixture: None,
         }
@@ -293,7 +300,7 @@ mod tests {
                 &parameters,
                 Some("CanIncrementCounter")
             )),
-            "言挙げ fn increment(int delta) -> int authorize(\"CanIncrementCounter\")"
+            "言挙げ fn increment(int delta) authorize(CanIncrementCounter) -> int"
         );
         assert_eq!(
             source_declaration(&declaration(
@@ -302,7 +309,7 @@ mod tests {
                 &parameters,
                 Some("CanIncrementCounter")
             )),
-            "kotoage fn increment(int delta) -> int authorize(\"CanIncrementCounter\")"
+            "kotoage fn increment(int delta) authorize(CanIncrementCounter) -> int"
         );
         // A spelling of a different keyword is never echoed as this declaration's keyword.
         assert!(
@@ -350,7 +357,7 @@ mod tests {
             Some("CanBump"),
         ));
         assert!(kanji.starts_with("**言挙げ** (kotoage)"), "{kanji}");
-        assert!(kanji.contains("Authorization: callers need `CanBump`."));
+        assert!(kanji.contains("Authorization: callers need the declared permission `CanBump`."));
         let romaji = source_documentation(&declaration(
             FunctionKind::Kaizen,
             Some("kaizen"),

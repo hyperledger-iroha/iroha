@@ -308,8 +308,8 @@ impl<'a> RecursiveLowerer<'a> {
             Some(ResolvedValueTarget::State(*symbol))
         } else if let Some(symbol) = self.globals.consts.get(name) {
             Some(ResolvedValueTarget::Const(*symbol))
-        } else if let Some(code) = self.globals.error_codes.get(name) {
-            Some(ResolvedValueTarget::ErrorCode(*code))
+        } else if let Some(code) = self.globals.variant_codes.get(name) {
+            Some(ResolvedValueTarget::VariantCode(*code))
         } else if kotodama_surface::source_policy::V1_ROUNDING_PATHS.contains(&name)
             || kotodama_surface::builtins::Builtin::nominal_value(name)
                 .is_some_and(kotodama_surface::builtins::Builtin::is_nominal_path)
@@ -326,12 +326,12 @@ impl<'a> RecursiveLowerer<'a> {
                 explicit_import_call(namespace) && !variant.is_empty()
             })
         {
-            Some(ResolvedValueTarget::ImportedErrorVariant)
+            Some(ResolvedValueTarget::ImportedVariant)
         } else {
             self.globals
-                .external_error_codes
+                .external_variant_codes
                 .get(name)
-                .map(|code| ResolvedValueTarget::ErrorCode(*code))
+                .map(|code| ResolvedValueTarget::VariantCode(*code))
         };
         if target.is_none() {
             let diagnostic =
@@ -347,8 +347,8 @@ impl<'a> RecursiveLowerer<'a> {
     ) -> Option<ResolvedTypeTarget> {
         if builtin_type(name) {
             Some(ResolvedTypeTarget::Builtin)
-        } else if let Some(symbol) = self.globals.errors.get(name) {
-            Some(ResolvedTypeTarget::ErrorEnum(*symbol))
+        } else if let Some(symbol) = self.globals.enums.get(name) {
+            Some(ResolvedTypeTarget::Enum(*symbol))
         } else if self.globals.external_structs.contains(name) {
             Some(ResolvedTypeTarget::ExternalStruct)
         } else if self.globals.resolve_import_calls && explicit_import_call(name) {
@@ -611,7 +611,7 @@ impl<'a> RecursiveLowerer<'a> {
                 let current = std::mem::replace(value, Expr::IntLiteral(BigInt::zero()));
                 *value = self.wrap_expr(current, scope, visible);
             }
-            Statement::Expr(expression) => {
+            Statement::Expr(expression) | Statement::Emit(expression) => {
                 let current = std::mem::replace(expression, Expr::IntLiteral(BigInt::zero()));
                 *expression = self.wrap_expr(current, scope, visible);
             }
@@ -788,6 +788,13 @@ impl<'a> RecursiveLowerer<'a> {
                 for argument in args {
                     let current = std::mem::replace(argument, Expr::IntLiteral(BigInt::zero()));
                     *argument = self.wrap_expr(current, scope, visible);
+                }
+            }
+            Expr::ArgumentRecord { fields } => {
+                for field in fields {
+                    let current =
+                        std::mem::replace(&mut field.value, Expr::IntLiteral(BigInt::zero()));
+                    field.value = self.wrap_expr(current, scope, visible);
                 }
             }
             Expr::StructLiteral { name, fields } => {
@@ -1014,7 +1021,7 @@ impl<'a> RecursiveLowerer<'a> {
                     }
                     self.wrap_block(&mut function.body, scope, &mut visible);
                 }
-                Item::Struct(definition) => {
+                Item::Struct(definition) | Item::Event(definition) => {
                     for (_, ty) in &mut definition.fields {
                         let current = std::mem::replace(ty, TypeExpr::Const(0));
                         *ty = self.wrap_type(current, root);
@@ -1033,13 +1040,27 @@ impl<'a> RecursiveLowerer<'a> {
                     declaration.ty = self.wrap_type(current, root);
                 }
                 Item::Trigger(declaration) => {
+                    if let crate::ast::TriggerFilter::Time(
+                        crate::ast::TriggerTimeFilter::Schedule {
+                            start_ms,
+                            period_ms,
+                        },
+                    ) = &mut declaration.filter
+                    {
+                        for expression in std::iter::once(start_ms).chain(period_ms) {
+                            let expression = expression.as_mut();
+                            let current =
+                                std::mem::replace(expression, Expr::IntLiteral(BigInt::zero()));
+                            *expression = self.wrap_expr(current, root, &root_visible);
+                        }
+                    }
                     for entry in &mut declaration.metadata {
                         let current =
                             std::mem::replace(&mut entry.value, Expr::IntLiteral(BigInt::zero()));
                         entry.value = self.wrap_expr(current, root, &root_visible);
                     }
                 }
-                Item::ErrorEnum(_) => {}
+                Item::Enum(_) => {}
             }
         }
         for fixture in &mut program.fixtures {
@@ -1059,17 +1080,18 @@ fn targets(ast: &SpannedProgram) -> GlobalTargets {
     let mut targets = GlobalTargets {
         all: BTreeMap::new(),
         structs: BTreeMap::new(),
-        errors: BTreeMap::new(),
+        enums: BTreeMap::new(),
         functions: BTreeMap::new(),
         states: BTreeMap::new(),
         consts: BTreeMap::new(),
-        error_codes: BTreeMap::new(),
+        permissions: BTreeSet::new(),
+        variant_codes: BTreeMap::new(),
         resolve_import_calls: true,
         external_functions: BTreeSet::from(["external_fn".to_owned()]),
         external_states: BTreeSet::from(["external_state".to_owned()]),
         external_structs: BTreeSet::from(["External".to_owned()]),
         external_consts: BTreeSet::from(["EXTERNAL_CONST".to_owned()]),
-        external_error_codes: BTreeMap::from([("ExternalError::No".to_owned(), 7)]),
+        external_variant_codes: BTreeMap::from([("ExternalError::No".to_owned(), 7)]),
         declarations: BTreeMap::new(),
     };
     for fact in &ast.facts.declarations {
@@ -1080,8 +1102,8 @@ fn targets(ast: &SpannedProgram) -> GlobalTargets {
         targets.all.insert(fact.name.clone(), id);
         let owner = match fact.kind {
             DeclarationKind::Function => Some(&mut targets.functions),
-            DeclarationKind::Struct => Some(&mut targets.structs),
-            DeclarationKind::ErrorEnum => Some(&mut targets.errors),
+            DeclarationKind::Struct | DeclarationKind::Event => Some(&mut targets.structs),
+            DeclarationKind::Enum => Some(&mut targets.enums),
             DeclarationKind::State => Some(&mut targets.states),
             DeclarationKind::Const => Some(&mut targets.consts),
             _ => None,

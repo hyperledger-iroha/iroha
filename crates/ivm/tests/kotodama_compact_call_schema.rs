@@ -34,7 +34,7 @@ fn quantity_result(vm: &IVM) -> String {
 }
 #[test]
 fn compact_schema_validates_an_unused_numeric_root_argument_before_its_constant_body() {
-    let source = "seiyaku UnusedRoot { view fn main(quantity value) -> quantity { let quantity constant=7; return constant; } }";
+    let source = "seiyaku UnusedRoot { view fn main(quantity value) authorize(anyone) -> quantity { let quantity constant=7; return constant; } }";
     let program = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .unwrap();
@@ -81,7 +81,7 @@ fn compact_schema_validates_an_unused_numeric_root_argument_before_its_constant_
 }
 #[test]
 fn compact_schema_rejects_a_genuine_invalid_durable_quantity_before_an_unused_private_body() {
-    let source = "seiyaku UnusedDurable { state quantity source; hajimari(){ source=9; } fn unused(quantity value)->quantity { let quantity constant=7; return constant; } view fn main()->quantity { let first=unused(value:source); return unused(value:first); } }";
+    let source = "seiyaku UnusedDurable { state quantity source; hajimari(){ source=9; } fn unused(quantity value)->quantity { let quantity constant=7; return constant; } view fn main() authorize(anyone) ->quantity { let first=unused(value:source); return unused(value:first); } }";
     let program = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .unwrap();

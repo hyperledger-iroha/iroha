@@ -31,6 +31,9 @@ fn checked_random_keypair() -> KeyPair {
 fn manifest_pointer_roundtrip() {
     let account_id = AccountId::new(checked_random_keypair().public_key().clone());
     let manifest = ContractManifest {
+        permissions: Vec::new(),
+        events: Vec::new(),
+        enum_types: Vec::new(),
         seiyaku_name: None,
         code_hash: Some(Hash::new(b"code-bytes")),
         abi_hash: Some(Hash::new(b"abi-policy")),

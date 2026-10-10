@@ -567,85 +567,21 @@ mod direct_home_original_tests {
     }
 
     #[test]
-    fn tmp_allocation_probe() {
+    fn direct_home_capture_checks_both_images_without_allocating() {
         use crate::test_allocations::allocations_during;
-        use iroha_data_model::{IntoKeyValue, account::Account};
-        let mut world = Box::new(World::default());
-        let (account_id, account) = Account::new(ALICE_ID.clone())
-            .build(&ALICE_ID)
-            .into_key_value();
-        world.accounts.insert(account_id, account);
-        world.domains.insert(
-            test_support::domain(),
-            Domain::new(test_support::domain()).build(&ALICE_ID),
+        let mut world = test_support::world(false, None);
+        world
+            .set_asset_definition_dataspace_for_testing(test_support::id(0), DataSpaceId::new(7))
+            .unwrap();
+        let mut result = None;
+        assert_eq!(
+            allocations_during(|| {
+                result = Some(CheckedAssetDefinitions::capture(&world, 16_777_216).map(|_| ()));
+            }),
+            0,
+            "original direct-home inspection must retain its native rows without allocation"
         );
-        world.asset_definitions.insert(
-            test_support::id(0),
-            test_support::definition(0, &ALICE_ID, true, None),
-        );
-        world.rebuild_asset_definition_indexes().unwrap();
-        let v = allocations_during(|| {
-            let _ = world
-                .asset_definition_direct_homes
-                .try_committed_view_nonblocking();
-        });
-        let vi = allocations_during(|| {
-            let _ = world
-                .axt_asset_incarnations
-                .try_committed_view_nonblocking();
-        });
-        let full = allocations_during(|| {
-            let _ = CheckedAssetDefinitions::capture(&world, 16_777_216).map(|_| ());
-        });
-        let homes = world
-            .asset_definition_direct_homes
-            .try_committed_view_nonblocking()
-            .unwrap();
-        let incarnations = world
-            .axt_asset_incarnations
-            .try_committed_view_nonblocking()
-            .unwrap();
-        let rows = world
-            .asset_definitions
-            .try_committed_view_nonblocking()
-            .unwrap();
-        let mut work = AssetDefinitionWork::bounded(16_777_216);
-        let t = allocations_during(|| {
-            validate_original_direct_home_transitions(&homes, &incarnations, &mut work).unwrap();
-        });
-        let r = allocations_during(|| {
-            validate_original_direct_home_rows(
-                &homes,
-                &rows,
-                &incarnations,
-                GroupImage::Current,
-                &mut work,
-            )
-            .unwrap();
-            validate_original_direct_home_rows(
-                &homes,
-                &rows,
-                &incarnations,
-                GroupImage::Predecessor,
-                &mut work,
-            )
-            .unwrap();
-        });
-        let l = allocations_during(|| {
-            let _ = lookup(
-                &homes,
-                GroupImage::Predecessor,
-                &test_support::id(0),
-                &mut work,
-            );
-        });
-        let m = allocations_during(|| {
-            let _ = homes.try_matches_current(&world.asset_definition_direct_homes);
-        });
-        let full2 = allocations_during(|| {
-            let _ = CheckedAssetDefinitions::capture(&world, 16_777_216).map(|_| ());
-        });
-        panic!("probe v={v} vi={vi} full={full} t={t} r={r} l={l} m={m} full2={full2}");
+        assert_eq!(result.unwrap(), Ok(()));
     }
 
     #[test]

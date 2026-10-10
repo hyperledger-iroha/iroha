@@ -256,7 +256,9 @@ fn epoch(length: u64) -> iroha_data_model::sumeragi::epoch::ValidatorEpochContex
         length,
         false,
     );
-    crate::sumeragi::epoch::genesis_epoch(&genesis).unwrap()
+    crate::sumeragi::epoch::authenticated_genesis(&genesis)
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap()
 }
 fn ordinary(schedule: &ConsensusSchedule, height: u64) -> ScheduleOutcome {
     let current = schedule.ready(height).unwrap().epoch.clone();

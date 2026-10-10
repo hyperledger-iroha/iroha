@@ -301,6 +301,16 @@ fn expected_node(node: &EntrypointValueTypeNodeV1) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        EntrypointValueTypeNodeV1::Enum(error) => format!(
+            "an enum variant name of `{}` (one of {})",
+            error.identity,
+            error
+                .variants
+                .iter()
+                .map(|variant| format!("`{}`", variant.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         EntrypointValueTypeNodeV1::StateCursor(_) => {
             "a state cursor as a 0x-prefixed lowercase hexadecimal string".to_owned()
         }
@@ -444,7 +454,9 @@ fn decode_argument_node(
                         let envelope = decode_blob(value)
                             .and_then(|bytes| encode_tlv(PointerType::NoritoBytes, &bytes))
                             .map_err(mismatch)?;
-                        crate::state_cursor::validate_cursor_envelope(*key, &envelope)
+                        let key_hash = crate::entrypoint::state_key_schema_hash_v1(key)
+                            .ok_or_else(|| mismatch(VMError::DecodeError))?;
+                        crate::state_cursor::validate_cursor_envelope(key_hash, &envelope)
                             .map_err(mismatch)?;
                         results.push(vec![EntrypointValueAtomV1::Pointer(envelope)]);
                     }
@@ -462,6 +474,15 @@ fn decode_argument_node(
                             })
                             .ok_or_else(|| mismatch(VMError::DecodeError))?;
                         results.push(vec![EntrypointValueAtomV1::ErrorCode(variant.code)]);
+                    }
+                    EntrypointValueTypeNodeV1::Enum(error) => {
+                        let variant = value
+                            .as_str()
+                            .and_then(|name| {
+                                error.variants.iter().find(|variant| variant.name == name)
+                            })
+                            .ok_or_else(|| mismatch(VMError::DecodeError))?;
+                        results.push(vec![EntrypointValueAtomV1::EnumCode(variant.code)]);
                     }
                     EntrypointValueTypeNodeV1::Struct(struct_node) => {
                         let object = value
@@ -947,7 +968,7 @@ mod tests {
             nodes: vec![
                 EntrypointValueTypeNodeV1::Struct(
                     iroha_data_model::smart_contract::entrypoint::EntrypointStructTypeNodeV1 {
-                        name: "Order".to_owned(),
+                        name: "Fixture::Order".to_owned(),
                         fields: vec!["lines".to_owned(), "memo".to_owned()],
                     },
                 ),

@@ -1,5 +1,5 @@
 seiyaku __CONTRACT_NAME__ {
-    view fn main() -> Json {
+    view fn main() authorize(anyone) -> Json {
         return json {
             entrypoint: "main",
             runtime: "soracloud_ivm",
@@ -8,7 +8,11 @@ seiyaku __CONTRACT_NAME__ {
         };
     }
 
-    view fn serve_health(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    view fn serve_health(
+        bytes _request_body,
+        Json _request_meta,
+        int observed_height,
+    ) authorize(anyone) -> Json {
         return json {
             observed_height: observed_height,
             ok: true,
@@ -21,7 +25,7 @@ seiyaku __CONTRACT_NAME__ {
         bytes _request_body,
         Json _request_meta,
         int observed_height,
-    ) -> Json {
+    ) authorize(anyone) -> Json {
         return json {
             observed_height: observed_height,
             route: "/api/v1/state/overview",
@@ -34,7 +38,7 @@ seiyaku __CONTRACT_NAME__ {
         bytes _request_body,
         Json _request_meta,
         int observed_height,
-    ) -> Json {
+    ) authorize(anyone) -> Json {
         return json {
             collectors: "validator_workers",
             observed_height: observed_height,
@@ -43,7 +47,11 @@ seiyaku __CONTRACT_NAME__ {
         };
     }
 
-    view fn serve_auth_me(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    view fn serve_auth_me(
+        bytes _request_body,
+        Json _request_meta,
+        int observed_height,
+    ) authorize(anyone) -> Json {
         return json {
             auth_surface: "/api/auth/me",
             observed_height: observed_height,
@@ -56,7 +64,7 @@ seiyaku __CONTRACT_NAME__ {
         bytes _request_body,
         Json _request_meta,
         int observed_height,
-    ) -> Json {
+    ) authorize(anyone) -> Json {
         return json {
             observed_height: observed_height,
             route: "/api/v1/user/preferences",
@@ -69,7 +77,7 @@ seiyaku __CONTRACT_NAME__ {
         bytes _request_body,
         Json _request_meta,
         int observed_height,
-    ) -> Json {
+    ) authorize(anyone) -> Json {
         return json {
             observed_height: observed_height,
             route: "/api/v1/user/saved-searches",
@@ -82,7 +90,7 @@ seiyaku __CONTRACT_NAME__ {
         bytes _request_body,
         int execution_sequence,
         int observed_height,
-    ) -> Json {
+    ) authorize(anyone) -> Json {
         return json {
             execution_sequence: execution_sequence,
             observed_height: observed_height,
@@ -95,7 +103,7 @@ seiyaku __CONTRACT_NAME__ {
         bytes _request_body,
         int execution_sequence,
         int observed_height,
-    ) -> Json {
+    ) authorize(anyone) -> Json {
         return json {
             execution_sequence: execution_sequence,
             observed_height: observed_height,
@@ -108,7 +116,7 @@ seiyaku __CONTRACT_NAME__ {
         bytes _request_body,
         int execution_sequence,
         int observed_height,
-    ) -> Json {
+    ) authorize(anyone) -> Json {
         return json {
             execution_sequence: execution_sequence,
             observed_height: observed_height,
@@ -121,7 +129,7 @@ seiyaku __CONTRACT_NAME__ {
         bytes _request_body,
         int execution_sequence,
         int observed_height,
-    ) -> Json {
+    ) authorize(anyone) -> Json {
         return json {
             execution_sequence: execution_sequence,
             observed_height: observed_height,
@@ -134,7 +142,7 @@ seiyaku __CONTRACT_NAME__ {
         bytes _request_body,
         int execution_sequence,
         int observed_height,
-    ) -> Json {
+    ) authorize(anyone) -> Json {
         return json {
             execution_sequence: execution_sequence,
             observed_height: observed_height,
@@ -148,7 +156,7 @@ seiyaku __CONTRACT_NAME__ {
         bytes _request_body,
         int execution_sequence,
         int observed_height,
-    ) -> Json {
+    ) authorize(anyone) -> Json {
         return json {
             execution_sequence: execution_sequence,
             observed_height: observed_height,

@@ -173,7 +173,7 @@ def test_declaration_reserved_extras_drift_fails_closed(tmp_path: Path) -> None:
     _copy_generator_inputs(tmp_path)
     policy_path = tmp_path / MODULE.DEFAULT_POLICY
     raw = json.loads(policy_path.read_text(encoding="utf-8"))
-    raw["declaration_reserved_extras"].remove("is_some")
+    raw["declaration_reserved_extras"].remove("__kotodama_list_len")
     policy_path.write_text(
         json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -229,7 +229,7 @@ def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
         "unwrap_err_or",
         "expect",
     ):
-        assert f'"{intrinsic}",' in semantic_policy
+        assert f'"{intrinsic}",' not in semantic_policy
 
     rust_policy = MODULE.render_ivm_abi_access_hint_policy(policy, grammar)
     assert "DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1" in rust_policy
@@ -245,7 +245,7 @@ def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
         "unwrap_err_or",
         "expect",
     ):
-        assert f'"{intrinsic}",' in rust_policy
+        assert f'"{intrinsic}",' not in rust_policy
     assert '"__kotodama_link_"' in rust_policy
     assert '"Amount",' not in rust_policy
     assert '"amount",' not in rust_policy

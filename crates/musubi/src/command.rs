@@ -14,7 +14,8 @@ use crate::{
     atomic_io::{AtomicWriteErrorCode, AtomicWriteRoot},
     cache::{CacheError, InstallOutcome, MusubiCache, RepairOutcome, platform_cache_root_v1},
     compiler::{
-        CompilerActionV1, CompilerBridgeErrorV1, execute_compiler_graph, validate_packaged_plan,
+        CompilerActionV1, CompilerBridgeErrorV1, CompilerSettingsV1, execute_compiler_graph,
+        validate_packaged_plan,
     },
     graph::{
         GraphErrorV1, GraphPurposeV1, GraphUpdateV1, OfflineGraphOptionsV1,
@@ -87,6 +88,10 @@ use scaffold::{InitArgs, NewArgs, run_init, run_new};
 #[path = "command_build.rs"]
 mod build;
 use build::run_build;
+#[path = "command_bindgen.rs"]
+mod bindgen;
+#[path = "command_lsp.rs"]
+mod lsp;
 #[path = "command_network.rs"]
 mod network;
 use network::{NetworkCommandArgs, run_network};
@@ -148,6 +153,10 @@ struct Cli {
 }
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Generate typed TypeScript, Swift or Kotlin requests and checked return decoders.
+    Bindgen(bindgen::BindgenArgs),
+    /// Serve editor diagnostics and navigation over the canonical Musubi workspace and lock.
+    Lsp(lsp::LspArgs),
     /// Create a wallet, obtain testnet XOR, inspect balances and send fee-paying transactions.
     Wallet(WalletArgs),
     /// Build and deploy one contract through a recoverable native transaction plan.
@@ -177,7 +186,7 @@ enum Command {
     /// Resolve and build selected packages.
     Build(BuildArgs),
     /// Resolve and test selected packages.
-    Test(BuildArgs),
+    Test(TestArgs),
     /// Build a clean canonical source package.
     Package(PackageArgs),
     /// Run the resumable publication workflow.
@@ -204,6 +213,8 @@ enum Command {
 impl Command {
     const fn name(&self) -> &'static str {
         match self {
+            Self::Bindgen(_) => "bindgen",
+            Self::Lsp(_) => "lsp",
             Self::Wallet(_) => "wallet",
             Self::Deploy(_) => "deploy",
             Self::Call(_) => "call",
@@ -331,7 +342,24 @@ struct FetchArgs {
     registry: RegistryReadArgs,
 }
 #[derive(Args, Debug)]
+struct TestArgs {
+    #[command(flatten)]
+    build: BuildArgs,
+    /// Match a test-name substring.
+    #[arg(long)]
+    filter: Option<String>,
+    /// Require the complete test name to match --filter.
+    #[arg(long, requires = "filter")]
+    exact: bool,
+    /// Run only tests whose declared target is this contract in the selected package.
+    #[arg(long)]
+    contract: Option<String>,
+}
+#[derive(Args, Debug)]
 struct BuildArgs {
+    /// Output profile directory; local check/build/test uses dev. Deployment selects production.
+    #[arg(long, value_name = "NAME", default_value = "dev")]
+    profile: String,
     #[command(flatten)]
     selection: SelectionArgs,
     #[command(flatten)]
@@ -673,11 +701,19 @@ where
             let command_name = cli.command.name();
             let mut report = |message: &str| report_progress(format, message, progress);
             let output = match &cli.command {
-                Command::Check(args) | Command::Build(args) | Command::Test(args) => {
+                Command::Lsp(_) if format != OutputFormat::Human => CommandOutput::failure(
+                    command_name,
+                    Diagnostic::new(
+                        ErrorCode::Usage,
+                        "The language server owns stdout framing; --format must be human",
+                    ),
+                ),
+                Command::Check(args) | Command::Build(args) => {
                     match build::run_build_with_warnings(
                         cli.manifest_path.as_deref(),
                         command_name,
                         args,
+                        None,
                     ) {
                         Ok((success, warnings)) => {
                             CommandOutput::success(command_name, success.message, success.data)
@@ -686,6 +722,18 @@ where
                         Err(diagnostic) => CommandOutput::failure(command_name, diagnostic),
                     }
                 }
+                Command::Test(args) => match build::run_build_with_warnings(
+                    cli.manifest_path.as_deref(),
+                    command_name,
+                    &args.build,
+                    Some(args),
+                ) {
+                    Ok((success, warnings)) => {
+                        CommandOutput::success(command_name, success.message, success.data)
+                            .with_warnings(warnings)
+                    }
+                    Err(diagnostic) => CommandOutput::failure(command_name, diagnostic),
+                },
                 _ if format == OutputFormat::Sarif => CommandOutput::failure(
                     command_name,
                     Diagnostic::new(
@@ -760,6 +808,8 @@ fn dispatch(
     progress: &mut dyn FnMut(&str),
 ) -> CommandResult {
     match command {
+        Command::Bindgen(args) => bindgen::run_bindgen(manifest_path, args),
+        Command::Lsp(args) => lsp::run_lsp(manifest_path, args),
         Command::Wallet(args) => run_wallet(manifest_path, args, progress),
         Command::Deploy(args) => run_deploy(manifest_path, args, progress),
         Command::Call(args) => run_call(manifest_path, args, progress),
@@ -774,7 +824,10 @@ fn dispatch(
         Command::Fetch(args) => run_fetch(manifest_path, args),
         Command::Check(args) => run_build(manifest_path, "check", args),
         Command::Build(args) => run_build(manifest_path, "build", args),
-        Command::Test(args) => run_build(manifest_path, "test", args),
+        Command::Test(args) => {
+            build::run_build_with_warnings(manifest_path, "test", &args.build, Some(args))
+                .map(|(success, _)| success)
+        }
         Command::Package(args) => run_package(manifest_path, args),
         Command::Publish(args) => run_publish(manifest_path, args, None),
         Command::Search(args) => run_search(args),
@@ -1692,6 +1745,8 @@ fn load_selected_workspace(
     Ok((workspace, selected_packages))
 }
 
+pub use build::RuntimePackageSelection;
+
 /// Build a package using the caller's retained runtime identity, explicit cache and storage policy.
 /// Local-only graphs do not open the cache; external resolver and archive records share this root.
 ///
@@ -1702,10 +1757,7 @@ pub fn build_runtime_package(
     cache_root: &Path,
     registry_config: Option<&iroha::config::Config>,
     registry_resolver: Option<&crate::deployment_runtime::BuildRegistryResolver>,
-    manifest: &iroha_fs::SelectedRegularFile,
-    package: Option<&str>,
-    contract: Option<&str>,
-    locked: bool,
+    selection: &RuntimePackageSelection<'_>,
     archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
 ) -> eyre::Result<crate::deployment_runtime::BuiltArtifact> {
     let artifact = build::build_runtime_package(
@@ -1713,14 +1765,11 @@ pub fn build_runtime_package(
         cache_root,
         registry_config,
         registry_resolver,
-        manifest,
-        package,
-        contract,
-        locked,
+        selection,
         archive_transport,
     )
     .map_err(|diagnostic| eyre::eyre!("{}", diagnostic.render_human()))?;
-    manifest.revalidate()?;
+    selection.manifest.revalidate()?;
     Ok(artifact)
 }
 #[derive(Clone)]
@@ -2399,17 +2448,12 @@ fn test_runner_diagnostic(error: &WorkspaceTestErrorV1) -> Diagnostic {
         WorkspaceTestErrorV1::ExternalModules(_) | WorkspaceTestErrorV1::Runner(_) => {
             ErrorCode::Compiler
         }
-        WorkspaceTestErrorV1::Compilation(rendered) => {
-            // The compiler's own rendering precedes the one-line summary unchanged, as for
-            // `check`, instead of being nested after a second error prefix.
+        WorkspaceTestErrorV1::Compilation(diagnostics) => {
             return Diagnostic::new(
                 ErrorCode::Compiler,
                 "Kotodama rejected the selected test sources",
             )
-            .with_report(
-                rendered.clone(),
-                &object([("compiler_output", Value::from(rendered.clone()))]),
-            );
+            .with_compiler_diagnostics(diagnostics.clone());
         }
         WorkspaceTestErrorV1::Execution(_) => ErrorCode::TestFailed,
     };
@@ -2684,7 +2728,7 @@ fn package_diagnostic(error: &PackageError) -> Diagnostic {
     Diagnostic::new(code, error.to_string())
 }
 /// Adapt explicit generated inputs to the sole existing publication command workflow.
-pub(crate) fn publish_generated(
+pub fn publish_generated(
     context: &crate::publication_runtime::GeneratedPublicationContextV1,
     request: &crate::generated_publication::GeneratedPublishRequest,
 ) -> CommandOutput {
@@ -2899,15 +2943,18 @@ fn run_publish(
                 "publication configuration provenance is unavailable",
             )
         })?;
-    let loaded = match generated {
-        Some(execution) => crate::publication_runtime::load_bound_generated_publication_runtime_v1(
-            platform_config_provenance,
-            execution.context,
-            validator,
-        ),
-        None => load_bound_production_publication_runtime_v1(platform_config_provenance, validator),
-    }
-    .map_err(publication_configuration_diagnostic)?;
+    let loaded = generated
+        .map_or_else(
+            || load_bound_production_publication_runtime_v1(platform_config_provenance, validator),
+            |execution| {
+                crate::publication_runtime::load_bound_generated_publication_runtime_v1(
+                    platform_config_provenance,
+                    execution.context,
+                    validator,
+                )
+            },
+        )
+        .map_err(publication_configuration_diagnostic)?;
     let registry = loaded.registry_reader();
     let bindings = loaded.bindings().clone();
     let (signing, mut services, _) = loaded.into_parts();
@@ -3171,12 +3218,10 @@ fn recover_publication_sidecars_at(
             RegistryReadClientV1::load_from_config_bytes(config_image.path(), config_image.bytes())
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?,
         );
-        graph.prepared_archive_fetch = Some(match generated {
-            Some(execution) => Ok(execution.archive_transport.clone()),
-            None => {
-                prepare_production_archive_transport_v1(config_image.path(), config_image.bytes())
-            }
-        });
+        graph.prepared_archive_fetch = Some(generated.map_or_else(
+            || prepare_production_archive_transport_v1(config_image.path(), config_image.bytes()),
+            |execution| Ok(execution.archive_transport.clone()),
+        ));
         ensure_graph_archives(cache, &graph, args.mode)?;
     }
     drop(config_image);
@@ -3255,18 +3300,23 @@ fn resume_publication(
     } else {
         args.network.publication_image(explicit_manifest)?
     };
-    let loaded = match generated {
-        Some(execution) => crate::publication_runtime::load_bound_generated_publication_runtime_v1(
-            &image.provenance(),
-            execution.context,
-            validate_resumable_publication_car,
-        ),
-        None => load_bound_production_publication_runtime_v1(
-            &image.provenance(),
-            validate_resumable_publication_car,
-        ),
-    }
-    .map_err(publication_configuration_diagnostic)?;
+    let loaded = generated
+        .map_or_else(
+            || {
+                load_bound_production_publication_runtime_v1(
+                    &image.provenance(),
+                    validate_resumable_publication_car,
+                )
+            },
+            |execution| {
+                crate::publication_runtime::load_bound_generated_publication_runtime_v1(
+                    &image.provenance(),
+                    execution.context,
+                    validate_resumable_publication_car,
+                )
+            },
+        )
+        .map_err(publication_configuration_diagnostic)?;
     let reader = loaded.registry_reader();
     let (signer, mut services, _) = loaded.into_parts();
     services

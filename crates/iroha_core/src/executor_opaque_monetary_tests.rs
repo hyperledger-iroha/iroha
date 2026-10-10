@@ -5,7 +5,7 @@ use crate::{
     pipeline::overlay::IvmProvedReplay,
     smartcontracts::{
         isi::triggers::set::SetReadOnly as _,
-        ivm::{cache::IvmCache, host::QueuedInstruction},
+        ivm::{cache::IvmCache, host::QueuedEffect},
     },
     state::{StateBlock, StateTransaction, WorldReadOnly as _},
 };
@@ -355,8 +355,8 @@ fn supplied_proved_staking_effects_require_signed_monetary_plan() {
             queued: instructions
                 .iter()
                 .cloned()
-                .map(|instruction| QueuedInstruction {
-                    instruction,
+                .map(|instruction| QueuedEffect {
+            payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(instruction),
                     authority: authority.clone(),
                     contract_runtime_context: None,
                     entrypoint_authorization: None,

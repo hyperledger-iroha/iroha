@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn independent_trigger_failures_retain_their_exact_name_spans() {
         let source = r#"seiyaku Timers {
-  view fn inspect() {}
+  view fn inspect() authorize(anyone) {}
   trigger morning -> inspect { on time pre_commit; }
   trigger evening -> inspect { on time pre_commit; }
 }"#;
@@ -535,11 +535,11 @@ mod tests {
     fn bump_inner() {
         count += 1;
     }
-    view fn bump() -> int {
+    view fn bump() authorize(anyone) -> int {
         count += 1;
         return count;
     }
-    view fn peek() -> int {
+    view fn peek() authorize(anyone) -> int {
         bump_inner();
         return count;
     }
@@ -567,7 +567,7 @@ mod tests {
     hajimari() {
         last = 0;
     }
-    view fn scan() -> int {
+    view fn scan() authorize(anyone) -> int {
         let items = scores.take(4);
         for (key, value) in items {
             last = value;
@@ -586,7 +586,7 @@ mod tests {
     fn unknown_member_fields_list_the_declared_fields() {
         let source = r#"seiyaku Fields {
     struct Point { int x; int y; }
-    view fn read() -> int {
+    view fn read() authorize(anyone) -> int {
         let point = Point { x: 1, y: 2 };
         return point.yy;
     }
@@ -599,16 +599,16 @@ mod tests {
         assert_eq!(primary_text(source, field), "point.yy");
         assert_eq!(
             field.help.as_deref(),
-            Some("struct `Point` declares `x`, `y`; read one of those fields.")
+            Some("struct `Fields::Point` declares `x`, `y`; read one of those fields.")
         );
     }
     #[test]
     fn direct_calls_to_public_functions_explain_the_private_helper_pattern() {
         let source = r#"seiyaku Calls {
-    view fn quote(int x) -> int {
+    view fn quote(int x) authorize(anyone) -> int {
         return x;
     }
-    view fn twice() -> int {
+    view fn twice() authorize(anyone) -> int {
         return quote(1);
     }
 }"#;
@@ -676,7 +676,7 @@ mod tests {
     fn numeric_operator_errors_use_source_symbols_and_inferred_labels() {
         let source = r#"seiyaku Acc {
     state StateMap<AccountId, quantity> Balances;
-    view fn total() -> quantity {
+    view fn total() authorize(anyone) -> quantity {
         var sum = 0;
         for (who, amount) in Balances.take(16) {
             sum += amount;
@@ -703,8 +703,8 @@ mod tests {
     }
     #[test]
     fn require_with_a_message_string_explains_error_enums() {
-        let source = r#"seiyaku Req {
-    kotoage fn deposit(int amount) authorize("CanDeposit") {
+        let source = r#"seiyaku Req { permission CanDeposit;
+    kotoage fn deposit(int amount) authorize(CanDeposit) {
         require(amount > 0, "amount must be positive");
     }
 }"#;
@@ -719,8 +719,8 @@ mod tests {
     }
     #[test]
     fn unknown_argument_labels_list_declared_parameters() {
-        let source = r#"seiyaku Pay {
-    kotoage fn pay(AccountId to) authorize("CanPay") {
+        let source = r#"seiyaku Pay { permission CanPay;
+    kotoage fn pay(AccountId to) authorize(CanPay) {
         ledger::asset::transfer(
             from: context::authority(),
             to: to,
@@ -743,7 +743,7 @@ mod tests {
     #[test]
     fn invalid_identifier_literals_are_semantic_errors_on_the_literal() {
         let source = r#"seiyaku Ids {
-    view fn space() -> DataSpaceId {
+    view fn space() authorize(anyone) -> DataSpaceId {
         return DataSpaceId::parse("zero");
     }
 }"#;
@@ -793,10 +793,10 @@ mod tests {
     fn add(int a, int b) -> int {
         return a + b;
     }
-    view fn many() -> int {
+    view fn many() authorize(anyone) -> int {
         return add(1, 2, 3);
     }
-    view fn wrong() -> int {
+    view fn wrong() authorize(anyone) -> int {
         return add(a: 1, b: true);
     }
 }"#;

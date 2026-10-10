@@ -18,8 +18,8 @@ use iroha_data_model::{
     sumeragi::{SumeragiFootprint, SumeragiStatus},
     sumeragi_finality::{
         SumeragiFinalityAttestation, SumeragiFinalityAttestationBody, SumeragiFinalityProof,
-        WorldStateElementKindV1, WorldStateSnapshotEntryV1, WorldStateSnapshotV1, genesis_epoch,
-        test_fixtures::NativeFinalityFixture, world_state_value_hash_v1,
+        WorldStateElementKindV1, WorldStateSnapshotEntryV1, WorldStateSnapshotV1,
+        authenticated_genesis, test_fixtures::NativeFinalityFixture, world_state_value_hash_v1,
     },
 };
 use iroha_model_base::{peer::PeerId, topology::DataSpaceId};
@@ -91,7 +91,9 @@ impl Fixture {
             child_chain.chain_id().parse().unwrap(),
             child_chain.network_id(),
             result,
-            genesis_epoch(child_chain.genesis()).unwrap(),
+            authenticated_genesis(child_chain.genesis())
+                .map(|genesis| genesis.into_parts().0)
+                .unwrap(),
         )
         .unwrap();
         let mut child = Config::load_table(

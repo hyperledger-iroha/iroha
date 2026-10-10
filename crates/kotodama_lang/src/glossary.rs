@@ -89,7 +89,7 @@ pub const BRANDED_KEYWORDS: [BrandedKeyword; 4] = [
         summary: "A kotoage is submitted in a transaction, may write durable state and the \
                   ledger, and always states who may invoke it with `authorize(...)`. Read-only \
                   public functions are `view fn` instead.",
-        example: "kotoage fn increment(int delta) authorize(\"CanIncrement\") {\n    value += delta;\n}",
+        example: "permission CanIncrement; kotoage fn increment(int delta) authorize(CanIncrement) {\n    value += delta;\n}",
         english_guesses: &["entry", "entrypoint", "pub", "public", "external", "action"],
         confusables: &["事挙げ", "言挙", "言上げ", "ことあげ", "コトアゲ"],
     },

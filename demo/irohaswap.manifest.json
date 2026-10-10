@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "IrohaSwap",
-  "code_hash": "hash:A44BAFEE83111D871A76A9B916D570BF1942074989D0C331464CA02660038D7D#2F32",
-  "abi_hash": "hash:088F6764587D10239E2AD2731DDEEDCD7CD75834E014EE8540BF8F585B446547#76D4",
+  "code_hash": "hash:3F30AA9C65A7B6048CAA1FD099856561C6A829EEC6907AF5670791193406D5CB#BC5D",
+  "abi_hash": "hash:1958609290EF3FD0D62CD291F4462DF35EB8BC77936B0E6CDF0D83D26815F5D5#684A",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -19,6 +19,16 @@
     "dynamic_reads": [],
     "dynamic_writes": []
   },
+  "permissions": [
+    {
+      "name": "Admin",
+      "scope": {
+        "kind": "Instance",
+        "value": null
+      }
+    }
+  ],
+  "events": [],
   "entrypoints": [
     {
       "name": "init_pool",
@@ -131,7 +141,10 @@
           }
         ]
       },
-      "permission": "Admin",
+      "authorization": {
+        "kind": "Permission",
+        "value": "Admin"
+      },
       "read_keys": [
         "state:*"
       ],
@@ -237,7 +250,10 @@
           }
         ]
       },
-      "permission": "Admin",
+      "authorization": {
+        "kind": "Permission",
+        "value": "Admin"
+      },
       "read_keys": [
         "state:*",
         "asset:*",
@@ -330,7 +346,10 @@
           }
         ]
       },
-      "permission": "Admin",
+      "authorization": {
+        "kind": "Permission",
+        "value": "Admin"
+      },
       "read_keys": [
         "state:*",
         "asset:*",
@@ -462,7 +481,10 @@
           }
         ]
       },
-      "permission": "Admin",
+      "authorization": {
+        "kind": "Permission",
+        "value": "Admin"
+      },
       "read_keys": [
         "state:*",
         "asset:*",
@@ -632,6 +654,7 @@
       ]
     }
   ],
+  "enum_types": [],
   "error_messages": null,
   "kotoba": null,
   "provenance": null

@@ -285,12 +285,6 @@ mod tests {
             application_api::CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET,
             application_api::CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET,
             application_api::CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET,
-            application_api::CONTRACTS_ROLLUPS_INTENTS_GET,
-            application_api::CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET,
-            application_api::CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET,
-            application_api::CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET,
-            application_api::CONTRACTS_ROLLUPS_RWA_LOTS_GET,
-            application_api::CONTRACTS_ROLLUPS_DLMM_HOOKS_GET,
             application_api::ACCOUNTS_BY_ACCOUNT_ID_GET,
             application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET,
             application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET,
@@ -382,14 +376,8 @@ mod tests {
             application_api::CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET,
             application_api::CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET,
             application_api::CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET,
-            application_api::CONTRACTS_ROLLUPS_INTENTS_GET,
-            application_api::CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET,
-            application_api::CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET,
-            application_api::CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET,
-            application_api::CONTRACTS_ROLLUPS_RWA_LOTS_GET,
-            application_api::CONTRACTS_ROLLUPS_DLMM_HOOKS_GET,
         ];
-        assert_eq!(routes.len(), 11);
+        assert_eq!(routes.len(), 5);
         for route in routes {
             assert_eq!(route.method(), HttpMethod::Get);
             assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);

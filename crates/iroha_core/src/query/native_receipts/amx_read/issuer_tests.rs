@@ -7,7 +7,7 @@ use iroha_data_model::{
     block::SignedBlock,
     isi::sumeragi_amx::{BeginAmxV1, RegisterAmxDataspaceV1},
     sumeragi_amx::{AmxForeignInstanceV1, AmxLegV1, AmxRecordKind, AmxRecordV1, AmxTransactionV1},
-    sumeragi_finality::{genesis_epoch, test_fixtures::NativeFinalityFixture},
+    sumeragi_finality::{authenticated_genesis, test_fixtures::NativeFinalityFixture},
 };
 use iroha_model_base::topology::DataSpaceId;
 
@@ -17,15 +17,36 @@ use super::{
 };
 use crate::{
     query::{native_context_archive::NativeContextArchiveError, native_receipts::amx_record_proof},
-    state::{NativeExecutionProjectionV1, World},
+    state::{NativeExecutionProjectionV1, StateReadOnly, World},
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 
 // The genuine canonical transaction is committed by an independent native test-chain owner.
 // No issued carrier, proof, context frame or paid graph is installed by this helper.
 pub(super) fn committed_source(count: usize) -> (CertifiedTestChain, [u8; 32], PathBuf) {
+    committed_source_with_npos(count, None)
+}
+
+fn committed_source_with_npos(
+    count: usize,
+    npos: Option<iroha_data_model::parameter::system::SumeragiNposParameters>,
+) -> (CertifiedTestChain, [u8; 32], PathBuf) {
     assert!((1..=iroha_data_model::sumeragi_amx::MAX_AMX_PENDING).contains(&count));
     let mut config = TestChainConfig::new(World::new(), 1_000);
+    if let Some(policy) = npos {
+        use iroha_data_model::parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiParameter},
+        };
+        policy.validate().unwrap();
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        config.genesis_parameters.extend([
+            Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+                policy.epoch_length_blocks,
+            )),
+            Parameter::Custom(policy.into_custom_parameter()),
+        ]);
+    }
     config.genesis_instructions = [21, 22]
         .into_iter()
         .map(|id| {
@@ -33,7 +54,12 @@ pub(super) fn committed_source(count: usize) -> (CertifiedTestChain, [u8; 32], P
             RegisterAmxDataspaceV1 {
                 dataspace: DataSpaceId::new(id),
                 instance: child.verifier().instance().0,
-                anchor: norito::encode_canonical(&genesis_epoch(child.genesis()).unwrap()).unwrap(),
+                anchor: norito::encode_canonical(
+                    &authenticated_genesis(child.genesis())
+                        .map(|genesis| genesis.into_parts().0)
+                        .unwrap(),
+                )
+                .unwrap(),
             }
             .into()
         })
@@ -237,9 +263,13 @@ fn owned_issuer_retains_first_refused_archive_descriptor_after_original_view_dro
     assert!(proof.belongs_to(&budget));
     let foreign = AllocationBudget::new(budget.limit_bytes());
     assert!(!proof.belongs_to(&foreign));
-    let tracker =
-        AmxForeignInstanceV1::new(chain.instance().0, genesis_epoch(chain.genesis()).unwrap())
-            .unwrap();
+    let tracker = AmxForeignInstanceV1::new(
+        chain.instance().0,
+        authenticated_genesis(chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(tracker.verify_record(proof.canonical()).unwrap().height, 2);
     assert!(matches!(&proof.canonical().record, AmxRecordV1::Begin(begin) if begin.tx == tx));
     assert!(original.complete().is_err(), "delivery remains one-shot");
@@ -294,9 +324,13 @@ fn owned_issuer_preserves_partial_frame_and_same_pool_without_an_extra_poll() {
     assert_eq!(original.acquired_frame().unwrap(), original_file);
     let proof = original.complete().unwrap().unwrap();
     assert!(proof.belongs_to(&budget));
-    let tracker =
-        AmxForeignInstanceV1::new(chain.instance().0, genesis_epoch(chain.genesis()).unwrap())
-            .unwrap();
+    let tracker = AmxForeignInstanceV1::new(
+        chain.instance().0,
+        authenticated_genesis(chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
+    )
+    .unwrap();
     tracker.verify_record(proof.canonical()).unwrap();
 }
 
@@ -466,4 +500,404 @@ fn owned_issuer_retains_original_decoder_refusal_and_rejects_substituted_carrier
     ));
     assert_eq!(original.acquired_frame().unwrap().as_ptr(), pointer);
     assert!(original.source.budget.same_pool(&budget));
+}
+
+#[test]
+fn public_amx_initial_shell_refusal_retains_original_genesis_frame_without_reread() {
+    let (chain, tx, _) = committed_source(1);
+    let view = chain.state().view();
+    let budget = view.execution_budget();
+    let baseline = budget.reserved_bytes();
+    let decoder = norito::core::DecodeBudgetContext::try_new_owned(
+        norito::canonical_decode_limits(chain.kura().native_context_archive_max_bytes().get()),
+        &budget,
+    )
+    .unwrap();
+    let expected = *view.block_hashes().get(0).unwrap();
+    let length = decoder
+        .with(|| chain.kura().native_frame_read(1, expected))
+        .unwrap()
+        .unwrap()
+        .wire_len();
+    let bytes = usize::try_from(length).unwrap();
+    // The real original extent fits; the original prepaid shared control does not.
+    let pressure = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes() - bytes)
+        .unwrap();
+    let mut read = amx_record_proof(&view, 2, AmxRecordKind::Begin, tx);
+    chain.kura().reset_canonical_query_reads_for_test();
+    let first = decoder.with(|| read.try_issue());
+    let Err(Error::Chain(crate::execution_attempt::ExecutionAttemptError::Deferred(first))) = first
+    else {
+        panic!("initial native shared control must return its genuine original-pool refusal");
+    };
+    let cause = first.allocation_refusal().unwrap().clone();
+    assert!(matches!(cause, AllocationRefusal::Capacity { .. }));
+    let original_reads = chain.kura().canonical_query_reads_for_test();
+    assert_eq!(original_reads, (1, length));
+
+    // Derive the legitimate retry metadata work through the same exact native owner.
+    // Keeping the raw frame does not remove current journal/slot checks or their debit.
+    let before = decoder.consumed_allocated_bytes();
+    decoder
+        .with(|| chain.kura().native_frame_read(1, expected))
+        .unwrap()
+        .unwrap();
+    let metadata = decoder.consumed_allocated_bytes() - before;
+    assert_eq!(
+        chain.kura().canonical_query_reads_for_test(),
+        original_reads
+    );
+    let consumed = decoder.consumed_allocated_bytes();
+    let repeated = decoder.with(|| read.try_issue());
+    let Err(Error::Chain(crate::execution_attempt::ExecutionAttemptError::Deferred(repeated))) =
+        repeated
+    else {
+        panic!("the same occupied original shared control must remain a local refusal");
+    };
+    assert!(matches!(
+        repeated.allocation_refusal(),
+        Some(AllocationRefusal::Capacity { .. })
+    ));
+    assert_eq!(
+        chain.kura().canonical_query_reads_for_test(),
+        original_reads,
+        "initial AMX certification must retain the exact genesis frame across refusal"
+    );
+    assert_eq!(repeated.allocation_refusal(), Some(&cause));
+    assert_eq!(decoder.consumed_allocated_bytes() - consumed, metadata);
+    drop(pressure);
+
+    let Issued::Acquired(mut original) = decoder.with(|| read.try_issue()).unwrap() else {
+        panic!("released original control must finish the same native acquisition");
+    };
+    drop(read);
+    drop(view);
+    let proof = decoder.with(|| original.complete()).unwrap().unwrap();
+    assert!(proof.belongs_to(&budget));
+    let AmxRecordV1::Begin(begin) = &proof.canonical().record else {
+        panic!("original independently committed Begin proof");
+    };
+    assert_eq!(begin.tx, tx);
+    drop(proof);
+    drop(original);
+    drop(decoder);
+    assert_eq!(budget.reserved_bytes(), baseline);
+}
+
+#[test]
+fn public_amx_initial_acquired_genesis_refuses_relocated_pinned_slot_without_reread() {
+    let (chain, tx, _) = committed_source(1);
+    let view = chain.state().view();
+    let budget = view.execution_budget();
+    let baseline = budget.reserved_bytes();
+    let decoder = norito::core::DecodeBudgetContext::try_new_owned(
+        norito::canonical_decode_limits(chain.kura().native_context_archive_max_bytes().get()),
+        &budget,
+    )
+    .unwrap();
+    let expected = *view.block_hashes().get(0).unwrap();
+    let length = decoder
+        .with(|| chain.kura().native_frame_read(1, expected))
+        .unwrap()
+        .unwrap()
+        .wire_len();
+    let pressure = budget
+        .try_reserve_bytes(
+            budget.limit_bytes() - budget.reserved_bytes() - usize::try_from(length).unwrap(),
+        )
+        .unwrap();
+    let mut read = amx_record_proof(&view, 2, AmxRecordKind::Begin, tx);
+    chain.kura().reset_canonical_query_reads_for_test();
+    assert!(matches!(decoder.with(|| read.try_issue()),
+        Err(Error::Chain(crate::execution_attempt::ExecutionAttemptError::Deferred(ref local)))
+            if matches!(local.allocation_refusal(), Some(AllocationRefusal::Capacity { .. }))));
+    let frame = read
+        .initialization
+        .as_ref()
+        .unwrap()
+        .frame_for_test()
+        .unwrap();
+    let pointer = frame.as_slice().as_ptr();
+    assert!(frame.belongs_to(&budget));
+    let original_reads = chain.kura().canonical_query_reads_for_test();
+    assert_eq!(original_reads, (1, length));
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+
+    // Change only the actual start coordinate in the same original index inode. The
+    // retained bytes do not authorize replacement slot geometry or another read.
+    let mut store = crate::kura::BlockStore::new(crate::kura::Kura::canonical_storage_path(
+        &chain.kura().store_root(),
+    ));
+    let slot = store.read_block_index(0).unwrap();
+    assert_eq!(slot.length, length);
+    store
+        .write_block_index(0, slot.start.checked_add(1).unwrap(), slot.length)
+        .unwrap();
+    let refused = decoder.with(|| read.try_issue());
+    // Restore before asserting, including when an unexpected error was returned.
+    store.write_block_index(0, slot.start, slot.length).unwrap();
+    assert!(
+        matches!(
+            refused,
+            Err(Error::Chain(
+                crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    crate::sumeragi::certified_chain::ChainReadError::NotInView { height: 1 }
+                )
+            )),
+        ),
+        "acquired genesis bytes must still refuse a changed original slot"
+    );
+    assert_eq!(
+        chain.kura().canonical_query_reads_for_test(),
+        original_reads
+    );
+    let frame = read
+        .initialization
+        .as_ref()
+        .unwrap()
+        .frame_for_test()
+        .unwrap();
+    assert_eq!(frame.as_slice().as_ptr(), pointer);
+    assert!(frame.belongs_to(&budget));
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    assert!(matches!(decoder.with(|| read.try_issue()),
+        Err(Error::Chain(crate::execution_attempt::ExecutionAttemptError::Deferred(ref local)))
+            if matches!(local.allocation_refusal(), Some(AllocationRefusal::Capacity { .. }))));
+    assert_eq!(
+        chain.kura().canonical_query_reads_for_test(),
+        original_reads
+    );
+    drop(pressure);
+    let Issued::Acquired(mut original) = decoder.with(|| read.try_issue()).unwrap() else {
+        panic!(
+            "restoring the original slot and releasing capacity must resume that original source"
+        );
+    };
+    drop(read);
+    drop(view);
+    let proof = decoder.with(|| original.complete()).unwrap().unwrap();
+    assert!(proof.belongs_to(&budget));
+    assert!(matches!(&proof.canonical().record, AmxRecordV1::Begin(begin) if begin.tx == tx));
+    drop(proof);
+    drop(original);
+    drop(decoder);
+    assert_eq!(budget.reserved_bytes(), baseline);
+}
+
+#[test]
+fn public_amx_signed_policy_retains_completed_npos_stage_on_metadata_refusal() {
+    use iroha_data_model::{
+        block::{SharedSignedBlock, decode_framed_signed_block},
+        isi::SetParameter,
+        parameter::{Parameter, system::SumeragiNposParameters},
+        sumeragi_finality::{GenesisReadError, signed_genesis_consensus_metadata},
+        transaction::Executable,
+    };
+    use norito::core::{DecodeBudgetContext, with_decode_limits_scope};
+
+    let (chain, tx, _) = committed_source_with_npos(1, Some(SumeragiNposParameters::default()));
+    let view = chain.state().view();
+    let budget = view.execution_budget();
+    let baseline = budget.reserved_bytes();
+    let limits =
+        norito::canonical_decode_limits(chain.kura().native_context_archive_max_bytes().get());
+    let bounded = |allocated| {
+        norito::DecodeLimits::new(
+            limits.max_sequence_elements(),
+            limits.max_field_bytes(),
+            limits.max_total_elements(),
+            allocated,
+            limits.max_nesting_depth(),
+        )
+    };
+    let expected = *view.block_hashes().get(0).unwrap();
+    let reference = DecodeBudgetContext::try_new_owned(limits, &budget).unwrap();
+    // This is the actual original native source/prelude/body path, not Kura's cached body.
+    // Its shared shell is admitted before the sole canonical body decoder, as in the owner.
+    let (original_slot, raw, body) = reference.with(|| {
+        let slot = chain
+            .kura()
+            .native_frame_read(1, expected)
+            .unwrap()
+            .unwrap();
+        let raw = slot
+            .read_original(slot.wire_len(), &budget)
+            .unwrap()
+            .unwrap();
+        let shell = SharedSignedBlock::reserve(&budget).unwrap();
+        let body = shell.initialize(decode_framed_signed_block(raw.as_slice()).unwrap());
+        assert_eq!(body.hash(), expected);
+        assert!(body.belongs_to(&budget) && raw.belongs_to(&budget));
+        body.validate_proposal_commitments().unwrap();
+        (slot, raw, body)
+    });
+    let acquisition = reference.consumed_allocated_bytes();
+    let policy = body
+        .external_transactions()
+        .find_map(|transaction| {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                panic!("genuine signed genesis has explicit instructions");
+            };
+            instructions.iter().find_map(|instruction| {
+                let set = instruction.as_any().downcast_ref::<SetParameter>()?;
+                let Parameter::Custom(custom) = set.inner() else {
+                    return None;
+                };
+                (custom.id() == &SumeragiNposParameters::parameter_id()).then_some(custom)
+            })
+        })
+        .unwrap();
+    let before = reference.consumed_allocated_bytes();
+    assert!(
+        reference
+            .with(|| SumeragiNposParameters::from_custom_parameter(policy))
+            .unwrap()
+            .is_some()
+    );
+    let completed_policy = reference.consumed_allocated_bytes() - before;
+    assert!(
+        completed_policy > 0,
+        "original signed NPoS policy must actually decode"
+    );
+
+    // Derive both real decoder failure debits from this exact signed body. Zero extra
+    // allocation refuses each original JSON object preflight; no forged error is installed.
+    let before = reference.consumed_allocated_bytes();
+    let policy_refusal = reference.with(|| {
+        with_decode_limits_scope(bounded(0), || {
+            SumeragiNposParameters::from_custom_parameter(policy)
+        })
+    });
+    assert!(matches!(
+        policy_refusal,
+        Err(norito::json::Error::DecodeResourceLimit)
+    ));
+    let failed_policy = reference.consumed_allocated_bytes() - before;
+    let before = reference.consumed_allocated_bytes();
+    let metadata_refusal = reference
+        .with(|| with_decode_limits_scope(bounded(0), || signed_genesis_consensus_metadata(&body)));
+    assert!(matches!(
+        metadata_refusal,
+        Err(GenesisReadError::Json(
+            norito::json::Error::DecodeResourceLimit
+        ))
+    ));
+    let failed_metadata = reference.consumed_allocated_bytes() - before;
+    assert_ne!(
+        failed_policy, failed_metadata,
+        "the genuine signed policy and metadata refusal debits must distinguish this fixture"
+    );
+    let wire_len = original_slot.wire_len();
+    // Compare with the original persisted carrier, including its execution result.
+    // The test chain's signed pre-execution genesis is not that complete native frame.
+    let original_wire = raw.as_slice().to_vec();
+    budget.with_deferred_refund_notifications(|_| {
+        drop(body);
+        drop(raw);
+    });
+    drop(reference);
+    assert_eq!(budget.reserved_bytes(), baseline);
+
+    let decoder = DecodeBudgetContext::try_new_owned(limits, &budget).unwrap();
+    let first_allowance =
+        usize::try_from(acquisition.checked_add(completed_policy).unwrap()).unwrap();
+    let mut read = amx_record_proof(&view, 2, AmxRecordKind::Begin, tx);
+    chain.kura().reset_canonical_query_reads_for_test();
+    let before = decoder.consumed_allocated_bytes();
+    let first =
+        decoder.with(|| with_decode_limits_scope(bounded(first_allowance), || read.try_issue()));
+    assert!(
+        matches!(first,
+        Err(Error::Chain(crate::execution_attempt::ExecutionAttemptError::Deferred(ref local)))
+            if local.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+                && local.allocation_refusal().is_none()),
+        "only original JSON metadata refusal after admitted policy is causal: {:?}",
+        first.as_ref().err()
+    );
+    assert_eq!(
+        decoder.consumed_allocated_bytes() - before,
+        acquisition
+            .checked_add(completed_policy)
+            .unwrap()
+            .checked_add(failed_metadata)
+            .unwrap(),
+        "first public attempt must complete the original policy before its metadata refusal"
+    );
+    assert!(read.chain.is_none());
+    let stage = read.initialization.as_ref().unwrap();
+    let body = stage.body_for_test().unwrap();
+    let body_pointer: *const SignedBlock = body.as_ref();
+    assert!(body.belongs_to(&budget));
+    let frame = stage.frame_for_test().unwrap();
+    let raw_pointer = frame.as_slice().as_ptr();
+    assert!(frame.belongs_to(&budget));
+    assert_eq!(body.hash(), expected);
+    assert_eq!(frame.as_slice(), original_wire.as_slice());
+    let original_reads = chain.kura().canonical_query_reads_for_test();
+    assert_eq!(original_reads, (1, wire_len));
+    let retained = budget.reserved_bytes();
+
+    // The same cumulative owner remains installed. Derive mandatory current slot debit,
+    // then admit only that prelude on retry: a retained policy must reach metadata again.
+    let before = decoder.consumed_allocated_bytes();
+    let current_slot = decoder
+        .with(|| chain.kura().native_frame_read(1, expected))
+        .unwrap()
+        .unwrap();
+    assert!(original_slot.same_original_slot(&current_slot));
+    let slot_recheck = decoder.consumed_allocated_bytes() - before;
+    let before = decoder.consumed_allocated_bytes();
+    let repeated = decoder.with(|| {
+        with_decode_limits_scope(bounded(usize::try_from(slot_recheck).unwrap()), || {
+            read.try_issue()
+        })
+    });
+    assert!(
+        matches!(repeated,
+        Err(Error::Chain(crate::execution_attempt::ExecutionAttemptError::Deferred(ref local)))
+            if local.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+                && local.allocation_refusal().is_none()),
+        "the retry must preserve original typed JSON refusal: {:?}",
+        repeated.as_ref().err()
+    );
+    let stage = read.initialization.as_ref().unwrap();
+    assert!(std::ptr::eq::<SignedBlock>(
+        stage.body_for_test().unwrap().as_ref(),
+        body_pointer
+    ));
+    assert_eq!(
+        stage.frame_for_test().unwrap().as_slice().as_ptr(),
+        raw_pointer
+    );
+    assert!(stage.body_for_test().unwrap().belongs_to(&budget));
+    assert!(stage.frame_for_test().unwrap().belongs_to(&budget));
+    assert_eq!(
+        chain.kura().canonical_query_reads_for_test(),
+        original_reads
+    );
+    assert_eq!(budget.reserved_bytes(), retained);
+    let repeated_debit = decoder.consumed_allocated_bytes() - before;
+    assert_eq!(
+        repeated_debit,
+        slot_recheck.checked_add(failed_metadata).unwrap(),
+        "public AMX retry must retain the completed original signed NPoS policy before metadata refusal; original metadata={failed_metadata}, repeated policy={failed_policy}, refusal={:?}",
+        repeated.as_ref().err()
+    );
+
+    // Lift only the test-local restriction; the original cumulative context and source
+    // still authenticate every prefix, target/archive, namespace and proof exactly once.
+    let Issued::Acquired(mut original) = decoder.with(|| read.try_issue()).unwrap() else {
+        panic!("unrestricted original signed source must issue its actual retained proof job");
+    };
+    drop(read);
+    drop(view);
+    let proof = decoder.with(|| original.complete()).unwrap().unwrap();
+    assert!(proof.belongs_to(&budget));
+    assert!(matches!(&proof.canonical().record, AmxRecordV1::Begin(begin) if begin.tx == tx));
+    assert!(original.complete().is_err());
+    drop(proof);
+    drop(original);
+    drop(decoder);
+    assert_eq!(budget.reserved_bytes(), baseline);
 }

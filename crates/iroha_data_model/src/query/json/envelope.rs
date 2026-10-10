@@ -439,7 +439,8 @@ impl SingularQueryJson {
                 }
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
-            Self::FindAssetDefinitionById { asset } | Self::FindAssetDefinitionDirectHome { asset } => {
+            Self::FindAssetDefinitionById { asset }
+            | Self::FindAssetDefinitionDirectHome { asset } => {
                 let mut payload = Map::new();
                 payload.insert("asset".to_owned(), Value::String(asset.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));

@@ -245,7 +245,6 @@ impl BuiltinSignature {
 }
 const fn default_parameter_names(arity: usize) -> &'static [&'static str] {
     match arity {
-        0 => &[],
         1 => &["value"],
         2 => &["first", "second"],
         3 => &["first", "second", "third"],
@@ -367,6 +366,8 @@ pub enum Builtin {
     QueryPageAccounts,
     /// Query a bounded page of projected asset views.
     QueryPageAssets,
+    /// Query a bounded asset page filtered by its exact account owner.
+    QueryPageAssetsOf,
     /// Query a bounded page of projected asset definition views.
     QueryPageAssetDefinitions,
     /// Query a bounded page of projected domain views.
@@ -393,8 +394,6 @@ pub enum Builtin {
     GetAccountBalance,
     /// Read a named public input as bytes.
     GetPublicInput,
-    /// Invoke a seiyaku with quantity input and minimum-output constraints.
-    ContractInvokeQuantity2,
     /// Internal integer debug-output syscall.
     DebugPrint,
     /// Internal string debug-log syscall.
@@ -493,10 +492,10 @@ pub enum Builtin {
     GrantPermission,
     /// Revoke a permission from an account.
     RevokePermission,
-    /// Grant an account permission to invoke a seiyaku kotoage.
-    GrantContractEntrypoint,
-    /// Revoke an account's permission to invoke a seiyaku kotoage.
-    RevokeContractEntrypoint,
+    /// Grant an account a declared permission of the executing seiyaku instance.
+    GrantContractPermission,
+    /// Revoke an account's declared permission of the executing seiyaku instance.
+    RevokeContractPermission,
     /// Open an escrow offer with an asset quantity and optional evidence.
     EscrowOpenOffer,
     /// Accept a named escrow offer.
@@ -519,12 +518,6 @@ pub enum Builtin {
     CreateNftsForAllUsers,
     /// Internal mutation of the host execution-depth limit.
     SetExecutionDepth,
-    /// Begin a host-managed V1 asset transfer batch.
-    TransferV1BatchBegin,
-    /// End a host-managed V1 asset transfer batch.
-    TransferV1BatchEnd,
-    /// Apply an encoded V1 asset transfer batch.
-    TransferV1BatchApply,
     /// Lower a bounded list of asset transfers to a host-managed batch.
     TransferBatch,
     /// Begin an atomic cross-dataspace transaction using its descriptor.
@@ -633,6 +626,21 @@ pub enum Builtin {
     TlvLen,
     /// Read the length of a byte value.
     BytesLen,
+    /// Encode a public value using its canonical typed Norito record.
+    ValueEncode,
+    /// Concatenate two byte values.
+    BytesConcat,
+    /// Concatenate two UTF-8 strings.
+    StringConcat,
+    /// Return the UTF-8 byte length of a string.
+    StringLen,
+    /// Expose the UTF-8 bytes of a string.
+    StringAsBytes,
+    /// Validate UTF-8 bytes and return an optional string.
+    StringFromBytes,
+    /// Render a public scalar as its canonical string.
+    StringFrom,
+
     /// Internal encoding of a pointer-ABI value as Norito bytes.
     PointerToNorito,
     /// Create an empty JSON object.
@@ -847,6 +855,7 @@ impl Builtin {
             "query_get_nft" => Self::QueryGetNft,
             "query_page_accounts" => Self::QueryPageAccounts,
             "query_page_assets" => Self::QueryPageAssets,
+            "query_page_assets_of" => Self::QueryPageAssetsOf,
             "query_page_asset_definitions" => Self::QueryPageAssetDefinitions,
             "query_page_domains" => Self::QueryPageDomains,
             "query_page_nfts" => Self::QueryPageNfts,
@@ -860,7 +869,6 @@ impl Builtin {
             "subscription_record_usage" => Self::SubscriptionRecordUsage,
             "get_account_balance" => Self::GetAccountBalance,
             "get_public_input" => Self::GetPublicInput,
-            "contract_invoke_quantity2" => Self::ContractInvokeQuantity2,
             "debug_print" => Self::DebugPrint,
             "debug_log" => Self::DebugLog,
             "assert" => Self::Assert,
@@ -910,8 +918,8 @@ impl Builtin {
             "revoke_role" => Self::RevokeRole,
             "grant_permission" => Self::GrantPermission,
             "revoke_permission" => Self::RevokePermission,
-            "grant_contract_entrypoint" => Self::GrantContractEntrypoint,
-            "revoke_contract_entrypoint" => Self::RevokeContractEntrypoint,
+            "grant_contract_permission" => Self::GrantContractPermission,
+            "revoke_contract_permission" => Self::RevokeContractPermission,
             "escrow_open_offer" => Self::EscrowOpenOffer,
             "escrow_accept" => Self::EscrowAccept,
             "escrow_mark_payment_sent" => Self::EscrowMarkPaymentSent,
@@ -923,9 +931,6 @@ impl Builtin {
             "commit_output" => Self::CommitOutput,
             "create_nfts_for_all_users" => Self::CreateNftsForAllUsers,
             "set_execution_depth" => Self::SetExecutionDepth,
-            "transfer_v1_batch_begin" => Self::TransferV1BatchBegin,
-            "transfer_v1_batch_end" => Self::TransferV1BatchEnd,
-            "transfer_v1_batch_apply" => Self::TransferV1BatchApply,
             "transfer_batch" => Self::TransferBatch,
             "axt_begin" => Self::AxtBegin,
             "axt_touch" => Self::AxtTouch,
@@ -980,6 +985,14 @@ impl Builtin {
             "tlv_eq" => Self::TlvEq,
             "tlv_len" => Self::TlvLen,
             "bytes_len" => Self::BytesLen,
+            "value_encode" => Self::ValueEncode,
+            "bytes_concat" => Self::BytesConcat,
+            "string_concat" => Self::StringConcat,
+            "string_len" => Self::StringLen,
+            "string_as_bytes" => Self::StringAsBytes,
+            "string_from_bytes" => Self::StringFromBytes,
+            "string_from" => Self::StringFrom,
+
             "pointer_to_norito" => Self::PointerToNorito,
             "json_object" => Self::JsonObject,
             "json_set_int" => Self::JsonSetInt,
@@ -1089,6 +1102,7 @@ impl Builtin {
             Self::QueryGetNft => "query_get_nft",
             Self::QueryPageAccounts => "query_page_accounts",
             Self::QueryPageAssets => "query_page_assets",
+            Self::QueryPageAssetsOf => "query_page_assets_of",
             Self::QueryPageAssetDefinitions => "query_page_asset_definitions",
             Self::QueryPageDomains => "query_page_domains",
             Self::QueryPageNfts => "query_page_nfts",
@@ -1102,7 +1116,6 @@ impl Builtin {
             Self::SubscriptionRecordUsage => "subscription_record_usage",
             Self::GetAccountBalance => "get_account_balance",
             Self::GetPublicInput => "get_public_input",
-            Self::ContractInvokeQuantity2 => "contract_invoke_quantity2",
             Self::DebugPrint => "debug_print",
             Self::DebugLog => "debug_log",
             Self::Assert => "assert",
@@ -1152,8 +1165,8 @@ impl Builtin {
             Self::RevokeRole => "revoke_role",
             Self::GrantPermission => "grant_permission",
             Self::RevokePermission => "revoke_permission",
-            Self::GrantContractEntrypoint => "grant_contract_entrypoint",
-            Self::RevokeContractEntrypoint => "revoke_contract_entrypoint",
+            Self::GrantContractPermission => "grant_contract_permission",
+            Self::RevokeContractPermission => "revoke_contract_permission",
             Self::EscrowOpenOffer => "escrow_open_offer",
             Self::EscrowAccept => "escrow_accept",
             Self::EscrowMarkPaymentSent => "escrow_mark_payment_sent",
@@ -1165,9 +1178,6 @@ impl Builtin {
             Self::CommitOutput => "commit_output",
             Self::CreateNftsForAllUsers => "create_nfts_for_all_users",
             Self::SetExecutionDepth => "set_execution_depth",
-            Self::TransferV1BatchBegin => "transfer_v1_batch_begin",
-            Self::TransferV1BatchEnd => "transfer_v1_batch_end",
-            Self::TransferV1BatchApply => "transfer_v1_batch_apply",
             Self::TransferBatch => "transfer_batch",
             Self::AxtBegin => "axt_begin",
             Self::AxtTouch => "axt_touch",
@@ -1222,6 +1232,14 @@ impl Builtin {
             Self::TlvEq => "tlv_eq",
             Self::TlvLen => "tlv_len",
             Self::BytesLen => "bytes_len",
+            Self::ValueEncode => "value_encode",
+            Self::BytesConcat => "bytes_concat",
+            Self::StringConcat => "string_concat",
+            Self::StringLen => "string_len",
+            Self::StringAsBytes => "string_as_bytes",
+            Self::StringFromBytes => "string_from_bytes",
+            Self::StringFrom => "string_from",
+
             Self::PointerToNorito => "pointer_to_norito",
             Self::JsonObject => "json_object",
             Self::JsonSetInt => "json_set_int",
@@ -1345,7 +1363,6 @@ impl Builtin {
             Self::ContractAddress => "context::seiyaku_address",
             Self::Entrypoint => "context::kotoage",
             Self::GetPublicInput => "context::public_input",
-            Self::ContractInvokeQuantity2 => "contract::invoke",
             Self::TriggerEvent => "context::trigger_event",
             Self::StateGet => "state::get",
             Self::StateSet => "state::set",
@@ -1360,6 +1377,7 @@ impl Builtin {
             Self::QueryGetNft => "ledger::query::nft",
             Self::QueryPageAccounts => "ledger::query::accounts",
             Self::QueryPageAssets => "ledger::query::assets",
+            Self::QueryPageAssetsOf => "ledger::query::assets_of",
             Self::QueryPageAssetDefinitions => "ledger::query::asset_definitions",
             Self::QueryPageDomains => "ledger::query::domains",
             Self::QueryPageNfts => "ledger::query::nfts",
@@ -1370,7 +1388,61 @@ impl Builtin {
             Self::SubscriptionBill => "ledger::subscription::bill",
             Self::SubscriptionRecordUsage => "ledger::subscription::record_usage",
             Self::GetAccountBalance => "ledger::asset::balance",
-            Self::DebugPrint => self.name(),
+            // The scalar setter cannot represent Kotodama's adaptive-width
+            // `int`; source must use native `json { ... }` construction,
+            // which carries the exact pointer-backed value.
+            // Typed JSON getters are receiver methods (`value.get_int(key)`);
+            // their source spelling is the method name.
+            // Operators and the named V1 conversions are the only numeric
+            // source surface. These registry entries remain compiler-owned
+            // lowering helpers and deliberately have no source alias.
+            Self::DebugPrint
+            | Self::JsonSetInt
+            | Self::GetInt
+            | Self::GetDecimal
+            | Self::GetQuantity
+            | Self::GetJson
+            | Self::GetName
+            | Self::GetAccountId
+            | Self::GetAssetDefinitionId
+            | Self::GetNftId
+            | Self::GetBytesHex
+            | Self::GetString
+            | Self::GetBool
+            | Self::NumericToInt
+            | Self::NumericNeg
+            | Self::NumericAdd
+            | Self::NumericSub
+            | Self::NumericMul
+            | Self::NumericDiv
+            | Self::NumericRem
+            | Self::NumericEq
+            | Self::NumericNe
+            | Self::NumericLt
+            | Self::NumericLe
+            | Self::NumericGt
+            | Self::NumericGe
+            | Self::Alloc
+            | Self::QueryExecuteNorito
+            | Self::ExecuteQuery
+            | Self::GrowHeap
+            | Self::GetMerklePath
+            | Self::GetMerkleCompact
+            | Self::GetRegisterMerkleCompact
+            | Self::NumericToIntDirect
+            | Self::NumericAddDirect
+            | Self::NumericSubDirect
+            | Self::NumericMulDirect
+            | Self::NumericDivDirect
+            | Self::NumericRemDirect
+            | Self::NumericNegDirect
+            | Self::NumericEqDirect
+            | Self::NumericNeDirect
+            | Self::NumericLtDirect
+            | Self::NumericLeDirect
+            | Self::NumericGtDirect
+            | Self::NumericGeDirect
+            | Self::SysvarAuthority => self.name(),
             Self::DebugLog => "debug::log",
             Self::Assert => "test::assert",
             Self::Require => "require",
@@ -1423,8 +1495,8 @@ impl Builtin {
             Self::RevokeRole => "ledger::role::revoke",
             Self::GrantPermission => "ledger::permission::grant",
             Self::RevokePermission => "ledger::permission::revoke",
-            Self::GrantContractEntrypoint => "ledger::seiyaku::grant_kotoage",
-            Self::RevokeContractEntrypoint => "ledger::seiyaku::revoke_kotoage",
+            Self::GrantContractPermission => "ledger::seiyaku::grant_permission",
+            Self::RevokeContractPermission => "ledger::seiyaku::revoke_permission",
             Self::EscrowOpenOffer => "ledger::escrow::open_offer",
             Self::EscrowAccept => "ledger::escrow::accept",
             Self::EscrowMarkPaymentSent => "ledger::escrow::mark_payment_sent",
@@ -1433,14 +1505,6 @@ impl Builtin {
             Self::EscrowOpenDispute => "ledger::escrow::open_dispute",
             Self::EscrowResolveDispute => "ledger::escrow::resolve_dispute",
             Self::SetExecutionDepth => "ledger::parameters::set_execution_depth",
-            // TODO: make the raw FASTPQ batch boundary (`ledger::asset::batch::*`,
-            // whose `apply` takes an untyped Norito `TransferAssetBatch`) compiler-internal
-            // so typed `ledger::asset::transfer_batch` is the one source batch API; this
-            // needs the c064..c069 compiler fixtures and their tests rewritten as
-            // rejection cases and the editor builtin summaries updated together.
-            Self::TransferV1BatchBegin => "ledger::asset::batch::begin",
-            Self::TransferV1BatchEnd => "ledger::asset::batch::end",
-            Self::TransferV1BatchApply => "ledger::asset::batch::apply",
             Self::TransferBatch => "ledger::asset::transfer_batch",
             Self::AxtBegin => "axt::begin",
             Self::AxtTouch => "axt::touch",
@@ -1464,24 +1528,7 @@ impl Builtin {
             Self::VrfVerifyBatch => "crypto::vrf::verify_batch",
             Self::Sm3Hash => "crypto::sm3",
             Self::JsonObject => "json::object",
-            // The scalar setter cannot represent Kotodama's adaptive-width
-            // `int`; source must use native `json { ... }` construction,
-            // which carries the exact pointer-backed value.
-            Self::JsonSetInt => self.name(),
             Self::JsonSetAccountId => "json::set_account_id",
-            // Typed JSON getters are receiver methods (`value.get_int(key)`);
-            // their source spelling is the method name.
-            Self::GetInt
-            | Self::GetDecimal
-            | Self::GetQuantity
-            | Self::GetJson
-            | Self::GetName
-            | Self::GetAccountId
-            | Self::GetAssetDefinitionId
-            | Self::GetNftId
-            | Self::GetBytesHex
-            | Self::GetString
-            | Self::GetBool => self.name(),
             Self::Sha256Hash => "crypto::sha256",
             Self::Sha3Hash => "crypto::sha3",
             Self::Blake2b256Hash => "crypto::blake2b256",
@@ -1507,28 +1554,19 @@ impl Builtin {
             Self::TlvEq => "codec::tlv_eq",
             Self::TlvLen => "codec::tlv_len",
             Self::BytesLen => "bytes::len",
+            Self::ValueEncode => "codec::encode",
+            Self::BytesConcat => "bytes::concat",
+            Self::StringConcat => "string::concat",
+            Self::StringLen => "string::len",
+            Self::StringAsBytes => "string::as_bytes",
+            Self::StringFromBytes => "string::from_bytes",
+            Self::StringFrom => "string::from",
             Self::PointerToNorito => "codec::to_norito",
             Self::EncodeJson => "codec::encode_json",
             Self::DecodeJson => "codec::decode_json",
             Self::SchemaEncode => "codec::schema::encode",
             Self::SchemaDecode => "codec::schema::decode",
             Self::SchemaInfo => "codec::schema::info",
-            // Operators and the named V1 conversions are the only numeric
-            // source surface. These registry entries remain compiler-owned
-            // lowering helpers and deliberately have no source alias.
-            Self::NumericToInt
-            | Self::NumericNeg
-            | Self::NumericAdd
-            | Self::NumericSub
-            | Self::NumericMul
-            | Self::NumericDiv
-            | Self::NumericRem
-            | Self::NumericEq
-            | Self::NumericNe
-            | Self::NumericLt
-            | Self::NumericLe
-            | Self::NumericGt
-            | Self::NumericGe => self.name(),
             Self::WrappingAdd => "math::wrapping_add",
             Self::WrappingSub => "math::wrapping_sub",
             Self::WrappingMul => "math::wrapping_mul",
@@ -1557,27 +1595,6 @@ impl Builtin {
             Self::SignatureSchemeEd25519 => "SignatureScheme::Ed25519",
             Self::SignatureSchemeSecp256k1 => "SignatureScheme::Secp256k1",
             Self::SignatureSchemeMlDsa => "SignatureScheme::MlDsa",
-            Self::Alloc
-            | Self::QueryExecuteNorito
-            | Self::ExecuteQuery
-            | Self::GrowHeap
-            | Self::GetMerklePath
-            | Self::GetMerkleCompact
-            | Self::GetRegisterMerkleCompact
-            | Self::NumericToIntDirect
-            | Self::NumericAddDirect
-            | Self::NumericSubDirect
-            | Self::NumericMulDirect
-            | Self::NumericDivDirect
-            | Self::NumericRemDirect
-            | Self::NumericNegDirect
-            | Self::NumericEqDirect
-            | Self::NumericNeDirect
-            | Self::NumericLtDirect
-            | Self::NumericLeDirect
-            | Self::NumericGtDirect
-            | Self::NumericGeDirect
-            | Self::SysvarAuthority => self.name(),
         }
     }
     /// Resolve a source-visible builtin by its canonical spelling.
@@ -1625,7 +1642,6 @@ impl Builtin {
             // helpers reachable from views may log.
             Self::SubscriptionBill
             | Self::SubscriptionRecordUsage
-            | Self::ContractInvokeQuantity2
             | Self::DebugPrint
             | Self::DebugLog
             | Self::TestInvokeEntrypoint
@@ -1671,8 +1687,8 @@ impl Builtin {
             | Self::RevokeRole
             | Self::GrantPermission
             | Self::RevokePermission
-            | Self::GrantContractEntrypoint
-            | Self::RevokeContractEntrypoint
+            | Self::GrantContractPermission
+            | Self::RevokeContractPermission
             | Self::EscrowOpenOffer
             | Self::EscrowAccept
             | Self::EscrowMarkPaymentSent
@@ -1684,9 +1700,6 @@ impl Builtin {
             | Self::CommitOutput
             | Self::CreateNftsForAllUsers
             | Self::SetExecutionDepth
-            | Self::TransferV1BatchBegin
-            | Self::TransferV1BatchEnd
-            | Self::TransferV1BatchApply
             | Self::TransferBatch
             | Self::AxtBegin
             | Self::AxtTouch
@@ -1716,7 +1729,6 @@ impl Builtin {
     /// Return the scheduler access class for this builtin.
     pub const fn access(self) -> BuiltinAccess {
         match self {
-            Self::PointerConstructor(PointerConstructor::AccountId) => BuiltinAccess::LedgerRead,
             Self::Contains
             | Self::StateGet
             | Self::StateHas
@@ -1725,7 +1737,8 @@ impl Builtin {
             Self::GetOrInsert | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
                 BuiltinAccess::StateWrite
             }
-            Self::QueryExecuteNorito
+            Self::PointerConstructor(PointerConstructor::AccountId)
+            | Self::QueryExecuteNorito
             | Self::QueryGetAccount
             | Self::QueryGetAsset
             | Self::QueryGetAssetDefinition
@@ -1733,6 +1746,7 @@ impl Builtin {
             | Self::QueryGetNft
             | Self::QueryPageAccounts
             | Self::QueryPageAssets
+            | Self::QueryPageAssetsOf
             | Self::QueryPageAssetDefinitions
             | Self::QueryPageDomains
             | Self::QueryPageNfts
@@ -1748,8 +1762,7 @@ impl Builtin {
             | Self::ZkVoteVerifyBallot
             | Self::ZkVoteVerifyTally
             | Self::VrfEpochSeed => BuiltinAccess::LedgerRead,
-            Self::ContractInvokeQuantity2
-            | Self::TestInvokeEntrypoint
+            Self::TestInvokeEntrypoint
             | Self::TestInvokeEntrypointAs
             | Self::TestExpectRejectAs
             | Self::TestExpectAnyRejectAs
@@ -1904,11 +1917,51 @@ impl Builtin {
     pub const fn operation_syscalls(self) -> &'static [u32] {
         use ivm_abi::syscalls as s;
         match self {
-            Self::PointerConstructor(PointerConstructor::AccountId) => {
+            Self::PointerConstructor(PointerConstructor::AccountId) | Self::ResolveAccountAlias => {
                 &[s::SYSCALL_RESOLVE_ACCOUNT_ALIAS]
             }
-            Self::PointerConstructor(_) => &[],
-            Self::Contains => &[s::SYSCALL_BUILD_PATH_KEY_NORITO, s::SYSCALL_STATE_GET],
+            Self::PointerConstructor(_)
+            | Self::KeysTake2
+            | Self::ValuesTake2
+            | Self::KeysValuesTake2
+            | Self::BuildSubmitBallotInline
+            | Self::StringAsBytes
+            | Self::NumericToIntDirect
+            | Self::NumericAddDirect
+            | Self::NumericSubDirect
+            | Self::NumericMulDirect
+            | Self::NumericDivDirect
+            | Self::NumericRemDirect
+            | Self::NumericNegDirect
+            | Self::NumericEqDirect
+            | Self::NumericNeDirect
+            | Self::NumericLtDirect
+            | Self::NumericLeDirect
+            | Self::NumericGtDirect
+            | Self::NumericGeDirect
+            | Self::WrappingAdd
+            | Self::WrappingSub
+            | Self::WrappingMul
+            | Self::WrappingNeg
+            | Self::Poseidon2
+            | Self::Poseidon6
+            | Self::Pubkgen
+            | Self::SetVl
+            | Self::NumericSpecUnconstrained
+            | Self::NumericSpecInteger
+            | Self::NumericSpecFractional
+            | Self::MintableInfinitely
+            | Self::MintableOnce
+            | Self::MintableNot
+            | Self::MintableLimited
+            | Self::SignatureSchemeEd25519
+            | Self::SignatureSchemeSecp256k1
+            | Self::SignatureSchemeMlDsa => &[],
+            Self::Contains => &[
+                s::SYSCALL_STATE_VALUE_ENCODE,
+                s::SYSCALL_BUILD_PATH_KEY_NORITO,
+                s::SYSCALL_STATE_GET,
+            ],
             Self::GetOrInsert => &[
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
@@ -1917,12 +1970,12 @@ impl Builtin {
                 s::SYSCALL_STATE_SET,
             ],
             Self::StateMapRemove => &[
+                s::SYSCALL_STATE_VALUE_ENCODE,
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
                 s::SYSCALL_STATE_DEL,
             ],
-            Self::KeysTake2 | Self::ValuesTake2 | Self::KeysValuesTake2 => &[],
             Self::StateGet => &[s::SYSCALL_STATE_GET],
             Self::StateSet => &[s::SYSCALL_STATE_SET],
             Self::StateDel => &[s::SYSCALL_STATE_DEL],
@@ -1937,6 +1990,7 @@ impl Builtin {
             | Self::QueryGetNft => &[s::SYSCALL_CORE_QUERY_GET],
             Self::QueryPageAccounts
             | Self::QueryPageAssets
+            | Self::QueryPageAssetsOf
             | Self::QueryPageAssetDefinitions
             | Self::QueryPageDomains
             | Self::QueryPageNfts => &[s::SYSCALL_CORE_QUERY_PAGE],
@@ -1945,12 +1999,10 @@ impl Builtin {
             Self::QueryGetContractInstance => &[s::SYSCALL_QUERY_GET_CONTRACT_INSTANCE],
             Self::ScExecuteSubmitBallot => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION],
             Self::ExecuteQuery => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY],
-            Self::ResolveAccountAlias => &[s::SYSCALL_RESOLVE_ACCOUNT_ALIAS],
             Self::SubscriptionBill => &[s::SYSCALL_SUBSCRIPTION_BILL],
             Self::SubscriptionRecordUsage => &[s::SYSCALL_SUBSCRIPTION_RECORD_USAGE],
             Self::GetAccountBalance => &[s::SYSCALL_GET_ACCOUNT_BALANCE],
             Self::GetPublicInput | Self::TriggerEvent => &[s::SYSCALL_GET_PUBLIC_INPUT],
-            Self::ContractInvokeQuantity2 => &[s::SYSCALL_CALL_CONTRACT_QUANTITY2],
             Self::DebugPrint => &[s::SYSCALL_DEBUG_PRINT],
             Self::DebugLog => &[s::SYSCALL_DEBUG_LOG],
             Self::Info => &[s::SYSCALL_POINTER_TO_NORITO, s::SYSCALL_DEBUG_LOG],
@@ -2003,8 +2055,8 @@ impl Builtin {
             Self::RevokeRole => &[s::SYSCALL_REVOKE_ROLE],
             Self::GrantPermission => &[s::SYSCALL_GRANT_PERMISSION],
             Self::RevokePermission => &[s::SYSCALL_REVOKE_PERMISSION],
-            Self::GrantContractEntrypoint => &[s::SYSCALL_GRANT_CONTRACT_ENTRYPOINT],
-            Self::RevokeContractEntrypoint => &[s::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT],
+            Self::GrantContractPermission => &[s::SYSCALL_GRANT_CONTRACT_PERMISSION],
+            Self::RevokeContractPermission => &[s::SYSCALL_REVOKE_CONTRACT_PERMISSION],
             Self::EscrowOpenOffer => &[s::SYSCALL_ESCROW_OPEN_OFFER],
             Self::EscrowAccept => &[s::SYSCALL_ESCROW_ACCEPT],
             Self::EscrowMarkPaymentSent => &[s::SYSCALL_ESCROW_MARK_PAYMENT_SENT],
@@ -2016,9 +2068,6 @@ impl Builtin {
             Self::CommitOutput => &[s::SYSCALL_COMMIT_OUTPUT],
             Self::CreateNftsForAllUsers => &[s::SYSCALL_CREATE_NFTS_FOR_ALL_USERS],
             Self::SetExecutionDepth => &[s::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH],
-            Self::TransferV1BatchBegin => &[s::SYSCALL_TRANSFER_V1_BATCH_BEGIN],
-            Self::TransferV1BatchEnd => &[s::SYSCALL_TRANSFER_V1_BATCH_END],
-            Self::TransferV1BatchApply => &[s::SYSCALL_TRANSFER_V1_BATCH_APPLY],
             Self::TransferBatch => &[
                 s::SYSCALL_TRANSFER_V1_BATCH_BEGIN,
                 s::SYSCALL_TRANSFER_V1,
@@ -2039,7 +2088,6 @@ impl Builtin {
             Self::ZkVerifyBatch => &[s::SYSCALL_ZK_VERIFY_BATCH],
             Self::ZkVoteVerifyBallot => &[s::SYSCALL_ZK_VOTE_VERIFY_BALLOT],
             Self::ZkVoteVerifyTally => &[s::SYSCALL_ZK_VOTE_VERIFY_TALLY],
-            Self::BuildSubmitBallotInline => &[],
             Self::VrfEpochSeed => &[s::SYSCALL_VRF_EPOCH_SEED],
             Self::VrfVerify => &[s::SYSCALL_VRF_VERIFY],
             Self::VrfVerifyBatch => &[s::SYSCALL_VRF_VERIFY_BATCH],
@@ -2072,10 +2120,17 @@ impl Builtin {
             Self::AddSignatory => &[s::SYSCALL_ADD_SIGNATORY],
             Self::RemoveSignatory => &[s::SYSCALL_REMOVE_SIGNATORY],
             Self::SetAccountQuorum => &[s::SYSCALL_SET_ACCOUNT_QUORUM],
-            Self::Path => &[s::SYSCALL_BUILD_PATH_KEY_NORITO],
+            Self::Path => &[
+                s::SYSCALL_STATE_VALUE_ENCODE,
+                s::SYSCALL_BUILD_PATH_KEY_NORITO,
+            ],
             Self::NameDecode => &[s::SYSCALL_NAME_DECODE],
             Self::TlvEq => &[s::SYSCALL_TLV_EQ],
-            Self::TlvLen | Self::BytesLen => &[s::SYSCALL_TLV_LEN],
+            Self::TlvLen | Self::BytesLen | Self::StringLen => &[s::SYSCALL_TLV_LEN],
+            Self::ValueEncode => &[s::SYSCALL_VALUE_ENCODE],
+            Self::BytesConcat | Self::StringConcat => &[s::SYSCALL_BLOB_CONCAT],
+            Self::StringFromBytes => &[s::SYSCALL_UTF8_VALIDATE],
+            Self::StringFrom => &[s::SYSCALL_VALUE_TO_STRING],
             Self::PointerToNorito => &[s::SYSCALL_POINTER_TO_NORITO],
             Self::JsonObject => &[s::SYSCALL_JSON_OBJECT],
             Self::JsonSetInt => &[s::SYSCALL_JSON_SET_I64],
@@ -2085,7 +2140,7 @@ impl Builtin {
             Self::SchemaEncode => &[s::SYSCALL_SCHEMA_ENCODE],
             Self::SchemaDecode => &[s::SYSCALL_SCHEMA_DECODE],
             Self::SchemaInfo => &[s::SYSCALL_SCHEMA_INFO],
-            Self::NumericToInt => &[s::SYSCALL_DECIMAL_TRY_TO_INT_EXACT],
+            Self::NumericToInt => &[s::SYSCALL_DECIMAL_TO_INT_EXACT],
             Self::NumericNeg => &[s::SYSCALL_INT_NEG, s::SYSCALL_DECIMAL_NEG],
             Self::NumericAdd => &[
                 s::SYSCALL_INT_ADD,
@@ -2139,35 +2194,26 @@ impl Builtin {
                 s::SYSCALL_DECIMAL_GE,
                 s::SYSCALL_QUANTITY_GE,
             ],
-            Self::NumericToIntDirect
-            | Self::NumericAddDirect
-            | Self::NumericSubDirect
-            | Self::NumericMulDirect
-            | Self::NumericDivDirect
-            | Self::NumericRemDirect
-            | Self::NumericNegDirect
-            | Self::NumericEqDirect
-            | Self::NumericNeDirect
-            | Self::NumericLtDirect
-            | Self::NumericLeDirect
-            | Self::NumericGtDirect
-            | Self::NumericGeDirect => &[],
             Self::Isqrt => &[s::SYSCALL_INT_ISQRT],
-            Self::Abs => &[s::SYSCALL_INT_ABS],
-            Self::Min => &[s::SYSCALL_INT_MIN],
-            Self::Max => &[s::SYSCALL_INT_MAX],
+            Self::Abs => &[
+                s::SYSCALL_INT_ABS,
+                s::SYSCALL_DECIMAL_LT,
+                s::SYSCALL_DECIMAL_NEG,
+            ],
+            Self::Min => &[
+                s::SYSCALL_INT_MIN,
+                s::SYSCALL_DECIMAL_LT,
+                s::SYSCALL_QUANTITY_LT,
+            ],
+            Self::Max => &[
+                s::SYSCALL_INT_MAX,
+                s::SYSCALL_DECIMAL_LT,
+                s::SYSCALL_QUANTITY_LT,
+            ],
             Self::DivCeil => &[s::SYSCALL_INT_DIV_CEIL],
             Self::Gcd => &[s::SYSCALL_INT_GCD],
             Self::Mean => &[s::SYSCALL_INT_MEAN],
             Self::Valcom => &[s::SYSCALL_PRIVATE_NUMERIC_VALCOM],
-            Self::WrappingAdd
-            | Self::WrappingSub
-            | Self::WrappingMul
-            | Self::WrappingNeg
-            | Self::Poseidon2
-            | Self::Poseidon6
-            | Self::Pubkgen
-            | Self::SetVl => &[],
             Self::GetInt => &[s::SYSCALL_JSON_GET_INT],
             Self::GetDecimal => &[s::SYSCALL_JSON_GET_DECIMAL],
             Self::GetQuantity => &[s::SYSCALL_JSON_GET_QUANTITY],
@@ -2188,16 +2234,6 @@ impl Builtin {
             Self::ContractAddress => &[s::SYSCALL_SYSVAR_CONTRACT_ADDRESS],
             Self::Entrypoint => &[s::SYSCALL_SYSVAR_ENTRYPOINT],
             Self::SysvarAuthority => &[s::SYSCALL_SYSVAR_AUTHORITY],
-            Self::NumericSpecUnconstrained
-            | Self::NumericSpecInteger
-            | Self::NumericSpecFractional
-            | Self::MintableInfinitely
-            | Self::MintableOnce
-            | Self::MintableNot
-            | Self::MintableLimited
-            | Self::SignatureSchemeEd25519
-            | Self::SignatureSchemeSecp256k1
-            | Self::SignatureSchemeMlDsa => &[],
         }
     }
     /// Return whether syscall emission is direct or compiler-derived.
@@ -2213,6 +2249,9 @@ impl Builtin {
                 | Self::GetOrInsert
                 | Self::StateMapRemove
                 | Self::TransferBatch
+                | Self::Min
+                | Self::Max
+                | Self::Abs
                 | Self::Path
                 | Self::Info
                 | Self::Valcom
@@ -2267,16 +2306,34 @@ impl Builtin {
                 S::new(&["StateMap<int,int>", "int", "int"], "int")
             }
             Self::KeysValuesTake2 => S::new(&["StateMap<int,int>", "int", "int"], "(int,int)"),
-            Self::StateGet => S::new(&["bytes"], "bytes"),
-            Self::StateSet => S::new(&["bytes", "bytes"], "()"),
-            Self::StateDel => S::new(&["bytes"], "()"),
-            Self::StateHas => S::new(&["bytes"], "bool"),
-            Self::StateLen | Self::StateCount => S::new(&["bytes"], "int"),
-            Self::QueryExecuteNorito
+            Self::StateGet
+            | Self::QueryExecuteNorito
             | Self::QueryGetContractManifest
             | Self::ZkRootsGet
             | Self::ZkVoteGetTally
-            | Self::VrfEpochSeed => S::new(&["bytes"], "bytes"),
+            | Self::ExecuteQuery
+            | Self::VrfVerify
+            | Self::VrfVerifyBatch
+            | Self::Sm3Hash
+            | Self::Sha256Hash
+            | Self::Sha3Hash
+            | Self::Blake2b256Hash
+            | Self::Keccak256Hash
+            | Self::IrohaHash => S::new(&["bytes"], "bytes"),
+            Self::StateSet => S::new(&["bytes", "bytes"], "()"),
+            Self::StateDel
+            | Self::ScExecuteSubmitBallot
+            | Self::DeactivateContractInstance
+            | Self::RemoveSmartContractBytes
+            | Self::RegisterSmartContractCode
+            | Self::RegisterSmartContractBytes
+            | Self::ActivateContractInstance
+            | Self::ZkVerifyBatch
+            | Self::ZkVoteVerifyBallot
+            | Self::ZkVoteVerifyTally => S::new(&["bytes"], "()"),
+            Self::StateHas | Self::VerifyProof => S::new(&["bytes"], "bool"),
+            Self::StateLen | Self::StateCount | Self::BytesLen => S::new(&["bytes"], "int"),
+            Self::VrfEpochSeed => S::new(&["int"], "Option<bytes>"),
             Self::QueryGetAccount => S::new(&["AccountId"], "Option<AccountView>"),
             Self::QueryGetAsset => S::new(&["AssetId"], "Option<AssetView>"),
             Self::QueryGetAssetDefinition => {
@@ -2286,6 +2343,7 @@ impl Builtin {
             Self::QueryGetNft => S::new(&["NftId"], "Option<NftView>"),
             Self::QueryPageAccounts => S::new(&["int", "int"], "QueryPage<AccountView>"),
             Self::QueryPageAssets => S::new(&["int", "int"], "QueryPage<AssetView>"),
+            Self::QueryPageAssetsOf => S::new(&["AccountId", "int", "int"], "QueryPage<AssetView>"),
             Self::QueryPageAssetDefinitions => {
                 S::new(&["int", "int"], "QueryPage<AssetDefinitionView>")
             }
@@ -2298,40 +2356,40 @@ impl Builtin {
                 &["string", "bytes", "bytes", "string", "bytes", "bytes"],
                 "bytes",
             ),
-            Self::ScExecuteSubmitBallot => S::new(&["bytes"], "()"),
-            Self::ExecuteQuery => S::new(&["bytes"], "bytes"),
             Self::ResolveAccountAlias => S::new(&["string|bytes"], "AccountId"),
-            Self::SubscriptionBill | Self::SubscriptionRecordUsage => S::new(&[], "()"),
+            Self::SubscriptionBill
+            | Self::SubscriptionRecordUsage
+            | Self::CommitOutput
+            | Self::CreateNftsForAllUsers
+            | Self::AxtCommit => S::new(&[], "()"),
             Self::GetAccountBalance => S::new(&["AccountId", "AssetDefinitionId"], "quantity"),
             Self::GetPublicInput => S::new(&["Name"], "bytes"),
-            Self::ContractInvokeQuantity2 => S::new(
-                &["bytes", "string", "string", "quantity", "quantity"],
-                "quantity",
-            ),
-            Self::DebugPrint => S::new(&["int"], "()"),
+            Self::DebugPrint
+            | Self::TestSetBlockHeight
+            | Self::TestAdvanceBlocks
+            | Self::TestSetTransactionTimeMs
+            | Self::SetExecutionDepth
+            | Self::SetVl => S::new(&["int"], "()"),
             Self::DebugLog => S::new(&["string"], "()"),
             Self::Assert => S::new(&["bool", "string|int?"], "()"),
             Self::Require => S::new(&["bool", "ErrorEnum::Variant"], "()"),
             Self::Info => S::new(&["string|int"], "()"),
             Self::AssertEq => S::new(&["T", "T", "string|int?"], "()"),
-            Self::TestInvokeEntrypoint => S::new(&["string", "Json"], "T"),
-            Self::TestInvokeEntrypointAs => S::new(&["string", "string", "Json"], "T"),
+            Self::TestInvokeEntrypoint => S::new(&["string", "{parameters}"], "T"),
+            Self::TestInvokeEntrypointAs => S::new(&["string", "string", "{parameters}"], "T"),
             Self::TestExpectRejectAs => S::new(
                 &[
                     "string",
                     "string",
-                    "Json",
+                    "{parameters}",
                     "ErrorEnum::Variant|test::Rejection",
                 ],
                 "()",
             ),
-            Self::TestExpectAnyRejectAs => S::new(&["string", "string", "Json"], "()"),
+            Self::TestExpectAnyRejectAs => S::new(&["string", "string", "{parameters}"], "()"),
             Self::TestActorAccount => S::new(&["string"], "AccountId"),
-            Self::TestActorPublicKey => S::new(&["string"], "bytes"),
+            Self::TestActorPublicKey | Self::StringAsBytes => S::new(&["string"], "bytes"),
             Self::TestActorSign => S::new(&["string", "bytes"], "bytes"),
-            Self::TestSetBlockHeight | Self::TestAdvanceBlocks | Self::TestSetTransactionTimeMs => {
-                S::new(&["int"], "()")
-            }
             // TODO: add `ledger::domain::set_metadata` and
             // `ledger::asset_definition::set_metadata` with the same shape once the
             // IVM ABI gains domain and asset-definition metadata syscalls.
@@ -2360,11 +2418,7 @@ impl Builtin {
                 ],
                 "()",
             ),
-            Self::SetAssetTransferDailyLimit => S::new(
-                &["AccountId", "AssetDefinitionId", "Option<quantity>"],
-                "()",
-            ),
-            Self::SetAssetHoldingLimit => S::new(
+            Self::SetAssetTransferDailyLimit | Self::SetAssetHoldingLimit => S::new(
                 &["AccountId", "AssetDefinitionId", "Option<quantity>"],
                 "()",
             ),
@@ -2387,33 +2441,30 @@ impl Builtin {
             // TODO: replace the Json admin payloads of peer, trigger, signatory
             // and permission builtins with compiler-declared records once their
             // host decoders accept a typed Norito frame instead of Json.
-            Self::RegisterPeer | Self::UnregisterPeer => S::new(&["Json"], "()"),
-            Self::RegisterTrigger => S::new(&["Json"], "()"),
-            Self::UnregisterTrigger => S::new(&["Name"], "()"),
+            Self::RegisterPeer | Self::UnregisterPeer | Self::RegisterTrigger => {
+                S::new(&["Json"], "()")
+            }
+            Self::UnregisterTrigger
+            | Self::UnregisterRole
+            | Self::EscrowAccept
+            | Self::EscrowMarkPaymentSent
+            | Self::EscrowRelease
+            | Self::EscrowCancel => S::new(&["Name"], "()"),
             Self::SetTriggerEnabled => S::new(&["Name", "bool"], "()"),
             Self::RegisterRole => S::new(&["Name", "Json"], "()"),
-            Self::UnregisterRole => S::new(&["Name"], "()"),
             Self::GrantRole | Self::RevokeRole => S::new(&["AccountId", "Name"], "()"),
             Self::GrantPermission | Self::RevokePermission => {
                 S::new(&["AccountId", "Name|Json"], "()")
             }
-            Self::GrantContractEntrypoint | Self::RevokeContractEntrypoint => {
-                S::new(&["AccountId", "string"], "()")
+            Self::GrantContractPermission | Self::RevokeContractPermission => {
+                S::new(&["AccountId", "Permission"], "()")
             }
             Self::EscrowOpenOffer => {
                 S::new(&["Name", "AssetDefinitionId", "quantity", "bytes?"], "()")
             }
-            Self::EscrowAccept
-            | Self::EscrowMarkPaymentSent
-            | Self::EscrowRelease
-            | Self::EscrowCancel => S::new(&["Name"], "()"),
             Self::EscrowOpenDispute => S::new(&["Name", "bytes?"], "()"),
             Self::EscrowResolveDispute => S::new(&["Name", "quantity", "quantity", "bytes?"], "()"),
             Self::GetPrivateInput => S::new(&["int"], "contextual Secret<numeric>"),
-            Self::CommitOutput | Self::CreateNftsForAllUsers => S::new(&[], "()"),
-            Self::SetExecutionDepth => S::new(&["int"], "()"),
-            Self::TransferV1BatchBegin | Self::TransferV1BatchEnd => S::new(&[], "()"),
-            Self::TransferV1BatchApply => S::new(&["bytes"], "()"),
             Self::TransferBatch => S::new(
                 &["List<(AccountId,AccountId,AssetDefinitionId,quantity),N>"],
                 "()",
@@ -2422,23 +2473,6 @@ impl Builtin {
             Self::AxtTouch => S::new(&["DataSpaceId", "bytes"], "()"),
             Self::StageAnchoredSpend => S::new(&["AxtAnchoredSpendV1"], "()"),
             Self::VerifyDsProof => S::new(&["DataSpaceId", "ProofBlob"], "bool"),
-            Self::AxtCommit => S::new(&[], "()"),
-            Self::DeactivateContractInstance
-            | Self::RemoveSmartContractBytes
-            | Self::RegisterSmartContractCode
-            | Self::RegisterSmartContractBytes
-            | Self::ActivateContractInstance => S::new(&["bytes"], "()"),
-            Self::ZkVerifyBatch | Self::ZkVoteVerifyBallot | Self::ZkVoteVerifyTally => {
-                S::new(&["bytes"], "()")
-            }
-            Self::VrfVerify => S::new(&["bytes"], "bytes"),
-            Self::VrfVerifyBatch => S::new(&["bytes"], "bytes"),
-            Self::Sm3Hash
-            | Self::Sha256Hash
-            | Self::Sha3Hash
-            | Self::Blake2b256Hash
-            | Self::Keccak256Hash
-            | Self::IrohaHash => S::new(&["bytes"], "bytes"),
             Self::Sm2Verify => S::new(&["bytes", "bytes", "bytes", "bytes?"], "bool"),
             Self::VerifySignature => {
                 S::new(&["bytes", "bytes", "bytes", "SignatureScheme"], "bool")
@@ -2449,9 +2483,12 @@ impl Builtin {
             Self::Sm4CcmSeal | Self::Sm4CcmOpen => {
                 S::new(&["bytes", "bytes", "bytes", "bytes", "int?"], "bytes")
             }
-            Self::Alloc | Self::GrowHeap => S::new(&["int"], "int"),
-            Self::ExecutionSummary => S::new(&[], "bytes"),
-            Self::VerifyProof => S::new(&["bytes"], "bool"),
+            Self::Alloc | Self::GrowHeap | Self::WrappingNeg | Self::Isqrt | Self::Pubkgen => {
+                S::new(&["int"], "int")
+            }
+            Self::ExecutionSummary | Self::ChainId | Self::ContractAddress | Self::Entrypoint => {
+                S::new(&[], "bytes")
+            }
             Self::GetMerklePath => S::new(&["int", "int", "int?"], "int"),
             Self::GetMerkleCompact | Self::GetRegisterMerkleCompact => {
                 S::new(&["int", "int", "int?", "int?"], "int")
@@ -2467,13 +2504,18 @@ impl Builtin {
             }
             Self::AddSignatory | Self::RemoveSignatory => S::new(&["AccountId", "Json"], "()"),
             Self::SetAccountQuorum => S::new(&["AccountId", "int"], "()"),
-            Self::Path => S::new(&["Name", "int|bytes"], "bytes"),
+            Self::Path => S::new(&["Name", "K"], "bytes"),
             Self::NameDecode => S::new(&["bytes"], "Name"),
             Self::TlvEq => S::new(&["pointer-ABI", "pointer-ABI"], "bool"),
             Self::TlvLen => S::new(&["pointer-ABI"], "int"),
-            Self::BytesLen => S::new(&["bytes"], "int"),
+            Self::ValueEncode => S::new(&["T"], "bytes"),
+            Self::BytesConcat => S::new(&["bytes", "bytes"], "bytes"),
+            Self::StringConcat => S::new(&["string", "string"], "string"),
+            Self::StringLen => S::new(&["string"], "int"),
+            Self::StringFromBytes => S::new(&["bytes"], "Option<string>"),
+            Self::StringFrom => S::new(&["bool|int|decimal|quantity|string|Name"], "string"),
             Self::PointerToNorito => S::new(&["pointer-ABI"], "bytes"),
-            Self::JsonObject => S::new(&[], "Json"),
+            Self::JsonObject | Self::TriggerEvent => S::new(&[], "Json"),
             Self::JsonSetInt => S::new(&["Json", "Name", "int"], "Json"),
             Self::JsonSetAccountId => S::new(&["Json", "Name", "AccountId"], "Json"),
             Self::EncodeJson => S::new(&["Json"], "bytes"),
@@ -2516,14 +2558,18 @@ impl Builtin {
             | Self::NumericLeDirect
             | Self::NumericGtDirect
             | Self::NumericGeDirect => S::new(&["wide-numeric", "same-as-arg0"], "bool"),
-            Self::WrappingNeg | Self::Isqrt | Self::Abs => S::new(&["int"], "int"),
-            Self::WrappingAdd | Self::WrappingSub | Self::WrappingMul => {
-                S::new(&["int", "int"], "int")
-            }
-            Self::Min | Self::Max | Self::DivCeil | Self::Gcd | Self::Mean => {
-                S::new(&["int", "int"], "int")
-            }
-            Self::Poseidon2 => S::new(&["int", "int"], "int"),
+            Self::Abs => S::new(&["int|decimal|quantity"], "int|decimal|quantity"),
+            Self::WrappingAdd
+            | Self::WrappingSub
+            | Self::WrappingMul
+            | Self::DivCeil
+            | Self::Gcd
+            | Self::Mean
+            | Self::Poseidon2 => S::new(&["int", "int"], "int"),
+            Self::Min | Self::Max => S::new(
+                &["int|decimal|quantity", "int|decimal|quantity"],
+                "int|decimal|quantity",
+            ),
             Self::Valcom => S::new(
                 &[
                     "Secret<int|decimal|quantity>",
@@ -2532,13 +2578,10 @@ impl Builtin {
                 "int",
             ),
             Self::Poseidon6 => S::new(&["int", "int", "int", "int", "int", "int"], "int"),
-            Self::Pubkgen => S::new(&["int"], "int"),
-            Self::SetVl => S::new(&["int"], "()"),
-            Self::TriggerEvent => S::new(&[], "Json"),
-            Self::Authority | Self::SysvarAuthority => S::new(&[], "AccountId"),
-            Self::ContractSubject => S::new(&[], "AccountId"),
+            Self::Authority | Self::SysvarAuthority | Self::ContractSubject => {
+                S::new(&[], "AccountId")
+            }
             Self::TransactionTimeMs | Self::BlockHeight | Self::BlockTimeMs => S::new(&[], "int"),
-            Self::ChainId | Self::ContractAddress | Self::Entrypoint => S::new(&[], "bytes"),
             Self::NumericSpecUnconstrained | Self::NumericSpecInteger => S::new(&[], "NumericSpec"),
             Self::NumericSpecFractional => S::new(&["int"], "NumericSpec"),
             Self::MintableInfinitely | Self::MintableOnce | Self::MintableNot => {
@@ -2551,9 +2594,8 @@ impl Builtin {
         };
         match self {
             Self::PointerConstructor(_) => signature.with_names(&["value"]),
-            Self::Contains => signature.with_names(&["map", "key"]),
+            Self::Contains | Self::StateMapRemove => signature.with_names(&["map", "key"]),
             Self::GetOrInsert => signature.with_names(&["map", "key", "default"]),
-            Self::StateMapRemove => signature.with_names(&["map", "key"]),
             Self::KeysTake2 | Self::ValuesTake2 | Self::KeysValuesTake2 => {
                 signature.with_names(&["map", "offset", "limit"])
             }
@@ -2563,17 +2605,18 @@ impl Builtin {
             | Self::StateLen
             | Self::StateCount => signature.with_names(&["path"]),
             Self::StateSet => signature.with_names(&["path", "value"]),
-            Self::QueryGetAccount => signature.with_names(&["id"]),
-            Self::QueryGetAsset => signature.with_names(&["id"]),
-            Self::QueryGetAssetDefinition => signature.with_names(&["id"]),
-            Self::QueryGetDomain => signature.with_names(&["id"]),
-            Self::QueryGetNft => signature.with_names(&["id"]),
+            Self::QueryGetAccount
+            | Self::QueryGetAsset
+            | Self::QueryGetAssetDefinition
+            | Self::QueryGetDomain
+            | Self::QueryGetNft => signature.with_names(&["id"]),
             Self::QueryPageAccounts
             | Self::QueryPageAssets
             | Self::QueryPageAssetDefinitions
             | Self::QueryPageDomains
             | Self::QueryPageNfts => signature.with_names(&["offset", "limit"]),
-            Self::QueryGetParameter | Self::QueryGetContractInstance => {
+            Self::QueryPageAssetsOf => signature.with_names(&["account", "offset", "limit"]),
+            Self::QueryGetParameter | Self::QueryGetContractInstance | Self::GetPublicInput => {
                 signature.with_names(&["name"])
             }
             Self::QueryExecuteNorito | Self::QueryGetContractManifest | Self::ExecuteQuery => {
@@ -2589,10 +2632,6 @@ impl Builtin {
             ]),
             Self::ResolveAccountAlias => signature.with_names(&["alias"]),
             Self::GetAccountBalance => signature.with_names(&["account", "asset_definition"]),
-            Self::GetPublicInput => signature.with_names(&["name"]),
-            Self::ContractInvokeQuantity2 => {
-                signature.with_names(&["contract", "entrypoint", "returns", "amount_in", "min_out"])
-            }
             Self::Assert => signature.with_names(&["condition", "message"]),
             Self::Require => signature.with_names(&["condition", "error"]),
             Self::AssertEq => signature.with_names(&["actual", "expected", "message"]),
@@ -2665,12 +2704,10 @@ impl Builtin {
             }
             Self::SetAccountQuorum => signature.with_names(&["account", "quorum"]),
             Self::GrantRole | Self::RevokeRole => signature.with_names(&["account", "role"]),
-            Self::GrantPermission | Self::RevokePermission => {
-                signature.with_names(&["account", "permission"])
-            }
-            Self::GrantContractEntrypoint | Self::RevokeContractEntrypoint => {
-                signature.with_names(&["account", "kotoage"])
-            }
+            Self::GrantPermission
+            | Self::RevokePermission
+            | Self::GrantContractPermission
+            | Self::RevokeContractPermission => signature.with_names(&["account", "permission"]),
             Self::EscrowOpenOffer => {
                 signature.with_names(&["offer", "asset_definition", "amount", "evidence"])
             }
@@ -2682,15 +2719,15 @@ impl Builtin {
             Self::EscrowResolveDispute => {
                 signature.with_names(&["offer", "buyer_amount", "seller_amount", "evidence"])
             }
-            Self::TransferV1BatchApply => signature.with_names(&["batch"]),
             Self::TransferBatch => signature.with_names(&["transfers"]),
             Self::SetExecutionDepth => signature.with_names(&["depth"]),
             Self::AxtBegin => signature.with_names(&["descriptor"]),
             Self::AxtTouch => signature.with_names(&["dataspace", "manifest"]),
             Self::StageAnchoredSpend => signature.with_names(&["spend"]),
             Self::VerifyDsProof => signature.with_names(&["dataspace", "proof"]),
-            Self::VrfVerify => signature.with_names(&["request"]),
-            Self::DeactivateContractInstance
+            Self::VrfEpochSeed => signature.with_names(&["epoch"]),
+            Self::VrfVerify
+            | Self::DeactivateContractInstance
             | Self::RemoveSmartContractBytes
             | Self::RegisterSmartContractCode
             | Self::RegisterSmartContractBytes
@@ -2724,25 +2761,8 @@ impl Builtin {
             Self::GetMerkleCompact | Self::GetRegisterMerkleCompact => {
                 signature.with_names(&["address_or_register", "output", "max_depth", "root_output"])
             }
-            Self::TlvEq => signature.with_names(&["left", "right"]),
-            Self::JsonSetInt | Self::JsonSetAccountId => {
-                signature.with_names(&["object", "key", "value"])
-            }
-            Self::GetInt
-            | Self::GetDecimal
-            | Self::GetQuantity
-            | Self::GetJson
-            | Self::GetName
-            | Self::GetAccountId
-            | Self::GetAssetDefinitionId
-            | Self::GetNftId
-            | Self::GetBytesHex
-            | Self::GetString
-            | Self::GetBool => signature.with_names(&["object", "key"]),
-            Self::NumericSpecFractional => signature.with_names(&["scale"]),
-            Self::MintableLimited => signature.with_names(&["tokens"]),
-            Self::DivCeil => signature.with_names(&["dividend", "divisor"]),
-            Self::NumericAdd
+            Self::TlvEq
+            | Self::NumericAdd
             | Self::NumericSub
             | Self::NumericMul
             | Self::NumericDiv
@@ -2773,6 +2793,23 @@ impl Builtin {
             | Self::Mean
             | Self::Poseidon2
             | Self::Valcom => signature.with_names(&["left", "right"]),
+            Self::JsonSetInt | Self::JsonSetAccountId => {
+                signature.with_names(&["object", "key", "value"])
+            }
+            Self::GetInt
+            | Self::GetDecimal
+            | Self::GetQuantity
+            | Self::GetJson
+            | Self::GetName
+            | Self::GetAccountId
+            | Self::GetAssetDefinitionId
+            | Self::GetNftId
+            | Self::GetBytesHex
+            | Self::GetString
+            | Self::GetBool => signature.with_names(&["object", "key"]),
+            Self::NumericSpecFractional => signature.with_names(&["scale"]),
+            Self::MintableLimited => signature.with_names(&["tokens"]),
+            Self::DivCeil => signature.with_names(&["dividend", "divisor"]),
             Self::Poseidon6 => signature.with_names(&["a", "b", "c", "d", "e", "f"]),
             _ => signature,
         }
@@ -2794,6 +2831,8 @@ impl Builtin {
             | Self::TestActorSign => Named,
             // Pure helpers whose operands read naturally in order.
             Self::Require
+            | Self::BytesConcat
+            | Self::StringConcat
             | Self::WrappingAdd
             | Self::WrappingSub
             | Self::WrappingMul
@@ -2831,6 +2870,7 @@ impl Builtin {
     /// keeps the two identical. Every builtin absent from the table accepts
     /// positional arguments.
     pub fn render_label_required_table() -> String {
+        use core::fmt::Write as _;
         let mut rows = Self::registry()
             .filter(|(_, spec)| {
                 spec.surface != BuiltinSurface::CompilerInternal
@@ -2853,14 +2893,13 @@ impl Builtin {
                         }
                     })
                     .collect::<Vec<_>>();
-                (!labels.is_empty()).then(|| format!("| `{}` | {} |", spec.name, labels.join(", ")))
+                (!labels.is_empty()).then(|| (spec.name, labels.join(", ")))
             })
             .collect::<Vec<_>>();
-        rows.sort();
+        rows.sort_by_key(|(name, _)| *name);
         let mut table = String::from("| Builtin | Required labels |\n| --- | --- |\n");
-        for row in rows {
-            table.push_str(&row);
-            table.push('\n');
+        for (name, labels) in rows {
+            writeln!(table, "| `{name}` | {labels} |").expect("writing to a String cannot fail");
         }
         table
     }
@@ -3338,20 +3377,20 @@ mod tests {
         }
     }
     #[test]
-    fn seiyaku_kotoage_capability_registry_is_exact_and_namespaced() {
+    fn seiyaku_permission_registry_is_exact_and_namespaced() {
         use ivm_abi::syscalls as s;
         for (builtin, internal_name, source_name, syscall) in [
             (
-                Builtin::GrantContractEntrypoint,
-                "grant_contract_entrypoint",
-                "ledger::seiyaku::grant_kotoage",
-                s::SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
+                Builtin::GrantContractPermission,
+                "grant_contract_permission",
+                "ledger::seiyaku::grant_permission",
+                s::SYSCALL_GRANT_CONTRACT_PERMISSION,
             ),
             (
-                Builtin::RevokeContractEntrypoint,
-                "revoke_contract_entrypoint",
-                "ledger::seiyaku::revoke_kotoage",
-                s::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+                Builtin::RevokeContractPermission,
+                "revoke_contract_permission",
+                "ledger::seiyaku::revoke_permission",
+                s::SYSCALL_REVOKE_CONTRACT_PERMISSION,
             ),
         ] {
             assert_eq!(builtin.name(), internal_name);
@@ -3365,8 +3404,8 @@ mod tests {
             assert_eq!(builtin.effects(), BuiltinEffects::HOST);
             assert_eq!(builtin.access(), BuiltinAccess::LedgerWrite);
             let signature = builtin.signature();
-            assert_eq!(signature.parameters, &["AccountId", "string"]);
-            assert_eq!(signature.parameter_names, &["account", "kotoage"]);
+            assert_eq!(signature.parameters, &["AccountId", "Permission"]);
+            assert_eq!(signature.parameter_names, &["account", "permission"]);
             assert_eq!(signature.return_type, "()");
         }
     }
@@ -3782,13 +3821,13 @@ mod tests {
                 "test::invoke_entrypoint_as",
             ),
             (
-                Builtin::GrantContractEntrypoint,
-                "ledger::seiyaku::grant_kotoage",
+                Builtin::GrantContractPermission,
+                "ledger::seiyaku::grant_permission",
                 "ledger::contract::grant_entrypoint",
             ),
             (
-                Builtin::RevokeContractEntrypoint,
-                "ledger::seiyaku::revoke_kotoage",
+                Builtin::RevokeContractPermission,
+                "ledger::seiyaku::revoke_permission",
                 "ledger::contract::revoke_entrypoint",
             ),
         ] {
@@ -4034,6 +4073,11 @@ mod tests {
         );
         assert!(expected.contains("| `ledger::asset::transfer` | `source:`"));
         assert!(!expected.contains("`math::min`"));
+        assert!(
+            expected.find("| `ledger::query::assets` |").unwrap()
+                < expected.find("| `ledger::query::assets_of` |").unwrap(),
+            "source names, rather than Markdown delimiters, determine prefix ordering"
+        );
     }
     #[test]
     fn forbidden_raw_surfaces_do_not_resolve() {
@@ -4042,6 +4086,9 @@ mod tests {
             "call_contract",
             "contract::call",
             "seiyaku::call",
+            "ledger::asset::batch::begin",
+            "ledger::asset::batch::apply",
+            "ledger::asset::batch::end",
             "execute_instruction",
             "execute_query",
             "query_execute_norito",

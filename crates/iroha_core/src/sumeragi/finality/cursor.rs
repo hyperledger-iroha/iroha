@@ -5,7 +5,6 @@
 
 use std::{
     alloc::Layout,
-    io::Write as _,
     num::{NonZeroU16, NonZeroU64},
     time::Instant,
 };
@@ -24,12 +23,10 @@ use iroha_data_model::{
     NetworkId,
     block::{BlockHeader, SharedSignedBlock, consensus::SumeragiRootScope},
     sumeragi_finality::{
-        FinalityValidator, MAX_FINALITY_BLOCK_BYTES, MAX_FINALITY_CHECKPOINT_BYTES,
-        SumeragiFinalityCheckpoint, SumeragiFinalityProof, SumeragiFinalityVerifier,
-        VerifiedSumeragiBlock,
+        MAX_FINALITY_BLOCK_BYTES, MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint,
+        SumeragiFinalityVerifier, VerifiedSumeragiBlock,
     },
 };
-use iroha_version::Version as _;
 
 /// Closed local failure of bounded native-to-portable observation.
 #[derive(Debug, thiserror::Error)]
@@ -353,7 +350,14 @@ impl Original {
                 )
             }
         };
-        let owned = OwnedProof::new(block, members, budget, deadline)?;
+        let owned = super::proof_destination::OwnedProof::new(block, members, budget, deadline)
+            .map_err(|error| match error {
+                super::ProofDestinationError::Deadline => Error::Deadline,
+                super::ProofDestinationError::Source => Error::Source,
+                super::ProofDestinationError::Admission(_)
+                | super::ProofDestinationError::Buffer(_)
+                | super::ProofDestinationError::Key(_) => Error::Allocation,
+            })?;
         let checkpoint_bytes = self
             .checkpoint
             .as_ref()
@@ -395,105 +399,6 @@ impl Original {
     }
 }
 
-// Field drop order reclaims the proof's actual Vec allocations before refunding their charges.
-struct OwnedProof {
-    proof: SumeragiFinalityProof,
-    _charges: ChargedBuffer<AllocationCharge>,
-}
-impl OwnedProof {
-    fn new(
-        block: &SharedSignedBlock,
-        members: &[iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1],
-        budget: &AllocationBudget,
-        deadline: Instant,
-    ) -> Result<Self> {
-        check(deadline)?;
-        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        let length = norito::canonical_frame_len(block.as_ref())
-            .map_err(|_| Error::Source)?
-            .checked_add(1)
-            .ok_or(Error::Source)?;
-        if length > MAX_FINALITY_BLOCK_BYTES
-            || members.is_empty()
-            || members.len() > iroha_sumeragi::types::MAX_COMMITTEE_SIZE
-        {
-            return Err(Error::Source);
-        }
-        let mut charges =
-            ChargedBuffer::new(2 + members.len(), budget).map_err(|_| Error::Allocation)?;
-        let mut wire = charged_vec::<u8>(length, budget, &mut charges)?;
-        check(deadline)?;
-        {
-            let mut writer = FixedVecWriter {
-                bytes: &mut wire,
-                maximum: length,
-            };
-            writer
-                .write_all(&[block.version()])
-                .map_err(|_| Error::Source)?;
-            norito::core::write_canonical_to_writer(block.as_ref(), &mut writer)
-                .map_err(|_| Error::Source)?;
-        }
-        if wire.len() != length {
-            return Err(Error::Source);
-        }
-        check(deadline)?;
-        let mut committee = charged_vec::<FinalityValidator>(members.len(), budget, &mut charges)?;
-        for member in members {
-            check(deadline)?;
-            let mut pop =
-                charged_vec::<u8>(member.proof_of_possession.len(), budget, &mut charges)?;
-            pop.extend_from_slice(&member.proof_of_possession);
-            committee.push(FinalityValidator {
-                public_key: member.validator.public_key().clone(),
-                proof_of_possession: pop,
-            });
-        }
-        Ok(Self {
-            proof: SumeragiFinalityProof {
-                block_header: block.header(),
-                block_wire: wire,
-                committee,
-            },
-            _charges: charges,
-        })
-    }
-}
-
-fn charged_vec<T>(
-    capacity: usize,
-    budget: &AllocationBudget,
-    charges: &mut ChargedBuffer<AllocationCharge>,
-) -> Result<Vec<T>> {
-    let layout = Layout::array::<T>(capacity).map_err(|_| Error::Allocation)?;
-    let charge = budget
-        .try_reserve(layout)
-        .map_err(|_| Error::Allocation)?
-        .try_split(layout)
-        .map_err(|_| Error::Allocation)?;
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(capacity)
-        .map_err(|_| Error::Allocation)?;
-    charges.push_reserved(charge);
-    Ok(values)
-}
-struct FixedVecWriter<'a> {
-    bytes: &'a mut Vec<u8>,
-    maximum: usize,
-}
-impl std::io::Write for FixedVecWriter<'_> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if bytes.len() > self.maximum.saturating_sub(self.bytes.len()) {
-            return Err(std::io::Error::other("native proof exceeds counted extent"));
-        }
-        self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 struct BufferWriter<'a>(&'a mut ChargedBuffer<u8>);
 impl std::io::Write for BufferWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

@@ -2412,7 +2412,8 @@ fn soracloud_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypointDes
                 ],
             },
         ),
-        permission: None,
+        authorization:
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
         read_keys: Vec::new(),
         write_keys: Vec::new(),
         access_hints_complete: Some(true),
@@ -2431,6 +2432,8 @@ fn soracloud_contract_artifact_with_words(entrypoints: &[&str], code_words: &[u3
         abi_version: 1,
     };
     let contract_interface = ivm::EmbeddedContractInterfaceV1 {
+        permissions: Vec::new(),
+        events: Vec::new(),
         callables: Vec::new(),
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "irohad-soracloud-tests".to_owned(),
@@ -2451,6 +2454,7 @@ fn soracloud_contract_artifact_with_words(entrypoints: &[&str], code_words: &[u3
             .collect(),
         error_messages: Vec::new(),
         error_types: Vec::new(),
+        enum_types: Vec::new(),
         states: Vec::new(),
     };
     let mut bytes = metadata.encode();

@@ -4027,20 +4027,14 @@ pub mod application_api {
         /// signed invocation and its consensus-bound metadata; contracts emit no rows here.
         CONTRACTS_ACTIVITY_GET => dataspace_get("application.contracts_activity_get", "/v1/contracts/activity");
         ///
-        /// Call-derived: one row per committed top-level `ContractCall`, projected from the
-        /// signed invocation and its consensus-bound metadata; contracts emit no rows here.
+        /// Native events in committed execution outputs, retaining the emitting contract,
+        /// signed declaration and execution coordinates.
         CONTRACTS_EVENTS_GET => dataspace_get("application.contracts_events_get", "/v1/contracts/events");
         CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => dataspace_get("application.contracts_rollups_swaps_fills_get", "/v1/contracts/rollups/swaps/fills");
         CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET => dataspace_get("application.contracts_rollups_swaps_candles_get", "/v1/contracts/rollups/swaps/candles");
         CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET => dataspace_get("application.contracts_rollups_uranai_markets_history_get", "/v1/contracts/rollups/uranai/markets/history");
         CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET => dataspace_get("application.contracts_rollups_trader_activity_get", "/v1/contracts/rollups/trader/activity");
         CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET => dataspace_get("application.contracts_rollups_trader_account_get", "/v1/contracts/rollups/trader/account");
-        CONTRACTS_ROLLUPS_INTENTS_GET => dataspace_sdk_get("application.contracts_rollups_intents_get", "/v1/contracts/rollups/intents");
-        CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET => dataspace_sdk_get("application.contracts_rollups_vaults_positions_get", "/v1/contracts/rollups/vaults/positions");
-        CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET => dataspace_sdk_get("application.contracts_rollups_operators_status_get", "/v1/contracts/rollups/operators/status");
-        CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET => dataspace_sdk_get("application.contracts_rollups_margin_health_get", "/v1/contracts/rollups/margin/health");
-        CONTRACTS_ROLLUPS_RWA_LOTS_GET => dataspace_sdk_get("application.contracts_rollups_rwa_lots_get", "/v1/contracts/rollups/rwa/lots");
-        CONTRACTS_ROLLUPS_DLMM_HOOKS_GET => dataspace_sdk_get("application.contracts_rollups_dlmm_hooks_get", "/v1/contracts/rollups/dlmm/hooks");
         ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => dataspace_get("application.accounts_by_account_id_assets_get", "/v1/accounts/{account_id}/assets");
         ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST => dataspace_post("application.accounts_by_account_id_assets_query_post", "/v1/accounts/{account_id}/assets/query");
         ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => dataspace_get("application.accounts_by_account_id_permissions_get", "/v1/accounts/{account_id}/permissions");

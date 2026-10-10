@@ -4,9 +4,9 @@
   "assets": [
     {
       "path": "diagnostic_explanations_v1.tsv",
-      "byte_length": 55391,
-      "sha256": "ccd06b66f1d240ebc0773e6fe095ad8c308b0bf16f04bbf327a9a005b37773de",
-      "layout": "header and schema followed by 283 tab-separated code, phase, summary, help, bad-example, and fixed-example rows with backslash escapes; `-` marks an absent example",
+      "byte_length": 60530,
+      "sha256": "abd3074c8cb5011062d5b39e148c6debfad66daecc92859427c619978cf7578e",
+      "layout": "header and schema followed by 306 tab-separated code, phase, summary, help, bad-example, and fixed-example rows with backslash escapes; `-` marks an absent example",
       "source_preimages": [
         {
           "path": "../../../build.rs"
@@ -15,8 +15,8 @@
     },
     {
       "path": "compile_fail_cases_v1.tsv",
-      "byte_length": 16461,
-      "sha256": "1e41036ae79d88f220ce6913deee1e0a40819dfe1a7639e3b01ce7477db341e9",
+      "byte_length": 16688,
+      "sha256": "e4241ed158f4d61f4bc2f26e15711ba888238c909537bb2f05854e7a352e840e",
       "layout": "header and schema followed by 84 tab-separated compile-fail case rows with backslash escapes",
       "source_preimages": [
         {
@@ -26,8 +26,8 @@
     },
     {
       "path": "secret_reject_cases_v1.tsv",
-      "byte_length": 3261,
-      "sha256": "0d62f715c83be396e55b2abb499e7e59a497f1ebeff60e1768ac50bff617714a",
+      "byte_length": 3525,
+      "sha256": "cbb124b4bda971357c61de40bf82566436efecf593e4bb5f9df8e4ac77b678db",
       "layout": "header and schema followed by 13 tab-separated secret-flow rejection rows with backslash escapes",
       "source_preimages": [
         {

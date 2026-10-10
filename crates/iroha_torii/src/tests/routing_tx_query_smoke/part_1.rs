@@ -76,7 +76,23 @@ fn forged_contract_event_metadata(contract_address: &str) -> iroha_model_base::m
     }
     metadata
 }
-async fn contract_feed_page(response: axum::response::Response) -> norito::json::Value {
+async fn contract_feed_page(
+    response: impl std::future::Future<Output = Result<axum::response::Response>>,
+) -> norito::json::Value {
+    // Native history reads and the returned body retain the same real bounded
+    // request owner, just as they do through the admitted collection route.
+    let working = 48 * 1024 * 1024;
+    let pool = crate::ByteWeightedMemoryPool::new(working).unwrap();
+    let reservation = crate::QueryFanoutMemoryReservation::from_admitted_fanout(
+        pool.try_acquire_parts([working as u64]).unwrap(),
+        crate::QueryFanoutMemoryEnvelope::for_body_admission(working).unwrap(),
+        pool.generation(),
+    )
+    .unwrap();
+    let response = crate::COLLECTION_READ_MEMORY_RESERVATION
+        .scope(reservation, response)
+        .await
+        .expect("admitted contract feed collection");
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     norito::json::from_slice(&body).unwrap()
@@ -85,32 +101,24 @@ async fn contract_activity_page(
     state: &Arc<CoreState>,
     query: iroha_torii_shared::list_query::ListQuery,
 ) -> norito::json::Value {
-    contract_feed_page(
-        handle_v1_contracts_activity_get(
-            Arc::clone(state),
-            DataspaceReadVisibility::all_for_tests(),
-            query,
-            crate::routing::MaybeTelemetry::for_tests(),
-        )
-        .await
-        .expect("contract activity collection"),
-    )
+    contract_feed_page(handle_v1_contracts_activity_get(
+        Arc::clone(state),
+        DataspaceReadVisibility::all_for_tests(),
+        query,
+        crate::routing::MaybeTelemetry::for_tests(),
+    ))
     .await
 }
 async fn contract_event_page(
     state: &Arc<CoreState>,
     query: iroha_torii_shared::list_query::ListQuery,
 ) -> norito::json::Value {
-    contract_feed_page(
-        handle_v1_contracts_events_get(
-            Arc::clone(state),
-            DataspaceReadVisibility::all_for_tests(),
-            query,
-            crate::routing::MaybeTelemetry::for_tests(),
-        )
-        .await
-        .expect("contract event collection"),
-    )
+    contract_feed_page(handle_v1_contracts_events_get(
+        Arc::clone(state),
+        DataspaceReadVisibility::all_for_tests(),
+        query,
+        crate::routing::MaybeTelemetry::for_tests(),
+    ))
     .await
 }
 /// Consensus binds contract metadata only to a top-level `ContractCall`, so an
@@ -149,11 +157,8 @@ async fn contract_feeds_ignore_contract_metadata_on_non_contract_transactions() 
         norito::json::to_string_pretty(&activity).unwrap()
     );
 }
-/// A committed by-reference call reaches both feeds under the identity its
-/// signer actually invoked. This call is rejected (nothing is deployed at the
-/// address), so none of its metadata passed consensus binding: alias, payload
-/// and every `contract_event_*` claim are withheld, and provenance stays
-/// `derived`.
+/// A rejected by-reference call remains in call history while its forged metadata
+/// cannot create an emission or contribute any native event payload.
 #[tokio::test]
 async fn contract_feeds_project_rejected_contract_call_from_signed_invocation() {
     let (authority, keypair) = account_with_key();
@@ -243,26 +248,7 @@ async fn contract_feeds_project_rejected_contract_call_from_signed_invocation() 
     let events = contract_event_page(&state, by_address()).await;
     let items = events["items"].as_array().unwrap();
     assert!(events["next_cursor"].is_null());
-    assert_eq!(
-        items.len(),
-        1,
-        "{}",
-        norito::json::to_string_pretty(&events).unwrap()
-    );
-    let event = &items[0];
-    assert_eq!(event["tx_hash_hex"].as_str(), Some(entry_hash.as_str()));
-    assert!(event["block_index"].as_u64().is_some());
-    assert_eq!(event["result_ok"].as_bool(), Some(false));
-    assert_eq!(event["provenance"].as_str(), Some("derived"));
-    assert_eq!(event["schema_version"].as_u64(), Some(1));
-    assert_eq!(event["event_kind"].as_str(), Some("route_swap"));
-    assert_eq!(
-        event["module"].as_str(),
-        Some(contract_address.to_string().as_str())
-    );
-    assert!(event.get("contract_alias").is_none());
-    assert!(event.get("payload").is_none());
-    assert!(event.get("numeric_fields").is_none());
+    assert!(items.is_empty(), "rejected calls never emit native events");
     let forged = iroha_torii_shared::list_query::ListQuery::new()
         .limit(10)
         .filter(iroha_torii_shared::list_query::field("provenance").eq("emitted"));

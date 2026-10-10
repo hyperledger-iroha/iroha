@@ -107,7 +107,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
             "  --> english-pub-fn.ko:2:5\n",
             "    2 |     pub fn one() -> int {\n",
             "      |     ^^^\n",
-            "  = help: public functions are `kotoage fn` (also `言挙げ fn`; submitted in a transaction, may write state, requires `authorize(\"Permission\")`) or `view fn` (read-only); plain `fn` is private to the unit\n",
+            "  = help: public functions are `kotoage fn` (also `言挙げ fn`; submitted in a transaction, may write state, requires an explicit `authorize(...)`) or `view fn` (read-only); plain `fn` is private to the unit\n",
             "  = fix: replace `pub` with `view`, `kotoage` or `言挙げ`",
         ),
     ),
@@ -137,37 +137,37 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "kanji-kotoage-without-fn",
-        "誓約 Counter {\n    言挙げ bump() authorize(\"CanBump\") {\n    }\n}\n",
+        "誓約 Counter {\n    言挙げ bump() authorize(anyone) {\n    }\n}\n",
         concat!(
             "error[E_DECLARATION_SHAPE] parse: `言挙げ` modifies a function declaration: write `言挙げ fn bump(...)`\n",
             "  --> kanji-kotoage-without-fn.ko:2:5\n",
-            "    2 |     言挙げ bump() authorize(\"CanBump\") {\n",
+            "    2 |     言挙げ bump() authorize(anyone) {\n",
             "      |     ^^^^^^\n",
             "  = help: public functions are declared `kotoage fn name(...)` (also `言挙げ fn`) or `view fn name(...)`; only the lifecycle hooks `hajimari` and `kaizen` omit `fn`\n",
             "  = fix: insert ` fn`",
         ),
     ),
     (
-        "authorize-before-return-type",
-        "seiyaku Counter {\n    kotoage fn bump(int delta) authorize(\"CanBump\") -> int {\n        return delta;\n    }\n}\n",
+        "authorize-after-return-type",
+        "seiyaku Counter {\n    kotoage fn bump(int delta) -> int authorize(anyone) {\n        return delta;\n    }\n}\n",
         concat!(
-            "error[E_AUTHORIZE_POSITION] parse: the return type comes before `authorize(...)`: write `-> int authorize(\"CanBump\")`\n",
-            "  --> authorize-before-return-type.ko:2:32\n",
-            "    2 |     kotoage fn bump(int delta) authorize(\"CanBump\") -> int {\n",
-            "      |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
-            "  = help: a function head reads `kotoage fn name(params) -> Type authorize(\"Permission\") { ... }`\n",
-            "  = fix: replace `authorize(\"CanBump\") -> int` with `-> int authorize(\"CanBump\")`",
+            "error[E_AUTHORIZE_POSITION] parse: `authorize(...)` comes before the return type\n",
+            "  --> authorize-after-return-type.ko:2:32\n",
+            "    2 |     kotoage fn bump(int delta) -> int authorize(anyone) {\n",
+            "      |                                ^^^^^^^^^^^^^^^^^^^^^^^^\n",
+            "  = help: write `kotoage fn name(params) authorize(Admin) -> Type { ... }`\n",
+            "  = fix: replace `-> int authorize(anyone)` with `authorize(anyone) -> int`",
         ),
     ),
     (
         "kanji-kotoage-without-authorize",
         "誓約 Counter {\n    言挙げ fn run() {\n    }\n}\n",
         concat!(
-            "error[E_KOTOAGE_AUTHORIZATION_MISSING] parse: 言挙げ function `run` requires `authorize(\"Permission\")` before its body\n",
+            "error[E_KOTOAGE_AUTHORIZATION_MISSING] parse: 言挙げ function `run` requires an explicit `authorize(...)` policy\n",
             "  --> kanji-kotoage-without-authorize.ko:2:17\n",
             "    2 |     言挙げ fn run() {\n",
             "      |                    ^\n",
-            "  = help: name the permission a caller must hold, for example `authorize(\"CanRun\")`; if `run` only reads state, declare it `view fn` instead",
+            "  = help: use a declared permission such as `authorize(Admin)`, or explicitly allow every caller with `authorize(anyone)`",
         ),
     ),
     (
@@ -178,13 +178,13 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
             "  --> lifecycle-authorization.ko:2:10\n",
             "    2 |     改善() authorize(\"Admin\") {\n",
             "      |            ^^^^^^^^^^^^^^^^^^\n",
-            "  = help: activation and in-place replacement are authorized by the runtime's `CanInvokeContractEntrypoint` check on the deploying transaction; remove the clause\n",
+            "  = help: remove the clause; lifecycle authority is checked by the runtime\n",
             "  = fix: delete ` authorize(\"Admin\")`",
         ),
     ),
     (
         "let-mut",
-        "seiyaku Counter {\n    view fn sum() -> int {\n        let mut total = 0;\n        return total;\n    }\n}\n",
+        "seiyaku Counter {\n    view fn sum() authorize(anyone) -> int {\n        let mut total = 0;\n        return total;\n    }\n}\n",
         concat!(
             "error[E_LET_MUT] parse: a mutable local is declared with `var`, not `let mut`\n",
             "  --> let-mut.ko:3:9\n",
@@ -196,7 +196,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "range-operator",
-        "seiyaku Counter {\n    view fn sum() -> int {\n        var total = 0;\n        for i in 0..10 {\n            total += i;\n        }\n        return total;\n    }\n}\n",
+        "seiyaku Counter {\n    view fn sum() authorize(anyone) -> int {\n        var total = 0;\n        for i in 0..10 {\n            total += i;\n        }\n        return total;\n    }\n}\n",
         concat!(
             "error[E_RANGE_SYNTAX] parse: Kotodama has no `..` range operator; counted loops use `range(N)`, which counts from 0 up to N - 1\n",
             "  --> range-operator.ko:4:18\n",
@@ -208,7 +208,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "while-loop",
-        "seiyaku Counter {\n    view fn sum() -> int {\n        var i = 0;\n        while i < 10 {\n            i += 1;\n        }\n        return i;\n    }\n}\n",
+        "seiyaku Counter {\n    view fn sum() authorize(anyone) -> int {\n        var i = 0;\n        while i < 10 {\n            i += 1;\n        }\n        return i;\n    }\n}\n",
         concat!(
             "error[E_UNSUPPORTED_LOOP] parse: `while` loops are not part of Kotodama; every loop is a `for` loop with a compiler-proven bound\n",
             "  --> while-loop.ko:4:9\n",
@@ -219,7 +219,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "three-clause-for",
-        "seiyaku Counter {\n    view fn sum() -> int {\n        var total = 0;\n        for (i = 0; i < 10; i += 1) {\n            total += i;\n        }\n        return total;\n    }\n}\n",
+        "seiyaku Counter {\n    view fn sum() authorize(anyone) -> int {\n        var total = 0;\n        for (i = 0; i < 10; i += 1) {\n            total += i;\n        }\n        return total;\n    }\n}\n",
         concat!(
             "error[E_UNSUPPORTED_LOOP] parse: `for (init; condition; step)` loops are not part of Kotodama; every loop is a `for` loop with a compiler-proven bound\n",
             "  --> three-clause-for.ko:4:13\n",
@@ -231,7 +231,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "match-wildcard",
-        "seiyaku Counter {\n    view fn read(Option<int> maybe) -> int {\n        match maybe {\n            Option::some(v) => v,\n            _ => 0,\n        }\n    }\n}\n",
+        "seiyaku Counter {\n    view fn read(Option<int> maybe) authorize(anyone) -> int {\n        match maybe {\n            Option::some(v) => v,\n            _ => 0,\n        }\n    }\n}\n",
         concat!(
             "error[E_MATCH_WILDCARD] parse: `match` has no wildcard arm; name every variant\n",
             "  --> match-wildcard.ko:5:13\n",
@@ -242,7 +242,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "some-constructor",
-        "seiyaku Counter {\n    view fn wrap(int value) -> Option<int> {\n        return Some(value);\n    }\n}\n",
+        "seiyaku Counter {\n    view fn wrap(int value) authorize(anyone) -> Option<int> {\n        return Some(value);\n    }\n}\n",
         concat!(
             "error[E_LEGACY_SUM_CONSTRUCTOR] parse: `Some` is spelled `Option::some` in Kotodama\n",
             "  --> some-constructor.ko:3:16\n",
@@ -254,7 +254,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "none-call",
-        "seiyaku Counter {\n    view fn empty() -> Option<int> {\n        return None();\n    }\n}\n",
+        "seiyaku Counter {\n    view fn empty() authorize(anyone) -> Option<int> {\n        return None();\n    }\n}\n",
         concat!(
             "error[E_LEGACY_SUM_CONSTRUCTOR] parse: `None` is spelled `Option::none` in Kotodama, and it is a value, not a call\n",
             "  --> none-call.ko:3:16\n",
@@ -266,7 +266,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "range-value",
-        "seiyaku Counter {\n    view fn first() -> int {\n        let window = 0..10;\n        return 0;\n    }\n}\n",
+        "seiyaku Counter {\n    view fn first() authorize(anyone) -> int {\n        let window = 0..10;\n        return 0;\n    }\n}\n",
         concat!(
             "error[E_RANGE_SYNTAX] parse: Kotodama has no `..` range operator\n",
             "  --> range-value.ko:3:23\n",
@@ -289,22 +289,22 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "missing-parameter-type",
-        "seiyaku Counter {\n    view fn run(value) -> int {\n        return 1;\n    }\n}\n",
+        "seiyaku Counter {\n    view fn run(value) authorize(anyone) -> int {\n        return 1;\n    }\n}\n",
         concat!(
             "error[E_MISSING_DECLARATION_TYPE] parse: parameter `value` needs a type before its name, for example `int value`\n",
             "  --> missing-parameter-type.ko:2:17\n",
-            "    2 |     view fn run(value) -> int {\n",
+            "    2 |     view fn run(value) authorize(anyone) -> int {\n",
             "      |                 ^^^^^\n",
             "  = help: declarations name the type first; the type is never inferred for parameters, fields, state or constants",
         ),
     ),
     (
         "name-colon-type",
-        "seiyaku Vault {\n    kotoage fn add(amount: int) authorize(\"CanAdd\") {\n    }\n}\n",
+        "seiyaku Vault { permission CanAdd; \n    kotoage fn add(amount: int) authorize(CanAdd) {\n    }\n}\n",
         concat!(
             "error[E_RETIRED_DECLARATION_ORDER] parse: parameters are type-first: write `int amount`, not `amount: int`\n",
             "  --> name-colon-type.ko:2:20\n",
-            "    2 |     kotoage fn add(amount: int) authorize(\"CanAdd\") {\n",
+            "    2 |     kotoage fn add(amount: int) authorize(CanAdd) {\n",
             "      |                    ^^^^^^^^^^^\n",
             "  = help: Kotodama declarations name the type first: `fn add(int lhs)`, `state int total;`, `const int limit = 1;`, `let int count = 0;`, struct field `quantity balance;`\n",
             "  = fix: replace `amount: int` with `int amount`",
@@ -312,7 +312,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "missing-closing-brace",
-        "seiyaku Counter {\n    state int count;\n    hajimari() {\n        count = 0;\n\n    kotoage fn bump() authorize(\"CanBump\") {\n        count += 1;\n    }\n}\n",
+        "seiyaku Counter { permission CanBump; \n    state int count;\n    hajimari() {\n        count = 0;\n\n    kotoage fn bump() authorize(CanBump) {\n        count += 1;\n    }\n}\n",
         concat!(
             "error[K1001] parse: expected `}` to close the block, found keyword `kotoage`\n",
             "  --> missing-closing-brace.ko:4:19\n",
@@ -339,11 +339,11 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "glued-kanji-keyword",
-        "seiyaku Counter {\n    言挙げfn bump() authorize(\"CanBump\") {\n    }\n}\n",
+        "seiyaku Counter {\n    言挙げfn bump() authorize(anyone) {\n    }\n}\n",
         concat!(
             "error[E_KEYWORD_SPACING] lex: `言挙げ` and `fn` need a space between them\n",
             "  --> glued-kanji-keyword.ko:2:5\n",
-            "    2 |     言挙げfn bump() authorize(\"CanBump\") {\n",
+            "    2 |     言挙げfn bump() authorize(anyone) {\n",
             "      |     ^^^^^^^^\n",
             "  = help: `言挙げ` is a keyword (also spelled `kotoage`); separate it from the next word with a space\n",
             "  = fix: insert ` `",
@@ -375,7 +375,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "bidi-control-in-string",
-        "seiyaku Counter {\n    view fn label() -> string {\n        return \"admin\u{202e} user\";\n    }\n}\n",
+        "seiyaku Counter {\n    view fn label() authorize(anyone) -> string {\n        return \"admin\\u{202e} user\";\n    }\n}\n",
         concat!(
             "error[E_BIDI_CONTROL_CHARACTER] lex: source contains the invisible bidirectional control character U+202E (RIGHT-TO-LEFT OVERRIDE)\n",
             "  --> bidi-control-in-string.ko:3:22\n",
@@ -411,7 +411,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "single-ampersand",
-        "seiyaku Counter {\n    view fn both(bool a, bool b) -> bool {\n        return a & b;\n    }\n}\n",
+        "seiyaku Counter {\n    view fn both(bool a, bool b) authorize(anyone) -> bool {\n        return a & b;\n    }\n}\n",
         concat!(
             "error[E_UNSUPPORTED_OPERATOR] lex: `&` is not a Kotodama operator; boolean AND is `&&`\n",
             "  --> single-ampersand.ko:3:18\n",
@@ -423,11 +423,11 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "japanese-identifier",
-        "seiyaku Counter {\n    view fn 合計() -> int {\n        return 1;\n    }\n}\n",
+        "seiyaku Counter {\n    view fn 合計() authorize(anyone) -> int {\n        return 1;\n    }\n}\n",
         concat!(
             "error[K0100] lex: non-ASCII identifier `合計`: identifiers are ASCII\n",
             "  --> japanese-identifier.ko:2:13\n",
-            "    2 |     view fn 合計() -> int {\n",
+            "    2 |     view fn 合計() authorize(anyone) -> int {\n",
             "      |             ^^^^\n",
             "  = help: the only Japanese words in Kotodama source are the keywords 誓約, 言挙げ, 始まり and 改善 (also spelled seiyaku, kotoage, hajimari and kaizen); name declarations with ASCII letters, digits and `_`, and keep Japanese text in strings and comments",
         ),
@@ -503,9 +503,9 @@ fn tail_type_mismatch_points_at_the_exact_tail_expression() {
 fn trigger_metadata_contract(value: &str) -> String {
     format!(
         r#"
-        seiyaku TriggerMetadata {{
+        seiyaku TriggerMetadata {{ permission RunTrigger;
             const string dynamic = "{{}}";
-            kotoage fn run() authorize("RunTrigger") {{}}
+            kotoage fn run() authorize(RunTrigger) {{}}
             trigger wake -> run {{
                 on time pre_commit;
                 metadata {{ payload: {value}; }}
@@ -605,13 +605,13 @@ fn named_type_chain_source(contract: &str, struct_count: usize) -> String {
             ));
         }
     }
-    source.push_str("view fn run() {}\n}\n");
+    source.push_str("view fn run() authorize(anyone) {}\n}\n");
     source
 }
 fn with_private_parameter(source: String, declaration: &str) -> String {
     source.replacen(
-        "view fn run() {}\n}",
-        &format!("{declaration}\nview fn run() {{}}\n}}"),
+        "view fn run() authorize(anyone) {}\n}",
+        &format!("{declaration}\nview fn run() authorize(anyone) {{}}\n}}"),
         1,
     )
 }
@@ -629,7 +629,7 @@ fn branching_named_type_use_source(contract: &str, repeated_roots: usize) -> Str
         .collect::<Vec<_>>()
         .join(", ");
     source.push_str(&format!(
-        "fn keep(Option<({repeated})> value) {{}}\nview fn run() {{}}\n}}\n"
+        "fn keep(Option<({repeated})> value) {{}}\nview fn run() authorize(anyone) {{}}\n}}\n"
     ));
     source
 }
@@ -647,7 +647,7 @@ fn branching_named_type_expression_source(contract: &str, repeated_roots: usize)
         .collect::<Vec<_>>()
         .join(", ");
     source.push_str(&format!(
-        "fn infer() {{ let values = ({repeated}); }}\nview fn run() {{}}\n}}\n"
+        "fn infer() {{ let values = ({repeated}); }}\nview fn run() authorize(anyone) {{}}\n}}\n"
     ));
     source
 }
@@ -817,7 +817,7 @@ fn modest_shared_named_type_dag_compiles_below_the_node_budget() {
             index + 1
         ));
     }
-    source.push_str("struct S008 { int value; }\nview fn run() {}\n}\n");
+    source.push_str("struct S008 { int value; }\nview fn run() authorize(anyone) {}\n}\n");
     CompilerSession::default()
         .build(CompileRequest {
             source: &source,
@@ -861,8 +861,14 @@ fn branching_named_type_dag_is_measured_without_exponential_expansion() {
 #[test]
 fn over_budget_named_types_point_at_parameter_and_return_references() {
     for (source_name, declaration) in [
-        ("oversized-param.ko", "view fn inspect(S000 value) {}"),
-        ("oversized-return.ko", "view fn inspect() -> S000 {}"),
+        (
+            "oversized-param.ko",
+            "view fn inspect(S000 value) authorize(anyone) {}",
+        ),
+        (
+            "oversized-return.ko",
+            "view fn inspect() authorize(anyone) -> S000 {}",
+        ),
     ] {
         let mut source = String::from("seiyaku LocatedBudget {\n");
         for index in 0..17 {

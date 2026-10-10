@@ -1,5 +1,5 @@
 
-        seiyaku MintRequestShape {
+        seiyaku MintRequestShape { permission WriteState;
             const int STATUS_PENDING = 1;
             const int REQUEST_TTL_MS = 86400000;
 
@@ -19,7 +19,7 @@
 
             state StateMap<Name, Request> Requests;
 
-            kotoage fn main() -> bool authorize("WriteState") {
+            kotoage fn main() authorize(WriteState) -> bool {
                 let Name proposal_id = Name::parse("request1");
                 let AccountId requester = context::authority();
                 let int created_at_ms = context::transaction_time_ms();

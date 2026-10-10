@@ -1,6 +1,7 @@
 // Register a fixed-supply asset definition, then mint its supply.
 seiyaku RegisterAndMint {
-    kotoage fn register_and_mint() authorize("AssetManager") {
+    permission AssetManager;
+    kotoage fn register_and_mint() authorize(AssetManager) {
         let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
         // The display name, numeric spec and mintability are exactly what the
         // host registers: whole units only, and a single mint.

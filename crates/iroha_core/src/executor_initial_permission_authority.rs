@@ -47,6 +47,9 @@ fn validate_initial_permission_payload_constraints(
         }};
     }
     match permission.name().as_ref() {
+        "CanUseContractPermission" => validate_exact_deployment_permission!(
+            executor_permission::smart_contract::CanUseContractPermission
+        ),
         "CanGrantDpnUserForAccountDomain" => validate_exact_deployment_permission!(
             executor_permission::dpn::CanGrantDpnUserForAccountDomain
         ),
@@ -659,7 +662,10 @@ fn initial_permission_capability_root_authority(
                 .is_some()
             }
         }
-        "CanInvokeContractEntrypoint" => contract_entrypoint_permission_delegation_allowed(
+        "CanUseContractPermission" => {
+            contract_permission_delegation_allowed(state_transaction, authority, permission)?
+        }
+        "CanInvokeContractEntrypoint" => contract_entrypoint_authorization_delegation_allowed(
             state_transaction,
             authority,
             permission,
@@ -778,8 +784,36 @@ fn initial_permission_capability_root_authority(
     };
     Ok(Some(result))
 }
+/// Only the current owner or exact holder may delegate a currently declared instance permission.
+/// Suspension retains this declaration catalog so grants can be repaired before resumption.
+fn contract_permission_delegation_allowed(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: &Permission,
+) -> Result<bool, ValidationFail> {
+    let token = executor_permission::smart_contract::CanUseContractPermission::try_from(permission)
+        .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+    let manifest =
+        retained_contract_authorization_manifest(&state_transaction.world, &token.contract)?;
+    if !manifest.permissions.iter().any(|declaration| {
+        declaration.name == token.permission
+            && matches!(declaration.scope, ContractPermissionScopeV1::Instance)
+    }) {
+        return Err(ValidationFail::NotPermitted(
+            "scoped contract grant must name an Instance permission declared by the current code"
+                .to_owned(),
+        ));
+    }
+    let binding = code::fetch_contract_lifecycle_binding(&state_transaction.world, &token.contract)
+        .map_err(ValidationFail::NotPermitted)?;
+    if authority_has_permission(&state_transaction.world, authority, permission)? {
+        return Ok(binding.is_some());
+    }
+    Ok(binding.is_some_and(|binding| matches!(&binding.lifecycle.owner,
+        iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(owner) if owner == authority)))
+}
 /// Single native authority rule for exact contract-entrypoint permission mutation.
-fn contract_entrypoint_permission_delegation_allowed(
+fn contract_entrypoint_authorization_delegation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
@@ -792,6 +826,30 @@ fn contract_entrypoint_permission_delegation_allowed(
             "contract entrypoint permission must use a non-empty canonical selector".to_owned(),
         ));
     }
+    if !matches!(
+        token.entrypoint.as_str(),
+        "hajimari" | "始まり" | "kaizen" | "改善"
+    ) {
+        return Err(ValidationFail::NotPermitted(
+            "CanInvokeContractEntrypoint authorizes only runtime lifecycle hooks".to_owned(),
+        ));
+    }
+    let manifest =
+        retained_contract_authorization_manifest(&state_transaction.world, &token.contract)?;
+    if !manifest.entrypoints.as_ref().is_some_and(|entries| {
+        entries.iter().any(|entry| {
+            entry.name == token.entrypoint
+                && matches!(
+                    entry.authorization,
+                    EntrypointAuthorizationV1::RuntimeLifecycle
+                )
+        })
+    }) {
+        return Err(ValidationFail::NotPermitted(
+            "lifecycle grant must name a RuntimeLifecycle hook declared by the current code"
+                .to_owned(),
+        ));
+    }
     if is_initial_genesis_context(state_transaction)
         || authority_has_permission(&state_transaction.world, authority, permission)?
         || authority_has_permission(
@@ -802,11 +860,11 @@ fn contract_entrypoint_permission_delegation_allowed(
     {
         return Ok(true);
     }
-    let lifecycle = code::fetch_contract_lifecycle(&state_transaction.world, &token.contract)
+    let binding = code::fetch_contract_lifecycle_binding(&state_transaction.world, &token.contract)
         .map_err(ValidationFail::NotPermitted)?;
-    Ok(lifecycle.is_some_and(|(_, lifecycle)| {
-        matches!(lifecycle.owner,
-            iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(owner) if owner == *authority)
+    Ok(binding.is_some_and(|binding| {
+        matches!(&binding.lifecycle.owner,
+            iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(owner) if owner == authority)
     }))
 }
 fn initial_permission_delegation_allowed(
@@ -821,6 +879,9 @@ fn initial_permission_delegation_allowed(
     // built-in token already present in state could be copied without ever decoding its scope.
     let capability_root =
         initial_permission_capability_root_authority(state_transaction, authority, permission)?;
+    if permission.name() == "CanUseContractPermission" {
+        return Ok(capability_root.unwrap_or(false));
+    }
     let holder_delegable = if permission.name() == "CanManageAssetDefinitionAlias" {
         let token = executor_permission::asset_definition::CanManageAssetDefinitionAlias::try_from(
             permission,
@@ -2279,13 +2340,15 @@ fn can_modify_asset_definition_metadata(
         .into();
     authority_has_permission(world, authority, &required)
 }
-pub(crate) fn enforce_contract_entrypoint_permission(
+pub(crate) fn enforce_contract_entrypoint_authorization(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     context: &ContractCallExecutionContext,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
-    let permission = context.entrypoint_permission();
-    if permission.is_none() {
+    let authorization = context.entrypoint_authorization();
+    if context.contract_address.is_none()
+        && matches!(authorization, EntrypointAuthorizationV1::Anyone)
+    {
         return Ok(());
     }
     let contract_address = context.contract_address.as_ref().ok_or_else(|| {
@@ -2293,12 +2356,12 @@ pub(crate) fn enforce_contract_entrypoint_permission(
             "permissioned contract entrypoint is missing its immutable contract address".to_owned(),
         )
     })?;
-    enforce_named_contract_entrypoint_permission(
+    enforce_named_contract_entrypoint_authorization(
         world,
         authority,
         contract_address,
         context.entrypoint.as_deref().unwrap_or("main"),
-        permission,
+        authorization,
     )
 }
 /// Authorize a prepared deployed-contract selector and capture its immutable apply snapshot.
@@ -2394,58 +2457,161 @@ pub(crate) fn authorize_prepared_raw_contract_selector(
 /// Returns a completed permission rejection or the original local refusal when an existing
 /// permission payload could not be inspected. Read-only transports must expose the latter as
 /// retryable capacity, never as a completed contract denial.
-pub fn enforce_named_contract_entrypoint_permission(
+pub fn enforce_named_contract_entrypoint_authorization(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
-    permission_name: Option<&str>,
+    authorization: &EntrypointAuthorizationV1,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
-    let Some(permission_name) = permission_name else {
-        return Ok(());
-    };
-    const SCOPED_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
-    if permission_name.is_empty()
-        || permission_name.trim() != permission_name
-        || entrypoint.is_empty()
-        || entrypoint.trim() != entrypoint
-    {
+    let manifest = current_contract_authorization_manifest(world, contract_address)?;
+    let declared_entrypoint = manifest
+        .entrypoints
+        .as_ref()
+        .and_then(|entries| entries.iter().find(|entry| entry.name == entrypoint))
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "contract entrypoint is not declared by the current code".to_owned(),
+            )
+        })?;
+    if &declared_entrypoint.authorization != authorization {
         return Err(ValidationFail::NotPermitted(
-            "contract entrypoint and permission must use non-empty canonical spellings".to_owned(),
+            "contract entrypoint authorization differs from the current signed declaration"
+                .to_owned(),
         )
         .into());
     }
-    let granted =
-        authority_has_borrowed_permission(world, authority, permission_name, |permission| {
-            if permission_name != SCOPED_PERMISSION_NAME {
-                // Json owns canonical lexical form; a custom class's sole token is JSON null.
-                return Ok(permission.payload().get() == "null");
+    let granted = match authorization {
+        EntrypointAuthorizationV1::Anyone => true,
+        EntrypointAuthorizationV1::RuntimeLifecycle => {
+            if !matches!(
+                declared_entrypoint.kind,
+                iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
+                    | iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen
+            ) {
+                return Err(ValidationFail::NotPermitted(
+                    "runtime lifecycle authorization requires a lifecycle hook".to_owned(),
+                )
+                .into());
             }
-            #[derive(crate::json_macros::JsonDeserialize)]
-            #[norito(deny_unknown_fields)]
-            struct EntrypointGrant {
-                contract: iroha_data_model::smart_contract::ContractAddress,
-                entrypoint: String,
+            authority_has_borrowed_permission(
+                world,
+                authority,
+                "CanInvokeContractEntrypoint",
+                |permission| {
+                    #[derive(crate::json_macros::JsonDeserialize)]
+                    #[norito(deny_unknown_fields)]
+                    struct LifecycleGrant {
+                        contract: iroha_data_model::smart_contract::ContractAddress,
+                        entrypoint: String,
+                    }
+                    read_permission_payload::<LifecycleGrant>(permission).map(|grant| {
+                        grant.is_some_and(|grant| {
+                            grant.contract == *contract_address && grant.entrypoint == entrypoint
+                        })
+                    })
+                },
+            )?
+        }
+        EntrypointAuthorizationV1::Permission(name) => {
+            let declaration = manifest
+                .permissions
+                .iter()
+                .find(|declaration| &declaration.name == name)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(
+                        "contract authorization refers to an undeclared permission".to_owned(),
+                    )
+                })?;
+            match &declaration.scope {
+                ContractPermissionScopeV1::Instance => authority_has_borrowed_permission(
+                    world,
+                    authority,
+                    "CanUseContractPermission",
+                    |permission| {
+                        #[derive(crate::json_macros::JsonDeserialize)]
+                        #[norito(deny_unknown_fields)]
+                        struct InstanceGrant {
+                            contract: iroha_data_model::smart_contract::ContractAddress,
+                            permission: iroha_model_base::name::Name,
+                        }
+                        read_permission_payload::<InstanceGrant>(permission).map(|grant| {
+                            grant.is_some_and(|grant| {
+                                grant.contract == *contract_address && &grant.permission == name
+                            })
+                        })
+                    },
+                )?,
+                ContractPermissionScopeV1::Chain { permission_name } => {
+                    authority_has_borrowed_permission(
+                        world,
+                        authority,
+                        permission_name.as_ref(),
+                        |permission| {
+                            // Chain imports denote exactly the null token, never a typed builtin payload.
+                            Ok(permission.payload().get() == "null")
+                        },
+                    )?
+                }
             }
-            read_permission_payload::<EntrypointGrant>(permission).map(|grant| {
-                grant.is_some_and(|grant| {
-                    grant.contract == *contract_address && grant.entrypoint == entrypoint
-                })
-            })
-        })?;
+        }
+    };
     if granted {
-        return Ok(());
-    }
-    if permission_name == SCOPED_PERMISSION_NAME {
-        Err(ValidationFail::NotPermitted(format!(
-            "contract entrypoint `{entrypoint}` on `{contract_address}` requires an exact `{SCOPED_PERMISSION_NAME}` grant"
-        )).into())
+        Ok(())
     } else {
+        let required = match authorization {
+            EntrypointAuthorizationV1::Permission(name) => format!("permission `{name}`"),
+            EntrypointAuthorizationV1::RuntimeLifecycle => {
+                "CanInvokeContractEntrypoint lifecycle grant".to_owned()
+            }
+            EntrypointAuthorizationV1::Anyone => {
+                unreachable!("anyone authorization is granted above")
+            }
+        };
         Err(ValidationFail::NotPermitted(format!(
-            "contract entrypoint `{entrypoint}` requires permission `{permission_name}` with the canonical empty payload"
+            "contract entrypoint `{entrypoint}` on `{contract_address}` requires its declared exact authorization: {required}"
         )).into())
     }
 }
+/// Borrow the permission catalog for an active invocation only.
+fn current_contract_authorization_manifest<'a>(
+    world: &'a impl WorldReadOnly,
+    contract: &iroha_data_model::smart_contract::ContractAddress,
+) -> Result<&'a iroha_data_model::smart_contract::manifest::ContractManifest, ValidationFail> {
+    world.contract_instances().get(contract).ok_or_else(|| {
+        ValidationFail::NotPermitted("contract permission requires a live instance".to_owned())
+    })?;
+    retained_contract_authorization_manifest(world, contract)
+}
+/// Borrow the last bound artifact's catalog for permission mutation, including suspension.
+/// Binding validation rejects mismatched active and retained identities before any catalog read.
+fn retained_contract_authorization_manifest<'a>(
+    world: &'a impl WorldReadOnly,
+    contract: &iroha_data_model::smart_contract::ContractAddress,
+) -> Result<&'a iroha_data_model::smart_contract::manifest::ContractManifest, ValidationFail> {
+    let code_hash = code::fetch_contract_lifecycle_binding(world, contract)
+        .map_err(ValidationFail::NotPermitted)?
+        .and_then(|binding| binding.lifecycle.retained_code_hash)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "contract permission requires a retained artifact binding".to_owned(),
+            )
+        })?;
+    let dataspace = contract
+        .dataspace_id()
+        .map_err(|_| ValidationFail::NotPermitted("invalid contract dataspace".to_owned()))?;
+    world
+        .contract_manifests()
+        .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+            dataspace, code_hash,
+        ))
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "contract permission requires the current signed manifest".to_owned(),
+            )
+        })
+}
+
 fn enforce_transaction_contract_permission_before_proof_verification<R>(
     state: &R,
     authority: &AccountId,
@@ -2874,6 +3040,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageSmartContractCode",
     "CanGrantSmartContractCodeManagement",
     "CanInvokeContractEntrypoint",
+    "CanUseContractPermission",
     "CanExecuteSettlement",
     "CanManageFxCorridors",
     "CanSetFxCorridorPolicy",

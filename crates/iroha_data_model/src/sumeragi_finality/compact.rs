@@ -220,7 +220,7 @@ impl SumeragiCommitVerifierV1 {
     pub fn new(native: &SumeragiFinalityVerifier) -> Result<Self, FinalityError> {
         need(
             matches!(
-                native.root_scope().map_err(malformed)?,
+                native.root_scope(),
                 crate::block::consensus::SumeragiRootScope::Global
             ),
             "compact global finality requires global signed genesis",

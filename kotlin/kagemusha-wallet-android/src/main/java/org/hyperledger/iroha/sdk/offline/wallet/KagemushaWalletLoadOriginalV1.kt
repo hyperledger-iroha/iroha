@@ -13,8 +13,8 @@ import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
 /**
  * Exact canonical receipt and native BLS evidence bound to the signed read's selectors
  * and payer. Decoding grants no verified finality, wallet admission, balance or Load permission.
- * The existing native wallet [KagemushaWalletV1.load] independently verifies its actual proof,
- * installed history/source, enrolled account, current ordinal, policy and durable operation.
+ * The existing native wallet [KagemushaWalletV1.load] independently verifies its certificate,
+ * event path, installed genesis/epoch authority, enrolled account, ordinal and durable operation.
  */
 class KagemushaWalletLoadOriginalV1 private constructor(
     private val input: KagemushaWalletLoadOriginalInputV1,
@@ -40,8 +40,18 @@ class KagemushaWalletLoadOriginalV1 private constructor(
         @JvmStatic
         fun decode(issuance: ToriiKagemushaWalletLoadIssuanceOriginalV1,
             finalityOriginal: ByteArray): KagemushaWalletLoadOriginalV1 {
-            val input = KagemushaWalletLoadOriginalInputV1(issuance.selection, issuance.payerAccountId,
+            return decodeRetained(issuance.selection, issuance.payerAccountId, issuance.networkId,
                 issuance.unverifiedResponseOriginal, finalityOriginal)
+        }
+
+        /** Reopen exact retained DATA through the same Native decoder. All selectors and the
+         * network remain untrusted until the installed wallet verifies finality before Load. */
+        @JvmStatic
+        fun decodeRetained(selection: ToriiKagemushaWalletLoadSelectionV1, payerAccountId: String,
+            networkId: NetworkId, receiptOriginal: ByteArray,
+            finalityOriginal: ByteArray): KagemushaWalletLoadOriginalV1 {
+            val input = KagemushaWalletLoadOriginalInputV1(selection, payerAccountId,
+                receiptOriginal, finalityOriginal)
             if (!PrivacyNativeBridge.isNativeAvailable()) {
                 throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
             }
@@ -57,8 +67,8 @@ class KagemushaWalletLoadOriginalV1 private constructor(
             }
             if (status < 0) throw KagemushaWalletExceptionV1(status)
             if (status != 0 || height[0] == 0L) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-            return KagemushaWalletLoadOriginalV1(input, issuance.networkId, issuance.payerAccountId,
-                java.math.BigInteger(java.lang.Long.toUnsignedString(height[0])), issuance.selection)
+            return KagemushaWalletLoadOriginalV1(input, networkId, payerAccountId,
+                java.math.BigInteger(java.lang.Long.toUnsignedString(height[0])), selection)
         }
     }
 }

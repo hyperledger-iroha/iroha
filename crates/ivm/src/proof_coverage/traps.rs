@@ -242,20 +242,29 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
             OutOfGas, PermissionDenied, UnknownSyscall,
         ],
         HostInvariant: [DecodeError],
-        LocalDeferral: [ExecutionDeferred],
+        LocalDeferral: [AllocationDeferred, ExecutionDeferred],
+    ),
+    producer!(
+        "crates/iroha_core/src/smartcontracts/ivm/host/contract_calls.rs",
+        SyscallTrap: [CallDepthExceeded, DecodeError, InvalidMetadata, Metered, OutOfGas, PermissionDenied, ReentrantCall],
+    ),
+    producer!(
+        "crates/iroha_core/src/smartcontracts/ivm/host/contract_event.rs",
+        SyscallTrap: [DecodeError],
+        LocalDeferral: [AllocationDeferred, ExecutionDeferred],
     ),
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/host/contract_state_namespace.rs",
         SyscallTrap: [PermissionDenied],
     ),
     producer!(
-        "crates/iroha_core/src/smartcontracts/ivm/host/tlv_transport.rs",
-        SyscallTrap: [DecodeError, NoritoInvalid],
-        LocalDeferral: [AllocationDeferred, ExecutionDeferred],
+        "crates/iroha_core/src/smartcontracts/ivm/host/native_events.rs",
+        SyscallTrap: [DecodeError, InvalidMetadata, Metered, PermissionDenied],
+        LocalDeferral: [ExecutionDeferred],
     ),
     producer!(
-        "crates/iroha_core/src/smartcontracts/ivm/return_value.rs",
-        SyscallTrap: [DecodeError, OutOfGas],
+        "crates/iroha_core/src/smartcontracts/ivm/host/tlv_transport.rs",
+        SyscallTrap: [NoritoInvalid],
     ),
     // Core encodes a fee-conversion state value with the VM codec outside any run.
     producer!(
@@ -413,6 +422,11 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         ],
         HostInvariant: [HostUnavailable],
     ),
+    producer!(
+        "crates/ivm/src/host/state_map_key.rs",
+        SyscallTrap: [NoritoInvalid],
+        LocalDeferral: [AllocationDeferred, ExecutionDeferred],
+    ),
     // The interpreter, program loading, syscall dispatch and the gas, heap and TLV helpers
     // they share. `debit_gas` and the heap preflight serve argument prepayment before the
     // run, root-call initialization and the opcodes or syscalls that call them. A shared
@@ -440,10 +454,10 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
             UnknownSyscall,
         ],
         HostInvariant: [
-            HostUnavailable, PrivacyViolation, SyscallGasQuoteExceeded,
+            HostUnavailable, SyscallGasQuoteExceeded,
             SyscallMeteringModeMismatch,
         ],
-        LocalDeferral: [AllocationDeferred],
+        LocalDeferral: [AllocationDeferred, ExecutionDeferred],
     ),
     producer!(
         "crates/ivm/src/ivm/program_load.rs",
@@ -452,7 +466,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     // Stale or detached register-logger custody is a violated host lifecycle contract.
     producer!(
         "crates/ivm/src/ivm/register_logging.rs",
-        HostInvariant: [PrivacyViolation],
+        LocalDeferral: [ExecutionDeferred],
     ),
     producer!(
         "crates/ivm/src/ivm/register_logging/event_counts.rs",
@@ -488,10 +502,6 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         SyscallTrap: [DecodeError, NoritoInvalid, UnknownSyscall],
     ),
     producer!(
-        "crates/ivm/src/koto_test_return.rs",
-        SyscallTrap: [DecodeError, MisalignedAccess],
-    ),
-    producer!(
         "crates/ivm/src/list.rs",
         SyscallTrap: [DecodeError],
     ),
@@ -513,7 +523,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     producer!(
         "crates/ivm/src/memory/private_scrub.rs",
-        HostInvariant: [PrivacyViolation],
+        LocalDeferral: [ExecutionDeferred],
     ),
     producer!(
         "crates/ivm/src/memory/read_log.rs",
@@ -530,10 +540,20 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     producer!(
         "crates/ivm/src/mock_wsv.rs",
         SyscallTrap: [
-            AbiTypeNotAllowed, DecodeError, Metered, NoritoInvalid, NotImplemented,
+            AbiTypeNotAllowed, DecodeError, InvalidMetadata, Metered, NoritoInvalid, NotImplemented,
             PermissionDenied, UnknownSyscall,
         ],
         HostInvariant: [HostUnavailable],
+    ),
+    // Diagnostic fixture admission/replacement and typed calls share this module.
+    // Fixture controls run outside execution; admitted nested calls and emission
+    // capture run inside the syscall, with allocator refusal remaining local.
+    producer!(
+        "crates/ivm/src/mock_wsv/contract_calls.rs",
+        PrepareRejection: [InvalidMetadata, PermissionDenied],
+        SyscallTrap: [CallDepthExceeded, DecodeError, InvalidMetadata, Metered, NoritoInvalid, OutOfGas, PermissionDenied, ReentrantCall],
+        LocalDeferral: [ExecutionDeferred],
+        OutsideInvocation: [InvalidMetadata, NoritoInvalid, PermissionDenied],
     ),
     producer!(
         "crates/ivm/src/numeric_gas.rs",
@@ -599,19 +619,48 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     producer!(
         "crates/ivm/src/state_scan.rs",
         SyscallTrap: [InvalidMetadata, NoritoInvalid],
+        LocalDeferral: [AllocationDeferred, ExecutionDeferred],
     ),
     producer!(
         "crates/ivm/src/state_value.rs",
         SyscallTrap: [DecodeError, NoritoInvalid, OutOfMemory],
+        LocalDeferral: [ExecutionDeferred],
     ),
     producer!(
         "crates/ivm/src/sum.rs",
         SyscallTrap: [DecodeError],
+        LocalDeferral: [ExecutionDeferred],
     ),
     producer!(
         "crates/ivm/src/syscall_metering.rs",
         SyscallTrap: [GasCostOverflow],
         HostInvariant: [SyscallMeteringModeMismatch],
+    ),
+    // Canonical capture and funded materialization serve production nested calls,
+    // native event emission, and the local test host with identical schema rules.
+    producer!(
+        "crates/ivm/src/value_record.rs",
+        SyscallTrap: [DecodeError, OutOfGas],
+        LocalDeferral: [ExecutionDeferred],
+    ),
+    producer!(
+        "crates/ivm/src/value_record/capture.rs",
+        SyscallTrap: [DecodeError, Metered, OutOfGas],
+        LocalDeferral: [AllocationDeferred, ExecutionDeferred],
+    ),
+    producer!(
+        "crates/ivm/src/value_record/materialize.rs",
+        SyscallTrap: [DecodeError, OutOfGas],
+        LocalDeferral: [ExecutionDeferred],
+    ),
+    producer!(
+        "crates/ivm/src/value_utilities.rs",
+        SyscallTrap: [DecodeError, Metered, NoritoInvalid, OutOfGas, UnknownSyscall],
+        LocalDeferral: [AllocationDeferred, ExecutionDeferred],
+    ),
+    producer!(
+        "crates/ivm/src/vrf.rs",
+        SyscallTrap: [OutOfGas],
     ),
     // Local diagnostic trace checks run outside the invocation.
     producer!(
@@ -721,6 +770,10 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         SyscallTrap: [NoritoInvalid],
     ),
     producer!(
+        "crates/ivm_artifact_admission/src/admitted_program.rs",
+        PrepareRejection: [InvalidMetadata],
+    ),
+    producer!(
         "crates/ivm_artifact_admission/src/decoded.rs",
         LocalDeferral: [AllocationDeferred, ExecutionDeferred],
     ),
@@ -781,7 +834,7 @@ const fn error(variant: &'static str, trap_kind: Option<VmTrapKind>) -> VmErrorE
 }
 
 /// Number of [`VMError`] variants.
-pub const VM_ERROR_COUNT: usize = 41;
+pub const VM_ERROR_COUNT: usize = 43;
 
 /// Every [`VMError`] variant in declaration order.
 pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
@@ -850,6 +903,8 @@ pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
     // `vm_error_without_producer` open semantic tracks it.
     error("NullifierAlreadyUsed", Some(VmTrapKind::PermissionDenied)),
     error("PermissionDenied", Some(VmTrapKind::PermissionDenied)),
+    error("ReentrantCall", Some(VmTrapKind::PermissionDenied)),
+    error("CallDepthExceeded", Some(VmTrapKind::PermissionDenied)),
     error("PrivacyViolation", Some(VmTrapKind::PrivacyViolation)),
     error("RegisterOutOfBounds", Some(VmTrapKind::RegisterOutOfBounds)),
     error("NoritoInvalid", Some(VmTrapKind::NoritoInvalid)),
@@ -903,6 +958,8 @@ pub const fn vm_error_variant_name(error: &VMError) -> &'static str {
         VMError::ZkExtensionDisabled => "ZkExtensionDisabled",
         VMError::NullifierAlreadyUsed => "NullifierAlreadyUsed",
         VMError::PermissionDenied => "PermissionDenied",
+        VMError::ReentrantCall => "ReentrantCall",
+        VMError::CallDepthExceeded => "CallDepthExceeded",
         VMError::PrivacyViolation => "PrivacyViolation",
         VMError::RegisterOutOfBounds => "RegisterOutOfBounds",
         VMError::NoritoInvalid => "NoritoInvalid",

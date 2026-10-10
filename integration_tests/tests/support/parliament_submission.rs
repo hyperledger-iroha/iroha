@@ -124,6 +124,8 @@ pub(crate) fn minimal_contract_artifact_with_identity(
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
         access_set_hints: None,
+        permissions: Vec::new(),
+        events: Vec::new(),
         kotoba: Vec::new(),
         entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
@@ -134,7 +136,7 @@ pub(crate) fn minimal_contract_artifact_with_identity(
             return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
                 nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
             }),
-            permission: None,
+            authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
@@ -143,6 +145,7 @@ pub(crate) fn minimal_contract_artifact_with_identity(
             entry_pc: 0,
         }],
         error_types: Vec::new(),
+        enum_types: Vec::new(),
         error_messages: Vec::new(),
         states: Vec::new(),
     };

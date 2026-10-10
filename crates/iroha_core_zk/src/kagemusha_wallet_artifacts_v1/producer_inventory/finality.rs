@@ -63,7 +63,7 @@ fn require_root(
     verifier: &SumeragiFinalityVerifier,
     network: &[u8; 32],
 ) -> Result<(), FinalityQualificationErrorV1> {
-    if verifier.root_scope().ok() != Some(SumeragiRootScope::Global)
+    if verifier.root_scope() != SumeragiRootScope::Global
         || verifier.initial_epoch().network_id.as_bytes() != network
     {
         return Err(FinalityQualificationErrorV1::AnchorMismatch);

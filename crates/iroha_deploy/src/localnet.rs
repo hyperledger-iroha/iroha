@@ -4625,15 +4625,16 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>
         .wrap_err("failed to reload persisted genesis.json before signing")?;
     let genesis_key_pair =
         KeyPair::new(public_key.clone(), private_key.0).wrap_err("make genesis key pair")?;
-    let (bound_manifest, block) = crate::genesis::bind_and_sign_staged_sumeragi_context(
-        persisted_genesis,
-        &genesis_key_pair,
-        Some(config),
-        policies.da_proof_policies,
-        policies.confidential_policy_hash,
-        creation_time_ms,
-    )
-    .wrap_err("stage and sign genesis block")?;
+    let (bound_manifest, block, nexus_context) =
+        crate::genesis::staging::bind_and_sign_staged_sumeragi_context_with_preimage(
+            persisted_genesis,
+            &genesis_key_pair,
+            Some(config),
+            policies.da_proof_policies,
+            policies.confidential_policy_hash,
+            creation_time_ms,
+        )
+        .wrap_err("stage and sign genesis block")?;
     let mut bound_json =
         norito::json::to_json_pretty(&bound_manifest).wrap_err("encode bound genesis manifest")?;
     bound_json.push('\n');
@@ -4652,6 +4653,10 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>
         ));
     }
     custody::write(signed_path, &framed)?;
+    custody::write(
+        &signed_path.with_file_name("nexus-amx-context.v1.bin"),
+        &nexus_context,
+    )?;
     Ok(expected_hash)
 }
 fn write_and_validate_genesis_expected_hash(

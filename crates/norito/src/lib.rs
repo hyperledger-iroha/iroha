@@ -3745,6 +3745,33 @@ pub mod json {
     }
     impl<'a> Parser<'a> {
         const LEADING_ZERO_MSG: &'static str = "leading zeros are not allowed in JSON numbers";
+        /// Apply the original complete-document depth preflight before a typed field walk.
+        ///
+        /// This shares the allocation-free depth helper used by [`from_json`]. It
+        /// neither parses fields nor changes the cursor or inherited decode context.
+        ///
+        /// # Errors
+        /// Returns the original document nesting refusal before invoking a field decoder.
+        pub fn preflight_document(&self) -> Result<(), Error> {
+            ensure_json_value_depth(document_json_value_depth(self.input()))
+        }
+        /// Finish the original document with the exact ordinary trailing-position error.
+        ///
+        /// Whitespace is consumed. No trailing token is parsed or discarded, and no
+        /// cursor, source or decoder budget is replaced. Callers retire their typed
+        /// result on failure using its existing owner/drop contract.
+        ///
+        /// # Errors
+        /// Returns the same trailing-character byte/line/column as [`from_json`].
+        pub fn finish_document(&mut self) -> Result<(), Error> {
+            self.skip_ws();
+            if !self.eof() {
+                let (byte, line, col) = pos_from_offset(self.input(), self.position());
+                return Err(Error::TrailingCharacters { byte, line, col });
+            }
+            Ok(())
+        }
+
         #[inline]
         fn pos_meta(&self, pos: usize) -> (usize, usize, usize) {
             let bytes = self.s;
@@ -4717,6 +4744,35 @@ pub mod json {
         /// delimiter (with optional surrounding whitespace), positioning the parser at the start of
         /// the value. This matches the typical caller contract used across tests and benches.
         pub fn parse_key(&mut self) -> Result<KeyRef<'a>, Error> {
+            self.parse_key_with_owned(|parser| parser.parse_string())
+        }
+        /// Read a key with an exact caller-owned destination for its escaped text.
+        ///
+        /// Unescaped keys remain original input borrows and never invoke `allocate`.
+        /// Escaped keys use the sole string/escape decoder and its logical charge
+        /// before the typed allocation callback. The same key/colon kernel preserves
+        /// syntax order; no ordinary String or intermediate Value is constructed.
+        /// The caller funds and retains its original destination and decoder context,
+        /// and scopes any refunds beyond enclosing State or storage guards.
+        ///
+        /// # Errors
+        /// Preserves original JSON errors and the callback's exact typed refusal.
+        /// The destination must expose exactly the decoded length. Refusal retains
+        /// no key progress across calls; the enclosing record/source owner controls retry.
+        pub fn parse_key_with_buffer<B, E>(
+            &mut self,
+            allocate: impl FnOnce(usize) -> Result<B, E>,
+        ) -> Result<KeyRef<'a, B>, E>
+        where
+            B: AsMut<[u8]>,
+            E: From<Error>,
+        {
+            self.parse_key_with_owned(|parser| parser.parse_string_with_buffer(allocate))
+        }
+        fn parse_key_with_owned<B, E: From<Error>>(
+            &mut self,
+            parse_owned: impl FnOnce(&mut Parser<'a>) -> Result<B, E>,
+        ) -> Result<KeyRef<'a, B>, E> {
             self.skip_ws();
             let pre = self.i;
             self.expect(b'"')?;
@@ -4740,7 +4796,8 @@ pub mod json {
                                 byte,
                                 line,
                                 col,
-                            });
+                            }
+                            .into());
                         }
                     }
                     let st = std::str::from_utf8(slice).map_err(|_| Error::InvalidUtf8)?;
@@ -4757,7 +4814,7 @@ pub mod json {
                 unsafe { std::str::from_utf8_unchecked(self.s) },
                 pre,
             );
-            let s = tmp.parse_string()?;
+            let s = parse_owned(&mut tmp)?;
             self.i = tmp.i;
             // Consume the mandatory colon after the key
             self.skip_ws();
@@ -4770,7 +4827,8 @@ pub mod json {
                         byte,
                         line,
                         col,
-                    });
+                    }
+                    .into());
                 }
             }
             Ok(KeyRef::Owned(s))
@@ -8160,15 +8218,13 @@ pub mod json {
         // Preflight the complete document once, before a generated typed
         // decoder can recurse or skip a subtree with a locally rooted Parser.
         // Internal Parser::new_at calls deliberately do not repeat this scan.
-        ensure_json_value_depth(document_json_value_depth(s))?;
         let mut p = Parser::new(s);
+        p.preflight_document()?;
         p.skip_ws();
         let v = T::json_deserialize(&mut p)?;
-        p.skip_ws();
-        if !p.eof() {
-            let (byte, line, col) = pos_from_offset(s, p.position());
+        if let Err(error) = p.finish_document() {
             v.json_drop_after_error();
-            return Err(Error::TrailingCharacters { byte, line, col });
+            return Err(error);
         }
         Ok(v)
     }
@@ -8676,10 +8732,15 @@ pub mod json {
             visitor(self.as_str())
         }
     }
-    /// Borrowed-or-owned key reference returned by `Parser::parse_key`.
-    pub enum KeyRef<'a> {
+    /// Original borrowed key text or the caller's exact decoded key destination.
+    ///
+    /// Ordinary parsing retains a String. Seeded parsing may retain move-only
+    /// admitted backing instead; this is lexical storage, not authenticated authority.
+    pub enum KeyRef<'a, B = String> {
+        /// Unescaped UTF-8 key text borrowed directly from the original input.
         Borrowed(&'a str),
-        Owned(String),
+        /// Escaped key text decoded into the caller's original destination.
+        Owned(B),
     }
     impl<'a> KeyRef<'a> {
         #[inline]

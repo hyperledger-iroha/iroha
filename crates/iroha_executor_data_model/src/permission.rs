@@ -765,7 +765,17 @@ pub mod smart_contract {
         pub struct CanManageSmartContractCode;
     }
     permission! {
-        /// Permission to invoke one exact entrypoint of one deployed contract instance.
+        /// Permission declared by the current code of one deployed contract instance.
+        /// Only its current account lifecycle owner or an exact holder may delegate it.
+        pub struct CanUseContractPermission {
+            /// Immutable deployed contract address.
+            pub contract: ContractAddress,
+            /// Exact source-level instance permission declaration.
+            pub permission: Name,
+        }
+    }
+    permission! {
+        /// Permission to invoke one exact runtime lifecycle hook of one deployed instance.
         ///
         /// Its current account lifecycle owner may explicitly grant or revoke this token
         /// without a global code-management capability. Ownership alone does not authorize
@@ -773,7 +783,7 @@ pub mod smart_contract {
         pub struct CanInvokeContractEntrypoint {
             /// Immutable deployed contract address.
             pub contract: ContractAddress,
-            /// Exact case-sensitive public entrypoint selector.
+            /// Exact case-sensitive lifecycle selector (`hajimari`/`始まり` or `kaizen`/`改善`).
             pub entrypoint: String,
         }
     }

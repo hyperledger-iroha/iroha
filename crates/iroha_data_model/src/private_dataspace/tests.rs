@@ -1,7 +1,7 @@
 //! Genuine native private-root certificate fixtures and hostile parent-anchor inputs.
 
 use super::*;
-use crate::sumeragi_finality::{genesis_epoch, test_fixtures::NativeFinalityFixture};
+use crate::sumeragi_finality::{authenticated_genesis, test_fixtures::NativeFinalityFixture};
 use iroha_crypto::{Hash, HashOf};
 
 fn fixture() -> (NativeFinalityFixture, PrivateDataspaceRegistration) {
@@ -21,7 +21,9 @@ fn fixture() -> (NativeFinalityFixture, PrivateDataspaceRegistration) {
         fixture.chain_id().parse().unwrap(),
         fixture.network_id(),
         verified.result().0,
-        genesis_epoch(fixture.genesis()).unwrap(),
+        authenticated_genesis(fixture.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
     )
     .unwrap();
     (fixture, registration)

@@ -61,6 +61,19 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+#[cfg(test)]
+#[path = "mock_wsv/contract_call_tests.rs"]
+mod contract_call_tests;
+#[path = "mock_wsv/contract_calls.rs"]
+mod contract_calls;
+#[cfg(test)]
+#[path = "mock_wsv/contract_permission_tests.rs"]
+mod contract_permission_tests;
+#[cfg(test)]
+#[path = "mock_wsv/vrf_epoch_seed_tests.rs"]
+mod vrf_epoch_seed_tests;
+use contract_calls::MockContractInstance;
+pub use contract_calls::{MockContractEvent, contract_state_path};
 /// Definition of an asset type.
 #[derive(Clone, Debug)]
 struct AssetDefinition {
@@ -265,7 +278,14 @@ pub enum PermissionToken {
         /// Exact case-sensitive public selector.
         entrypoint: String,
     },
-    /// Opaque custom permission token used by contract entrypoints and tests.
+    /// Permission declared by one immutable deployed contract instance.
+    ContractPermission {
+        /// Immutable deployed contract address.
+        contract: ContractAddress,
+        /// Exact name in the current authenticated declaration table.
+        permission: Name,
+    },
+    /// Exact chain-wide marker token, imported explicitly by a contract.
     Custom(String),
 }
 /// Minimal account representation tracking signatories, quorum, and metadata.
@@ -330,16 +350,17 @@ pub struct MockWorldStateView {
     // ZK (shielded) state
     zk_assets: HashMap<AssetDefinitionId, ZkAssetState>,
     elections: HashMap<String, ElectionState>,
+    /// Exact committed epoch seeds supplied by local diagnostic fixtures.
+    vrf_epoch_seeds: BTreeMap<u64, [u8; 32]>,
     /// Events emitted by ZK operations for test visibility
     zk_events: Vec<ZkEvent>,
     /// Durable smart-contract state (path -> NoritoBytes payload TLVs)
     state_overlay: DurableStateOverlay,
-    /// Manifest registry keyed by code hash (presence-only for gating).
-    contract_manifests: HashSet<iroha_data_model::smart_contract::ContractArtifactId>,
-    /// Stored contract bytecode keyed by code hash.
-    contract_code: HashMap<iroha_data_model::smart_contract::ContractArtifactId, Vec<u8>>,
-    /// Active contract instances keyed by canonical contract address.
-    contract_instances: HashMap<ContractAddress, CryptoHash>,
+    /// Complete admitted artifacts owned by their exact dataspace and code hash.
+    contract_artifacts:
+        HashMap<iroha_data_model::smart_contract::ContractArtifactId, crate::PreparedContract>,
+    /// Explicit diagnostic lifecycle fixtures keyed by immutable instance address.
+    contract_instances: HashMap<ContractAddress, MockContractInstance>,
     /// Logical wall-clock timestamp used for time-gated operations (ms since epoch).
     current_time_ms: u64,
     /// Deterministic block height reported to contracts; local tests advance it explicitly.
@@ -355,6 +376,11 @@ pub struct ZkPolicyConfig {
     pub vk_unshield: Option<VerifyingKeyId>,
 }
 impl MockWorldStateView {
+    /// Supply one exact deterministic epoch seed for a local diagnostic fixture.
+    /// This never fabricates a seed for a different or missing epoch.
+    pub fn set_vrf_epoch_seed_fixture(&mut self, epoch: u64, seed: [u8; 32]) {
+        self.vrf_epoch_seeds.insert(epoch, seed);
+    }
     /// Create an empty mock WSV.
     pub fn new() -> Self {
         Self {
@@ -376,8 +402,8 @@ impl MockWorldStateView {
             elections: HashMap::new(),
             zk_events: Vec::new(),
             state_overlay: DurableStateOverlay::in_memory(),
-            contract_manifests: HashSet::new(),
-            contract_code: HashMap::new(),
+            contract_artifacts: HashMap::new(),
+            vrf_epoch_seeds: BTreeMap::new(),
             contract_instances: HashMap::new(),
             current_time_ms: 0,
             current_block_height: 0,
@@ -534,14 +560,6 @@ impl MockWorldStateView {
     }
     pub fn sc_flush(&self) -> Result<(), VMError> {
         self.state_overlay.flush()
-    }
-    /// Bind a contract instance in the mock registry.
-    pub fn bind_contract_instance(
-        &mut self,
-        contract_address: ContractAddress,
-        code_hash: CryptoHash,
-    ) {
-        self.contract_instances.insert(contract_address, code_hash);
     }
     // -----------------------------
     // ZK shielded ledger handlers (permissions and full Merkle enforcement outstanding)
@@ -1560,6 +1578,10 @@ pub struct WsvHost {
     contract_runtime_invoker: Option<AccountId>,
     contract_runtime_address: Option<ContractAddress>,
     contract_runtime_entrypoint: Option<String>,
+    contract_fixture_state_scope: Option<ContractAddress>,
+    contract_execution_budget: iroha_allocation::AllocationBudget,
+    contract_ancestors: Vec<ContractAddress>,
+    contract_events: Vec<MockContractEvent>,
     fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Quantity)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
@@ -1583,6 +1605,10 @@ struct WsvHostSnapshot {
     contract_runtime_invoker: Option<AccountId>,
     contract_runtime_address: Option<ContractAddress>,
     contract_runtime_entrypoint: Option<String>,
+    contract_fixture_state_scope: Option<ContractAddress>,
+    contract_execution_budget: iroha_allocation::AllocationBudget,
+    contract_ancestors: Vec<ContractAddress>,
+    contract_events: Vec<MockContractEvent>,
     fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Quantity)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
@@ -1593,7 +1619,7 @@ impl WsvHost {
     /// Quote response-producing WSV helpers from pointer headers and ABI
     /// region bounds only. No world-state lookup, schema call, proof walk, or
     /// guest allocation is allowed during preparation.
-    fn bounded_response_gas_quote(number: u32, vm: &IVM) -> Result<Option<u64>, VMError> {
+    fn bounded_response_gas_quote(&self, number: u32, vm: &IVM) -> Result<Option<u64>, VMError> {
         let maximum_output =
             usize::try_from(crate::memory::Memory::INPUT_SIZE).unwrap_or(usize::MAX);
         let quote = match number {
@@ -1666,9 +1692,17 @@ impl WsvHost {
             crate::syscalls::SYSCALL_CURRENT_TIME_MS
             | crate::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS
             | crate::syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT
-            | crate::syscalls::SYSCALL_SYSVAR_CHAIN_ID
-            | crate::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS
-            | crate::syscalls::SYSCALL_SYSVAR_ENTRYPOINT => Self::sysvar_gas(0),
+            | crate::syscalls::SYSCALL_SYSVAR_CHAIN_ID => Self::sysvar_gas(0),
+            crate::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS => Self::sysvar_gas(
+                self.contract_runtime_address
+                    .as_ref()
+                    .map_or(0, |address| address.as_str().len()),
+            ),
+            crate::syscalls::SYSCALL_SYSVAR_ENTRYPOINT => Self::sysvar_gas(
+                self.contract_runtime_entrypoint
+                    .as_ref()
+                    .map_or(0, String::len),
+            ),
             _ => return Ok(None),
         };
         Ok(Some(quote))
@@ -1700,6 +1734,10 @@ impl WsvHost {
             contract_runtime_invoker: None,
             contract_runtime_address: None,
             contract_runtime_entrypoint: None,
+            contract_fixture_state_scope: None,
+            contract_execution_budget: iroha_allocation::AllocationBudget::new(128 * 1024 * 1024),
+            contract_ancestors: Vec::new(),
+            contract_events: Vec::new(),
             fastpq_batch_entries: None,
             actual_access: crate::host::AccessLog::default(),
             state_overlay: BTreeMap::new(),
@@ -1766,6 +1804,10 @@ impl WsvHost {
             contract_runtime_invoker: self.contract_runtime_invoker.clone(),
             contract_runtime_address: self.contract_runtime_address.clone(),
             contract_runtime_entrypoint: self.contract_runtime_entrypoint.clone(),
+            contract_fixture_state_scope: self.contract_fixture_state_scope.clone(),
+            contract_execution_budget: self.contract_execution_budget.clone(),
+            contract_ancestors: self.contract_ancestors.clone(),
+            contract_events: self.contract_events.clone(),
             fastpq_batch_entries: self.fastpq_batch_entries.clone(),
             actual_access: self.actual_access.clone(),
             state_overlay: self.state_overlay.clone(),
@@ -1788,6 +1830,10 @@ impl WsvHost {
         self.contract_runtime_invoker = snapshot.contract_runtime_invoker.clone();
         self.contract_runtime_address = snapshot.contract_runtime_address.clone();
         self.contract_runtime_entrypoint = snapshot.contract_runtime_entrypoint.clone();
+        self.contract_fixture_state_scope = snapshot.contract_fixture_state_scope.clone();
+        self.contract_execution_budget = snapshot.contract_execution_budget.clone();
+        self.contract_ancestors = snapshot.contract_ancestors.clone();
+        self.contract_events = snapshot.contract_events.clone();
         self.fastpq_batch_entries = snapshot.fastpq_batch_entries.clone();
         self.actual_access = snapshot.actual_access.clone();
         self.state_overlay = snapshot.state_overlay.clone();
@@ -2784,6 +2830,26 @@ fn parse_permission_name_payload(bytes: &[u8]) -> Result<PermissionToken, VMErro
 /* tests moved to EOF */
 impl IVMHost for WsvHost {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        if number == syscalls::SYSCALL_VRF_EPOCH_SEED {
+            vm.ensure_public_register(10)?;
+            return Ok(crate::vrf::epoch_seed_gas(
+                self.wsv.vrf_epoch_seeds.contains_key(&vm.register(10)),
+            ));
+        }
+        if number == syscalls::SYSCALL_CALL_CONTRACT {
+            let bytes = Self::quote_contract_call(vm)?;
+            return reserve_available_syscall_gas_at_least(
+                vm,
+                gas::syscall_byte_gas(gas::G_CALL_CONTRACT, bytes, 0),
+            );
+        }
+        if number == syscalls::SYSCALL_EMIT_CONTRACT_EVENT {
+            for register in 10..=12 {
+                vm.ensure_public_register(register)?;
+            }
+            return reserve_available_syscall_gas_at_least(vm, 32);
+        }
+
         let metering = require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         if metering.metering == crate::syscall_metering::SyscallMetering::Staged {
             return Ok(0);
@@ -2798,6 +2864,10 @@ impl IVMHost for WsvHost {
             number,
             crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
                 | crate::syscalls::SYSCALL_STATE_MAP_KEY_AT
+                | crate::syscalls::SYSCALL_VALUE_ENCODE
+                | crate::syscalls::SYSCALL_BLOB_CONCAT
+                | crate::syscalls::SYSCALL_UTF8_VALIDATE
+                | crate::syscalls::SYSCALL_VALUE_TO_STRING
                 | crate::syscalls::SYSCALL_STATE_VALUE_ENCODE
                 | crate::syscalls::SYSCALL_STATE_VALUE_DECODE
                 | crate::syscalls::SYSCALL_STATE_PATH_FROM_NAME
@@ -2857,7 +2927,7 @@ impl IVMHost for WsvHost {
         if let Some(quote) = crate::core_host::CoreHost::codec_gas_quote(number, vm)? {
             return Ok(quote);
         }
-        if let Some(quote) = Self::bounded_response_gas_quote(number, vm)? {
+        if let Some(quote) = self.bounded_response_gas_quote(number, vm)? {
             return Ok(quote);
         }
         // Mutating ledger calls and proof verification retain the generic
@@ -2879,6 +2949,14 @@ impl IVMHost for WsvHost {
             return Ok(Self::json_gas(cost.input_bytes, cost.output_bytes));
         }
         match number {
+            syscalls::SYSCALL_VRF_EPOCH_SEED => {
+                let epoch = vm.register(10);
+                crate::vrf::publish_epoch_seed(vm, self.wsv.vrf_epoch_seeds.get(&epoch))
+            }
+
+            syscalls::SYSCALL_CALL_CONTRACT => self.call_contract(vm),
+            syscalls::SYSCALL_EMIT_CONTRACT_EVENT => self.emit_contract_event(vm),
+
             crate::syscalls::SYSCALL_CORE_QUERY_GET => {
                 let tag = ivm_abi::core_query::CoreQueryEntityTagV1::try_from(vm.register(10))
                     .map_err(|_| VMError::DecodeError)?;
@@ -2901,6 +2979,8 @@ impl IVMHost for WsvHost {
                 // &NoritoBytes value (or 0 if none).
                 let (path, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_path(vm, &path)?;
+                let logical_path = path;
+                let path = self.scoped_state_path(&logical_path)?;
                 if self.tx_active
                     && let Some(entry) = self.state_overlay.get(&path)
                 {
@@ -2915,7 +2995,11 @@ impl IVMHost for WsvHost {
                             let len = Self::state_value_payload_len(val)?;
                             let gas = crate::host::state_value_gas(path_len, len);
                             preflight_reserved_syscall_gas(vm, gas)?;
-                            crate::host::validate_declared_state_value_payload(vm, &path, val)?;
+                            crate::host::validate_declared_state_value_payload(
+                                vm,
+                                &logical_path,
+                                val,
+                            )?;
                             let val = val.clone();
                             self.log_read_key(path.as_ref());
                             Self::load_state_value(vm, &val)?;
@@ -2934,7 +3018,7 @@ impl IVMHost for WsvHost {
                     let len = Self::state_value_payload_len(env)?;
                     let gas = crate::host::state_value_gas(path_len, len);
                     preflight_reserved_syscall_gas(vm, gas)?;
-                    crate::host::validate_declared_state_value_payload(vm, &path, env)?;
+                    crate::host::validate_declared_state_value_payload(vm, &logical_path, env)?;
                     let env = env.to_vec();
                     self.log_read_key(path.as_ref());
                     Self::load_state_value(vm, &env)?;
@@ -2972,6 +3056,7 @@ impl IVMHost for WsvHost {
                 crate::host::validate_declared_state_path(vm, &path)?;
                 crate::host::validate_state_value_payload_len(p_val.payload.len())?;
                 crate::host::validate_declared_state_value_payload(vm, &path, p_val.payload)?;
+                let path = self.scoped_state_path(&path)?;
                 self.log_write_key(path.as_ref());
                 let stored = p_val.payload.to_vec();
                 if self.tx_active {
@@ -2991,6 +3076,7 @@ impl IVMHost for WsvHost {
                 // r10 = &NoritoBytes(StatePath)
                 let (path, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_path(vm, &path)?;
+                let path = self.scoped_state_path(&path)?;
                 self.log_write_key(path.as_ref());
                 if self.tx_active {
                     if crate::dev_env::decode_trace_enabled() {
@@ -3006,11 +3092,16 @@ impl IVMHost for WsvHost {
                 let instance = self
                     .contract_runtime_address
                     .as_ref()
+                    .or(self.contract_fixture_state_scope.as_ref())
                     .map_or_else(|| "local".to_owned(), ToString::to_string);
                 let request = crate::state_scan::StateScanRequest::decode(vm, &instance)?;
-                let map = request.map.clone();
-                let prefix = format!("{}/", map.as_ref());
-                let after = request.after.clone();
+                let map = request.map().clone();
+                let namespace = self.state_namespace();
+                let prefix = format!("{}{}/", namespace, map.as_ref());
+                let after = request
+                    .after()
+                    .map(|path| self.scoped_state_path(path))
+                    .transpose()?;
                 let lower = after
                     .as_ref()
                     .map_or(std::ops::Bound::Included(prefix.as_str()), |key| {
@@ -3029,19 +3120,27 @@ impl IVMHost for WsvHost {
                 let mut page = crate::state_scan::StateScanPage::new(request);
                 for (key, present) in crate::state_scan::merge_candidates(backing, overlay) {
                     if page
-                        .examine(vm, key.as_ref(), key.as_ref().len(), present)?
+                        .examine(
+                            vm,
+                            key.as_ref()
+                                .strip_prefix(&namespace)
+                                .ok_or(VMError::DecodeError)?,
+                            key.as_ref().len(),
+                            present,
+                        )?
                         .is_break()
                     {
                         break;
                     }
                 }
                 let gas = page.publish(vm)?;
-                self.log_read_key(map.as_ref());
+                self.log_read_key(self.scoped_state_path(&map)?.as_ref());
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_STATE_HAS => {
                 let (path, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_path(vm, &path)?;
+                let path = self.scoped_state_path(&path)?;
                 self.log_read_key(path.as_ref());
                 vm.set_register(10, u64::from(self.state_key_present(&path)));
                 Ok(crate::host::state_path_gas(path_len))
@@ -3049,6 +3148,7 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_STATE_LEN => {
                 let (path, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_path(vm, &path)?;
+                let path = self.scoped_state_path(&path)?;
                 self.log_read_key(path.as_ref());
                 if let Some(len) = self.state_value_len(&path)? {
                     let gas = crate::host::state_path_gas(path_len);
@@ -3067,6 +3167,7 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_STATE_COUNT => {
                 let (prefix, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_scan_path(vm, &prefix)?;
+                let prefix = self.scoped_state_path(&prefix)?;
                 let (total, scan_work_gas) = self.state_count_with_prefix(vm, &prefix, path_len)?;
                 let gas = crate::host::STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas);
                 preflight_reserved_syscall_gas(vm, gas)?;
@@ -3425,6 +3526,10 @@ impl IVMHost for WsvHost {
             }
             crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | crate::syscalls::SYSCALL_STATE_MAP_KEY_AT
+            | crate::syscalls::SYSCALL_VALUE_ENCODE
+            | crate::syscalls::SYSCALL_BLOB_CONCAT
+            | crate::syscalls::SYSCALL_UTF8_VALIDATE
+            | crate::syscalls::SYSCALL_VALUE_TO_STRING
             | crate::syscalls::SYSCALL_STATE_VALUE_ENCODE
             | crate::syscalls::SYSCALL_STATE_VALUE_DECODE
             | crate::syscalls::SYSCALL_STATE_PATH_FROM_NAME
@@ -3697,39 +3802,32 @@ impl IVMHost for WsvHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let req: scode::DeactivateContractInstance = decode_canonical_norito(tlv.payload)?;
-                if self
+                let instance = self
                     .wsv
                     .contract_instances
-                    .remove(req.contract_address())
-                    .is_some()
+                    .get_mut(req.contract_address())
+                    .ok_or(VMError::PermissionDenied)?;
+                if instance.lifecycle.owner
+                    != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                        self.caller.clone(),
+                    )
+                    || instance.lifecycle.revision != *req.expected_revision()
+                    || instance.lifecycle.active_code_hash.is_none()
                 {
-                    Ok(Self::mutation_gas(0))
-                } else {
-                    Err(VMError::PermissionDenied)
+                    return Err(VMError::PermissionDenied);
                 }
+                instance.lifecycle.revision = instance
+                    .lifecycle
+                    .revision
+                    .checked_add(1)
+                    .ok_or(VMError::PermissionDenied)?;
+                instance.lifecycle.active_code_hash = None;
+                Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
-                let ptr = vm.register(10);
-                let tlv = vm.validate_tlv(ptr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let req: scode::RemoveSmartContractBytes = decode_canonical_norito(tlv.payload)?;
-                let artifact_id = *req.artifact_id();
-                if self.wsv.contract_manifests.contains(&artifact_id) {
-                    return Err(VMError::PermissionDenied);
-                }
-                if self.wsv.contract_instances.iter().any(|(address, hash)| {
-                    address.dataspace_id().ok() == Some(artifact_id.dataspace_id)
-                        && hash == &artifact_id.code_hash
-                }) {
-                    return Err(VMError::PermissionDenied);
-                }
-                if self.wsv.contract_code.remove(&artifact_id).is_some() {
-                    Ok(Self::mutation_gas(0))
-                } else {
-                    Err(VMError::PermissionDenied)
-                }
+                // Installed mock artifacts always include the authenticated declaration table;
+                // deleting code independently of that retained fixture would create invalid state.
+                Err(VMError::PermissionDenied)
             }
             syscalls::SYSCALL_REGISTER_DOMAIN => {
                 // r10=&DomainId TLV; caller must have RegisterDomain
@@ -4088,8 +4186,8 @@ impl IVMHost for WsvHost {
                     vm.set_register(10, 0);
                     return Ok(Self::sysvar_gas(0));
                 };
-                let payload = encode_canonical_norito(contract)?;
-                let pointer = Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, &payload)?;
+                let payload = contract.as_str().as_bytes();
+                let pointer = Self::alloc_tlv_payload(vm, PointerType::Blob, payload)?;
                 vm.set_register(10, pointer);
                 Ok(Self::sysvar_gas(payload.len()))
             }
@@ -4108,8 +4206,8 @@ impl IVMHost for WsvHost {
                     vm.set_register(10, 0);
                     return Ok(Self::sysvar_gas(0));
                 };
-                let payload = entrypoint.as_bytes().to_vec();
-                let pointer = Self::alloc_tlv_payload(vm, PointerType::Blob, &payload)?;
+                let payload = entrypoint.as_bytes();
+                let pointer = Self::alloc_tlv_payload(vm, PointerType::Blob, payload)?;
                 vm.set_register(10, pointer);
                 Ok(Self::sysvar_gas(payload.len()))
             }
@@ -4185,27 +4283,33 @@ impl IVMHost for WsvHost {
                 self.wsv.revoke_permission(&subject, &token);
                 Ok(Self::mutation_gas(0))
             }
-            syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
-            | syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT => {
+            syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION
+            | syscalls::SYSCALL_REVOKE_CONTRACT_PERMISSION => {
                 let subject = self.decode_account_subject_reg(vm, 10)?;
-                let selector_tlv = vm.validate_tlv(vm.register(11))?;
-                if selector_tlv.type_id != PointerType::Blob {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let entrypoint =
-                    core::str::from_utf8(selector_tlv.payload).map_err(|_| VMError::DecodeError)?;
-                if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
-                    return Err(VMError::DecodeError);
-                }
+                let permission = self.decode_name_reg(vm, 11)?;
                 let contract = self
                     .contract_runtime_address
                     .clone()
                     .ok_or(VMError::PermissionDenied)?;
-                let token = PermissionToken::ContractEntrypoint {
+                let interface = vm.contract_interface().ok_or(VMError::InvalidMetadata)?;
+                let declared = interface.permissions.iter().any(|declaration| {
+                    declaration.name == permission
+                        && matches!(
+                            declaration.scope,
+                            iroha_data_model::smart_contract::manifest::ContractPermissionScopeV1::Instance
+                        )
+                });
+                if !declared || self.caller != contract.subject_id() {
+                    return Err(VMError::PermissionDenied);
+                }
+                let token = PermissionToken::ContractPermission {
                     contract,
-                    entrypoint: entrypoint.to_owned(),
+                    permission,
                 };
-                let is_grant = number == syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT;
+                if !self.wsv.has_permission(&self.caller, &token) {
+                    return Err(VMError::PermissionDenied);
+                }
+                let is_grant = number == syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION;
                 let exists = self.wsv.has_permission(&subject, &token);
                 if exists == is_grant {
                     return Err(VMError::PermissionDenied);
@@ -5361,6 +5465,9 @@ mod tests_null_decode {
 
     fn load_int_state_map_schema(vm: &mut IVM, name: &str) {
         let interface = crate::metadata::EmbeddedContractInterfaceV1 {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             callables: vec![ivm_abi::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
@@ -5382,7 +5489,8 @@ mod tests_null_decode {
                 return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
                     nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
                 }),
-                permission: None,
+                authorization:
+                    iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: Some(true),
@@ -5489,6 +5597,61 @@ mod tests_null_decode {
                 call_syscall(&mut vm, syscalls::SYSCALL_POINTER_FROM_NORITO),
                 Err(VMError::NoritoInvalid),
                 "numeric {kind:?} cannot decode from null"
+            );
+            assert_eq!(vm.register(10), 0);
+        }
+    }
+    #[test]
+    fn contract_context_byte_outputs_have_exact_gas_quotes_and_canonical_address_bytes() {
+        let caller = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "fixture",
+        );
+        let address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .unwrap(),
+            &caller,
+            812,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        )
+        .unwrap();
+        let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
+        host.contract_runtime_address = Some(address.clone());
+        host.contract_runtime_entrypoint = Some("digest_for".into());
+        for (number, expected) in [
+            (
+                syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+                address.as_str().as_bytes(),
+            ),
+            (
+                syscalls::SYSCALL_SYSVAR_ENTRYPOINT,
+                b"digest_for".as_slice(),
+            ),
+        ] {
+            let mut vm = IVM::new(1_000_000);
+            let quote = host.prepare_syscall(number, &vm).unwrap();
+            let used = host.syscall(number, &mut vm).unwrap();
+            assert_eq!(quote, used);
+            assert_eq!(used, WsvHost::sysvar_gas(expected.len()));
+            let output = vm.validate_tlv(vm.register(10)).unwrap();
+            assert_eq!(output.type_id, PointerType::Blob);
+            assert_eq!(output.payload, expected);
+        }
+        host.contract_runtime_address = None;
+        host.contract_runtime_entrypoint = None;
+        for number in [
+            syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+            syscalls::SYSCALL_SYSVAR_ENTRYPOINT,
+        ] {
+            let mut vm = IVM::new(1_000_000);
+            assert_eq!(
+                host.prepare_syscall(number, &vm).unwrap(),
+                WsvHost::sysvar_gas(0)
+            );
+            assert_eq!(
+                host.syscall(number, &mut vm).unwrap(),
+                WsvHost::sysvar_gas(0)
             );
             assert_eq!(vm.register(10), 0);
         }
@@ -6618,9 +6781,19 @@ mod tests_null_decode {
         let base_ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::Name, &base_bytes))
             .expect("alloc base");
-        let key_bytes =
-            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
-                .expect("encode canonical int key");
+        let key_schema = crate::state_value_runtime::schema_for_embedded_state_type(
+            &crate::metadata::EmbeddedStateType::Int,
+        )
+        .expect("scalar key schema");
+        let key_schema_bytes = norito::to_bytes(&key_schema).expect("key schema frame");
+        let key_record = ivm_abi::state_value::StateValueRecordV1 {
+            schema_hash: ivm_abi::state_value::state_value_schema_hash_v1(&key_schema_bytes),
+            atoms: vec![ivm_abi::state_value::StateValueAtomV1::Pointer(
+                ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
+                    .expect("encode canonical int key"),
+            )],
+        };
+        let key_bytes = norito::to_bytes(&key_record).expect("canonical key record");
         let key_ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &key_bytes))
             .expect("alloc key");

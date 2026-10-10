@@ -64,16 +64,16 @@ mod tests {
         let lane_bindings: Vec<_> = lanes
             .lanes()
             .iter()
-            .map(|lane| (lane.alias.as_str(), lane.dataspace_id))
+            .map(|lane| (lane.alias.as_str(), lane.dataspace_id, lane.visibility))
             .collect();
         assert_eq!(
             lane_bindings,
             [
-                ("core", DataSpaceId::UNIVERSAL),
-                ("governance", DataSpaceId::UNIVERSAL),
-                ("zk", DataSpaceId::UNIVERSAL),
+                ("core", DataSpaceId::UNIVERSAL, LaneVisibility::Public),
+                ("governance", DataSpaceId::UNIVERSAL, LaneVisibility::Public),
+                ("zk", DataSpaceId::UNIVERSAL, LaneVisibility::Public),
             ],
-            "logical governance and zk lanes must not manufacture physical dataspaces"
+            "logical governance and zk lanes must keep universal's public disclosure class"
         );
 
         let dataspaces = sora_dataspace_catalog();

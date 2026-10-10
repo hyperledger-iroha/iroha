@@ -1,4 +1,4 @@
-//! Canonical Quantity decoding into its original exact prepaid native-digit backing.
+//! Canonical binary and JSON Quantity decoding into exact original prepaid native digits.
 //!
 //! This leaf is not a frame authenticator or an admission decision. The enclosing
 //! prepared record walker must preserve the advertised flags, decode scope and
@@ -232,6 +232,51 @@ impl std::error::Error for QuantityDecodeAdmissionError {
     }
 }
 
+/// Original JSON decoder cause or original-pool backing admission refusal.
+///
+/// The text and native digits use the caller's same finite pool. This local error
+/// retains the original physical release observation; it is not protocol rejection.
+#[derive(Debug)]
+pub enum QuantityJsonAdmissionError {
+    /// Original string, cumulative decode-work or decimal-domain failure.
+    Json(json::Error),
+    /// Exact temporary text or native-digit allocation could not be admitted.
+    Allocation(ChargedBufferError),
+}
+impl From<json::Error> for QuantityJsonAdmissionError {
+    fn from(error: json::Error) -> Self {
+        Self::Json(error)
+    }
+}
+impl From<ChargedBufferError> for QuantityJsonAdmissionError {
+    fn from(error: ChargedBufferError) -> Self {
+        Self::Allocation(error)
+    }
+}
+impl core::fmt::Display for QuantityJsonAdmissionError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Json(error) => core::fmt::Display::fmt(error, formatter),
+            Self::Allocation(error) => core::fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+impl std::error::Error for QuantityJsonAdmissionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Json(error) => Some(error),
+            Self::Allocation(error) => Some(error),
+        }
+    }
+}
+
+struct QuantityJsonText(ChargedBuffer<u8>);
+impl AsMut<[u8]> for QuantityJsonText {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.0.as_mut_slice()
+    }
+}
+
 /// Original prepared backing or exact canonical decoding refusal.
 #[derive(Debug)]
 pub enum QuantityDestinationError {
@@ -444,6 +489,80 @@ pub struct ChargedQuantity {
     charge: AllocationCharge,
 }
 impl ChargedQuantity {
+    /// Decode one JSON Quantity into its actual original-pool native-digit owner.
+    ///
+    /// The existing string/escape and decimal kernels keep their syntax and logical
+    /// work order. Exact text and native digits are admitted before allocation; the
+    /// temporary text retires before return and the immutable value owns its digits'
+    /// original charge. Zero has no digit allocation and keeps a zero-sized charge.
+    /// No ordinary Quantity decode, graph clone or binary reencoding occurs here.
+    ///
+    /// The caller retains the enclosing source, keys, record/control storage and same
+    /// cumulative decoder context. It must defer refunds beyond any State or storage
+    /// guards. This leaf retains no partially parsed text/digits on failure and does
+    /// not close the admitted NPoS record/key or later authority-graph obligations.
+    ///
+    /// # Errors
+    /// Preserves the original JSON/resource cause or exact pool/allocator refusal.
+    #[allow(unsafe_code)]
+    pub fn try_decode_json(
+        parser: &mut json::Parser<'_>,
+        budget: &AllocationBudget,
+    ) -> Result<Self, QuantityJsonAdmissionError> {
+        let mut preflight = *parser;
+        preflight.skip_string_bounded(MAX_CANONICAL_QUANTITY_TEXT_BYTES)?;
+        // Declare the ledger before text/value so every failure destroys physical
+        // storage before its original charge. No charge is inferred after decoding.
+        let mut digit_charge = None;
+        let text = parser.parse_string_with_buffer(|length| {
+            let mut bytes = ChargedBuffer::new(length, budget)?;
+            for _ in 0..length {
+                bytes.push_reserved(0);
+            }
+            Ok::<_, QuantityJsonAdmissionError>(QuantityJsonText(bytes))
+        })?;
+        let source = core::str::from_utf8(text.0.as_slice())
+            .expect("the shared JSON string decoder produces valid UTF-8");
+        let value = Quantity::from_canonical_json_text_with(source, |magnitude| {
+            let allocate = |layout: Layout| {
+                let mut reservation = budget
+                    .try_reserve(layout)
+                    .map_err(ChargedBufferError::Admission)?;
+                let charge = reservation
+                    .try_split(layout)
+                    .expect("the original reservation covers its exact native-digit layout");
+                // SAFETY: the shared mantissa kernel supplies the checked nonzero
+                // exact native-digit layout. Credit already covers this allocator
+                // request; the kernel immediately takes the pointer into its Vec.
+                let pointer = unsafe { std::alloc::alloc(layout) };
+                if pointer.is_null() {
+                    return Err(ChargedBufferError::Allocator {
+                        requested_bytes: layout.size(),
+                    }
+                    .into());
+                }
+                digit_charge = Some(charge);
+                Ok::<_, QuantityJsonAdmissionError>(pointer)
+            };
+            // SAFETY: the callback returns precisely the original admitted global
+            // allocation, or its typed refusal before supplying a pointer. The
+            // unchanged kernel fills and owns it without growth or replacement.
+            unsafe { quantity_mantissa_from_canonical_le_bytes_with(magnitude, allocate) }
+        })?;
+        let charge = match digit_charge {
+            Some(charge) => charge,
+            None => {
+                debug_assert!(value.is_zero());
+                let empty = ChargedBuffer::<NativeBigDigit>::new(0, budget)?;
+                // SAFETY: zero owns no allocation; pair its same-pool zero charge
+                // immediately with the already allocation-free canonical zero.
+                let (_, charge) = unsafe { empty.into_allocation_parts() };
+                charge
+            }
+        };
+        Ok(Self { value, charge })
+    }
+
     /// Borrow the canonical value without separating backing and credit custody.
     #[must_use]
     pub fn get(&self) -> &Quantity {
@@ -471,3 +590,7 @@ impl ChargedQuantity {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "prepared_quantity/json_tests.rs"]
+mod json_tests;

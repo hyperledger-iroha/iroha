@@ -1,6 +1,7 @@
 // Demonstrates typed pointer-ABI for account detail and asset transfer.
 seiyaku DetailAndTransfer {
-    kotoage fn set_cursor_and_transfer() authorize("Admin") {
+    permission Admin;
+    kotoage fn set_cursor_and_transfer() authorize(Admin) {
         // Write a small JSON cursor to the caller's account metadata
         ledger::account::set_metadata(
             account: context::authority(),

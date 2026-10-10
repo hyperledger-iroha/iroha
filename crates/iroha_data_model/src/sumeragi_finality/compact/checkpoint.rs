@@ -59,7 +59,7 @@ impl SumeragiCommitCheckpointV1 {
     ) -> Result<Self, FinalityError> {
         need(
             matches!(
-                native.root_scope().map_err(malformed)?,
+                native.root_scope(),
                 crate::block::consensus::SumeragiRootScope::Global
             ),
             "compact global finality requires global signed genesis",
@@ -217,7 +217,7 @@ impl SumeragiCommitVerifierV1 {
         checkpoint.validate_bounds()?;
         need(
             matches!(
-                native.root_scope().map_err(malformed)?,
+                native.root_scope(),
                 crate::block::consensus::SumeragiRootScope::Global
             ) && checkpoint.genesis_hash == native.genesis.hash()
                 && checkpoint.network == native.initial_epoch().network_id

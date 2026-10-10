@@ -632,7 +632,9 @@ fn graph_epoch_scope_reuses_exact_context_across_cold_imports_and_ends_with_lexi
     let _guard = crate::managed::native_test_guard();
     let mut fixture = Fixture::new();
     let context =
-        iroha_data_model::sumeragi_finality::genesis_epoch(fixture.native.chain.genesis()).unwrap();
+        iroha_data_model::sumeragi_finality::authenticated_genesis(fixture.native.chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
     let (_, first, first_bytes) = fixture.paid("first graph epoch import");
     let (_, second, second_bytes) = fixture.paid("second graph epoch import");
     assert_ne!(first_bytes, second_bytes);
@@ -731,7 +733,9 @@ fn graph_epoch_scope_keeps_active_charges_nonwaiting_fallback_and_no_local_dupli
     let _guard = crate::managed::native_test_guard();
     let mut fixture = Fixture::new();
     let context =
-        iroha_data_model::sumeragi_finality::genesis_epoch(fixture.native.chain.genesis()).unwrap();
+        iroha_data_model::sumeragi_finality::authenticated_genesis(fixture.native.chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
     let (_, original, bytes) = fixture.paid("graph epoch active and optional fallback");
     let scope = CheckpointImportScope::for_original(&fixture.parent).unwrap();
     let (a, b) = fixture.pair(&scope);

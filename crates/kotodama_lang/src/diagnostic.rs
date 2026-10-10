@@ -1040,7 +1040,7 @@ mod tests {
         for (code, source) in [
             (
                 "K2002",
-                "seiyaku Unknown { view fn run() -> int { return missing; } }",
+                "seiyaku Unknown { view fn run() authorize(anyone) -> int { return missing; } }",
             ),
             (
                 "E_DUPLICATE_DECLARATION",
@@ -1048,11 +1048,11 @@ mod tests {
             ),
             (
                 "E_RESERVED_DECLARATION",
-                "seiyaku Reserved { fn account_id(string value) -> int { return 1; } }",
+                "seiyaku Reserved { fn __kotodama_list_len() -> int { return 1; } }",
             ),
             (
                 "E_LOCAL_SHADOWING",
-                "seiyaku Shadow { const int limit = 1; view fn run(int limit) -> int { return limit; } }",
+                "seiyaku Shadow { const int limit = 1; view fn run(int limit) authorize(anyone) -> int { return limit; } }",
             ),
         ] {
             let diagnostics = CompilerSession::default()
@@ -1219,9 +1219,11 @@ mod tests {
             .pointer("/runs/0/results/0/properties/kotodama")
             .expect("SARIF embeds the canonical diagnostic");
         assert_eq!(canonical, embedded);
+        assert!(human.contains("seiyaku.ko:3:5"));
         assert!(
-            human.contains("seiyaku.ko:3:5-3:6"),
-            "human renderer must preserve the full primary and label range"
+            !human.contains("--> seiyaku.ko:3:5-3:6")
+                && !human.contains("= label: seiyaku.ko:3:5-3:6"),
+            "human primary and label locations name the start"
         );
     }
     fn fixture_diagnostic(text: &str, start: usize, end: usize) -> (SourceFile, Diagnostic) {

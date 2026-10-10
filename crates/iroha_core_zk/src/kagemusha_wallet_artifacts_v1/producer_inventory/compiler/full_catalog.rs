@@ -11,7 +11,7 @@ use std::{
 
 use iroha_data_model::{
     block::decode_framed_signed_block,
-    sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier, genesis_epoch},
+    sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier, authenticated_genesis},
 };
 use iroha_pasta::msm::MemoryBudget;
 use iroha_plonk_gadgets::p256::native::{Affine, words_from_be};
@@ -91,7 +91,9 @@ fn native_finality(fixture: &[u8]) -> SumeragiFinalityVerifier {
     let capture: norito::json::Value = norito::json::from_slice(fixture).unwrap();
     let wire = hex::decode(capture["signed_genesis_wire_hex"].as_str().unwrap()).unwrap();
     let genesis = decode_framed_signed_block(&wire).unwrap();
-    let epoch = genesis_epoch(&genesis).unwrap();
+    let epoch = authenticated_genesis(&genesis)
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
     let roster = epoch
         .committee
         .iter()

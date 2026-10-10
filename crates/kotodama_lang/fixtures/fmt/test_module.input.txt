@@ -8,7 +8,7 @@ module WrappingTests {
     }
     #[test(fixture = actors)]
     fn invokes_entrypoints() {
-        test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: json {},);
-        test::invoke_kotoage_as(actor: "issuer", kotoage: "increment", arguments: json { step: 2 });
+        test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments:  {},);
+        test::invoke_kotoage_as(actor: "issuer", kotoage: "increment", arguments:  { step: 2 });
     }
 }

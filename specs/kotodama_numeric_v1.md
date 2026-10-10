@@ -12,6 +12,7 @@ Kotodama uses type-first declarations consistently:
 
 ```kotodama
 seiyaku Counter {
+    permission CanIncrement;
     const int initial = 1;
     const int step = 2;
 
@@ -21,11 +22,11 @@ seiyaku Counter {
         value = initial;
     }
 
-    kotoage fn increment() authorize("CanIncrement") {
+    kotoage fn increment() authorize(CanIncrement) {
         value = value + step;
     }
 
-    view fn current() -> int {
+    view fn current() authorize(anyone) -> int {
         return value;
     }
 }
@@ -368,10 +369,11 @@ The source conversion surface is explicit and complete:
 | `quantity::try_from_decimal(value)` | `Result<quantity, NumericError>` | preserves the exact canonical value; a negative input returns `NumericError::NegativeQuantity` |
 | `decimal::from_quantity(value)` | `decimal` | exact nominal-domain exit with identical mantissa and scale |
 
-The `int` error payload of a recoverable quantity conversion is the stable
-numeric fault tag; it is not a substituted value. Exact and truncating
-decimal-to-int forms and all infallible conversions trap on an impossible
-final-domain violation rather than saturating. Width-specific constructors,
+The `NumericError` error payload of a recoverable quantity conversion identifies
+the exact numeric fault. Its ABI status register carries the corresponding stable
+`NumericFaultV1` tag. Exact and truncating decimal-to-int forms and all infallible
+conversions trap on an impossible final-domain violation rather than saturating.
+Width-specific constructors,
 implicit assignment/argument/return/arithmetic/comparison conversions, and
 generic `numeric::*` arithmetic helpers are not part of V1.
 
@@ -620,9 +622,17 @@ Stable numeric pointer-validation fault tags are:
 
 Both fault tables, including names and tags, are inputs to the ABI V1 hash.
 
-Fallible arithmetic accepts failure mode `0` (trap) or `1` (return the fault in
-the status register). Conversions documented as recoverable always return a
-status. Invalid pointer envelopes, versions, lengths, hashes, schemas, flags,
+Fallible arithmetic and checked conversions accept failure mode `0` (trap) or
+`1` (return the fault in the status register). `INT_TO_I64`, `INT_TO_U64`,
+`DECIMAL_TO_INT_EXACT`, `QUANTITY_FROM_INT`, and `QUANTITY_FROM_DECIMAL` read
+the authenticated source pointer from `r10`, require zero `r11..r13`, and read
+the failure mode from `r14`. Trap mode preserves the exact `NumericFaultV1`;
+it does not lower a failed conversion to a generic abort. Status mode returns
+zero in `r10` and the fault tag in `r11`. Success returns the converted value
+in `r10` and zero in `r11`. The compiler selects status mode only for source
+operations that return `Result`, such as `quantity::try_from_int`; source
+operations with a checked value result use trap mode. Invalid pointer
+envelopes, versions, lengths, hashes, schemas, flags,
 canonical encodings, scale pointers, rounding tags, failure modes, and required
 zero registers have deterministic distinct validation behavior.
 

@@ -54,9 +54,12 @@ fn keyword_kind(text: &str) -> SyntaxKind {
         Some(TokenKind::Continue) => SyntaxKind::KwContinue,
         Some(TokenKind::State) => SyntaxKind::KwState,
         Some(TokenKind::Struct) => SyntaxKind::KwStruct,
+        Some(TokenKind::Event) => SyntaxKind::KwEvent,
+        Some(TokenKind::Emit) => SyntaxKind::KwEmit,
         Some(TokenKind::Error) => SyntaxKind::KwError,
         Some(TokenKind::Enum) => SyntaxKind::KwEnum,
         Some(TokenKind::Authorize) => SyntaxKind::KwAuthorize,
+        Some(TokenKind::Permission) => SyntaxKind::KwPermission,
         Some(TokenKind::Trigger) => SyntaxKind::KwTrigger,
         Some(TokenKind::If) => SyntaxKind::KwIf,
         Some(TokenKind::Match) => SyntaxKind::KwMatch,
@@ -579,8 +582,13 @@ impl<'source> Scanner<'source> {
             self.bump();
             (SyntaxKind::ErrorToken, None)
         } else if self.starts_with("//") {
+            let kind = if self.starts_with("///") && !self.starts_with("////") {
+                SyntaxKind::DocComment
+            } else {
+                SyntaxKind::LineComment
+            };
             self.scan_line_comment();
-            (SyntaxKind::LineComment, None)
+            (kind, None)
         } else if self.starts_with("/*") {
             let terminated = self.scan_block_comment();
             (
@@ -1005,7 +1013,7 @@ mod tests {
         let source = SourceFile::new(
             SourceId(0),
             "branded-keywords.ko",
-            "誓約 Demo { 始まり() {} 言挙げ fn run() authorize(\"Run\") {} 改善() {} }",
+            "誓約 Demo { permission Run;  始まり() {} 言挙げ fn run() authorize(Run) {} 改善() {} }",
         );
         let lexed = lex(&source, FrontendBudget::v1());
         assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
@@ -1033,14 +1041,7 @@ mod tests {
     #[test]
     fn retired_words_are_plain_identifiers_and_retired_operators_are_errors() {
         for text in [
-            "contract",
-            "entry",
-            "init",
-            "permission",
-            "meta",
-            "this",
-            "upgrade",
-            "while",
+            "contract", "entry", "init", "meta", "this", "upgrade", "while",
         ] {
             let source = SourceFile::new(SourceId(0), "retired-word.ko", text);
             let lexed = lex(&source, FrontendBudget::v1());

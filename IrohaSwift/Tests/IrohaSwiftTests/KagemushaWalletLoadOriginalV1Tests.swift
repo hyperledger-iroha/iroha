@@ -15,6 +15,15 @@ final class KagemushaWalletLoadOriginalV1Tests: XCTestCase {
     var returned = input.receipt; returned[0] = 0
     XCTAssertEqual(input.receipt, Data([7, 8]))
   }
+  func testRetainedReopeningAppliesBoundsBeforeAccessingNative() throws {
+    let network = try NetworkId(literal: "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
+    for (receipt, finality) in [(Data(), Data([1])), (Data([1]), Data(repeating: 0, count: 256 * 1024 + 1))] {
+      XCTAssertThrowsError(try KagemushaWalletLoadOriginalV1.decodeRetained(selection: selection(),
+        payerAccountID: "payer", networkID: network, receiptOriginal: receipt, finalityOriginal: finality)) {
+        XCTAssertEqual($0 as? KagemushaWalletErrorV1, .invalidInput)
+      }
+    }
+  }
   func testAbsentOrOversizedOriginalIsRejectedBeforeNative() throws {
     for bad in [Data(), Data(repeating: 0, count: 513)] {
       XCTAssertThrowsError(try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: "x", receipt: bad, finality: Data([1])))

@@ -322,6 +322,7 @@ mod axt_spend_issuer;
 mod block_proofs;
 mod bounded_authority;
 mod callback_journal;
+mod contract_event_journal;
 mod canonical_history;
 mod committed_execution_read;
 pub(crate) mod native_execution_tip;
@@ -385,8 +386,12 @@ use crate::execution_attempt::ExecutionAttemptError;
 pub use block_proofs::{BlockProofLimits, BlockProofResource};
 use block_proofs::{block_proofs_for_entry_from_kura, executed_block_wire_from_kura};
 use canonical_history::committed_block_from_kura;
+mod finality_proof_interval;
+pub use finality_proof_interval::FinalityProofIntervalReadError;
+
 pub use canonical_history::{
     CanonicalHistoryCursor, CanonicalHistoryReadBudget, CanonicalHistorySource,
+    FinalizedEventReadError,
 };
 #[cfg(test)]
 pub(crate) use committed_transaction_context::seed_committed_transaction_context;
@@ -897,7 +902,9 @@ mod threshold_key_lifecycle_certificate_tests {
             10,
             false,
         );
-        let epoch = crate::sumeragi::epoch::genesis_epoch(&signed).unwrap();
+        let epoch = crate::sumeragi::epoch::authenticated_genesis(&signed)
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
         let roster = epoch
             .committee
             .iter()
@@ -5804,6 +5811,10 @@ impl WorldBlock<'_> {
         collect_reverts!(self.axt_policies, AxtPolicy);
         collect_reverts!(self.axt_handle_counters, AxtHandleCounter);
         collect_reverts!(self.axt_asset_incarnations, AxtAssetIncarnation);
+        collect_reverts!(
+            self.asset_definition_direct_homes,
+            AssetDefinitionDirectHome
+        );
         collect_reverts!(self.axt_replay_ledger, AxtReplay);
         collect_reverts!(self.axt_spend_nonce_ledger, AxtSpendNonce);
         collect_reverts!(
@@ -5906,6 +5917,10 @@ impl WorldBlock<'_> {
         collect_payload!(self.axt_policies, AxtPolicy);
         collect_payload!(self.axt_handle_counters, AxtHandleCounter);
         collect_payload!(self.axt_asset_incarnations, AxtAssetIncarnation);
+        collect_payload!(
+            self.asset_definition_direct_homes,
+            AssetDefinitionDirectHome
+        );
         collect_payload!(self.axt_replay_ledger, AxtReplay);
         collect_payload!(self.axt_spend_nonce_ledger, AxtSpendNonce);
         collect_payload!(
@@ -7526,6 +7541,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             contract_address.subject_id(),
         );
         binding.lifecycle.active_code_hash = Some(code_hash);
+        binding.lifecycle.retained_code_hash = Some(code_hash);
         let subject = binding.subject.clone();
         if self.accounts.get(&subject).is_none() {
             self.accounts.insert(
@@ -13889,6 +13905,8 @@ pub struct StateTransaction<'block, 'state> {
     active_trigger_execution_depth: u16,
     /// Sole pre-apply owner of every actual nested callback trace.
     callback_journal: callback_journal::CallbackJournal,
+    /// Sole ordered owner of every native contract emission before root output publication.
+    contract_event_journal: contract_event_journal::ContractEventJournal,
     /// An undrained callback owner prevents publication of the parent State.
     block_execution_output_plan: &'block mut Option<output_capacity::ExecutionOutputPlanState>,
     /// Data-trigger firings attempted across every drain in this transaction.
@@ -16325,12 +16343,14 @@ mod stake_snapshot_tests {
             let nexus = state.nexus.get_mut();
             nexus.staking.min_validator_stake = 100_u64.into();
         }
+        let restricted_dataspace = DataSpaceId::new(1);
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![
                 LaneConfig::default(),
                 LaneConfig {
                     id: LaneId::new(1),
+                    dataspace_id: restricted_dataspace,
                     alias: "restricted".to_string(),
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
@@ -16340,6 +16360,15 @@ mod stake_snapshot_tests {
         .expect("lane catalog");
         {
             let nexus = state.nexus.get_mut();
+            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: restricted_dataspace,
+                    alias: "restricted".to_owned(),
+                    ..DataSpaceMetadata::default()
+                },
+            ])
+            .expect("dataspace catalog");
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
@@ -16617,12 +16646,14 @@ mod stake_snapshot_tests {
             let nexus = state.nexus.get_mut();
             nexus.staking.min_validator_stake = 1_u64.into();
         }
+        let restricted_dataspace = DataSpaceId::new(1);
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![
                 LaneConfig::default(),
                 LaneConfig {
                     id: LaneId::new(1),
+                    dataspace_id: restricted_dataspace,
                     alias: "restricted".to_string(),
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
@@ -16632,6 +16663,15 @@ mod stake_snapshot_tests {
         .expect("lane catalog");
         {
             let nexus = state.nexus.get_mut();
+            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: restricted_dataspace,
+                    alias: "restricted".to_owned(),
+                    ..DataSpaceMetadata::default()
+                },
+            ])
+            .expect("dataspace catalog");
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
@@ -30304,6 +30344,139 @@ impl State {
         )
     }
 
+    /// Read one block-event execution under its original finite State source owner.
+    ///
+    /// This off-chain event projection does not authorize State mutation or deterministic
+    /// instruction metering. It preserves the caller's work/byte limits and original
+    /// execution pool; genesis results still require their actual H2 successor. Both
+    /// captures are one-shot: an active/changed publication returns its original release
+    /// observation rather than waiting inside the single event consumer.
+    /// # Errors
+    /// Preserves original State capture refusal, local execution refusal and canonical rejection.
+    pub fn read_finalized_event_carrier(
+        &self,
+        height: NonZeroUsize,
+        max_work: u64,
+        max_bytes: u64,
+    ) -> Result<crate::smartcontracts::isi::tx::FinalizedExecutionCarrier, FinalizedEventReadError>
+    {
+        #[cfg(all(test, sumeragi_core_mutation = "HC201"))]
+        return self
+            .read_finalized_execution_carrier(height, max_work, max_bytes)
+            .map_err(Into::into);
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC201")))]
+        self.read_finalized_event_carrier_after_read(height, max_work, max_bytes, || {})
+    }
+
+    // This probe is used only by deterministic tests at the real post-I/O boundary.
+    // The production caller supplies no callback, owner, source or visibility hint.
+    fn read_finalized_event_carrier_after_read(
+        &self,
+        height: NonZeroUsize,
+        max_work: u64,
+        max_bytes: u64,
+        after_read: impl FnOnce(),
+    ) -> Result<crate::smartcontracts::isi::tx::FinalizedExecutionCarrier, FinalizedEventReadError>
+    {
+        use iroha_data_model::query::error::QueryExecutionFail;
+        if max_work == 0 || max_bytes == 0 {
+            return Err(QueryExecutionFail::GasBudgetExceeded.into());
+        }
+        let budget = self.ivm_execution_budget();
+        // Every physical hash guard ends before original-pool refund callbacks run.
+        budget.with_deferred_refund_notifications(|_| {
+            let mut releases = self.block_hashes.reader_release_batch();
+            let (hashes, tip) = self.try_event_source(&mut releases, || {})?;
+            let expected = hashes.get(height.get() - 1).copied().ok_or_else(|| {
+                QueryExecutionFail::Conversion("canonical carrier height is unavailable".into())
+            })?;
+            let carrier = if height.get() <= 2 {
+                // Same G1/H2 verifier and same pool; use the captured original journal
+                // instead of entering a second blocking State reader on this event path.
+                crate::smartcontracts::isi::tx::read_finalized_execution_carrier(
+                    &self.kura,
+                    self.chain_id_ref(),
+                    *self.network_id_ref(),
+                    &hashes,
+                    height,
+                    expected,
+                    max_work,
+                    max_bytes,
+                    &budget,
+                )?
+            } else {
+                let source = CanonicalHistorySource::new(&self.kura, &hashes, tip, budget.clone());
+                crate::smartcontracts::isi::tx::read_finalized_event_carrier(
+                    source,
+                    &self.kura,
+                    self.chain_id_ref(),
+                    *self.network_id_ref(),
+                    height,
+                    expected,
+                    max_work,
+                    max_bytes,
+                )?
+            };
+            // A new stable tip may append while I/O runs. Keep the target's current
+            // membership check, but never spin or hide an active/changed writer here.
+            after_read();
+            let mut current_releases = self.block_hashes.reader_release_batch();
+            let (current_hashes, _) = self.try_event_source(&mut current_releases, || {})?;
+            if current_hashes.get(height.get() - 1).copied() != Some(expected) {
+                return Err(QueryExecutionFail::Conversion(
+                    "canonical carrier changed during finalized event read".into(),
+                )
+                .into());
+            }
+            Ok(carrier)
+        })
+    }
+
+    // Existing physical reader acquisition owns both release notices. The test probe
+    // runs at the real capture boundary; ordinary callers install no callback or source.
+    fn try_event_source<'state>(
+        &'state self,
+        releases: &mut Option<iroha_allocation::release::DeferredReleaseBatch>,
+        after_capture: impl FnOnce(),
+    ) -> Result<(BlockHashesView<'state>, Option<NativeExecutionTip>), StateViewError> {
+        #[cfg(all(test, sumeragi_core_mutation = "HC202"))]
+        {
+            let mut after_capture = Some(after_capture);
+            loop {
+                let generation = self.state_view_generation();
+                if generation % 2 != 0 {
+                    std::thread::yield_now();
+                    continue;
+                }
+                let hashes = self.block_hashes.try_view_retaining(releases)?;
+                let tip = *self.native_execution_tip.view().get();
+                if let Some(probe) = after_capture.take() {
+                    probe();
+                }
+                if is_stable_state_view_generation(generation, self.state_view_generation()) {
+                    return Ok((hashes, tip));
+                }
+                drop(hashes);
+                std::thread::yield_now();
+            }
+        }
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC202")))]
+        {
+            let release = self.state_write_lock.observe_release();
+            let generation = self.state_view_generation();
+            if generation % 2 != 0 {
+                return Err(StateViewError::Busy(release));
+            }
+            let hashes = self.block_hashes.try_view_retaining(releases)?;
+            let tip = *self.native_execution_tip.view().get();
+            after_capture();
+            if !is_stable_state_view_generation(generation, self.state_view_generation()) {
+                return Err(StateViewError::Busy(release));
+            }
+            Ok((hashes, tip))
+        }
+    }
+
     /// Read the complete signed-genesis prefix under an off-chain caller's original owner.
     ///
     /// Unlike a checkpoint walk, a G1 execution requires its actual H2 successor. The
@@ -37631,6 +37804,8 @@ impl<'state> StateBlock<'state> {
         let _ = ingest_event_telemetry;
         let callback_journal =
             callback_journal::CallbackJournal::new(self.callback_output_byte_limit());
+        let contract_event_journal =
+            contract_event_journal::ContractEventJournal::new(self.callback_output_byte_limit());
         let fields = self.fields.as_mut().expect("original executing State");
         let axt_current_slot =
             current_axt_slot_from_block(&fields._curr_block, fields.nexus.axt.slot_length_ms);
@@ -37754,6 +37929,7 @@ impl<'state> StateBlock<'state> {
             zk_commitments_in_tx: 0,
             active_trigger_execution_depth: 0,
             callback_journal,
+            contract_event_journal,
             block_execution_output_plan: &mut fields.execution_output_plan,
             data_trigger_firings_in_tx: 0,
             multisig_deferred_execution_stack: Vec::new(),
@@ -41599,6 +41775,7 @@ impl StateTransaction<'_, '_> {
                     | output_capacity::ExecutionOutputPlanState::Poisoned
             )
         ) || !self.callback_journal.allows_apply()
+            || !self.contract_event_journal.allows_apply()
             || !self.execution_effects_allow_apply()
             || self.world.execution_deferral.borrow().is_some()
             || self.canonical_runtime.touched_value().is_some()
@@ -41656,6 +41833,8 @@ impl StateTransaction<'_, '_> {
             Some("transaction cannot apply in the current execution-output phase")
         } else if !self.callback_journal.allows_apply() {
             Some("transaction callback journal does not authorize application")
+        } else if !self.contract_event_journal.allows_apply() {
+            Some("transaction contract emission journal does not authorize application")
         } else if !self.fastpq_source_quota.allows_apply() {
             Some("transaction FASTPQ source preparation does not authorize application")
         } else if !self.execution_effects_allow_apply() {
@@ -42627,7 +42806,9 @@ impl StateTransaction<'_, '_> {
                 .map_err(|error| {
                     ValidationFail::InternalError(format!("invalid ZK snapshot state: {error}"))
                 })?;
-            let run_result = vm.run_with_host(&mut host);
+            let run_result = vm
+                .run_with_host(&mut host)
+                .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             if let Err(error) = run_result {
                 let attempt =
@@ -43066,12 +43247,16 @@ impl StateTransaction<'_, '_> {
                         identity.contract_address
                     ))
                 })?;
+                let trigger_args = self
+                    .trigger_args_from_event(&event)
+                    .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                 let contract_call_context =
-                    crate::executor::parse_prepared_contract_invocation_execution_context(
+                    crate::executor::parse_prepared_trigger_invocation_execution_context(
                         invocation,
                         summary.prepared_contract(),
                         identity.contract_alias.clone(),
                         contract_subject,
+                        &trigger_args,
                         gas_limit,
                     )?;
                 let heap_limit = self.world.parameters.get().smart_contract().memory().get();
@@ -43098,11 +43283,14 @@ impl StateTransaction<'_, '_> {
                 let contract_runtime_context = contract_call_context.runtime_context();
                 let accounts = self.trigger_accounts_snapshot();
                 let mut host =
-                    crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
+                    crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                         authority.clone(),
                         accounts,
-                        contract_call_context.prepared_argument_record().cloned(),
+                        trigger_args,
                     );
+                host.set_entrypoint_argument_record(
+                    contract_call_context.prepared_argument_record().cloned(),
+                );
                 host.set_output_limits_from_parameters(
                     self.world.parameters.get().smart_contract(),
                 );
@@ -43137,12 +43325,18 @@ impl StateTransaction<'_, '_> {
                     })?;
                 vm.set_max_cycles(eff_cycles.get());
                 vm.set_gas_limit(gas_limit);
-                if let Some(argument_record) = contract_call_context.prepared_argument_record() {
-                    argument_record
-                        .precharge_vm(&mut vm)
-                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+                let precharge_result = contract_call_context
+                    .prepared_argument_record()
+                    .map_or(Ok(()), |record| record.precharge_vm(&mut vm));
+                if let Err(error) = &precharge_result {
+                    vm.record_boundary_fault(
+                        error,
+                        iroha_data_model::executor::fault::IvmFaultPositionV1::Initialization,
+                    );
                 }
-                let run_result = vm.run_with_host(&mut host);
+                let run_result = precharge_result
+                    .and_then(|()| vm.run_with_host(&mut host))
+                    .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
                 let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
                 let run_error = run_result.err().map(|error| {
                     crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error)
@@ -43426,14 +43620,15 @@ impl StateTransaction<'_, '_> {
                                 })?;
                             vm.set_max_cycles(eff_cycles.get());
                             vm.set_gas_limit(gas_limit);
-                            if let Some(argument_record) =
-                                contract_call_context.prepared_argument_record()
-                            {
-                                argument_record.precharge_vm(&mut vm).map_err(|error| {
-                                    ValidationFail::NotPermitted(error.to_string())
-                                })?;
+                            let precharge_result = contract_call_context
+                                .prepared_argument_record()
+                                .map_or(Ok(()), |record| record.precharge_vm(&mut vm));
+                            if let Err(error) = &precharge_result {
+                                vm.record_boundary_fault(error, iroha_data_model::executor::fault::IvmFaultPositionV1::Initialization);
                             }
-                            let run_result = vm.run_with_host(&mut host);
+                            let run_result = precharge_result
+                                .and_then(|()| vm.run_with_host(&mut host))
+                                .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
                             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
                             let run_error = run_result.err().map(|error| {
                                 crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
@@ -43938,6 +44133,8 @@ mod npos_effect_application_tests {
     }
 }
 #[cfg(test)]
+mod event_carrier_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 #[path = "state/world_initial_supply_tests.rs"]
@@ -43994,5 +44191,5 @@ mod nexus_fee_receipt;
 
 #[path = "state/direct_homes.rs"]
 mod direct_homes;
-use direct_homes::{ensure_dataspace_classes_preserved, ensure_homed_dataspaces_keep_lanes};
 pub(crate) use direct_homes::{direct_home_dataspace, validate_direct_home_transition};
+use direct_homes::{ensure_dataspace_classes_preserved, ensure_homed_dataspaces_keep_lanes};

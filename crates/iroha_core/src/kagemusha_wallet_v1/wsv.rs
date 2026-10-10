@@ -286,8 +286,11 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
         {
             return Err(Error::Binding);
         }
-        if !registration_scope_matches_home(&self.state.world, definition, registration.balance_scope)
-        {
+        if !registration_scope_matches_home(
+            &self.state.world,
+            definition,
+            registration.balance_scope,
+        ) {
             return Err(Error::Binding);
         }
         Ok(())
@@ -306,7 +309,10 @@ pub(crate) fn registration_scope_matches_home(
     match (definition.balance_scope_policy(), scope) {
         (AssetBalancePolicy::Global, AssetBalanceScope::Global) => true,
         (AssetBalancePolicy::DataspaceRestricted, AssetBalanceScope::Dataspace(dataspace)) => {
-            crate::read_scope::confined_home(world, definition).ok().flatten() == Some(dataspace)
+            crate::read_scope::confined_home(world, definition)
+                .ok()
+                .flatten()
+                == Some(dataspace)
         }
         _ => false,
     }

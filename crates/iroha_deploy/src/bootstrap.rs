@@ -612,11 +612,7 @@ fn verify_checkpoint(release: &NetworkRelease, bytes: &[u8]) -> Result<FinalityV
             &release.chain_id,
         )
         .map_err(crate::verify::finality::FinalityError::from)?;
-    if native
-        .root_scope()
-        .map_err(crate::verify::finality::FinalityError::from)?
-        != iroha_data_model::block::consensus::SumeragiRootScope::Global
-    {
+    if native.root_scope() != iroha_data_model::block::consensus::SumeragiRootScope::Global {
         return Err(BootstrapError::Invalid(
             "public parent release requires a committed global root",
         ));

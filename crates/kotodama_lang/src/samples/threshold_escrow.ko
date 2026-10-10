@@ -1,6 +1,7 @@
 // Threshold escrow sample for a single payer and an exact funding target.
 // The payer is bound to context::authority() when the escrow is opened.
 seiyaku ThresholdEscrow {
+    permission Admin;
     error enum EscrowError {
         AlreadyOpen = 1,
         AlreadyReleased = 2,
@@ -55,11 +56,11 @@ seiyaku ThresholdEscrow {
     }
 
     // NOTE:
-    // This sample uses authorize("Admin") because it releases and refunds funds
+    // This sample uses authorize(Admin) because it releases and refunds funds
     // from the configured escrow account. The recipient, escrow account, and
     // asset definition are fixed literals so the compiler can emit a complete
     // first-release access set without manual annotations.
-    kotoage fn open_escrow(quantity target_amount) authorize("Admin") {
+    kotoage fn open_escrow(quantity target_amount) authorize(Admin) {
         assert_unopened();
         let quantity zero = 0;
         require(target_amount > zero, EscrowError::NonPositiveTarget);
@@ -74,7 +75,7 @@ seiyaku ThresholdEscrow {
         is_refunded = false;
     }
 
-    kotoage fn deposit(quantity amount) authorize("Admin") {
+    kotoage fn deposit(quantity amount) authorize(Admin) {
         assert_open();
         assert_payer();
         require(amount > 0, EscrowError::NonPositiveAmount);
@@ -89,7 +90,7 @@ seiyaku ThresholdEscrow {
         funded_amount_value = next_funded;
     }
 
-    kotoage fn release_if_ready() authorize("Admin") {
+    kotoage fn release_if_ready() authorize(Admin) {
         assert_open();
         require(funded_amount_value == target_amount_value, EscrowError::NotFullyFunded);
         ledger::asset::transfer(
@@ -102,7 +103,7 @@ seiyaku ThresholdEscrow {
         is_released = true;
     }
 
-    kotoage fn refund() authorize("Admin") {
+    kotoage fn refund() authorize(Admin) {
         assert_open();
         assert_payer();
         let funded = funded_amount_value;

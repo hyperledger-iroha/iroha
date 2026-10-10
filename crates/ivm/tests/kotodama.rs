@@ -81,7 +81,7 @@ fn lexer_accepts_v1_branded_keywords_in_both_scripts() {
     for branded in [
         "誓約 Demo { }",
         "始まり() {}",
-        "言挙げ fn run() {}",
+        "言挙げ fn run() authorize(anyone) {}",
         "改善() {}",
     ] {
         lex(branded).expect("Japanese branded declaration must be accepted");
@@ -223,7 +223,7 @@ compile_cases! {
     "for_each_map_snapshot_allows_mutation", Production,
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/030.ko"));
     "string_equality_compiles", Production,
-        CaseSource::Exact("seiyaku StringEquality { view fn f() { let _x = \"hi\" == \"hi\"; } }");
+        CaseSource::Exact("seiyaku StringEquality { view fn f() authorize(anyone) { let _x = \"hi\" == \"hi\"; } }");
     "irohaswap_sample_compiles", Test,
         CaseSource::Exact(include_str!("../../kotodama_lang/src/samples/irohaswap.ko"));
     "prediction_market_demo_compiles", Test,
@@ -237,7 +237,7 @@ compile_cases! {
     "public_function_with_permission_is_allowed", Production,
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/012.ko"));
     "compile_unary_ops", Production,
-        CaseSource::Exact("seiyaku UnaryOps { view fn f(int a, bool b) { let c = -a; let d = !b; } }");
+        CaseSource::Exact("seiyaku UnaryOps { view fn f(int a, bool b) authorize(anyone) { let c = -a; let d = !b; } }");
 }
 
 compile_rejection_cases! {
@@ -270,7 +270,7 @@ compile_rejection_cases! {
         &["query_execute_norito"], &[];
     "raw_query_and_authority_sysvar_helpers_are_not_source_apis/authority", Test,
         CaseSource::Exact(
-            r#"seiyaku RawAuthority { view fn caller() -> AccountId { return sysvar_authority(); } }"#,
+            r#"seiyaku RawAuthority { view fn caller() authorize(anyone) -> AccountId { return sysvar_authority(); } }"#,
         ),
         &["sysvar_authority"], &[];
     "dynamic_state_map_take_is_rejected", Production,
@@ -286,7 +286,7 @@ compile_rejection_cases! {
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/056.ko")),
         &["while"], &[];
     "compile_pubkgen_and_valcom", Production,
-        CaseSource::Exact("seiyaku Commitments { view fn main() -> (int, int) { let p = crypto::pubkgen(9); let c = crypto::valcom(left: 9, right: 4); return (p, c); } }"),
+        CaseSource::Exact("seiyaku Commitments { view fn main() authorize(anyone) -> (int, int) { let p = crypto::pubkgen(9); let c = crypto::valcom(left: 9, right: 4); return (p, c); } }"),
         &["crypto::pubkgen"], &[];
     "raw_json_codec_aliases_are_rejected", Production,
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/059.ko")),
@@ -354,8 +354,8 @@ semantic_rejection_cases! {
         None, "ledger::query::account";
     "semantic_rejects_typed_query_get_helper_args/instance", CaseSource::Exact(r#"module InvalidQuery { fn f() { let _instance = ledger::query::seiyaku_instance(1); } }"#),
         None, "ledger::query::seiyaku_instance";
-    "semantic_rejects_zk_vrf_read_helper_args", CaseSource::Exact(r#"module InvalidVrfRequest { fn f() { let _seed = crypto::vrf::epoch_seed(value: 1); } }"#),
-        None, "crypto::vrf::epoch_seed expects (bytes) pointer to NoritoBytes VrfEpochSeedRequest";
+    "semantic_rejects_zk_vrf_read_helper_args", CaseSource::Exact(r#"module InvalidVrfRequest { fn f() { let _seed = crypto::vrf::epoch_seed(epoch: bytes("0x00")); } }"#),
+        None, "crypto::vrf::epoch_seed expects (int epoch) and returns Option<bytes>";
     "semantic_rejects_state_introspection_helper_args", CaseSource::Exact(r#"seiyaku C { fn f() { let _length = state::len(1); } }"#),
         None, "state::len expects (bytes StatePath)";
     "semantic_rejects_legacy_name_state_path_carriers", CaseSource::Exact(r#"seiyaku C { fn f() { let _count = state::count(Name::parse("Orders")); } }"#),
@@ -399,9 +399,9 @@ semantic_rejection_cases! {
 }
 
 vm_result_cases! {
-    "tuple_destructure_and_field_access", CaseSource::Exact("seiyaku TupleDestructure { view fn sum() -> int { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; } }"),
+    "tuple_destructure_and_field_access", CaseSource::Exact("seiyaku TupleDestructure { view fn sum() authorize(anyone) -> int { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; } }"),
         "sum", 9;
-    "tuple_var_member_access", CaseSource::Exact("seiyaku TupleMember { view fn f() -> int { let t = (5,6); return t.0 + t.1; } }"),
+    "tuple_var_member_access", CaseSource::Exact("seiyaku TupleMember { view fn f() authorize(anyone) -> int { let t = (5,6); return t.0 + t.1; } }"),
         "f", 11;
     "call_function_with_tuple_return", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/001.ko")),
         "main", 56;
@@ -413,7 +413,7 @@ vm_result_cases! {
         "f", 7;
     "method_call_sugar_receiver_and_arg", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/043.ko")),
         "main", 12;
-    "compile_and_run_modulo", CaseSource::Exact("seiyaku Modulo { view fn main() -> int { return 17 % 5; } }"),
+    "compile_and_run_modulo", CaseSource::Exact("seiyaku Modulo { view fn main() authorize(anyone) -> int { return 17 % 5; } }"),
         "main", 2;
 }
 
@@ -590,7 +590,8 @@ fn semantic_success_case_registry() {
 #[test]
 fn many_string_literals_load_under_wide_guard() {
     // Exercise pointer literal emission with offsets beyond the wide 8-bit range.
-    let mut src = String::from("seiyaku Literals { kotoage fn main() authorize(\"Test\") {");
+    let mut src =
+        String::from("seiyaku Literals { permission Test;  kotoage fn main() authorize(Test) {");
     for i in 0..32 {
         src.push_str(&format!(" debug::info(\"literal_{i}\");"));
     }
@@ -660,7 +661,7 @@ fn compile_blob_literal_emits_tlv_blob() {
 }
 #[test]
 fn compile_emits_get_authority_syscall() {
-    let src = r#"seiyaku Authority { view fn f() -> AccountId { return context::authority(); } }"#;
+    let src = r#"seiyaku Authority { view fn f() authorize(anyone) -> AccountId { return context::authority(); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -675,7 +676,7 @@ fn compile_emits_get_authority_syscall() {
 }
 #[test]
 fn compile_emits_current_time_syscall() {
-    let src = r#"seiyaku Time { view fn f() -> int { return context::transaction_time_ms(); } }"#;
+    let src = r#"seiyaku Time { view fn f() authorize(anyone) -> int { return context::transaction_time_ms(); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -690,7 +691,7 @@ fn compile_emits_current_time_syscall() {
 }
 #[test]
 fn compile_emits_block_height_syscall() {
-    let src = r#"seiyaku Height { view fn f() -> int { return context::block_height(); } }"#;
+    let src = r#"seiyaku Height { view fn f() authorize(anyone) -> int { return context::block_height(); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
@@ -771,7 +772,7 @@ fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
     let src = format!(
         r#"
         seiyaku QueryHints {{
-          view fn read() -> Option<NftView> {{
+          view fn read() authorize(anyone) -> Option<NftView> {{
             let account = ledger::query::account(context::authority());
             let asset = ledger::query::asset(AssetId::parse("{asset}"));
             let definition = ledger::query::asset_definition(AssetDefinitionId::parse("{asset_definition}"));
@@ -858,7 +859,7 @@ fn manifest_includes_exact_access_hints_for_static_zk_read_requests() {
     let src = format!(
         r#"
         seiyaku StaticReadHints {{
-          view fn read() -> bytes {{
+          view fn read() authorize(anyone) -> bytes {{
             let roots = crypto::zk::roots(value: b"{}");
             let tally = ledger::governance::tally(value: b"{}");
             return tally;
@@ -934,7 +935,7 @@ fn compile_emits_extended_hash_syscalls() {
 }
 #[test]
 fn compile_emits_resolve_account_alias_syscall() {
-    let src = r#"seiyaku ResolveAlias { view fn f() { let a = ledger::account::resolve_alias(alias: "banking@centralbank"); } }"#;
+    let src = r#"seiyaku ResolveAlias { view fn f() authorize(anyone) { let a = ledger::account::resolve_alias(alias: "banking@centralbank"); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -973,7 +974,7 @@ fn encode_helpers() {
 }
 #[test]
 fn compile_and_run_add() {
-    let src = "seiyaku Add { fn add(int a, int b) -> int { return a + b; } view fn main() -> int { return add(a: 4, b: 7); } }";
+    let src = "seiyaku Add { fn add(int a, int b) -> int { return a + b; } view fn main() authorize(anyone) -> int { return add(a: 4, b: 7); } }";
     let compiler = Compiler::new();
     let code = compiler.compile_source(src).expect("compile failed");
     let (meta, off) = parse_meta_offset(&code).unwrap();
@@ -992,7 +993,7 @@ fn compile_and_run_add() {
 }
 #[test]
 fn compile_builtin_create_nfts_and_set_detail() {
-    let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_metadata(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")); } }";
+    let src = "seiyaku CanonicalHostCalls { permission Admin;  kotoage fn main() authorize(Admin) { ledger::nft::create_for_all_users(); ledger::account::set_metadata(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")); } }";
     let code = test_compiler().compile_source(src).expect("compile failed");
     // Sanity: code contains at least three syscalls (order preserved)
     // Byte-pattern search for SCALL encodings (LE): [imm8, 0x00, 0x00, 0x60]
@@ -1048,7 +1049,7 @@ fn semantic_type_enforcement_for_typed_syscalls() {
 }
 #[test]
 fn compile_typed_nft_syscalls() {
-    let src = "seiyaku NftCalls { kotoage fn main() authorize(\"ManageNfts\") { ledger::nft::mint(nft: NftId::parse(\"n0$wonderland.universal\"), owner: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\")); ledger::nft::transfer(source: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), nft: NftId::parse(\"n0$wonderland.universal\"), destination: AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
+    let src = "seiyaku NftCalls { permission ManageNfts;  kotoage fn main() authorize(ManageNfts) { ledger::nft::mint(nft: NftId::parse(\"n0$wonderland.universal\"), owner: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\")); ledger::nft::transfer(source: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), nft: NftId::parse(\"n0$wonderland.universal\"), destination: AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile typed NFT");
@@ -1062,7 +1063,7 @@ fn compile_typed_nft_syscalls() {
 #[test]
 fn compiler_owns_first_release_abi_metadata() {
     let code = Compiler::new()
-        .compile_source("seiyaku FixedAbi { view fn f() -> int { return 3; } }")
+        .compile_source("seiyaku FixedAbi { view fn f() authorize(anyone) -> int { return 3; } }")
         .expect("compile");
     let (meta, _off) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.abi_version, 1);
@@ -1071,7 +1072,7 @@ fn compiler_owns_first_release_abi_metadata() {
 #[test]
 fn compile_emits_manifest_hashes() {
     use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
-    let src = "seiyaku ManifestHash { view fn f() { let x = 1 + 2; } }";
+    let src = "seiyaku ManifestHash { view fn f() authorize(anyone) { let x = 1 + 2; } }";
     let (code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile with manifest");
@@ -1091,12 +1092,12 @@ fn manifest_code_hash_reflects_literals() {
     let compiler = Compiler::new();
     let (_, manifest_a) = compiler
         .compile_source_with_manifest(
-            "seiyaku LiteralAlpha { view fn f() -> string { return \"alpha\"; } }",
+            "seiyaku LiteralAlpha { view fn f() authorize(anyone) -> string { return \"alpha\"; } }",
         )
         .expect("compile alpha");
     let (_, manifest_b) = compiler
         .compile_source_with_manifest(
-            "seiyaku LiteralBeta { view fn f() -> string { return \"beta\"; } }",
+            "seiyaku LiteralBeta { view fn f() authorize(anyone) -> string { return \"beta\"; } }",
         )
         .expect("compile beta");
     let hash_a = manifest_a.code_hash.expect("alpha code hash");
@@ -1124,12 +1125,20 @@ fn manifest_includes_entrypoints_and_features() {
     assert_eq!(entrypoints.len(), 2);
     assert_eq!(entrypoints[0].name, "hajimari");
     assert!(matches!(entrypoints[0].kind, EntryPointKind::Hajimari));
-    assert_eq!(entrypoints[0].permission, None);
+    assert_eq!(
+        entrypoints[0].authorization,
+        iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::RuntimeLifecycle
+    );
     assert_eq!(entrypoints[0].read_keys, Vec::<String>::new());
     assert_eq!(entrypoints[0].write_keys, vec!["state:counter"]);
     assert_eq!(entrypoints[1].name, "run");
     assert!(matches!(entrypoints[1].kind, EntryPointKind::Kotoage));
-    assert_eq!(entrypoints[1].permission.as_deref(), Some("Admin"));
+    assert_eq!(
+        entrypoints[1].authorization,
+        iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission(
+            "Admin".parse().unwrap()
+        )
+    );
     assert_eq!(entrypoints[1].read_keys, vec!["state:counter"]);
     assert_eq!(entrypoints[1].write_keys, Vec::<String>::new());
     assert_eq!(manifest.features_bitmap, Some(0));
@@ -1283,7 +1292,7 @@ fn source_localization_blocks_are_rejected() {
                 {spelling} {{
                     "E0001": {{ en: "Invalid assets", ja: "無効な資産" }}
                 }}
-                view fn main() {{}}
+                view fn main() authorize(anyone) {{}}
             }}
             "#
         );
@@ -1435,7 +1444,7 @@ fn typed_json_access_spills_are_handled() {
         .spawn(|| {
             let build_src = |count: usize| {
                 let mut src =
-                    String::from("seiyaku JsonSpills {\nview fn main(Json j) -> int {\n");
+                    String::from("seiyaku JsonSpills {\nview fn main(Json j) authorize(anyone) -> int {\n");
                 for i in 0..count {
                     let value = (i + 1) as i64;
                     src.push_str(&format!("  let v{i} = {value};\n"));
@@ -1862,16 +1871,16 @@ fn retired_axt_handle_intrinsics_are_rejected() {
     for (retired, source) in [
         (
             "asset_handle",
-            r#"seiyaku RemovedAxtSurface {
-                 kotoage fn main() authorize("UseAxt") {
+            r#"seiyaku RemovedAxtSurface { permission UseAxt;
+                 kotoage fn main() authorize(UseAxt) {
                    let handle = asset_handle("0x00");
                  }
                }"#,
         ),
         (
             "axt::use_asset_handle",
-            r#"seiyaku RemovedAxtSurface {
-                 kotoage fn main() authorize("UseAxt") {
+            r#"seiyaku RemovedAxtSurface { permission UseAxt;
+                 kotoage fn main() authorize(UseAxt) {
                    axt::use_asset_handle(handle: norito_bytes("h"), operation: norito_bytes("i"), proof: norito_bytes("p"));
                  }
                }"#,

@@ -6229,6 +6229,13 @@ pub mod tests {
             .active_code_hash = Some(contract_code_hash);
         state_tx
             .world
+            .contract_subject_bindings
+            .get_mut(&contract_address)
+            .unwrap()
+            .lifecycle
+            .retained_code_hash = Some(contract_code_hash);
+        state_tx
+            .world
             .contract_instances
             .insert(contract_address.clone(), contract_code_hash);
         DeactivateContractInstance {
@@ -9438,6 +9445,9 @@ pub mod tests {
         }
         .encode();
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "TxManifestFixture".to_owned(),
             compiler_fingerprint: "iroha-core-tx-tests".to_owned(),
@@ -9454,7 +9464,7 @@ pub mod tests {
                 return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
                     nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
                 }),
-                permission: None,
+                authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: Some(true),
@@ -9698,7 +9708,7 @@ pub mod tests {
     fn validate_ivm_rejects_stale_authenticated_cntr_abi_hash() {
         let (artifact, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
-                "seiyaku StaleAbi { view fn inspect() -> int { return 1; } }",
+                "seiyaku StaleAbi { view fn inspect() authorize(anyone) -> int { return 1; } }",
             )
             .expect("compile self-describing contract");
         let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse compiled contract");
@@ -9753,6 +9763,9 @@ pub mod tests {
         tx1.world.contract_manifests.insert(
             ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
+                events: Vec::new(),
+                enum_types: Vec::new(),
+                permissions: Vec::new(),
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
@@ -9786,6 +9799,9 @@ pub mod tests {
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x55;
         let manifest = ContractManifest {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
@@ -9853,6 +9869,9 @@ pub mod tests {
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         // Attach manifest in metadata
         let manifest = ContractManifest {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
@@ -9902,6 +9921,9 @@ pub mod tests {
         let mut wrong_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         wrong_abi[0] ^= 0xAA;
         let manifest = ContractManifest {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
@@ -9948,6 +9970,9 @@ pub mod tests {
         let wrong_code_hash = iroha_crypto::Hash::prehashed(wrong_bytes);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest = ContractManifest {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             seiyaku_name: None,
             code_hash: Some(wrong_code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
@@ -10010,6 +10035,9 @@ pub mod tests {
         tx1.world.contract_manifests.insert(
             ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
+                events: Vec::new(),
+                enum_types: Vec::new(),
+                permissions: Vec::new(),
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
@@ -10041,6 +10069,9 @@ pub mod tests {
             Some(iroha_data_model::block::consensus::SumeragiRootScope::Global),
         );
         let manifest = ContractManifest {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
@@ -10246,6 +10277,9 @@ pub mod tests {
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest = ContractManifest {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
@@ -12183,7 +12217,7 @@ pub mod tests {
         }
         let (code, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
-                "seiyaku NativeUploadGovernance { view fn inspect() -> int { return 1; } }",
+                "seiyaku NativeUploadGovernance { view fn inspect() authorize(anyone) -> int { return 1; } }",
             )
             .expect("compile self-describing contract fixture");
         assert!(

@@ -381,13 +381,13 @@ fn value_materialization_bound(
             .ok_or(VMError::DecodeError)?;
         let children = &rendered[children_start..rendered_len];
         let bound = match node {
-            EntrypointValueTypeNodeV1::Unit | EntrypointValueTypeNodeV1::Error(_) => {
-                SchemaMaterializationBound {
-                    words: 1,
-                    pointer_envelopes: 0,
-                    raw_heap_bytes: 0,
-                }
-            }
+            EntrypointValueTypeNodeV1::Unit
+            | EntrypointValueTypeNodeV1::Error(_)
+            | EntrypointValueTypeNodeV1::Enum(_) => SchemaMaterializationBound {
+                words: 1,
+                pointer_envelopes: 0,
+                raw_heap_bytes: 0,
+            },
             EntrypointValueTypeNodeV1::Struct(node) if node.fields.is_empty() => {
                 SchemaMaterializationBound {
                     words: 1,
@@ -580,7 +580,8 @@ fn argument_node_child_count(node: &EntrypointValueTypeNodeV1) -> usize {
         EntrypointValueTypeNodeV1::Leaf(_)
         | EntrypointValueTypeNodeV1::Unit
         | EntrypointValueTypeNodeV1::StateCursor(_)
-        | EntrypointValueTypeNodeV1::Error(_) => 0,
+        | EntrypointValueTypeNodeV1::Error(_)
+        | EntrypointValueTypeNodeV1::Enum(_) => 0,
     }
 }
 fn argument_node_word_count(
@@ -625,6 +626,7 @@ fn argument_node_word_count(
                         | EntrypointValueTypeNodeV1::Unit
                         | EntrypointValueTypeNodeV1::StateCursor(_)
                         | EntrypointValueTypeNodeV1::Error(_)
+                        | EntrypointValueTypeNodeV1::Enum(_)
                 ))
         {
             words = words.checked_add(1).ok_or(VMError::DecodeError)?;
@@ -787,7 +789,11 @@ fn validate_argument_atoms(
                 let Some(EntrypointValueAtomV1::Pointer(envelope)) = atoms.get(cursor) else {
                     return Err(VMError::DecodeError);
                 };
-                ivm_abi::state_cursor::validate_cursor_envelope(*key, envelope)?;
+                ivm_abi::state_cursor::validate_cursor_envelope(
+                    iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(key)
+                        .ok_or(VMError::DecodeError)?,
+                    envelope,
+                )?;
                 cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
             }
             EntrypointValueTypeNodeV1::Unit => {
@@ -801,6 +807,13 @@ fn validate_argument_atoms(
                     return Err(VMError::DecodeError);
                 };
                 error.variant(*code).ok_or(VMError::DecodeError)?;
+                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+            }
+            EntrypointValueTypeNodeV1::Enum(descriptor) => {
+                let Some(EntrypointValueAtomV1::EnumCode(code)) = atoms.get(cursor) else {
+                    return Err(VMError::DecodeError);
+                };
+                descriptor.variant(*code).ok_or(VMError::DecodeError)?;
                 cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
             }
             EntrypointValueTypeNodeV1::Struct(node) => {
@@ -1164,13 +1177,19 @@ fn plan_argument_atoms(
                         frame.roots.push(index);
                     }
                 }
-                EntrypointValueTypeNodeV1::Unit | EntrypointValueTypeNodeV1::Error(_) => {
+                EntrypointValueTypeNodeV1::Unit
+                | EntrypointValueTypeNodeV1::Error(_)
+                | EntrypointValueTypeNodeV1::Enum(_) => {
                     let scalar = match (node, atoms.get(cursor)) {
                         (EntrypointValueTypeNodeV1::Unit, Some(EntrypointValueAtomV1::Unit)) => 0,
                         (
                             EntrypointValueTypeNodeV1::Error(error),
                             Some(EntrypointValueAtomV1::ErrorCode(code)),
                         ) if error.variant(*code).is_some() => u64::from(*code),
+                        (
+                            EntrypointValueTypeNodeV1::Enum(descriptor),
+                            Some(EntrypointValueAtomV1::EnumCode(code)),
+                        ) if descriptor.variant(*code).is_some() => u64::from(*code),
                         _ => return Err(VMError::DecodeError),
                     };
                     cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
@@ -1492,7 +1511,7 @@ mod tests {
         let empty = EntrypointValueTypeV1 {
             nodes: vec![EntrypointValueTypeNodeV1::Struct(
                 ivm_abi::entrypoint::EntrypointStructTypeNodeV1 {
-                    name: "Empty".into(),
+                    name: "Fixture::Empty".into(),
                     fields: Vec::new(),
                 },
             )],
@@ -1672,7 +1691,7 @@ mod tests {
             instance: "local::金庫".into(),
             map: "balances".parse().unwrap(),
             schema_hash: [3; 32],
-            key_type: EntrypointValueKindV1::Int,
+            key_schema_hash: iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(&iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 { nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int)] }).unwrap(),
             last_key: "balances/00".parse().unwrap(),
         };
         let frame = cursor.encode_frame().unwrap();
@@ -1680,9 +1699,7 @@ mod tests {
             fields: vec![EntrypointArgumentFieldV1 {
                 name: "cursor".into(),
                 ty: EntrypointValueTypeV1 {
-                    nodes: vec![EntrypointValueTypeNodeV1::StateCursor(
-                        EntrypointValueKindV1::Int,
-                    )],
+                    nodes: vec![EntrypointValueTypeNodeV1::StateCursor(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 { nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int)] })],
                 },
             }],
         };
@@ -1695,9 +1712,64 @@ mod tests {
         assert_eq!(materialized.type_id, PointerType::NoritoBytes);
         assert_eq!(materialized.payload, frame);
         let mut wrong = schema;
-        wrong.fields[0].ty.nodes[0] =
-            EntrypointValueTypeNodeV1::StateCursor(EntrypointValueKindV1::Bool);
+        wrong.fields[0].ty.nodes[0] = EntrypointValueTypeNodeV1::StateCursor(
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(
+                        EntrypointValueKindV1::Bool,
+                    ),
+                ],
+            },
+        );
         assert!(argument_record_from_json(&wrong, &payload).is_err());
+    }
+    #[test]
+    fn ordinary_enum_arguments_use_exact_names_and_scalar_materialization() {
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "status".into(),
+                ty: EntrypointValueTypeV1 { nodes: vec![EntrypointValueTypeNodeV1::Enum(iroha_data_model::smart_contract::manifest::ContractEnumTypeDescriptorV1 {
+                identity: "local::Status".into(),
+                variants: vec![
+                    iroha_data_model::smart_contract::manifest::ContractEnumVariantDescriptorV1 { name: "Open".into(), code: 1 },
+                    iroha_data_model::smart_contract::manifest::ContractEnumVariantDescriptorV1 { name: "Closed".into(), code: 7 },
+                ],
+            })] },
+            }],
+        };
+        let payload = Json::new(norito::json!({"status":"Closed"}));
+        let mut vm = install_record(&schema, &payload);
+        decode_argument_record(&mut vm).unwrap();
+        assert_eq!(decoded_words(&vm), vec![7]);
+        let bound = value_materialization_bound(&schema.fields[0].ty).unwrap();
+        assert_eq!(
+            (bound.words, bound.pointer_envelopes, bound.raw_heap_bytes),
+            (1, 0, 0)
+        );
+        for invalid in [
+            norito::json!({"status":7}),
+            norito::json!({"status":"closed"}),
+            norito::json!({"status":"Missing"}),
+        ] {
+            assert!(argument_record_from_json(&schema, &Json::new(invalid)).is_err());
+        }
+        for atom in [
+            EntrypointValueAtomV1::ErrorCode(7),
+            EntrypointValueAtomV1::EnumCode(2),
+        ] {
+            let mut node = 0;
+            let mut value = 0;
+            assert_eq!(
+                validate_argument_atoms(
+                    ivm_abi::SyscallPolicy::AbiV1,
+                    &schema.fields[0].ty.nodes,
+                    &[atom],
+                    &mut node,
+                    &mut value
+                ),
+                Err(VMError::DecodeError)
+            );
+        }
     }
     #[test]
     fn unit_and_nominal_error_arguments_materialize_as_canonical_scalar_words() {
@@ -2529,7 +2601,7 @@ mod tests {
                     nodes: vec![
                         EntrypointValueTypeNodeV1::Struct(
                             ivm_abi::entrypoint::EntrypointStructTypeNodeV1 {
-                                name: "Request".into(),
+                                name: "Fixture::Request".into(),
                                 fields: vec!["pair".into(), "memo".into(), "outcome".into()],
                             },
                         ),
@@ -2891,7 +2963,7 @@ mod tests {
                     nodes: vec![
                         EntrypointValueTypeNodeV1::Struct(
                             ivm_abi::entrypoint::EntrypointStructTypeNodeV1 {
-                                name: "Request".to_owned(),
+                                name: "Fixture::Request".to_owned(),
                                 fields: vec!["pairs".to_owned(), "nonce".to_owned()],
                             },
                         ),
@@ -3362,7 +3434,7 @@ mod tests {
                 ty: EntrypointValueTypeV1 {
                     nodes: vec![
                         EntrypointValueTypeNodeV1::Struct(EntrypointStructTypeNodeV1 {
-                            name: "Pair".to_owned(),
+                            name: "Fixture::Pair".to_owned(),
                             fields: vec!["items".to_owned(), "maybe".to_owned()],
                         }),
                         EntrypointValueTypeNodeV1::List(EntrypointListTypeNodeV1 { capacity: 1 }),
