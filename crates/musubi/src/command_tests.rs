@@ -145,8 +145,11 @@ fn assert_scaffold_compiler_workflows(root: &Path, cache_root: &Path) {
             std::slice::from_ref(&selector),
             &lock,
             action,
-            753,
-            false,
+            CompilerSettingsV1 {
+                chain_discriminant: 753,
+                zk_enabled: false,
+                profile: "dev",
+            },
         )
         .expect("canonical scaffold compiler workflow");
         assert_eq!(execution.validated_packages, 1);
@@ -1133,9 +1136,10 @@ fn top_level_and_nested_command_inventory_is_exact() {
         command_names(&command),
         BTreeSet::from_iter(
             [
-                "add", "alias", "build", "cache", "call", "check", "deploy", "fetch", "info",
-                "init", "metadata", "network", "new", "owner", "package", "publish", "remove",
-                "search", "test", "tree", "unyank", "update", "versions", "view", "wallet", "yank",
+                "add", "alias", "bindgen", "build", "cache", "call", "check", "deploy", "fetch",
+                "info", "init", "lsp", "metadata", "network", "new", "owner", "package", "publish",
+                "remove", "search", "test", "tree", "unyank", "update", "versions", "view",
+                "wallet", "yank",
             ]
             .map(str::to_owned)
         )
@@ -1402,9 +1406,25 @@ fn workspace_test_failures_keep_their_stable_boundary_codes() {
         test_runner_diagnostic(&WorkspaceTestErrorV1::Execution("fixture".to_owned())).code(),
         ErrorCode::TestFailed
     );
-    let rendered = "error[K2003] semantic: operator `+` is not defined for `bool` and `int`\n  --> tests/app.test.ko:3:9";
-    let compilation =
-        test_runner_diagnostic(&WorkspaceTestErrorV1::Compilation(rendered.to_owned()));
+    let bundle = kotodama_lang::diagnostic::DiagnosticBundle::single(
+        kotodama_lang::diagnostic::Diagnostic::error(
+            "K2003",
+            kotodama_lang::diagnostic::DiagnosticPhase::Semantic,
+            "operator `+` is not defined for `bool` and `int`",
+            Some(kotodama_lang::diagnostic::SourceSpan {
+                package_identity: None,
+                source: Some("tests/app.test.ko".to_owned()),
+                start: kotodama_lang::diagnostic::SourcePosition { line: 3, column: 9 },
+                end: kotodama_lang::diagnostic::SourcePosition {
+                    line: 3,
+                    column: 10,
+                },
+                byte_range: None,
+            }),
+        ),
+    );
+    let rendered = bundle.render_human();
+    let compilation = test_runner_diagnostic(&WorkspaceTestErrorV1::Compilation(bundle));
     assert_eq!(compilation.code(), ErrorCode::Compiler);
     assert_eq!(
         compilation.render_human(),
@@ -1412,18 +1432,26 @@ fn workspace_test_failures_keep_their_stable_boundary_codes() {
             "{rendered}\nerror[MUSUBI_E_COMPILER]: Kotodama rejected the selected test sources\n"
         )
     );
-    let json = CommandOutput::failure("test", compilation)
-        .render(OutputFormat::Json)
-        .expect("json failure");
+    let output = CommandOutput::failure("test", compilation);
+    let json = output.render(OutputFormat::Json).expect("json failure");
     let json: Value = norito::json::from_str(json.stdout()).expect("json document");
     assert_eq!(
         json.pointer("/error/message").and_then(Value::as_str),
         Some("Kotodama rejected the selected test sources")
     );
     assert_eq!(
-        json.pointer("/error/details/compiler_output")
+        json.pointer("/error/diagnostics/0/code")
             .and_then(Value::as_str),
-        Some(rendered)
+        Some("K2003")
+    );
+    assert!(json.pointer("/error/details/compiler_output").is_none());
+    let sarif = output.render(OutputFormat::Sarif).expect("sarif failure");
+    let sarif: Value = norito::json::from_str(sarif.stdout()).expect("sarif document");
+    assert_eq!(
+        sarif
+            .pointer("/runs/0/results/0/ruleId")
+            .and_then(Value::as_str),
+        Some("K2003")
     );
     assert_eq!(
         package_diagnostic(&PackageError::UnsupportedPlatform).code(),
@@ -3056,7 +3084,7 @@ fn runtime_cache_contract_fixture(temp: &TempDir) -> (PathBuf, PathBuf) {
     add_dependency_to_fixture_manifest(&manifest);
     fs::write(
         root.join("contract.ko"),
-        "seiyaku CachedCoffee { view fn quote(int cups) -> int { return cups * 10; } }",
+        "seiyaku CachedCoffee { view fn quote(int cups) authorize(anyone) -> int { return cups * 10; } }",
     )
     .expect("real runtime contract source");
     let mut document = fs::read_to_string(&manifest).expect("runtime fixture manifest");
@@ -3185,10 +3213,12 @@ fn runtime_package_cold_registry_failure_uses_only_selected_cache_root() {
         &selected_cache,
         Some(&config),
         None,
-        &iroha_fs::SelectedRegularFile::capture(&manifest).unwrap(),
-        None,
-        None,
-        false,
+        &RuntimePackageSelection {
+            manifest: &iroha_fs::SelectedRegularFile::capture(&manifest).unwrap(),
+            package: None,
+            contract: None,
+            locked: false,
+        },
         None,
     );
     assert_eq!(
@@ -3230,10 +3260,12 @@ fn runtime_package_recorded_resolver_and_real_archive_reuse_exact_cache_root() {
         &selected_cache,
         Some(&config),
         None,
-        &iroha_fs::SelectedRegularFile::capture(&manifest).unwrap(),
-        None,
-        None,
-        false,
+        &RuntimePackageSelection {
+            manifest: &iroha_fs::SelectedRegularFile::capture(&manifest).unwrap(),
+            package: None,
+            contract: None,
+            locked: false,
+        },
         None,
     );
     assert_eq!(
@@ -3269,10 +3301,12 @@ fn runtime_package_recorded_resolver_and_real_archive_reuse_exact_cache_root() {
         &selected_cache,
         Some(&offline_config),
         None,
-        &iroha_fs::SelectedRegularFile::capture(&manifest).unwrap(),
-        None,
-        None,
-        true,
+        &RuntimePackageSelection {
+            manifest: &iroha_fs::SelectedRegularFile::capture(&manifest).unwrap(),
+            package: None,
+            contract: None,
+            locked: true,
+        },
         None,
     )
     .expect("locked cache reuse without registry or provider HTTP");
@@ -3296,10 +3330,12 @@ fn runtime_package_recorded_resolver_and_real_archive_reuse_exact_cache_root() {
         &other_cache,
         Some(&refusing_config),
         None,
-        &iroha_fs::SelectedRegularFile::capture(&manifest).unwrap(),
-        None,
-        None,
-        true,
+        &RuntimePackageSelection {
+            manifest: &iroha_fs::SelectedRegularFile::capture(&manifest).unwrap(),
+            package: None,
+            contract: None,
+            locked: true,
+        },
         None,
     );
     assert_eq!(
@@ -3467,6 +3503,58 @@ fn compiler_failures_reach_json_and_sarif_as_canonical_diagnostics() {
     assert!(rendered.stdout().contains("MUSUBI_E_USAGE"));
 }
 
+#[cfg(unix)]
+#[test]
+fn test_source_parse_and_semantic_failures_reach_json_and_sarif() {
+    let temp = TempDir::new().expect("package directory");
+    let manifest = contract_package(&temp);
+    let test_path = manifest
+        .parent()
+        .expect("package root")
+        .join("tests/hello.test.ko");
+    for body in ["let int value = 1", "test::assert(missing());"] {
+        fs::write(
+            &test_path,
+            format!(
+                r#"module Tests {{
+            koto_test {{ target: "../contracts/hello.ko" }}
+            #[test] fn broken() {{ {body} }}
+        }}"#
+            ),
+        )
+        .expect("invalid test source");
+        let invocation = run_with_manifest(&manifest, &["--format", "json", "test"]);
+        let rendered = invocation.output.render(invocation.format).expect("json");
+        assert_eq!(
+            rendered.exit_code(),
+            ErrorCode::Compiler.exit_code(),
+            "{}",
+            rendered.stdout()
+        );
+        let json: Value = norito::json::from_str(rendered.stdout()).expect("json document");
+        assert_eq!(
+            json.pointer("/error/diagnostics/0/primary_span/source")
+                .and_then(Value::as_str),
+            Some("tests/hello.test.ko")
+        );
+        let invocation = run_with_manifest(&manifest, &["--format", "sarif", "test"]);
+        let rendered = invocation.output.render(invocation.format).expect("sarif");
+        assert_eq!(rendered.exit_code(), ErrorCode::Compiler.exit_code());
+        let sarif: Value = norito::json::from_str(rendered.stdout()).expect("sarif document");
+        let rule = sarif
+            .pointer("/runs/0/results/0/ruleId")
+            .and_then(Value::as_str)
+            .expect("canonical compiler code");
+        assert!(!rule.starts_with("MUSUBI_"), "{rule}");
+        assert_eq!(
+            sarif
+                .pointer("/runs/0/results/0/locations/0/physicalLocation/artifactLocation/uri")
+                .and_then(Value::as_str),
+            Some("tests/hello.test.ko")
+        );
+    }
+}
+
 #[test]
 fn usage_errors_have_one_prefix_and_zk_reaches_the_build_options() {
     let rendered = invoke(["musubi", "new"])
@@ -3483,9 +3571,10 @@ fn usage_errors_have_one_prefix_and_zk_reaches_the_build_options() {
     assert!(!rendered.stderr().contains("error[MUSUBI_E_USAGE]: error:"));
     for command in ["check", "build", "test"] {
         let parsed = Cli::try_parse_from(["musubi", command, "--zk"]).expect("zk flag");
-        let (Command::Check(args) | Command::Build(args) | Command::Test(args)) = parsed.command
-        else {
-            panic!("build-like command");
+        let args = match parsed.command {
+            Command::Check(args) | Command::Build(args) => args,
+            Command::Test(args) => args.build,
+            _ => panic!("expected compiler command"),
         };
         assert!(args.zk);
     }

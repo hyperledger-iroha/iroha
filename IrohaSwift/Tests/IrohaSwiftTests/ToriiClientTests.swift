@@ -209,6 +209,31 @@ func tcBodyJSON(from request: URLRequest) -> [String: Any] {
 }
 
 final class ToriiClientTests: XCTestCase {
+    func testOrdinaryEnumsAndEventsBindExactNominalSchemas() throws {
+        let text = #"{"permissions":[],"enum_types":[{"identity":"Demo::Status","variants":[{"name":"Pending","code":1},{"name":"Done","code":7}]}],"events":[{"name":"Changed","payload_type":{"nodes":[{"kind":"Struct","value":{"name":"Demo::Changed","fields":["status"]}},{"kind":"Enum","value":{"identity":"Demo::Status","variants":[{"name":"Pending","code":1},{"name":"Done","code":7}]}}]}}],"states":[{"name":"status","type_name":"Demo::Status"}]}"#
+        let parsed = try JSONDecoder().decode(ToriiContractManifest.self, from: Data(text.utf8))
+        XCTAssertEqual(parsed.enumTypes.first?.variants.last?.code, 7)
+        guard case .enumType(let descriptor) = parsed.events[0].payloadType.nodes[1] else { return XCTFail("distinct Enum node expected") }
+        XCTAssertEqual(descriptor, parsed.enumTypes[0])
+        let encoded = try JSONEncoder().encode(parsed)
+        XCTAssertEqual(try JSONDecoder().decode(ToriiContractManifest.self, from: encoded), parsed)
+        let invalid = [
+            text.replacingOccurrences(of: #""enum_types":"#, with: #""retired_enum_types":"#),
+            text.replacingOccurrences(of: #""events":"#, with: #""retired_events":"#),
+            text.replacingOccurrences(of: #""code":1"#, with: #""code":0"#),
+            text.replacingOccurrences(of: #""kind":"Enum""#, with: #""kind":"Error""#),
+            text.replacingOccurrences(of: #""name":"Changed","payload_type""#, with: #""name":"Other","payload_type""#),
+            text.replacingOccurrences(of: #""kind":"Enum","value":{"identity":"Demo::Status","variants":[{"name":"Pending","code":1},{"name":"Done","code":7}]}"#, with: #""kind":"Leaf","value":{"kind":"Json","value":null}"#),
+        ]
+        for value in invalid { XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifest.self, from: Data(value.utf8))) }
+        var forged = parsed
+        forged.enumTypes[0].variants[1].code = 8
+        XCTAssertThrowsError(try JSONEncoder().encode(forged))
+        forged = parsed
+        forged.errorTypes = [ToriiContractErrorTypeDescriptor(identity: "Demo::Status", variants: [ToriiContractErrorVariantDescriptor(name: "Pending", code: 1)])]
+        XCTAssertThrowsError(try JSONEncoder().encode(forged))
+    }
+
     func testRamLfeEncryptionRefusalDoesNotImplyUncertainAssetTransferSubmission() {
         XCTAssertNil(ToriiClient.uncertainDetachedAssetTransferPostCause(
             ToriiClientError.ramLfeEncryptionUnavailable
@@ -7545,7 +7570,7 @@ final class ToriiClientTests: XCTestCase {
             "epoch":11,
             "manifest_len":\(manifestB64.count),
             "manifest_norito":"\(manifestB64)",
-            "manifest":{"chunking":{"namespace":"sorafs","name":"sf1","semver":"1.2.3"}},
+            "manifest":{"events":[],"enum_types":[],"permissions":[],"chunking":{"namespace":"sorafs","name":"sf1","semver":"1.2.3"}},
             "chunk_plan":{"schema":"sorafs.chunk_fetch_plan.v1","payload_digest_blake3_hex":"\(String(repeating: "ef", count: 32))","chunk_fetch_specs":[{"chunk_index":0,"offset":0,"length":4,"digest_blake3":"\(String(repeating: "22", count: 32))"}]}
         }
         """
@@ -8380,24 +8405,28 @@ final class ToriiClientTests: XCTestCase {
             {
                 "items": [
                     {
-                        "event_id": "0xabc:0",
+                        "event_id": "0xblock:0:0",
                         "schema_version": 1,
-                        "provenance": "derived",
+                        "provenance": "emitted",
                         "authority": "beneficiary@paynet",
                         "timestamp_ms": 1234,
-                        "block_index": 0,
-                        "tx_hash_hex": "0xabc",
+                        "execution_hash_hex": "0xabc",
+                        "output_index": 0,
+                        "emission_index": 0,
                         "block_height": 7,
                         "block_hash_hex": "0xblock",
-                        "result_ok": false,
+                        "result_ok": true,
                         "contract_address": "cntr:deadbeef",
-                        "contract_alias": "benefits::paynet",
-                        "module": "benefits",
-                        "event_kind": "spend",
+                        "event_kind": "Changed",
                         "participants": ["beneficiary@paynet", "merchant@paynet"],
                         "asset_ids": ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
-                        "numeric_fields": {"amount": 125},
-                        "payload": {"amount": 125, "merchant_account": "merchant@paynet"},
+                        "numeric_fields": {},
+                        "payload": {},
+                        "emission": {
+                            "contract": "cntr:deadbeef", "code_hash": "code", "entrypoint": 0, "event": 0, "caller": "beneficiary@paynet",
+                            "definition": {"name": "Changed", "payload_type": {"nodes": [{"kind": "Struct", "value": {"name": "Demo::Changed", "fields": []}}]}},
+                            "payload": {"schema_hash": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], "atoms": []}
+                        },
                         "fee_payment": {
                             "payer": "authority",
                             "value": {"charge_limits": [], "gas_limit": 70000}
@@ -8410,17 +8439,17 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let query = ToriiListQuery(filterText: #"contract_alias = "benefits::paynet" and module = "benefits" and event_kind = "spend" and participants = "merchant@paynet" and asset_ids = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" and provenance = "derived" and result_ok = false"#, limit: 10)
+        let query = ToriiListQuery(filterText: #"contract_address = "cntr:deadbeef" and event_kind = "Changed" and participants = "merchant@paynet" and asset_ids = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" and provenance = "emitted" and result_ok = true"#, limit: 10)
         let list = try await makeClient().contractEvents.page(query)
         XCTAssertNil(list.nextCursor)
-        XCTAssertEqual(list.items.first?.eventId, "0xabc:0")
+        XCTAssertEqual(list.items.first?.eventId, "0xblock:0:0")
         XCTAssertEqual(list.items.first?.participants ?? [], ["beneficiary@paynet", "merchant@paynet"])
         XCTAssertEqual(list.items.first?.assetIds ?? [], ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM"])
         XCTAssertEqual(list.items.first?.feePayment, testFeePayment(gasLimit: 70_000))
-        guard case let .number(amount)? = list.items.first?.numericFields?["amount"] else {
-            return XCTFail("Expected numeric field.")
-        }
-        XCTAssertEqual(amount, 125)
+        XCTAssertEqual(list.items.first?.outputIndex, 0)
+        XCTAssertEqual(list.items.first?.emissionIndex, 0)
+        XCTAssertEqual(list.items.first?.emission.definition.name, "Changed")
+        XCTAssertEqual(list.items.first?.emission.payload.atoms, [])
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -14148,7 +14177,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
             XCTAssertEqual(request.url?.path, "/v1/contracts/artifacts/\(UInt64.max)/\(codeHash)")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"network_id":"\(TestNetworkIds.canonical.literal)","artifact_id":{"dataspace_id":18446744073709551615,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"},"manifest":{"seiyaku_name":null,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071","compiler_fingerprint":"rustc","features_bitmap":1,"access_set_hints":{"read_keys":["account:alice#wonderland"],"write_keys":[]},"entrypoints":null,"states":null,"error_types":null},"code_hash":"\(codeHash)","abi_hash":"\(abiHash)"}
+            {"network_id":"\(TestNetworkIds.canonical.literal)","artifact_id":{"dataspace_id":18446744073709551615,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"},"manifest":{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":null,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071","compiler_fingerprint":"rustc","features_bitmap":1,"access_set_hints":{"read_keys":["account:alice#wonderland"],"write_keys":[]},"entrypoints":null,"states":null,"error_types":null},"code_hash":"\(codeHash)","abi_hash":"\(abiHash)"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -14171,7 +14200,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
     }
 
     func testContractManifestRecordRejectsMismatchedHashConveniences() throws {
-        let manifest = #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071"}"#
+        let manifest = #"{"permissions":[],"events":[],"enum_types":[],"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071"}"#
         let identity = "\"network_id\":\"\(TestNetworkIds.canonical.literal)\",\"artifact_id\":{\"dataspace_id\":18446744073709551615,\"code_hash\":\"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2\"},"
         let valid = "{\(identity)\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "b", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}"
         let record = try JSONDecoder().decode(
@@ -14201,7 +14230,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         let bytes = Data([0])
         let hash = IrohaHash.hash(Data("iroha:ivm:contract-artifact:v1\0".utf8) + bytes).hexLowercased()
         let literal = try XCTUnwrap(ToriiCanonicalHashLiteral.literal(fromNormalizedHex: hash))
-        let prefix = "\"network_id\":\"\(TestNetworkIds.canonical.literal)\",\"artifact_id\":{\"dataspace_id\":17,\"code_hash\":\"\(literal)\"},\"manifest\":{\"code_hash\":\"\(literal)\",\"abi_hash\":\"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071\"},\"code_hash\":\"\(hash)\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\""
+        let prefix = "\"network_id\":\"\(TestNetworkIds.canonical.literal)\",\"artifact_id\":{\"dataspace_id\":17,\"code_hash\":\"\(literal)\"},\"manifest\":{\"events\":[],\"enum_types\":[],\"permissions\":[],\"code_hash\":\"\(literal)\",\"abi_hash\":\"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071\"},\"code_hash\":\"\(hash)\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\""
         func decode(_ suffix: String) throws -> ToriiContractManifestRecord {
             try JSONDecoder().decode(ToriiContractManifestRecord.self, from: Data("{\(prefix)\(suffix)}".utf8))
         }
@@ -14217,7 +14246,8 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
     func testContractManifestPreservesExactV1InterfaceShape() throws {
         let payload = """
         {
-          "seiyaku_name":"Ledger",
+          "events":[],"enum_types":[],"permissions":[{"name":"TransferAsset","scope":{"kind":"Instance","value":null}}],
+                "seiyaku_name":"Ledger",
           "code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2",
           "abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071",
           "compiler_fingerprint":"kotodama_lang",
@@ -14237,12 +14267,12 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
             "name":"transfer",
             "kind":{"kind":"Kotoage","value":null},
             "params":[
-              {"name":"request","type_name":"struct Transfer"},
+              {"name":"request","type_name":"struct Fixture::Transfer"},
               {"name":"tags","type_name":"List<Name, 64>"}
             ],
             "argument_schema":{"fields":[
               {"name":"request","ty":{"nodes":[
-                {"kind":"Struct","value":{"name":"Transfer","fields":["amount","memo"]}},
+                {"kind":"Struct","value":{"name":"Fixture::Transfer","fields":["amount","memo"]}},
                 {"kind":"Leaf","value":{"kind":"Quantity","value":null}},
                 {"kind":"Option","value":null},
                 {"kind":"Leaf","value":{"kind":"String","value":null}}
@@ -14260,7 +14290,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
               {"kind":"Leaf","value":{"kind":"Decimal","value":null}},
               {"kind":"Leaf","value":{"kind":"String","value":null}}
             ]},
-            "permission":"TransferAsset",
+            "authorization":{"kind":"Permission","value":"TransferAsset"},
             "read_keys":["state:Balances"],
             "write_keys":["state:Balances"],
             "access_hints_complete":true,
@@ -14343,6 +14373,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
             "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"\(kind)\",\"value\":null}}"
         }
         func structNode(_ name: String, _ fields: [String]) -> String {
+            let name = ["AccountView", "AssetView", "AssetDefinitionView", "DomainView", "NftView", "QueryPage", "StatePage"].contains(name) ? "kotodama::" + name : name
             let encodedFields = fields.map { "\"\($0)\"" }.joined(separator: ",")
             return "{\"kind\":\"Struct\",\"value\":{\"name\":\"\(name)\",\"fields\":[\(encodedFields)]}}"
         }
@@ -14426,11 +14457,11 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         }
 
         let pair = try decode([
-            structNode("Pair", ["left", "right"]),
+            structNode("Fixture::Pair", ["left", "right"]),
             leaf("Int"),
             leaf("Bool"),
         ])
-        XCTAssertEqual(pair.canonicalTypeName, "struct Pair")
+        XCTAssertEqual(pair.canonicalTypeName, "struct Fixture::Pair")
     }
 
     func testEntrypointSchemaRejectsLegacyTruncatedDeepAndForgedTapes() throws {
@@ -14438,6 +14469,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
             "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"\(kind)\",\"value\":null}}"
         }
         func structNode(_ name: String, _ fields: [String]) -> String {
+            let name = ["AccountView", "AssetView", "AssetDefinitionView", "DomainView", "NftView", "QueryPage", "StatePage"].contains(name) ? "kotodama::" + name : name
             let encodedFields = fields.map { "\"\($0)\"" }.joined(separator: ",")
             return "{\"kind\":\"Struct\",\"value\":{\"name\":\"\(name)\",\"fields\":[\(encodedFields)]}}"
         }
@@ -14585,45 +14617,45 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
     func testContractManifestRejectsNoncanonicalV1InterfaceShapes() throws {
         let validLeaf = #"{"kind":"Leaf","value":{"kind":"Bool","value":null}}"#
         var cases = [
-            #"{"seiyaku_name":" Ledger "}"#,
-            #"{"seiyaku_name":"Amount"}"#,
-            #"{"seiyaku_name":"amount"}"#,
-            #"{"seiyaku_name":"seiyaku"}"#,
-            #"{"seiyaku_name":"match"}"#,
-            #"{"seiyaku_name":"__kotodama_quantity_ratio_round"}"#,
-            #"{"seiyaku_name":"__kotodama_decimal_to_int_trunc"}"#,
-            #"{"seiyaku_name":"__kotodama_decimal_to_int_round"}"#,
-            #"{"states":[{"name":"Amount","type_name":"quantity"}]}"#,
-            #"{"states":[{"name":"Balances","type_name":"Transfer{Amount: quantity}"}]}"#,
-            #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount>"}]}"#,
-            #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, amount>"}]}"#,
-            #"{"states":[{"name":"Balances","type_name":"Amount: quantity"}]}"#,
-            #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount: quantity>"}]}"#,
-            #"{"states":[{"name":"Balances","type_name":"Transfer{value: Result<int, Amount: quantity>}"}]}"#,
-            #"{"states":[{"name":"Balances","type_name":"Transfer{amount: Amount}"}]}"#,
-            #"{"states":[{"name":"Balances","type_name":"Amount{amount: quantity}"}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":" Ledger "}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"Amount"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"amount"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"seiyaku"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"match"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"__kotodama_quantity_ratio_round"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"__kotodama_decimal_to_int_trunc"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"__kotodama_decimal_to_int_round"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Amount","type_name":"quantity"}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Balances","type_name":"Fixture::Transfer{Amount: quantity}"}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount>"}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Balances","type_name":"StateMap<AccountId, amount>"}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Balances","type_name":"Amount: quantity"}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount: quantity>"}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Balances","type_name":"Fixture::Transfer{value: Result<int, Amount: quantity>}"}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Balances","type_name":"Fixture::Transfer{amount: Amount}"}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Balances","type_name":"Amount{amount: quantity}"}]}"#,
             #"{"code_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}"#,
             #"{"code_hash":"hash:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#ABA2"}"#,
             #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#0000"}"#,
             #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#aba2"}"#,
             #"{"code_hash":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B"}"#,
-            #"{"provenance":"not-an-object"}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Public","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"Amount","kind":{"kind":"View","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"View","value":null},"params":[{"name":"Amount","type_name":"bool"}],"argument_schema":{"fields":[{"name":"Amount","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":"Kotoage"},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[{\"name\":\"flag\",\"type_name\":\"bool\"}],\"argument_schema\":{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":1},\(validLeaf)]}}]},\"return_type\":\"()\",\"return_schema\":{\"nodes\":[{\"kind\":\"Unit\",\"value\":null}]},\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}",
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"bool","return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}},{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":["not-an-object"]}]}"#,
-            #"{"error_types":[{"identity":"Ledger::Failure","variants":[{"name":"Denied","code":0}]}]}"#,
-            #"{"error_types":[{"identity":"Ledger::Failure","variants":[{"name":"Amount","code":1}]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"flag","type_name":"bool"}],"argument_schema":{"fields":[{"name":"different","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"tags","type_name":"List<Name, 64>"}],"argument_schema":{"fields":[{"name":"tags","ty":{"nodes":[{"kind":"List","value":{"capacity":65}},{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"provenance":"not-an-object"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"entrypoints":[{"name":"run","kind":{"kind":"Public","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"authorization":{"kind":"Anyone","value":null},"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"entrypoints":[{"name":"Amount","kind":{"kind":"View","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"authorization":{"kind":"Anyone","value":null},"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"entrypoints":[{"name":"run","kind":{"kind":"View","value":null},"params":[{"name":"Amount","type_name":"bool"}],"argument_schema":{"fields":[{"name":"Amount","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"authorization":{"kind":"Anyone","value":null},"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":"Kotoage"},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"authorization":{"kind":"Anyone","value":null},"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            "{\"events\":[],\"enum_types\":[],\"permissions\":[],\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[{\"name\":\"flag\",\"type_name\":\"bool\"}],\"argument_schema\":{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":1},\(validLeaf)]}}]},\"return_type\":\"()\",\"return_schema\":{\"nodes\":[{\"kind\":\"Unit\",\"value\":null}]},\"authorization\":{\"kind\":\"Anyone\",\"value\":null},\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}",
+            #"{"events":[],"enum_types":[],"permissions":[],"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"bool","return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}},{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"authorization":{"kind":"Anyone","value":null},"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"authorization":{"kind":"Anyone","value":null},"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":["not-an-object"]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"error_types":[{"identity":"Ledger::Failure","variants":[{"name":"Denied","code":0}]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"error_types":[{"identity":"Ledger::Failure","variants":[{"name":"Amount","code":1}]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"authorization":{"kind":"Anyone","value":null},"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"flag","type_name":"bool"}],"argument_schema":{"fields":[{"name":"different","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"authorization":{"kind":"Anyone","value":null},"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"tags","type_name":"List<Name, 64>"}],"argument_schema":{"fields":[{"name":"tags","ty":{"nodes":[{"kind":"List","value":{"capacity":65}},{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"authorization":{"kind":"Anyone","value":null},"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
         ]
         let wideLeaves = Array(repeating: validLeaf, count: 14).joined(separator: ",")
         cases.append(
-            "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[],\"argument_schema\":null,\"return_type\":\"wide tuple\",\"return_schema\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":14},\(wideLeaves)]},\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}")
+            "{\"events\":[],\"enum_types\":[],\"permissions\":[],\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[],\"argument_schema\":null,\"return_type\":\"wide tuple\",\"return_schema\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":14},\(wideLeaves)]},\"authorization\":{\"kind\":\"Anyone\",\"value\":null},\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}")
 
         for payload in cases {
             XCTAssertThrowsError(
@@ -14638,22 +14670,34 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
 
     func testContractManifestAllowsAmountAsStructFieldIdentifier() throws {
         let payload =
-            #"{"states":[{"name":"Balances","type_name":"Transfer{amount: quantity}"}]}"#
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Balances","type_name":"Fixture::Transfer{amount: quantity}"}]}"#
         let manifest = try JSONDecoder().decode(
             ToriiContractManifest.self,
             from: Data(payload.utf8)
         )
 
-        XCTAssertEqual(manifest.states?.first?.typeName, "Transfer{amount: quantity}")
+        XCTAssertEqual(manifest.states?.first?.typeName, "Fixture::Transfer{amount: quantity}")
         let encoded = try JSONEncoder().encode(manifest)
         let decoded = try JSONDecoder().decode(ToriiContractManifest.self, from: encoded)
-        XCTAssertEqual(decoded.states?.first?.typeName, "Transfer{amount: quantity}")
+        XCTAssertEqual(decoded.states?.first?.typeName, "Fixture::Transfer{amount: quantity}")
+    }
+
+    func testDurableBuiltinProductsRequireExactShapes() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let vectors = try JSONDecoder().decode([String: [String]].self, from: Data(contentsOf: root.appendingPathComponent("fixtures/kotodama/durable_builtin_shapes_v1.json")))
+        func decode(_ type: String) throws -> ToriiContractManifest {
+            let value: [String: Any] = ["permissions": [], "events": [], "enum_types": [], "states": [["name": "stored", "type_name": type]]]
+            return try JSONDecoder().decode(ToriiContractManifest.self, from: JSONSerialization.data(withJSONObject: value))
+        }
+        for type in vectors["valid"]! { XCTAssertEqual(try decode(type).states?.first?.typeName, type) }
+        for type in vectors["invalid"]! { XCTAssertThrowsError(try decode(type), type) }
     }
 
     func testContractManifestStateTypesUseExactCanonicalV1Grammar() throws {
         func decode(_ typeName: String) throws -> ToriiContractManifest {
             let data = try JSONSerialization.data(
                 withJSONObject: [
+                "events":[],"enum_types":[],"permissions": [],
                     "states": [
                         ["name": "Balances", "type_name": typeName],
                     ],
@@ -14672,9 +14716,9 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         } + [
             "(int, decimal)",
             "Option<Result<quantity, string>>",
-            "List<Transfer{amount: quantity}, 64>",
-            "StateMap<AccountId, Transfer{amount: quantity}>",
-            "StateMap<Name, Transfer{amount: quantity, memo: Option<string>}>",
+            "List<Fixture::Transfer{amount: quantity}, 64>",
+            "StateMap<AccountId, Fixture::Transfer{amount: quantity}>",
+            "StateMap<Name, Fixture::Transfer{amount: quantity, memo: Option<string>}>",
         ]
         for typeName in canonical {
             let manifest = try decode(typeName)
@@ -14685,19 +14729,19 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         let noncanonical = [
             "Amount",
             "amount",
-            "Transfer{amount: amount}",
-            "Transfer{amount:: quantity}",
-            "Transfer{Amount: quantity}",
-            "Transfer{amount:quantity}",
-            "Transfer{amount:  quantity}",
+            "Fixture::Transfer{amount: amount}",
+            "Fixture::Transfer{amount:: quantity}",
+            "Fixture::Transfer{Amount: quantity}",
+            "Fixture::Transfer{amount:quantity}",
+            "Fixture::Transfer{amount:  quantity}",
             "Transfer {amount: quantity}",
-            "Transfer{ }",
-            "Transfer{amount: quantity, amount: int}",
-            "Transfer{__kotodama_link_amount: quantity}",
+            "Fixture::Transfer{ }",
+            "Fixture::Transfer{amount: quantity, amount: int}",
+            "Fixture::Transfer{__kotodama_link_amount: quantity}",
             "(int)",
             "(int,decimal)",
             "Option<quantity",
-            "Transfer{amount: Option<quantity>}}",
+            "Fixture::Transfer{amount: Option<quantity>}}",
             "Option<StateMap<AccountId, quantity>>",
             "StateMap<AccountId, StateMap<Name, quantity>>",
             "StateMap<Json, quantity>",
@@ -14707,7 +14751,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
             "List<quantity, 01>",
             "List<quantity, 65>",
             "Trаnsfer{amount: quantity}",
-            "Transfer{amount: quаntity}",
+            "Fixture::Transfer{amount: quаntity}",
         ]
         for typeName in noncanonical {
             XCTAssertThrowsError(try decode(typeName), "accepted state type \(typeName)")
@@ -14724,6 +14768,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         func decode(_ typeName: String) throws -> ToriiContractManifest {
             let data = try JSONSerialization.data(
                 withJSONObject: [
+                "events":[],"enum_types":[],"permissions": [],
                     "states": [
                         ["name": "Balances", "type_name": typeName],
                     ],
@@ -14774,6 +14819,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
                 dynamicHint["unknown"] = true
             }
             return try JSONSerialization.data(withJSONObject: [
+                "events":[],"enum_types":[],"permissions": [],
                 "access_set_hints": [
                     "read_keys": [],
                     "write_keys": [],
@@ -14999,6 +15045,9 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
                     dynamicReads: reads,
                     dynamicWrites: writes
                 ),
+                permissions: [],
+                events: [],
+                enumTypes: [],
                 states: [
                     ToriiContractStateDescriptor(name: stateName, typeName: stateType),
                 ]
@@ -15017,6 +15066,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
                 ]
             }
             return try JSONSerialization.data(withJSONObject: [
+                "events":[],"enum_types":[],"permissions": [],
                 "access_set_hints": [
                     "read_keys": [],
                     "write_keys": [],
@@ -15086,7 +15136,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         for identity in ["Error<Injected>", "Invalid Error"] {
             let descriptor = ToriiContractErrorTypeDescriptor(identity: identity, variants: [.init(name: "Denied", code: 7)])
             XCTAssertThrowsError(try JSONEncoder().encode(descriptor))
-            let payload = #"{"error_types":[{"identity":""# + identity + #"","variants":[{"name":"Denied","code":7}]}]}"#
+            let payload = #"{"events":[],"enum_types":[],"permissions":[],"error_types":[{"identity":""# + identity + #"","variants":[{"name":"Denied","code":7}]}]}"#
             XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifest.self, from: Data(payload.utf8)))
         }
     }
@@ -15131,7 +15181,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
     func testStaticErrorMessagesBindDeclaredVariants() throws {
         let error = ToriiContractErrorTypeDescriptor(identity: "Vault::Failure", variants: [ToriiContractErrorVariantDescriptor(name: "Missing", code: 1)])
         let message = ToriiContractErrorMessage(errorType: error.identity, code: 1, message: "残高が不足しています")
-        var manifest = ToriiContractManifest(errorTypes: [error], errorMessages: [message])
+        var manifest = ToriiContractManifest(permissions: [], events: [], enumTypes: [], errorTypes: [error], errorMessages: [message])
         let encoded = try JSONEncoder().encode(manifest)
         XCTAssertEqual(try JSONDecoder().decode(ToriiContractManifest.self, from: encoded), manifest)
         for text in [" \n explanation \t", "\u{001c}", "😀"] {
@@ -15147,6 +15197,34 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         XCTAssertThrowsError(try JSONEncoder().encode(manifest))
         manifest.errorMessages = [.init(errorType: error.identity, code: 1, message: String(repeating: "é", count: 2049))]
         XCTAssertThrowsError(try JSONEncoder().encode(manifest))
+    }
+
+    func testTupleCursorAndStatePageBindTheCompleteKeySchema() throws {
+        let key = ToriiEntrypointValueTypeV1(nodes: [.tuple(2), .leaf(.accountId), .tuple(2), .leaf(.int), .leaf(.name)])
+        let cursor = ToriiEntrypointValueTypeV1(nodes: [.stateCursor(key)])
+        XCTAssertEqual(cursor.canonicalTypeName, "StateCursor<(AccountId, (int, Name))>")
+        let encoded = try JSONEncoder().encode(cursor)
+        XCTAssertEqual(try JSONDecoder().decode(ToriiEntrypointValueTypeV1.self, from: encoded), cursor)
+        var page = ToriiEntrypointValueTypeV1(nodes: [
+            .structType(ToriiEntrypointStructTypeNodeV1(name: "kotodama::StatePage", fields: ["items", "next"])),
+            .list(ToriiEntrypointListTypeNodeV1(capacity: 8)), .tuple(2),
+        ] + key.nodes + [.leaf(.bool), .option, .stateCursor(key)])
+        XCTAssertEqual(page.canonicalTypeName, "StatePage<(AccountId, (int, Name)), bool, 8>")
+        var changed = key
+        changed.nodes[3] = .leaf(.bool)
+        page.nodes[page.nodes.count - 1] = .stateCursor(changed)
+        XCTAssertNil(page.canonicalTypeName)
+        for arity in [254, 255] {
+            let wide = ToriiEntrypointValueTypeV1(nodes: [.stateCursor(ToriiEntrypointValueTypeV1(nodes: [.tuple(UInt16(arity))] + Array(repeating: .leaf(.int), count: arity)))])
+            XCTAssertEqual(wide.wordCount != nil, arity == 254)
+        }
+        for raw in [
+            #"{"nodes":[{"kind":"StateCursor","value":{"kind":"Int","value":null}}]}"#,
+            #"{"nodes":[{"kind":"StateCursor","value":{"nodes":[{"kind":"Leaf","value":{"kind":"Json","value":null}}]}}]}"#,
+            #"{"nodes":[{"kind":"StateCursor","value":{"nodes":[{"kind":"StateCursor","value":{}}]}}]}"#,
+        ] {
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiEntrypointValueTypeV1.self, from: Data(raw.utf8)))
+        }
     }
 
     func testNominalErrorSharedFixturePreservesJapaneseIdentityAndUnit() throws {
@@ -15167,7 +15245,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         XCTAssertEqual(record.manifest.errorTypes?.count, 2)
         let cursor = try XCTUnwrap(record.manifest.entrypoints?[1].returnSchema)
         XCTAssertEqual(cursor.canonicalTypeName, "Option<StateCursor<int>>")
-        XCTAssertEqual(cursor.nodes[1], .stateCursor(.int))
+        XCTAssertEqual(cursor.nodes[1], .stateCursor(ToriiEntrypointValueTypeV1(nodes: [.leaf(.int)])))
         XCTAssertEqual(cursor.wordCount, 1)
         XCTAssertEqual(record.manifest.entrypoints?[2].returnSchema?.canonicalTypeName, "StatePage<int, bool, 8>")
         XCTAssertEqual(record.manifest.entrypoints?[2].returnSchema?.wordCount, 2)
@@ -15186,7 +15264,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         XCTAssertThrowsError(try JSONDecoder().decode(ManifestFixture.self, from: Data(unknownState.utf8)))
         for forged in ["StatePage{anything: int}", "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<bool>>}"] {
             let changedState = String(decoding: bytes, as: UTF8.self).replacingOccurrences(
-                of: "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<int>>}", with: forged)
+                of: "kotodama::StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<int>>}", with: forged)
             XCTAssertThrowsError(try JSONDecoder().decode(ManifestFixture.self, from: Data(changedState.utf8)))
         }
     }
@@ -15231,17 +15309,17 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
                         argumentSchema: String = "null",
                         returnType: String = "\"()\"",
                         returnSchema: String = #"{"nodes":[{"kind":"Unit","value":null}]}"#,
-                        permission: String = "\"Run\"",
+                        authorization: String = #"{"kind":"Permission","value":"Run"}"#,
                         complete: String = "true",
                         skipped: String = "[]",
                         triggers: String = "[]") -> String {
             """
-            {"name":"\(name)","kind":{"kind":"\(kind)","value":null},"params":\(params),"argument_schema":\(argumentSchema),"return_type":\(returnType),"return_schema":\(returnSchema),"permission":\(permission),"read_keys":[],"write_keys":[],"access_hints_complete":\(complete),"access_hints_skipped":\(skipped),"triggers":\(triggers)}
+            {"name":"\(name)","kind":{"kind":"\(kind)","value":null},"params":\(params),"argument_schema":\(argumentSchema),"return_type":\(returnType),"return_schema":\(returnSchema),"authorization":\(authorization),"read_keys":[],"write_keys":[],"access_hints_complete":\(complete),"access_hints_skipped":\(skipped),"triggers":\(triggers)}
             """
         }
 
         func manifest(_ entrypoints: [String]) -> String {
-            "{\"entrypoints\":[\(entrypoints.joined(separator: ","))]}"
+            "{\"events\":[],\"enum_types\":[],\"permissions\":[{\"name\":\"Run\",\"scope\":{\"kind\":\"Instance\",\"value\":null}}],\"entrypoints\":[\(entrypoints.joined(separator: ","))]}"
         }
 
         func trigger(id: String = "tick", callback: String = "run") -> String {
@@ -15252,17 +15330,17 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
 
         let invalid = [
             #"{"unknown":true}"#,
-            #"{"features_bitmap":4}"#,
-            #"{"seiyaku_name":"Option"}"#,
-            #"{"seiyaku_name":"__kotodama_link_private"}"#,
-            #"{"seiyaku_name":"state_map_get"}"#,
-            #"{"states":[{"name":"Option","type_name":"bool"}]}"#,
-            #"{"error_types":[{"identity":"Error<Injected>","variants":[{"name":"Denied","code":1}]}]}"#,
-            #"{"provenance":{"signer":"fixture","signature":"sig","unknown":true}}"#,
-            manifest([descriptor(permission: "null")]),
-            manifest([descriptor(name: "start", kind: "Hajimari", permission: "null")]),
-            manifest([descriptor(name: "始まり", kind: "Hajimari", permission: "\"Deploy\"")]),
-            manifest([descriptor(name: "hajimari", kind: "View", permission: "null")]),
+            #"{"events":[],"enum_types":[],"permissions":[],"features_bitmap":4}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"Option"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"__kotodama_link_private"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"state_map_get"}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"states":[{"name":"Option","type_name":"bool"}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"error_types":[{"identity":"Error<Injected>","variants":[{"name":"Denied","code":1}]}]}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"provenance":{"signer":"fixture","signature":"sig","unknown":true}}"#,
+            manifest([descriptor(authorization: "null")]),
+            manifest([descriptor(name: "start", kind: "Hajimari", authorization: "null")]),
+            manifest([descriptor(name: "始まり", kind: "Hajimari", authorization: "\"Deploy\"")]),
+            manifest([descriptor(name: "hajimari", kind: "View", authorization: "null")]),
             manifest([descriptor(
                 params: #"[{"name":"flag","type_name":"int"}]"#,
                 argumentSchema: boolSchema
@@ -15275,7 +15353,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
             manifest([descriptor(complete: "false", skipped: "[]")]),
             manifest([descriptor(triggers: "[\(trigger(callback: "missing"))]")]),
             manifest([
-                descriptor(name: "inspect", kind: "View", permission: "null"),
+                descriptor(name: "inspect", kind: "View", authorization: "null"),
                 descriptor(triggers: "[\(trigger(callback: "inspect"))]"),
             ]),
             manifest([descriptor(triggers: "[\(trigger()),\(trigger())]")]),
@@ -15301,7 +15379,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
     func testEveryPublicEntrypointRequiresAnExplicitReturnSchema() throws {
         func payload(_ returns: String) -> Data {
             Data("""
-            {"name":"done","kind":{"kind":"View","value":null},"params":[]\(returns)}
+            {"name":"done","kind":{"kind":"View","value":null},"authorization":{"kind":"Anyone","value":null},"params":[]\(returns)}
             """.utf8)
         }
         for returns in [
@@ -15337,7 +15415,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         ]
         for (name, kind) in selectors {
             let payload = """
-            {"entrypoints":[{"name":"\(name)","kind":{"kind":"\(kind)","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}
+            {"events":[],"enum_types":[],"permissions":[],"entrypoints":[{"name":"\(name)","kind":{"kind":"\(kind)","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"authorization":{"kind":"RuntimeLifecycle","value":null},"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}
             """
             let manifest = try JSONDecoder().decode(
                 ToriiContractManifest.self,
@@ -16521,7 +16599,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
                 if request.url!.path.hasSuffix("/bytes") {
                     payload = "{\(identity),\"code_b64\":\"AAAA\"}"
                 } else {
-                    payload = "{\(identity),\"manifest\":{\"code_hash\":\"\(literal)\"},\"code_hash\":\"\(hash)\",\"abi_hash\":null}"
+                    payload = "{\(identity),\"manifest\":{\"events\":[],\"enum_types\":[],\"permissions\":[],\"code_hash\":\"\(literal)\"},\"code_hash\":\"\(hash)\",\"abi_hash\":null}"
                 }
                 return (response, Data(payload.utf8))
             }

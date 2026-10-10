@@ -985,13 +985,11 @@ export function extractConfidentialGasConfig(
 export interface ContractEventStreamOptions {
   authority?: string;
   contractAddress?: string;
-  contractAlias?: string;
-  module?: string;
   eventKind?: string;
   participant?: string;
   assetId?: string;
-  /** Contract-event rows are call-derived; `"derived"` is the only provenance. */
-  provenance?: "derived";
+  /** Only committed native emissions appear in contract event history. */
+  provenance?: "emitted";
   sinceTimestampMs?: NumericLike;
   untilTimestampMs?: NumericLike;
   resultOk?: boolean;
@@ -1021,16 +1019,13 @@ export interface ToriiBrowserContractEventStreamOptions {
   authority?: string;
   contractAddress?: string;
   contract_address?: string;
-  contractAlias?: string;
-  contract_alias?: string;
-  module?: string;
   eventKind?: string;
   event_kind?: string;
   participant?: string;
   assetId?: string;
   asset_id?: string;
-  /** Contract-event rows are call-derived; `"derived"` is the only provenance. */
-  provenance?: "derived";
+  /** Only committed native emissions appear in contract event history. */
+  provenance?: "emitted";
   sinceTimestampMs?: NumericLike;
   since_timestamp_ms?: NumericLike;
   untilTimestampMs?: NumericLike;
@@ -1584,29 +1579,39 @@ export interface ToriiContractActivityItem {
   fee_payment?: NoritoFeePaymentIntent;
 }
 
+export type ContractValueAtomV1 =
+  | { kind: "Tag" | "Bool"; value: boolean }
+  | { kind: "Pointer"; value: ReadonlyArray<number> }
+  | { kind: "List" | "ErrorCode" | "EnumCode"; value: number }
+  | { kind: "Unit"; value: null };
+export interface ContractEmissionV1 {
+  contract: string;
+  code_hash: string;
+  entrypoint: number;
+  event: number;
+  caller: string;
+  definition: ContractEventDescriptorV1;
+  payload: { schema_hash: ReadonlyArray<number>; atoms: ReadonlyArray<ContractValueAtomV1> };
+}
 export interface ToriiContractEventItem {
-  block_index: number;
   event_id: string;
   schema_version: number;
-  /**
-   * Always `"derived"`: Torii projects the row from a committed `ContractCall` and
-   * the metadata consensus bound to it; contracts do not emit these events.
-   */
-  provenance: "derived";
-  authority?: string;
+  provenance: "emitted";
+  authority: string;
   timestamp_ms?: number;
-  tx_hash_hex: string;
+  execution_hash_hex: string;
   block_height: number;
   block_hash_hex: string;
-  result_ok: boolean;
+  output_index: number;
+  emission_index: number;
+  result_ok: true;
   contract_address: string;
-  contract_alias?: string;
-  module: string;
   event_kind: string;
   participants?: ReadonlyArray<string>;
   asset_ids?: ReadonlyArray<string>;
   numeric_fields?: JsonValue;
-  payload?: JsonValue;
+  payload: JsonValue;
+  emission: ContractEmissionV1;
   fee_payment?: NoritoFeePaymentIntent;
 }
 
@@ -4387,6 +4392,7 @@ export interface ToriiGovernanceContractLifecycle {
   pending_owner: string | null;
   parliament_delegated: boolean;
   active_code_hash_hex: string | null;
+  retained_code_hash_hex: string | null;
   revision: ToriiU64;
   emergency_hold: ToriiGovernanceContractEmergencyHold | null;
 }
@@ -7138,8 +7144,9 @@ export type ContractEntrypointValueTypeNode =
   | { kind: "List"; value: ContractEntrypointListTypeNode }
   | { kind: "Leaf"; value: ContractEntrypointValueKindRecord }
   | { kind: "Unit"; value: null }
-  | { kind: "StateCursor"; value: ContractEntrypointValueKindRecord }
-  | { kind: "Error"; value: ContractErrorTypeDescriptorRecord };
+  | { kind: "StateCursor"; value: ContractEntrypointValueType }
+  | { kind: "Error"; value: ContractErrorTypeDescriptorRecord }
+  | { kind: "Enum"; value: ContractEnumTypeDescriptorRecord };
 
 export interface ContractEntrypointValueType {
   nodes: ReadonlyArray<ContractEntrypointValueTypeNode>;
@@ -7177,6 +7184,16 @@ export interface ContractTriggerDescriptorInput {
   callback: ContractTriggerCallbackInput;
 }
 
+/** Exact authorization encoded in every current entrypoint descriptor. */
+export type EntrypointAuthorizationV1 =
+  | { kind: "Anyone"; value: null }
+  | { kind: "Permission"; value: string }
+  | { kind: "RuntimeLifecycle"; value: null };
+export type ContractPermissionScopeV1 =
+  | { kind: "Instance"; value: null }
+  | { kind: "Chain"; value: { permission_name: string } };
+export interface ContractPermissionDescriptorV1 { name: string; scope: ContractPermissionScopeV1; }
+
 export interface ContractEntrypointInput {
   name: string;
   kind: ContractEntrypointKind | ContractEntrypointKindRecord;
@@ -7185,7 +7202,7 @@ export interface ContractEntrypointInput {
   /** Every entrypoint returns a value; Unit uses `()` and a Unit schema. */
   returnType: string;
   returnSchema: ContractEntrypointValueType;
-  permission?: string | null;
+  authorization: EntrypointAuthorizationV1;
   readKeys?: ReadonlyArray<string>;
   writeKeys?: ReadonlyArray<string>;
   accessHintsComplete?: boolean | null;
@@ -7198,6 +7215,18 @@ export type ContractStateDescriptorInput = {
 } & ContractRequiredAliasPair<"typeName", "type_name", string>;
 
 export interface ContractErrorMessage { error_type: string; code: number; message: string; }
+
+/** Ordinary enum codes are schema-local and never represent runtime error codes. */
+export interface ContractEnumVariantDescriptorInput { name: string; code: NumericLike; }
+export interface ContractEnumTypeDescriptorInput {
+  identity: string;
+  variants: ReadonlyArray<ContractEnumVariantDescriptorInput>;
+}
+export interface ContractEventDescriptorV1 {
+  name: string;
+  /** Exact named Struct root; Json and StateCursor payload fields are prohibited. */
+  payload_type: ContractEntrypointValueType;
+}
 
 export interface ContractErrorVariantDescriptorInput { name: string; code: NumericLike; }
 export interface ContractErrorTypeDescriptorInput {
@@ -7226,6 +7255,9 @@ export interface ContractManifestProvenanceInput {
 }
 
 export interface ContractManifestInput {
+  permissions: ReadonlyArray<ContractPermissionDescriptorV1>;
+  events: ReadonlyArray<ContractEventDescriptorV1>;
+  enumTypes: ReadonlyArray<ContractEnumTypeDescriptorInput>;
   seiyakuName?: string | null;
   codeHash?: HashLike | null;
   abiHash?: HashLike | null;
@@ -7246,6 +7278,9 @@ export interface ContractManifestInput {
  * binary buffers are rejected at runtime.
  */
 export interface ToriiContractManifestInput {
+  permissions: ReadonlyArray<ContractPermissionDescriptorV1>;
+  events: ReadonlyArray<ContractEventDescriptorV1>;
+  enumTypes: ReadonlyArray<ContractEnumTypeDescriptorInput>;
   seiyakuName?: string | null;
   codeHash?: string | null;
   abiHash?: string | null;
@@ -7297,6 +7332,8 @@ export interface ContractCallRequest {
   contractAlias?: string;
   entrypoint: string;
   payload?: unknown;
+  /** Signed entrypoint argument schema used locally before payload hashing and request signing. */
+  argumentSchema?: ContractEntrypointArgumentSchema | null;
   metadata?: Record<string, JsonValue>;
   creationTimeMs?: NumericLike | null;
   creation_time_ms?: NumericLike | null;
@@ -7338,6 +7375,16 @@ export interface ContractCallSimulateRequest {
   gas_limit?: NumericLike;
 }
 
+/** Deterministic execution fault bound to its originating artifact and invocation. */
+export interface IvmFaultV1 {
+  kind: {kind: "OutOfGas" | "MemoryLimitExceeded" | "MemoryAccessViolation" | "MisalignedAccess" | "MemoryOutOfBounds" | "DecodeError" | "InvalidOpcode" | "UnknownSyscall" | "UnsupportedSyscall" | "GasCostOverflow" | "AssertionFailed" | "ExceededMaxCycles" | "InvalidMetadata" | "InvalidVectorLength" | "MissingHalt" | "VectorExtensionDisabled" | "ZkExtensionDisabled" | "NullifierAlreadyUsed" | "PermissionDenied" | "PrivacyViolation" | "RegisterOutOfBounds" | "NoritoInvalid" | "AbiTypeNotAllowed" | "HostOutputItemsExceeded" | "HostOutputBytesExceeded" | "AmxBudgetExceeded" | "ReentrantCall" | "CallDepthExceeded"; value: null} | {kind: "Numeric"; value: {kind: "MantissaOverflow" | "ScaleOverflow" | "DivisionByZero" | "RepeatingDecimal" | "ExactDivisionScaleOverflow" | "InvalidScale" | "InexactConversion" | "NegativeQuantity" | "QuantityUnderflow" | "InvalidRoundingMode" | "InvalidFailureMode" | "ReservedRegisterNonZero" | "NegativeSquareRoot"; value: null}} | {kind: "PointerAbi"; value: {kind: "InvalidAddress" | "UnknownType" | "TypeNotAllowed" | "WrongType" | "InvalidEnvelopeVersion" | "OversizedLength" | "TruncatedEnvelope" | "PayloadHashMismatch" | "MalformedFrame" | "SchemaMismatch" | "NonCanonical"; value: null}};
+  site: {
+    code_hash: string;
+    selector: {kind: "Generic"; value: null} | {kind: "Entrypoint"; value: number};
+    position: {kind: "Initialization" | "ReturnValidation"; value: null} | {kind: "Execute"; value: {pc_offset: number}};
+  };
+}
+
 export interface ContractCallSimulateResponse {
   ok: boolean;
   dataspace: string;
@@ -7352,6 +7399,7 @@ export interface ContractCallSimulateResponse {
   result: JsonValue | null;
   error: string | null;
   vm_diagnostic: JsonValue | null;
+  fault: IvmFaultV1 | null;
 }
 
 export interface ContractManifestRecord {
@@ -7385,6 +7433,9 @@ export interface ContractManifestRecord {
           }>;
         }
       | null;
+    permissions: ReadonlyArray<ContractPermissionDescriptorV1>;
+    events: ReadonlyArray<ContractEventDescriptorV1>;
+    enum_types: ReadonlyArray<ContractEnumTypeDescriptorRecord>;
     entrypoints: ReadonlyArray<ContractEntrypointRecord> | null;
     states: ReadonlyArray<ContractStateDescriptorRecord> | null;
     error_types: ReadonlyArray<ContractErrorTypeDescriptorRecord> | null;
@@ -7417,7 +7468,7 @@ export interface ContractEntrypointRecord {
   argument_schema: ContractEntrypointArgumentSchema | null;
   return_type: string;
   return_schema: ContractEntrypointValueType;
-  permission: string | null;
+  authorization: EntrypointAuthorizationV1;
   read_keys: ReadonlyArray<string>;
   write_keys: ReadonlyArray<string>;
   access_hints_complete: boolean | null;
@@ -7428,6 +7479,12 @@ export interface ContractEntrypointRecord {
 export interface ContractStateDescriptorRecord {
   name: string;
   type_name: string;
+}
+
+export interface ContractEnumVariantDescriptorRecord { name: string; code: number; }
+export interface ContractEnumTypeDescriptorRecord {
+  identity: string;
+  variants: ReadonlyArray<ContractEnumVariantDescriptorRecord>;
 }
 
 export interface ContractErrorVariantDescriptorRecord { name: string; code: number; }
@@ -9098,6 +9155,8 @@ export interface SubmitTransactionAndWaitOptions
 
 /** `details` of Torii's `{"code", "message", "details"}` error envelope. */
 export interface ToriiErrorDetails {
+  /** Canonical deterministic runtime fault when the HTTP error arose from IVM execution. */
+  readonly ivm_fault?: IvmFaultV1 | null;
   /** The request control at fault (`filter`, `sort`, `select`, ...). */
   readonly field?: string;
   /** The data field at fault, when there is one. */

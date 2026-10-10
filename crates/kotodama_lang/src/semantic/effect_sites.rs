@@ -223,7 +223,7 @@ fn view_policy_help(view: &str, effect: &str) -> String {
     };
     format!(
         "A `view fn` is answered by a read-only query and cannot run code that {what}. \
-         Declare `{view}` as a {kotoage} function with `authorize(\"Permission\")` so it runs in an \
+         Declare `{view}` as a {kotoage} function with an explicit `authorize(...)` policy so it runs in an \
          authorized transaction, or move the effect out of the view's call graph."
     )
 }
@@ -303,12 +303,16 @@ pub(super) fn permission_failures(
                 diagnostic,
             });
         }
-        if func.modifiers.kind == FunctionKind::Kotoage && func.modifiers.permission.is_none() {
+        if matches!(
+            func.modifiers.kind,
+            FunctionKind::Kotoage | FunctionKind::View
+        ) && func.modifiers.authorization.is_none()
+        {
             failures.push(SemanticFailure {
                 error: SemanticError {
                     code: "K2004",
                     message: format!(
-                        "kotoage function `{}` requires `authorize(\"Permission\")`",
+                        "public function `{}` requires an explicit `authorize(...)` policy",
                         func.name
                     ),
                 },

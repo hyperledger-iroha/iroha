@@ -16,6 +16,16 @@ class KagemushaWalletLoadOriginalV1Test {
         assertArrayEquals(byteArrayOf(7, 8), input.receipt()); assertArrayEquals(byteArrayOf(9, 10), input.finality())
         assertArrayEquals(ByteArray(32) { 3 }, input.requestId())
     }
+    @Test fun retainedReopeningAppliesOriginalBoundsBeforeAccessingNative() {
+        val network = org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
+        for ((receipt, finality) in listOf(byteArrayOf() to byteArrayOf(1),
+            byteArrayOf(1) to ByteArray(256 * 1024 + 1))) {
+            assertThrows(IllegalArgumentException::class.java) {
+                KagemushaWalletLoadOriginalV1.decodeRetained(selection(), "payer", network, receipt, finality)
+            }
+        }
+    }
     @Test fun oversizedOrAbsentFinancialOriginalIsNeverSentToNative() {
         for (bad in listOf(byteArrayOf(), ByteArray(513)))
             assertThrows(IllegalArgumentException::class.java) { KagemushaWalletLoadOriginalInputV1(selection(), "x", bad, byteArrayOf(1)) }

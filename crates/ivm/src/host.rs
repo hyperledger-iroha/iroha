@@ -26,14 +26,10 @@ use iroha_crypto::{
     },
 };
 use iroha_data_model::{
-    account::AccountId,
-    asset::{AssetDefinitionId, AssetId},
     isi::transfer::TransferAssetBatch,
     nexus::{AxtPolicySnapshot, AxtPolicySnapshotValidationError},
-    nft::NftId,
     zk::{OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
-use iroha_model_base::domain::DomainId;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::{name::Name, state_path::StatePath};
 #[cfg(test)]
@@ -361,84 +357,17 @@ fn declared_state_map_key_type<'a>(
 pub(crate) fn validate_declared_state_map_base(vm: &IVM, base: &Name) -> Result<(), VMError> {
     declared_state_map_key_type(vm, base).map(drop)
 }
-fn validate_canonical_pointer_key<T>(key: &[u8], expected_type: PointerType) -> Result<(), VMError>
-where
-    T: norito::NoritoSerialize,
-    for<'de> T: norito::NoritoDeserialize<'de>,
-{
-    let tlv = pointer_abi::validate_tlv_bytes(key)?;
-    if tlv.type_id != expected_type {
-        return Err(VMError::NoritoInvalid);
-    }
-    let _: T = decode_canonical_norito(tlv.payload)?;
-    Ok(())
-}
-/// Validate canonical `StateMap` key bytes against the loaded CNTR declaration.
-///
-/// The key carrier contains a complete pointer envelope for pointer-backed
-/// keys and canonical framed `i64` bytes for `bool`. Numeric decoders enforce
-/// their nominal type as well as the unique mantissa/scale representation.
+#[path = "host/state_map_key.rs"]
+mod state_map_key;
+pub(crate) use state_map_key::state_map_key_schema;
+
+/// Bind every scalar or tuple map key to its exact canonical StateValueRecordV1 schema.
 pub(crate) fn validate_declared_state_map_key(
     vm: &IVM,
     base: &Name,
     key: &[u8],
 ) -> Result<(), VMError> {
-    use crate::metadata::EmbeddedStateType;
-    match declared_state_map_key_type(vm, base)? {
-        EmbeddedStateType::Int => crate::numeric_tlv::decode_int_bytes(key).map(drop),
-        EmbeddedStateType::Decimal => crate::numeric_tlv::decode_decimal_bytes(key).map(drop),
-        EmbeddedStateType::Quantity => crate::numeric_tlv::decode_quantity_bytes(key).map(drop),
-        EmbeddedStateType::Bool => {
-            let value: i64 = decode_canonical_norito(key)?;
-            if !matches!(value, 0 | 1) {
-                return Err(VMError::NoritoInvalid);
-            }
-            Ok(())
-        }
-        EmbeddedStateType::String => {
-            let tlv = pointer_abi::validate_tlv_bytes(key)?;
-            if tlv.type_id != PointerType::Blob || core::str::from_utf8(tlv.payload).is_err() {
-                return Err(VMError::NoritoInvalid);
-            }
-            Ok(())
-        }
-        EmbeddedStateType::Bytes => {
-            let tlv = pointer_abi::validate_tlv_bytes(key)?;
-            if tlv.type_id != PointerType::Blob {
-                return Err(VMError::NoritoInvalid);
-            }
-            Ok(())
-        }
-        EmbeddedStateType::DataSpaceId => {
-            validate_canonical_pointer_key::<DataSpaceId>(key, PointerType::DataSpaceId)
-        }
-        EmbeddedStateType::AccountId => {
-            validate_canonical_pointer_key::<AccountId>(key, PointerType::AccountId)
-        }
-        EmbeddedStateType::AssetDefinitionId => {
-            validate_canonical_pointer_key::<AssetDefinitionId>(key, PointerType::AssetDefinitionId)
-        }
-        EmbeddedStateType::AssetId => {
-            validate_canonical_pointer_key::<AssetId>(key, PointerType::AssetId)
-        }
-        EmbeddedStateType::NftId => {
-            validate_canonical_pointer_key::<NftId>(key, PointerType::NftId)
-        }
-        EmbeddedStateType::DomainId => {
-            validate_canonical_pointer_key::<DomainId>(key, PointerType::DomainId)
-        }
-        EmbeddedStateType::Name => validate_canonical_pointer_key::<Name>(key, PointerType::Name),
-        EmbeddedStateType::StateCursor(_)
-        | EmbeddedStateType::Unit
-        | EmbeddedStateType::Error(_)
-        | EmbeddedStateType::Json
-        | EmbeddedStateType::Tuple(_)
-        | EmbeddedStateType::Struct { .. }
-        | EmbeddedStateType::StateMap { .. }
-        | EmbeddedStateType::Option(_)
-        | EmbeddedStateType::Result { .. }
-        | EmbeddedStateType::List { .. } => Err(VMError::NoritoInvalid),
-    }
+    state_map_key::validate_key_record(vm, declared_state_map_key_type(vm, base)?, key)
 }
 /// Build a map path only after binding the canonical key to its CNTR type.
 pub(crate) fn canonical_typed_state_map_path(
@@ -446,9 +375,8 @@ pub(crate) fn canonical_typed_state_map_path(
     base: &Name,
     key: &[u8],
 ) -> Result<StatePath, VMError> {
-    let path = canonical_state_map_path(base, key)?;
     validate_declared_state_map_key(vm, base, key)?;
-    Ok(path)
+    canonical_state_map_path(base, key)
 }
 enum DeclaredStatePath<'a> {
     Value(&'a crate::metadata::EmbeddedStateType),
@@ -534,6 +462,24 @@ pub fn validate_declared_state_value_payload(
     };
     let schema = crate::state_value_runtime::schema_for_embedded_state_type(ty)?;
     crate::state_value_runtime::validate_state_value_record(vm, &schema, payload)
+}
+/// Validate a persisted value against a complete admitted V1 state type without executing code.
+///
+/// Lifecycle completion uses the same canonical record, pointer and schema checks as `STATE_SET`.
+/// A map declaration is not a scalar value and is rejected.
+///
+/// # Errors
+/// Rejects invalid types, malformed records, noncanonical payloads and schema mismatches.
+pub fn validate_persisted_state_value_payload(
+    ty: &crate::metadata::EmbeddedStateType,
+    payload: &[u8],
+) -> Result<(), VMError> {
+    let schema = crate::state_value_runtime::schema_for_embedded_state_type(ty)?;
+    crate::state_value_runtime::validate_state_value_record_for_policy(
+        crate::SyscallPolicy::AbiV1,
+        &schema,
+        payload,
+    )
 }
 /// Validate header-only `StateMap` path inputs and return their gas lengths.
 ///
@@ -1100,6 +1046,10 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
     if matches!(
         number,
         syscalls::SYSCALL_JSON_BUILD
+            | syscalls::SYSCALL_VALUE_ENCODE
+            | syscalls::SYSCALL_BLOB_CONCAT
+            | syscalls::SYSCALL_UTF8_VALIDATE
+            | syscalls::SYSCALL_VALUE_TO_STRING
             | syscalls::SYSCALL_STATE_VALUE_ENCODE
             | syscalls::SYSCALL_STATE_VALUE_DECODE
             | syscalls::SYSCALL_GET_PUBLIC_INPUT
@@ -1111,7 +1061,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE
             | syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
             | syscalls::SYSCALL_CALL_CONTRACT
-            | syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2
+            | syscalls::SYSCALL_EMIT_CONTRACT_EVENT
             | syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS
             | syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH
     ) {
@@ -1149,8 +1099,8 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_REVOKE_ROLE
             | syscalls::SYSCALL_GRANT_PERMISSION
             | syscalls::SYSCALL_REVOKE_PERMISSION
-            | syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
-            | syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT
+            | syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION
+            | syscalls::SYSCALL_REVOKE_CONTRACT_PERMISSION
             | syscalls::SYSCALL_CREATE_TRIGGER
             | syscalls::SYSCALL_REMOVE_TRIGGER
             | syscalls::SYSCALL_SET_TRIGGER_ENABLED
@@ -1662,9 +1612,12 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
         syscalls::SYSCALL_DECODE_ARGUMENT_RECORD => {
             crate::argument_record::decode_argument_record_gas_quote(vm)?
         }
-        syscalls::SYSCALL_STATE_VALUE_ENCODE | syscalls::SYSCALL_STATE_VALUE_DECODE => {
-            reserve_available_syscall_gas(vm)?
-        }
+        syscalls::SYSCALL_VALUE_ENCODE
+        | syscalls::SYSCALL_BLOB_CONCAT
+        | syscalls::SYSCALL_UTF8_VALIDATE
+        | syscalls::SYSCALL_VALUE_TO_STRING
+        | syscalls::SYSCALL_STATE_VALUE_ENCODE
+        | syscalls::SYSCALL_STATE_VALUE_DECODE => reserve_available_syscall_gas(vm)?,
         syscalls::SYSCALL_STATE_PATH_FROM_NAME => {
             let input = quote_tlv_payload_len_at(
                 vm,
@@ -2656,6 +2609,10 @@ impl IVMHost for DefaultHost {
             quote_any_tlv_at(vm, pointer).map(|(_, payload_len)| payload_len)
         };
         let quote = match number {
+            crate::syscalls::SYSCALL_VRF_EPOCH_SEED => {
+                vm.ensure_public_register(10)?;
+                crate::vrf::epoch_seed_gas(false)
+            }
             crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO => {
                 let base_len = quote_tlv_payload_len_at(
                     vm,
@@ -2930,6 +2887,13 @@ impl IVMHost for DefaultHost {
                 vm.set_register(10, 0);
                 Ok(Self::sysvar_gas(0))
             }
+            crate::syscalls::SYSCALL_VRF_EPOCH_SEED => {
+                vm.ensure_public_register(10)?;
+                Err(VMError::metered_not_implemented(
+                    crate::vrf::epoch_seed_gas(false),
+                    number,
+                ))
+            }
             crate::syscalls::SYSCALL_QUERY_EXECUTE_NORITO
             | crate::syscalls::SYSCALL_CORE_QUERY_GET
             | crate::syscalls::SYSCALL_CORE_QUERY_PAGE
@@ -3007,9 +2971,9 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_STATE_SCAN => {
                 let request =
                     crate::state_scan::StateScanRequest::decode(vm, &self.state_instance)?;
-                let map = request.map.clone();
+                let map = request.map().clone();
                 let prefix = format!("{}/", map.as_ref());
-                let after = request.after.clone();
+                let after = request.after().cloned();
                 let lower = after
                     .as_ref()
                     .map_or(std::ops::Bound::Included(prefix.as_str()), |key| {
@@ -3220,6 +3184,12 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD => {
                 crate::argument_record::decode_argument_record(vm)
+            }
+            crate::syscalls::SYSCALL_VALUE_ENCODE
+            | crate::syscalls::SYSCALL_BLOB_CONCAT
+            | crate::syscalls::SYSCALL_UTF8_VALIDATE
+            | crate::syscalls::SYSCALL_VALUE_TO_STRING => {
+                crate::value_utilities::execute(number, vm)
             }
             crate::syscalls::SYSCALL_STATE_VALUE_ENCODE => {
                 crate::state_value_runtime::encode_state_value(
@@ -4604,6 +4574,34 @@ mod tests {
     use iroha_data_model::privacy::PrivacyProtocolIdV1;
     use iroha_data_model::zk::BackendTag;
     use iroha_model_base::name::MAX_NAME_BYTES;
+    #[test]
+    fn persisted_state_validation_requires_exact_schema_and_canonical_record() {
+        use ivm_abi::state_value::{
+            StateValueAtomV1, StateValueRecordV1, state_value_schema_for_embedded_type_v1,
+            state_value_schema_hash_v1,
+        };
+        let ty = crate::metadata::EmbeddedStateType::Bool;
+        let schema = state_value_schema_for_embedded_type_v1(&ty).unwrap();
+        let record = StateValueRecordV1 {
+            schema_hash: state_value_schema_hash_v1(
+                &crate::codec::encode_canonical_norito(&schema).unwrap(),
+            ),
+            atoms: vec![StateValueAtomV1::Bool(true)],
+        };
+        let encoded = crate::codec::encode_canonical_norito(&record).unwrap();
+        assert!(validate_persisted_state_value_payload(&ty, &encoded).is_ok());
+        assert!(
+            validate_persisted_state_value_payload(
+                &crate::metadata::EmbeddedStateType::Unit,
+                &encoded
+            )
+            .is_err()
+        );
+        assert!(validate_persisted_state_value_payload(&ty, b"true").is_err());
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(validate_persisted_state_value_payload(&ty, &trailing).is_err());
+    }
     fn test_tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
         out.extend_from_slice(&(kind as u16).to_be_bytes());

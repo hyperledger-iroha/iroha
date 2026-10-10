@@ -33,6 +33,8 @@ fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
 }
 fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
     EmbeddedContractInterfaceV1 {
+        permissions: Vec::new(),
+        events: Vec::new(),
         callables: vec![common::unit_callable(0)],
         seiyaku_name: "DirectMapKeyFixture".to_owned(),
         compiler_fingerprint: "ivm-integration-tests".to_owned(),
@@ -49,7 +51,8 @@ fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractIn
             return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
                 nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
             }),
-            permission: None,
+            authorization:
+                iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
@@ -66,6 +69,7 @@ fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractIn
         }],
         error_messages: Vec::new(),
         error_types: Vec::new(),
+        enum_types: Vec::new(),
     }
 }
 fn assemble_state_map_schema(name: &str, key: EmbeddedStateType) -> Vec<u8> {

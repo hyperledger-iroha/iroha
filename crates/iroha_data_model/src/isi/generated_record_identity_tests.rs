@@ -120,7 +120,7 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "4a6568079490fc73ddf6dd052a17fd8f0cc64ba57c2a52acb17b969c0089d2d2",
+                "88c4802912eed703771cb305fff231f7a3e85eef1e96ae81c211b22a8bfb0bf6",
                 "instruction record capture digest drift"
             );
             let capture: Value =
@@ -367,66 +367,87 @@ fn print_contract_artifact_record_fixture_rows() {
         hex(abi_hash.as_ref()),
         "18b2577f70fcf90193eff287aacd10b76dd36b99c0f5935fdcc67443f8bc148d"
     );
-    // Match the selected full-width dataspace in the current populated capture.
-    let artifact_id = ContractArtifactId::new(DataSpaceId::new(u64::MAX), code_hash);
-    let values = vec![
-        capture(CancelSmartContractCodeUpload { artifact_id }),
-        capture(FinalizeSmartContractCodeUpload {
-            artifact_id,
-            total_size: 3,
-            chunk_count: 1,
-        }),
-        capture(RegisterSmartContractBytes {
-            artifact_id,
-            code: vec![1, 2, 3],
-        }),
-        capture(RegisterSmartContractCode {
-            artifact_id,
-            manifest: ContractManifest {
-                seiyaku_name: None,
-                code_hash: Some(code_hash),
-                abi_hash: Some(abi_hash),
-                compiler_fingerprint: Some("kotodama-1.2.3".to_owned()),
-                features_bitmap: Some(0),
-                access_set_hints: None,
-                entrypoints: None,
-                states: None,
-                error_types: None,
-                error_messages: None,
-                kotoba: None,
-                provenance: None,
-            },
-        }),
-        capture(RemoveSmartContractBytes {
-            artifact_id,
-            reason: Some("superseded".to_owned()),
-        }),
-        capture(UploadSmartContractCodeChunk {
-            artifact_id,
-            total_size: 3,
-            chunk_index: 0,
-            chunk_count: 1,
-            chunk: vec![1, 2, 3],
-        }),
-    ];
-    let rows: Vec<_> = values
-        .into_iter()
-        .map(|value| {
-            json::object([
-                ("nominal", value.get("nominal").unwrap().clone()),
-                (
-                    "serialize_hash",
-                    value.get("serialize_hash").unwrap().clone(),
-                ),
-                (
-                    "deserialize_hash",
-                    value.get("deserialize_hash").unwrap().clone(),
-                ),
-                ("cases", Value::Array(vec![frame_fields(&value)])),
-            ])
-            .expect("current contract artifact instruction row")
-        })
-        .collect();
+    // Preserve both original cases in their declared order: full-width and universal.
+    // Every frame is constructed and round-tripped by the current native codec.
+    let mut rows = BTreeMap::<String, Value>::new();
+    for dataspace in [DataSpaceId::new(u64::MAX), DataSpaceId::UNIVERSAL] {
+        let artifact_id = ContractArtifactId::new(dataspace, code_hash);
+        let values = vec![
+            capture(CancelSmartContractCodeUpload { artifact_id }),
+            capture(FinalizeSmartContractCodeUpload {
+                artifact_id,
+                total_size: 3,
+                chunk_count: 1,
+            }),
+            capture(RegisterSmartContractBytes {
+                artifact_id,
+                code: vec![1, 2, 3],
+            }),
+            capture(RegisterSmartContractCode {
+                artifact_id,
+                manifest: ContractManifest {
+                    permissions: Vec::new(),
+                    events: Vec::new(),
+                    enum_types: Vec::new(),
+                    seiyaku_name: None,
+                    code_hash: Some(code_hash),
+                    abi_hash: Some(abi_hash),
+                    compiler_fingerprint: Some("kotodama-1.2.3".to_owned()),
+                    features_bitmap: Some(0),
+                    access_set_hints: None,
+                    entrypoints: None,
+                    states: None,
+                    error_types: None,
+                    error_messages: None,
+                    kotoba: None,
+                    provenance: None,
+                },
+            }),
+            capture(RemoveSmartContractBytes {
+                artifact_id,
+                reason: Some("superseded".to_owned()),
+            }),
+            capture(UploadSmartContractCodeChunk {
+                artifact_id,
+                total_size: 3,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![1, 2, 3],
+            }),
+        ];
+        for value in values {
+            let name = value
+                .get("nominal")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_owned();
+            let row = rows.entry(name).or_insert_with(|| {
+                json::object([
+                    ("nominal", value.get("nominal").unwrap().clone()),
+                    (
+                        "serialize_hash",
+                        value.get("serialize_hash").unwrap().clone(),
+                    ),
+                    (
+                        "deserialize_hash",
+                        value.get("deserialize_hash").unwrap().clone(),
+                    ),
+                    ("cases", Value::Array(Vec::new())),
+                ])
+                .expect("current contract artifact instruction row")
+            });
+            let Value::Array(cases) = row.get_mut("cases").expect("cases") else {
+                panic!("native record cases are an array");
+            };
+            cases.push(frame_fields(&value));
+        }
+    }
+    let rows: Vec<_> = rows.into_values().collect();
+    assert_eq!(rows.len(), 6);
+    assert!(
+        rows.iter()
+            .all(|row| row.get("cases").and_then(Value::as_array).unwrap().len() == 2)
+    );
     println!(
         "CONTRACT_ARTIFACT_FIXTURE_ROWS={}",
         json::to_json(&rows).expect("canonical contract artifact instruction rows")

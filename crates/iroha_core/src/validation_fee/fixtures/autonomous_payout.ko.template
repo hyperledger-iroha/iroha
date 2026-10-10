@@ -1,6 +1,7 @@
 // Generated conversion wrapper. Pricing, reference feed guards and validator
 // allocation are Parliament-governed native consensus policy.
 seiyaku AutonomousValidationFeePayout {
+    permission Payout;
     error enum AutonomousPayoutError {
         InvalidInvocationAuthority = 1, InvalidContractSubject = 2, XorOutputBelowBound = 3,
     }
@@ -38,7 +39,7 @@ seiyaku AutonomousValidationFeePayout {
         return AssetDefinitionId::parse("6TEAJqbb8oEPmLncoNiMRbLEK6tw");
     }
 
-    kotoage fn autonomous_validation_fee_tick() -> quantity authorize("CanInvokeContractEntrypoint") {
+    kotoage fn autonomous_validation_fee_tick() authorize(Payout) -> quantity {
         let vault = payout_vault();
         require(context::authority() == vault, AutonomousPayoutError::InvalidInvocationAuthority);
         require(context::seiyaku_subject() == vault, AutonomousPayoutError::InvalidContractSubject);

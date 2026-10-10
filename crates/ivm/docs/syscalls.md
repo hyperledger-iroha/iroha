@@ -49,7 +49,7 @@ Admission/host guardrails
   ISI syscalls, but admission and host dispatch both reject the ABI-bound
   `GENERIC_PROGRAM_DENIED_SYSCALLS_V1` list with
   `GenericSyscallNotAllowed(syscall)` before side effects. The denied list covers
-  contract-entrypoint grants, contract code/lifecycle administration, durable
+  instance-permission grants, contract code/lifecycle administration, durable
   state, the opaque contract instruction bridge, nested contract calls, and
   contract-identity sysvars. Generic transaction metadata may not carry the
   reserved contract/deployment keys bound by the descriptor.
@@ -94,7 +94,7 @@ Ordering and OUTPUT
 - The VM clears OUTPUT (and resets its append-only cursor) when loading a program; within a run, OUTPUT writes must move forward (rewinds trap).
 - Event emission that reflects syscall outcomes must preserve syscall order. VM implementations must not reorder syscalls, including under acceleration. Deterministic overlays and commit phases in the node preserve this ordering across the pipeline.
 - Host lifecycle: `begin_tx`/`finish_tx` return `Result`; hosts must surface overlay flush errors (e.g., durable state writes) instead of swallowing them, clear staged overlays on failure, and rely on checkpoints to restore pre-tx state when a VM run aborts.
-- Deployed-contract overlays retain the selected entrypoint authorization for every queued effect and every physical durable-state path. Apply revalidates the exact caller permission, address/code/alias binding, nested caller lineage, and path ownership before effects and again immediately before each durable write; stale or structurally incomplete metadata applies no effects. `IvmProved` admission is closed until complete native execution proofs and authenticated finalized State anchors are available.
+- Deployed-contract overlays retain the selected entrypoint authorization for every queued effect and every physical durable-state path. Apply revalidates the exact caller permission against the signed declaration table, address/code/alias binding, lifecycle revision, nested caller lineage, and path ownership before effects and again immediately before each durable write; stale or structurally incomplete metadata applies no effects. Suspension and resumption invalidate prepared effects even when the artifact and pending hook are unchanged. `IvmProved` admission is closed until complete native execution proofs and authenticated finalized State anchors are available.
 
 Legend
 - Args: registers and pointer types; `&Type` indicates a provenance-valid pointer to a canonical Norito TLV.
@@ -195,8 +195,8 @@ Kotodama intrinsics
 - ``crypto::sm2::verify(message:, signature:, public_key:[, distid:]) -> bool`` mirrors each Blob argument into INPUT, invokes `SM2_VERIFY`, and returns `true` for valid signatures. Omitting `distid` selects the runtime-configured default (``Sm2PublicKey::default_distid()``, sourced from `crypto.sm2_distid_default`); providing it enforces a custom distinguishing identifier.
 - ``crypto::verify_signature(message:, signature:, public_key:, scheme:) -> bool`` issues `VERIFY_SIGNATURE`. `scheme` is a compile-time `SignatureScheme::Ed25519`, `SignatureScheme::Secp256k1`, or `SignatureScheme::MlDsa`, which the compiler folds into the scheme code `1`, `2`, or `3`; source code cannot pass any other code.
 - ``context::transaction_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the deterministic logical execution time in milliseconds. `CoreHost` binds transaction contract calls to the signed transaction creation time, which the signer chooses within the node's admission tolerance, and trigger calls to the block-header creation time; test/default hosts use an explicitly configured value and default to `0`. No host reads wall-clock time while servicing the syscall. `SYSVAR_BLOCK_TIME_MS` returns the same value on every host and is not a source builtin.
-- ``context::authority() -> AccountId`` issues `GET_AUTHORITY` and returns the immediate caller: the transaction or trigger authority for a top-level call, and the calling seiyaku's subject account for a seiyaku called through `CALL_CONTRACT_QUANTITY2`.
-- ``block_height() -> int`` issues `SYSVAR_BLOCK_HEIGHT` and returns the host-provided committed block height. `CoreHost` binds this to the attached transaction context; test/default hosts default to `0`.
+- ``context::authority() -> AccountId`` issues `GET_AUTHORITY` and returns the immediate caller: the transaction or trigger authority for a top-level call, and the calling seiyaku's subject account for a nested call through `CALL_CONTRACT`.
+- ``context::block_height() -> int`` issues `SYSVAR_BLOCK_HEIGHT` and returns the host-provided committed block height. `CoreHost` binds this to the attached transaction context; test/default hosts default to `0`.
 
 Exact numeric helpers
 - `0x010100..0x01011A` implement signed checked and explicit modulo-`2^512`
@@ -400,14 +400,47 @@ Durable state
   ancestor directories remain an operator-owned trust boundary.
 
 Smart‑contract helpers (Norito)
+- `GRANT_CONTRACT_PERMISSION` (`0x36`) and `REVOKE_CONTRACT_PERMISSION`
+  (`0x37`) take `r10=&AccountId` and `r11=&Name` for an Instance permission
+  declared by the current contract. The queued native operation requires its
+  executing subject to be the current account owner or an exact holder of
+  `CanUseContractPermission { contract, permission }`; calling the helper does
+  not grant the subject delegation authority. The general code-management
+  permission supplies no scoped delegation authority. Native grant and revoke
+  operations may use the retained artifact's declarations during suspension,
+  but invocation still requires an active instance. Lifecycle hook grants use
+  the separate exact address-and-hook token.
 - 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)`, `r11=operation_tag` (`1=SubmitBallot`) → 0 — Gas: G_sci
 - 0xA5 SUBSCRIPTION_BILL — Args: none → 0 — Gas: G_sub_bill
   - Uses trigger metadata `subscription_ref` to locate the subscription NFT, computes charges, updates subscription metadata (including `subscription_invoice`), and reschedules the billing trigger.
 - 0xA6 SUBSCRIPTION_RECORD_USAGE — Args: none → 0 — Gas: G_sub_usage
   - Parses `SubscriptionUsageDelta` from trigger args, increments usage counters, and updates subscription metadata.
-- 0xA9 CALL_CONTRACT — Args: `r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&NoritoBytes(EntrypointArgumentRecordV1) or 0` → `r10=ptr (&NoritoBytes(EntrypointReturnRecordV1))` or `0` — Gas: G_call_contract + request bytes + return bytes + child gas
+- 0xA9 CALL_CONTRACT — Args: `r10=&Blob(contract_address), r11=&NoritoBytes(ContractCallBindingV1), r12=argument-table-base, r13=exact-argument-words, r14=result-table-base, r15=exact-result-words` → `caller-owned typed result table; Unit uses one zero word` — Gas: G_call_contract + request bytes + return bytes + child gas
+- 0xAA EMIT_CONTRACT_EVENT — Captures a typed event payload against the executing artifact's signed event declaration. The host supplies the instance, code hash, entrypoint, caller and exact declaration; callers cannot substitute provenance. Emissions retain execution order across nested calls and are published only in a successful committed execution result. A reverted invocation discards its emissions and those of its descendants while preserving gas charges. Views and generic programs cannot emit. Gas is quoted before capture from the canonical schema, active value traversal and complete retained TLV envelopes. Deterministic output limits reject the invocation; a local allocation refusal defers it.
+
+
+  The callee shares the current invocation's durable-state overlay and sees the
+  calling seiyaku's subject as its immediate authority. Queued ledger instructions
+  are applied after root execution succeeds; they do not modify the ledger query
+  snapshot during nested execution. Any active-address re-entry, including a
+  view or indirect callback, is rejected before callee execution; nesting is
+  bounded to 32 calls. A canonical outer `Result::err` returns its error record
+  while rolling back the callee and its successful descendants. Read dependencies
+  and consumed gas survive this recoverable rollback. Results embedded in other
+  returned values remain data. VM faults and nominal aborts roll back the frame
+  and propagate to the caller. Direct deployed calls and local execution apply
+  the same outer-Result rule.
+  A deterministic runtime failure carries `IvmFaultV1`: its closed fault kind,
+  exact code hash, authenticated CNTR entrypoint ordinal (or generic-program
+  selector), and initialization, execution, or return-validation position.
+  Execution positions are byte offsets relative to the executable stream.
+  Nested unwinding preserves the deepest originating fault; the parent's CALL
+  instruction cannot replace it. Source paths and message strings are local
+  presentation derived only from a matching artifact. Node-local allocation or
+  execution deferrals and host invariants never become consensus faults.
+  The ABI descriptor binds this fault layout and propagation policy.
   - Executes the callee in a child VM. The parent escrows the available syscall gas and is charged the fixed request/return overhead plus all gas consumed by child instructions and child syscalls; unused escrow is refunded.
-  - If the callee source declares `authorize("PermissionName")`, its manifest carries that caller-authorization requirement. The host checks the caller contract subject for the named direct or role-derived permission before launching the child VM; missing permission rejects the syscall with `PermissionDenied`.
+  - Every public callee has an explicit authorization policy and an authenticated permission declaration table. For a `kotoage fn` or `view fn`, `authorize(anyone)` opens invocation and `authorize(Role)` resolves the declared role. An instance role requires an exact address-and-name grant on the calling contract subject. An explicitly imported chain role requires that exact chain token with canonical JSON `null` payload; a typed built-in permission payload cannot satisfy it. Lifecycle hooks require the separate runtime address-and-hook token. Missing permission rejects the syscall with `PermissionDenied`. Invocation authority never supplies the separate permissions needed for ledger effects.
 
 Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010000 QUERY_EXECUTE_NORITO — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr (&NoritoBytes(QueryResponse))` — Gas: G_scq
@@ -419,7 +452,7 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010021 SYSVAR_BLOCK_HEIGHT — Args: none → `u64=height` — Gas: G_sysvar
 - 0x010022 SYSVAR_BLOCK_TIME_MS — Args: none → `u64=block_time_ms` — Gas: G_sysvar
 - 0x010023 SYSVAR_AUTHORITY — Args: none → `ptr (&AccountId)` — Gas: G_get_auth + bytes
-- 0x010024 SYSVAR_CONTRACT_ADDRESS — Args: none → `ptr (&NoritoBytes(ContractAddress))` or `0` — Gas: G_sysvar + bytes
+- 0x010024 SYSVAR_CONTRACT_ADDRESS — Args: none → `ptr (&Blob(canonical address UTF-8 literal))` or `0` outside contract scope. The literal has exactly 60 bytes and is accepted by imported seiyaku `at(address:)`. Gas: G_sysvar + bytes.
 - 0x010025 SYSVAR_ENTRYPOINT — Args: none → `ptr (&Blob(entrypoint))` or `0` — Gas: G_sysvar + bytes
 - 0x010026 DECODE_ARGUMENT_RECORD — Args: `r10=&NoritoBytes(EntrypointArgumentRecordV1)`, `r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=aligned owned-HEAP table base (0 if empty)`, `r11=exact word count` — Gas: G_argument_decode + record + schema + complete materialization. Raw syscall quoting uses only bounded record/schema envelope lengths and reserves the full HEAP before schema and record authentication. The decoder validates the schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer. It preflights all aligned pointer TLV allocations and raw aggregate/table storage together. Pointer TLVs prefer INPUT and spill into owned HEAP; aggregate storage and argument tables always use owned HEAP. The record limit is inclusive at 1 MiB. Public invocation preparation is mandatory before guest execution and consumes a host-owned prepared record directly; it does not expose a guest binding or invoke this syscall. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries, through the shared state-free `ivm_abi::arguments` codec.
 - 0x010027 SYSVAR_CONTRACT_SUBJECT — Args: none → `ptr (&AccountId(contract subject))` — Gas: G_sysvar + bytes. Calls outside a deployed-contract scope fail closed.
@@ -591,10 +624,9 @@ VRF
   - Empty and over-16 batches fail with `r11=9 (batch_bound)` and `r12=u64::MAX` before backend or response-allocation work. Canonical-decode and batch-bound failures examine zero items. The VM reserves 16 items, then deterministically refunds every unexamined item, including the tail after the first failing item.
   - The host must provide its exact `NetworkId` and every item must match it. An absent host network or mismatch fails with `r11=8` and `r12` set to the first affected index.
 
-- 0x7E VRF_EPOCH_SEED — Args: `r10=&NoritoBytes(VrfEpochSeedRequest{epoch:u64, fallback_to_latest:bool})` → Return: `r10=ptr (&NoritoBytes(VrfEpochSeedResponse{found:bool, epoch:u64, seed:[u8;32]}))`, `r11=status:u64` — Gas: G_vote_get + bytes
+- 0x7E VRF_EPOCH_SEED — Args: public `r10=epoch:u64` → Return: `r10=&Blob(seed[32])`, or zero when the exact epoch is absent; `r11` is unchanged. Gas: G_state_query + 8 + 32 for a found seed, G_state_query + 8 otherwise. No latest-epoch fallback. VM memory exhaustion is a typed fault; local allocation refusal remains deferred.
   - Reads a world-snapshot VRF epoch seed for governance/sortition use in smart contracts.
-  - If `fallback_to_latest=true` and the requested epoch is missing, the host returns the latest known epoch seed.
-  - Status codes: `0=ok`, `1=type_mismatch`, `2=decode_error`, `3=oom`.
+  - An absent exact epoch produces `Option::none()` in Kotodama; a present epoch produces `Option::some(seed)`. No other epoch is substituted.
 
 Host gating and exact-network binding
 - A host-owned `NetworkId` is mandatory for VRF verification. Missing host
@@ -633,10 +665,12 @@ node enforces that policy unconditionally.
   The former vector body is rejected and its ABI hash/captures must be replaced
   by genuine current native output.
   It preserves Option/Result payloads, exact List capacities and element types,
-  nominal products/errors, privacy, and `StateCursor(EntrypointValueKindV1)` keys.
+  nominal products/errors, privacy, and complete
+  `StateCursor(EntrypointValueTypeV1)` scalar or tuple key schemas.
   Table counts derive from the trees; active nested values use the same checks as
-  direct words. Canonical cursor frames with a different key kind are rejected;
-  `Json` is not a supported cursor key kind. Private schemas retain the compiler's
+  direct words. Canonical cursor frames with a different key-schema hash are rejected;
+  key schemas contain supported scalar leaves and tuples of at least two elements.
+  `Json` and live handles are not supported key components. Private schemas retain the compiler's
   250,000-node/depth-256 bounds; public record limits remain unchanged.
 - Pointer provenance tests pin INPUT, allocated HEAP, and exact indexed literals as the only
   accepted V1 object stores. Asset mutation fixtures pin canonical `QuantityValueV1` frames;
@@ -689,8 +723,8 @@ node enforces that policy unconditionally.
 | 0x33 | REVOKE_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_role@ivm.core/v2 |
 | 0x34 | GRANT_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_perm@ivm.core/v2 |
 | 0x35 | REVOKE_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_perm@ivm.core/v2 |
-| 0x36 | GRANT_CONTRACT_ENTRYPOINT | r10=&AccountId, r11=&Blob(entrypoint) | u64=0 | asset:gas/G_grant_perm@ivm.core/v2 |
-| 0x37 | REVOKE_CONTRACT_ENTRYPOINT | r10=&AccountId, r11=&Blob(entrypoint) | u64=0 | asset:gas/G_revoke_perm@ivm.core/v2 |
+| 0x36 | GRANT_CONTRACT_PERMISSION | r10=&AccountId, r11=&Name(permission) | u64=0 | asset:gas/G_grant_perm@ivm.core/v2 |
+| 0x37 | REVOKE_CONTRACT_PERMISSION | r10=&AccountId, r11=&Name(permission) | u64=0 | asset:gas/G_revoke_perm@ivm.core/v2 |
 | 0x40 | CREATE_TRIGGER | r10=&Json(spec) | u64=0 | asset:gas/G_create_trig@ivm.core/v2 |
 | 0x41 | REMOVE_TRIGGER | r10=&Name | u64=0 | asset:gas/G_remove_trig@ivm.core/v2 |
 | 0x42 | SET_TRIGGER_ENABLED | r10=&Name, r11=enabled:u64 | u64=0 | asset:gas/G_set_trig@ivm.core/v2 |
@@ -725,7 +759,7 @@ node enforces that policy unconditionally.
 | 0x7B | JSON_GET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key) | r10=Option<AccountId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x7C | JSON_GET_NFT_ID | r10=&Json(object), r11=&Name(key) | r10=Option<NftId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x7D | JSON_GET_BLOB_HEX | r10=&Json(object), r11=&Name(key) | r10=Option<bytes> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
-| 0x7E | VRF_EPOCH_SEED | r10=&NoritoBytes(VrfEpochSeedRequest) | r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64 | asset:gas/G_vote_get@ivm.core/v2 + bytes |
+| 0x7E | VRF_EPOCH_SEED | r10=epoch:u64 | r10=&Blob(seed[32]) or 0 if absent | asset:gas/G_state_query@ivm.core/v2 + 8 + 32 if found, otherwise G_state_query + 8 |
 | 0x80 | JSON_GET_ASSET_DEFINITION_ID | r10=&Json(object), r11=&Name(key) | r10=Option<AssetDefinitionId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x81 | JSON_OBJECT | - | r10=&Json(empty object) | asset:gas/G_json@ivm.core/v2 + encoded bytes |
 | 0x82 | JSON_SET_I64 | r10=&Json(object), r11=&Name(key), r12=value:i64 | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
@@ -750,7 +784,8 @@ node enforces that policy unconditionally.
 | 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v2 |
 | 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
 | 0xA8 | CURRENT_TIME_MS | - | r10=unix_time_ms:u64 | asset:gas/G_sysvar@ivm.core/v2 |
-| 0xA9 | CALL_CONTRACT | r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&NoritoBytes(EntrypointArgumentRecordV1) or 0 | r10=ptr (&NoritoBytes(EntrypointReturnRecordV1)) or 0 | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
+| 0xA9 | CALL_CONTRACT | r10=&Blob(contract_address), r11=&NoritoBytes(ContractCallBindingV1), r12=argument-table-base, r13=exact-argument-words, r14=result-table-base, r15=exact-result-words | caller-owned typed result table; Unit uses one zero word | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
+| 0xAA | EMIT_CONTRACT_EVENT | r10=authenticated event ordinal, r11=owned public heap word table, r12=exact schema word count | - | 32 + 1 per canonical schema byte + 32 per active schema node + 1 per retained full TLV byte |
 | 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB2 | AXT_COMMIT | - | u64=0 | asset:gas/G_axt@ivm.core/v2 + entries |
@@ -786,7 +821,7 @@ node enforces that policy unconditionally.
 | 0xFF | GET_REGISTER_MERKLE_COMPACT | r10=reg, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0x10000 | QUERY_EXECUTE_NORITO | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10001 | CORE_QUERY_GET | r10=CoreQueryEntityTagV1:u64, r11=&typed entity id | r10=Option<View> sum handle (typed leaf TLVs) | asset:gas/G_scq@ivm.core/v2 + query items + encoded bytes |
-| 0x10002 | CORE_QUERY_PAGE | r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64 | r10=List<View,64> handle, r11=Option<int> sum handle | asset:gas/G_scq@ivm.core/v2 + offset + query items + encoded bytes |
+| 0x10002 | CORE_QUERY_PAGE | r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64, r13=nullable AccountId pointer (Asset only; zero for every other tag) | r10=List<View,64> handle, r11=Option<int> sum handle | asset:gas/G_scq@ivm.core/v2 + offset + query items + encoded bytes + (32 + AccountId payload bytes when filtered) |
 | 0x10006 | QUERY_GET_PARAMETER | r10=&NoritoBytes(Name) | r10=ptr (&NoritoBytes(Parameter)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10007 | QUERY_GET_CONTRACT_MANIFEST | r10=&NoritoBytes(ContractArtifactId) | r10=ptr (&NoritoBytes(ContractManifest)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10008 | QUERY_GET_CONTRACT_INSTANCE | r10=&NoritoBytes(ContractAddress | Name) | r10=ptr (&NoritoBytes(ContractInstance)) | asset:gas/G_scq@ivm.core/v2 |
@@ -794,12 +829,11 @@ node enforces that policy unconditionally.
 | 0x10021 | SYSVAR_BLOCK_HEIGHT | - | r10=height:u64 | asset:gas/G_sysvar@ivm.core/v2 |
 | 0x10022 | SYSVAR_BLOCK_TIME_MS | - | r10=block_time_ms:u64 | asset:gas/G_sysvar@ivm.core/v2 |
 | 0x10023 | SYSVAR_AUTHORITY | - | r10=ptr (&AccountId) | asset:gas/G_get_auth@ivm.core/v2 + bytes |
-| 0x10024 | SYSVAR_CONTRACT_ADDRESS | - | r10=ptr (&NoritoBytes(ContractAddress)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
+| 0x10024 | SYSVAR_CONTRACT_ADDRESS | - | r10=&Blob(canonical ContractAddress UTF-8 literal, exactly 60 bytes) or 0 without contract context | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10025 | SYSVAR_ENTRYPOINT | - | r10=ptr (&Blob(entrypoint)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10026 | DECODE_ARGUMENT_RECORD | r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1) | r10=aligned owned-HEAP table base (0 if empty), r11=exact word count | asset:gas/G_argument_decode@ivm.core/v2 + record + schema + complete materialization |
 | 0x10027 | SYSVAR_CONTRACT_SUBJECT | - | r10=ptr (&AccountId(contract subject)) | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10028 | NORMALIZE_NORITO_BYTES | r10=&Blob or &NoritoBytes (validated public TLV) | r10=&NoritoBytes(same payload) | asset:gas/G_pointer@ivm.core/v2 + bytes |
-| 0x10029 | CALL_CONTRACT_QUANTITY2 | r10=&Blob(contract_address), r11=&Blob(literal entrypoint), r12=&Quantity(amount_in), r13=&Quantity(min_out) | r10=ptr (&Quantity) | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
 | 0x10031 | STATE_HAS | r10=&NoritoBytes(StatePath) | r10=present:u64 | asset:gas/G_state_has@ivm.core/v2 + canonical path frame bytes |
 | 0x10032 | STATE_LEN | r10=&NoritoBytes(StatePath) | r10=len:u64, r11=found:u64 | asset:gas/G_state_len@ivm.core/v2 + canonical path frame bytes |
 | 0x10033 | STATE_COUNT | r10=&NoritoBytes(StatePath prefix) | r10=total:u64 | asset:gas/G_state_count@ivm.core/v2 + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes |
@@ -809,10 +843,14 @@ node enforces that policy unconditionally.
 | 0x10037 | STATE_PATH_FROM_NAME | r10=&Name | r10=ptr (&NoritoBytes(StatePath)) | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x10038 | STATE_SCAN | r10=&NoritoBytes(StatePath map), r11=&NoritoBytes(StateCursorV1) or 0, r12=limit(1..64), r13=0, r14=0, r15=0 | r10=&NoritoBytes(Vec<StatePath>), r11=&NoritoBytes(StateCursorV1) or 0, r12=selected, r13=examined | asset:gas/G_state_query@ivm.core/v2 + canonical map and cursor input frame bytes + canonical map schema bytes + instance UTF-8 bytes + 1 per examined candidate + examined physical key UTF-8 bytes + canonical response frame bytes; at most 64 candidate positions, no count or lookahead |
 | 0x1004E | JSON_BUILD | r10=&NoritoBytes(JsonConstructionSchemaV1), r11=word_table, r12=word_count | r10=&Json | asset:gas/G_json_build@ivm.core/v2 + schema bytes + source bytes + words + collection elements + encoded bytes |
+| 0x10050 | VALUE_ENCODE | r10=&NoritoBytes(EntrypointValueTypeV1), r11=owned public heap table, r12=exact word count | r10=&Blob(EntrypointReturnRecordV1) | 32 + 1 per schema byte + value quote + 1 per encoded output byte |
+| 0x10051 | BLOB_CONCAT | r10=&Blob(left), r11=&Blob(right) | r10=&Blob(left || right) | 32 + 2 per combined payload byte |
+| 0x10052 | UTF8_VALIDATE | r10=&Blob | r10=same pointer for valid UTF-8, otherwise zero | 32 + 1 per payload byte |
+| 0x10053 | VALUE_TO_STRING | r10=&NoritoBytes(scalar EntrypointValueTypeV1), r11=owned public heap table, r12=1 | r10=&Blob(canonical scalar text) | 32 + 1 per schema byte + value quote + 1 per UTF-8 output byte |
 | 0x10100 | INT_FROM_I64 | r10=value:i64 | r10=&Int, r11=status:0 | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10101 | INT_FROM_U64 | r10=value:u64 | r10=&Int, r11=status:0 | asset:gas/G_numeric_staged@ivm.core/v2 |
-| 0x10102 | INT_TRY_TO_I64 | r10=&Int | r10=value:i64-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
-| 0x10103 | INT_TRY_TO_U64 | r10=&Int | r10=value:u64-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10102 | INT_TO_I64 | r10=&Int, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=value:i64-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10103 | INT_TO_U64 | r10=&Int, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=value:u64-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10104 | INT_NEG | r10=&Int, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10105 | INT_ADD | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10106 | INT_SUB | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
@@ -849,12 +887,12 @@ node enforces that policy unconditionally.
 | 0x1012A | DECIMAL_LE | r10=&Decimal, r11=&Decimal | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x1012B | DECIMAL_GT | r10=&Decimal, r11=&Decimal | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x1012C | DECIMAL_GE | r10=&Decimal, r11=&Decimal | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
-| 0x1012D | DECIMAL_TRY_TO_INT_EXACT | r10=&Decimal | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1012D | DECIMAL_TO_INT_EXACT | r10=&Decimal, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x1012E | DECIMAL_TO_INT_TRUNC | r10=&Decimal | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x1012F | DECIMAL_TO_INT_ROUND | r10=&Decimal, r11=reserved:0, r12=reserved:0, r13=RoundingModeV1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10130 | DECIMAL_MUL_DIV_ROUND | r10=&Decimal, r11=&Decimal multiplier, r12=&Decimal divisor, r13=&Int scale, r14=rounding:u64, r15=0 | r10=&Decimal | asset:gas/G_numeric_staged@ivm.core/v2 |
-| 0x10140 | QUANTITY_TRY_FROM_INT | r10=&Int | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
-| 0x10141 | QUANTITY_TRY_FROM_DECIMAL | r10=&Decimal | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10140 | QUANTITY_FROM_INT | r10=&Int, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10141 | QUANTITY_FROM_DECIMAL | r10=&Decimal, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10142 | QUANTITY_TO_DECIMAL | r10=&Quantity | r10=&Decimal | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10143 | QUANTITY_ADD | r10=&Quantity, r11=&Quantity, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10144 | QUANTITY_SUB | r10=&Quantity, r11=&Quantity, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |

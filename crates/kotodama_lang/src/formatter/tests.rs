@@ -31,7 +31,7 @@ fn preserved_tokens(text: &str) -> Vec<(SyntaxKind, String)> {
         })
         .map(|token| {
             let text = source.slice(token.range).unwrap_or_default();
-            let text = if token.kind == SyntaxKind::LineComment {
+            let text = if token.kind.is_line_comment() {
                 text.trim_end()
             } else {
                 text
@@ -182,7 +182,7 @@ fn every_repository_source_formats_losslessly_and_idempotently() {
     );
 }
 /// Assert that every line of `formatted` over the column target is held there by what cannot be
-/// split: a literal of at least 40 characters, or comments without which the line's code fits.
+/// split: an identifier or literal of at least 40 characters, or comments without which the line's code fits.
 fn assert_lines_within_target(name: &str, formatted: &str) {
     let source = SourceFile::new(SourceId(0), name, formatted);
     let lexed = crate::syntax::lex(&source, FrontendBudget::v1());
@@ -204,10 +204,13 @@ fn assert_lines_within_target(name: &str, formatted: &str) {
                     .count();
                 match token.kind {
                     // A comment and the space that separates it from the code.
-                    SyntaxKind::LineComment | SyntaxKind::BlockComment => {
+                    SyntaxKind::LineComment | SyntaxKind::DocComment | SyntaxKind::BlockComment => {
                         comment_width += on_line + 1;
                     }
-                    SyntaxKind::String | SyntaxKind::Bytes | SyntaxKind::Number => {
+                    SyntaxKind::Ident
+                    | SyntaxKind::String
+                    | SyntaxKind::Bytes
+                    | SyntaxKind::Number => {
                         long_literal |= formatted[start..end].chars().count() >= 40;
                     }
                     _ => {}
@@ -296,7 +299,7 @@ fn join_code_lines(text: &str) -> String {
         index.is_some_and(|token| {
             matches!(
                 token.kind,
-                SyntaxKind::LineComment | SyntaxKind::BlockComment
+                SyntaxKind::LineComment | SyntaxKind::DocComment | SyntaxKind::BlockComment
             )
         })
     };
@@ -390,24 +393,25 @@ fn formatting_ignores_indentation_and_spacing_within_lines() {
 #[test]
 fn canonicalizes_blocks_operators_and_declarations() {
     let formatted = format(
-        "seiyaku Demo{state int count;hajimari(){count=0;}kotoage fn bump(int value)->int authorize(\"Write\"){var int total=count+value;if total>10{total=10;}return total;}view fn read()->int{return count;}}",
+        "seiyaku Demo{ permission Write; state int count;hajimari(){count=0;}kotoage fn bump(int value) authorize(Write) ->int {var int total=count+value;if total>10{total=10;}return total;}view fn read() authorize(anyone) ->int {return count;}}",
     );
     assert_eq!(
         formatted,
         concat!(
             "seiyaku Demo {\n",
+            "    permission Write;\n",
             "    state int count;\n",
             "    hajimari() {\n",
             "        count = 0;\n",
             "    }\n\n",
-            "    kotoage fn bump(int value) -> int authorize(\"Write\") {\n",
+            "    kotoage fn bump(int value) authorize(Write) -> int {\n",
             "        var int total = count + value;\n",
             "        if total > 10 {\n",
             "            total = 10;\n",
             "        }\n",
             "        return total;\n",
             "    }\n\n",
-            "    view fn read() -> int {\n",
+            "    view fn read() authorize(anyone) -> int {\n",
             "        return count;\n",
             "    }\n",
             "}\n",
@@ -417,13 +421,13 @@ fn canonicalizes_blocks_operators_and_declarations() {
 }
 #[test]
 fn preserves_comments_literals_and_canonical_keywords() {
-    let source = "seiyaku Demo{/* exact */view fn text()->string{// keep me\nreturn r#\"a  b\"#;}}";
+    let source = "seiyaku Demo{/* exact */view fn text() authorize(anyone) ->string {// keep me\nreturn r#\"a  b\"#;}}";
     let formatted = format(source);
     assert_eq!(
         formatted,
         concat!(
             "seiyaku Demo {\n",
-            "    /* exact */ view fn text() -> string { // keep me\n",
+            "    /* exact */ view fn text() authorize(anyone) -> string { // keep me\n",
             "        return r#\"a  b\"#;\n",
             "    }\n",
             "}\n",
@@ -433,7 +437,8 @@ fn preserves_comments_literals_and_canonical_keywords() {
 }
 #[test]
 fn preserves_decimal_literal_spelling_idempotently() {
-    let formatted = format("seiyaku Demo{view fn value()->decimal{return 1.250_0;}}");
+    let formatted =
+        format("seiyaku Demo{view fn value() authorize(anyone) ->decimal {return 1.250_0;}}");
     assert!(formatted.contains("return 1.250_0;"));
     assert_eq!(format(&formatted), formatted);
 }
@@ -538,7 +543,7 @@ fn unicode_literal_bytes_do_not_cause_spurious_wrapping() {
 #[test]
 fn branded_unicode_and_comments_remain_stable_in_multiline_calls() {
     let formatted = format(
-        "誓約 Branding{始まり(){}言挙げ fn run()authorize(\"Run\"){target(first:\"雪\",// 保持\nsecond:\"月\",third:\"星\");}改善(){}}",
+        "誓約 Branding{ permission Run; 始まり(){}言挙げ fn run() authorize(Run) {target(first:\"雪\",// 保持\nsecond:\"月\",third:\"星\");}改善(){}}",
     );
     for spelling in [
         "誓約",
@@ -559,9 +564,10 @@ fn branded_unicode_and_comments_remain_stable_in_multiline_calls() {
         formatted,
         concat!(
             "誓約 Branding {\n",
+            "    permission Run;\n",
             "    始まり() {}\n",
             "\n",
-            "    言挙げ fn run() authorize(\"Run\") {\n",
+            "    言挙げ fn run() authorize(Run) {\n",
             "        target(\n",
             "            first: \"雪\", // 保持\n",
             "            second: \"月\",\n",
@@ -641,13 +647,14 @@ fn formats_amount_div_round_named_arguments_within_the_target() {
 #[test]
 fn authorize_modifier_stays_on_one_line_even_without_a_break_point() {
     let formatted = format(
-        "seiyaku Demo{kotoage fn settle()authorize(\"ThisRoleNameIsDeliberatelyLongEnoughThatTheHeaderCannotFitWithinTheTarget\"){}}",
+        "seiyaku Demo{ permission ThisRoleNameIsDeliberatelyLongEnoughThatTheHeaderCannotFitWithinTheTarget; kotoage fn settle() authorize(ThisRoleNameIsDeliberatelyLongEnoughThatTheHeaderCannotFitWithinTheTarget) {}}",
     );
     assert_eq!(
         formatted,
         concat!(
             "seiyaku Demo {\n",
-            "    kotoage fn settle() authorize(\"ThisRoleNameIsDeliberatelyLongEnoughThatTheHeaderCannotFitWithinTheTarget\") {}\n",
+            "    permission ThisRoleNameIsDeliberatelyLongEnoughThatTheHeaderCannotFitWithinTheTarget;\n",
+            "    kotoage fn settle() authorize(ThisRoleNameIsDeliberatelyLongEnoughThatTheHeaderCannotFitWithinTheTarget) {}\n",
             "}\n",
         )
     );
@@ -656,18 +663,19 @@ fn authorize_modifier_stays_on_one_line_even_without_a_break_point() {
 #[test]
 fn long_declaration_heads_break_parameters_before_authorize() {
     let formatted = format(
-        "seiyaku Pools{kotoage fn quote_or_deposit(AccountId trader,Name pool,quantity amount_a,quantity amount_b)->quantity authorize(\"Admin\"){return amount_a;}}",
+        "seiyaku Pools{ permission Admin; kotoage fn quote_or_deposit(AccountId trader,Name pool,quantity amount_a,quantity amount_b) authorize(Admin) ->quantity {return amount_a;}}",
     );
     assert_eq!(
         formatted,
         concat!(
             "seiyaku Pools {\n",
+            "    permission Admin;\n",
             "    kotoage fn quote_or_deposit(\n",
             "        AccountId trader,\n",
             "        Name pool,\n",
             "        quantity amount_a,\n",
             "        quantity amount_b,\n",
-            "    ) -> quantity authorize(\"Admin\") {\n",
+            "    ) authorize(Admin) -> quantity {\n",
             "        return amount_a;\n",
             "    }\n",
             "}\n",
@@ -678,7 +686,7 @@ fn long_declaration_heads_break_parameters_before_authorize() {
 #[test]
 fn distinguishes_generic_delimiters_from_comparisons() {
     let formatted = format(
-        "seiyaku Demo{state StateMap<string,Option<int>> values;view fn less(int a,int b)->bool{return a<b;}}",
+        "seiyaku Demo{state StateMap<string,Option<int>> values;view fn less(int a,int b) authorize(anyone) ->bool {return a<b;}}",
     );
     assert!(formatted.contains("StateMap<string, Option<int>>"));
     assert!(formatted.contains("return a < b;"));
@@ -722,7 +730,7 @@ fn refuses_to_rewrite_invalid_sources() {
 }
 #[test]
 fn refuses_output_expansion_beyond_the_source_budget() {
-    let mut text = String::from("seiyaku Demo { view fn run() {");
+    let mut text = String::from("seiyaku Demo { view fn run() authorize(anyone) {");
     for _ in 0..16 {
         text.push_str("if true {");
     }
@@ -761,12 +769,11 @@ fn spelled(tokens: &[Tok<'_>]) -> String {
 fn every_source_policy_type_formats_type_arguments_without_spaces() {
     for name in kotodama_surface::source_policy::V1_SOURCE_TYPE_NAMES {
         let formatted = format(&format!(
-            "seiyaku Demo{{view fn read({name} < Name , int > value)->{name} < Name >{{return value;}}}}"
+            "seiyaku Demo{{view fn read({name} < Name , int > value)authorize(anyone)->{name} < Name >{{return value;}}}}"
         ));
         assert!(
-            formatted.contains(&format!(
-                "view fn read({name}<Name, int> value) -> {name}<Name> {{"
-            )),
+            formatted.contains(&format!("{name}<Name, int> value"))
+                && formatted.contains(&format!("-> {name}<Name> {{")),
             "{name}:\n{formatted}"
         );
     }
@@ -811,7 +818,7 @@ fn syntax_roles_classify_braces_lists_and_parameters() {
                     ("{", Role::Brace(BraceKind::Block)),
                     ("{", Role::Brace(BraceKind::StructFields)),
                     ("}", Role::ItemBlockEnd),
-                    ("{", Role::Brace(BraceKind::ErrorVariants)),
+                    ("{", Role::Brace(BraceKind::EnumVariants)),
                     ("#", Role::AttributeStart),
                     ("]", Role::AttributeEnd),
                     ("}", Role::ItemBlockEnd),
@@ -993,18 +1000,20 @@ fn prefix_operators_follow_keywords_and_operators_with_one_space() {
 #[test]
 fn branded_path_segments_call_without_a_space_in_either_script() {
     let formatted = format(
-        "誓約 Mixed{kotoage fn a()authorize(\"A\"){let string x=context::kotoage ();let string y=context::言挙げ ();ledger::seiyaku::grant_kotoage(context::authority(),\"a\");}言挙げ fn b()authorize(\"B\"){}始まり(){}kaizen(){}}",
+        "誓約 Mixed{ permission A; permission B; kotoage fn a() authorize(A) {let string x=context::kotoage ();let string y=context::言挙げ ();ledger::seiyaku::grant_permission(context::authority(),permission:A);}言挙げ fn b() authorize(B) {}始まり(){}kaizen(){}}",
     );
     assert_eq!(
         formatted,
         concat!(
             "誓約 Mixed {\n",
-            "    kotoage fn a() authorize(\"A\") {\n",
+            "    permission A;\n",
+            "    permission B;\n",
+            "    kotoage fn a() authorize(A) {\n",
             "        let string x = context::kotoage();\n",
             "        let string y = context::言挙げ();\n",
-            "        ledger::seiyaku::grant_kotoage(context::authority(), \"a\");\n",
+            "        ledger::seiyaku::grant_permission(context::authority(), permission: A);\n",
             "    }\n\n",
-            "    言挙げ fn b() authorize(\"B\") {}\n\n",
+            "    言挙げ fn b() authorize(B) {}\n\n",
             "    始まり() {}\n\n",
             "    kaizen() {}\n",
             "}\n",
@@ -1079,7 +1088,7 @@ fn brace_kinds_stay_inline_only_where_their_layout_allows() {
         ("module R{struct P{int a}}", BraceKind::StructFields, false),
         (
             "module R{error enum E{A=1}}",
-            BraceKind::ErrorVariants,
+            BraceKind::EnumVariants,
             false,
         ),
     ] {
@@ -1269,7 +1278,7 @@ fn group_can_break_only_for_non_empty_layout_groups() {
 #[test]
 fn trigger_filters_end_with_a_semicolon_unless_they_end_with_a_block() {
     let formatted = format(
-        "seiyaku T{trigger a->run{on time pre_commit // every block\nrepeats 2;}trigger b->run{metadata{tag:\"x\";}on pipeline block approved}trigger c->run{on data account created{}repeats indefinitely;}trigger d->run{on time schedule(0,10)authority alice;}trigger e->run{on execute trigger on}fn run(){}}",
+        "seiyaku T{trigger a->run{on time pre_commit // every block\nrepeats 2;}trigger b->run{metadata{tag:\"x\";}on pipeline block approved}trigger c->run{on data account created{}repeats indefinitely;}trigger d->run{on time schedule(start_ms:0,period_ms:10)authority alice;}trigger e->run{on execute trigger on}fn run(){}}",
     );
     assert!(
         formatted.contains(concat!(
@@ -1289,7 +1298,9 @@ fn trigger_filters_end_with_a_semicolon_unless_they_end_with_a_block() {
         "{formatted}"
     );
     assert!(
-        formatted.contains("        on time schedule(0, 10);\n        authority alice;\n"),
+        formatted.contains(
+            "        on time schedule(start_ms: 0, period_ms: 10);\n        authority alice;\n"
+        ),
         "{formatted}"
     );
     assert!(
@@ -1302,7 +1313,7 @@ fn trigger_filters_end_with_a_semicolon_unless_they_end_with_a_block() {
 fn trigger_filter_last_follows_the_closed_filter_grammar() {
     for (filter, last) in [
         ("time pre_commit", "pre_commit"),
-        ("time schedule(0, 10)", ")"),
+        ("time schedule(start_ms: 0, period_ms: 10)", ")"),
         ("execute trigger wake", "wake"),
         ("data any", "any"),
         ("data account created { account_id alice; }", "}"),
@@ -1841,4 +1852,89 @@ fn comment_placement_helpers_follow_the_printer_state() {
         printer.group_start = true;
         assert!(printer.comment_is_trailing(position("/* a */")));
     });
+}
+
+#[test]
+fn formats_instance_and_chain_permission_declarations_in_canonical_order() {
+    let source = r#"誓約 Policies{permission Admin;import permission "CanSetParameters" as ChainAdmin;kotoage fn update()authorize(Admin)->int{1}view fn inspect()authorize(ChainAdmin)->int{2}言挙げ fn open()authorize(anyone){}}"#;
+    let output = format(source);
+    assert!(output.contains("permission Admin;\n"), "{output}");
+    assert!(
+        output.contains("import permission \"CanSetParameters\" as ChainAdmin;"),
+        "{output}"
+    );
+    assert!(
+        output.contains("kotoage fn update() authorize(Admin) -> int"),
+        "{output}"
+    );
+    assert_eq!(format(&output), output);
+}
+
+#[test]
+fn data_and_error_enums_share_canonical_multiline_variant_formatting() {
+    let source = "module Values{export enum Status{Active=1;Paused=2}error enum Failure{#[message(\"Not found\")]Missing=1}}";
+    let formatted = format(source);
+    assert!(
+        formatted.contains("enum Status {\n        Active = 1,\n        Paused = 2,\n    }"),
+        "{formatted}"
+    );
+    assert!(formatted.contains("error enum Failure"), "{formatted}");
+    assert_eq!(format(&formatted), formatted);
+}
+
+#[test]
+fn native_event_declarations_and_emissions_use_shared_record_formatting() {
+    let source = "seiyaku Events{event Transfer{int first;int second;}kotoage fn run()authorize(anyone){emit Transfer{second:2,first:1};}}";
+    let output = format(source);
+    assert!(
+        output.contains("event Transfer {\n        int first,\n        int second,\n    }"),
+        "{output}"
+    );
+    assert!(
+        output
+            .contains("emit Transfer {\n            second: 2,\n            first: 1,\n        };"),
+        "{output}"
+    );
+    assert_eq!(format(&output), output);
+}
+
+#[test]
+fn typed_test_argument_records_format_as_closed_records() {
+    let source = r#"module Checks { koto_test { target: "counter.ko" } #[test] fn check() { test::invoke_kotoage(kotoage:"increment",arguments:{step:1}); } }"#;
+    let formatted = format(source);
+    assert!(formatted.contains("arguments: { step: 1 }"), "{formatted}");
+    assert_eq!(format(&formatted), formatted);
+}
+
+#[test]
+fn imported_contract_and_exact_type_bindings_preserve_spelling_and_nominal_paths() {
+    let source = r#"誓約 App{import 誓約 "./pool.to" as Pool;import type "data@1.0.0::Data::Status" from Pool as PreviousStatus;view fn run(bytes address,Pool::Data::Payload value)authorize(anyone)->Pool::Data::Payload{let pool=Pool::at(address:address);pool.echo(payload:value)}}"#;
+    let formatted = assert_stable("contract-import.ko", source).expect("contract import parses");
+    assert!(formatted.contains("import 誓約 \"./pool.to\" as Pool;"));
+    assert!(
+        formatted.contains("import type \"data@1.0.0::Data::Status\" from Pool as PreviousStatus;")
+    );
+    assert!(formatted.contains("Pool::Data::Payload value"));
+    assert!(formatted.contains("pool.echo(payload: value)"));
+}
+
+#[test]
+fn authored_doc_comments_preserve_text_and_declaration_attachment() {
+    let source = "seiyaku Guide {\n/// First **paragraph**.\n///\n/// Second paragraph.\nview fn read() authorize(anyone)->int{1}\n}";
+    let formatted = format(source);
+    assert!(
+        formatted.contains("/// First **paragraph**.\n    ///\n    /// Second paragraph."),
+        "{formatted}"
+    );
+    assert_eq!(format(&formatted), formatted);
+    let snapshot = crate::editor::EditorSnapshot::single("guide.ko", &formatted, false);
+    let signature = snapshot
+        .declaration_signatures(SourceId(0))
+        .into_iter()
+        .find(|signature| signature.name == "read")
+        .unwrap();
+    assert_eq!(
+        signature.authored_documentation,
+        "First **paragraph**.\n\nSecond paragraph."
+    );
 }

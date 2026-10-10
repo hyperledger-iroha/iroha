@@ -131,8 +131,8 @@ fn forced_vendor_latch_cannot_admit_development_ballot() {
     let (contract_program, _) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
             r#"
-seiyaku VendorBridgeGate {
-    kotoage fn execute(bytes instruction) authorize("CanUseVendorBridgeTest") {
+seiyaku VendorBridgeGate { permission CanUseVendorBridgeTest;
+    kotoage fn execute(bytes instruction) authorize(CanUseVendorBridgeTest) {
         ledger::governance::submit_ballot(value: instruction);
     }
 }

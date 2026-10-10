@@ -7,7 +7,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use iroha_allocation::{AllocationRefusal, ReleaseRegistration};
+use iroha_allocation::{AllocationRefusal, release::ReleaseRegistration};
 use norito::core::{DecodeBudgetContext, DecodeLimits, serialize_to_buffer};
 use norito::json::JsonDeserialize;
 

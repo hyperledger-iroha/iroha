@@ -322,6 +322,7 @@ mod axt_spend_issuer;
 mod block_proofs;
 mod bounded_authority;
 mod callback_journal;
+mod contract_event_journal;
 mod canonical_history;
 mod committed_execution_read;
 pub(crate) mod native_execution_tip;
@@ -5810,6 +5811,10 @@ impl WorldBlock<'_> {
         collect_reverts!(self.axt_policies, AxtPolicy);
         collect_reverts!(self.axt_handle_counters, AxtHandleCounter);
         collect_reverts!(self.axt_asset_incarnations, AxtAssetIncarnation);
+        collect_reverts!(
+            self.asset_definition_direct_homes,
+            AssetDefinitionDirectHome
+        );
         collect_reverts!(self.axt_replay_ledger, AxtReplay);
         collect_reverts!(self.axt_spend_nonce_ledger, AxtSpendNonce);
         collect_reverts!(
@@ -5912,6 +5917,10 @@ impl WorldBlock<'_> {
         collect_payload!(self.axt_policies, AxtPolicy);
         collect_payload!(self.axt_handle_counters, AxtHandleCounter);
         collect_payload!(self.axt_asset_incarnations, AxtAssetIncarnation);
+        collect_payload!(
+            self.asset_definition_direct_homes,
+            AssetDefinitionDirectHome
+        );
         collect_payload!(self.axt_replay_ledger, AxtReplay);
         collect_payload!(self.axt_spend_nonce_ledger, AxtSpendNonce);
         collect_payload!(
@@ -7532,6 +7541,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             contract_address.subject_id(),
         );
         binding.lifecycle.active_code_hash = Some(code_hash);
+        binding.lifecycle.retained_code_hash = Some(code_hash);
         let subject = binding.subject.clone();
         if self.accounts.get(&subject).is_none() {
             self.accounts.insert(
@@ -13895,6 +13905,8 @@ pub struct StateTransaction<'block, 'state> {
     active_trigger_execution_depth: u16,
     /// Sole pre-apply owner of every actual nested callback trace.
     callback_journal: callback_journal::CallbackJournal,
+    /// Sole ordered owner of every native contract emission before root output publication.
+    contract_event_journal: contract_event_journal::ContractEventJournal,
     /// An undrained callback owner prevents publication of the parent State.
     block_execution_output_plan: &'block mut Option<output_capacity::ExecutionOutputPlanState>,
     /// Data-trigger firings attempted across every drain in this transaction.
@@ -37792,6 +37804,8 @@ impl<'state> StateBlock<'state> {
         let _ = ingest_event_telemetry;
         let callback_journal =
             callback_journal::CallbackJournal::new(self.callback_output_byte_limit());
+        let contract_event_journal =
+            contract_event_journal::ContractEventJournal::new(self.callback_output_byte_limit());
         let fields = self.fields.as_mut().expect("original executing State");
         let axt_current_slot =
             current_axt_slot_from_block(&fields._curr_block, fields.nexus.axt.slot_length_ms);
@@ -37915,6 +37929,7 @@ impl<'state> StateBlock<'state> {
             zk_commitments_in_tx: 0,
             active_trigger_execution_depth: 0,
             callback_journal,
+            contract_event_journal,
             block_execution_output_plan: &mut fields.execution_output_plan,
             data_trigger_firings_in_tx: 0,
             multisig_deferred_execution_stack: Vec::new(),
@@ -41760,6 +41775,7 @@ impl StateTransaction<'_, '_> {
                     | output_capacity::ExecutionOutputPlanState::Poisoned
             )
         ) || !self.callback_journal.allows_apply()
+            || !self.contract_event_journal.allows_apply()
             || !self.execution_effects_allow_apply()
             || self.world.execution_deferral.borrow().is_some()
             || self.canonical_runtime.touched_value().is_some()
@@ -41817,6 +41833,8 @@ impl StateTransaction<'_, '_> {
             Some("transaction cannot apply in the current execution-output phase")
         } else if !self.callback_journal.allows_apply() {
             Some("transaction callback journal does not authorize application")
+        } else if !self.contract_event_journal.allows_apply() {
+            Some("transaction contract emission journal does not authorize application")
         } else if !self.fastpq_source_quota.allows_apply() {
             Some("transaction FASTPQ source preparation does not authorize application")
         } else if !self.execution_effects_allow_apply() {
@@ -42788,7 +42806,9 @@ impl StateTransaction<'_, '_> {
                 .map_err(|error| {
                     ValidationFail::InternalError(format!("invalid ZK snapshot state: {error}"))
                 })?;
-            let run_result = vm.run_with_host(&mut host);
+            let run_result = vm
+                .run_with_host(&mut host)
+                .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             if let Err(error) = run_result {
                 let attempt =
@@ -43227,12 +43247,16 @@ impl StateTransaction<'_, '_> {
                         identity.contract_address
                     ))
                 })?;
+                let trigger_args = self
+                    .trigger_args_from_event(&event)
+                    .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                 let contract_call_context =
-                    crate::executor::parse_prepared_contract_invocation_execution_context(
+                    crate::executor::parse_prepared_trigger_invocation_execution_context(
                         invocation,
                         summary.prepared_contract(),
                         identity.contract_alias.clone(),
                         contract_subject,
+                        &trigger_args,
                         gas_limit,
                     )?;
                 let heap_limit = self.world.parameters.get().smart_contract().memory().get();
@@ -43259,11 +43283,14 @@ impl StateTransaction<'_, '_> {
                 let contract_runtime_context = contract_call_context.runtime_context();
                 let accounts = self.trigger_accounts_snapshot();
                 let mut host =
-                    crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
+                    crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                         authority.clone(),
                         accounts,
-                        contract_call_context.prepared_argument_record().cloned(),
+                        trigger_args,
                     );
+                host.set_entrypoint_argument_record(
+                    contract_call_context.prepared_argument_record().cloned(),
+                );
                 host.set_output_limits_from_parameters(
                     self.world.parameters.get().smart_contract(),
                 );
@@ -43298,12 +43325,18 @@ impl StateTransaction<'_, '_> {
                     })?;
                 vm.set_max_cycles(eff_cycles.get());
                 vm.set_gas_limit(gas_limit);
-                if let Some(argument_record) = contract_call_context.prepared_argument_record() {
-                    argument_record
-                        .precharge_vm(&mut vm)
-                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+                let precharge_result = contract_call_context
+                    .prepared_argument_record()
+                    .map_or(Ok(()), |record| record.precharge_vm(&mut vm));
+                if let Err(error) = &precharge_result {
+                    vm.record_boundary_fault(
+                        error,
+                        iroha_data_model::executor::fault::IvmFaultPositionV1::Initialization,
+                    );
                 }
-                let run_result = vm.run_with_host(&mut host);
+                let run_result = precharge_result
+                    .and_then(|()| vm.run_with_host(&mut host))
+                    .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
                 let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
                 let run_error = run_result.err().map(|error| {
                     crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error)
@@ -43587,14 +43620,15 @@ impl StateTransaction<'_, '_> {
                                 })?;
                             vm.set_max_cycles(eff_cycles.get());
                             vm.set_gas_limit(gas_limit);
-                            if let Some(argument_record) =
-                                contract_call_context.prepared_argument_record()
-                            {
-                                argument_record.precharge_vm(&mut vm).map_err(|error| {
-                                    ValidationFail::NotPermitted(error.to_string())
-                                })?;
+                            let precharge_result = contract_call_context
+                                .prepared_argument_record()
+                                .map_or(Ok(()), |record| record.precharge_vm(&mut vm));
+                            if let Err(error) = &precharge_result {
+                                vm.record_boundary_fault(error, iroha_data_model::executor::fault::IvmFaultPositionV1::Initialization);
                             }
-                            let run_result = vm.run_with_host(&mut host);
+                            let run_result = precharge_result
+                                .and_then(|()| vm.run_with_host(&mut host))
+                                .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
                             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
                             let run_error = run_result.err().map(|error| {
                                 crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(

@@ -489,6 +489,53 @@ fn row_transitions_are_immutable_for_one_incarnation() {
 }
 
 #[test]
+fn block_invariant_rejects_a_new_restricted_definition_without_its_home() {
+    let state = state_with(World::default());
+    let mut block = state.block(header());
+    block.world.asset_definitions.insert(
+        id(),
+        AssetDefinition::numeric(id(), "Kina", AssetBalancePolicy::DataspaceRestricted, None)
+            .build(&ALICE_ID),
+    );
+    block
+        .world
+        .axt_asset_incarnations
+        .insert(id(), incarnation(1));
+    assert!(block.validate_direct_home_rows().is_err());
+    block
+        .world
+        .asset_definition_direct_homes
+        .insert(id(), row(1, 5));
+    block.validate_direct_home_rows().unwrap();
+}
+
+#[test]
+fn tiered_direct_home_changes_retain_insertions_and_removals() {
+    let world = World::default();
+    let mut block = world.block();
+    block.asset_definition_direct_homes.insert(id(), row(1, 5));
+    for diff in [
+        block.tiered_snapshot_diff(),
+        TieredSnapshotDiff::from(&block.tiered_snapshot_payload()),
+    ] {
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AssetDefinitionDirectHome(key) if *key == id())
+        }));
+    }
+    block.commit();
+    let mut block = world.block();
+    block.asset_definition_direct_homes.remove(id());
+    for diff in [
+        block.tiered_snapshot_diff(),
+        TieredSnapshotDiff::from(&block.tiered_snapshot_payload()),
+    ] {
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AssetDefinitionDirectHome(key) if *key == id())
+        }));
+    }
+}
+
+#[test]
 fn snapshot_restore_rejects_a_row_moved_for_the_same_incarnation() {
     let mut world = world();
     world

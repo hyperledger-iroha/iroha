@@ -266,7 +266,7 @@ _REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS = frozenset({
 _REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS = frozenset({
     "crates/iroha/tests/fixtures/contract_code_readback/code_readback.to",
     "crates/ivm/docs/examples/01_hajimari.to",
-    "crates/ivm/docs/examples/02_kotoage_public_fn.to",
+    "crates/ivm/docs/examples/02_view_public_fn.to",
     "crates/ivm/docs/examples/03_kaizen_permission.to",
     "crates/ivm/docs/examples/04_foreach_map.to",
     "crates/ivm/docs/examples/05_range_for.to",

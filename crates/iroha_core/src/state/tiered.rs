@@ -1680,6 +1680,11 @@ impl TieredStateBackend {
             world.axt_asset_incarnations
         );
         collect_map!(
+            TieredSegment::AssetDefinitionDirectHomes,
+            AssetDefinitionDirectHome,
+            world.asset_definition_direct_homes
+        );
+        collect_map!(
             TieredSegment::AxtReplayLedger,
             AxtReplay,
             world.axt_replay_ledger
@@ -2481,7 +2486,7 @@ mod measured_bytes_impls {
             RecoveryGuardian, rekey::AccountAliasDomain,
         },
         asset::{
-            AssetDefinition, AssetDefinitionId, AssetId,
+            AssetDefinition, AssetDefinitionDirectHomeV1, AssetDefinitionId, AssetId,
             definition::{
                 AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
                 Mintable,
@@ -2524,10 +2529,11 @@ mod measured_bytes_impls {
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
         smart_contract::ContractAddress,
         smart_contract::manifest::{
-            AccessSetHints, ContractErrorTypeDescriptor, ContractManifest, DynamicAccessHint,
-            EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor, KotobaTranslation,
-            KotobaTranslationEntry, ManifestProvenance, StateDescriptor, TriggerCallback,
-            TriggerDescriptor,
+            AccessSetHints, ContractErrorTypeDescriptor, ContractManifest,
+            ContractPermissionDescriptorV1, ContractPermissionScopeV1, DynamicAccessHint,
+            EntryPointKind, EntrypointAuthorizationV1, EntrypointDescriptor,
+            EntrypointParamDescriptor, KotobaTranslation, KotobaTranslationEntry,
+            ManifestProvenance, StateDescriptor, TriggerCallback, TriggerDescriptor,
         },
         sorafs_uri::SorafsUri,
         trigger::{TriggerId, action::Repeats},
@@ -2617,6 +2623,7 @@ mod measured_bytes_impls {
         PrivacyRootProvenanceV1,
         PrivacyStateItemRecordV1,
         AxtAssetIncarnationV1,
+        AssetDefinitionDirectHomeV1,
         AxtHandleCounterRecord,
         AxtPolicyEntry,
         PrivateSettlementFinalizationReferenceV1,
@@ -3354,13 +3361,36 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.kind.measured_bytes_extra());
             total = total.saturating_add(self.params.measured_bytes_extra());
             total = total.saturating_add(self.return_type.measured_bytes_extra());
-            total = total.saturating_add(self.permission.measured_bytes_extra());
+            total = total.saturating_add(self.authorization.measured_bytes_extra());
             total = total.saturating_add(self.read_keys.measured_bytes_extra());
             total = total.saturating_add(self.write_keys.measured_bytes_extra());
             total = total.saturating_add(self.access_hints_complete.measured_bytes_extra());
             total = total.saturating_add(self.access_hints_skipped.measured_bytes_extra());
             total = total.saturating_add(self.triggers.measured_bytes_extra());
             total
+        }
+    }
+    impl MeasuredBytes for EntrypointAuthorizationV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Self>().saturating_add(match self {
+                Self::Permission(name) => name.measured_bytes_extra(),
+                Self::Anyone | Self::RuntimeLifecycle => 0,
+            })
+        }
+    }
+    impl MeasuredBytes for ContractPermissionScopeV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Self>().saturating_add(match self {
+                Self::Chain { permission_name } => permission_name.measured_bytes_extra(),
+                Self::Instance => 0,
+            })
+        }
+    }
+    impl MeasuredBytes for ContractPermissionDescriptorV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Self>()
+                .saturating_add(self.name.measured_bytes_extra())
+                .saturating_add(self.scope.measured_bytes_extra())
         }
     }
     impl MeasuredBytes for EntrypointParamDescriptor {
@@ -3432,6 +3462,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.compiler_fingerprint.measured_bytes_extra());
             total = total.saturating_add(self.features_bitmap.measured_bytes_extra());
             total = total.saturating_add(self.access_set_hints.measured_bytes_extra());
+            total = total.saturating_add(self.permissions.measured_bytes_extra());
             total = total.saturating_add(self.entrypoints.measured_bytes_extra());
             total = total.saturating_add(self.states.measured_bytes_extra());
             total = total.saturating_add(self.error_types.measured_bytes_extra());
@@ -3883,6 +3914,7 @@ enum TieredSegment {
     AxtPolicies,
     AxtHandleCounters,
     AxtAssetIncarnations,
+    AssetDefinitionDirectHomes,
     AxtReplayLedger,
     AxtSpendNonceLedger,
     AxtSourceTransferReplayLedger,
@@ -3960,6 +3992,7 @@ macro_rules! tiered_segment_table {
             AxtPolicies, AxtPolicy, "axt_policies", axt_policies;
             AxtHandleCounters, AxtHandleCounter, "axt_handle_counters", axt_handle_counters;
             AxtAssetIncarnations, AxtAssetIncarnation, "axt_asset_incarnations", axt_asset_incarnations;
+            AssetDefinitionDirectHomes, AssetDefinitionDirectHome, "asset_definition_direct_homes", asset_definition_direct_homes;
             AxtReplayLedger, AxtReplay, "axt_replay_ledger", axt_replay_ledger;
             AxtSpendNonceLedger, AxtSpendNonce, "axt_spend_nonce_ledger", axt_spend_nonce_ledger;
             AxtSourceTransferReplayLedger, AxtSourceTransferReplay, "axt_source_transfer_replay_ledger", axt_source_transfer_replay_ledger;
@@ -4206,6 +4239,7 @@ pub(crate) enum TieredKeyHandle {
     AxtPolicy(iroha_model_base::topology::DataSpaceId),
     AxtHandleCounter(iroha_model_base::topology::DataSpaceId),
     AxtAssetIncarnation(iroha_data_model::asset::AssetDefinitionId),
+    AssetDefinitionDirectHome(iroha_data_model::asset::AssetDefinitionId),
     AxtReplay(iroha_data_model::nexus::AxtHandleReplayKey),
     AxtSpendNonce(iroha_data_model::nexus::AxtAnchoredSpendReplayKeyV1),
     AxtSourceTransferReplay(iroha_data_model::nexus::AxtSourceTransferReplayKeyV1),
@@ -4301,6 +4335,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::AxtPolicy(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AxtHandleCounter(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AxtAssetIncarnation(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AssetDefinitionDirectHome(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
             TieredKeyHandle::AxtReplay(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AxtSpendNonce(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AxtSourceTransferReplay(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4443,6 +4480,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::AxtHandleCounter(id) => write!(f, "axt_handle_counter:{id}"),
             TieredKeyHandle::AxtAssetIncarnation(id) => {
                 write!(f, "axt_asset_incarnation:{id}")
+            }
+            TieredKeyHandle::AssetDefinitionDirectHome(id) => {
+                write!(f, "asset_definition_direct_home:{id}")
             }
             TieredKeyHandle::AxtReplay(id) => write!(
                 f,
@@ -4633,6 +4673,52 @@ include!("tiered_hot_byte_accounting.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn contract_permission_metadata_accounts_for_every_owned_name() {
+        use iroha_data_model::smart_contract::manifest::{
+            ContractPermissionDescriptorV1, ContractPermissionScopeV1, EntrypointAuthorizationV1,
+        };
+        let declaration = ContractPermissionDescriptorV1 {
+            name: "Operator".parse().unwrap(),
+            scope: ContractPermissionScopeV1::Chain {
+                permission_name: "SharedOperations".parse().unwrap(),
+            },
+        };
+        assert_eq!(
+            declaration.measured_bytes_extra(),
+            "Operator".len() + "SharedOperations".len()
+        );
+        let policy = EntrypointAuthorizationV1::Permission("Operator".parse().unwrap());
+        assert_eq!(policy.measured_bytes_extra(), "Operator".len());
+        assert_eq!(EntrypointAuthorizationV1::Anyone.measured_bytes_extra(), 0);
+        assert_eq!(
+            EntrypointAuthorizationV1::RuntimeLifecycle.measured_bytes_extra(),
+            0
+        );
+        let mut manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            seiyaku_name: None,
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            permissions: Vec::new(),
+            entrypoints: None,
+            states: None,
+            error_types: None,
+            error_messages: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let before = MeasuredBytes::measured_bytes(&manifest);
+        manifest.permissions = vec![declaration];
+        assert_eq!(
+            MeasuredBytes::measured_bytes(&manifest) - before,
+            manifest.permissions.measured_bytes_extra()
+        );
+    }
     use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -5117,6 +5203,52 @@ mod tests {
             "first-release persistence must not default or migrate missing descriptor fields"
         );
     }
+    #[test]
+    fn direct_home_row_roundtrips_through_cold_tier_disk() {
+        use iroha_data_model::asset::AssetDefinitionDirectHomeV1;
+        let temp = tempdir().expect("temporary cold storage");
+        let root = temp.path().to_path_buf();
+        let mut backend = TieredStateBackend::new(true, 0, 1, 0, Some(root.clone()), None, 0, 0);
+        let mut world = World::default();
+        let id = AssetDefinitionId::from_uuid_bytes([
+            0x31, 0x42, 0x53, 0x64, 0x75, 0x86, 0x47, 0x98, 0x80, 0x19, 0x2a, 0x3b, 0x4c, 0x5d,
+            0x6e, 0x7f,
+        ])
+        .unwrap();
+        let home = AssetDefinitionDirectHomeV1 {
+            incarnation: AxtAssetIncarnationV1::try_from_bytes(Hash::new(b"direct home").into())
+                .unwrap(),
+            dataspace_id: DataSpaceId::new((1_u64 << 53) + 7),
+        };
+        world.asset_definition_direct_homes.insert(id.clone(), home);
+        backend.record_world_snapshot(&world).unwrap();
+        let snapshot_index = backend.last_manifest().unwrap().snapshot_index;
+        drop(backend);
+        let manifest: TieredSnapshotManifest = json::from_slice(
+            &fs::read(
+                root.join(format!("{snapshot_index:020}"))
+                    .join("manifest.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let entry = manifest
+            .cold_entries
+            .iter()
+            .find(|entry| entry.segment == TieredSegment::AssetDefinitionDirectHomes)
+            .expect("direct-home authority is present in the persisted snapshot");
+        assert_eq!(entry.key_payload, norito::codec::Encode::encode(&id));
+        let reader = TieredStateBackend::new(true, 0, 1, 0, Some(root), None, 0, 0);
+        let original = reader
+            .read_cold_payload(snapshot_index, entry)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            json::from_slice::<AssetDefinitionDirectHomeV1>(&original).unwrap(),
+            home
+        );
+    }
+
     #[test]
     fn alias_binding_records_roundtrip_through_cold_tier_disk() {
         let temp = tempdir().expect("tmpdir");

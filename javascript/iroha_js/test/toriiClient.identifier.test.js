@@ -23,7 +23,7 @@ import { encryptDiagnosticIdentifierInputForPolicy } from "./helpers/diagnosticI
 import { NetworkId } from "../src/networkId.js";
 import { normalizeIdentifierInput } from "../src/normalizers.js";
 import { blake2b256 } from "../src/blake2b.js";
-import { ValidationError } from "../src/validationError.js";
+import { ValidationError, ValidationErrorCode } from "../src/validationError.js";
 
 const ACCOUNT_ID = AccountAddress.fromAccount({ publicKey: ed25519.getPublicKey(Buffer.alloc(32, 0x5a)) }).toI105();
 const APPLICATION_SIGNING_CONTEXT = new LocalSigningContext(NetworkId.fromBytes(Buffer.alloc(32, 0xa5)), 753);
@@ -1877,7 +1877,11 @@ test("issueIdentifierClaimReceipt rejects account aliases before dispatch", asyn
       outputOpening,
       canonicalAuth: APPLICATION_AUTH,
     }),
-    /canonical I105/u,
+    {
+      name: "ValidationError",
+      code: ValidationErrorCode.INVALID_ACCOUNT_ID,
+      path: "issueIdentifierClaimReceipt.accountId",
+    },
   );
   assert.equal(dispatched, false);
 });

@@ -93,6 +93,29 @@ not establish publication or service readiness.
 
 ## Local compilation
 
+`Musubi.toml` and `Musubi.lock` are the sole persisted project contract. `koto` compiles
+standalone sources with an optional `--source-root`; package resolution, project tests and
+project editor sessions use Musubi. Local builds use the `dev` output profile in both tools;
+`--profile NAME` selects an output directory. Deployment and invocation builds explicitly
+select `production`. Profiles name output/cache locations; compiler policy stays explicit.
+
+A compiled contract import such as `import seiyaku "./interfaces/pool.to" as Pool;`
+reads the complete admitted artifact from the importing source's package. Source collection and
+packaging follow this declaration, include the exact binary bytes in the package commitment,
+and preserve separate inventories for locked dependencies. Builds and editor reloads reject
+missing artifacts, paths outside the source owner, and invalid embedded interfaces; a loose JSON
+manifest does not substitute for the `.to` artifact.
+
+`musubi lsp --manifest-path Musubi.toml` serves selected contract and library targets through the
+same authenticated source graphs used by builds. Library-only projects retain their package
+identity, declared exports and locked dependency bindings. Unsaved local source and TOML buffers retain
+exact source identities and export token spans. Shared modules require a unique target or
+`--contract NAME` for semantic requests; diagnostics include all targets. Reloads validate the
+existing lock without silently changing dependencies. Save dependency changes and run
+`musubi check` before reloading the editor. Test lenses invoke `musubi test` with the exact
+manifest, package, contract, test filter and lock context; `musubi test --contract NAME
+--filter TEST --exact` also runs that selection directly.
+
 `musubi check`, `musubi build` and `musubi test` compile for the data-model default
 account-address profile (SORA, `0x02F1` = 753) unless a network binding or
 `--chain-discriminant` selects another one; `koto` uses the same default, so address
@@ -124,6 +147,33 @@ that already hold network bindings, deployment or call journals, or publication 
 because that state is scoped to the old root. A member's earlier `Musubi.lock` is no
 longer read once the workspace exists, and the command lists each one to delete.
 
+## SDK bindings
+
+`musubi bindgen contract.to --language typescript|swift|kotlin --out PATH` generates SDK
+request models and checked result decoders from the complete admitted artifact. It does not
+read a loose manifest or resolve a project. `--name SEED` selects the generated namespace
+seed; the default is the artifact filename stem. Output replaces one file atomically in an
+existing directory and cannot replace the input artifact.
+
+Generated entrypoint builders return distinct `ViewRequest`, `KotoageRequest`,
+`HajimariRequest` or `KaizenRequest` types, each carrying the exact code hash, signed ordinal,
+selector and schemas. The application checks that code hash against the target's current
+binding and chooses the corresponding view, call, activation or upgrade workflow. The
+generator does not sign transactions or choose fees. Its payloads integrate with the SDK's
+existing contract request API; its `decodeResult` validates the returned value before
+constructing typed products, enums and sums. Lossless `KotodamaInt`, `KotodamaDecimal` and
+`KotodamaQuantity` reuse the existing SDK numeric codecs. TypeScript follows the JavaScript
+SDK's safe-integer JSON limit for `DataSpaceId`; Swift and Kotlin preserve the full unsigned
+64-bit dataspace domain.
+
+Nominal identities remain distinct across package owners. Generated identifier escaping is
+injective and signed ordinals keep entrypoint names collision-free. The unmodified wire
+names and full nominal identities appear in the generated metadata and comments.
+
+Focused validation: `cargo test -p musubi --lib bindgen`. Setting the developer-only test
+variable `MUSUBI_BINDGEN_CAPTURE_DIR` retains the compiler-produced sample bindings for
+compilation against the corresponding installed SDKs; it does not change production behavior.
+
 ## Command output and exit codes
 
 `--format human` (default) writes success to stdout and failures to stderr. `--format json`
@@ -132,9 +182,9 @@ Kotodama diagnostic records (codes, spans, labels, notes, help and fixes) under
 `error.diagnostics`. `--format sarif` (`check`, `build` and `test` only) writes one SARIF
 2.1.0 document with the same diagnostics. Sources of local workspace packages are named by
 their path from the workspace root (for example `feemath/src/lib.ko`); registry package
-sources keep their package identity. A test source that fails to compile is reported with
-the compiler's rendering under `error.details.compiler_output`. The exit status does not
-depend on the format:
+sources keep their package identity. Test-source parse and compilation failures use the
+same structured records, including machine-applicable fixes. The exit status does not depend
+on the format:
 
 | Status | Codes |
 | --- | --- |
@@ -166,10 +216,43 @@ deployment and `unverified` when it returns an earlier completed deployment whos
 already have run. `call`, `view` and `deploy --activate` all take named arguments with `--args
 JSON` or `--args-file PATH`.
 
+Every `kotoage` and `view` states `authorize(anyone)` or a declared permission,
+before any `-> ReturnType`. `permission Increment;` declares an instance role;
+its native grant is `CanUseContractPermission` with the exact `contract` address
+and `permission: "Increment"`. `import permission "SharedOperators" as Operator;`
+explicitly imports a chain permission and `authorize(Operator)` requires its exact
+null-payload token. A declaration name that is not in the signed table is rejected.
+
+The scaffold's complete flow is to deploy, grant its `Increment` role, activate
+`hajimari`, then call `increment`. Use the live instance owner or an exact role holder
+to submit the following permission JSON to
+`iroha account permission grant --id <CALLER>` (replace `<CONTRACT_ADDRESS>` with
+the deployment receipt's address):
+
+```json
+{"name":"CanUseContractPermission","payload":{"contract":"<CONTRACT_ADDRESS>","permission":"Increment"}}
+```
+
+Run the activation command printed by `musubi deploy`, then
+`musubi call --entrypoint increment --args '{"step":"1"}'` with the configured fee
+authorization. `musubi deploy --activate` combines deployment and activation; the
+role grant may follow activation when the hook does not require that role. Missing
+instance or imported permissions stop a call with the exact token to grant. Only
+the exact lifecycle token can be granted automatically by the call workflow.
+
+Ingress authorization checks the caller. Ledger effects execute as the contract
+subject and need that subject's separate effect permissions. A contract method
+using `ledger::seiyaku::grant_permission` must itself already hold the exact role it
+delegates; a caller's role does not transfer to the contract subject. The instance
+owner can root-grant that role to the subject. Fixtures model these independently
+with `grant_seiyaku_permission(actor, "Increment")`,
+`grant_seiyaku_lifecycle_permission(actor, "hajimari")`, and
+`grant_seiyaku_permission(seiyaku_subject, "Increment")`.
+
 `musubi call` simulates the call on current state before signing. A rejected simulation
 stops the call; otherwise the signature-bound gas limit is the simulated gas plus half
 again and a fixed margin, unless `--gas-limit` chooses one. A call that first grants its
-own entrypoint permission cannot be simulated beforehand and uses 1,500,000 gas unless
+own lifecycle permission cannot be simulated beforehand and uses 1,500,000 gas unless
 `--gas-limit` is given. Every Applied stage in deployment and call receipts records the
 gas used and fee settled by its committed fee receipt when the node reports it; that
 charge is reporting evidence and never gates finality or recovery.

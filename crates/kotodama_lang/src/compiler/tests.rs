@@ -114,7 +114,7 @@ fn assert_internal_source_names_rejected(names: &[&str]) {
         calls.push_str("();\n");
     }
     let source = format!(
-        "seiyaku CompilerFixture {{\n  view fn probe() -> int {{\n{calls}    return 0;\n  }}\n}}"
+        "seiyaku CompilerFixture {{\n  view fn probe() authorize(anyone) -> int {{\n{calls}    return 0;\n  }}\n}}"
     );
     let error = test_mode_compiler()
         .compile_source(&source)
@@ -327,11 +327,41 @@ fn dynamic_state_fallback_preserves_registry_read_write_class() {
         ]
     );
 }
+fn canonical_state_key(
+    base: &str,
+    kind: ivm_abi::state_value::StateValueKindV1,
+    atom: ivm_abi::state_value::StateValueAtomV1,
+) -> String {
+    use ivm_abi::state_value::{
+        StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1, state_value_schema_hash_v1,
+    };
+    let schema = StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(kind)],
+    };
+    let record = StateValueRecordV1 {
+        schema_hash: state_value_schema_hash_v1(
+            &ivm_abi::codec::encode_canonical_norito(&schema).unwrap(),
+        ),
+        atoms: vec![atom],
+    };
+    format!(
+        "state:{base}/{}",
+        hex::encode(ivm_abi::codec::encode_canonical_norito(&record).unwrap())
+    )
+}
 fn canonical_numeric_state_key(base: &str, kind: ir::DataRefKind, value: &str) -> String {
     let encoded = super::encode_pointer_tlv_bytes(kind, value, false)
         .expect("encode canonical pointer-backed numeric state key");
-    format!("state:{base}/{}", hex::encode(encoded))
+    use ivm_abi::state_value::{StateValueAtomV1 as A, StateValueKindV1 as K};
+    let kind = match kind {
+        ir::DataRefKind::Int => K::Int,
+        ir::DataRefKind::Decimal => K::Decimal,
+        ir::DataRefKind::Quantity => K::Quantity,
+        _ => panic!("numeric key"),
+    };
+    canonical_state_key(base, kind, A::Pointer(encoded))
 }
+
 fn sample_account_id() -> iroha_data_model::account::AccountId {
     iroha_data_model::account::AccountId::new(
         "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
@@ -346,9 +376,6 @@ fn kotodama_escrow_hex(name: &str) -> String {
     let name: iroha_model_base::name::Name = name.parse().expect("valid escrow name");
     let id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&name);
     hex::encode(id.as_hash().as_ref())
-}
-fn kotodama_bytes_literal(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("\\x{byte:02x}")).collect()
 }
 fn sample_account_id_alt() -> iroha_data_model::account::AccountId {
     iroha_data_model::account::AccountId::new(
@@ -607,8 +634,8 @@ fn codegen_rejects_noncanonical_or_invalid_literal_axt_touch_manifests() {
     }
 }
 #[test]
-fn shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints() {
-    use ivm_abi::host_payload::{RootsGetRequest, VoteGetTallyRequest, VrfEpochSeedRequest};
+fn shared_host_requests_drive_canonical_roots_and_tally_access_hints() {
+    use ivm_abi::host_payload::{RootsGetRequest, VoteGetTallyRequest};
     let asset: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         .parse()
         .expect("canonical asset definition");
@@ -618,10 +645,6 @@ fn shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints() {
     };
     let tally = VoteGetTallyRequest {
         election_id: "election".to_owned(),
-    };
-    let vrf = VrfEpochSeedRequest {
-        epoch: 42,
-        fallback_to_latest: true,
     };
     let mut roots_access = AccessSets::default();
     assert_eq!(
@@ -643,25 +666,10 @@ fn shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints() {
         IndexSet::from(["zk:election:election:tally".to_owned()])
     );
     assert!(tally_access.writes.is_empty());
-    let mut vrf_access = AccessSets::default();
-    assert_eq!(
-        super::record_vrf_epoch_seed_access(&canonical_norito_hex(&vrf), &mut vrf_access),
-        Some(())
-    );
-    assert_eq!(
-        vrf_access.reads,
-        IndexSet::from([
-            "vrf:epoch_seed:42".to_owned(),
-            "vrf:epoch_seed:latest".to_owned(),
-        ])
-    );
-    assert!(vrf_access.writes.is_empty());
     let alternate_roots = alternate_norito_hex(&roots);
     let alternate_tally = alternate_norito_hex(&tally);
-    let alternate_vrf = alternate_norito_hex(&vrf);
     assert_ne!(alternate_roots, canonical_norito_hex(&roots));
     assert_ne!(alternate_tally, canonical_norito_hex(&tally));
-    assert_ne!(alternate_vrf, canonical_norito_hex(&vrf));
     for (raw, decode) in [
         (
             alternate_roots,
@@ -676,35 +684,11 @@ fn shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints() {
             canonical_norito_hex(&roots),
             super::record_zk_vote_get_tally_access,
         ),
-        (alternate_vrf, super::record_vrf_epoch_seed_access),
-        (
-            canonical_norito_hex(&tally),
-            super::record_vrf_epoch_seed_access,
-        ),
     ] {
         let mut access = AccessSets::default();
         assert_eq!(decode(&raw, &mut access), None);
         assert!(access.reads.is_empty() && access.writes.is_empty());
     }
-    let mut malformed_bool =
-        ivm_abi::codec::encode_canonical_norito(&vrf).expect("encode canonical VRF request");
-    assert_eq!(
-        malformed_bool.last(),
-        Some(&1),
-        "the fixture's final bare field is the true boolean"
-    );
-    *malformed_bool
-        .last_mut()
-        .expect("canonical VRF request has a bool field") = 2;
-    let mut access = AccessSets::default();
-    assert_eq!(
-        super::record_vrf_epoch_seed_access(
-            &format!("0x{}", hex::encode(malformed_bool)),
-            &mut access,
-        ),
-        None
-    );
-    assert!(access.reads.is_empty() && access.writes.is_empty());
 }
 #[test]
 fn default_max_cycles_matches_pipeline_bound() {
@@ -721,18 +705,21 @@ fn expression_and_named_call_sugar_emit_identical_executable_bytecode() {
         let metadata = ProgramMetadata::parse(&artifact).expect("parse V1 artifact");
         artifact[metadata.code_offset..].to_vec()
     }
-    let tail = executable_code("seiyaku Equivalence { view fn main(int value) -> int { value } }");
-    let explicit =
-        executable_code("seiyaku Equivalence { view fn main(int value) -> int { return value; } }");
+    let tail = executable_code(
+        "seiyaku Equivalence { view fn main(int value) authorize(anyone) -> int { value } }",
+    );
+    let explicit = executable_code(
+        "seiyaku Equivalence { view fn main(int value) authorize(anyone) -> int { return value; } }",
+    );
     assert_eq!(
         tail, explicit,
         "function tail expressions must add no emitted instructions"
     );
     let positional = executable_code(
-        "seiyaku Equivalence { fn choose(int _ count, bool _ enabled) -> int { if enabled { count } else { 0 } } view fn main() -> int { choose(7, true) } }",
+        "seiyaku Equivalence { fn choose(int _ count, bool _ enabled) -> int { if enabled { count } else { 0 } } view fn main() authorize(anyone) -> int { choose(7, true) } }",
     );
     let named = executable_code(
-        "seiyaku Equivalence { fn choose(int count, bool enabled) -> int { if enabled { count } else { 0 } } view fn main() -> int { choose(count: 7, enabled: true) } }",
+        "seiyaku Equivalence { fn choose(int count, bool enabled) -> int { if enabled { count } else { 0 } } view fn main() authorize(anyone) -> int { choose(count: 7, enabled: true) } }",
     );
     assert_eq!(
         named, positional,
@@ -741,7 +728,8 @@ fn expression_and_named_call_sugar_emit_identical_executable_bytecode() {
 }
 #[test]
 fn source_metadata_changes_sidecars_but_not_lowered_ir_or_artifact_bytes() {
-    let source_text = "seiyaku MetadataFree { view fn answer(int value) -> int { value + 1 } }";
+    let source_text =
+        "seiyaku MetadataFree { view fn answer(int value) authorize(anyone) -> int { value + 1 } }";
     let source = crate::source::SourceFile::new(
         crate::source::SourceId(73),
         "contracts/metadata_free.ko",
@@ -1267,6 +1255,58 @@ fn sum_type_join_fallbacks_do_not_become_false_constant_facts() {
     );
 }
 #[test]
+fn computation_samples_publish_only_public_views() {
+    use iroha_data_model::smart_contract::manifest::{EntryPointKind, EntrypointAuthorizationV1};
+    let sources = [
+        (
+            "tuple_return_demo.ko",
+            include_str!("../samples/tuple_return_demo.ko"),
+        ),
+        (
+            "02_view_public_fn.ko",
+            include_str!("../../../ivm/docs/examples/02_view_public_fn.ko"),
+        ),
+        (
+            "04_foreach_map.ko",
+            include_str!("../../../ivm/docs/examples/04_foreach_map.ko"),
+        ),
+        (
+            "05_range_for.ko",
+            include_str!("../../../ivm/docs/examples/05_range_for.ko"),
+        ),
+        (
+            "14_map_sum_take2.ko",
+            include_str!("../../../ivm/docs/examples/14_map_sum_take2.ko"),
+        ),
+        (
+            "15_modulo.ko",
+            include_str!("../../../ivm/docs/examples/15_modulo.ko"),
+        ),
+        (
+            "18_ternary.ko",
+            include_str!("../../../ivm/docs/examples/18_ternary.ko"),
+        ),
+    ];
+    for (name, source) in sources {
+        let (_, manifest) = Compiler::new()
+            .compile_source_with_manifest(source)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(manifest.permissions.is_empty(), "{name}: no mutation roles");
+        let entrypoints = manifest
+            .entrypoints
+            .as_ref()
+            .expect("public view descriptors");
+        assert_eq!(entrypoints.len(), 1, "{name}");
+        let entrypoint = &entrypoints[0];
+        assert_eq!(entrypoint.kind, EntryPointKind::View, "{name}");
+        assert_eq!(
+            entrypoint.authorization,
+            EntrypointAuthorizationV1::Anyone,
+            "{name}"
+        );
+    }
+}
+#[test]
 fn mint_trigger_takes_amount_from_one_typed_argument_record() {
     let source = include_str!("../samples/mint_rose_trigger.ko");
     let output = test_mode_compiler()
@@ -1341,9 +1381,9 @@ fn direct_call(callee: &str) -> ir::Instr {
 fn bool_state_map_keys_do_not_emit_public_int_codec_syscalls() {
     let artifact = Compiler::new()
         .compile_source(
-            r#"seiyaku Test {
+            r#"seiyaku Test { permission Entry;
   state StateMap<bool, int> Foo;
-  kotoage fn main() authorize("Entry") {
+  kotoage fn main() authorize(Entry) {
     Foo[true] = 2;
     let _x = Foo.get(true);
   }
@@ -1421,6 +1461,7 @@ fn unresolved_and_indirect_calls_are_conservative() {
                     actor: Some(ir::Temp(1)),
                     entrypoint: ir::Temp(2),
                     payload: ir::Temp(3),
+                    argument_words: 0,
                 }],
             ),
         ],
@@ -1512,12 +1553,12 @@ fn unknown_state_path_call_before_literal_keeps_helper_hints_conservative() {
 #[test]
 fn unknown_ledger_argument_before_literal_keeps_helper_hints_conservative() {
     let source = r#"
-seiyaku CompilerFixture {
+seiyaku CompilerFixture { permission FixtureAccess;
   fn remove_role(Name _ role) {
     ledger::role::unregister(role: role);
   }
 
-  kotoage fn main(Name dynamic_role) authorize("CompilerFixture") {
+  kotoage fn main(Name dynamic_role) authorize(FixtureAccess) {
     remove_role(dynamic_role);
     remove_role(Name::parse("auditor"));
   }
@@ -1550,12 +1591,12 @@ seiyaku CompilerFixture {
 #[test]
 fn dynamic_account_before_authority_keeps_helper_hints_conservative() {
     let source = r#"
-seiyaku CompilerFixture {
+seiyaku CompilerFixture { permission FixtureAccess;
   fn remove_account(AccountId _ account) {
     ledger::account::unregister(account: account);
   }
 
-  kotoage fn main(AccountId dynamic_account) authorize("CompilerFixture") {
+  kotoage fn main(AccountId dynamic_account) authorize(FixtureAccess) {
     remove_account(dynamic_account);
     remove_account(context::authority());
   }
@@ -1927,9 +1968,9 @@ fn native_escrow_builtins_report_literal_access_hints() {
     let asset_def = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let src = format!(
         r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission EscrowAdmin;
 
-kotoage fn main() authorize("EscrowAdmin") {{
+kotoage fn main() authorize(EscrowAdmin) {{
   let evidence = b"00";
   ledger::escrow::open_offer(
     offer: Name::parse("aitai_offer"),
@@ -2043,9 +2084,9 @@ fn static_account_multisig_admin_builtins_emit_exact_account_hints() {
     let account = sample_account_literal();
     let src = format!(
         r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission FixtureAccess;
 
-kotoage fn main() authorize("CompilerFixture") {{
+kotoage fn main() authorize(FixtureAccess) {{
   let account = AccountId::parse("{account}");
   let signatory = Json::parse("\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\"");
   ledger::account::add_signatory(account: account, signatory: signatory);
@@ -2114,7 +2155,7 @@ fn dynamic_account_quorum_emits_checked_conversion_and_scoped_account_hints() {
         "expected SET_ACCOUNT_QUORUM syscall in compiled code"
     );
     let int_to_u64 =
-        encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_INT_TRY_TO_U64).to_le_bytes();
+        encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_INT_TO_U64).to_le_bytes();
     assert!(
         code.windows(int_to_u64.len())
             .any(|window| window == int_to_u64),
@@ -2173,7 +2214,7 @@ fn account_balance_query_builtin_emits_balance_syscall_and_exact_reads() {
         r#"
 seiyaku CompilerFixture {{
 
-view fn read() -> quantity {{
+view fn read() authorize(anyone) -> quantity {{
   let account = AccountId::parse("{account}");
   let asset = AssetDefinitionId::parse("{asset_definition}");
   return ledger::asset::balance(account: account, asset_definition: asset);
@@ -2232,9 +2273,9 @@ fn set_account_detail_builtin_emits_syscall_and_exact_access() {
     let account = sample_account_literal();
     let src = format!(
         r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission FixtureAccess;
 
-kotoage fn main() authorize("CompilerFixture") {{
+kotoage fn main() authorize(FixtureAccess) {{
   ledger::account::set_metadata(
     account: AccountId::parse("{account}"),
     key: Name::parse("status"),
@@ -2332,9 +2373,9 @@ fn native_asset_operation_builtins_emit_syscalls_and_exact_access() {
     );
     let src = format!(
         r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission FixtureAccess;
 
-kotoage fn main() authorize("CompilerFixture") {{
+kotoage fn main() authorize(FixtureAccess) {{
   ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: AccountId::parse("{to_literal}"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 1, dataspace: DataSpaceId::parse("0"));
   ledger::asset::mint(account: AccountId::parse("{to_literal}"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 2);
   ledger::asset::burn(account: AccountId::parse("{from_literal}"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: 1);
@@ -2461,9 +2502,9 @@ fn nft_asset_operation_builtins_emit_syscalls_and_exact_access() {
     let nft_alt = "n1$wonderland.universal";
     let src = format!(
         r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission FixtureAccess;
 
-kotoage fn main() authorize("CompilerFixture") {{
+kotoage fn main() authorize(FixtureAccess) {{
   ledger::nft::mint(nft: NftId::parse("{nft}"), owner: AccountId::parse("{owner_literal}"));
   ledger::nft::set_metadata(nft: NftId::parse("{nft}"), key: Name::parse("issued"), value: Json::parse("{{\"meta\":1}}"));
   ledger::nft::transfer(source: AccountId::parse("{owner_literal}"), nft: NftId::parse("{nft}"), destination: AccountId::parse("{recipient_literal}"));
@@ -2581,9 +2622,9 @@ fn lifecycle_builtins_emit_syscalls_and_exact_access() {
         iroha_data_model::asset::id::AssetId::of(asset_definition.clone(), owner.clone());
     let src = format!(
         r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission FixtureAccess;
 
-kotoage fn main() authorize("CompilerFixture") {{
+kotoage fn main() authorize(FixtureAccess) {{
   let domain_id = DomainId::parse("{domain}");
   let owner = AccountId::parse("{owner_literal}");
   let recipient = AccountId::parse("{recipient_literal}");
@@ -2770,9 +2811,9 @@ fn role_permission_management_builtins_emit_syscalls_and_exact_access() {
     let account_literal = account.to_string();
     let src = format!(
         r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission FixtureAccess;
 
-kotoage fn main() authorize("CompilerFixture") {{
+kotoage fn main() authorize(FixtureAccess) {{
   let account = AccountId::parse("{account_literal}");
   let role = Name::parse("auditor");
   let perm = Name::parse("read_blocks");
@@ -3000,12 +3041,12 @@ fn debug_info_emits_full_width_pointer_codec_and_complete_access() {
 #[test]
 fn debug_info_preserves_wide_int_without_retired_syscalls() {
     let source = r#"
-seiyaku WideInfo {
-  kotoage fn inspect(int value) -> int authorize("WideInfo") {
+seiyaku WideInfo { permission FixtureAccess;
+  kotoage fn inspect(int value) authorize(FixtureAccess) -> int {
     debug::info(value);
     return value;
   }
-  kotoage fn boundary() -> int authorize("WideInfo") {
+  kotoage fn boundary() authorize(FixtureAccess) -> int {
     let value = 1267650600228229401496703205376;
     debug::info(value);
     return value;
@@ -3045,7 +3086,7 @@ fn debug_surface_rejects_raw_variants_and_invalid_info_arguments() {
         "debug::info(Name::parse(\"not-a-message\"))",
     ] {
         let source = format!(
-            "seiyaku CompilerFixture {{ kotoage fn run() authorize(\"DebugContract\") {{ {call}; }} }}"
+            "seiyaku CompilerFixture {{ permission DebugContract;  kotoage fn run() authorize(DebugContract) {{ {call}; }} }}"
         );
         let err = Compiler::new()
             .compile_source(&source)
@@ -3203,7 +3244,7 @@ fn compiler_internal_seiyaku_lifecycle_operations_are_not_source_apis() {
         "contract::activate_instance",
     ] {
         let source = format!(
-            "seiyaku CompilerFixture {{ view fn probe() -> int {{ {name}(); return 0; }} }}"
+            "seiyaku CompilerFixture {{ view fn probe() authorize(anyone) -> int {{ {name}(); return 0; }} }}"
         );
         let error = test_mode_compiler()
             .compile_source(&source)
@@ -3218,183 +3259,21 @@ fn compiler_internal_seiyaku_lifecycle_operations_are_not_source_apis() {
     }
 }
 #[test]
-fn fastpq_batch_apply_builtin_emits_batch_apply_syscall_and_exact_access() {
-    let from = sample_account_id();
-    let to = sample_account_id_alt();
-    let asset_definition: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
-        .parse()
-        .expect("asset definition");
-    let batch = iroha_data_model::isi::transfer::TransferAssetBatch::new(vec![
-        iroha_data_model::isi::transfer::TransferAssetBatchEntry::new(
-            from.clone(),
-            to.clone(),
-            asset_definition.clone(),
-            7_u64,
-        ),
-        iroha_data_model::isi::transfer::TransferAssetBatchEntry::new(
-            to.clone(),
-            from.clone(),
-            asset_definition.clone(),
-            3_u64,
-        ),
-    ]);
-    let batch_payload = norito::to_bytes(&batch).expect("batch request");
-    let batch_literal = kotodama_bytes_literal(&batch_payload);
-    let src = format!(
-        r#"
-seiyaku CompilerFixture {{
-
-kotoage fn apply_batch() authorize("Admin") {{
-  let batch = b"{batch_literal}";
-  ledger::asset::batch::apply(batch: batch);
-}}
-
-}}
-"#
-    );
-    let compiler = test_mode_compiler();
-    let (bytes, manifest) = compiler
-        .compile_source_with_manifest(&src)
-        .expect("compile transfer_v1_batch_apply builtin");
-    let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let code = &bytes[parsed.code_offset..];
-    for (syscall, label) in [
-        (
-            ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
-            "INPUT_PUBLISH_TLV",
-        ),
-        (
-            ivm_abi::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY,
-            "TRANSFER_V1_BATCH_APPLY",
-        ),
+fn raw_transfer_batch_boundaries_are_not_source_apis() {
+    for source in [
+        include_str!("fixtures/v1/c064.ko"),
+        include_str!("fixtures/v1/c065.ko"),
+        include_str!("fixtures/v1/c066.ko"),
+        include_str!("fixtures/v1/c067.ko"),
+        include_str!("fixtures/v1/c068.ko"),
+        include_str!("fixtures/v1/c069.ko"),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("FASTPQ batch apply syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let error = Compiler::new()
+            .compile_source(source)
+            .expect_err("only typed transfer_batch is a source API");
         assert!(
-            code.windows(needle.len()).any(|window| window == needle),
-            "expected {label} syscall in compiled code"
-        );
-    }
-    let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
-    let apply_batch = entrypoints
-        .iter()
-        .find(|entry| entry.name == "apply_batch")
-        .expect("apply_batch entrypoint");
-    assert_eq!(apply_batch.access_hints_complete, Some(true));
-    assert!(apply_batch.access_hints_skipped.is_empty());
-    assert_no_global_access_key(&apply_batch.read_keys);
-    assert_no_global_access_key(&apply_batch.write_keys);
-    for account in [&from, &to] {
-        let key = super::key_asset(&iroha_data_model::asset::AssetId::of(
-            asset_definition.clone(),
-            account.clone(),
-        ));
-        assert!(
-            apply_batch.read_keys.iter().any(|actual| actual == &key),
-            "missing transfer batch read key {key}; got {:?}",
-            apply_batch.read_keys
-        );
-        assert!(
-            apply_batch.write_keys.iter().any(|actual| actual == &key),
-            "missing transfer batch write key {key}; got {:?}",
-            apply_batch.write_keys
-        );
-    }
-}
-#[test]
-fn fastpq_batch_apply_builtin_rejects_invalid_arguments() {
-    let parsed = parse(include_str!("fixtures/v1/c064.ko")).expect("parse source");
-    let err = analyze(&parsed).expect_err("semantic analysis should reject batch payload type");
-    assert!(
-        err.message
-            .contains("ledger::asset::batch::apply expects (bytes) Norito TransferAssetBatch"),
-        "unexpected semantic error: {}",
-        err.message
-    );
-}
-#[test]
-fn fastpq_batch_boundary_builtins_emit_boundary_syscalls_and_complete_access() {
-    let src = include_str!("fixtures/v1/c065.ko");
-    let compiler = test_mode_compiler();
-    let (bytes, manifest) = compiler
-        .compile_source_with_manifest(src)
-        .expect("compile transfer V1 batch boundary builtins");
-    let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let code = &bytes[parsed.code_offset..];
-    for (syscall, label) in [
-        (
-            ivm_abi::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN,
-            "TRANSFER_V1_BATCH_BEGIN",
-        ),
-        (
-            ivm_abi::syscalls::SYSCALL_TRANSFER_V1_BATCH_END,
-            "TRANSFER_V1_BATCH_END",
-        ),
-    ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("FASTPQ batch boundary syscall id fits in u8"),
-        )
-        .to_le_bytes();
-        let count = code
-            .windows(needle.len())
-            .filter(|window| *window == needle)
-            .count();
-        assert!(
-            count == 2,
-            "expected direct and call-sugar {label} syscalls in compiled code, got {count}"
-        );
-    }
-    let publish_tlv = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-    )
-    .to_le_bytes();
-    assert!(
-        !code
-            .windows(publish_tlv.len())
-            .any(|window| window == publish_tlv),
-        "batch boundary helpers must not publish input TLVs"
-    );
-    let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
-    let batch = entrypoints
-        .iter()
-        .find(|entry| entry.name == "batch")
-        .expect("batch entrypoint");
-    assert_ne!(batch.access_hints_complete, Some(false));
-    assert!(batch.access_hints_skipped.is_empty());
-    assert_no_ledger_reads(&batch.read_keys);
-    assert!(batch.write_keys.is_empty());
-}
-#[test]
-fn fastpq_batch_boundary_builtins_reject_invalid_arguments() {
-    for (src, expected) in [
-        (
-            include_str!("fixtures/v1/c066.ko"),
-            "call `ledger::asset::batch::begin` expects at most 0 arguments",
-        ),
-        (
-            include_str!("fixtures/v1/c067.ko"),
-            "call `ledger::asset::batch::end` expects at most 0 arguments",
-        ),
-        (
-            include_str!("fixtures/v1/c068.ko"),
-            "call `ledger::asset::batch::begin` expects at most 0 arguments",
-        ),
-        (
-            include_str!("fixtures/v1/c069.ko"),
-            "call `ledger::asset::batch::end` expects at most 0 arguments",
-        ),
-    ] {
-        let parsed = parse(src).expect("parse source");
-        let err = analyze(&parsed).expect_err("semantic analysis should reject boundary args");
-        assert!(
-            err.message.contains(expected),
-            "expected `{expected}`, got `{}`",
-            err.message
+            error.contains("E_UNKNOWN_BUILTIN") || error.contains("K2002"),
+            "{error}"
         );
     }
 }
@@ -3424,8 +3303,8 @@ fn transfer_batch_builtin_lowers_entries_between_boundaries() {
     assert_eq!(transfers, 1, "one bounded loop visits each active entry");
     assert_eq!(ends, 1, "one nonempty batch closes one atomic scope");
     for source in [
-        "seiyaku EmptyBatch { kotoage fn main() authorize(\"Writer\") { ledger::asset::transfer_batch(transfers: []); } }",
-        "seiyaku SavedBatch { kotoage fn main() authorize(\"Writer\") { let List<(AccountId, AccountId, AssetDefinitionId, quantity), 8> transfers = []; ledger::asset::transfer_batch(transfers: transfers); } }",
+        "seiyaku EmptyBatch { permission Writer;  kotoage fn main() authorize(Writer) { ledger::asset::transfer_batch(transfers: []); } }",
+        "seiyaku SavedBatch { permission Writer;  kotoage fn main() authorize(Writer) { let List<(AccountId, AccountId, AssetDefinitionId, quantity), 8> transfers = []; ledger::asset::transfer_batch(transfers: transfers); } }",
     ] {
         Compiler::new()
             .compile_source(source)
@@ -3493,8 +3372,8 @@ fn signed_axt_spend_source_emits_the_typed_v1_staging_syscall() {
     let descriptor_hex = canonical_norito_hex(&descriptor);
     let spend_hex = canonical_norito_hex(&spend);
     let source = format!(
-        r#"seiyaku SignedAxt {{
-                kotoage fn main() authorize("UseAxt") {{
+        r#"seiyaku SignedAxt {{ permission UseAxt;
+                kotoage fn main() authorize(UseAxt) {{
                     let descriptor = AxtDescriptor::parse("{descriptor_hex}");
                     let spend = AxtAnchoredSpendV1::parse("{spend_hex}");
                     axt::begin(descriptor: descriptor);
@@ -3523,7 +3402,7 @@ fn signed_axt_spend_source_emits_the_typed_v1_staging_syscall() {
 fn opaque_pointer_abi_types_are_not_source_types() {
     for type_name in ["Domain", "Blob", "NoritoBytes", "Opaque"] {
         let source = format!(
-            "seiyaku CompilerFixture {{ view fn inspect({type_name} value) -> int {{ return 0; }} }}"
+            "seiyaku CompilerFixture {{ view fn inspect({type_name} value) authorize(anyone) -> int {{ return 0; }} }}"
         );
         let error = test_mode_compiler()
             .compile_source(&source)
@@ -3897,9 +3776,9 @@ fn inline_submit_ballot_requires_a_canonical_governance_selector() {
     let source = |selector: &str| {
         format!(
             r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission FixtureAccess;
 
-kotoage fn main() authorize("CompilerFixture") {{
+kotoage fn main() authorize(FixtureAccess) {{
   let _ballot = ledger::governance::build_submit_ballot(
     election_id: "{selector}",
     ciphertext: b"00",
@@ -3999,7 +3878,7 @@ fn noncanonical_inline_submit_ballot_cannot_seed_access_hints() {
 #[test]
 fn literal_instruction_bridge_keeps_transitive_access_hints_conservative() {
     let source = r#"
-seiyaku BallotAccess {
+seiyaku BallotAccess { permission Invoke;
     fn submit() {
         let instruction = ledger::governance::build_submit_ballot(
             election_id: "election",
@@ -4011,7 +3890,7 @@ seiyaku BallotAccess {
         );
         ledger::governance::submit_ballot(value: instruction);
     }
-    kotoage fn run() authorize("CanInvokeContractEntrypoint") {
+    kotoage fn run() authorize(Invoke) {
         submit();
     }
 }
@@ -4151,8 +4030,8 @@ fn raw_contract_calls_are_not_a_source_api() {
         r#"call_contract(target, "settle", payload)"#,
     ] {
         let src = format!(
-            r#"seiyaku Relay {{
-  kotoage fn run(bytes target, Json payload) -> bytes authorize("Admin") {{
+            r#"seiyaku Relay {{ permission Admin;
+  kotoage fn run(bytes target, Json payload) authorize(Admin) -> bytes {{
     return {call};
   }}
 }}"#
@@ -4360,7 +4239,7 @@ fn retired_numeric_helper_surface_is_rejected() {
         "numeric::ge(left: 1, right: 2)",
     ] {
         let source = format!(
-            "seiyaku CompilerFixture {{ view fn probe() -> int {{ let value = {call}; return 0; }} }}"
+            "seiyaku CompilerFixture {{ view fn probe() authorize(anyone) -> int {{ let value = {call}; return 0; }} }}"
         );
         let error = test_mode_compiler()
             .compile_source(&source)
@@ -4414,17 +4293,17 @@ fn raw_pointer_codec_plumbing_is_not_a_source_api() {
     for (name, code, message) in [
         (
             "path",
-            "K1001",
+            "K2002",
             "`path(...)` was removed as a free helper; use `base.path(segment)`",
         ),
         (
             "codec::path",
-            "K2002",
-            "unknown function or builtin `codec::path`",
+            "E_UNKNOWN_BUILTIN",
+            "unknown builtin `codec::path`",
         ),
     ] {
         let source = format!(
-            "seiyaku CompilerFixture {{ view fn probe() -> int {{ {name}(); return 0; }} }}"
+            "seiyaku CompilerFixture {{ view fn probe() authorize(anyone) -> int {{ {name}(); return 0; }} }}"
         );
         let error = test_mode_compiler()
             .compile_source(&source)
@@ -4472,7 +4351,7 @@ fn bytes_len_emits_only_the_typed_tlv_length_path_and_complete_access() {
 fn bytes_len_rejects_wrong_types_flat_aliases_and_raw_codec_names() {
     for ty in ["Json", "Name", "AccountId", "string", "int"] {
         let source = format!(
-            "seiyaku CompilerFixture {{ view fn probe({ty} value) -> int {{ return bytes::len(value); }} }}"
+            "seiyaku CompilerFixture {{ view fn probe({ty} value) authorize(anyone) -> int {{ return bytes::len(value); }} }}"
         );
         let error = test_mode_compiler()
             .compile_source(&source)
@@ -4490,7 +4369,7 @@ fn bytes_len_rejects_wrong_types_flat_aliases_and_raw_codec_names() {
         "codec::tlv_len",
     ] {
         let source = format!(
-            "seiyaku CompilerFixture {{ view fn probe(bytes value) -> int {{ return {name}(value); }} }}"
+            "seiyaku CompilerFixture {{ view fn probe(bytes value) authorize(anyone) -> int {{ return {name}(value); }} }}"
         );
         let error = test_mode_compiler()
             .compile_source(&source)
@@ -4499,6 +4378,7 @@ fn bytes_len_rejects_wrong_types_flat_aliases_and_raw_codec_names() {
             error.contains("K1001")
                 || error.contains("K2002")
                 || error.contains("E_INTERNAL_BUILTIN")
+                || error.contains("E_UNKNOWN_BUILTIN")
                 || error.contains("unknown function or builtin")
                 || error.contains("compiler-internal"),
             "helper `{name}` was rejected for the wrong reason: {error}"
@@ -4878,7 +4758,7 @@ fn account_id_canonical_literal_stays_static_without_alias_resolution() {
         .compile_source(&format!(
             r#"
 seiyaku CompilerFixture {{
-view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
+view fn account() authorize(anyone) -> AccountId {{ return AccountId::parse("{canonical}"); }}
 }}
 "#
         ))
@@ -5125,8 +5005,9 @@ fn production_rejects_test_only_assertions() {
         "test::assert(true);",
         "test::assert_eq(actual: 1, expected: 1);",
     ] {
-        let source =
-            format!("seiyaku Test {{ kotoage fn main() authorize(\"Entry\") {{ {assertion} }} }}");
+        let source = format!(
+            "seiyaku Test {{ permission Entry;  kotoage fn main() authorize(Entry) {{ {assertion} }} }}"
+        );
         let error = Compiler::new()
             .compile_source(&source)
             .expect_err("production assertion must be rejected");
@@ -5144,8 +5025,8 @@ fn production_rejects_test_only_assertions() {
 fn vector_length_is_compiler_owned() {
     for expression in ["runtime::set_vector_length(8)", "setvl(8)"] {
         let src = format!(
-            r#"seiyaku Test {{
-  kotoage fn main() authorize("Entry") {{ {expression}; }}
+            r#"seiyaku Test {{ permission Entry;
+  kotoage fn main() authorize(Entry) {{ {expression}; }}
 }}"#
         );
         let error = Compiler::new()
@@ -5229,7 +5110,7 @@ fn unreachable_scans_in_retained_functions_emit_no_dynamic_hints() {
 seiyaku ReachableHintControlFlow {{
   state StateMap<int, int> Entries;
 
-  view fn scan(bool flag) -> int {{
+  view fn scan(bool flag) authorize(anyone) -> int {{
 {body}
   }}
 }}
@@ -5412,7 +5293,7 @@ fn zero_length_state_map_scan_limits_are_rejected() {
 seiyaku ZeroScanNoOp {{
   state StateMap<int, int> Entries;
 
-  view fn scan() -> int {{
+  view fn scan() authorize(anyone) -> int {{
     var int total = 0;
     for (key, value) in {iterator} {{
       total = total + key + value;
@@ -5436,7 +5317,7 @@ fn free_calls_cannot_forge_state_map_scan_provenance() {
 seiyaku ExactScanProvenance {{
   state StateMap<Name, int> Names;
 
-  view fn scan() -> int {{
+  view fn scan() authorize(anyone) -> int {{
     var int total = 0;
     for (name, value) in {iterator} {{
       total = total + value;
@@ -5567,6 +5448,20 @@ fn compile_native_json_object_with_exact_int_and_pointer_values() {
         .compile_source_with_manifest(src)
         .expect("compile json object builders");
 }
+#[test]
+fn native_json_accepts_returned_state_cursors() {
+    let source = r#"seiyaku CursorJson {
+        state StateMap<int, int> values;
+        view fn page() authorize(anyone) -> Json {
+            let batch = values.page(after: Option::none, limit: 2);
+            json { after: batch.next }
+        }
+    }"#;
+    Compiler::new()
+        .compile_source(source)
+        .expect("opaque cursors are native JSON values");
+}
+
 #[test]
 fn native_json_construction_emits_one_extended_build_syscall() {
     let source = include_str!("fixtures/v1/c146.ko");
@@ -5699,9 +5594,9 @@ fn manifest_access_set_hints_include_asset_registration_literals() {
     let asset_id = AssetId::of(asset_def.clone(), account.clone());
     let src = format!(
         r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission AssetAdmin;
 
-kotoage fn main() authorize("AssetAdmin") {{
+kotoage fn main() authorize(AssetAdmin) {{
   ledger::asset::register(
     asset_definition: AssetDefinitionId::parse("{asset_literal}"),
     name: "ROSE",
@@ -5745,9 +5640,9 @@ fn manifest_access_set_hints_include_authority_placeholders() {
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let src = format!(
         r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission AssetAdmin;
 
-kotoage fn main() authorize("AssetAdmin") {{
+kotoage fn main() authorize(AssetAdmin) {{
   ledger::asset::register(
     asset_definition: AssetDefinitionId::parse("{asset_literal}"),
     name: "ROSE",
@@ -5805,9 +5700,9 @@ fn manifest_access_set_hints_propagate_context_authority_bindings() {
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let source = format!(
         r#"
-seiyaku CompilerFixture {{
+seiyaku CompilerFixture {{ permission AssetAdmin;
 
-kotoage fn main() authorize("AssetAdmin") {{
+kotoage fn main() authorize(AssetAdmin) {{
   let caller = context::authority();
   let asset = AssetDefinitionId::parse("{asset_literal}");
   ledger::asset::transfer(
@@ -5903,7 +5798,7 @@ fn manifest_access_set_hints_include_transfer_domain_literal() {
     let to_literal = to.to_string();
     let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let src = format!(
-        "seiyaku CompilerFixture {{ kotoage fn main() authorize(\"Admin\") {{ ledger::domain::transfer(source: AccountId::parse(\"{from_literal}\"), domain: DomainId::parse(\"{domain}\"), destination: AccountId::parse(\"{to_literal}\")); }} }}"
+        "seiyaku CompilerFixture {{ permission Admin;  kotoage fn main() authorize(Admin) {{ ledger::domain::transfer(source: AccountId::parse(\"{from_literal}\"), domain: DomainId::parse(\"{domain}\"), destination: AccountId::parse(\"{to_literal}\")); }} }}"
     );
     let compiler = Compiler::new();
     let (_bytes, manifest) = compiler
@@ -5944,8 +5839,8 @@ fn assert_alias_transfer_uses_scoped_access(destination: AliasTransferDestinatio
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let src = format!(
         r#"
-seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{
+seiyaku CompilerFixture {{ permission AssetAdmin;
+kotoage fn main() authorize(AssetAdmin) {{
   ledger::asset::transfer(
     source: AccountId::parse("{from_literal}"),
     destination: {destination},
@@ -6111,6 +6006,9 @@ fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         compiler_fingerprint: Some("test".to_owned()),
         features_bitmap: Some(0),
         access_set_hints: None,
+        permissions: Vec::new(),
+        events: Vec::new(),
+        enum_types: Vec::new(),
         entrypoints: None,
         states: None,
         kotoba: None,
@@ -6240,8 +6138,8 @@ fn manifest_access_set_hints_include_static_peer_helpers() {
     );
     let src = format!(
         r#"
-seiyaku Test {{
-  kotoage fn peers() authorize("Admin") {{
+seiyaku Test {{ permission Admin;
+  kotoage fn peers() authorize(Admin) {{
     ledger::peer::register(peer: Json::parse("{{\"pop\":[],\"public_key\":\"{public_key}\"}}"));
     ledger::peer::unregister(peer: Json::parse("{{\"public_key\":\"{public_key}\"}}"));
   }}
@@ -6333,8 +6231,8 @@ fn manifest_trigger_decl_sets_authority() {
     let authority_literal = sample_account_literal();
     let src = format!(
         r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger wake -> run {{
     on time pre_commit;
     authority "{authority_literal}";
@@ -6360,21 +6258,47 @@ seiyaku Test {{
     );
 }
 #[test]
-fn manifest_trigger_decl_preserves_namespaced_callback() {
+fn manifest_trigger_decl_rejects_unchecked_namespaced_callback() {
     let src = include_str!("fixtures/v1/c156.ko");
-    let compiler = Compiler::new();
-    let (_bytes, manifest) = compiler
+    let error = Compiler::new()
         .compile_source_with_manifest(src)
-        .expect("compile manifest");
-    let entrypoints = manifest.entrypoints.expect("entrypoints present");
-    let arm = entrypoints
+        .expect_err("remote callbacks cannot bypass authenticated source signatures");
+    assert!(error.contains("E_TRIGGER_TARGET_NAMESPACE"), "{error}");
+}
+#[test]
+fn execute_trigger_callback_uses_exact_public_argument_schema() {
+    let source = r#"seiyaku TriggerArguments {
+        kotoage fn run(int amount, Name recipient) authorize(anyone) {}
+        trigger wake -> run { on execute trigger wake; }
+    }"#;
+    let (_, manifest) = Compiler::new()
+        .compile_source_with_manifest(source)
+        .expect("typed execute callback");
+    let entrypoints = manifest.entrypoints.unwrap();
+    let callback = entrypoints
         .iter()
-        .find(|entry| entry.name == "arm")
-        .expect("arm entrypoint");
-    assert_eq!(arm.triggers.len(), 1);
-    let callback = &arm.triggers[0].callback;
-    assert_eq!(callback.namespace.as_deref(), Some("callee"));
-    assert_eq!(callback.entrypoint, "run");
+        .find(|entry| entry.name == "run")
+        .unwrap();
+    let schema = callback.argument_schema.as_ref().unwrap();
+    assert_eq!(
+        schema
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["amount", "recipient"]
+    );
+    let payload =
+        iroha_primitives::json::Json::from_str_norito(r#"{"amount":"7","recipient":"buyer"}"#)
+            .unwrap();
+    ivm_abi::arguments::argument_record_from_json(schema, &payload)
+        .expect("execute event matches typed callback");
+    let wrong =
+        iroha_primitives::json::Json::from_str_norito(r#"{"amount":7,"recipient":"buyer"}"#)
+            .unwrap();
+    assert!(ivm_abi::arguments::argument_record_from_json(schema, &wrong).is_err());
+    assert_eq!(callback.triggers[0].callback.namespace, None);
+    assert_eq!(callback.triggers[0].callback.entrypoint, "run");
 }
 #[test]
 fn trigger_callback_dispatches_only_through_cntr_entry_pc() {
@@ -6480,8 +6404,8 @@ fn manifest_trigger_decl_lowers_structured_data_filter() {
     let asset_definition_literal = asset_definition.to_string();
     let src = format!(
         r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger intercept -> run {{
     on data asset added {{
       asset_definition "{asset_definition_literal}";
@@ -6559,8 +6483,8 @@ fn manifest_trigger_decl_lowers_structured_data_filters_for_core_families() {
         (
             format!(
                 r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger wake -> run {{
     on data peer added {{
       peer "{peer_literal}";
@@ -6578,8 +6502,8 @@ seiyaku Test {{
         (
             format!(
                 r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger wake -> run {{
     on data domain created {{
       domain "{domain}";
@@ -6597,8 +6521,8 @@ seiyaku Test {{
         (
             format!(
                 r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger wake -> run {{
     on data account created {{
       account "{account_literal}";
@@ -6616,8 +6540,8 @@ seiyaku Test {{
         (
             format!(
                 r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger wake -> run {{
     on data asset added {{
       asset "{asset_literal}";
@@ -6637,8 +6561,8 @@ seiyaku Test {{
         (
             format!(
                 r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger wake -> run {{
     on data asset_definition created {{
       asset_definition "{asset_definition}";
@@ -6656,8 +6580,8 @@ seiyaku Test {{
         (
             format!(
                 r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger wake -> run {{
     on data nft created {{
       nft "{nft}";
@@ -6675,8 +6599,8 @@ seiyaku Test {{
         (
             format!(
                 r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger wake -> run {{
     on data rwa created {{
       rwa "{rwa}";
@@ -6694,8 +6618,8 @@ seiyaku Test {{
         (
             format!(
                 r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger wake -> run {{
     on data trigger created {{
       trigger "{trigger_id}";
@@ -6713,8 +6637,8 @@ seiyaku Test {{
         (
             format!(
                 r#"
-seiyaku Test {{
-  kotoage fn run() authorize("Entry") {{}}
+seiyaku Test {{ permission Entry;
+  kotoage fn run() authorize(Entry) {{}}
   trigger wake -> run {{
     on data role created {{
       role "{role_id}";
@@ -6857,71 +6781,175 @@ fn production_rejects_raw_call_contract_surface() {
         "{error}"
     );
 }
-#[test]
-fn production_contract_invoke_quantity2_is_typed_and_conservative() {
-    let src = include_str!("fixtures/v1/c167.ko");
-    let (bytes, manifest) = Compiler::new()
-        .compile_source_with_manifest(src)
-        .expect("compile exact typed nested call");
-    let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    assert!(
-        bytes[parsed.code_offset..].chunks_exact(4).any(|chunk| {
-            let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).expect("instruction word"));
-            instruction::wide::opcode(word) == instruction::wide::system::SYSTEM
-                && encoding::wide::decode_syscallx(word)
-                    == ivm_abi::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2
-        }),
-        "typed nested call must emit only its production schema-bound syscall"
-    );
-    let entry = manifest
-        .entrypoints
-        .expect("entrypoints")
-        .into_iter()
-        .find(|entry| entry.name == "relay")
-        .expect("relay entrypoint");
-    assert_eq!(entry.read_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
-    assert_eq!(entry.write_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
-    assert_eq!(entry.access_hints_complete, Some(false));
-    assert_eq!(
-        entry.access_hints_skipped,
-        [HINT_SKIP_CONTRACT_CALL_TARGET.to_owned()]
-    );
+fn compile_contract_import(
+    source: &str,
+    callee: &str,
+) -> Result<crate::session::CompileOutput, crate::driver::BuildError> {
+    use crate::linker::{SourceContractArtifact, SourceLinkRequest, SourceModuleUnit};
+    let artifact = Compiler::new()
+        .compile_source(callee)
+        .expect("compile imported interface");
+    let request = SourceLinkRequest {
+        root: SourceModuleUnit {
+            source_name: "app.ko".into(),
+            source: source.into(),
+        },
+        artifacts: vec![SourceContractArtifact {
+            source_name: "pool.to".into(),
+            artifact,
+        }],
+        sources: Vec::new(),
+        imports: Vec::new(),
+        packages: Vec::new(),
+    };
+    crate::driver::BuildDriver::new(
+        crate::session::CompilerSession::default(),
+        "contract-import-test",
+    )
+    .compile_project(request, "app.ko")
 }
 #[test]
-fn production_contract_invoke_quantity2_rejects_dynamic_schema_selectors() {
-    for (source_fragment, expected) in [
+fn production_contract_import_emits_typed_a9_and_exact_access_kind() {
+    let callee = "seiyaku Pool { view fn quote(quantity amount) authorize(anyone) -> quantity { amount } kotoage fn swap(quantity amount) authorize(anyone) -> quantity { amount } }";
+    for (kind, method, writes) in [("view", "quote", false), ("kotoage", "swap", true)] {
+        let source = format!(
+            r#"seiyaku Caller {{ import seiyaku "pool.to" as Pool; {kind} fn relay(bytes address, quantity amount) authorize(anyone) -> quantity {{ let pool = Pool::at(address: address); pool.{method}(amount: amount) }} }}"#
+        );
+        let output =
+            compile_contract_import(&source, callee).unwrap_or_else(|error| panic!("{error}"));
+        let parsed = ProgramMetadata::parse(&output.artifact).unwrap();
+        assert!(
+            output.artifact[parsed.code_offset..]
+                .chunks_exact(4)
+                .any(|chunk| {
+                    let word = u32::from_le_bytes(chunk.try_into().unwrap());
+                    word == encoding::wide::encode_sys(
+                        instruction::wide::system::SCALL,
+                        ivm_abi::syscalls::SYSCALL_CALL_CONTRACT as u8,
+                    )
+                })
+        );
+        let entry = output
+            .manifest
+            .entrypoints
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.name == "relay")
+            .unwrap();
+        assert_eq!(entry.read_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
+        assert_eq!(
+            entry.write_keys,
+            if writes {
+                vec![GLOBAL_WILDCARD_KEY.to_owned()]
+            } else {
+                vec![]
+            }
+        );
+        assert_eq!(
+            entry.access_hints_skipped,
+            [HINT_SKIP_CONTRACT_CALL_TARGET.to_owned()]
+        );
+    }
+}
+#[test]
+fn imported_contract_calls_reject_wrong_nominal_types_modes_and_lifecycle() {
+    let callee = "seiyaku Pool { struct Payload { int amount; } hajimari() {} view fn quote(Payload payload) authorize(anyone) -> Payload { payload } kotoage fn change() authorize(anyone) {} }";
+    for (body, expected) in [
         (
-            "entrypoint: selector, returns: \"quantity\"",
-            "E_CONTRACT_ENTRYPOINT_LITERAL",
+            "let pool = Pool::at(address: address); pool.quote(payload: 7);",
+            "type",
         ),
         (
-            "entrypoint: \"swap_exact_in_quote_public\", returns: selector",
-            "E_CONTRACT_RETURN_SCHEMA",
+            "let pool = Pool::at(address: address); pool.quote(amount: 7);",
+            "E_UNKNOWN_NAMED_ARGUMENT",
         ),
         (
-            "entrypoint: \"swap_exact_in_quote_public\", returns: \"int\"",
-            "E_CONTRACT_RETURN_SCHEMA",
+            "let pool = Pool::at(address: address); pool.hajimari();",
+            "keyword `hajimari`",
+        ),
+        (
+            "let pool = Pool::at(address: address); pool.change();",
+            "view",
+        ),
+        (
+            "let pool = Pool::at(address: address); pool.missing();",
+            "E_CONTRACT_METHOD",
+        ),
+        (
+            "let pool = Pool::at(address: address); let values = [pool];",
+            "List",
+        ),
+        (
+            "let pool = Pool::at(address: address); let value = json { reference: pool };",
+            "JSON",
         ),
     ] {
         let source = format!(
-            r#"
-seiyaku Test {{
-  kotoage fn relay(bytes target, string selector, quantity amount, quantity minimum) -> quantity authorize("Entry") {{
-    return contract::invoke(
-      contract: target,
-      {source_fragment},
-      amount_in: amount,
-      min_out: minimum
-    );
-  }}
-}}
-"#
+            r#"seiyaku Caller {{ import seiyaku "pool.to" as Pool; view fn relay(bytes address) authorize(anyone) {{ {body} }} }}"#
         );
-        let error = Compiler::new()
-            .compile_source_with_manifest(&source)
-            .expect_err("dynamic or unsupported nested-call schema must fail closed");
-        assert!(error.contains(expected), "{error}");
+        let error = compile_contract_import(&source, callee)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{body}: {error}");
     }
+}
+#[test]
+fn imported_nominal_types_keep_exact_identity_through_aliases_and_records() {
+    let callee = "seiyaku Pool { enum Status { Active = 7, Paused = 9 } struct Payload { Status status; List<int, 2> amounts; } view fn echo(Payload payload) authorize(anyone) -> Payload { payload } }";
+    let source = r#"seiyaku Caller {
+        import seiyaku "pool.to" as Pool;
+        import type "Pool::Payload" from Pool as Payload;
+        import type "Pool::Status" from Pool as Status;
+        view fn relay(bytes address) authorize(anyone) -> Pool::Payload {
+            let pool = Pool::at(address: address);
+            pool.echo(payload: Payload { amounts: [1], status: Status::Active })
+        }
+    }"#;
+    let output = compile_contract_import(source, callee).unwrap_or_else(|error| panic!("{error}"));
+    let entry = output.manifest.entrypoints.unwrap().remove(0);
+    assert_eq!(entry.return_type.as_deref(), Some("struct Pool::Payload"));
+    let schema = entry.return_schema.unwrap();
+    assert!(schema.nodes.iter().any(|node| matches!(node, ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Enum(value) if value.identity == "Pool::Status")));
+    let wrong = source.replace(
+        "import type \"Pool::Payload\" from Pool as Payload;",
+        "struct Payload { Pool::Status status; List<int, 2> amounts; }",
+    );
+    assert!(
+        compile_contract_import(&wrong, callee).is_err(),
+        "equal field shape does not erase nominal identity"
+    );
+}
+#[test]
+fn contract_references_stay_private_and_imported_type_aliases_cannot_shadow_declarations() {
+    let callee = "seiyaku Pool { struct Payload { int amount; } view fn echo(Payload payload) authorize(anyone) -> Payload { payload } }";
+    for declaration in [
+        "state Pool stored;",
+        "fn invalid(Option<Pool> reference) {}",
+        "fn invalid(Result<int, Pool> reference) {}",
+        "struct Holder { Pool reference; } fn invalid(Option<Holder> value) {}",
+        "struct Holder { Pool reference; } fn invalid(List<Holder, 2> values) {}",
+        "view fn invalid(Pool reference) authorize(anyone) {}",
+        "view fn invalid(bytes address) authorize(anyone) -> Pool { Pool::at(address: address) }",
+        "fn invalid(bytes address) { let value = Option::some(Pool::at(address: address)); }",
+        "import type \"Pool::Payload\" from Pool as Payload; struct Payload { int amount; }",
+        "struct Pool { int amount; }",
+    ] {
+        let source =
+            format!(r#"seiyaku Caller {{ import seiyaku "pool.to" as Pool; {declaration} }}"#);
+        assert!(
+            compile_contract_import(&source, callee).is_err(),
+            "accepted invalid reference boundary: {declaration}"
+        );
+    }
+}
+#[test]
+fn retired_contract_invoke_is_not_a_source_api() {
+    let source = include_str!("fixtures/v1/c167.ko");
+    let error = Compiler::new().compile_source(source).unwrap_err();
+    assert!(
+        error.contains("error[K2002] resolve: unknown function or builtin `contract::invoke`"),
+        "{error}"
+    );
 }
 #[test]
 fn production_accepts_opaque_isi_access_fallback() {
@@ -6986,8 +7014,8 @@ fn production_accepts_fixed_asset_dynamic_account_transfer_hints() {
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let src = format!(
         r#"
-seiyaku Test {{
-  kotoage fn move(AccountId from, AccountId to, quantity amount) authorize("Admin") {{
+seiyaku Test {{ permission Admin;
+  kotoage fn move(AccountId from, AccountId to, quantity amount) authorize(Admin) {{
     ledger::asset::transfer(
       source: from,
       destination: to,
@@ -7039,13 +7067,13 @@ fn production_propagates_asset_definition_helper_return_into_access_hints() {
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let src = format!(
         r#"
-seiyaku Test {{
+seiyaku Test {{ permission Admin;
   fn settlement_asset() -> AssetDefinitionId {{
     let asset = AssetDefinitionId::parse("{asset_literal}");
     return asset;
   }}
 
-  kotoage fn move(AccountId from, AccountId to, quantity amount) authorize("Admin") {{
+  kotoage fn move(AccountId from, AccountId to, quantity amount) authorize(Admin) {{
     let asset = settlement_asset();
     ledger::asset::transfer(
       source: from,
@@ -7095,9 +7123,9 @@ fn manifest_access_set_hints_rejects_explicit_access() {
     let account_key = format!("account:{account_literal}");
     let src = format!(
         r#"
-seiyaku Test {{
+seiyaku Test {{ permission Admin;
   #[access(read="{account_key}", write="{account_key}")]
-  kotoage fn move(AccountId from, AccountId to, AssetDefinitionId asset, quantity amount) authorize("Admin") {{
+  kotoage fn move(AccountId from, AccountId to, AssetDefinitionId asset, quantity amount) authorize(Admin) {{
     ledger::asset::transfer(
       source: from,
       destination: to,
@@ -7130,14 +7158,17 @@ fn manifest_access_set_hints_include_literal_map_keys() {
     assert_eq!(hints.write_keys, vec![literal_key]);
 }
 #[test]
-fn manifest_access_set_hints_use_norito_i64_for_bool_map_keys() {
+fn manifest_access_set_hints_use_canonical_records_for_bool_map_keys() {
     let src = include_str!("fixtures/v1/c172.ko");
     let (_bytes, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile bool map access hints");
     let hints = manifest.access_set_hints.expect("access hints");
-    let encoded = norito::to_bytes(&1_i64).expect("encode canonical bool map key");
-    let literal_key = format!("state:Foo/{}", hex::encode(encoded));
+    let literal_key = canonical_state_key(
+        "Foo",
+        ivm_abi::state_value::StateValueKindV1::Bool,
+        ivm_abi::state_value::StateValueAtomV1::Bool(true),
+    );
     assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
     assert!(hints.write_keys.contains(&literal_key), "{hints:?}");
 }
@@ -7174,9 +7205,11 @@ fn manifest_access_set_hints_include_literal_pointer_map_keys() {
         .expect("expected access_set_hints");
     let tlv = super::encode_pointer_tlv_bytes(super::ir::DataRefKind::Name, "alice", false)
         .expect("encode pointer tlv");
-    let raw = format!("0x{}", hex::encode(tlv));
-    let path = super::state_path_for_norito_key("Foo", &raw).expect("path");
-    let expected = format!("state:{path}");
+    let expected = canonical_state_key(
+        "Foo",
+        ivm_abi::state_value::StateValueKindV1::Name,
+        ivm_abi::state_value::StateValueAtomV1::Pointer(tlv),
+    );
     assert!(hints.read_keys.contains(&expected));
     assert!(hints.write_keys.contains(&expected));
 }
@@ -7212,7 +7245,7 @@ fn manifest_access_set_hints_include_create_trigger() {
     let raw_json = norito::json::to_string(&json_value).expect("trigger json");
     let escaped = raw_json.replace('\\', "\\\\").replace('"', "\\\"");
     let src = format!(
-        r#"seiyaku Test {{ kotoage fn main() authorize("Admin") {{ ledger::trigger::register(trigger_spec: Json::parse("{escaped}")); }} }}"#
+        r#"seiyaku Test {{ permission Admin;  kotoage fn main() authorize(Admin) {{ ledger::trigger::register(trigger_spec: Json::parse("{escaped}")); }} }}"#
     );
     let compiler = Compiler::new();
     let (_bytes, manifest) = compiler
@@ -7312,7 +7345,7 @@ fn emitted_syscalls(bytes: &[u8]) -> Vec<u32> {
 fn json_string_and_bool_getters_emit_their_extended_syscalls() {
     let source = r#"
 seiyaku JsonFields {
-    view fn flags() -> bool {
+    view fn flags() authorize(anyone) -> bool {
         return read_flag(json { label: "rose", flag: true });
     }
     fn read_flag(Json value) -> bool {
@@ -7342,7 +7375,7 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
     use kotodama_surface::builtins::{Builtin, BuiltinLowering, BuiltinMode, BuiltinSurface};
     const PARAMS: &str = "AccountId account, AccountId source, AccountId destination, \
         AssetDefinitionId asset_definition, quantity amount, NftId nft, AccountId owner, \
-        Name key, Json value, DomainId domain, Name role, Json permissions, Name permission, \
+        Name key, Json value, DomainId domain, Name role, Json permissions, Name permission_token, \
         Json peer, Json trigger_spec, Name trigger_id, bool enabled, Json signatory, int quorum, \
         string alias, int request_generation, Name offer, bytes evidence, string name, \
         DataSpaceId dataspace, Option<quantity> cap, Option<quantity> limit, bytes ballot";
@@ -7459,19 +7492,19 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
         (Builtin::RevokeRole, "ledger::role::revoke(account, role)"),
         (
             Builtin::GrantPermission,
-            "ledger::permission::grant(account, permission)",
+            "ledger::permission::grant(account, permission: permission_token)",
         ),
         (
             Builtin::RevokePermission,
-            "ledger::permission::revoke(account, permission)",
+            "ledger::permission::revoke(account, permission: permission_token)",
         ),
         (
-            Builtin::GrantContractEntrypoint,
-            "ledger::seiyaku::grant_kotoage(account, kotoage: \"probe\")",
+            Builtin::GrantContractPermission,
+            "ledger::seiyaku::grant_permission(account, permission: ProbeAccess)",
         ),
         (
-            Builtin::RevokeContractEntrypoint,
-            "ledger::seiyaku::revoke_kotoage(account, kotoage: \"probe\")",
+            Builtin::RevokeContractPermission,
+            "ledger::seiyaku::revoke_permission(account, permission: ProbeAccess)",
         ),
         (
             Builtin::EscrowOpenOffer,
@@ -7512,7 +7545,7 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
     ];
     let compile = |body: &str| {
         let source = format!(
-            "seiyaku Probe {{ kotoage fn probe({PARAMS}) authorize(\"Probe\") {{ {body} }} }}"
+            "seiyaku Probe {{ permission ProbeAccess; kotoage fn probe({PARAMS}) authorize(ProbeAccess) {{ {body} }} }}"
         );
         let bytes = Compiler::new()
             .compile_source(&source)
@@ -7565,9 +7598,6 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
             && !matches!(
                 builtin,
                 Builtin::TransferBatch
-                    | Builtin::TransferV1BatchBegin
-                    | Builtin::TransferV1BatchEnd
-                    | Builtin::TransferV1BatchApply
                     | Builtin::SetAssetTransferAvailability
                     | Builtin::CreateNftsForAllUsers
                     | Builtin::SubscriptionBill
@@ -7598,9 +7628,11 @@ fn registry_probe_argument(descriptor: &str) -> Option<&'static str> {
         "Option<quantity>" => "cap",
         "Option<string>" => "note",
         "bool" => "enabled",
-        "int" | "int|bytes" | "int|decimal" => "quorum",
+        "int" | "int|bytes" | "int|decimal" | "int|decimal|quantity" => "quorum",
         "quantity" => "amount",
         "string" | "string|bytes" | "string|int" => "name",
+        "T" | "K" | "bool|int|decimal|quantity|string|Name" => "quorum",
+        "Permission" => "ProbeAccess",
         "NumericSpec" => "NumericSpec::integer()",
         "Mintable" => "Mintable::Once",
         "SignatureScheme" => "SignatureScheme::Ed25519",
@@ -7620,8 +7652,8 @@ fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
         string name";
     let compile = |body: &str| {
         let source = format!(
-            "seiyaku Probe {{ error enum ProbeError {{ Rejected = 1 }} \
-             kotoage fn probe({PARAMS}) authorize(\"Probe\") {{ {body} }} }}"
+            "seiyaku Probe {{ permission ProbeAccess; error enum ProbeError {{ Rejected = 1 }} \
+             kotoage fn probe({PARAMS}) authorize(ProbeAccess) {{ {body} }} }}"
         );
         Compiler::new()
             .compile_source(&source)
@@ -7661,11 +7693,10 @@ fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
         }
         // Arguments that must be compile-time literals at the call.
         let literal = |label: &str| match (builtin, label) {
-            (Builtin::ContractInvokeQuantity2, "entrypoint")
-            | (Builtin::GrantContractEntrypoint | Builtin::RevokeContractEntrypoint, "kotoage") => {
-                Some("\"probe\"")
-            }
-            (Builtin::ContractInvokeQuantity2, "returns") => Some("\"quantity\""),
+            (
+                Builtin::GrantContractPermission | Builtin::RevokeContractPermission,
+                "permission",
+            ) => Some("ProbeAccess"),
             (Builtin::BuildSubmitBallotInline, "election_id" | "backend") => Some("\"probe\""),
             (Builtin::BuildSubmitBallotInline, "ciphertext") => Some("b\"ciphertext\""),
             (Builtin::BuildSubmitBallotInline, "nullifier") => {
@@ -7737,8 +7768,8 @@ fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
         evidence, nft, cap, note, enabled, quorum, amount, name";
     let compile_method = |body: &str| {
         let source = format!(
-            "seiyaku Probe {{ state StateMap<int, int> Balances; fn run({PARAMS}) {{ {body} }} \
-             kotoage fn probe({PARAMS}) authorize(\"Probe\") {{ run({ARGS}); }} }}"
+            "seiyaku Probe {{ permission ProbeAccess; state StateMap<int, int> Balances; fn run({PARAMS}) {{ {body} }} \
+             kotoage fn probe({PARAMS}) authorize(ProbeAccess) {{ run({ARGS}); }} }}"
         );
         Compiler::new()
             .compile_source(&source)
@@ -7833,4 +7864,457 @@ fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
         "registry builtins the sweep cannot synthesize a call for"
     );
     assert!(checked > 100, "only {checked} builtins were probed");
+}
+
+#[test]
+fn declared_authorization_inventory_is_authenticated_in_artifact_and_manifest() {
+    use iroha_data_model::smart_contract::manifest::{
+        ContractPermissionScopeV1, EntrypointAuthorizationV1,
+    };
+    let source = r#"誓約 Guarded {
+        permission Unused;
+        permission Admin;
+        import permission "CanSetParameters" as ChainAdmin;
+        始まり() {}
+        kaizen() {}
+        言挙げ fn update() authorize(Admin) {}
+        view fn inspect() authorize(ChainAdmin) -> int { 1 }
+        kotoage fn open() authorize(anyone) {}
+    }"#;
+    let (artifact, manifest) = Compiler::new()
+        .compile_source_with_manifest(source)
+        .expect("declared permissions");
+    let interface = ProgramMetadata::parse(&artifact)
+        .unwrap()
+        .contract_interface
+        .unwrap();
+    assert_eq!(interface.permissions, manifest.permissions);
+    assert_eq!(
+        interface
+            .permissions
+            .iter()
+            .map(|permission| permission.name.as_ref())
+            .collect::<Vec<&str>>(),
+        ["Admin", "ChainAdmin", "Unused"]
+    );
+    assert_eq!(
+        interface.permissions[0].scope,
+        ContractPermissionScopeV1::Instance
+    );
+    assert_eq!(
+        interface.permissions[1].scope,
+        ContractPermissionScopeV1::Chain {
+            permission_name: "CanSetParameters".parse().unwrap()
+        }
+    );
+    let authorization = |name: &str| {
+        &interface
+            .entrypoints
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap()
+            .authorization
+    };
+    assert_eq!(
+        authorization("update"),
+        &EntrypointAuthorizationV1::Permission("Admin".parse().unwrap())
+    );
+    assert_eq!(
+        authorization("inspect"),
+        &EntrypointAuthorizationV1::Permission("ChainAdmin".parse().unwrap())
+    );
+    assert_eq!(authorization("open"), &EntrypointAuthorizationV1::Anyone);
+    assert_eq!(
+        authorization("hajimari"),
+        &EntrypointAuthorizationV1::RuntimeLifecycle
+    );
+    assert_eq!(
+        authorization("kaizen"),
+        &EntrypointAuthorizationV1::RuntimeLifecycle
+    );
+}
+
+#[test]
+fn scoped_permission_grants_emit_canonical_name_pointer_operations() {
+    let source = r#"seiyaku Grants {
+        permission Admin; permission Pay;
+        kotoage fn grant(AccountId account) authorize(Admin) {
+            ledger::seiyaku::grant_permission(account: account, permission: Pay);
+            ledger::誓約::revoke_permission(account: account, permission: Pay);
+        }
+    }"#;
+    let artifact = Compiler::new()
+        .compile_source(source)
+        .expect("instance permission grant and revoke");
+    let syscalls = emitted_syscalls(&artifact);
+    assert!(syscalls.contains(&crate::syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION));
+    assert!(syscalls.contains(&crate::syscalls::SYSCALL_REVOKE_CONTRACT_PERMISSION));
+}
+
+#[test]
+fn ordinary_enums_keep_distinct_public_call_json_and_durable_state_schemas() {
+    use ivm_abi::entrypoint::{EntrypointValueAtomV1 as Atom, EntrypointValueTypeNodeV1 as Node};
+    let source = r#"seiyaku EnumValues {
+        enum Status { Active = 1, Paused = 2 }
+        struct Record { Status status; Option<Status> previous; List<Status, 4> history; }
+        state Record Snapshot;
+        state StateMap<int, Status> Values;
+        hajimari() { Snapshot = Record { status: Status::Active, previous: Option::none, history: [Status::Active] }; }
+        view fn echo(Status value) authorize(anyone) -> Status { value }
+        view fn inspect() authorize(anyone) -> Record { Snapshot }
+        view fn pending() authorize(anyone) -> Result<int, Status> { Result::err(Status::Paused) }
+        view fn json_value(Status value) authorize(anyone) -> Json { json { status: value } }
+        kotoage fn store(int key, Status value) authorize(anyone) { Values[key] = value; }
+    }"#;
+    let (artifact, manifest) = Compiler::new()
+        .compile_source_with_manifest(source)
+        .expect("enum ABI and state");
+    let interface = ProgramMetadata::parse(&artifact)
+        .unwrap()
+        .contract_interface
+        .unwrap();
+    assert!(
+        interface
+            .error_types
+            .iter()
+            .all(|descriptor| !descriptor.identity.ends_with("::Status"))
+    );
+    assert_eq!(interface.enum_types, manifest.enum_types);
+    assert_eq!(interface.enum_types.len(), 1);
+    assert_eq!(interface.enum_types[0].identity, "EnumValues::Status");
+    assert!(manifest.error_types.as_ref().is_none_or(|types| {
+        types
+            .iter()
+            .all(|descriptor| !descriptor.identity.ends_with("::Status"))
+    }));
+    let echo = interface
+        .entrypoints
+        .iter()
+        .find(|entry| entry.name == "echo")
+        .unwrap();
+    let schema = echo.argument_schema.as_ref().unwrap();
+    assert!(
+        matches!(&schema.fields[0].ty.nodes[..], [Node::Enum(descriptor)] if descriptor.identity == "EnumValues::Status")
+    );
+    let record = ivm_abi::arguments::argument_record_from_json(
+        schema,
+        &iroha_primitives::json::Json::from_str_norito(r#"{"value":"Paused"}"#).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(record.atoms.as_slice(), [Atom::EnumCode(2)]));
+    for invalid in [
+        iroha_primitives::json::Json::from_str_norito(r#"{"value":2}"#).unwrap(),
+        iroha_primitives::json::Json::from_str_norito(r#"{"value":"2"}"#).unwrap(),
+        iroha_primitives::json::Json::from_str_norito(r#"{"value":"EnumValues::Status::Paused"}"#)
+            .unwrap(),
+    ] {
+        assert!(ivm_abi::arguments::argument_record_from_json(schema, &invalid).is_err());
+    }
+    assert!(
+        interface
+            .states
+            .iter()
+            .any(|state| format!("{:?}", state.ty).contains("Enum(")),
+        "nested stored schemas carry the nominal data enum"
+    );
+}
+
+#[test]
+fn native_events_embed_exact_sorted_payload_schemas_and_enum_inventory() {
+    use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
+    let source = r#"seiyaku EventValues {
+        enum Status { Active = 1, Paused = 2 }
+        struct Details { Status status; List<int, 4> changes; }
+        event Transfer { AccountId from; Option<Details> details; quantity amount; }
+        event Empty {}
+        kotoage fn run(AccountId owner) authorize(anyone) {
+            emit Transfer { amount: 2.5, details: Option::some(Details { status: Status::Active, changes: [1, 2] }), from: owner };
+            emit Empty {};
+        }
+    }"#;
+    let (artifact, manifest) = Compiler::new()
+        .compile_source_with_manifest(source)
+        .expect("native event compilation");
+    let interface = ProgramMetadata::parse(&artifact)
+        .unwrap()
+        .contract_interface
+        .unwrap();
+    assert_eq!(interface.events, manifest.events);
+    assert_eq!(
+        interface
+            .events
+            .iter()
+            .map(|event| event.name.as_ref())
+            .collect::<Vec<_>>(),
+        ["Empty", "Transfer"]
+    );
+    assert!(interface.events.iter().all(|event| event.validate()));
+    assert_eq!(interface.enum_types.len(), 1);
+    let Node::Struct(root) = &interface.events[1].payload_type.nodes[0] else {
+        panic!("event payload root")
+    };
+    assert_eq!(root.name, "EventValues::Transfer");
+    assert_eq!(root.fields, ["from", "details", "amount"]);
+    assert!(interface.events[1].payload_type.nodes.iter().any(
+        |node| matches!(node, Node::Enum(descriptor) if descriptor == &interface.enum_types[0])
+    ));
+}
+
+#[test]
+fn vrf_epoch_seed_accepts_typed_exact_epochs_and_returns_an_option() {
+    let source = "seiyaku Seeds { view fn read(int epoch) authorize(anyone) -> Option<bytes> { crypto::vrf::epoch_seed(epoch: epoch) } }";
+    let parsed = parse(source).unwrap();
+    let typed = analyze(&parsed).unwrap();
+    let lowered = ir::lower(&typed).unwrap();
+    assert!(
+        lowered
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instrs)
+            .any(|instruction| matches!(instruction, ir::Instr::IntToU64 { .. }))
+    );
+    assert!(
+        lowered
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instrs)
+            .any(|instruction| matches!(instruction, ir::Instr::VrfEpochSeed { .. }))
+    );
+    Compiler::new()
+        .compile_source(source)
+        .expect("typed VRF source compiles");
+    for expression in [
+        "crypto::vrf::epoch_seed(epoch: bytes(\"0x00\"))",
+        "crypto::vrf::epoch_seed(epoch: -1)",
+        "crypto::vrf::epoch_seed(epoch: 18446744073709551616)",
+    ] {
+        let source = format!(
+            "seiyaku Seeds {{ view fn read() authorize(anyone) -> Option<bytes> {{ {expression} }} }}"
+        );
+        assert!(
+            Compiler::new().compile_source(&source).is_err(),
+            "{expression}"
+        );
+    }
+}
+
+#[test]
+fn public_value_utilities_compile_exact_schemas_and_reject_private_or_cursor_values() {
+    Compiler::new().compile_source(r#"seiyaku Utilities {
+        enum Status { Ready = 1 }
+        struct Payload { Status status; List<Option<int>, 2> values; Json metadata }
+        view fn encode(Payload value) authorize(anyone) -> bytes { codec::encode(value) }
+        view fn text(Name value) authorize(anyone) -> string { string::from(value) }
+        view fn concat(string left, string right) authorize(anyone) -> string { string::concat(left, right) }
+        view fn decode(bytes value) authorize(anyone) -> Option<string> { string::from_bytes(value) }
+    }"#).expect("canonical public utilities");
+    for source in [
+        "module Reject { fn encode(StateCursor<int> value) -> bytes { codec::encode(value) } }",
+        "module Reject { fn encode(Option<StateCursor<int>> value) -> bytes { codec::encode(value) } }",
+        "module Reject { fn text(AccountId value) -> string { string::from(value) } }",
+        "module Reject { fn text(bytes value) -> string { string::from(value) } }",
+        "module Reject { fn text(int value) -> string { string::as_bytes(value) } }",
+    ] {
+        let error = Compiler::new()
+            .compile_source(source)
+            .expect_err("utility must reject unsupported source type");
+        assert!(error.contains("K2003"), "{error}");
+    }
+}
+
+#[test]
+fn numeric_selection_retains_exact_domains_and_rejects_implicit_mixing() {
+    Compiler::new().compile_source("seiyaku NumericSelection { view fn select(decimal a, decimal b, quantity q, quantity r) authorize(anyone) -> (decimal, decimal, decimal, quantity, quantity, quantity) { (math::min(a, b), math::max(a, b), math::abs(a), math::min(q, r), math::max(q, r), math::abs(q)) } }").expect("all exact numeric domains");
+    for expression in [
+        "math::min(1, 2.0)",
+        "math::max(1.0, 2)",
+        "math::abs(true)",
+        "math::mean(1.0, 2.0)",
+    ] {
+        let source = format!("module Rejected {{ fn bad() {{ let _value = {expression}; }} }}");
+        let error = Compiler::new()
+            .compile_source(&source)
+            .expect_err("mixed or unsupported numeric operands");
+        assert!(error.contains("K2003"), "{error}");
+    }
+}
+
+#[test]
+fn account_filtered_asset_pages_keep_the_exact_owner_and_typed_projection() {
+    let source = "seiyaku Inventory { view fn assets(AccountId account, int offset) authorize(anyone) -> QueryPage<AssetView> { ledger::query::assets_of(account: account, offset: offset, limit: 2) } }";
+    let typed = analyze(&parse(source).unwrap()).unwrap();
+    let lowered = ir::lower(&typed).unwrap();
+    assert!(
+        lowered
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instrs)
+            .any(|instruction| matches!(
+                instruction,
+                ir::Instr::CoreQueryPage {
+                    account: Some(_),
+                    entity: ivm_abi::core_query::CoreQueryEntityTagV1::Asset,
+                    ..
+                }
+            ))
+    );
+    Compiler::new()
+        .compile_source(source)
+        .expect("typed owner filter");
+    for args in [
+        "account: 3, offset: 0, limit: 2",
+        "account: account, offset: -1, limit: 2",
+        "account: account, offset: 0, limit: 65",
+    ] {
+        let source = format!(
+            "seiyaku Inventory {{ view fn assets(AccountId account) authorize(anyone) -> QueryPage<AssetView> {{ ledger::query::assets_of({args}) }} }}"
+        );
+        assert!(Compiler::new().compile_source(&source).is_err(), "{args}");
+    }
+}
+
+#[test]
+fn tuple_state_keys_emit_exact_cursor_and_dynamic_access_schemas() {
+    use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
+    let source = r#"seiyaku TupleSchema {
+        state StateMap<(int, (Name, bool)), quantity> balances;
+        view fn page(Option<StateCursor<(int, (Name, bool))>> after) authorize(anyone) -> StatePage<(int, (Name, bool)), quantity, 2> {
+            balances.page(after: after, limit: 2)
+        }
+    }"#;
+    let (artifact, manifest) = Compiler::new()
+        .compile_source_with_manifest(source)
+        .unwrap();
+    let parsed = ProgramMetadata::parse(&artifact).unwrap();
+    let interface = parsed.contract_interface.unwrap();
+    let schema = interface.entrypoints[0].argument_schema.as_ref().unwrap();
+    let Node::StateCursor(key) = &schema.fields[0].ty.nodes[1] else {
+        panic!("cursor key schema");
+    };
+    assert_eq!(
+        key.canonical_type_name().as_deref(),
+        Some("(int, (Name, bool))")
+    );
+    let hints = manifest.access_set_hints.unwrap();
+    assert_eq!(hints.dynamic_reads[0].key_type, "(int, (Name, bool))");
+}
+#[test]
+fn tuple_state_keys_reject_unsupported_leaves_and_mismatched_cursor_layouts() {
+    for key in [
+        "(int, Json)",
+        "(int, Option<int>)",
+        "(int, List<int, 2>)",
+        "(int, StateCursor<int>)",
+        "(int, ())",
+    ] {
+        let source = format!(
+            "seiyaku InvalidKey {{ state StateMap<{key}, int> values; view fn read() authorize(anyone) {{ () }} }}"
+        );
+        let error = Compiler::new().compile_source(&source).unwrap_err();
+        assert!(error.contains("StateMap key type"), "{key}: {error}");
+    }
+    let source = "seiyaku WrongCursor { state StateMap<(int, Name), int> values; view fn page(Option<StateCursor<(Name, int)>> after) authorize(anyone) { let _ = values.page(after: after, limit: 1); } }";
+    let error = Compiler::new().compile_source(source).unwrap_err();
+    assert!(error.contains("StateCursor"), "{error}");
+}
+
+#[test]
+fn literal_scalar_and_tuple_map_keys_keep_exact_canonical_child_hints() {
+    use ivm_abi::state_value::{
+        StateValueAtomV1 as Atom, StateValueKindV1 as Kind, StateValueNodeV1 as Node,
+        StateValueRecordV1, StateValueSchemaV1, state_value_schema_hash_v1,
+    };
+    let output = Compiler::new().compile_source_output(r#"seiyaku ConstantKeys {
+        state StateMap<int, int> Singles;
+        state StateMap<(int, bool), int> Pairs;
+        view fn known() authorize(anyone) -> bool { Singles.contains(1) && Pairs.contains((1, true)) }
+        view fn dynamic(int key) authorize(anyone) -> bool { Singles.contains(key) }
+    }"#, None).expect("compile canonical literal keys");
+    let known = output
+        .contract_interface
+        .entrypoints
+        .iter()
+        .find(|entry| entry.name == "known")
+        .unwrap();
+    let schema = StateValueSchemaV1 {
+        nodes: vec![
+            Node::Tuple { arity: 2 },
+            Node::Leaf(Kind::Int),
+            Node::Leaf(Kind::Bool),
+        ],
+    };
+    let record = StateValueRecordV1 {
+        schema_hash: state_value_schema_hash_v1(
+            &ivm_abi::codec::encode_canonical_norito(&schema).unwrap(),
+        ),
+        atoms: vec![
+            Atom::Pointer(
+                super::encode_pointer_tlv_bytes(ir::DataRefKind::Int, "1", false).unwrap(),
+            ),
+            Atom::Bool(true),
+        ],
+    };
+    let pair_key = format!(
+        "state:Pairs/{}",
+        hex::encode(ivm_abi::codec::encode_canonical_norito(&record).unwrap())
+    );
+    assert_eq!(known.access_hints_complete, Some(true));
+    assert!(known.read_keys.contains(&canonical_numeric_state_key(
+        "Singles",
+        ir::DataRefKind::Int,
+        "1"
+    )));
+    assert!(known.read_keys.contains(&pair_key));
+    // The folded record load still belongs to the source operation; it must
+    // never become an unassigned generated-code gap in statement traces.
+    let parsed = ProgramMetadata::parse(&output.artifact).unwrap();
+    let directory = ivm_abi::metadata::LiteralDirectory::validate(
+        &output.artifact,
+        parsed.header_len,
+        parsed.literal_section,
+        ivm_abi::SyscallPolicy::AbiV1,
+    )
+    .unwrap();
+    let encoded_record = ivm_abi::codec::encode_canonical_norito(&record).unwrap();
+    let literal_index = (0..parsed.literal_section.unwrap().count).find(|index| {
+        matches!(directory.get(*index), Some(ivm_abi::metadata::ValidatedLiteral::Pointer { type_id: PointerType::NoritoBytes, payload, .. }) if payload == encoded_record)
+    }).expect("literal tuple key record");
+    let positions = output.artifact[parsed.code_offset..]
+        .chunks_exact(4)
+        .enumerate()
+        .filter_map(|(index, bytes)| {
+            let word = u32::from_le_bytes(bytes.try_into().unwrap());
+            (instruction::wide::opcode(word) == instruction::wide::memory::LDLIT
+                && instruction::wide::literal_index(word) == literal_index)
+                .then_some(index as u64 * 4)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !positions.is_empty(),
+        "the canonical record must be loaded by the folded key operation"
+    );
+    for pc in positions {
+        assert!(
+            output
+                .report
+                .statement_map
+                .iter()
+                .any(|entry| entry.pc_start <= pc
+                    && pc < entry.pc_end
+                    && entry.function_name == "known"
+                    && entry.source.line == 4),
+            "folded key load at {pc} lost its source statement"
+        );
+    }
+    let dynamic = output
+        .contract_interface
+        .entrypoints
+        .iter()
+        .find(|entry| entry.name == "dynamic")
+        .unwrap();
+    assert_eq!(dynamic.access_hints_complete, Some(false));
+    assert!(!dynamic.access_hints_skipped.is_empty());
 }

@@ -25,9 +25,12 @@ fn owned_payload(manifest: ContractManifest) -> ContractManifestSignaturePayload
         compiler_fingerprint,
         features_bitmap,
         access_set_hints,
+        permissions,
+        events,
         entrypoints,
         states,
         error_types,
+        enum_types,
         error_messages,
         kotoba,
         provenance: _,
@@ -39,9 +42,12 @@ fn owned_payload(manifest: ContractManifest) -> ContractManifestSignaturePayload
         compiler_fingerprint,
         features_bitmap,
         access_set_hints,
+        permissions,
+        events,
         entrypoints,
         states,
         error_types,
+        enum_types,
         error_messages,
         kotoba,
     }
@@ -242,7 +248,7 @@ enum NativeType {
     Option(Box<Self>),
     Result(Box<Self>, Box<Self>),
     List(Box<Self>, u8),
-    Cursor(Kind),
+    Cursor(EntrypointValueTypeV1),
 }
 impl ManifestStateTypeV1 for NativeType {
     fn node(&self) -> Node<'_> {
@@ -259,7 +265,7 @@ impl ManifestStateTypeV1 for NativeType {
             Self::Option(_) => Node::Option,
             Self::Result(_, _) => Node::Result,
             Self::List(_, cap) => Node::List(*cap),
-            Self::Cursor(key) => Node::StateCursor(*key),
+            Self::Cursor(key) => Node::StateCursor(key),
         }
     }
     fn child(&self, index: usize) -> Option<&dyn ManifestStateTypeV1> {
@@ -338,7 +344,9 @@ fn native_state_spelling_preserves_all_shapes_and_uses_one_charged_string() {
             "List<bytes, 255>",
         ),
         (
-            NativeType::Cursor(Kind::DataSpaceId),
+            NativeType::Cursor(EntrypointValueTypeV1 {
+                nodes: vec![EntrypointValueTypeNodeV1::Leaf(Kind::DataSpaceId)],
+            }),
             "StateCursor<DataSpaceId>",
         ),
     ];
@@ -385,10 +393,16 @@ fn cursor_projection_uses_the_same_native_supported_kind_rule_without_schema_all
         Kind::Blob,
     ] {
         let schema = EntrypointValueTypeV1 {
-            nodes: vec![EntrypointValueTypeNodeV1::StateCursor(kind)],
+            nodes: vec![EntrypointValueTypeNodeV1::StateCursor(
+                EntrypointValueTypeV1 {
+                    nodes: vec![EntrypointValueTypeNodeV1::Leaf(kind)],
+                },
+            )],
         };
         assert_eq!(kind.is_state_cursor_key(), schema.validate());
-        let source = NativeType::Cursor(kind);
+        let source = NativeType::Cursor(EntrypointValueTypeV1 {
+            nodes: vec![EntrypointValueTypeNodeV1::Leaf(kind)],
+        });
         let view = ManifestStateTypeNameV1::new(&source);
         let (length, allocations) = measured(|| view.byte_len());
         assert_eq!(allocations, 0);
@@ -496,3 +510,33 @@ fn projected_state_rows_match_the_existing_native_string_and_sequence_codecs() {
 
 #[path = "contract_manifest_instruction_registry_projection_tests.rs"]
 mod instruction_registry_projection_tests;
+
+#[test]
+fn public_argument_schema_validates_unique_names_without_allocating() {
+    use iroha_data_model::smart_contract::entrypoint::{
+        EntrypointArgumentFieldV1, EntrypointArgumentSchemaV1,
+    };
+    let mut schema = EntrypointArgumentSchemaV1 {
+        fields: vec![
+            EntrypointArgumentFieldV1 {
+                name: "first".into(),
+                ty: EntrypointValueTypeV1 {
+                    nodes: vec![EntrypointValueTypeNodeV1::Leaf(Kind::Int)],
+                },
+            },
+            EntrypointArgumentFieldV1 {
+                name: "second".into(),
+                ty: EntrypointValueTypeV1 {
+                    nodes: vec![EntrypointValueTypeNodeV1::Leaf(Kind::Bool)],
+                },
+            },
+        ],
+    };
+    let (valid, allocations) = measured(|| schema.validate());
+    assert!(valid);
+    assert_eq!(allocations, 0);
+    schema.fields[1].name = "first".into();
+    let (valid, allocations) = measured(|| schema.validate());
+    assert!(!valid);
+    assert_eq!(allocations, 0);
+}

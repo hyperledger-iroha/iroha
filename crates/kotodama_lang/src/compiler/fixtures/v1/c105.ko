@@ -1,7 +1,7 @@
 
 seiyaku CompilerFixture {
 
-view fn main() {
+view fn main() authorize(anyone) {
   let _authority = context::authority();
   let _subject = context::seiyaku_subject();
   let _now = context::transaction_time_ms();

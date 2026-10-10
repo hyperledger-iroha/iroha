@@ -198,6 +198,12 @@ impl BuiltArtifact {
         }
         let verified = ivm::verify_contract_artifact(&bytes)
             .map_err(|error| eyre!("invalid contract artifact: {error}"))?;
+        if !verified.private_input_entrypoints().is_empty() {
+            bail!(
+                "contract entrypoints {} require raw private inputs from a prover/test host; production consensus hosts do not provide them. Generate proofs off-chain and deploy a public-proof verifier instead",
+                verified.private_input_entrypoints().join(", ")
+            );
+        }
         let name = verified
             .manifest
             .seiyaku_name
@@ -370,10 +376,12 @@ impl DeploymentRuntime {
                     &self.cache_root,
                     self.build_registry.as_ref(),
                     self.registry_resolver.as_deref(),
-                    manifest,
-                    package.as_deref(),
-                    contract.as_deref(),
-                    *locked,
+                    &crate::command::RuntimePackageSelection {
+                        manifest,
+                        package: package.as_deref(),
+                        contract: contract.as_deref(),
+                        locked: *locked,
+                    },
                     self.archive_transport.clone(),
                 )
             }
@@ -626,7 +634,8 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    const SOURCE: &str = "seiyaku Coffee { view fn quote(int cups) -> int { return cups * 10; } }";
+    const SOURCE: &str =
+        "seiyaku Coffee { view fn quote(int cups) authorize(anyone) -> int { return cups * 10; } }";
 
     #[test]
     fn journal_failure_display_preserves_pending_hash_cause_and_exact_recovery_path() {
@@ -1004,6 +1013,26 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
     }
 
     #[test]
+    fn deployment_rejects_private_witnesses_without_rejecting_other_zk_artifacts() {
+        let compiler = kotodama_lang::compiler::Compiler::new_with_options(
+            kotodama_lang::compiler::CompilerOptions {
+                force_zk: true,
+                ..Default::default()
+            },
+        );
+        let public = compiler
+            .compile_source("seiyaku Public { view fn read() authorize(anyone) -> int { 1 } }")
+            .unwrap();
+        assert!(BuiltArtifact::from_bytes(public).is_ok());
+        let private = compiler.compile_source("seiyaku Prover { fn witness() -> Secret<int> { crypto::private_input(0) } kotoage fn commitment() authorize(anyone) -> int { let value = witness(); crypto::valcom(left: value, right: value) } }").unwrap();
+        let error = BuiltArtifact::from_bytes(private)
+            .err()
+            .expect("private inputs cannot deploy");
+        assert!(error.to_string().contains("commitment"));
+        assert!(error.to_string().contains("prover/test host"));
+    }
+
+    #[test]
     fn package_build_uses_runtime_context_without_network_bindings() -> Result<()> {
         let temp = TempDir::new()?;
         fs::write(temp.path().join("contract.ko"), SOURCE)?;
@@ -1071,7 +1100,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         let source = temp.path().join("selected.ko");
         fs::write(
             &source,
-            "seiyaku Selected { include \"state.ko\"; import \"math.ko\" as Math; view fn quote(int cups) -> int { return cups * 10 + total + Math::value(); } }",
+            "seiyaku Selected { include \"state.ko\"; import \"math.ko\" as Math; view fn quote(int cups) authorize(anyone) -> int { return cups * 10 + total + Math::value(); } }",
         )?;
         fs::write(
             temp.path().join("state.ko"),
@@ -1139,17 +1168,17 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         if hybrid {
             fs::write(
                 root.join("contract.ko"),
-                "seiyaku SelectedRoot { view fn quote(int cups) -> int { return cups * 3; } }",
+                "seiyaku SelectedRoot { view fn quote(int cups) authorize(anyone) -> int { return cups * 3; } }",
             )?;
         }
         for (name, source) in [
             (
                 "app",
-                "seiyaku SelectedApp { view fn quote(int cups) -> int { return cups; } }",
+                "seiyaku SelectedApp { view fn quote(int cups) authorize(anyone) -> int { return cups; } }",
             ),
             (
                 "other",
-                "seiyaku DefaultOther { view fn quote(int cups) -> int { return cups * 2; } }",
+                "seiyaku DefaultOther { view fn quote(int cups) authorize(anyone) -> int { return cups * 2; } }",
             ),
         ] {
             fs::write(

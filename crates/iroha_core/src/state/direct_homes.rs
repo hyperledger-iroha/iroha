@@ -217,11 +217,16 @@ impl StateBlock<'_> {
                 self.world.axt_asset_incarnations.get_before_block(id),
                 incarnation_after,
             )?;
-            direct_home_dataspace(
+            let home = direct_home_dataspace(
                 self.world.asset_definition_direct_homes.get(id),
                 self.world.asset_definitions.get(id),
                 incarnation_after,
             )?;
+            if let Some(definition) = self.world.asset_definitions.get(id) {
+                iroha_data_model::asset::AssetDefinitionHome::validate_definition(
+                    definition, home,
+                )?;
+            }
         }
         Ok(())
     }

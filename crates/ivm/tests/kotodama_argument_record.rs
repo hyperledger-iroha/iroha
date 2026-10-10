@@ -176,7 +176,7 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
 fn compiled_wrapper_decodes_record_and_loads_aligned_words() {
     let source = r#"
 seiyaku ArgumentRecordRuntime {
-  view fn run(int count, Name label) -> int {
+  view fn run(int count, Name label) authorize(anyone) -> int {
     let _label = label;
     return count;
   }
@@ -212,7 +212,7 @@ seiyaku ArgumentRecordRuntime {
 fn single_json_parameter_is_a_named_record_field_not_the_transport_object() {
     let source = r#"
 seiyaku JsonArgumentRecordRuntime {
-  view fn run(Json event) -> Option<int> {
+  view fn run(Json event) authorize(anyone) -> Option<int> {
     event.get_int(Name::parse("value"))
   }
 }
@@ -280,7 +280,7 @@ seiyaku RecursiveArgumentRecordRuntime {
 
   view fn run(
     Request request,
-    (int, bool) pair,
+    (int, bool) authorize(anyone) pair,
     Option<int> maybe,
     Result<int, bool> outcome
   ) -> int {

@@ -8,7 +8,7 @@ fn valid_source_round_trips_with_unicode_in_trivia_and_strings() {
     let text = r##"/* leading comment */
 seiyaku Words {
     // 言葉 and spacing must survive
-    view fn cafe(int value) -> string {
+    view fn cafe(int value) authorize(anyone) -> string {
         let message = r#"こんにちは // not a comment"#;
         return message;
     }
@@ -30,7 +30,7 @@ seiyaku Words {
 }
 #[test]
 fn non_ascii_identifier_characters_are_lossless_errors() {
-    let text = "seiyaku Café { view fn ping() { return; } }";
+    let text = "seiyaku Café { view fn ping() authorize(anyone) { return; } }";
     let source = SourceFile::new(SourceId(8), "non-ascii-ident.ko", text);
     let output = parse(&source, FrontendBudget::v1());
     assert_eq!(output.tree.text(&source), text);

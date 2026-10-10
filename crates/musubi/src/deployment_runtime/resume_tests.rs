@@ -51,7 +51,9 @@ fn plan_for_alias(runtime: &DeploymentRuntime, nonce: u64, alias: &str) -> Resul
     let config = &runtime.config;
     let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
     let artifact = kotodama_lang::compiler::Compiler::new()
-        .compile_source("seiyaku ResumeFixture { view fn value() -> int { return 1; } }")
+        .compile_source(
+            "seiyaku ResumeFixture { view fn value() authorize(anyone) -> int { return 1; } }",
+        )
         .map_err(|error| eyre!(error))?;
     let verified = ivm::verify_contract_artifact(&artifact).map_err(|error| eyre!(error))?;
     let alias: ContractAlias = alias.parse()?;

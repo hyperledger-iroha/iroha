@@ -172,54 +172,9 @@ impl RejectionExpectation {
     }
 }
 
-/// Spelling hint for the keys of a JSON argument record that name no declared parameter.
-///
-/// Each undeclared key is paired with the closest declared parameter that the record omits, so a
-/// misspelt key reads as a typo rather than as a missing argument. Returns `None` when the payload
-/// is not a JSON object or every key is declared.
-#[must_use]
-pub fn undeclared_argument_keys_hint(declared: &[&str], payload: &str) -> Option<String> {
-    let value: norito::json::Value = norito::json::from_str(payload).ok()?;
-    let object = value.as_object()?;
-    let omitted = declared
-        .iter()
-        .copied()
-        .filter(|parameter| object.get(*parameter).is_none())
-        .collect::<Vec<_>>();
-    let hints = object
-        .keys()
-        .filter(|key| !declared.contains(&key.as_str()))
-        .map(
-            |key| match crate::diagnostic::suggest::closest(key, omitted.iter().copied()) {
-                Some(parameter) => {
-                    format!("`{key}` is not a parameter; did you mean `{parameter}`?")
-                }
-                None => format!("`{key}` is not a parameter"),
-            },
-        )
-        .collect::<Vec<_>>();
-    (!hints.is_empty()).then(|| hints.join("; "))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn undeclared_argument_keys_are_paired_with_omitted_parameters() {
-        assert_eq!(
-            undeclared_argument_keys_hint(&["initial"], r#"{"inital":"1"}"#).as_deref(),
-            Some("`inital` is not a parameter; did you mean `initial`?")
-        );
-        assert_eq!(
-            undeclared_argument_keys_hint(&["amount"], r#"{"amount":"1","memo":"x"}"#).as_deref(),
-            Some("`memo` is not a parameter")
-        );
-        assert_eq!(
-            undeclared_argument_keys_hint(&["amount"], r#"{"amount":"1"}"#),
-            None
-        );
-        assert_eq!(undeclared_argument_keys_hint(&["amount"], "[1]"), None);
-    }
     #[test]
     fn assertion_sites_roundtrip_the_canonical_codec() {
         for site in [

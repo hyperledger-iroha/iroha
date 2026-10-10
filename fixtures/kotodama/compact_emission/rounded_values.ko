@@ -1,5 +1,5 @@
 seiyaku CompactRoundedValues {
-    view fn main() -> (
+    view fn main() authorize(anyone) -> (
         quantity,
         quantity,
         quantity,

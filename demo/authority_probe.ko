@@ -1,5 +1,6 @@
 seiyaku AuthorityProbe {
-    kotoage fn main() authorize("Admin") {
+    permission Admin;
+    kotoage fn main() authorize(Admin) {
         let caller = context::authority();
         let alice = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
         let key = Name::parse("authority_probe");

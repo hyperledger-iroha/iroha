@@ -57,7 +57,7 @@ function scopeOf(tokens, text, occurrence = 0) {
 test("types, namespaces, sum variants and labels keep distinct scopes", async () => {
   const tokens = await tokenize([
     "seiyaku Demo {",
-    "    kotoage fn pay(AccountId who) authorize(\"CanPay\") {",
+    "    kotoage fn pay(AccountId who) authorize(CanPay) {",
     "        let account = AccountId::parse(\"alice\");",
     "        let maybe = Option::some(1);",
     "        let mode = Rounding::floor;",
@@ -94,8 +94,8 @@ test("conditional branches are values, not named labels", async () => {
 test("both spellings of every branded keyword share one scope in every layout", async () => {
   const layouts = [
     keyword => `${keyword} Demo {\n}`,
-    keyword => `    ${keyword} fn bump() authorize("P") {}`,
-    keyword => `    ${keyword}\n    fn bump() authorize("P") {}`,
+    keyword => `    ${keyword} fn bump() authorize(P) {}`,
+    keyword => `    ${keyword}\n    fn bump() authorize(P) {}`,
     keyword => `    ${keyword}() {}`,
     keyword => `        test::invoke_kotoage(${keyword}: "bump");`,
   ];
@@ -119,7 +119,7 @@ test("trigger bodies highlight their contextual words only inside the trigger", 
     "            tag: \"treasury\";",
     "        }",
     "    }",
-    "    kotoage fn sweep() authorize(\"Admin\") {",
+    "    kotoage fn sweep() authorize(Admin) {",
     "        let block = 1;",
     "    }",
   ].join("\n"));
@@ -163,4 +163,28 @@ test("shipped samples tokenize exactly as the reviewed snapshot", async () => {
     fs.writeFileSync(snapshotPath, rendered);
   }
   assert.equal(rendered, fs.readFileSync(snapshotPath, "utf8"));
+});
+
+// Trigger schedule labels are contextual; ordinary local names stay ordinary.
+test("trigger schedules highlight labelled milliseconds contextually", async () => {
+  const tokens = await tokenize([
+    "seiyaku Clock {",
+    "    trigger tick -> run {",
+    "        on time schedule(start_ms: 0, period_ms: 60 * 1_000);",
+    "    }",
+    "    fn helper(int start_ms) -> int { start_ms }",
+    "}",
+  ].join("\n"));
+  for (const word of ["schedule", "start_ms", "period_ms"]) {
+    assert.equal(scopeOf(tokens, word), "meta.trigger.kotodama keyword.other.trigger.kotodama", word);
+  }
+  assert.equal(scopeOf(tokens, "start_ms", 1), "-");
+});
+
+test("ordinary enums are data declarations and error enums retain error scope", async () => {
+  const tokens = await tokenize("module Data { enum Status { Active = 1 } error enum Failure { Missing = 1 } }");
+  assert.equal(scopeOf(tokens, "enum"), "keyword.declaration.enum.kotodama");
+  assert.equal(scopeOf(tokens, "Status"), "entity.name.type.enum.kotodama");
+  assert.equal(scopeOf(tokens, "error"), "keyword.declaration.error.kotodama");
+  assert.equal(scopeOf(tokens, "enum", 1), "keyword.declaration.error.kotodama");
 });

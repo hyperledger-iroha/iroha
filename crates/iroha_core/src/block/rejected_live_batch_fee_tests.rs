@@ -204,8 +204,8 @@ fn rejected_contract_only_batch_vm_error_still_charges_nexus_fee() {
     let (program, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
             r#"
-seiyaku MeteredFailure {
-  kotoage fn run() authorize("CanInvokeContractEntrypoint") {
+seiyaku MeteredFailure { permission CanInvokeContractEntrypoint;
+  kotoage fn run() authorize(CanInvokeContractEntrypoint) {
 ledger::account::set_metadata(
   account: context::authority(),
   key: Name::parse("must_not_be_written"),

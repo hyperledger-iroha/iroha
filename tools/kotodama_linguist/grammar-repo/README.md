@@ -1,8 +1,9 @@
 # Kotodama for Visual Studio Code
 
 Kotodama is the smart-contract language of the Iroha Virtual Machine: `.ko`
-sources compile to IVM bytecode (`.to`). This extension starts the `koto`
-language server (`koto lsp`) and ships the canonical TextMate grammar.
+sources compile to IVM bytecode (`.to`). This extension starts `musubi lsp` for
+Musubi projects and `koto lsp` for standalone sources, and ships the canonical
+TextMate grammar.
 
 Editor features come from the compiler itself:
 
@@ -13,8 +14,9 @@ Editor features come from the compiler itself:
   function bodies, members after `.`, paths after `::`);
 - hover and signature help rendered in Kotodama syntax, with the documentation
   of every builtin;
-- definition, references, highlights and rename, including the
-  `kotoage: "name"` selector strings that tests use to call entrypoints;
+- definition, references, highlights and rename, including compile-time checked
+  `kotoage: "name"` test selector references; test calls pass schema-checked typed
+  argument records;
 - document outline, workspace symbols, folding and semantic highlighting;
 - a **Run test** code lens on every `#[test]` function;
 - formatting with `koto fmt` rules and quick fixes.
@@ -26,18 +28,18 @@ by completion; hover echoes the spelling you wrote.
 
 ## Install
 
-The extension and the `koto` executable must come from the same Iroha checkout
+The extension and the `koto` and `musubi` executables must come from the same Iroha checkout
 or release. The language server reports its version in the `serverInfo` of
 its LSP `initialize` response.
 
-1. Build `koto` from the Iroha workspace:
+1. Build both tools from the Iroha workspace:
 
    ```sh
-   cargo build --release -p kotodama_toolchain --bin koto
+   cargo build --release -p kotodama_toolchain --bin koto -p musubi --bin musubi
    ```
 
-   Put `target/release/koto` on `PATH`, or note its absolute path for
-   `kotodama.serverPath`.
+   Put `target/release` on `PATH`, or set the absolute executable paths in
+   `kotodama.kotoPath` and `kotodama.musubiPath`.
 
 2. Package and install the extension from this directory (Node.js 22 or newer):
 
@@ -58,30 +60,45 @@ its LSP `initialize` response.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `kotodama.serverPath` | `koto` | Path to the `koto` executable. |
-| `kotodama.project` | `kotodama.project.json` | Exact project graph, relative to the workspace folder; `${workspaceFolder}` expands. |
+| `kotodama.kotoPath` | `koto` | Standalone compiler executable. |
+| `kotodama.musubiPath` | `musubi` | Project tool executable. |
+| `kotodama.manifestPath` | empty | Explicit `Musubi.toml`, relative to the workspace folder; `${workspaceFolder}` expands. Otherwise discover the nearest ancestor manifest. |
+| `kotodama.contract` | empty | Select a unique target name or `namespace/package::target` for navigation in shared sources. |
+| `kotodama.chainDiscriminant` | `753` | Account-address chain discriminant for standalone sources. |
 | `kotodama.zk` | `false` | Enable the explicit ZK compilation capability. |
 
-The client starts one server per workspace folder as
-`koto lsp [--project <kotodama.project.json>] [--zk]`. With a project manifest
-the server analyzes exactly that source and package graph. Without one, each
-open seiyaku is analyzed with the sources its `include`/`import` directives
-name, read relative to its own directory; imports are never inferred from
-other files. Standalone test modules are attached to the seiyaku named by their
-`koto_test` target, so renaming an entrypoint also updates the test selectors.
+The client starts one server per workspace folder. A folder with a Musubi
+manifest uses `musubi lsp --manifest-path <Musubi.toml> [--contract <target>]
+[--zk]`. Musubi resolves the same manifest and lockfile as its build and test
+commands. Diagnostics include all selected targets; navigation in a source with
+several distinct package identities requires an explicit contract selection.
+Local workspace manifest buffers participate in resolution and export rename.
+Cached dependency manifests remain read-only.
 
-**Kotodama: Restart Language Server** restarts every client, for example after
-replacing the `koto` executable. Configuration changes restart clients
-automatically. The client requires a trusted workspace before starting a
-configured executable and passes arguments without a shell. The **Run test**
-code lens runs `koto test run --filter <name> --exact <source>` as a task.
+A folder without a manifest uses `koto lsp --source-root <folder> [--zk]`.
+Each open seiyaku follows its own `include` and `import` directives; other open
+files do not establish imports. Standalone test modules attach to the seiyaku
+named by `koto_test { target: ... }`, including entrypoint selector rename.
+For several independent projects inside one large directory, add their folders
+to the editor workspace or set an explicit manifest for the folder.
+
+**Kotodama: Restart Language Server** restarts every client after replacing an
+executable. Configuration and workspace-folder changes restart clients
+automatically. The extension requires a trusted workspace and passes arguments
+without a shell. **Run test** invokes the matching tool with an exact test
+filter; project tests retain their manifest, package, and contract selection.
+Both tools retain the resolved chain discriminant and ZK compilation capability.
+Project tests also retain explicit network/client-config selection and run with
+`--locked --offline`, preserving the dependency graph used by the editor.
 
 ## Other editors
 
-Any editor with a Language Server Protocol client can run the same server over
-stdio. Configure the command `koto lsp` (add `--project <manifest>` and `--zk`
-as needed) for files with the `.ko` extension. The server uses UTF-16 positions
-and full-document synchronization.
+Any Language Server Protocol client can run either server over stdio. Use
+`musubi lsp --manifest-path <Musubi.toml>` for a project, adding `--contract`
+when navigating an ambiguous shared source. Use `koto lsp --source-root <dir>`
+for standalone sources. Both accept `--zk`, use UTF-16 positions and full-document
+synchronization. Forward editable `Musubi.toml` buffers to the project server
+without replacing the editor's TOML formatting and completion providers.
 
 The TextMate grammar in `syntaxes/` is generated by
 `scripts/regenerate_kotodama_syntax.py` from

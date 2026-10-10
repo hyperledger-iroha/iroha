@@ -500,12 +500,15 @@ The closed `iroha.taira.public-reset.topology-intent.v1` contains topology, path
 and explicit authority only. Computed release/config/artifact pins and generated
 beacon plans are not fields. Native validation extracts the
 canary public identity from its exact onboarding request and validates the signed
-genesis against the generated raw manifest. The command atomically writes five
+genesis against the generated raw manifest. The command atomically writes six
 public artifacts: `genesis.json`, `genesis.signed.nrt`, `genesis.hash`,
-`canary-onboarding-request.json` and `public-inputs.json`, with mode0644 inside a
-mode0700 directory. The typed record binds `raw_manifest_sha256` and distinguishes
-the native consensus genesis hash from the signed wire's SHA256. An incomplete
-five-file bundle is rejected; prepare a fresh complete output. Repeating an
+`nexus-amx-context.v1.bin`, `canary-onboarding-request.json` and
+`public-inputs.json`, with mode0644 inside a mode0700 directory. The typed record
+binds `raw_manifest_sha256` and `nexus_amx_context_sha256` and distinguishes
+the native consensus genesis hash from the signed wire's SHA256. The exact context
+preimage must hash to the signed genesis commitment and pass the current typed
+decoder; the generator emits it alongside signed genesis. An incomplete six-file
+bundle is rejected; prepare a fresh complete output. Repeating an
 identical complete request verifies the retained bundle without replacing it.
 The explicit `--canary-public-key PATH` alternative is mutually exclusive with
 `--intent` and reads only that public key.
@@ -528,8 +531,8 @@ units. The native request is not hand-authored JSON.
 `public-reset assemble --intent PATH` and `authorize` require the same
 `--public-inputs DIR`, `--beacon-inputs PATH`, four ordered
 `--beacon-validator-unit` paths, runtime client, four validator client configs,
-operator key, onboarding token, initial validator units, edge unit, and known
-hosts. Full scope also requires its Inrou stage. Native assembly independently
+operator key, onboarding token, initial validator units, native edge capability,
+and known hosts. Full scope also requires its Inrou stage. Native assembly independently
 rederives the source, credential joins, signed genesis, beacon request, and seat
 map before signing. Apply receives only admitted runtime inputs.
 

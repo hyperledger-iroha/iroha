@@ -582,7 +582,7 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
         assert_eq!(variant.get("properties").and_then(Value::as_object).map(object_field_set), Some(expected));
     }
     for (schema, expected) in contract_rows! {
-        "GovernedContractLifecycleV1", contract_words(concat!("version origin origin_account origin_proposal_content_id_hex ", "origin_governance_attempt_id_hex owner pending_owner parliament_delegated ", "active_code_hash_hex revision emergency_hold")) .into_iter() .collect::<BTreeSet<_>>();
+        "GovernedContractLifecycleV1", contract_words(concat!("version origin origin_account origin_proposal_content_id_hex ", "origin_governance_attempt_id_hex owner pending_owner parliament_delegated ", "active_code_hash_hex retained_code_hash_hex revision emergency_hold")) .into_iter() .collect::<BTreeSet<_>>();
         "GovernedContractEmergencyHoldV1", contract_words(concat!("incident_digest_hex proposal_content_id_hex governance_attempt_id_hex reason ", "imposed_at_height expires_at_height")) .into_iter() .collect::<BTreeSet<_>>();
     } {
         let schema = contract_schema(schemas, schema);

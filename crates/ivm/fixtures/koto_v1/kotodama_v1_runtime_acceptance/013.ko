@@ -1,5 +1,5 @@
 
-seiyaku ShortCircuitAcceptance {
+seiyaku ShortCircuitAcceptance { permission WriteState;
   error enum LogicError {
     FalseAndChangedResult = 1,
     TrueOrChangedResult = 2,
@@ -16,7 +16,7 @@ seiyaku ShortCircuitAcceptance {
     return result;
   }
 
-  kotoage fn run() -> int authorize("WriteState") {
+  kotoage fn run() authorize(WriteState) -> int {
     let false_and = false && bump(result: true);
     let true_or = true || bump(result: false);
     let true_and = true && bump(result: true);

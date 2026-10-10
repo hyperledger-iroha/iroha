@@ -6,7 +6,7 @@ use crate::{
     smartcontracts::Execute,
     state::{StateTransaction, World, WorldReadOnly},
     validation_fee::{
-        VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION, VALIDATION_FEE_POOL_SWAP_ENTRYPOINT,
+        VALIDATION_FEE_POOL_SWAP_ENTRYPOINT,
     },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -196,7 +196,7 @@ fn minimal_bound_contract_artifact() -> (
                 ],
             },
         ),
-        permission: Some(VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION.to_owned()),
+        authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission("Payout".parse().unwrap()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
         access_hints_complete: None,
@@ -205,10 +205,14 @@ fn minimal_bound_contract_artifact() -> (
     };
     let pool_entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
         name: VALIDATION_FEE_POOL_SWAP_ENTRYPOINT.to_owned(),
+        authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission("SwapQuotePublic".parse().unwrap()),
         ..wrapper_entrypoint.clone()
     };
     let entrypoints = [wrapper_entrypoint, pool_entrypoint];
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        events: Vec::new(),
+        enum_types: Vec::new(),
+        permissions: ["Payout", "SwapQuotePublic"].into_iter().map(|name| iroha_data_model::smart_contract::manifest::ContractPermissionDescriptorV1 { name: name.parse().unwrap(), scope: iroha_data_model::smart_contract::manifest::ContractPermissionScopeV1::Instance }).collect(),
         callables: (0..entrypoints.len())
             .map(|index| unit_callable(index as u64 * 16))
             .collect(),
@@ -228,7 +232,7 @@ fn minimal_bound_contract_artifact() -> (
                 argument_schema: entrypoint.argument_schema.clone(),
                 return_type: entrypoint.return_type.clone(),
                 return_schema: entrypoint.return_schema.clone(),
-                permission: entrypoint.permission.clone(),
+                authorization: entrypoint.authorization.clone(),
                 read_keys: entrypoint.read_keys.clone(),
                 write_keys: entrypoint.write_keys.clone(),
                 access_hints_complete: entrypoint.access_hints_complete,

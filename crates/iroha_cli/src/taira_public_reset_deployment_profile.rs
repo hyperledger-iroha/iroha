@@ -198,6 +198,7 @@ mod tests {
             network_id: NetworkId::from_genesis_hash(genesis.hash()),
             genesis_hash: genesis_hash.clone(),
             signed_genesis_sha256: sha256_hex(&wire),
+            nexus_amx_context_sha256: "11".repeat(32),
             raw_manifest_sha256: "1".repeat(64),
             genesis_public_key: key.public_key().clone(),
             canary_public_key: canary.public_key().clone(),

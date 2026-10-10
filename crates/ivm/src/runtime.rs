@@ -104,7 +104,7 @@ mod tests {
     fn owned_host_retains_prepared_arguments_and_requires_exact_prepayment() {
         let (program, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
-                "seiyaku Prepared { view fn echo(bool ready) -> bool { return ready; } }",
+                "seiyaku Prepared { view fn echo(bool ready) authorize(anyone) -> bool { return ready; } }",
             )
             .expect("compile parameterized view");
         let verified = crate::verify_contract_artifact(&program).expect("verify view");

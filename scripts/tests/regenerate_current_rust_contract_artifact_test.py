@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -1174,3 +1175,78 @@ def test_check_reports_stale_fixture_diff(tmp_path: Path) -> None:
 
     assert '"old": true' in str(raised.value)
     assert '"new": true' in str(raised.value)
+
+
+def _static_local_javascript_imports(source: str) -> list[str]:
+    """Find static ESM edges, ignoring comments, literals, and dynamic imports."""
+    identifier = r"[\w$]+"
+    namespace = rf"\*\s+as\s+{identifier}"
+    bindings = rf"(?:\{{[^{{}}]*\}}|{namespace})"
+    clause = rf"(?:{bindings}|{identifier}(?:\s*,\s*{bindings})?)"
+    declaration = (
+        rf"(?:\bimport\s+(?:{clause}\s+from\s+)?"
+        rf"|\bexport\s+(?:\{{[^{{}}]*\}}|\*(?:\s+as\s+{identifier})?)\s+from\s+)"
+        r"(?P<quote>['\"])(?P<specifier>[^'\"\r\n]+)(?P=quote)"
+    )
+    tokens = re.compile(
+        r"//[^\n]*|/\*[\s\S]*?\*/|`(?:\\.|[^`\\])*`"
+        r"|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|" + declaration
+    )
+    return [
+        match["specifier"]
+        for match in tokens.finditer(source)
+        if match["specifier"] is not None and match["specifier"].startswith(".")
+    ]
+
+
+def test_static_javascript_import_scanner_handles_module_forms() -> None:
+    source = """
+        import './side-effect.js';
+        import Default from "./default.js";
+        import { first,
+ second as renamed } from './named.js';
+        import * as namespace from './namespace.js';
+        import Default, { named } from './combined.js';
+        export { original as forwarded } from './reexport.js';
+        export * from './all.js';
+        export * as group from './group.js';
+        import { external } from 'external-package';
+        // import ignored from './comment.js';
+        /* export * from './block-comment.js'; */
+        const text = "import ignored from './string.js'";
+        const template = `export * from './template.js'`;
+        import('./dynamic.js');
+        import.meta.url;
+    """
+    assert _static_local_javascript_imports(source) == [
+        './side-effect.js', './default.js', './named.js', './namespace.js',
+        './combined.js', './reexport.js', './all.js', './group.js',
+    ]
+
+
+def test_compiler_metadata_parser_dependencies_have_source_custody() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source_root = Path("javascript/iroha_js/src")
+    pending = [
+        source_root / "ivmArtifact.js",
+        source_root / "kotodamaCompiler/normalize.js",
+    ]
+    discovered: set[Path] = set()
+    while pending:
+        path = pending.pop()
+        if path in discovered:
+            continue
+        assert path.is_relative_to(source_root), f"parser import escaped SDK source: {path}"
+        assert path.suffix == ".js", f"parser dependency must be an explicit JS file: {path}"
+        discovered.add(path)
+        for specifier in _static_local_javascript_imports((root / path).read_text(encoding="utf-8")):
+            dependency = (root / path.parent / specifier).resolve().relative_to(root.resolve())
+            pending.append(dependency)
+
+    declared = {path for path in MODULE.ROOT_INPUTS if path.is_relative_to(source_root)}
+    assert discovered == declared
+    manifest = MODULE.tomllib.loads((root / "generated-files.toml").read_text(encoding="utf-8"))
+    owners = [entry for entry in manifest["generated"] if str(MODULE.FIXTURE_PATH) in entry["outputs"]]
+    assert len(owners) == 1
+    owned = {Path(path) for path in owners[0]["inputs"] if Path(path).is_relative_to(source_root)}
+    assert discovered == owned

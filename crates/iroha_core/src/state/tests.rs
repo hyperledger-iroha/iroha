@@ -1425,8 +1425,8 @@ state_test! { sync trigger_batch_contract_calls_advance_nft_sequence
     };
     use iroha_test_samples::ALICE_KEYPAIR;
     let_row! { (program, manifest) = kotodama_lang::compiler::Compiler::new() .compile_source_with_manifest( r#"
-seiyaku SequentialNfts {
-  kotoage fn run() authorize("CanInvokeContractEntrypoint") {
+seiyaku SequentialNfts { permission CanInvokeContractEntrypoint;
+  kotoage fn run() authorize(CanInvokeContractEntrypoint) {
 ledger::nft::create_for_all_users();
   }
 }
@@ -1993,6 +1993,7 @@ state_test! { sync contract_lifecycle_survives_state_snapshot_and_preserves_cano
         Some(ContractLifecycleOwnerV1::Account(pending_owner.clone()));
     binding.lifecycle.parliament_delegation = ContractParliamentDelegationV1::Lifecycle;
     binding.lifecycle.active_code_hash = Some(active_code_hash);
+    binding.lifecycle.retained_code_hash = Some(active_code_hash);
     binding.lifecycle.revision = 7;
     binding.lifecycle.emergency_hold = Some(ContractEmergencyHoldV1 {
         incident_digest: [0xA1; 32],
@@ -26980,6 +26981,9 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
     assert!(step.0.is_empty());
     transaction.world.contract_manifests.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, generic_code_hash),
         iroha_data_model::smart_contract::manifest::ContractManifest {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             seiyaku_name: None,
             code_hash: Some(generic_code_hash),
             abi_hash: Some(Hash::prehashed(ivm::syscalls::compute_abi_hash(
@@ -27061,8 +27065,8 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
     const REQUIRED_PERMISSION: &str = "raw_trigger_run";
     let trigger_id: TriggerId = "protected_raw_callback".parse().expect("trigger id");
     let_row! { src = r#"
-        seiyaku ProtectedRawTrigger {
-          kotoage fn main(int marker, Json event) authorize("raw_trigger_run") {
+        seiyaku ProtectedRawTrigger { permission raw_trigger_run;
+          kotoage fn main(int marker, Json event) authorize(raw_trigger_run) {
             let _marker = marker;
             ledger::account::set_metadata(
               account: context::seiyaku_subject(),
@@ -27447,8 +27451,8 @@ state_test! { sync identityless_raw_trigger_rejects_before_event_argument_decode
     let state = blank_state();
     let trigger_id: TriggerId = "identityless_raw_callback".parse().expect("trigger id");
     let_row! { program = kotodama_lang::compiler::Compiler::new() .compile_source( r#"
-seiyaku IdentitylessRawCallback {
-  kotoage fn main(Json ev) authorize("identityless_raw_callback_run") {
+seiyaku IdentitylessRawCallback { permission identityless_raw_callback_run;
+  kotoage fn main(Json ev) authorize(identityless_raw_callback_run) {
 let _ev = ev;
   }
 }
@@ -27513,43 +27517,42 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
     });
     use crate::smartcontracts::code::{activate_instance, register_code_bytes, register_manifest};
     use iroha_data_model::{
-        events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+        events::execute_trigger::ExecuteTriggerEvent,
         smart_contract::ContractAddress,
-        transaction::{
-            Executable,
-            executable::{ContractArgumentRecord, ContractInvocation},
-        },
-        trigger::{
-            Trigger,
-            action::{Action, Repeats},
-        },
     };
     use iroha_test_samples::ALICE_KEYPAIR;
     use kotodama_lang::compiler::Compiler as KotodamaCompiler;
     let state = authenticate_trigger_fixture(blank_state());
     const REQUIRED_PERMISSION: &str = "contract_trigger_run";
     let_row! { src = r#"
-        seiyaku ProtectedContractCallTrigger {
-          kotoage fn run(int marker) authorize("contract_trigger_run") {
-            let _marker = marker;
+        seiyaku ProtectedContractCallTrigger { permission contract_trigger_run;
+          error enum TriggerProbeError { UnexpectedMarker = 1 }
+          kotoage fn run(int marker) authorize(contract_trigger_run) {
+            require(marker == 9, TriggerProbeError::UnexpectedMarker);
             ledger::account::set_metadata(
               account: context::seiyaku_subject(),
               key: Name::parse("contract_trigger_marker"),
-              value: Json::parse("{\"authorized\":true}")
+              value: context::trigger_event()
             );
           }
 
           trigger protected_contract_callback -> run {
             on execute trigger protected_contract_callback;
           }
+          kotoage fn capture() authorize(anyone) {
+            ledger::account::set_metadata(
+              account: context::seiyaku_subject(),
+              key: Name::parse("zero_parameter_event"),
+              value: context::trigger_event()
+            );
+          }
+          trigger capture_contract_callback -> capture {
+            on execute trigger capture_contract_callback;
+          }
         }
     "# };
     let_row! { (code, mut manifest) = KotodamaCompiler::new() .compile_source_with_manifest(src) .expect("compile contract-call trigger probe") };
-    let parsed = ivm::ProgramMetadata::parse(&code).expect("parse trigger contract artifact");
-    let_row! { argument_schema = parsed .contract_interface .as_ref() .and_then(|interface| { interface .entrypoints .iter() .find(|entrypoint| entrypoint.name == "run") }) .and_then(|entrypoint| entrypoint.argument_schema.as_ref()) .expect("parameterized trigger callback schema") };
-    let_row! { callback_arguments = ivm_abi::arguments::encode_argument_record_from_json( argument_schema, &Json::from(norito::json!({ "marker": "9" })), ) .expect("encode trigger callback arguments") };
-    let_row! { callback_arguments = ContractArgumentRecord::try_new(callback_arguments) .expect("bounded trigger callback arguments") };
-    let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
+    let trigger_id: TriggerId = "protected_contract_callback".parse().unwrap();
     let_row! { contract_address = ContractAddress::derive(state.network_id_ref(), &ALICE_ID, 0, DataSpaceId::UNIVERSAL) .expect("derive contract address") };
     let contract_subject = contract_address.subject_id();
     let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("completed original State read").expect("original trigger parent").as_ref().clone()) };
@@ -27580,10 +27583,13 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
         );
         activate_instance(&ALICE_ID, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate contract instance");
-        let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( Executable::ContractCall(ContractInvocation { contract_address: contract_address.clone(), expected_code_hash: code_hash, entrypoint: "run".to_owned(), arguments: Some(callback_arguments), }), Repeats::Indefinitely, ALICE_ID.clone(), ExecuteTriggerEventFilter::new() .for_trigger(trigger_id.clone()) .under_authority(ALICE_ID.clone()), ) .expect("trigger action fixture satisfies validation invariants"), ) };
-        Register::trigger(trigger)
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        let callback = stx.world.triggers.by_call_triggers().get(&trigger_id)
+            .expect("activation registers the signed manifest callback");
+        let ExecutableRef::ContractCall(invocation) = callback.executable() else {
+            panic!("activated callback is a typed contract invocation");
+        };
+        assert!(invocation.arguments.is_none());
+        assert_eq!(callback.authority(), &contract_subject);
         stx.apply_callback_for_testing().expect("capture successful component callbacks");
         state_block.commit_world_overlay_for_testing().unwrap();
     }
@@ -27592,7 +27598,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
         let mut state_block = state.block(block2.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
         let_row! { metadata_marker: Name = "contract_trigger_marker" .parse() .expect("valid ContractCall trigger metadata marker") };
-        let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: ALICE_ID.clone(), args: Json::from_raw_json(r#"{"condition_code":7}"#.to_owned()) .expect("valid trigger arguments JSON"), } };
+        let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: contract_subject.clone(), args: Json::from_raw_json(r#"{"marker":"9"}"#.to_owned()) .expect("valid trigger arguments JSON"), } };
         let denied_events_before = stx.world.external_event_buf.len();
         ivm::reset_argument_record_decode_count();
         let_row! { denied = stx .execute_called_trigger(&trigger_id, &event) .expect_err("trigger authority without the entrypoint permission must be denied") };
@@ -27623,10 +27629,18 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
             denied_events_before,
             "denied ContractCall trigger must emit no completion event"
         );
-        let callback_permission = Permission::new(REQUIRED_PERMISSION.into(), Json::new(()));
-        Grant::account_permission(callback_permission.clone(), ALICE_ID.clone())
+        let callback_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanUseContractPermission {
+            contract: contract_address.clone(),
+            permission: REQUIRED_PERMISSION.parse().unwrap(),
+        }.into();
+        Grant::account_permission(callback_permission.clone(), contract_subject.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant trigger entrypoint permission");
+        let mut malformed_event = event.clone();
+        malformed_event.args = Json::from(norito::json!({"marker": 9}));
+        assert!(stx.execute_called_trigger(&trigger_id, &malformed_event).is_err(),
+            "typed callback arguments reject noncanonical numeric JSON");
+        ivm::reset_argument_record_decode_count();
         stx.execute_called_trigger(&trigger_id, &event)
             .expect("granted contract-call trigger should consume its canonical arguments");
         assert_eq!(
@@ -27635,6 +27649,17 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
             "authorized ContractCall trigger arguments must be prepared exactly once"
         );
         let_row! { authorized_marker = stx .world .account(&contract_subject) .expect("ContractCall trigger contract subject account") .metadata() .get(&metadata_marker) .cloned() .expect("authorized trigger writes its metadata marker") };
+        assert_eq!(authorized_marker, event.args, "context retains the exact firing payload");
+        let capture_id: TriggerId = "capture_contract_callback".parse().unwrap();
+        let capture_event = ExecuteTriggerEvent {
+            trigger_id: capture_id.clone(), authority: contract_subject.clone(),
+            args: Json::from(norito::json!({"note": "no callback parameters"})),
+        };
+        stx.execute_called_trigger(&capture_id, &capture_event)
+            .expect("zero-parameter callback preserves its event context");
+        assert_eq!(stx.world.account(&contract_subject).unwrap().metadata()
+            .get(&"zero_parameter_event".parse::<Name>().unwrap()), Some(&capture_event.args));
+
         {
             let binding = stx
                 .world
@@ -27699,7 +27724,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
                 .checked_add(1)
                 .expect("test lifecycle revision advances");
         }
-        Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
+        Revoke::account_permission(callback_permission.clone(), contract_subject.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("revoke trigger entrypoint permission");
         let revoked_events_before = stx.world.external_event_buf.len();
@@ -27732,7 +27757,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
             revoked_events_before,
             "revoked ContractCall trigger must emit no completion event"
         );
-        Grant::account_permission(callback_permission, ALICE_ID.clone())
+        Grant::account_permission(callback_permission, contract_subject.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("restore trigger entrypoint permission");
         stx.world
@@ -27800,7 +27825,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
     let trigger_id: TriggerId = "alias_json_transfer".parse().unwrap();
     let_row! { banking_label = AccountAlias::new( "banking".parse().expect("banking label"), Some(AccountAliasDomain::new(domain_id.name().clone())), DataSpaceId::UNIVERSAL, ) };
     let_row! { src = r#"
-        seiyaku AliasTransfer {
+        seiyaku AliasTransfer { permission alias_transfer_run;
           error enum AliasTransferError {
             UnexpectedKind = 1,
             UnexpectedOperation = 2,
@@ -27817,7 +27842,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
             AccountId account_id,
             DomainId account_domain,
             quantity amount,
-          ) authorize("alias_transfer_run") {
+          ) authorize(alias_transfer_run) {
             require(kind == Name::parse("asset_change"), AliasTransferError::UnexpectedKind);
             require(op == Name::parse("added"), AliasTransferError::UnexpectedOperation);
             require(amount > 0, AliasTransferError::NonPositiveAmount);

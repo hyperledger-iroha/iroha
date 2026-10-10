@@ -4,6 +4,9 @@ Representative liquidity-pool seiyaku for Kotodama grammar validation.	comment.l
 seiyaku	keyword.declaration.contract.kotodama
 PoolManager	entity.name.type.contract.kotodama
 {	punctuation.section.braces.kotodama
+permission	storage.type.permission.kotodama
+Admin	-
+;	punctuation.terminator.statement.kotodama
 state	storage.type.kotodama
 StateMap	support.type.kotodama
 <	keyword.operator.kotodama
@@ -76,14 +79,12 @@ quantity	support.type.kotodama
 amount_b	-
 ,	punctuation.separator.comma.kotodama
 )	punctuation.section.parens.kotodama
-->	keyword.operator.kotodama
-quantity	support.type.kotodama
 authorize	storage.modifier.authorization.kotodama
 (	punctuation.section.parens.kotodama
-"	string.quoted.double.kotodama punctuation.definition.string.begin.kotodama
-Admin	string.quoted.double.kotodama
-"	string.quoted.double.kotodama punctuation.definition.string.end.kotodama
+Admin	-
 )	punctuation.section.parens.kotodama
+->	keyword.operator.kotodama
+quantity	support.type.kotodama
 {	punctuation.section.braces.kotodama
 let	storage.type.kotodama
 quantity	support.type.kotodama
@@ -125,7 +126,7 @@ get	support.function.method.kotodama
 pool	-
 )	punctuation.section.parens.kotodama
 .	punctuation.accessor.kotodama
-unwrap_or	-
+unwrap_or	support.function.method.kotodama
 (	punctuation.section.parens.kotodama
 trader	-
 )	punctuation.section.parens.kotodama
@@ -286,6 +287,9 @@ hajimari and kaizen; either spelling may be used anywhere.	comment.line.double-s
 誓約	keyword.declaration.contract.kotodama
 RewardLedger	entity.name.type.contract.kotodama
 {	punctuation.section.braces.kotodama
+permission	storage.type.permission.kotodama
+CanAwardPoints	-
+;	punctuation.terminator.statement.kotodama
 error	keyword.declaration.error.kotodama
 enum	keyword.declaration.error.kotodama
 RewardError	entity.name.type.enum.kotodama
@@ -346,9 +350,7 @@ points	-
 )	punctuation.section.parens.kotodama
 authorize	storage.modifier.authorization.kotodama
 (	punctuation.section.parens.kotodama
-"	string.quoted.double.kotodama punctuation.definition.string.begin.kotodama
-CanAwardPoints	string.quoted.double.kotodama
-"	string.quoted.double.kotodama punctuation.definition.string.end.kotodama
+CanAwardPoints	-
 )	punctuation.section.parens.kotodama
 {	punctuation.section.braces.kotodama
 require	support.function.kotodama
@@ -372,7 +374,7 @@ get	support.function.method.kotodama
 member	-
 )	punctuation.section.parens.kotodama
 .	punctuation.accessor.kotodama
-unwrap_or	-
+unwrap_or	support.function.method.kotodama
 (	punctuation.section.parens.kotodama
 0	constant.numeric.integer.decimal.kotodama
 )	punctuation.section.parens.kotodama
@@ -394,6 +396,10 @@ balance	entity.name.function.kotodama
 AccountId	support.type.kotodama
 member	-
 )	punctuation.section.parens.kotodama
+authorize	storage.modifier.authorization.kotodama
+(	punctuation.section.parens.kotodama
+anyone	-
+)	punctuation.section.parens.kotodama
 ->	keyword.operator.kotodama
 int	support.type.kotodama
 {	punctuation.section.braces.kotodama
@@ -404,7 +410,7 @@ get	support.function.method.kotodama
 member	-
 )	punctuation.section.parens.kotodama
 .	punctuation.accessor.kotodama
-unwrap_or	-
+unwrap_or	support.function.method.kotodama
 (	punctuation.section.parens.kotodama
 0	constant.numeric.integer.decimal.kotodama
 )	punctuation.section.parens.kotodama
@@ -416,6 +422,9 @@ Representative trigger sample for Kotodama grammar validation.	comment.line.doub
 seiyaku	keyword.declaration.contract.kotodama
 TreasurySweep	entity.name.type.contract.kotodama
 {	punctuation.section.braces.kotodama
+permission	storage.type.permission.kotodama
+Admin	-
+;	punctuation.terminator.statement.kotodama
 error	keyword.declaration.error.kotodama
 enum	keyword.declaration.error.kotodama
 SweepError	entity.name.type.enum.kotodama
@@ -476,9 +485,7 @@ sweep	entity.name.function.kotodama
 )	punctuation.section.parens.kotodama
 authorize	storage.modifier.authorization.kotodama
 (	punctuation.section.parens.kotodama
-"	string.quoted.double.kotodama punctuation.definition.string.begin.kotodama
-Admin	string.quoted.double.kotodama
-"	string.quoted.double.kotodama punctuation.definition.string.end.kotodama
+Admin	-
 )	punctuation.section.parens.kotodama
 {	punctuation.section.braces.kotodama
 let	storage.type.kotodama
@@ -520,6 +527,9 @@ Representative ZK bridge sample for Kotodama grammar validation.	comment.line.do
 seiyaku	keyword.declaration.contract.kotodama
 ZkBridge	entity.name.type.contract.kotodama
 {	punctuation.section.braces.kotodama
+permission	storage.type.permission.kotodama
+Admin	-
+;	punctuation.terminator.statement.kotodama
 error	keyword.declaration.error.kotodama
 enum	keyword.declaration.error.kotodama
 VerificationError	entity.name.type.enum.kotodama
@@ -545,9 +555,7 @@ instruction	-
 )	punctuation.section.parens.kotodama
 authorize	storage.modifier.authorization.kotodama
 (	punctuation.section.parens.kotodama
-"	string.quoted.double.kotodama punctuation.definition.string.begin.kotodama
-Admin	string.quoted.double.kotodama
-"	string.quoted.double.kotodama punctuation.definition.string.end.kotodama
+Admin	-
 )	punctuation.section.parens.kotodama
 {	punctuation.section.braces.kotodama
 let	storage.type.kotodama

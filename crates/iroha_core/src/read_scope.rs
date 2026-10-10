@@ -176,6 +176,7 @@ mod tests {
             world,
             iroha_config::parameters::actual::Nexus {
                 dataspace_catalog,
+                lane_catalog: catalog(),
                 ..Default::default()
             },
             LiveQueryStore::start_test(),

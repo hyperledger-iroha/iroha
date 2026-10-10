@@ -1020,7 +1020,7 @@ test("ToriiBrowserClient streams fragmented multiline CRLF contract events with 
       capturedInit = init;
       assert.equal(
         String(url),
-        "https://torii.example/v1/contracts/events/sse?module=swaps&event_kind=fill",
+        "https://torii.example/v1/contracts/events/sse?contract_address=irohac1router&event_kind=fill",
       );
       return sseResponse(
         [
@@ -1037,7 +1037,7 @@ test("ToriiBrowserClient streams fragmented multiline CRLF contract events with 
   });
 
   const iterator = client.streamContractEvents({
-    module: "swaps",
+    contractAddress: "irohac1router",
     eventKind: "fill",
     signal: abortController.signal,
   });
@@ -1134,7 +1134,7 @@ test("ToriiBrowserClient treats contract stream EOF as a terminal non-replayable
   assert.equal(fetchCalls, 1);
 });
 
-test("ToriiBrowserClient contract event stream accepts only call-derived provenance", () => {
+test("ToriiBrowserClient contract event stream accepts only committed emitted provenance", () => {
   let fetchCalls = 0;
   const client = new ToriiBrowserClient("https://torii.example", {
     fetchImpl: async () => {
@@ -1144,26 +1144,29 @@ test("ToriiBrowserClient contract event stream accepts only call-derived provena
   });
 
   assert.throws(
-    () => client.streamContractEvents({ provenance: "emitted" }),
-    /streamContractEvents options\.provenance must be derived/u,
+    () => client.streamContractEvents({ provenance: "derived" }),
+    /streamContractEvents options\.provenance must be emitted/u,
   );
   assert.equal(fetchCalls, 0);
 });
 
 test("ToriiBrowserClient rejects adversarial query options before fetch", async () => {
+  let fetchCalls = 0;
   const fetchImpl = async () => {
+    fetchCalls += 1;
     throw new Error("fetch should not be called for invalid local options");
   };
   const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
 
-  assert.throws(
+  await assert.rejects(
     () => client.explorerBlocks.list({ page: 0 }),
-    /contains unsupported option page/,
+    { name: "ListQueryError", message: /invalid `query`: unknown member `page`/u },
   );
   assert.throws(
     () => client.resolveAlias("  "),
     /alias must not be empty/,
   );
+  assert.equal(fetchCalls, 0);
 });
 
 test("ToriiBrowserClient preserves error responses for callers", async () => {

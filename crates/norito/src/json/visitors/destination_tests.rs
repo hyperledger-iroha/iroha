@@ -1,5 +1,6 @@
 //! Caller-owned JSON destinations preserve canonical kernels and typed refusal.
 use super::*;
+use crate::json::Value;
 
 #[derive(Debug)]
 enum Failure {
@@ -275,7 +276,7 @@ fn admitted_keys_preserve_original_borrow_and_exact_escaped_pool_charge() {
 #[test]
 fn admitted_key_refusal_preserves_original_release_and_cumulative_colon_order() {
     use iroha_allocation::{
-        AllocationBudget, AllocationRefusal, ChargedBufferError, ReleaseRegistration,
+        AllocationBudget, AllocationRefusal, ChargedBufferError, release::ReleaseRegistration,
     };
     use std::{
         future::Future as _,
@@ -491,11 +492,9 @@ fn admitted_map_keys_preserve_shared_lifecycle_and_original_typed_refusal() {
     assert!(matches!(
         refusal,
         KeyFailure::Allocation(iroha_allocation::ChargedBufferError::Admission(
-            iroha_allocation::AllocationRefusal::Capacity {
+            iroha_allocation::AllocationRefusal::ExceedsLimit {
                 requested_bytes: 4,
-                reserved_bytes: 0,
                 limit_bytes: 0,
-                ..
             }
         ))
     ));

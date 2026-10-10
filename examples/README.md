@@ -11,7 +11,8 @@ koto build examples/hello/hello.ko \
   --out target/examples/hello.to \
   --max-cycles 1000000
 
-koto check examples/transfer/transfer.ko examples/nft/nft.ko
+koto check examples/transfer/transfer.ko
+koto check examples/nft/nft.ko
 koto build examples/transfer/transfer.ko examples/nft/nft.ko
 ```
 
@@ -23,11 +24,9 @@ Use the Iroha CLI for a local named-entrypoint check:
 
 ```sh
 iroha --config defaults/client.toml \
-  app contracts debug-call \
+  contract debug-call \
   --code-file target/examples/hello.to \
-  --source-file examples/hello/hello.ko \
-  --entrypoint main \
-  --payload-json '{}'
+  --entrypoint main
 ```
 
 Kotodama V1 has no implicit entrypoint or source-order dispatch. Always select
@@ -35,6 +34,10 @@ the public `kotoage fn`/`言挙げ fn` or `view fn` by name. The local debugger 
 cycles, syscalls, queued instructions, durable-state changes, and source-aware
 traps. `koto test` reports the gas and cycles of every test, and
 `koto test run --gas-report` adds a per-kotoage gas table.
+
+Pass the build's `--source-map-file` to resolve a fault to its authenticated
+source location. An optional `--source-file` override requires that map;
+the debugger first checks its artifact hash.
 
 ## Files
 

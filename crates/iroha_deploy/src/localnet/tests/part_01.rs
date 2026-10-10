@@ -343,6 +343,15 @@ fn canonical_taira_options(out_dir: &Path, seed: &str) -> LocalnetOptions {
 }
 
 /// Assert the exact rendered `[nexus]` catalog tables of the fresh SORA Taira layout.
+#[test]
+fn public_taira_template_matches_genesis_catalog_and_routes() {
+    let template: toml::Value = toml::from_str(include_str!(
+        "../../../../../configs/soranexus/taira/config.toml"
+    ))
+    .expect("public Taira template is valid TOML");
+    assert_taira_nexus_catalog_tables(template["nexus"].as_table().unwrap());
+}
+
 #[allow(clippy::too_many_lines)]
 fn assert_taira_nexus_catalog_tables(nexus: &toml::Table) {
     assert_eq!(nexus["lane_count"].as_integer(), Some(8));

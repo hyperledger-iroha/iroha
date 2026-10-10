@@ -2,8 +2,8 @@ import Foundation
 
 /// Exact canonical Load receipt and finality originals bound to the authenticated read.
 /// Decoding grants no finality verdict, wallet admission, balance or Load permission.
-/// Native Load independently authenticates its installed history/source, proof, enrolled
-/// account, current ordinal, policy and durable operation before changing value.
+/// Native Load independently authenticates its certificate, event path, installed genesis/epoch
+/// authority, enrolled account, ordinal and durable operation before changing value.
 public struct KagemushaWalletLoadOriginalV1: Sendable {
   private let input: KagemushaWalletLoadOriginalInputV1
   /// Network retained from authenticated transport; never inferred from receipt data.
@@ -24,9 +24,18 @@ public struct KagemushaWalletLoadOriginalV1: Sendable {
   /// Decode through the maintained Native canonical types and retain the exact input frames.
   public static func decode(issuance: ToriiKagemushaWalletLoadIssuanceOriginalV1,
     finalityOriginal: Data) throws -> Self {
-    let input = try KagemushaWalletLoadOriginalInputV1(selection: issuance.selection,
-      payer: issuance.payerAccountID, receipt: issuance.canonicalResponseOriginal,
-      finality: finalityOriginal)
+    try decodeRetained(selection: issuance.selection, payerAccountID: issuance.payerAccountID,
+      networkID: issuance.networkID, receiptOriginal: issuance.canonicalResponseOriginal,
+      finalityOriginal: finalityOriginal)
+  }
+
+  /// Reopen exact retained DATA through the same Native decoder. Selectors and network are
+  /// untrusted until the installed wallet verifies finality before its Load Advance.
+  public static func decodeRetained(selection: ToriiKagemushaWalletLoadSelectionV1,
+    payerAccountID: String, networkID: NetworkId, receiptOriginal: Data,
+    finalityOriginal: Data) throws -> Self {
+    let input = try KagemushaWalletLoadOriginalInputV1(selection: selection,
+      payer: payerAccountID, receipt: receiptOriginal, finality: finalityOriginal)
     typealias Revision = @convention(c) () -> UInt32
     typealias Validate = @convention(c) (
       UnsafePointer<UInt8>?, UnsafePointer<UInt8>?, UnsafePointer<UInt8>?,
@@ -59,8 +68,8 @@ public struct KagemushaWalletLoadOriginalV1: Sendable {
     }
     if status < 0 { throw KagemushaWalletErrorV1.native(status: status, reason: -1, platformCode: 0) }
     guard status == 0, height > 0 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-    return Self(input: input, networkID: issuance.networkID, payerAccountID: issuance.payerAccountID,
-      blockHeight: height, selection: issuance.selection)
+    return Self(input: input, networkID: networkID, payerAccountID: payerAccountID,
+      blockHeight: height, selection: selection)
   }
 }
 

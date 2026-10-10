@@ -1,5 +1,6 @@
 // File header comment.
 seiyaku Comments {
+    permission Pay;
     state int value;   // trailing comment on state
     state int other; /* trailing block */
 
@@ -18,7 +19,7 @@ seiyaku Comments {
         // closing comment inside the block
     }
 
-    kotoage fn pay(AccountId payer, AccountId payee) authorize("Pay") {
+    kotoage fn pay(AccountId payer, AccountId payee) authorize(Pay) {
         ledger::asset::transfer(
             source: payer, // 支払人
             destination: payee, // 受取人 (same for demo)
@@ -27,7 +28,7 @@ seiyaku Comments {
             dataspace: DataSpaceId::parse("0") // last argument
         );
     }
-    view fn pick( /* 任意 */ Option<int> item /* 既定値なし */ ) -> int {
+    view fn pick( /* 任意 */ Option<int> item /* 既定値なし */ ) authorize(anyone) -> int {
         match item {
             Option::some(found) => found, // present
             Option::none => 0 // absent

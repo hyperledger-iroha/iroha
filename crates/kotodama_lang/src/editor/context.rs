@@ -41,6 +41,10 @@ pub(super) enum CompletionSite {
     /// Inside a `kotoage`/`言挙げ` or `view` header after its parameter list or return type,
     /// where `authorize(...)` may follow.
     FunctionHeader,
+    /// The explicit caller policy in a public function header.
+    Authorization,
+    /// A declared native event name after `emit`.
+    Event,
     /// Start of a statement in a function body.
     Statement,
     /// Inside an expression.
@@ -91,7 +95,8 @@ fn item_block(run: &[&TokenKind]) -> Block {
         )
     }) {
         Block::Function
-    } else if run.first() == Some(&&TokenKind::Struct)
+    } else if run.first() == Some(&&TokenKind::Event)
+        || run.first() == Some(&&TokenKind::Struct)
         || run.starts_with(&[&TokenKind::Export, &TokenKind::Struct])
     {
         Block::Struct
@@ -111,6 +116,15 @@ fn item_site(unit: UnitKind, run: &[&TokenKind], parens: usize) -> CompletionSit
             TokenKind::Fn | TokenKind::Hajimari | TokenKind::Kaizen
         )
     });
+    if parens > 0
+        && run
+            .iter()
+            .rev()
+            .take_while(|kind| !matches!(kind, TokenKind::RParen))
+            .any(|kind| matches!(kind, TokenKind::Authorize))
+    {
+        return CompletionSite::Authorization;
+    }
     if parens > 0 {
         return if header && matches!(last, TokenKind::LParen | TokenKind::Comma) {
             CompletionSite::Type
@@ -122,6 +136,7 @@ fn item_site(unit: UnitKind, run: &[&TokenKind], parens: usize) -> CompletionSit
     // lifecycle hooks never do.
     let entrypoint = header
         && !run.contains(&&TokenKind::Authorize)
+        && !run.contains(&&TokenKind::Arrow)
         && run
             .iter()
             .any(|kind| matches!(kind, TokenKind::Kotoage | TokenKind::View));
@@ -221,6 +236,7 @@ pub(super) fn completion_site(tokens: &[Token], offset: u32) -> CompletionSite {
             _ if parens > 0 => CompletionSite::Expression,
             None => CompletionSite::Statement,
             Some(TokenKind::Else) => CompletionSite::AfterElse,
+            Some(TokenKind::Emit) => CompletionSite::Event,
             Some(TokenKind::Let | TokenKind::Var) => CompletionSite::Type,
             Some(_) => CompletionSite::Expression,
         },
@@ -234,7 +250,7 @@ pub(super) fn completion_site(tokens: &[Token], offset: u32) -> CompletionSite {
 
 /// Statement keywords offered at the start of a statement.
 pub(super) const STATEMENT_KEYWORDS: &[&str] = &[
-    "let", "var", "if", "for", "match", "return", "break", "continue",
+    "let", "var", "if", "for", "match", "return", "break", "continue", "emit",
 ];
 /// Keywords that are complete expressions.
 pub(super) const EXPRESSION_KEYWORDS: &[&str] = &["true", "false", "if", "match"];
@@ -242,12 +258,20 @@ pub(super) const EXPRESSION_KEYWORDS: &[&str] = &["true", "false", "if", "match"
 /// One-line documentation for ordinary (non-branded) V1 keywords.
 const KEYWORD_DOCS: &[(&str, &str)] = &[
     (
+        "event",
+        "Declares a seiyaku-owned native event payload: `event Transfer { AccountId from; quantity amount; }`. Event payloads contain canonical public values and cannot be used as ordinary value types.",
+    ),
+    (
+        "emit",
+        "Emits one checked native event record: `emit Transfer { from: owner, amount: total };`. Fields evaluate once in source order; views cannot emit events.",
+    ),
+    (
         "as",
         "Names the alias of an import: `import \"./math.ko\" as math;`.",
     ),
     (
         "authorize",
-        "Declares the permission a caller needs: `authorize(\"Permission\")`. Every `kotoage`/`言挙げ` fn declares one, a `view fn` may declare one, and lifecycle hooks never do.",
+        "Declares caller policy: `authorize(Admin)` uses a declared permission and `authorize(anyone)` explicitly permits every caller. Every `kotoage`/`言挙げ` fn and `view fn` declares a policy before the return type; lifecycle hooks never do.",
     ),
     (
         "break",
@@ -264,7 +288,7 @@ const KEYWORD_DOCS: &[(&str, &str)] = &[
     ("else", "Introduces the alternative branch of an `if`."),
     (
         "enum",
-        "Completes an error enum declaration: `error enum Name { Variant = 1 }`.",
+        "Declares a closed nominal data type: `enum Name { Variant = 1 }`. Every variant has an explicit nonzero code; ordinary variants cannot reject execution.",
     ),
     (
         "error",
@@ -272,7 +296,7 @@ const KEYWORD_DOCS: &[(&str, &str)] = &[
     ),
     (
         "export",
-        "Makes a module declaration reachable through `import`: `export fn`, `export struct`, `export const` or `export error enum`.",
+        "Makes a module declaration reachable through `import`: `export fn`, `export struct`, `export const`, `export enum` or `export error enum`.",
     ),
     ("false", "The boolean constant `false`."),
     (
@@ -312,6 +336,10 @@ const KEYWORD_DOCS: &[(&str, &str)] = &[
         "Declares a reusable library source unit: `module Name { ... }`. A module is not deployable; other sources `import` its `export`ed declarations.",
     ),
     (
+        "permission",
+        "Declares an instance permission: `permission Admin;`. Chain permissions use `import permission` with an explicit token string and alias.",
+    ),
+    (
         "return",
         "Returns from the current function: `return expression;` or `return;`.",
     ),
@@ -334,7 +362,7 @@ const KEYWORD_DOCS: &[(&str, &str)] = &[
     ),
     (
         "view",
-        "Declares a read-only public function: `view fn name() -> Type { ... }`. Views are public unless they add `authorize(\"Permission\")`; they cannot mutate durable state, emit ledger instructions or perform host side effects.",
+        "Declares a read-only public function: `view fn name() authorize(anyone) -> Type { ... }`. Use a declared permission instead of `anyone` to restrict callers. Views cannot mutate durable state, emit ledger instructions or perform host side effects.",
     ),
 ];
 
@@ -447,6 +475,12 @@ pub(super) fn item_start_items(unit: UnitKind) -> Vec<EditorCompletion> {
             doc("struct"),
         ),
         snippet(
+            "enum",
+            "nominal data variants",
+            "enum ${1:Name} {\n\t${2:Variant} = ${3:1},\n}".into(),
+            doc("enum"),
+        ),
+        snippet(
             "error enum",
             "error codes",
             "error enum ${1:Name} {\n\t${2:Variant} = ${3:1},\n}".into(),
@@ -470,6 +504,24 @@ pub(super) fn item_start_items(unit: UnitKind) -> Vec<EditorCompletion> {
     }
     if matches!(unit, UnitKind::Seiyaku | UnitKind::Fragment) {
         items.push(snippet(
+            "event",
+            "native event declaration",
+            "event ${1:Name} {\n\t${2:int} ${3:field};\n}".into(),
+            doc("event"),
+        ));
+        items.push(snippet(
+            "permission",
+            "instance permission",
+            "permission ${1:Admin};".into(),
+            doc("permission"),
+        ));
+        items.push(snippet(
+            "import permission",
+            "chain permission import",
+            "import permission \"${1:CanSetParameters}\" as ${2:ChainAdmin};".into(),
+            doc("permission"),
+        ));
+        items.push(snippet(
             "state",
             "durable state",
             "state ${1:int} ${2:name};".into(),
@@ -478,7 +530,7 @@ pub(super) fn item_start_items(unit: UnitKind) -> Vec<EditorCompletion> {
         items.push(snippet(
             "view fn",
             "read-only public function",
-            "view fn ${1:name}($2) -> ${3:int} {\n\t$0\n}".into(),
+            "view fn ${1:name}($2) authorize(${3:anyone}) -> ${4:int} {\n\t$0\n}".into(),
             doc("view"),
         ));
         items.push(plain_keyword("trigger"));
@@ -487,9 +539,7 @@ pub(super) fn item_start_items(unit: UnitKind) -> Vec<EditorCompletion> {
             " fn",
             "authorized public function",
             |spelling| {
-                format!(
-                    "{spelling} fn ${{1:name}}($2) authorize(\"${{3:Permission}}\") {{\n\t$0\n}}"
-                )
+                format!("{spelling} fn ${{1:name}}($2) authorize(${{3:Admin}}) {{\n\t$0\n}}")
             },
         ));
         for (romaji, detail) in [
@@ -508,7 +558,7 @@ pub(super) fn item_start_items(unit: UnitKind) -> Vec<EditorCompletion> {
 pub(super) fn modifier_items(site: CompletionSite) -> Vec<EditorCompletion> {
     match site {
         CompletionSite::AfterEntrypointModifier => vec![plain_keyword("fn")],
-        CompletionSite::AfterExport => ["fn", "const", "struct", "error"]
+        CompletionSite::AfterExport => ["fn", "const", "struct", "enum", "error"]
             .into_iter()
             .map(plain_keyword)
             .collect(),
@@ -516,7 +566,7 @@ pub(super) fn modifier_items(site: CompletionSite) -> Vec<EditorCompletion> {
         CompletionSite::FunctionHeader => vec![snippet(
             "authorize",
             "caller authorization",
-            "authorize(\"${1:Permission}\")".into(),
+            "authorize(${1:Admin})".into(),
             keyword_documentation("authorize").unwrap_or_default(),
         )],
         CompletionSite::AfterElse => vec![plain_keyword("if")],
@@ -575,23 +625,26 @@ mod tests {
             site("seiyaku A { kotoage fn f() | {} }"),
             CompletionSite::FunctionHeader
         );
-        // `authorize` may follow a public entrypoint's return type, never a private function,
-        // a lifecycle hook or an existing authorization.
+        // Authorization belongs before the return type; completed guards never offer it again.
         assert_eq!(
-            site("seiyaku A { 言挙げ fn f() -> int | {} }"),
-            CompletionSite::FunctionHeader
+            site("seiyaku A { 言挙げ fn f() authorize(anyone) -> int | {} }"),
+            CompletionSite::Nothing
         );
         assert_eq!(
-            site("seiyaku A { view fn f() -> Option<int> | {} }"),
-            CompletionSite::FunctionHeader
+            site("seiyaku A { view fn f() authorize(anyone) -> Option<int> | {} }"),
+            CompletionSite::Nothing
         );
         assert_eq!(
-            site("seiyaku A { view fn f() -> () | {} }"),
-            CompletionSite::FunctionHeader
+            site("seiyaku A { view fn f() authorize(anyone) -> () | {} }"),
+            CompletionSite::Nothing
         );
         assert_eq!(
-            site("seiyaku A { view fn f() -> Option<| {} }"),
+            site("seiyaku A { view fn f() authorize(anyone) -> Option<| {} }"),
             CompletionSite::Type
+        );
+        assert_eq!(
+            site("seiyaku A { kotoage fn f() authorize(Ad|) {} }"),
+            CompletionSite::Authorization
         );
         assert_eq!(site("seiyaku A { fn f() | {} }"), CompletionSite::Nothing);
         assert_eq!(
@@ -600,7 +653,7 @@ mod tests {
         );
         assert_eq!(site("seiyaku A { 始まり() | {} }"), CompletionSite::Nothing);
         assert_eq!(
-            site("seiyaku A { kotoage fn f() authorize(\"P\") | {} }"),
+            site("seiyaku A { permission P;  kotoage fn f() authorize(P) | {} }"),
             CompletionSite::Nothing
         );
         assert_eq!(

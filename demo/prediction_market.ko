@@ -1,4 +1,5 @@
 seiyaku PredictionMarket {
+    permission MarketUser;
     // Fixed-size demo market: two bettors (Alice/Bob) and two oracle keys (YES/NO).
     // Durable state guards prevent double-staking or double-resolution.
     state bool alice_staked;
@@ -10,7 +11,7 @@ seiyaku PredictionMarket {
         resolved = false;
     }
 
-    kotoage fn main() authorize("MarketUser") {
+    kotoage fn main() authorize(MarketUser) {
         let caller = context::authority();
         let asset = AssetDefinitionId::parse("61CtjvNd9T3THAR65GsMVHr82Bjc");
         let pool = AccountId::parse("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE");

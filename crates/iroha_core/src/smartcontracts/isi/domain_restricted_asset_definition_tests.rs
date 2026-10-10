@@ -40,6 +40,12 @@ fn register_restricted_asset_definition_requires_explicit_owning_domain() {
         assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
         assert!(
             tx.world
+                .asset_definition_direct_homes
+                .get(&definition_id)
+                .is_none()
+        );
+        assert!(
+            tx.world
                 .asset_definition_domains
                 .get(&definition_id)
                 .is_none()

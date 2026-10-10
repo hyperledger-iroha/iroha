@@ -51,6 +51,7 @@ class KotodamaCallTableTest {
     ): ContractEntrypointDescriptor {
         val descriptor = linkedMapOf<String, Any?>(
             "name" to "inspect",
+            "authorization" to mapOf("kind" to "Anyone", "value" to null),
             "kind" to mapOf("kind" to "View", "value" to null),
             "params" to fields.mapIndexed { index, type ->
                 mapOf("name" to "arg_$index", "type_name" to type.first)
@@ -63,7 +64,7 @@ class KotodamaCallTableTest {
             "return_type" to returns.first,
             "return_schema" to mapOf("nodes" to returns.second),
         )
-        return ContractManifestJsonParser.parseManifest(mapOf("entrypoints" to listOf(descriptor)))
+        return ContractManifestJsonParser.parseManifest(mapOf("permissions" to emptyList<Any?>(), "entrypoints" to listOf(descriptor)))
             .entrypoints!!.single()
     }
 

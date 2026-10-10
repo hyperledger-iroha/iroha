@@ -31,8 +31,8 @@ fn generic_program_syscall_profile_is_sorted_complete_and_fail_closed() {
     assert_eq!(
         GENERIC_PROGRAM_DENIED_SYSCALLS_V1,
         &[
-            SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
-            SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+            SYSCALL_GRANT_CONTRACT_PERMISSION,
+            SYSCALL_REVOKE_CONTRACT_PERMISSION,
             SYSCALL_DEACTIVATE_CONTRACT_INSTANCE,
             SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
             SYSCALL_REGISTER_SMART_CONTRACT_CODE,
@@ -43,10 +43,10 @@ fn generic_program_syscall_profile_is_sorted_complete_and_fail_closed() {
             SYSCALL_STATE_DEL,
             SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
             SYSCALL_CALL_CONTRACT,
+            SYSCALL_EMIT_CONTRACT_EVENT,
             SYSCALL_SYSVAR_CONTRACT_ADDRESS,
             SYSCALL_SYSVAR_ENTRYPOINT,
             SYSCALL_SYSVAR_CONTRACT_SUBJECT,
-            SYSCALL_CALL_CONTRACT_QUANTITY2,
             SYSCALL_STATE_HAS,
             SYSCALL_STATE_LEN,
             SYSCALL_STATE_COUNT,
@@ -130,10 +130,6 @@ fn syscall_access_classification_is_conservative() {
     );
     assert_eq!(
         syscall_access(SYSCALL_CALL_CONTRACT),
-        SyscallAccess::Dynamic
-    );
-    assert_eq!(
-        syscall_access(SYSCALL_CALL_CONTRACT_QUANTITY2),
         SyscallAccess::Dynamic
     );
     assert_eq!(syscall_access(SYSCALL_SHA256_HASH), SyscallAccess::None);

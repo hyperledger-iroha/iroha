@@ -2168,6 +2168,8 @@ pub struct GovernedContractLifecycleV1 {
     pub parliament_delegated: bool,
     /// Lowercase active artifact hash, or `None` while the contract is inactive.
     pub active_code_hash_hex: Option<String>,
+    /// Last bound artifact hash retained while suspended, including unfinished lifecycle hooks.
+    pub retained_code_hash_hex: Option<String>,
     /// Non-zero compare-and-swap revision.
     pub revision: u64,
     /// Retained emergency-hold record, including after expiry.
@@ -2235,6 +2237,10 @@ impl From<&iroha_data_model::smart_contract::ContractLifecycleControlV1>
                 == ContractParliamentDelegationV1::Lifecycle,
             active_code_hash_hex: lifecycle
                 .active_code_hash
+                .map(<[u8; 32]>::from)
+                .map(hex::encode),
+            retained_code_hash_hex: lifecycle
+                .retained_code_hash
                 .map(<[u8; 32]>::from)
                 .map(hex::encode),
             revision: lifecycle.revision,

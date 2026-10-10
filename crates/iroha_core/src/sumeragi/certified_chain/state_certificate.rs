@@ -128,6 +128,27 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         select: impl FnOnce(&CertifiedBlock) -> Result<Option<NonZeroUsize>, QueryExecutionFail>,
     ) -> Result<(CertifiedBlock, Option<CertifiedBlock>), ExecutionAttemptError<QueryExecutionFail>>
     {
+        self.certified_with_ancestor_from_execution_into(
+            height,
+            before_read,
+            select,
+            |latest, ancestor| (latest, ancestor),
+        )
+    }
+
+    /// Transfer the two completed certificates after the original ancestry walk retires.
+    ///
+    /// The same kernel backs the owned public reader. Its consuming destination runs only
+    /// after every original source admission, selected certificate and presence check has
+    /// succeeded; it introduces no graph clone, allocation, scope or authority verdict.
+    #[inline(never)]
+    pub(crate) fn certified_with_ancestor_from_execution_into<Output>(
+        &self,
+        height: NonZeroUsize,
+        before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
+        select: impl FnOnce(&CertifiedBlock) -> Result<Option<NonZeroUsize>, QueryExecutionFail>,
+        finish: impl FnOnce(CertifiedBlock, Option<CertifiedBlock>) -> Output,
+    ) -> Result<Output, ExecutionAttemptError<QueryExecutionFail>> {
         let invalid = |message: &str| {
             ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(message.into()))
         };
@@ -180,7 +201,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         if select.is_none() && target_height != height.get() as u64 && ancestor.is_none() {
             return Err(invalid("authenticated selected ancestor is absent"));
         }
-        Ok((latest, ancestor))
+        Ok(finish(latest, ancestor))
     }
 
     fn executed_successor_authority(

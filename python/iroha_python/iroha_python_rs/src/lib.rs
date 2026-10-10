@@ -7243,6 +7243,30 @@ mod tests {
         );
     }
     #[test]
+    fn ivm_fault_projection_retains_typed_origin_without_presentation() {
+        use iroha_data_model::executor::fault::{
+            IvmFaultKindV1, IvmFaultPositionV1, IvmFaultSiteV1, IvmFaultV1,
+            IvmInvocationSelectorV1, NumericFaultV1,
+        };
+        let fault = IvmFaultV1 {
+            kind: IvmFaultKindV1::Numeric(NumericFaultV1::DivisionByZero),
+            site: IvmFaultSiteV1 {
+                code_hash: Hash::new(b"origin"),
+                selector: IvmInvocationSelectorV1::Entrypoint(3),
+                position: IvmFaultPositionV1::Execute {
+                    pc_offset: u64::MAX,
+                },
+            },
+        };
+        let reason = TransactionRejectionReason::Validation(ValidationFail::IvmFault(fault));
+        assert_eq!(transaction_rejection_code(&reason), "IvmFault");
+        assert_eq!(
+            transaction_ivm_fault_json(&reason),
+            Some(norito::json!(fault))
+        );
+        assert!(transaction_contract_rejection_json(&reason).is_none());
+    }
+    #[test]
     fn contract_rejection_projection_preserves_boxed_identity_and_message() {
         let reason = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
             iroha_data_model::executor::ContractRejection {
@@ -12199,6 +12223,7 @@ fn transaction_rejection_code(reason: &TransactionRejectionReason) -> &str {
         TransactionRejectionReason::Validation(validation) => match validation {
             ValidationFail::NotPermitted(_) => "NotPermitted",
             ValidationFail::IvmAdmission(_) => "IvmAdmission",
+            ValidationFail::IvmFault(_) => "IvmFault",
             ValidationFail::InstructionFailed(error) => instruction_execution_rejection_code(error),
             ValidationFail::ContractRejected(rejection) => rejection.name.as_str(),
             ValidationFail::QueryFailed(_) => "QueryFailed",
@@ -12207,9 +12232,14 @@ fn transaction_rejection_code(reason: &TransactionRejectionReason) -> &str {
             ValidationFail::InternalError(_) => "InternalError",
         },
         TransactionRejectionReason::InstructionExecution(_) => "InstructionExecutionFailed",
-        TransactionRejectionReason::IvmExecution(_) => "IvmExecutionFailed",
         TransactionRejectionReason::TriggerExecution(_) => "TriggerExecutionFailed",
     }
+}
+fn transaction_ivm_fault_json(reason: &TransactionRejectionReason) -> Option<json::Value> {
+    let TransactionRejectionReason::Validation(ValidationFail::IvmFault(fault)) = reason else {
+        return None;
+    };
+    Some(norito::json!(fault))
 }
 fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> Option<json::Value> {
     let TransactionRejectionReason::Validation(ValidationFail::ContractRejected(rejection)) =
@@ -12379,6 +12409,12 @@ fn verify_committed_transaction_inclusion_py(
                 transaction_contract_rejection_json(reason),
             ),
         };
+    let ivm_fault = committed
+        .result()
+        .0
+        .as_ref()
+        .err()
+        .and_then(transaction_ivm_fault_json);
     let batch_outcomes = committed
         .result()
         .batch_transfer_outcomes()
@@ -12526,6 +12562,10 @@ fn verify_committed_transaction_inclusion_py(
     result.insert(
         "rejection_message".into(),
         rejection_message.map_or(norito::json::Value::Null, norito::json::Value::String),
+    );
+    result.insert(
+        "ivm_fault".into(),
+        ivm_fault.unwrap_or(norito::json::Value::Null),
     );
     result.insert(
         "contract_rejection".into(),

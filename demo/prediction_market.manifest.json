@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "PredictionMarket",
-  "code_hash": "hash:BCA23569DAD3CAF9A1FE19012D61A8666AFEFBCE0E320DA662BC1C87CF977B1D#8A07",
-  "abi_hash": "hash:088F6764587D10239E2AD2731DDEEDCD7CD75834E014EE8540BF8F585B446547#76D4",
+  "code_hash": "hash:57CDD3313C93A48A1B199D5BE9AB62B7793AF1FBE53659A9439EDD3C82457995#3E0A",
+  "abi_hash": "hash:1958609290EF3FD0D62CD291F4462DF35EB8BC77936B0E6CDF0D83D26815F5D5#684A",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -34,6 +34,16 @@
     "dynamic_reads": [],
     "dynamic_writes": []
   },
+  "permissions": [
+    {
+      "name": "MarketUser",
+      "scope": {
+        "kind": "Instance",
+        "value": null
+      }
+    }
+  ],
+  "events": [],
   "entrypoints": [
     {
       "name": "hajimari",
@@ -52,7 +62,10 @@
           }
         ]
       },
-      "permission": null,
+      "authorization": {
+        "kind": "RuntimeLifecycle",
+        "value": null
+      },
       "read_keys": [],
       "write_keys": [
         "state:alice_staked",
@@ -80,7 +93,10 @@
           }
         ]
       },
-      "permission": "MarketUser",
+      "authorization": {
+        "kind": "Permission",
+        "value": "MarketUser"
+      },
       "read_keys": [
         "state:resolved",
         "state:alice_staked",
@@ -186,6 +202,7 @@
       ]
     }
   ],
+  "enum_types": [],
   "error_messages": null,
   "kotoba": null,
   "provenance": null

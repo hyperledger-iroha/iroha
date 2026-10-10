@@ -9322,7 +9322,7 @@ async fn handler_contracts_rollups_trader_activity_get(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
         let key_hint = params
-            .module
+            .contract_address
             .as_deref()
             .or(params.event_kind.as_deref())
             .or(params.authority.as_deref())
@@ -9382,87 +9382,6 @@ async fn handler_contracts_rollups_trader_account_get(
     .await
     .map(IntoResponse::into_response)
 }
-macro_rules! contracts_rollup_event_get_handlers {
-    ($(($handler:ident, $routing_handler:ident, $key_hint:literal)),+ $(,)?) => {
-        $(
-            #[cfg(feature = "app_api")]
-            async fn $handler(
-                State(app): State<SharedAppState>,
-                headers: axum::http::HeaderMap,
-                method: axum::http::Method,
-                uri: axum::http::Uri,
-                axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-                AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
-            ) -> Result<Response, Error> {
-                let remote_ip = remote.ip();
-                let visibility = torii_dataspace_context_from_headers(
-                    &app,
-                    &headers,
-                    &method,
-                    &uri,
-                    $key_hint,
-                )?;
-                let rate_limit_bypassed =
-                    limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-                let limits = crate::routing::app_query_limits();
-                let mut params = params;
-                let page_limit = limits.clamp_page_limit(params.limit)?;
-                params.limit = Some(page_limit);
-                if !rate_limit_bypassed {
-                    let enforce =
-                        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-                    let cost = limits.rate_limit_cost(page_limit);
-                    let key_hint = params
-                        .authority
-                        .as_deref()
-                        .unwrap_or($key_hint);
-                    check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
-                        .await?;
-                }
-                routing::$routing_handler(
-                    app.state.clone(),
-                    visibility.current_visibility(),
-                    crate::NoritoQuery(params),
-                    app.telemetry.clone(),
-                )
-                .await
-                .map(IntoResponse::into_response)
-            }
-        )+
-    };
-}
-contracts_rollup_event_get_handlers!(
-    (
-        handler_contracts_rollups_intents_get,
-        handle_v1_contracts_rollups_intents_get,
-        "contracts-rollups-intents"
-    ),
-    (
-        handler_contracts_rollups_vault_positions_get,
-        handle_v1_contracts_rollups_vault_positions_get,
-        "contracts-rollups-vaults"
-    ),
-    (
-        handler_contracts_rollups_operators_status_get,
-        handle_v1_contracts_rollups_operators_status_get,
-        "contracts-rollups-operators"
-    ),
-    (
-        handler_contracts_rollups_margin_health_get,
-        handle_v1_contracts_rollups_margin_health_get,
-        "contracts-rollups-margin"
-    ),
-    (
-        handler_contracts_rollups_rwa_lots_get,
-        handle_v1_contracts_rollups_rwa_lots_get,
-        "contracts-rollups-rwa"
-    ),
-    (
-        handler_contracts_rollups_dlmm_hooks_get,
-        handle_v1_contracts_rollups_dlmm_hooks_get,
-        "contracts-rollups-dlmm-hooks"
-    ),
-);
 #[cfg(feature = "app_api")]
 include!("proof_query_bounded.rs");
 #[cfg(feature = "app_api")]
@@ -38029,12 +37948,6 @@ impl Torii {
             CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET => optional_canonical_signature_get(handler_contracts_rollups_uranai_markets_history_get);
             CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET => optional_canonical_signature_get(handler_contracts_rollups_trader_activity_get);
             CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET => optional_canonical_signature_get(handler_contracts_rollups_trader_account_get);
-            CONTRACTS_ROLLUPS_INTENTS_GET => optional_canonical_signature_get(handler_contracts_rollups_intents_get);
-            CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET => optional_canonical_signature_get(handler_contracts_rollups_vault_positions_get);
-            CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET => optional_canonical_signature_get(handler_contracts_rollups_operators_status_get);
-            CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET => optional_canonical_signature_get(handler_contracts_rollups_margin_health_get);
-            CONTRACTS_ROLLUPS_RWA_LOTS_GET => optional_canonical_signature_get(handler_contracts_rollups_rwa_lots_get);
-            CONTRACTS_ROLLUPS_DLMM_HOOKS_GET => optional_canonical_signature_get(handler_contracts_rollups_dlmm_hooks_get);
             ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => optional_canonical_signature_get(handler_account_assets);
         );
         mount_account_assets_query(builder, app_state.clone(), transaction_max_content_len);
@@ -43463,6 +43376,12 @@ fn public_validation_fail_envelope(
                 ..Default::default()
             });
     }
+    if let iroha_data_model::ValidationFail::IvmFault(fault) = fail {
+        return ErrorEnvelope::new("ivm_fault", fault.to_string()).with_details(ErrorDetails {
+            ivm_fault: Some(*fault),
+            ..Default::default()
+        });
+    }
     ErrorEnvelope::new("query_validation_failed", validation_fail_message(fail))
 }
 impl IntoResponse for Error {
@@ -43948,6 +43867,13 @@ impl Error {
             NotPermitted(_) => StatusCode::FORBIDDEN,
             IvmAdmission(_) => StatusCode::BAD_REQUEST,
             ContractRejected(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            IvmFault(fault)
+                if fault.kind
+                    == iroha_data_model::executor::fault::IvmFaultKindV1::PermissionDenied =>
+            {
+                StatusCode::FORBIDDEN
+            }
+            IvmFault(_) => StatusCode::UNPROCESSABLE_ENTITY,
             AxtReject(_) => StatusCode::BAD_REQUEST,
             QueryFailed(query_error)
             | InstructionFailed(InstructionExecutionError::Query(query_error)) => match query_error
@@ -44057,3 +43983,38 @@ mod native_transaction_proxy_tests;
 
 #[cfg(test)]
 mod service_checked_writer_test_support;
+
+#[cfg(test)]
+mod runtime_fault_tests {
+    use super::*;
+    use iroha_data_model::executor::fault::{
+        IvmFaultKindV1, IvmFaultPositionV1, IvmFaultSiteV1, IvmFaultV1, IvmInvocationSelectorV1,
+    };
+
+    #[test]
+    fn public_runtime_fault_preserves_origin_and_permission_status() {
+        for (kind, status) in [
+            (IvmFaultKindV1::OutOfGas, StatusCode::UNPROCESSABLE_ENTITY),
+            (IvmFaultKindV1::PermissionDenied, StatusCode::FORBIDDEN),
+        ] {
+            let fault = IvmFaultV1 {
+                kind,
+                site: IvmFaultSiteV1 {
+                    code_hash: iroha_crypto::Hash::new(b"callee"),
+                    selector: IvmInvocationSelectorV1::Entrypoint(3),
+                    position: IvmFaultPositionV1::Execute { pc_offset: 28 },
+                },
+            };
+            let rejection = iroha_data_model::ValidationFail::IvmFault(fault);
+            assert_eq!(Error::query_status_code(&rejection), status);
+            let envelope = public_validation_fail_envelope(&rejection, status);
+            assert_eq!(envelope.code, "ivm_fault");
+            assert_eq!(envelope.details.unwrap().ivm_fault, Some(fault));
+        }
+        let native =
+            iroha_data_model::ValidationFail::NotPermitted("ledger permission denied".into());
+        let envelope = public_validation_fail_envelope(&native, Error::query_status_code(&native));
+        assert_eq!(envelope.code, "query_validation_failed");
+        assert!(envelope.details.is_none());
+    }
+}

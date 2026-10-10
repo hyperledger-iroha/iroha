@@ -327,11 +327,20 @@ def _validate_v1_lowering_contract(production: str) -> None:
         _require(retired not in production, f"retired V1 lowering returned: {retired}")
     surface = re.sub(r"\s+", "", _function_region(production, "lower_surface_builtin_call"))
     numeric = (
-        "builtin@(Builtin::Isqrt|Builtin::Abs|Builtin::Min|Builtin::Max|"
-        "Builtin::DivCeil|Builtin::Gcd|Builtin::Mean)"
-        "=>lower_direct_helper_call(ctx,builtin,args,vars),"
+        "builtin@(Builtin::Isqrt|Builtin::DivCeil|Builtin::Gcd|Builtin::Mean)"
+        "=>{lower_direct_helper_call(ctx,builtin,args,vars)}"
     )
     _require(numeric in surface, "full-width numeric helper routing changed")
+    _require("Builtin::Min|Builtin::Max|Builtin::Abs=>{"
+             "lower_numeric_selection(ctx,builtin,args,vars)}" in surface,
+             "exact numeric-domain selection routing changed")
+    selection = _function_region(production, "lower_numeric_selection")
+    _require(".map(|arg| lower_expr(ctx, arg, vars))" in selection
+             and "lower_expr_as_" not in selection,
+             "numeric selection arguments must evaluate once without narrowing")
+    for operation in ("MIN", "MAX", "ABS"):
+        _require(f"SYSCALL_INT_{operation}" in selection,
+                 "integer selection must retain full-width kernels")
     direct = _function_region(production, "lower_direct_helper_call")
     _require("lowered_args.push(lower_expr(ctx, arg, vars));" in direct
              and "lower_expr_as_" not in direct,
@@ -500,7 +509,12 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
 
     def test_constructor_and_call_argument_drift(self) -> None:
         self.rejects("let table = emit_alloc(ctx, bytes);", "let table = emit_state_get(ctx, bytes);", "helpers")
-        self.rejects("MapFallback::Eager, vars)", "MapFallback::Insert, vars)", "helper_calls")
+        # get_or_insert is the sole fallback route: its third argument is the
+        # lazy default, and an absent durable key must store that value.
+        self.rejects("lower_map_fallback(ctx, &args[0], &args[1], &args[2], vars)",
+                     "lower_map_fallback(ctx, &args[0], &args[1], &args[1], vars)", "helper_calls")
+        self.rejects("let _ = lower_state_map_set_value(ctx, &base, key, &spec.key, &spec.value, default);",
+                     "let _ = default;", "helpers")
         self.rejects("lower_map_fallback(ctx, &args[0], &args[1], &args[2],",
                      "lower_map_fallback(ctx, &args[1], &args[0], &args[2],", "helper_calls")
         self.rejects("let keep_going = emit_binary(ctx, BinaryOp::Lt, index, source_len);",
@@ -516,8 +530,13 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
 
     def test_v1_replacement_routes_cannot_regress(self) -> None:
         for old, new, message in (
-            ("Builtin::Mean) => lower_direct_helper_call(ctx, builtin, args, vars),",
+            ("Builtin::Mean) => {\n            lower_direct_helper_call(ctx, builtin, args, vars)\n        }",
              "Builtin::Mean) => emit_i64_const(ctx, 0),", "full-width numeric helper routing"),
+            ("lower_numeric_selection(ctx, builtin, args, vars)",
+             "lower_direct_helper_call(ctx, builtin, args, vars)", "exact numeric-domain selection"),
+            ('let kind = wide_numeric_kind_for_type(&args[0].ty).expect("typed selection operand");\n    let values = args\n        .iter()\n        .map(|arg| lower_expr(ctx, arg, vars))',
+             'let kind = wide_numeric_kind_for_type(&args[0].ty).expect("typed selection operand");\n    let values = args\n        .iter()\n        .map(|arg| lower_expr_as_i64(ctx, arg, vars))',
+             "selection arguments must evaluate once"),
             ("lowered_args.push(lower_expr(ctx, arg, vars));",
              "lowered_args.push(lower_expr_as_i64(ctx, arg, vars));", "must not narrow"),
             ("ctx.current_instr(Instr::StageAnchoredSpend { spend });",

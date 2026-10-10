@@ -9692,6 +9692,9 @@ mod tests {
         let own = DataSpaceId::new((1_u64 << 40) + 7);
         let artifact_id = ContractArtifactId::new(own, Hash::new(b"artifact"));
         let manifest = ContractManifest {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             seiyaku_name: None,
             code_hash: Some(artifact_id.code_hash),
             abi_hash: None,

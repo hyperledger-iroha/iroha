@@ -22,6 +22,7 @@ struct Fixture {
     manifest: iroha_genesis::RawGenesisTransaction,
     genesis: KeyPair,
     canary: KeyPair,
+    nexus_context: Vec<u8>,
 }
 
 impl Fixture {
@@ -115,7 +116,7 @@ impl Fixture {
         // their actual values; the newly signed final fixture must pass unchanged.
         let (nexus_hash, execution_hash) =
             execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref())
-                .map(|(_, nexus, execution)| (nexus, execution))
+                .map(|(_, nexus, execution, _)| (nexus, execution))
                 .unwrap_or_else(|derived_policies| derived_policies);
         let mut context = manifest.sumeragi_context_parameters();
         context.nexus_amx_context_hash = nexus_hash.into();
@@ -124,7 +125,7 @@ impl Fixture {
             .with_sumeragi_context_parameters(context)
             .with_consensus_meta()
             .expect("valid fixture consensus parameters");
-        let (mut block, final_nexus_hash, final_execution_hash) =
+        let (mut block, final_nexus_hash, final_execution_hash, nexus_context) =
             execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref())
                 .expect("newly signed fixture must reproduce both exact native policies");
         assert_eq!(nexus_hash, final_nexus_hash);
@@ -162,6 +163,7 @@ impl Fixture {
             manifest,
             genesis,
             canary,
+            nexus_context,
         }
     }
 
@@ -182,6 +184,7 @@ impl Fixture {
             &line(self.network()),
             &line(self.genesis.public_key()),
             &line(self.canary.public_key()),
+            &self.nexus_context,
         )
     }
 
@@ -193,6 +196,7 @@ impl Fixture {
         for (name, bytes) in [
             ("genesis.signed.nrt", self.block.encode_wire().unwrap()),
             ("genesis.json", self.manifest_json()),
+            ("nexus-amx-context.v1.bin", self.nexus_context.clone()),
             ("genesis.expected_hash", line(self.network())),
             ("genesis.public_key", line(self.genesis.public_key())),
             (
@@ -271,7 +275,7 @@ fn execute_fixture_genesis(
     manifest: &iroha_genesis::RawGenesisTransaction,
     key: &KeyPair,
     citizenship_escrow: Option<&AccountId>,
-) -> std::result::Result<(SignedBlock, Hash, Hash), (Hash, Hash)> {
+) -> std::result::Result<(SignedBlock, Hash, Hash, Vec<u8>), (Hash, Hash)> {
     use iroha_config::{
         kura::InitMode,
         parameters::{actual, defaults},
@@ -422,11 +426,12 @@ fn execute_fixture_genesis(
             )
         }
     };
-    let nexus_hash = iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
+    let nexus_context = iroha_core::sumeragi::staged_genesis_nexus_amx_context_preimage(&staged);
+    let nexus_hash = Hash::new(&nexus_context);
     let execution_hash =
         iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged).unwrap();
     drop(staged);
-    Ok((valid.into(), nexus_hash, execution_hash))
+    Ok((valid.into(), nexus_hash, execution_hash, nexus_context))
 }
 
 pub(crate) fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
@@ -581,7 +586,8 @@ fn rejects_wrong_network_key_and_resultless_genesis() {
             &json_line(&fixture.manifest).unwrap(),
             &line(wrong),
             &line(fixture.genesis.public_key()),
-            &line(fixture.canary.public_key())
+            &line(fixture.canary.public_key()),
+            &fixture.nexus_context,
         )
         .unwrap_err()
         .to_string()
@@ -593,7 +599,8 @@ fn rejects_wrong_network_key_and_resultless_genesis() {
             &json_line(&fixture.manifest).unwrap(),
             &line(fixture.network()),
             &line(fixture.canary.public_key()),
-            &line(fixture.canary.public_key())
+            &line(fixture.canary.public_key()),
+            &fixture.nexus_context,
         )
         .is_err()
     );
@@ -609,7 +616,8 @@ fn rejects_wrong_network_key_and_resultless_genesis() {
             &json_line(&fixture.manifest).unwrap(),
             &line(fixture.network()),
             &line(fixture.genesis.public_key()),
-            &line(fixture.canary.public_key())
+            &line(fixture.canary.public_key()),
+            &fixture.nexus_context,
         )
         .is_err()
     );
@@ -630,7 +638,8 @@ fn rejects_noncanonical_identity_and_non_ed25519_canary() {
                 &json_line(&fixture.manifest).unwrap(),
                 &text,
                 &line(fixture.genesis.public_key()),
-                &line(fixture.canary.public_key())
+                &line(fixture.canary.public_key()),
+                &fixture.nexus_context,
             )
             .is_err()
         );
@@ -642,7 +651,8 @@ fn rejects_noncanonical_identity_and_non_ed25519_canary() {
             &json_line(&fixture.manifest).unwrap(),
             &line(fixture.network()),
             &line(fixture.genesis.public_key()),
-            &line(unsupported.public_key())
+            &line(unsupported.public_key()),
+            &fixture.nexus_context,
         )
         .unwrap_err()
         .to_string()

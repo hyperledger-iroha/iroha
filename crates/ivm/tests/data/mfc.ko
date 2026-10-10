@@ -2,6 +2,7 @@
 // Provides a simple transfer function and a looped
 // transfer across a range of quantities.
 seiyaku MakotoFreeCash {
+    permission ManageMfc;
     fn send_mfc(AccountId from_account, AccountId to_account, quantity amount) {
         // Use constant asset id 1 representing the Makoto Free Cash token
         let mfc = mfc_asset();
@@ -30,7 +31,7 @@ seiyaku MakotoFreeCash {
     // Example kotoage/言挙げ declaration demonstrating asset creation and usage.
     // It first registers the Makoto Free Cash asset, mints some
     // quantity to the caller, then performs the transfers.
-    kotoage fn main(AccountId from, AccountId to) authorize("ManageMfc") {
+    kotoage fn main(AccountId from, AccountId to) authorize(ManageMfc) {
         // Register the asset definition before minting any tokens.
         let mfc = mfc_asset();
         ledger::asset::register(

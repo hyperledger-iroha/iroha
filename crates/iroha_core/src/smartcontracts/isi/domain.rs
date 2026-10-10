@@ -8026,6 +8026,12 @@ mod tests {
                     .expect("retained contract binding")
                     .lifecycle
                     .active_code_hash = Some(code_hash);
+                tx.world
+                    .contract_subject_bindings
+                    .get_mut(&contract)
+                    .unwrap()
+                    .lifecycle
+                    .retained_code_hash = Some(code_hash);
             }
 
             let error = Unregister::account(subject.clone())

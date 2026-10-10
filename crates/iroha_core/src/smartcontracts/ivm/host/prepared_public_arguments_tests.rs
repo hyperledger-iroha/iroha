@@ -10,8 +10,8 @@ fn prepared_public_arguments_decode_once_ignore_guest_descriptors_and_require_pr
     let (program, _) = compiler
         .compile_source_with_manifest(
             r#"
-seiyaku PreparedArguments {
-  kotoage fn invoke(int count, Name label) authorize("Invoke") {
+seiyaku PreparedArguments { permission Invoke;
+  kotoage fn invoke(int count, Name label) authorize(Invoke) {
   }
 }
 "#,

@@ -1,11 +1,12 @@
 // Representative ZK bridge sample for Kotodama grammar validation.
 seiyaku ZkBridge {
+    permission Admin;
     error enum VerificationError {
         InvalidFlags = 1,
         EmptyEnvelope = 2,
     }
 
-    kotoage fn verify(bytes proof_env, bytes instruction) authorize("Admin") {
+    kotoage fn verify(bytes proof_env, bytes instruction) authorize(Admin) {
         let domain = b"ENV-BALLOT";
         let label = br#"proof-bytes"#;
         let flags = bytes::len(domain) + bytes::len(label);

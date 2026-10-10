@@ -429,11 +429,14 @@ fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
         compiler_fingerprint: Some("codec-fixture".to_owned()),
         features_bitmap: Some(0),
         access_set_hints: None,
+        permissions: Vec::new(),
+        events: Vec::new(),
         entrypoints: None,
         states: None,
         kotoba: None,
         error_messages: None,
         error_types: None,
+        enum_types: Vec::new(),
         provenance: None,
     };
     let instructions: Vec<InstructionBox> = vec![
@@ -1080,11 +1083,14 @@ fn register_code_payload() -> Value {
         compiler_fingerprint: Some("codec-fixture".to_owned()),
         features_bitmap: Some(0),
         access_set_hints: None,
+        permissions: Vec::new(),
+        events: Vec::new(),
         entrypoints: None,
         states: None,
         kotoba: None,
         error_messages: None,
         error_types: None,
+        enum_types: Vec::new(),
         provenance: None,
     };
     object([
@@ -1452,11 +1458,14 @@ fn artifact_instruction_codecs_preserve_exact_dataspace_and_reject_alternate_env
             compiler_fingerprint: None,
             features_bitmap: None,
             access_set_hints: None,
+            permissions: Vec::new(),
+            events: Vec::new(),
             entrypoints: None,
             states: None,
             kotoba: None,
             error_messages: None,
             error_types: None,
+            enum_types: Vec::new(),
             provenance: None,
         };
         let instructions: [InstructionBox; 6] = [
