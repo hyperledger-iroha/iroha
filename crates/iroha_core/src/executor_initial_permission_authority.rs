@@ -1693,7 +1693,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::staking::SchedulePublicLaneUnbond,
         iroha_data_model::isi::staking::FinalizePublicLaneUnbond,
         iroha_data_model::isi::staking::ClaimPublicLaneRewards,
-        iroha_data_model::isi::staking::RecordPublicLaneRewards,
     ) {
         return true;
     }
@@ -1962,13 +1961,7 @@ fn validate_initial_native_instruction_authority(
     if !is_genesis && validator_owner.is_some_and(|owner| owner != authority) {
         return deny("public validator lifecycle requires the validator account authority");
     }
-    if let Some(rewards) =
-        any.downcast_ref::<iroha_data_model::isi::staking::RecordPublicLaneRewards>()
-        && !is_genesis
-        && rewards.reward_asset.account() != authority
-    {
-        return deny("public lane rewards require the reward treasury account authority");
-    }
+
     if (any
         .downcast_ref::<iroha_data_model::isi::register::RegisterPeerWithPop>()
         .is_some()

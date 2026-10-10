@@ -137,6 +137,20 @@ required-features = ["dev-tools", "privacy-exact12-conformance"]
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
 [[test]]
+name = "automatic_validator_rewards"
+path = "tests/automatic_validator_rewards.rs"
+
+[[test]]
+name = "automatic_reward_evidence"
+path = "tests/automatic_reward_evidence.rs"
+required-features = ["test-fixtures", "transparent_api"]
+
+[[test]]
+name = "staking_reward_identity_capture"
+path = "tests/staking_reward_identity_capture.rs"
+required-features = ["transparent_api"]
+
+[[test]]
 name = "iroha_data_model_group_01"
 path = "tests/grouped/group_01.rs"
 

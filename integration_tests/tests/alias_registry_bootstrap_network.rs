@@ -485,9 +485,6 @@ fn validator_bindings(
                     == Some("staking")
                 && item
                     .get("deactivation_height")
-                    .is_some_and(norito::json::Value::is_null)
-                && item
-                    .get("last_reward_epoch")
                     .is_some_and(norito::json::Value::is_null),
             "BPNG validator record route, authority source or open tenure changed"
         );

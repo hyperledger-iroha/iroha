@@ -706,7 +706,6 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
                 activation_height: 1,
                 election_exit_height: deactivation_height,
                 deactivation_height,
-                last_reward_epoch: None,
             },
         );
     }

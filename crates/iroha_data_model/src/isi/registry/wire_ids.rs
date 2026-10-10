@@ -104,7 +104,6 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(crate::isi::staking::SchedulePublicLaneUnbond => "iroha.instruction.v1::staking::SchedulePublicLaneUnbond", register),
     built_in_wire_id!(crate::isi::staking::FinalizePublicLaneUnbond => "iroha.instruction.v1::staking::FinalizePublicLaneUnbond", register),
     built_in_wire_id!(crate::isi::staking::SlashPublicLaneValidator => "iroha.instruction.v1::staking::SlashPublicLaneValidator", register),
-    built_in_wire_id!(crate::isi::staking::RecordPublicLaneRewards => "iroha.instruction.v1::staking::RecordPublicLaneRewards", register),
     built_in_wire_id!(crate::isi::staking::ClaimPublicLaneRewards => "iroha.instruction.v1::staking::ClaimPublicLaneRewards", register),
     built_in_wire_id!(nexus::RegisterVerifiedFeeSponsorVaultAllocation => "nexus::RegisterVerifiedFeeSponsorVaultAllocation"),
     built_in_wire_id!(nexus::CreateFeeSponsorProgram => "nexus::CreateFeeSponsorProgram"),

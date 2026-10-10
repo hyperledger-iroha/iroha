@@ -360,11 +360,14 @@ untested combinations without claiming platform or vendor universality.
 - With regulatory controls off, pay, recover and spend onward offline after
   reboots, clock changes and long idle periods. Run each enabled control
   separately. Record the longest tested interval and any network dependency.
-- On a device class that fails or has no published lineage budget,
-  activation, Load, Receive and RefreshPolicy refuse before commit, and the
-  load receipt or Payment stays deliverable. On each passing class,
-  measure fold time, peak memory and energy per operation, including folds
-  interrupted by app suspension and resumed at the next app run. With a
+- When the proposal §5.3 runtime capacity check fails on the phone (too
+  little free custody storage or available memory for the operation's
+  relations), activation, Load, Send, Receive and RefreshPolicy refuse before
+  commit with `NotEnoughStorage` or `NotEnoughMemory`, and the load receipt or
+  Payment stays deliverable. No device class, model list or published budget
+  gates any phone. On each measured phone, record fold time, peak memory and
+  energy per operation as evidence, including folds interrupted by app
+  suspension and resumed at the next app run. With a
   receiver's Request-issuance policy (minimum amount, rate limit, maximum
   unfolded backlog), new quotes stop at the configured limit and committed
   Payments stay receivable.
@@ -378,8 +381,9 @@ untested combinations without claiming platform or vendor universality.
   receiver's durable completion (P1a). Include intervening framing, retries,
   carrier setup, the payer's remaining step-proof time, receiver verification,
   the receiver step proof and both durable commits. Report separately, per
-  device class, the fold time until the value is ready to spend onward and
-  tap-to-done including setup and the confirmation dwell. Measure the payer's
+  measured phone and never as an enablement gate, the fold time until the
+  value is ready to spend onward and tap-to-done including setup and the
+  confirmation dwell. Measure the payer's
   later delivery confirmation separately. State sample counts and the
   percentile estimator before measurement; retain raw samples, failures, cold/warm
   results, peak memory, energy and thermal effects. These are requirements

@@ -972,9 +972,6 @@ fn original_npos_parameter_refusal_does_not_become_missing_staking_policy() {
         valid_for_blocks: 1,
         operation: PublicLanePreparationOperationV1::ClaimRewards(PublicLanePrepareClaimV1 {
             recipient: owner,
-            upto_epoch: None,
-            max_records: 1,
-            accrued_sources: vec![],
         }),
     };
     let custom = view
@@ -988,7 +985,8 @@ fn original_npos_parameter_refusal_does_not_become_missing_staking_policy() {
         &view,
         request.clone(),
     )
-    .unwrap();
+    .unwrap_err();
+    assert!(matches!(expected, Attempt::Rejected(_)), "{expected:?}");
     let producer =
         no_allocation(|| norito::json::from_str::<SumeragiNposParameters>(&original_bytes))
             .unwrap_err();
@@ -1008,11 +1006,10 @@ fn original_npos_parameter_refusal_does_not_become_missing_staking_policy() {
         "the original signed NPoS read refusal was flattened: {error:?}"
     );
     assert_eq!(custom.payload().get(), &original_bytes);
-    assert_eq!(
+    let retry =
         crate::smartcontracts::isi::staking::preparation::prepare_public_lane_plan(&view, request)
-            .unwrap(),
-        expected
-    );
+            .unwrap_err();
+    assert_eq!(retry, expected);
 }
 
 #[test]
@@ -1131,10 +1128,8 @@ fn original_npos_reserve_validation_refuses_without_changing_current_or_undo() {
     let current = state.world.view();
     assert_custody(&current);
     crate::state::validate_public_lane_stake_reserves(&current).unwrap();
-    crate::state::validate_public_lane_reward_reserves(&current).unwrap();
     for error in [
         no_allocation(|| crate::state::validate_public_lane_stake_reserves(&current)).unwrap_err(),
-        no_allocation(|| crate::state::validate_public_lane_reward_reserves(&current)).unwrap_err(),
     ] {
         assert!(matches!(error, Attempt::Deferred(_)), "{error:?}");
     }
@@ -1143,22 +1138,19 @@ fn original_npos_reserve_validation_refuses_without_changing_current_or_undo() {
         let previous = state.world.block_and_revert();
         assert_custody(&previous);
         crate::state::validate_public_lane_stake_reserves(&previous).unwrap();
-        crate::state::validate_public_lane_reward_reserves(&previous).unwrap();
-        for error in [
-            no_allocation(|| crate::state::validate_public_lane_stake_reserves(&previous))
-                .unwrap_err(),
-            no_allocation(|| crate::state::validate_public_lane_reward_reserves(&previous))
-                .unwrap_err(),
-        ] {
+        for error in
+            [
+                no_allocation(|| crate::state::validate_public_lane_stake_reserves(&previous))
+                    .unwrap_err(),
+            ]
+        {
             assert!(matches!(error, Attempt::Deferred(_)), "{error:?}");
         }
         crate::state::validate_public_lane_stake_reserves(&previous).unwrap();
-        crate::state::validate_public_lane_reward_reserves(&previous).unwrap();
     }
     assert_eq!(norito::json::to_json(&state.world).unwrap(), before);
     let current = state.world.view();
     crate::state::validate_public_lane_stake_reserves(&current).unwrap();
-    crate::state::validate_public_lane_reward_reserves(&current).unwrap();
 }
 
 #[cfg(feature = "telemetry")]

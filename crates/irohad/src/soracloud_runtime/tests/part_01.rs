@@ -2669,7 +2669,6 @@ fn insert_active_public_lane_validator_fixture(state: &State, local_peer_id: &st
                 activation_height,
                 election_exit_height: None,
                 deactivation_height: None,
-                last_reward_epoch: None,
             },
         );
     tx.apply();

@@ -1,4 +1,4 @@
-//! Funded real-XOR rewards and source-bound withdrawal across certified replacement.
+//! Source-bound real-XOR withdrawal across certified replacement and liability expiry.
 
 use super::*;
 use iroha::{
@@ -6,16 +6,12 @@ use iroha::{
     crypto::HashOf,
     data_model::{
         block::consensus::NexusFeeSettlementV1,
-        isi::staking::{
-            ClaimPublicLaneRewards, FinalizePublicLaneUnbond, RecordPublicLaneRewards,
-            SchedulePublicLaneUnbond,
-        },
+        isi::staking::{FinalizePublicLaneUnbond, SchedulePublicLaneUnbond},
         nexus::{
             FeeDebitSource, PublicLanePreparationBalanceV1, PublicLanePreparationOperationV1,
             PublicLanePreparationRequestV1, PublicLanePreparationV1, PublicLanePrepareBondV1,
             PublicLanePrepareClaimV1, PublicLanePrepareUnbondV1, PublicLanePreparedPlanV1,
-            PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding,
-            public_lane_unbonding_commitment,
+            PublicLaneUnbonding, public_lane_unbonding_commitment,
         },
     },
 };
@@ -23,8 +19,6 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-
-const REWARD_EPOCH: u64 = 2;
 
 /// Select a finite wall-clock unlock; eligibility still requires certified replacement
 /// and the complete authenticated evidence/slashing horizon.
@@ -777,6 +771,7 @@ fn assert_effects(
     Ok(())
 }
 
+#[cfg(test)]
 fn assert_reward_reservation(
     before: &Observation,
     after: &Observation,
@@ -800,8 +795,8 @@ fn assert_reward_reservation(
     Ok(())
 }
 
-/// Reserve existing treasury XOR, claim its exact bounded record, and retain a full bond.
-pub(super) async fn fund_rewards_and_schedule_withdrawal(
+/// Schedule a full-bond withdrawal and preserve its authenticated committee liability.
+pub(super) async fn schedule_retained_withdrawal(
     network: &sandbox::SerializedNetwork,
     admin: &Client,
     owner: &Operator,
@@ -951,138 +946,12 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
         before_reward.prepared.observed_height < TARGET_LAST,
         "unbond scheduling missed the seven-seat tenure"
     );
-    let reward: Quantity = 25_u64.into();
-    let record = submit_signed(
-        &admin,
-        RecordPublicLaneRewards {
-            lane_id: LaneId::SINGLE,
-            epoch: REWARD_EPOCH,
-            reward_asset: lifecycle.reward_treasury.clone(),
-            total_reward: reward.clone(),
-            shares: vec![PublicLaneRewardShare {
-                account: lifecycle.owner.account.clone(),
-                role: PublicLaneRewardRole::Validator,
-                amount: reward.clone(),
-            }],
-            metadata: Metadata::default(),
-        }
-        .into(),
-        true,
-    )
-    .await?;
-    ensure!(
-        record.authority() == lifecycle.reward_treasury.account(),
-        "the exact signed reward input must spend its own configured treasury fee"
-    );
-    let claim = lifecycle
-        .observe(PublicLanePreparationOperationV1::ClaimRewards(
-            PublicLanePrepareClaimV1 {
-                recipient: lifecycle.owner.account.clone(),
-                upto_epoch: Some(REWARD_EPOCH),
-                max_records: 1,
-                accrued_sources: Vec::new(),
-            },
-        ))
-        .await?;
-    let fee = actual_fee(
-        &before_reward,
-        &claim,
-        &record,
-        true,
-        None,
-        lifecycle.escrow.definition(),
-    )?;
-    assert_reward_reservation(
-        &before_reward,
-        &claim,
-        &lifecycle.reward_treasury,
-        &lifecycle.escrow,
-        &lifecycle.destination,
-        &reward,
-        &fee,
-    )?;
-    let PublicLanePreparedPlanV1::Claim(plan) = &claim.prepared.plan else {
-        return Err(eyre!("reward read returned withdrawal"));
-    };
-    ensure!(
-        plan.records.len() == 1
-            && plan.records[0].epoch == REWARD_EPOCH
-            && plan.sources.len() == 1
-            && plan.sources[0].source_asset == lifecycle.reward_treasury
-            && plan.sources[0].destination_asset == lifecycle.destination
-            && plan.sources[0].payout == reward
-            && plan.fee_claim.is_none(),
-        "bounded reward plan differs from funded treasury distribution"
-    );
-    let transaction = submit_signed(
-        &lifecycle.owner.client,
-        ClaimPublicLaneRewards {
-            lane_id: LaneId::SINGLE,
-            account: lifecycle.owner.account.clone(),
-            claim_plan: plan.clone(),
-        }
-        .into(),
-        true,
-    )
-    .await?;
-    let after_claim = lifecycle.observe(lifecycle.unbond_intent()).await?;
-    let fee = actual_fee(
-        &claim,
-        &after_claim,
-        &transaction,
-        true,
-        None,
-        lifecycle.escrow.definition(),
-    )?;
-    assert_effects(
-        &claim,
-        &after_claim,
-        &lifecycle.reward_treasury,
-        &lifecycle.destination,
-        &reward,
-        &Quantity::zero(),
-        &reward,
-        &lifecycle.owner.account,
-        &fee,
-    )?;
-    let replay = submit_signed(
-        &lifecycle.owner.client,
-        ClaimPublicLaneRewards {
-            lane_id: LaneId::SINGLE,
-            account: lifecycle.owner.account.clone(),
-            claim_plan: plan.clone(),
-        }
-        .into(),
-        false,
-    )
-    .await?;
-    ensure!(
-        replay.hash() != transaction.hash(),
-        "claim replay must be a new signed transaction carrying the exact consumed plan"
-    );
-    let after_replay = lifecycle.observe(lifecycle.unbond_intent()).await?;
-    let replay_fee = actual_fee(
-        &after_claim,
-        &after_replay,
-        &replay,
-        false,
-        Some("reward claim processing cursor changed after signing"),
-        lifecycle.escrow.definition(),
-    )?;
-    assert_effects(
-        &after_claim,
-        &after_replay,
-        &lifecycle.reward_treasury,
-        &lifecycle.destination,
-        &Quantity::zero(),
-        &Quantity::zero(),
-        &Quantity::zero(),
-        &lifecycle.owner.account,
-        &replay_fee,
-    )?;
+    // TODO: qualify automatic funded reward conversion and signed nominator claims
+    // in a real-peer scenario with authenticated monthly funding and reference
+    // observations. This retained-tenure scenario only qualifies principal custody.
     lifecycle
         .reject_early(
-            after_replay,
+            before_reward,
             "authenticated release of current and frozen committee obligations",
         )
         .await?;
@@ -1109,9 +978,6 @@ mod tests {
             valid_for_blocks: EPOCH,
             operation: PublicLanePreparationOperationV1::ClaimRewards(PublicLanePrepareClaimV1 {
                 recipient: BOB_ID.clone(),
-                upto_epoch: Some(REWARD_EPOCH),
-                max_records: 1,
-                accrued_sources: Vec::new(),
             }),
         };
         let hash = Hash::new(b"accounting helper observation; not network qualification");

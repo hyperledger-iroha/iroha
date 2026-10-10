@@ -34999,10 +34999,6 @@
             "format": "uint64",
             "type": "integer"
           },
-          "last_reward_epoch": {
-            "description": "Manifest authority has no staking reward epoch.",
-            "type": "null"
-          },
           "metadata": {
             "description": "Empty metadata projected for manifest authority.",
             "type": "object"
@@ -35055,7 +35051,6 @@
           "activation_height",
           "deactivation_height",
           "metadata",
-          "last_reward_epoch",
           "authority_source",
           "election_exit_height"
         ],
@@ -35222,6 +35217,7 @@
       },
       "PublicLanePendingReward": {
         "additionalProperties": false,
+        "description": "Automatically accrued funded XOR entitlement, including dust below the minimum claim threshold. Beneficiary recovery preserves the original entitlement identity.",
         "properties": {
           "account": {
             "description": "Account literal for the reward recipient.",
@@ -35235,35 +35231,46 @@
             "description": "Exact custody source asset identifier for the unpaid reward.",
             "type": "string"
           },
+          "beneficiary_id": {
+            "type": "string"
+          },
+          "beneficiary_revision": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "claimable": {
+            "type": "boolean"
+          },
+          "expected_claim_sequence": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
           "lane_id": {
             "description": "Lane identifier echoed from the request.",
             "format": "uint64",
             "type": "integer"
           },
-          "latest_unprocessed_epoch": {
-            "description": "Latest unprocessed reward epoch for this exact asset included in amount; null when the obligation contains only retained dust.",
-            "format": "uint64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "processed_through_epoch": {
-            "description": "Last reward epoch processed for this lane and recipient; null includes epoch zero.",
-            "format": "uint64",
-            "type": [
-              "integer",
-              "null"
-            ]
+          "lifecycle_seal": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-Fa-f]{64}$",
+            "type": "string"
           }
         },
         "required": [
           "lane_id",
           "account",
           "asset",
-          "processed_through_epoch",
-          "latest_unprocessed_epoch",
-          "amount"
+          "amount",
+          "beneficiary_id",
+          "beneficiary_revision",
+          "expected_claim_sequence",
+          "lifecycle_seal",
+          "claimable"
         ],
         "type": "object"
       },
@@ -35441,7 +35448,7 @@
             "items": {
               "$ref": "#/components/schemas/PublicLanePreparationBalanceV1"
             },
-            "maxItems": 128,
+            "maxItems": 2,
             "type": "array"
           },
           "network_id": {
@@ -35508,40 +35515,12 @@
       "PublicLanePrepareClaimV1": {
         "additionalProperties": false,
         "properties": {
-          "accrued_sources": {
-            "items": {
-              "type": "string"
-            },
-            "maxItems": 64,
-            "type": "array"
-          },
-          "max_records": {
-            "maximum": 64,
-            "minimum": 0,
-            "type": "integer"
-          },
           "recipient": {
             "type": "string"
-          },
-          "upto_epoch": {
-            "anyOf": [
-              {
-                "format": "uint64",
-                "maximum": 18446744073709551615,
-                "minimum": 0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
-          "recipient",
-          "upto_epoch",
-          "max_records",
-          "accrued_sources"
+          "recipient"
         ],
         "type": "object"
       },
@@ -35652,43 +35631,11 @@
       "PublicLaneRewardClaimPlanV1": {
         "additionalProperties": false,
         "properties": {
-          "expected_state": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PublicLaneRewardClaimStateV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "fee_claim": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PublicLaneFeeRewardClaimV1"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Exact independently accrued fee reward payment, or explicit null for no fee reward effects. This field must be present before signing."
+            "$ref": "#/components/schemas/PublicLaneFeeRewardClaimV1"
           },
           "network_scope": {
             "$ref": "#/components/schemas/PublicLaneMonetaryScopeV1"
-          },
-          "records": {
-            "items": {
-              "$ref": "#/components/schemas/PublicLaneRewardRecordRefV1"
-            },
-            "maxItems": 64,
-            "type": "array"
-          },
-          "sources": {
-            "items": {
-              "$ref": "#/components/schemas/PublicLaneRewardClaimSourceV1"
-            },
-            "maxItems": 64,
-            "type": "array"
           },
           "valid_until_height": {
             "format": "uint64",
@@ -35700,82 +35647,7 @@
         "required": [
           "network_scope",
           "valid_until_height",
-          "expected_state",
-          "records",
-          "sources",
           "fee_claim"
-        ],
-        "type": "object"
-      },
-      "PublicLaneRewardClaimSourceV1": {
-        "additionalProperties": false,
-        "properties": {
-          "destination_asset": {
-            "type": "string"
-          },
-          "expected_accrued": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Quantity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "payout": {
-            "$ref": "#/components/schemas/Quantity"
-          },
-          "source_asset": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "source_asset",
-          "destination_asset",
-          "expected_accrued",
-          "payout"
-        ],
-        "type": "object"
-      },
-      "PublicLaneRewardClaimStateV1": {
-        "additionalProperties": false,
-        "properties": {
-          "through_epoch": {
-            "anyOf": [
-              {
-                "format": "uint64",
-                "maximum": 18446744073709551615,
-                "minimum": 0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "through_epoch"
-        ],
-        "type": "object"
-      },
-      "PublicLaneRewardRecordRefV1": {
-        "additionalProperties": false,
-        "properties": {
-          "epoch": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "record_hash": {
-            "$ref": "#/components/schemas/Hash"
-          }
-        },
-        "required": [
-          "epoch",
-          "record_hash"
         ],
         "type": "object"
       },
@@ -36003,16 +35875,8 @@
             "format": "uint64",
             "type": "integer"
           },
-          "last_reward_epoch": {
-            "description": "Epoch that last produced a reward payout.",
-            "format": "uint64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
           "metadata": {
-            "description": "Optional metadata (commission, endpoints, jurisdiction flags, etc.).",
+            "description": "Descriptive metadata (endpoints, jurisdiction flags, etc.); commission is zero and metadata cannot change rewards.",
             "type": "object"
           },
           "peer_id": {
@@ -36050,7 +35914,6 @@
           "activation_height",
           "deactivation_height",
           "metadata",
-          "last_reward_epoch",
           "authority_source",
           "election_exit_height"
         ],
@@ -84027,7 +83890,7 @@
     },
     "/v1/nexus/public-lanes/{lane_id}/rewards/pending": {
       "get": {
-        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`) and accepts optional `asset_id` and `upto_epoch` filters.",
+        "description": "Returns the automatically accrued funded XOR entitlement for the current beneficiary in the requested public lane, including dust below the claim threshold. Requires an account query parameter and accepts an optional exact custody asset_id filter.",
         "operationId": "nexusPublicLaneRewards",
         "parameters": [
           {
@@ -84056,16 +83919,6 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
-          },
-          {
-            "description": "Inclusive cap on new, unprocessed reward records; retained dust remains visible even when its processing cursor exceeds this value.",
-            "in": "query",
-            "name": "upto_epoch",
-            "required": false,
-            "schema": {
-              "format": "int64",
-              "type": "integer"
             }
           }
         ],

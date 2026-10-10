@@ -303,7 +303,9 @@ fn supplied_proved_replay_cannot_derive_a_record() {
                 .iter()
                 .cloned()
                 .map(|instruction| QueuedEffect {
-            payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(instruction),
+                    payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
+                        instruction,
+                    ),
                     authority: authority.clone(),
                     contract_runtime_context: None,
                     entrypoint_authorization: None,

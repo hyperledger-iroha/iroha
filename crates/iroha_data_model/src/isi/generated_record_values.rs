@@ -19,8 +19,7 @@ use crate::{
     nexus::{
         PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
         PublicLaneMonetaryScopeV1, PublicLaneMonetarySlashV1, PublicLaneMonetaryUnbondV1,
-        PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding,
-        public_lane_unbonding_commitment,
+        PublicLaneUnbonding, public_lane_unbonding_commitment,
     },
     runtime::{RuntimeUpgradeId, RuntimeUpgradeManifest},
     smart_contract::{ContractAddress, ContractLifecycleOwnerV1},
@@ -213,18 +212,6 @@ fn staking_values() -> Vec<Value> {
                     slashable_exposure: 13_u64.into(),
                 }),
             ),
-        }),
-        capture(staking::RecordPublicLaneRewards {
-            lane_id: LaneId::SINGLE,
-            epoch: 4,
-            reward_asset: AssetId::new(asset_definition(), validator.clone()),
-            total_reward: Quantity::from(5_u64),
-            shares: vec![PublicLaneRewardShare {
-                account: validator,
-                role: PublicLaneRewardRole::Validator,
-                amount: Quantity::from(5_u64),
-            }],
-            metadata: Metadata::default(),
         }),
     ]
 }

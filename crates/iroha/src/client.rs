@@ -7854,7 +7854,6 @@ impl Client {
         &self,
         lane_id: LaneId,
         account: &str,
-        upto_epoch: Option<u64>,
     ) -> Result<JsonValue> {
         if account.is_empty() {
             return Err(eyre!("account filter must not be empty"));
@@ -7863,12 +7862,9 @@ impl Client {
             &self.torii_url,
             &format!("v1/nexus/public-lanes/{}/rewards/pending", lane_id.as_u32()),
         );
-        let mut req = self
+        let req = self
             .default_request(HttpMethod::GET, url)
             .param("account", account);
-        if let Some(epoch) = upto_epoch {
-            req = req.param("upto_epoch", &epoch);
-        }
         let resp = self.send_builder(req)?;
         Self::ensure_response_status(
             &resp,
@@ -29806,7 +29802,6 @@ mod tests {
             client.get_public_lane_pending_rewards(
                 LaneId::new(0),
                 "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-                Some(5),
             )
         });
         let payload = payload.expect("request succeeds");
@@ -29820,7 +29815,7 @@ mod tests {
             "account".into(),
             "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into()
         )));
-        assert!(pairs.contains(&("upto_epoch".into(), "5".into())));
+        assert_eq!(pairs.len(), 1);
     }
     #[test]
     fn get_explorer_account_qr_parses_payload_and_omits_query_params() {

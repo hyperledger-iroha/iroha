@@ -11756,7 +11756,6 @@
             "staking.unbonding_delay.seconds",
             "staking.unbonding_delay.nanoseconds",
             "staking.max_slash_bps",
-            "staking.reward_dust_threshold",
             "staking.stake_asset_id",
             "staking.stake_escrow_account_id",
             "staking.slash_sink_account_id"

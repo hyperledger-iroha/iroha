@@ -120,7 +120,10 @@ impl Name {
     /// Exact optional string allocation made by [`Self::try_clone_for_admission`].
     #[must_use]
     pub fn admission_clone_layout(&self) -> Option<std::alloc::Layout> {
-        (!self.0.is_inlined()).then(|| std::alloc::Layout::array::<u8>(self.as_ref().len()).expect("existing bounded name layout"))
+        (!self.0.is_inlined()).then(|| {
+            std::alloc::Layout::array::<u8>(self.as_ref().len())
+                .expect("existing bounded name layout")
+        })
     }
     /// Copy an already validated name through exact, fallible retained storage.
     ///

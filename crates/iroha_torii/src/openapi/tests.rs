@@ -2010,14 +2010,7 @@ fn public_lane_reward_claim_schema_requires_exact_fee_consent() {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     let schemas = openapi_schemas();
-    let plan_fields = [
-        "network_scope",
-        "valid_until_height",
-        "expected_state",
-        "records",
-        "sources",
-        "fee_claim",
-    ];
+    let plan_fields = ["network_scope", "valid_until_height", "fee_claim"];
     let claim_fields = [
         "lifecycle_seal",
         "beneficiary_id",
@@ -2030,11 +2023,8 @@ fn public_lane_reward_claim_schema_requires_exact_fee_consent() {
     assert_strict_object_schema(&schemas, "PublicLaneRewardClaimPlanV1", &plan_fields, &[]);
     assert_strict_object_schema(&schemas, "PublicLaneFeeRewardClaimV1", &claim_fields, &[]);
     assert_eq!(
-        schemas["PublicLaneRewardClaimPlanV1"]["properties"]["fee_claim"]["anyOf"],
-        norito::json!([
-            {"$ref": "#/components/schemas/PublicLaneFeeRewardClaimV1"},
-            {"type": "null"}
-        ])
+        schemas["PublicLaneRewardClaimPlanV1"]["properties"]["fee_claim"],
+        norito::json!({"$ref": "#/components/schemas/PublicLaneFeeRewardClaimV1"})
     );
     assert_eq!(
         schemas["PublicLaneFeeRewardClaimV1"]["properties"]["lifecycle_seal"],
@@ -2054,13 +2044,11 @@ fn public_lane_reward_claim_schema_requires_exact_fee_consent() {
         expected_claim_sequence: u64::MAX,
     };
     assert!(claim.has_canonical_shape(&ALICE_ID));
-    for fee_claim in [None, Some(claim)] {
+    {
+        let fee_claim = claim;
         let plan = PublicLaneRewardClaimPlanV1 {
             network_scope: PublicLaneMonetaryScopeV1::Genesis,
             valid_until_height: 1,
-            expected_state: None,
-            records: Vec::new(),
-            sources: Vec::new(),
             fee_claim,
         };
         let encoded = norito::json::to_value(&plan).unwrap();
@@ -2073,7 +2061,7 @@ fn public_lane_reward_claim_schema_requires_exact_fee_consent() {
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from(plan_fields)
         );
-        if plan.fee_claim.is_some() {
+        {
             assert_eq!(
                 encoded["fee_claim"]
                     .as_object()
@@ -2087,8 +2075,6 @@ fn public_lane_reward_claim_schema_requires_exact_fee_consent() {
                 encoded["fee_claim"]["lifecycle_seal"],
                 Value::String("A5".repeat(32))
             );
-        } else {
-            assert_eq!(encoded["fee_claim"], Value::Null);
         }
         assert_eq!(
             norito::json::from_value::<PublicLaneRewardClaimPlanV1>(encoded.clone()).unwrap(),

@@ -7,8 +7,7 @@
 //! current exact quorum must cancel that immutable attempt without losing finality.
 //! Retention scenarios restart every process, then authenticate a paid successor signed
 //! by the unchanged generation and a fresh, separately identified future attempt.
-//! The complete rotation also reserves existing real XOR for a bounded reward claim
-//! and withdraws a departing seat's full bond only after replacement and liability
+//! The complete rotation withdraws a departing seat's full bond only after replacement and liability
 //! expiry. Its genuine Parliament pulse consumes current credentials while the next
 //! committee remains pending. Retail monthly policy and network slashing remain separate gates.
 
@@ -1985,7 +1984,7 @@ async fn run_custody_or_activation_scenario(
         .difference(&return_target)
         .next()
         .ok_or_else(|| eyre!("seven-seat committee has no departing validator"))?;
-    let lifecycle = committee_staking::fund_rewards_and_schedule_withdrawal(
+    let lifecycle = committee_staking::schedule_retained_withdrawal(
         network,
         admin,
         operators

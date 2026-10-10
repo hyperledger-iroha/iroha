@@ -80,7 +80,7 @@ const GENESIS_EXPECTED_HASH_FILE: &str = "genesis.expected_hash";
 /// Kagami owns checked replacement of the pre-seating identity, publishing it last.
 fn resign_instructions(prior: NetworkId) -> String {
     format!(
-        "re-sign genesis in the network directory with `kagami genesis sign genesis.json --private-key-file genesis.private_key --config peer0.toml --out-file genesis.signed.nrt --bound-manifest-out genesis.json --expected-hash-out genesis.expected_hash --replace-expected-hash '{prior}'`; if interrupted, retry with this same prior identity; a stale-prior refusal requires verifying the signed block, bound manifest, and published identity before proceeding"
+        "re-sign genesis in the network directory with `kagami genesis sign genesis.json --private-key-file genesis.private_key --config peer0.toml --out-file genesis.signed.nrt --bound-manifest-out genesis.json --nexus-context-output nexus-amx-context.v1.bin --expected-hash-out genesis.expected_hash --replace-expected-hash '{prior}'`; if interrupted, retry with this same prior identity; a stale-prior refusal requires verifying the signed block, bound manifest, Nexus AMX context, and published identity before proceeding"
     )
 }
 

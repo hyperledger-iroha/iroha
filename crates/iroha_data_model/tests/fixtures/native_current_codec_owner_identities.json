@@ -3762,24 +3762,6 @@
           "serialize_hash": "c6fb8b61764a1409ffb3cf3cdf253058"
         },
         {
-          "deserialize_hash": "b33ca92b9e099c62a4775fff8b623238",
-          "nominal": "iroha_data_model::nexus::staking::PublicLaneRewardShare",
-          "root": "iroha_data_model::nexus::staking::PublicLaneRewardShare",
-          "serialize_hash": "b33ca92b9e099c62a4775fff8b623238"
-        },
-        {
-          "deserialize_hash": "60efbe14276d16725030b38b5cc4f400",
-          "nominal": "iroha_data_model::nexus::staking::PublicLaneRewardRole",
-          "root": "iroha_data_model::nexus::staking::PublicLaneRewardRole",
-          "serialize_hash": "60efbe14276d16725030b38b5cc4f400"
-        },
-        {
-          "deserialize_hash": "3c1393042a610f1605456fc56fe1b7a0",
-          "nominal": "iroha_data_model::nexus::staking::PublicLaneRewardRecord",
-          "root": "iroha_data_model::nexus::staking::PublicLaneRewardRecord",
-          "serialize_hash": "3c1393042a610f1605456fc56fe1b7a0"
-        },
-        {
           "deserialize_hash": "fe5c3d4d9f459655d97a15f49e71c01f",
           "nominal": "iroha_data_model::nexus::staking::PublicLanePendingReward",
           "root": "iroha_data_model::nexus::staking::PublicLanePendingReward",

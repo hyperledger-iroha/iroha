@@ -180,8 +180,9 @@ fn pool_bin_quantity(
 #[test]
 fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_directions() {
     let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
-    // Exact current production source. The cross-repository source guard checks
-    // this copy byte-for-byte before the SoraSwap check/build/test workflows.
+    // Full current Iroha DLMM fixture through production native execution. The
+    // sibling SoraSwap source still needs the current-language/shared-traversal
+    // migration; this test does not establish cross-repository byte parity.
     let source = include_str!("fixtures/dlmm_pool.ko");
     let (code, _) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(source)

@@ -814,6 +814,7 @@ kagami genesis sign <network>/genesis.json \
   --config <network>/peer0.toml \
   --out-file <network>/genesis.signed.nrt \
   --bound-manifest-out <network>/genesis.json \
+  --nexus-context-output <network>/nexus-amx-context.v1.bin \
   --expected-hash-out <network>/genesis.expected_hash.next
 mv <network>/genesis.expected_hash.next <network>/genesis.expected_hash
 ```

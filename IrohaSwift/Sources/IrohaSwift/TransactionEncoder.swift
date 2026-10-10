@@ -429,6 +429,32 @@ enum SingleInstructionSwiftNoritoEncoder {
         return transactionPayload.data
     }
 
+    /// Ordinary `Executable::Instructions` payload over exact dynamic instruction frames.
+    static func instructionsPayload(
+        networkId: NetworkId,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        frames: [TransactionInstructionFrame],
+        feePayment: FeePaymentIntent
+    ) throws -> Data {
+        guard !frames.isEmpty else { throw ExecutableBatchInputError.emptyBatch }
+        return try encodeNetworkTransactionPayload(
+            networkId: networkId, authority: authority, creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs, feePayment: feePayment,
+            instructionPayloads: try frames.map { try $0.compactInstructionBoxPayload(expectedNetworkId: networkId) }
+        )
+    }
+
+    /// Versioned signed wire and entrypoint hash for an exact payload and its detached signature.
+    static func signedEnvelope(transactionPayload: Data, signature: Data) -> SignedTransactionEnvelope {
+        let signed = encodeCompactSignedTransaction(signature: signature, transactionPayload: transactionPayload)
+        return SignedTransactionEnvelope(
+            norito: encodeVersionedSignedTransaction(signed), signedTransaction: signed, payload: nil,
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload))
+        )
+    }
+
     static func encodeExecutableBatch(
         networkId: NetworkId,
         authority: String,

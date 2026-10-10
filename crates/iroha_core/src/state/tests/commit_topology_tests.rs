@@ -146,7 +146,6 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
                     activation_height: 1,
                     election_exit_height: None,
                     deactivation_height: None,
-                    last_reward_epoch: None,
                 },
             );
         }
@@ -166,7 +165,6 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
                     activation_height: 1,
                     election_exit_height: None,
                     deactivation_height: None,
-                    last_reward_epoch: None,
                 },
             );
         }
@@ -281,7 +279,6 @@ state_test! { sync apply_without_execution_keeps_active_candidate_outside_suppli
                     activation_height: 1,
                     election_exit_height: None,
                     deactivation_height: None,
-                    last_reward_epoch: None,
                 },
             );
         }

@@ -1726,7 +1726,7 @@ impl RawGenesisTransaction {
     /// # Errors
     ///
     /// Returns an error when the topology is not an exact supported `3f + 1`
-    /// committee or repeats a peer.
+    /// committee, repeats a peer, or contains a missing or invalid BLS proof of possession.
     pub fn validate_genesis_topology(&self) -> Result<()> {
         let mut topology = self
             .transactions
@@ -1745,6 +1745,15 @@ impl RawGenesisTransaction {
             return Err(eyre!(
                 "genesis topology repeats a validator identity; provision one canonical entry per validator"
             ));
+        }
+        for entry in self.transactions.iter().flat_map(|tx| &tx.topology) {
+            let validator_key = entry.peer.public_key();
+            let pop = entry.pop_bytes()?.ok_or_else(|| {
+                eyre!("missing `pop_hex` entry for topology peer {validator_key}")
+            })?;
+            bls_normal_pop_verify(validator_key, &pop).map_err(|error| {
+                eyre!("genesis topology validator {validator_key} has an invalid PoP: {error}")
+            })?;
         }
         Ok(())
     }
@@ -3248,6 +3257,63 @@ mod tests {
                 .to_string()
                 .contains("exact Sumeragi `3f + 1` topology")
         );
+    }
+
+    #[test]
+    fn direct_signing_validates_each_topology_proof_of_possession() {
+        let topology = deterministic_test_genesis_topology_entries();
+        let make_manifest = |topology| {
+            GenesisBuilder::new_without_executor(
+                ChainId::from("genesis-topology-pop-verification"),
+                PathBuf::from("."),
+            )
+            .set_topology(topology)
+            .build_raw_for_test()
+        };
+        let valid = make_manifest(topology.clone());
+        valid
+            .validate_genesis_topology()
+            .expect("valid BLS proofs bind every unique validator");
+        valid
+            .build_and_sign(&checked_genesis_fixture_keypair())
+            .expect("a valid committee remains signable");
+
+        for (label, pop_hex, expected_error) in [
+            ("missing", None, "missing `pop_hex`"),
+            ("empty", Some(String::new()), "is empty"),
+            ("malformed", Some("not-hex".to_owned()), "invalid `pop_hex`"),
+            ("wrong length", Some("00".to_owned()), "invalid PoP"),
+            (
+                "another validator's proof",
+                topology[1].pop_hex.clone(),
+                "invalid PoP",
+            ),
+            (
+                "corrupted proof",
+                Some({
+                    let mut pop = topology[0].pop_bytes().unwrap().unwrap();
+                    pop[0] ^= 1;
+                    hex::encode(pop)
+                }),
+                "invalid PoP",
+            ),
+        ] {
+            let mut invalid_topology = topology.clone();
+            invalid_topology[0].pop_hex = pop_hex;
+            let invalid = make_manifest(invalid_topology);
+            let validation_error = invalid.validate_genesis_topology().expect_err(label);
+            assert!(
+                validation_error.to_string().contains(expected_error),
+                "{label}: {validation_error}"
+            );
+            let signing_error = invalid
+                .build_and_sign(&checked_genesis_fixture_keypair())
+                .expect_err(label);
+            assert!(
+                signing_error.to_string().contains(expected_error),
+                "{label}: {signing_error}"
+            );
+        }
     }
 
     #[test]

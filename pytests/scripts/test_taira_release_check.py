@@ -29,39 +29,75 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1830 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1863 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1843 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1876 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
-    'domain.rs': ('smartcontracts::isi::domain::tests::', (
-        'unregister_account_rejects_retained_reward_processing_cursor',
-        'unregister_account_rejects_when_account_is_reward_claim_asset_owner',
-        'unregister_asset_definition_ignores_mismatched_public_lane_reward_record',
+    'smartcontracts/isi/multisig.rs': ('smartcontracts::isi::multisig::tests::', (
+        'replace_account_controller_preserves_principal_custody_and_exact_reserves',
     )),
-    'multisig.rs': ('smartcontracts::isi::multisig::tests::', (
-        'rekey_public_lane_reward_cursors_and_unpaid_sources_preserve_scope_and_quantity',
+    'smartcontracts/isi/staking_reward_tests.rs': ('smartcontracts::isi::staking::tests::', (
+        'staking_instructions_change_only_future_reward_exposure',
     )),
-    'staking_rewards.rs': ('smartcontracts::isi::staking::rewards::tests::', (
-        'outstanding_rewards_retains_processed_dust_in_its_exact_source',
+    'smartcontracts/isi/staking_custody_tests.rs': ('smartcontracts::isi::staking::tests::', (
+        'staking_reserve_checks_aggregate_batch_debits',
     )),
-    'staking_reward_tests.rs': ('smartcontracts::isi::staking::tests::', (
-        'reward_epoch_zero_is_claimable_once',
-        'reward_dust_accumulates_until_paid',
-        'reward_reserve_blocks_transfer_and_burn_but_releases_paid_rewards',
-        'reward_failed_payment_restores_claim_and_reserve',
-        'reward_obligation_audit_rejects_corrupt_record_keys',
-        'reward_claim_uses_recorded_custody_after_fee_policy_changes',
-        'reward_recording_excludes_bonded_custody_from_a_shared_fee_sink',
-        'reward_failed_second_source_rolls_back_all_claim_state',
+    'validation_fee_rewards/automatic_tests.rs': ('validation_fee_rewards::tests::', (
+        'automatic_multiple_validator_nominations_accrue_and_claim_exact_xor',
+        'delayed_funding_preserves_pre_exit_service_and_late_stake_cannot_capture_it',
+        'automatic_cursor_rounding_conserves_minor_units_across_cohorts_and_replay',
+        'automatic_nominator_failed_transfer_rolls_back_credit_reserve_and_claim_receipt',
     )),
-    'staking.rs': ('smartcontracts::isi::staking::tests::', (
-        'claim_rewards_transfers_and_marks_epoch',
-        'claim_rewards_defers_dust_without_marking_paid',
-        'claim_rewards_rejects_mismatched_reward_record_rows_without_releasing_reserves',
-        'claim_rewards_accepts_i105_fee_sink',
+    'validation_fee_rewards.rs': ('validation_fee_rewards::tests::', (
+        'conversion_reserves_once_preserves_earning_month_and_obeys_caps',
+        'pending_sbd_and_reserved_xor_are_protected_but_unrelated_funds_are_spendable',
     )),
-    'staking_custody_tests.rs': ('smartcontracts::isi::staking::tests::', (
-        'staking_custody_and_rewards_share_one_additive_reserve_floor',
+    'validation_fee_rewards/exposure.rs': ('validation_fee_rewards::exposure::tests::', (
+        'changed_exposure_preserves_chronology_and_only_adjacent_snapshots_coalesce',
+        'full_page_rollover_is_atomic_and_does_not_limit_future_changes',
+        'optional_validator_registration_cannot_overfill_historical_service_roster',
+        'historical_capture_survives_current_block_slash_exit_and_late_deposit',
+    )),
+    'validation_fee_rewards/exposure_service_tests.rs': ('validation_fee_rewards::exposure::service_tests::', (
+        'authenticated_finalized_service_captures_nominators_once_before_current_mutations',
+    )),
+    'validation_fee_rewards/exposure_restart_tests.rs': ('validation_fee_rewards::exposure::restart_tests::', (
+        'certified_reward_replay_resumes_unfinished_pages_and_actual_signed_claims',
+    )),
+    'validation_fee_rewards/exposure_archive_tests.rs': ('validation_fee_rewards::exposure::archive_tests::', (
+        'archived_exposure_survives_hot_rollover_replay_and_signed_claims',
+    )),
+    'validation_fee_rewards/reconciliation.rs': ('validation_fee_rewards::reconciliation::tests::', (
+        'funded_reward_restore_accepts_cursor_credit_and_bounded_source_pruning',
+        'restore_rejects_forged_claimable_cursor_and_entitlement_without_consuming_credit',
+        'restart_requires_complete_unfinished_sources_and_consecutive_funded_sequences',
+        'restart_requires_unsealed_sources_even_without_pending_funding',
+        'lifetime_reward_turnover_can_exceed_current_balance_width',
+        'restore_requires_retirement_journal_before_accepting_funded_rights',
+    )),
+    'validation_fee_rewards/exposure_budget_tests.rs': ('validation_fee_rewards::exposure::budget_tests::', (
+        'live_stake_backing_does_not_rescan_history_but_restore_requires_it',
+        'maximum_committee_tail_archive_fits_independent_source_budget',
+    )),
+    'validation_fee_rewards/history.rs': ('validation_fee_rewards::history::tests::', (
+        'journal_validation_requires_exact_original_height_hash_and_custody',
+        'retirement_journal_keeps_contract_and_custody_scope',
+        'compacted_lifetime_turnover_preserves_more_than_u128',
+    )),
+    'query/native_receipts/reward_history/tests.rs': ('query::native_receipts::reward_history::tests::', (
+        'committed_fee_archive_preserves_original_corpus_and_rejects_absent_exposure',
+        'committed_reward_archive_missing_corrupt_and_changed_root_defer_without_fabrication',
+        'reward_archive_capacity_preserves_original_pool_refusal',
+    )),
+    'retail_fee/reward_history.rs': ('retail_fee::reward_history::tests::', (
+        'original_month_history_waits_for_late_wallet_collection_and_credit_flush',
+        'wallet_recovery_and_closure_keep_exact_frontier_without_lifetime_rows',
+        'restart_rejects_missing_or_fabricated_unsettled_month_frontier',
+        'rejected_wallet_update_rolls_back_frontier_and_closure_seal',
+    )),
+    'validation_fee/runtime_rewards_tests.rs': ('validation_fee::tests::runtime_wrapper_tests::reward_tests::', (
+        'scheduled_production_conversion_automatically_funds_nominator_signed_claims',
+        'scheduled_funded_pool_conversion_automatically_funds_nominator_signed_claims',
     )),
 }
 
@@ -230,7 +266,6 @@ class BeaconGateTests(unittest.TestCase):
         owners = (
             ("smartcontracts/isi/staking_monetary_fixture_tests.rs", "smartcontracts::isi::staking::tests", True, (
                 "registration_rejects_changed_signed_monetary_fields_without_custody_writes",
-                "reward_claim_rejects_changed_record_source_and_entitlement_without_payment",
                 "genesis_monetary_scope_requires_exact_height_without_npos_parameters",
             )),
             ("executor_opaque_monetary_tests.rs", "executor::opaque_monetary_tests", True, (
@@ -238,9 +273,9 @@ class BeaconGateTests(unittest.TestCase):
                 "supplied_proved_staking_effects_require_signed_monetary_plan",
             )),
             ("smartcontracts/isi/multisig/tests/proposal_attempt.rs", "smartcontracts::isi::multisig::tests::proposal_attempt", True, (
-                "live_multisig_proposal_decode_refusal_retries_original_signed_xor_claim",
+                "live_multisig_proposal_decode_refusal_retries_original_signed_xor_transfer",
                 "live_multisig_proposal_missing_malformed_and_rebound_state_are_not_deferrals",
-                "live_multisig_proposal_body_binding_rolls_back_original_signed_xor_claim",
+                "live_multisig_proposal_body_binding_rolls_back_original_signed_xor_transfer",
                 "proposal_migration_validates_original_physical_key_and_body_before_writes",
                 "cancel_wrapper_decode_refusal_rolls_back_and_retries_original_signed_approval",
                 "expiry_child_decode_refusal_rolls_back_and_retries_original_signed_approval",
@@ -265,7 +300,7 @@ class BeaconGateTests(unittest.TestCase):
             for leaf in leaves:
                 self.assertEqual(names.count(leaf), 1, (relative, leaf))
                 expected.append(prefix + "::" + leaf)
-        self.assertEqual(len(expected), 16)
+        self.assertEqual(len(expected), 15)
         for platform in ("darwin", "linux"):
             spec = importlib.util.spec_from_file_location("monetary_authority_gate", gate.__file__)
             selected_gate = importlib.util.module_from_spec(spec)
@@ -290,8 +325,8 @@ class BeaconGateTests(unittest.TestCase):
     def test_reward_accounting_repairs_are_required_once_in_both_scopes(self):
         required = [prefix + name for prefix, names in REWARD_ACCOUNTING_SOURCE_TESTS.values()
                     for name in names]
-        self.assertEqual(len(required), 18)
-        self.assertEqual(len(set(required)), 18)
+        self.assertEqual(len(required), 36)
+        self.assertEqual(len(set(required)), 36)
         for platform in ("darwin", "linux"):
             spec = importlib.util.spec_from_file_location("reward_accounting_gate", gate.__file__)
             selected_gate = importlib.util.module_from_spec(spec)
@@ -318,20 +353,40 @@ class BeaconGateTests(unittest.TestCase):
                             selected_gate.require_tests(listing, stages)
 
     def test_reward_accounting_selectors_follow_actual_module_and_include_paths(self):
-        root = SCRIPT.resolve().parents[1] / "crates/iroha_core/src/smartcontracts/isi"
-        module = (root / "mod.rs").read_text()
-        for child in ("domain", "multisig", "staking"):
+        root = SCRIPT.resolve().parents[1] / "crates/iroha_core/src"
+        module = (root / "smartcontracts/isi/mod.rs").read_text()
+        for child in ("multisig", "staking"):
             self.assertIn("pub mod " + child + ";", module)
-        staking = (root / "staking.rs").read_text()
-        self.assertRegex(staking, r'#\[path = "staking_rewards\.rs"\]\s*mod rewards;')
+        staking = (root / "smartcontracts/isi/staking.rs").read_text()
         for child in ("staking_reward_tests.rs", "staking_custody_tests.rs"):
             self.assertIn('include!("' + child + '");', staking)
-        for child in ("domain.rs", "multisig.rs", "staking.rs", "staking_rewards.rs"):
+        rewards = (root / "validation_fee_rewards.rs").read_text()
+        self.assertIn('include!("validation_fee_rewards/automatic_tests.rs");', rewards)
+        for child in ("exposure", "history", "reconciliation"):
+            self.assertIn('mod ' + child + ';', rewards)
+        exposure = (root / "validation_fee_rewards/exposure.rs").read_text()
+        for child in ("archive", "budget", "restart", "service"):
+            self.assertIn('#[path = "exposure_' + child + '_tests.rs"]\nmod ' + child + '_tests;', exposure)
+        self.assertIn('mod reward_history;', (root / "retail_fee.rs").read_text())
+        self.assertIn('pub mod native_receipts;', (root / "query/mod.rs").read_text())
+        self.assertIn('mod reward_history;', (root / "query/native_receipts.rs").read_text())
+        self.assertIn('#[cfg(test)]\nmod tests;',
+                      (root / "query/native_receipts/reward_history.rs").read_text())
+        self.assertIn('#[path = "validation_fee/tests.rs"]\npub(crate) mod tests;',
+                      (root / "validation_fee.rs").read_text())
+        self.assertIn('#[path = "runtime_wrapper_tests.rs"]\npub(crate) mod runtime_wrapper_tests;',
+                      (root / "validation_fee/tests.rs").read_text())
+        self.assertIn('#[path = "runtime_rewards_tests.rs"]\npub(crate) mod reward_tests;',
+                      (root / "validation_fee/runtime_wrapper_tests.rs").read_text())
+        for child in ("smartcontracts/isi/multisig.rs", "smartcontracts/isi/staking.rs",
+                      "validation_fee_rewards.rs", "validation_fee_rewards/exposure.rs",
+                      "validation_fee_rewards/reconciliation.rs", "validation_fee_rewards/history.rs",
+                      "retail_fee/reward_history.rs"):
             self.assertRegex((root / child).read_text(), r'#\[cfg\(test\)\]\s*mod tests\s*\{')
         registered = [name for _, names in gate.CORE_REWARD_ACCOUNTING_STAGES for name in names]
         expected = []
         # This verifies selected names in their explicit source/module owners; it
-        # does not claim these eighteen exhaust every staking or account test.
+        # does not claim these thirty-six exhaust every reward or custody test.
         for child, (prefix, names) in REWARD_ACCOUNTING_SOURCE_TESTS.items():
             source = (root / child).read_text()
             for name in names:
@@ -460,8 +515,7 @@ class BeaconGateTests(unittest.TestCase):
             "canonical_network_xor_is_required_before_fee_reward_state_changes",
             "signed_fee_reward_claim_rejects_every_changed_binding_before_mutation",
             "self_custody_fee_claim_releases_only_its_exact_reserve_without_debiting_balance",
-            "absent_fee_claim_leaves_even_unreadable_credit_and_dust_untouched",
-            "signed_fee_reward_claim_rolls_back_public_payout_when_fee_transfer_is_refused",
+            "unreadable_credit_rejects_the_required_claim_without_mutation",
             "shared_fee_stake_reward_custody_is_additive",
             "fee_reward_claim_refuses_currency_substitution_and_stale_credit",
         ))

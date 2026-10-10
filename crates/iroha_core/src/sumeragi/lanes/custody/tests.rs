@@ -27,7 +27,6 @@ fn record() -> PublicLaneValidatorRecord {
         activation_height: 1,
         election_exit_height: None,
         deactivation_height: None,
-        last_reward_epoch: None,
     }
 }
 fn obligation(record: &PublicLaneValidatorRecord, incarnation: u8) -> SumeragiLaneCustody {

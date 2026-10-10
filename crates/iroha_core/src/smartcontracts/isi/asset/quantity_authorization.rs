@@ -628,7 +628,6 @@ mod tests {
             P::SocialReward,
             P::SocialEscrow,
             P::StakingUnbond,
-            P::StakingRewardClaim,
             P::StakingSlash,
             P::ModerationChallengeRefund,
             P::ModerationChallengeSlash,

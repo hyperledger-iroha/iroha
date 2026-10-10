@@ -219,7 +219,7 @@ class AuthComponentTests(unittest.TestCase):
                 self.assertEqual(owner.pi_policy.minimum_device_integrity,'MEETS_DEVICE_INTEGRITY')
                 self.assertEqual(owner.security_levels,frozenset({1,2}))
                 self.assertEqual(calls[0]['credential_fd'],991)
-                self.assertEqual(calls[0]['credential_owner_uid'],0)
+                self.assertEqual(calls[0]['credential_owner_uid'],os.geteuid())
                 self.assertFalse(any('issuer' in key for key in calls[0]))
             finally:owner.close()
 
