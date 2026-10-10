@@ -87,6 +87,8 @@ tempfile = { workspace = true, optional = true }
 rustix = { version = "1.1.4", features = ["fs", "process"], optional = true }
 
 [dev-dependencies]
+# Preserve exact primitive backing-identity assertions only in model tests.
+iroha_primitives = { workspace = true, features = ["test-fixtures"] }
 # Exercise real runtime storage JSON only in model tests.
 mv = { workspace = true }
 criterion = { workspace = true }

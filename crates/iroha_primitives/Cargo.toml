@@ -21,6 +21,8 @@ maintenance = { status = "actively-developed" }
 default = ["json", "simd-accel"]
 # Enable JSON helpers backed by Norito.
 json = []
+# Expose opaque backing observations only to non-shipping fixture consumers.
+test-fixtures = []
 trybuild-tests = ["dep:trybuild"]
 bench = []
 simd-accel = []

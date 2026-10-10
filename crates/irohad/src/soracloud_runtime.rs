@@ -11219,6 +11219,8 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::ZkExtensionDisabled => "zk_disabled",
         VMError::NullifierAlreadyUsed => "nullifier_used",
         VMError::PermissionDenied => "permission_denied",
+        VMError::ReentrantCall => "reentrant_call",
+        VMError::CallDepthExceeded => "call_depth_exceeded",
         VMError::PrivacyViolation => "privacy_violation",
         VMError::RegisterOutOfBounds => "register_out_of_bounds",
         VMError::NoritoInvalid => "norito_invalid",

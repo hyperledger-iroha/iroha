@@ -105,6 +105,19 @@ impl BigInt {
         self.inner.iter_u32_digits()
     }
 
+    /// Observe the original native magnitude's opaque backing address in fixtures.
+    ///
+    /// Identity comparisons require a nonempty magnitude and live, unchanged owners.
+    /// Empty magnitudes may share a dangling address; freed addresses may be reused.
+    /// This address must not be dereferenced and grants no ownership, lifetime,
+    /// allocation credit, or authority. Moving the value preserves its backing;
+    /// cloning a nonempty value creates independent backing.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[must_use]
+    pub fn magnitude_backing_address(&self) -> *const () {
+        self.inner.magnitude().native_digits().as_ptr().cast::<()>()
+    }
+
     /// Exact native-digit allocation layout of a cloned magnitude.
     ///
     /// Zero has a zero-byte layout. This describes the physical `num-bigint`
@@ -716,6 +729,25 @@ impl<'a> DecodeFromSlice<'a> for BigInt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nonempty_magnitude_backing_address_survives_move_but_not_clone() {
+        for value in [1_i128 << 100, -(1_i128 << 100)] {
+            let original = BigInt::from_i128(value);
+            assert!(!original.is_zero());
+            assert!(original.admission_clone_layout().unwrap().size() > 0);
+            let address = original.magnitude_backing_address();
+            let independent = original.clone();
+            assert_eq!(independent, original);
+            assert_ne!(independent.magnitude_backing_address(), address);
+            let moved = std::hint::black_box(original);
+            assert_eq!(moved.magnitude_backing_address(), address);
+            assert_eq!(moved, independent);
+            assert_ne!(
+                moved.magnitude_backing_address(),
+                independent.magnitude_backing_address()
+            );
+        }
+    }
     #[test]
     #[allow(unsafe_code)]
     fn admitted_clone_uses_exact_native_digit_layout_and_refuses_allocator() {
