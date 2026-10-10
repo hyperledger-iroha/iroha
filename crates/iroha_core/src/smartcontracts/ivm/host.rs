@@ -9083,29 +9083,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    fn flush_completed_axt(
-        &mut self,
-        tx: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), ValidationFail> {
-        self.amx_budget_violation = None;
-        if self.completed_axt.is_empty() {
-            return Ok(());
-        }
-        let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
-        let commit_height = tx.block_height();
-        // Materialize and persist each completed envelope into the block-level accumulator.
-        let envelopes: Vec<_> = self
-            .completed_axt
-            .drain(..)
-            .map(|state| Self::materialize_axt_record(&state, lane, commit_height))
-            .collect();
-        for envelope in envelopes {
-            tx.record_axt_envelope(envelope)
-                .map_err(ValidationFail::InstructionFailed)?;
-        }
-        Ok(())
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Execute a closure with a mutable reference to the [`CoreHost`] attached to `vm`.
     ///
     /// Used in tests to access the host state without juggling raw pointers.
@@ -20998,7 +20975,7 @@ seiyaku Callee { permission AssetOps;
         for case in 0..7 {
             let (result, vm) = invoke(
                 if case == 1 { "no_args" } else { "echo" },
-                &|vm, registers| match case {
+                &|vm, _registers| match case {
                     0 => {
                         vm.set_register(12, 0);
                         vm.set_register(13, 0);

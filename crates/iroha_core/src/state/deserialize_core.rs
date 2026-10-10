@@ -50,6 +50,27 @@ pub(crate) enum StateRestoreError {
     #[error("snapshot State execution deferred: {0}")]
     ExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
 }
+impl From<native_execution_tip::TipRestoreError> for StateRestoreError {
+    fn from(error: native_execution_tip::TipRestoreError) -> Self {
+        match error {
+            native_execution_tip::TipRestoreError::GenesisReplayRequired => {
+                Self::NativeExecutionReplayRequired
+            }
+            native_execution_tip::TipRestoreError::History(message) => {
+                Self::Serialization(json::Error::InvalidField {
+                    field: "native_execution_tip".into(),
+                    message,
+                })
+            }
+            native_execution_tip::TipRestoreError::Admission(error) => {
+                Self::Admission(StateAdmissionError::Storage(error))
+            }
+            native_execution_tip::TipRestoreError::Deferred(original) => {
+                Self::ExecutionDeferred(original)
+            }
+        }
+    }
+}
 impl From<mv::storage::AdmittedStorageError> for StateRestoreError {
     fn from(error: mv::storage::AdmittedStorageError) -> Self {
         Self::Admission(StateAdmissionError::Storage(
@@ -819,20 +840,7 @@ impl KuraSeed {
                 &block_hashes,
                 &self.kura,
             )
-            .map_err(|error| match error {
-                native_execution_tip::TipRestoreError::GenesisReplayRequired => {
-                    StateRestoreError::NativeExecutionReplayRequired
-                }
-                native_execution_tip::TipRestoreError::History(message) => {
-                    StateRestoreError::Serialization(json::Error::InvalidField {
-                        field: "native_execution_tip".into(),
-                        message,
-                    })
-                }
-                native_execution_tip::TipRestoreError::Admission(error) => {
-                    StateRestoreError::Admission(StateAdmissionError::Storage(error))
-                }
-            })?;
+            .map_err(StateRestoreError::from)?;
         let committed_height =
             u64::try_from(block_hashes.hash_count()).map_err(|_| json::Error::InvalidField {
                 field: "state.block_hashes".to_owned(),

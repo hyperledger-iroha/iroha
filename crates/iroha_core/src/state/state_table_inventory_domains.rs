@@ -55,6 +55,14 @@ pub(super) struct OtherDomains {
 /// Every discovered domain literal that no commitment and no application accumulator owns.
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
+        usage: Use::Record,
+        reason: "Hashes of the finite variant names and codes of one ordinary enum or application-error schema, excluding nominal identity. Each binds one supplied descriptor's content and commits no State tables or cells",
+        literals: &[
+            r"iroha:kotodama:enum-schema:v1\0",
+            r"iroha:kotodama:error-schema:v1\0",
+        ],
+    },
+    OtherDomains {
         usage: Use::Name,
         reason: "Diagnostic JSON schema name for a verified genesis dataspace authority; it labels the projection and computes no State commitment",
         literals: &[r"iroha.genesis-dataspace-verification.v1"],
@@ -493,7 +501,6 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:hijiri_account_risk_v1:",
             r"iroha:hijiri_parameters_v1",
             r"iroha:kiso:test:soranet-transport:v1",
-            r"iroha:kotodama:error-schema:v1\0",
             r"iroha:multisig_home_domain",
             r"iroha:validation_fee_governance_keyset_v1",
             r"iroha:validation_fee_policy_registry_v1",

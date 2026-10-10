@@ -1082,13 +1082,16 @@ impl PrefixVerifierContext {
         artifacts: Option<PrefixArtifacts>,
     ) -> Result<CertificateVerdict, ExecutionAttemptError<ChainReadError>> {
         let height = committed.height;
-        // Existing inherited decoder and physical refusal remain unfinished local attempts.
+        // Reuse the original active caller allowance before proposal and RS16 scratch
+        // allocation, as the State-tip verifier does. No scope or pool is installed here.
+        // TODO(S6): this cumulative callback does not fund the nested authority/crypto
+        // graph or provide an independent physical scratch owner for AMX relaying.
         self.prepare_certificate_with_scratch_admission(
             committed,
             authority,
             config,
             artifacts,
-            &mut |_| Ok(()),
+            &mut state_certificate::query_scratch_admission,
         )
         .map_err(|error| match error {
             VerificationReadError::Source(error) => error.into(),
@@ -1640,19 +1643,33 @@ fn authenticate_genesis(
     (ValidatorEpochContextV1, Hash32),
     crate::execution_attempt::ExecutionAttemptError<ChainReadError>,
 > {
+    authenticate_genesis_with(genesis, network, chain_id, || {
+        super::epoch::authenticated_genesis(genesis).map_err(|error| {
+            crate::execution_attempt::genesis_read_attempt_error(error, |_| {
+                ChainReadError::ForeignGenesis
+            })
+        })
+    })
+}
+
+// Reuse all original network, signed-body and instance checks for the one canonical
+// authentication kernel, whether its policy destination is ordinary or retained.
+fn authenticate_genesis_with(
+    genesis: &SignedBlock,
+    network: &NetworkId,
+    chain_id: &ChainId,
+    authenticate: impl FnOnce() -> Result<
+        iroha_data_model::sumeragi_finality::AuthenticatedGenesis,
+        ExecutionAttemptError<ChainReadError>,
+    >,
+) -> Result<(ValidatorEpochContextV1, Hash32), ExecutionAttemptError<ChainReadError>> {
     if genesis.hash().as_ref() != network.as_bytes()
         || !genesis.header().is_genesis()
         || genesis.validate_proposal_commitments().is_err()
     {
         return Err(ChainReadError::ForeignGenesis.into());
     }
-    let (epoch, root_scope) = super::epoch::authenticated_genesis(genesis)
-        .map_err(|error| {
-            crate::execution_attempt::genesis_read_attempt_error(error, |_| {
-                ChainReadError::ForeignGenesis
-            })
-        })?
-        .into_parts();
+    let (epoch, root_scope) = authenticate()?.into_parts();
     // TODO: This paired projection removes completed metadata redecoding only.
     // Subsequent partial genesis-result/authority retention and nested graph funding
     // still belong to their original acquisition and prefix owners.
@@ -1898,6 +1915,7 @@ pub struct CertifiedChain<'v, V: StateReadOnly + ?Sized> {
     // Only AMX transfers its actual constructor acquisition into this same reader. The
     // genesis body/control lives above; raw bytes and original source retire here after
     // the prefix/terminal graphs at the caller's existing scoped chain drop.
+    _amx_genesis_authentication: Option<iroha_data_model::sumeragi_finality::OriginalGenesisRead>,
     amx_genesis_source: Option<native_acquisition::NativeCarrierAcquisition<'v>>,
 }
 
@@ -1931,7 +1949,23 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     ) -> Result<Self, ExecutionAttemptError<ChainReadError>> {
         let (genesis_epoch, instance) =
             authenticate_genesis(&genesis, source.network_id(), source.chain_id())?;
-        Ok(Self {
+        Ok(Self::from_authenticated_genesis(
+            source,
+            genesis,
+            genesis_epoch,
+            instance,
+        ))
+    }
+
+    // Private construction consumes only the projection returned by the original
+    // guarded authentication above; no public API accepts an unchecked epoch.
+    fn from_authenticated_genesis(
+        source: ChainSource<'v, V>,
+        genesis: iroha_data_model::block::SharedSignedBlock,
+        genesis_epoch: ValidatorEpochContextV1,
+        instance: Hash32,
+    ) -> Self {
+        Self {
             source,
             genesis,
             genesis_epoch,
@@ -1941,8 +1975,9 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             #[cfg(test)]
             terminal_probe: parking_lot::Mutex::new(None),
             proof_source_genesis: None,
+            _amx_genesis_authentication: None,
             amx_genesis_source: None,
-        })
+        }
     }
 
     fn verification_context(&self) -> PrefixVerifierContext {

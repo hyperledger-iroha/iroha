@@ -32,8 +32,9 @@ pub use beacon::{
 mod genesis;
 pub use genesis::{
     AuthenticatedGenesis, AuthenticatedSignedGenesisV1, GenesisReadError,
-    MAX_SIGNED_GENESIS_BYTES_V1, SignedGenesisPinsV1, authenticate_signed_genesis_v1,
-    authenticated_genesis, signed_genesis_consensus_metadata,
+    MAX_SIGNED_GENESIS_BYTES_V1, OriginalGenesisRead, OriginalGenesisReadError,
+    SignedGenesisPinsV1, authenticate_signed_genesis_v1, authenticated_genesis,
+    signed_genesis_consensus_metadata,
 };
 mod genesis_dataspace;
 pub use genesis_dataspace::{

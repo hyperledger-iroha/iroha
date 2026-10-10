@@ -1871,7 +1871,8 @@ mod tests {
                 return_schema: Some(EntrypointValueTypeV1 {
                     nodes: vec![EntrypointValueTypeNodeV1::Unit],
                 }),
-                authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
+                authorization:
+                    iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: None,

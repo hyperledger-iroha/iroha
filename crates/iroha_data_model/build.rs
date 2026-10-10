@@ -10,7 +10,7 @@ const CFG: &str = "sumeragi_model_mutation";
 const ENV: &str = "SUMERAGI_MODEL_MUTATION";
 const IDS: &[&str] = &[
     "DM1", "DM2", "DM3", "DM4", "DM5", "DM6", "DM7", "DM8", "DM9", "DM10", "DM11", "DM12", "DM13",
-    "DM14",
+    "DM14", "DM15", "DM16", "DM17", "DM18", "DM19", "DM20", "DM21", "DM22", "DM23", "DM24",
 ];
 
 fn main() {

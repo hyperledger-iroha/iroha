@@ -482,6 +482,8 @@ def test_hc10_selects_only_the_original_query_scratch_owner():
     assert rule.tests == (
         "sumeragi::certified_chain::tests::state_certificate::"
         "state_certificate_signed_availability_scratch_uses_original_query_allowance",
+        "sumeragi::certified_chain::terminal_selection::tests::terminal_amx_prefix_refuses_original_payload_scratch_without_advancing",
+        "sumeragi::certified_chain::terminal_selection::tests::terminal_amx_prefix_refuses_original_rs16_scratch_without_advancing",
     )
     assert not rule.scenarios
     assert gate.has_switch("HC10", core=True)
@@ -701,11 +703,13 @@ def test_core_registry_refusal_gate_requires_native_fee_host_and_parliament_cont
     assert not gate.has_switch("HC30")
 
 
-def test_core_credit_reader_gate_requires_alias_and_owner_original_source_controls():
+def test_core_decode_gate_requires_credit_and_both_native_worker_original_source_controls():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC32"]
     assert rule.tests == (
         "validation_fee_rewards::tests::original_fee_credit_alias_decode_refusal_preserves_balance_and_retries",
         "validation_fee_rewards::tests::original_fee_credit_owner_decode_refusal_preserves_exact_binding_and_retries",
+        "sumeragi::executor::publication_tests::context_proof_decoder_refusal_retains_original_inputs_and_retries",
+        "sumeragi::executor::publication_tests::native_context_archive_decoder_refusal_retains_original_execution_and_retries",
     )
     assert not rule.scenarios
     assert gate.has_switch("HC32", core=True)
@@ -2611,6 +2615,16 @@ MODEL_NAMES = {
     "DM12": "sumeragi_finality::genesis_dataspace::tests::pinned_signed_genesis_preserves_original_json_refusal_and_retry",
     "DM13": "sumeragi_finality::tests::consensus_fingerprint_reuses_original_authenticated_metadata_under_one_pass_budget",
     "DM14": "sumeragi_finality::tests::initial_chain_parameters_reuses_constructor_authenticated_metadata_under_one_pass_budget",
+    "DM15": "sumeragi_finality::genesis::original_policy::tests::original_completed_policy_survives_metadata_refusal_without_another_decode",
+    "DM16": "sumeragi::epoch::tests::epoch_validation_retains_original_signed_roster_without_generation_allocation",
+    "DM17": "parameter::system::npos_json::tests::admitted_npos_record_moves_exact_original_quantity_backing_and_funded_charge_ledger",
+    "DM18": "nexus::committee::tests::public_readiness_borrows_original_roster_with_only_canonical_transcript_work",
+    "DM19": "nexus::committee::tests::public_activation_borrows_original_generation_beyond_existing_readiness_work",
+    "DM20": "smart_contract::multisig_call::tests::canonical_recognition_preserves_original_scoped_refusal_and_same_envelope_retry",
+    "DM21": "account::address::tests::canonical_address_json_preserves_original_refusal_fields_scope_and_retry",
+    "DM22": "account::json_tests::canonical_account_json_preserves_original_refusal_fields_scope_and_retry",
+    "DM23": "account::address::tests::numeric_i105_resource_refusal_stops_at_original_candidate_without_later_allocations",
+    "DM24": "account::address::tests::expected_i105_prefix_diagnostics_do_not_retry_original_resource_refusal",
 }
 MODEL_ALLOCATION_OBSERVER = "amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind"
 
@@ -2631,6 +2645,19 @@ def test_model_mutations_have_owning_source_hooks_named_controls_and_exact_spec_
     for identifier, name in MODEL_NAMES.items():
         rule = registered[identifier]
         expected = (MODEL_ALLOCATION_OBSERVER, name) if identifier in ("DM5", "DM6", "DM7") else (name,)
+        if identifier == "DM17":
+            expected = (name,
+                "parameter::system::tests::sumeragi_npos_synthetic_identity_is_exact_and_validation_never_allocates",
+                "nexus::committee::tests::frozen_policy_validation_borrows_fixed_synthetic_identity_without_allocation")
+        if identifier == "DM21":
+            expected = (name,
+                "account::address::tests::account_address_value_and_map_key_json_decoders_are_borrowed_and_measured",
+                "account::address::tests::address_resource_conversions_preserve_fields_and_anonymous_bounds_without_minting_scope")
+        if identifier == "DM22":
+            expected = (name,
+                "account::json_tests::account_id_json_roundtrips_large_multisig_as_canonical_i105",
+                "account::json_tests::account_id_value_and_map_key_json_decoders_are_borrowed_and_measured",
+                "account::json_tests::canonical_account_public_parser_preserves_original_address_cause_and_diagnostics")
         assert rule.tests == expected
         assert all(test.rsplit("::", 1)[-1] in functions for test in expected)
         assert not rule.scenarios
@@ -2714,7 +2741,7 @@ def test_original_begin_depth_mutation_bypasses_only_its_participant_payload_con
     assert source[end:].startswith('                let deadline = fixed_field::<u64, _>')
 
 
-@pytest.mark.parametrize("selected", [None, "DM1", "DM4", "DM5", "DM6", "DM7", "DM8", "DM9", "DM10", "DM11", "DM12", "DM13", "DM14"])
+@pytest.mark.parametrize("selected", [None, *MODEL_NAMES])
 def test_model_actual_cargo_argv_profile_and_isolated_environment(monkeypatch, tmp_path, selected):
     captured = {}
     class Process:
@@ -2859,6 +2886,16 @@ def model_build_script(tmp_path_factory):
     (True, "DM12", "", True, True), (False, "DM12", "", True, False),
     (True, "DM13", "", True, True), (False, "DM13", "", True, False),
     (True, "DM14", "", True, True), (False, "DM14", "", True, False),
+    (True, "DM15", "", True, True), (False, "DM15", "", True, False),
+    (True, "DM16", "", True, True), (False, "DM16", "", True, False),
+    (True, "DM17", "", True, True), (False, "DM17", "", True, False),
+    (True, "DM18", "", True, True), (False, "DM18", "", True, False),
+    (True, "DM19", "", True, True), (False, "DM19", "", True, False),
+    (True, "DM20", "", True, True), (False, "DM20", "", True, False),
+    (True, "DM21", "", True, True), (False, "DM21", "", True, False),
+    (True, "DM22", "", True, True), (False, "DM22", "", True, False),
+    (True, "DM23", "", True, True), (False, "DM23", "", True, False),
+    (True, "DM24", "", True, True), (False, "DM24", "", True, False),
     (True, "unknown_rule", "", False, False), (True, "HC1", "", False, False),
     (False, None, '--cfg\x1fsumeragi_model_mutation="DM1"', False, False),
     (True, "DM1", '--cfg\x1fsumeragi_model_mutation="DM2"', False, False),
@@ -3022,6 +3059,7 @@ MANAGED_BOOTSTRAP_OWNERS = (
 
 UNIT_TEST_MUTATION_OWNERS = MANAGED_BOOTSTRAP_OWNERS + (
     ("torii", "iroha_torii", "TOR", "sumeragi_torii_mutation", "SUMERAGI_TORII_MUTATION"),
+    ("norito", "norito", "NC", "sumeragi_norito_mutation", "SUMERAGI_NORITO_MUTATION"),
 )
 
 
@@ -3097,7 +3135,7 @@ def test_managed_bootstrap_cargo_preserves_exact_owner_profile_caps_and_isolates
         return Process()
     variables = ("SUMERAGI_MUTATION", "SUMERAGI_CORE_MUTATION", "SUMERAGI_DAEMON_MUTATION",
                  "SUMERAGI_MODEL_MUTATION", "SUMERAGI_SDK_MUTATION", "SUMERAGI_DEPLOY_MUTATION",
-                 "SUMERAGI_TORII_MUTATION")
+                 "SUMERAGI_TORII_MUTATION", "SUMERAGI_NORITO_MUTATION")
     for variable in variables:
         monkeypatch.setenv(variable, "foreign-inherited-rule")
     for variable in ("SUMERAGI_SIM_SEED", "SUMERAGI_SIM_SEED_BASE", "SUMERAGI_SIM_SEEDS"):
@@ -3208,7 +3246,7 @@ def test_managed_bootstrap_nightly_owns_all_rules_and_ordinary_feature_policy_re
     module = importlib.util.module_from_spec(ci_spec)
     sys.modules[ci_spec.name] = module
     ci_spec.loader.exec_module(module)
-    assert module.MUTATION_FEATURE_OWNERS == {"iroha_data_model", "iroha_core", "irohad_lib", "iroha_sumeragi", "iroha", "iroha_deploy", "iroha_torii"}
+    assert module.MUTATION_FEATURE_OWNERS == {"iroha_data_model", "iroha_core", "irohad_lib", "iroha_sumeragi", "iroha", "iroha_deploy", "iroha_torii", "norito"}
 
 
 # Genuine standalone compiler guard checks are part of the subsequent owner gate review.
@@ -4226,7 +4264,7 @@ def test_torii_cache_mutation_has_exact_owner_hook_and_both_native_adapters():
         identifier for path in (source / "src").rglob("*.rs")
         for identifier in re.findall(r'sumeragi_torii_mutation\s*=\s*"([^"]+)"', path.read_text())
     }
-    assert actual_switches == {"TOR1", "TOR2"}
+    assert actual_switches == {"TOR1", "TOR2", "TOR3"}
     controls = (source / "src/tests/lib_runtime_handlers/part_5.rs").read_text()
     for name in rule.tests:
         assert "fn " + name.rsplit("::", 1)[-1] + "(" in controls
@@ -4235,10 +4273,11 @@ def test_torii_cache_mutation_has_exact_owner_hook_and_both_native_adapters():
     assert "canonical_outcome_test_fixture(false)" in controls
     assert "membership.insert_block(HashSet::new(), NonZeroUsize::new(2).unwrap())" in controls
     build = (source / "build.rs").read_text()
-    assert 'const IDS: &[&str] = &["TOR1", "TOR2"];' in build
+    assert 'const IDS: &[&str] = &["TOR1", "TOR2", "TOR3"];' in build
     assert 'const ENV: &str = "SUMERAGI_TORII_MUTATION";' in build
     assert 'const CFG: &str = "sumeragi_torii_mutation";' in build
-    assert 'cfg(sumeragi_torii_mutation, values(\\"TOR1\\", \\"TOR2\\"))' in build
+    assert 'let values = IDS' in build
+    assert 'println!("cargo:rustc-check-cfg=cfg({CFG}, values({values}))")' in build
     assert "!rustflags.contains(CFG)" in build
     assert "CARGO_FEATURE_MUTATION_TESTING" in build
     assert 'mentions(Path::new("src"), &needle)' in build
@@ -4293,6 +4332,7 @@ def test_torii_named_kill_accounts_for_both_exact_adapters_and_selected_extras(
     ("sdk", "iroha", "mutation-testing", ["--profile", "test"], "SUMERAGI_SDK_MUTATION"),
     ("deploy", "iroha_deploy", "mutation-testing", ["--profile", "test"], "SUMERAGI_DEPLOY_MUTATION"),
     ("torii", "iroha_torii", "mutation-testing", ["--profile", "test"], "SUMERAGI_TORII_MUTATION"),
+    ("norito", "norito", "mutation-testing", ["--profile", "test"], "SUMERAGI_NORITO_MUTATION"),
 ])
 @pytest.mark.parametrize("mutant", [None, "original-owned-rule"])
 def test_all_mutation_families_clear_inherited_torii_selection_without_changing_profiles(
@@ -4300,7 +4340,7 @@ def test_all_mutation_families_clear_inherited_torii_selection_without_changing_
 ):
     variables = ("SUMERAGI_MUTATION", "SUMERAGI_CORE_MUTATION", "SUMERAGI_DAEMON_MUTATION",
                  "SUMERAGI_MODEL_MUTATION", "SUMERAGI_SDK_MUTATION", "SUMERAGI_DEPLOY_MUTATION",
-                 "SUMERAGI_TORII_MUTATION")
+                 "SUMERAGI_TORII_MUTATION", "SUMERAGI_NORITO_MUTATION")
     for variable in variables:
         monkeypatch.setenv(variable, "inherited-foreign-rule")
     captured = {}
@@ -4789,3 +4829,728 @@ def test_deploy_completed_genesis_metadata_mutation_has_original_profile_owner()
     assert len(row) == 1 and selector in row[0]
     native = (source / "src/localnet/private_root.rs").read_text()
     assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
+
+
+def test_original_amx_completed_policy_mutation_keeps_exact_public_native_control():
+    mid = "HC215"
+    selector = "query::native_receipts::amx_read::issuer_tests::public_amx_signed_policy_retains_completed_npos_stage_on_metadata_refusal"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"sumeragi/certified_chain/amx_initialization.rs"}
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and selector in rows[0]
+    assert "fn " + selector.rsplit("::", 1)[1] + "(" in (core / "query/native_receipts/amx_read/issuer_tests.rs").read_text()
+
+
+def test_private_root_home_mutations_have_isolated_native_guard_controls():
+    cases = {
+        "HC207": "restricted_home_requires_original_private_root_not_global_missing_or_foreign_scope",
+        "HC208": "original_private_home_requires_both_exact_captured_routes",
+        "HC209": "original_private_home_requires_canonical_single_root_geometry",
+    }
+    core = ROOT / "crates/iroha_core/src"
+    controls = (core / "smartcontracts/isi/domain/private_root_home_tests.rs").read_text()
+    registered = gate.index_mutations(gate.CORE_MUTATIONS)
+    for mid, name in cases.items():
+        selector = "smartcontracts::isi::domain::isi::private_root_home_tests::" + name
+        rule = registered[mid]
+        assert rule.tests == (selector,) and not rule.scenarios
+        assert gate.has_switch(mid, core=True)
+        owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+                  if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+        assert owners == {"smartcontracts/isi/domain/asset_alias_scope.rs"}
+        for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True},
+                       {"deploy": True}, {"torii": True}):
+            assert not gate.has_switch(mid, **family)
+        rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+        assert len(rows) == 1 and selector in rows[0]
+        assert "fn " + name + "(" in controls
+
+
+def test_finite_finality_interval_mutations_have_original_native_owner_controls():
+    cases = {'HC210': ('sumeragi::finality::proof_reader_tests::finite_finality_interval_under_original_codec_checks_each_real_quorum_once',
+               'sumeragi/certified_chain.rs',
+               'sumeragi/finality/proof_reader_tests.rs'),
+     'HC211': ('sumeragi::finality::interval::tests::finite_interval_rejects_earlier_real_qc_changed_after_verification_before_publication',
+               'sumeragi/finality/interval.rs',
+               'sumeragi/finality/interval/tests.rs'),
+     'HC212': ('sumeragi::finality::interval::tests::finite_interval_stop_retires_real_original_cursor_without_next_native_read',
+               'sumeragi/finality/interval.rs',
+               'sumeragi/finality/interval/tests.rs'),
+     'HC213': ('sumeragi::finality::proof_destination::tests::original_proof_destination_charges_each_actual_compact_key_before_clone_and_refunds',
+               'sumeragi/finality/proof_destination.rs',
+               'sumeragi/finality/proof_destination/tests.rs'),
+     'HC214': ('state::finality_proof_interval::tests::interval_post_read_writer_refusal_retires_response_and_preserves_original_release',
+               'state/finality_proof_interval.rs',
+               'state/finality_proof_interval/tests.rs')}
+    core = ROOT / "crates/iroha_core/src"
+    registered = gate.index_mutations(gate.CORE_MUTATIONS)
+    for mid, (selector, owner, control) in cases.items():
+        rule = registered[mid]
+        assert rule.tests == (selector,) and not rule.scenarios
+        assert gate.has_switch(mid, core=True)
+        owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+                  if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+        assert owners == {owner}
+        for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True},
+                       {"deploy": True}, {"torii": True}):
+            assert not gate.has_switch(mid, **family)
+        rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+        assert len(rows) == 1 and selector in rows[0]
+        native = (core / control).read_text()
+        assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
+
+
+def test_borrowed_epoch_and_fixed_identity_mutations_keep_exact_physical_controls():
+    model = ROOT / "crates/iroha_data_model"
+    registered = gate.index_mutations(gate.MODEL_MUTATIONS)
+    owners = {
+        "DM16": {"sumeragi/epoch.rs"},
+        "DM17": {"parameter/system.rs", "nexus/committee.rs"},
+    }
+    for mid, expected in owners.items():
+        actual = {path.relative_to(model / "src").as_posix()
+                  for path in (model / "src").rglob("*.rs")
+                  if f'sumeragi_model_mutation = "{mid}"' in path.read_text()}
+        assert actual == expected
+        assert gate.has_switch(mid, model=True)
+        for family in ({}, {"core": True}, {"daemon": True}, {"sdk": True},
+                       {"deploy": True}, {"torii": True}):
+            assert not gate.has_switch(mid, **family)
+        assert not registered[mid].scenarios
+    epoch = (model / "src/sumeragi/epoch.rs").read_text()
+    assert epoch.count('sumeragi_model_mutation = "DM16"') == 2
+    assert '#[cfg(all(test, sumeragi_model_mutation = "DM16"))]\n        self.authorization\n            .validate_against_generation(&self.generation())' in epoch
+    assert '.validate_against_committee(' in epoch
+    primary = (model / "src/sumeragi/epoch/tests.rs").read_text()
+    assert "validating the original signed epoch must not allocate a temporary generation roster" in primary
+    assert "PhysicalObservation::start()" in primary
+    assert registered["DM16"].tests == (MODEL_NAMES["DM16"],)
+    assert registered["DM17"].tests == (
+        MODEL_NAMES["DM17"],
+        "parameter::system::tests::sumeragi_npos_synthetic_identity_is_exact_and_validation_never_allocates",
+        "nexus::committee::tests::frozen_policy_validation_borrows_fixed_synthetic_identity_without_allocation",
+    )
+    for owner in owners["DM17"]:
+        native = (model / "src" / owner).read_text()
+        assert native.count('sumeragi_model_mutation = "DM17"') == 2
+        assert '#[cfg(all(test, sumeragi_model_mutation = "DM17"))]\n' in native
+        constructor = 'crate::asset::AssetDefinitionId' if owner == 'parameter/system.rs' else 'AssetDefinitionId'
+        assert 'let synthetic_bytes = ' + constructor + '::derive_from_components(' in native
+        assert '::REJECTED_SYNTHETIC_XOR_ASSET_BYTES;' in native
+        assert '.aid_bytes() == synthetic_bytes' in native
+    record = (model / "src/parameter/system/npos_json/tests.rs").read_text()
+    assert "record transfer allocates/reallocates no replacement digit graph" in record
+    assert "transfer.retirements(pointer)" in record
+    assert "original native-digit allocation retires exactly with its admitted record" in record
+
+
+@pytest.mark.parametrize("mid", ["DM16", "DM17", "DM18", "DM19"])
+@pytest.mark.parametrize("damage,verdict", [
+    ("none", "killed_by_test"), ("incidental_only", "error"),
+    ("missing", "error"), ("ignored", "error"),
+])
+def test_original_model_allocation_kill_requires_the_exact_native_control(
+    monkeypatch, tmp_path, mid, damage, verdict
+):
+    rule = gate.index_mutations(gate.MODEL_MUTATIONS)[mid]
+    rows = [(name, "FAILED") for name in rule.tests]
+    if damage == "incidental_only":
+        rows = [(name, "ok") for name in rule.tests]
+    elif damage == "missing":
+        rows.clear()
+    elif damage == "ignored":
+        rows = [(name, "ignored") for name in rule.tests]
+    rows.append((rule.tests[0] + "_incidental", "FAILED"))
+    code, output = exact_control_output(rows)
+    selected_cargo_results(monkeypatch, code, output, names=tuple(name for name, _ in rows))
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    result = gate.evaluate(SimpleNamespace(model=True, target_dir=tmp_path,
+                          timeout_test=900, fast=False), tmp_path, rule)
+    assert result["verdict"] == verdict, result
+    if verdict == "killed_by_test":
+        assert result["named"]["required_failed"] == sorted(rule.tests)
+    elif damage == "incidental_only":
+        assert result["reason"] == "named tests: only additional substring-selected tests failed"
+    else:
+        assert result["reason"] == "named tests: missing-test"
+
+
+def test_finality_stop_mutation_keeps_original_query_credit_control_and_exact_owner():
+    mid = "TOR3"
+    selector = "finality_interval::tests::failed_and_timed_out_workers_keep_original_credit_until_unpolled_stop_control_retires"
+    rule = gate.index_mutations(gate.TORII_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, torii=True)
+    for family in ({}, {"core": True}, {"daemon": True}, {"model": True},
+                   {"sdk": True}, {"deploy": True}):
+        assert not gate.has_switch(mid, **family)
+    source = ROOT / "crates/iroha_torii"
+    owners = {path.relative_to(source / "src").as_posix()
+              for path in (source / "src").rglob("*.rs")
+              if f'sumeragi_torii_mutation = "{mid}"' in path.read_text()}
+    assert owners == {"finality_interval.rs"}
+    native = (source / "src/finality_interval.rs").read_text()
+    retained = native.split("struct CancelOnDrop {", 1)[1].split("impl Drop", 1)[0]
+    assert retained.index("flag:") < retained.index("_owner:")
+    guard = '#[cfg(not(all(test, sumeragi_torii_mutation = "TOR3")))]'
+    assert native.count(guard) == 2
+    assert guard + "\n    _owner: history_producer::HistoryProducerOwner" in retained
+    assert guard + "\n                _owner: owner.clone()" in native
+    assert "self.flag.store(true, Ordering::Release)" in native
+    controls = (source / "src/finality_interval/tests.rs").read_text()
+    body = controls.split("async fn " + selector.rsplit("::", 1)[-1] + "()", 1)[1]
+    for observation in (
+        "for expired in [false, true]", "std::future::Future::poll",
+        "notified).await", "cpu_credit_retired", "original_credit_held",
+        "StatusCode::REQUEST_TIMEOUT", "QueryExecutionFail::NotFound",
+        "None => request.await", "drop(result)", "fully_refunded",
+        "native worker error must retain original query credit until the unpolled HTTP stop control retires",
+    ):
+        assert observation in body
+    assert body.index("drop(result)") < body.index("assert!(\n            original_credit_held")
+    build = (source / "build.rs").read_text()
+    declared = re.search(r'const IDS: &\[&str\] = &\[(.*?)\];', build, re.S)
+    assert declared is not None
+    ids = re.findall(r'"(TOR[0-9]+)"', declared.group(1))
+    assert ids == [rule.id for rule in gate.TORII_MUTATIONS]
+    assert "let values = IDS" in build
+    assert 'println!("cargo:rustc-check-cfg=cfg({CFG}, values({values}))")' in build
+    rows = re.findall(r"^\| TOR3 \| (.+)$", (ROOT / "specs/sumeragi.md").read_text(), re.M)
+    assert len(rows) == 1 and selector in rows[0]
+
+
+@pytest.mark.parametrize("damage,verdict", [
+    ("none", "killed_by_test"), ("incidental_only", "error"),
+    ("missing", "error"), ("ignored", "error"),
+])
+def test_finality_stop_named_kill_requires_original_worker_credit_control(
+    monkeypatch, tmp_path, damage, verdict
+):
+    rule = gate.index_mutations(gate.TORII_MUTATIONS)["TOR3"]
+    rows = [(rule.tests[0], "FAILED")]
+    if damage == "incidental_only":
+        rows[0] = (rule.tests[0], "ok")
+    elif damage == "missing":
+        rows.clear()
+    elif damage == "ignored":
+        rows[0] = (rule.tests[0], "ignored")
+    rows.append((rule.tests[0] + "_incidental", "FAILED"))
+    code, output = exact_control_output(rows)
+    selected_cargo_results(monkeypatch, code, output, names=tuple(name for name, _ in rows))
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    result = gate.evaluate(SimpleNamespace(torii=True, target_dir=tmp_path,
+                          timeout_test=900, fast=False), tmp_path, rule)
+    assert result["verdict"] == verdict, result
+    assert "scenario" not in result
+    if verdict == "killed_by_test":
+        assert result["named"]["required_failed"] == list(rule.tests)
+    elif damage == "incidental_only":
+        assert result["reason"] == "named tests: only additional substring-selected tests failed"
+    else:
+        assert result["reason"] == "named tests: missing-test"
+
+
+def test_committee_borrowed_generation_mutations_keep_public_transcript_work_and_short_circuits():
+    model = ROOT / "crates/iroha_data_model"
+    registered = gate.index_mutations(gate.MODEL_MUTATIONS)
+    source = (model / "src/nexus/committee.rs").read_text()
+    for mid in ("DM18", "DM19"):
+        assert registered[mid].tests == (MODEL_NAMES[mid],)
+        assert not registered[mid].scenarios
+        assert gate.has_switch(mid, model=True)
+        actual = {path.relative_to(model / "src").as_posix()
+                  for path in (model / "src").rglob("*.rs")
+                  if f'sumeragi_model_mutation = "{mid}"' in path.read_text()}
+        assert actual == {"nexus/committee.rs"}
+        for family in ({}, {"core": True}, {"daemon": True}, {"sdk": True},
+                       {"deploy": True}, {"torii": True}):
+            assert not gate.has_switch(mid, **family)
+        assert source.count(f'sumeragi_model_mutation = "{mid}"') == 2
+    context = source.split("pub fn readiness_context(", 1)[1].split("/// Validate structural consistency", 1)[0]
+    assert 'let identity = self.preparation.generation().generation_id();' in context
+    assert 'let identity = ValidatorGenerationV1::generation_id_from_committee(' in context
+    assert context.index("let credentials = self.validated_credentials()?") < context.index("target validator seat is out of range") < context.index("transition_id: self.preparation.transition_id()?") < context.index("let identity")
+    activation = source.split("ValidatorEpochDecisionV1::Activate => {", 1)[1].split("ValidatorEpochDecisionV1::RetainAndCancel", 1)[0]
+    assert activation.index("self.readiness.len() != preparation.committee.len()") < activation.index("outcome.beacon !=") < activation.index("|| {") < activation.index("let relation")
+    assert 'outcome.validate_against_generation(&preparation.generation());' in activation
+    assert 'let relation = outcome.validate_against_committee(' in activation
+    assert 'relation.is_err()' in activation
+    for name, message in (
+        (MODEL_NAMES["DM18"], "public readiness must borrow the original roster beyond its independently measured canonical transcript work"),
+        (MODEL_NAMES["DM19"], "public activation must borrow the original target generation beyond existing readiness and canonical transcript work"),
+    ):
+        control = source.split("fn " + name.rsplit("::", 1)[1] + "()", 1)[1].split("#[test]", 1)[0]
+        assert 'measured(||' in control and message in control
+        assert control.index('original_committee_storage(') < control.index('measured(||')
+        assert 'original.encode(), original_wire' in control
+        assert 'required_requests' in control and 'actual_requests' in control
+        assert 'PhysicalObservation::start' not in control
+
+
+
+def test_native_tip_restore_mutation_has_original_resource_and_same_source_controls():
+    mid = "HC216"
+    selectors = (
+        "state::native_execution_tip::tests::restore_preserves_original_pool_refusal_release_and_same_source_retry",
+        "state::native_execution_tip::tests::restore_preserves_cumulative_prefix_decode_refusal_and_same_source_retry",
+    )
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == selectors and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"state/native_execution_tip.rs"}
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True},
+                   {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and all(selector in rows[0] for selector in selectors)
+    native = (core / "state/native_execution_tip/tests.rs").read_text()
+    assert all("fn " + selector.rsplit("::", 1)[1] + "(" in native for selector in selectors)
+    assert "restore_keeps_corrupt_native_history_a_completed_schema_rejection" in native
+    owner = (core / "state/native_execution_tip.rs").read_text()
+    assert 'all(test, sumeragi_core_mutation = "HC216")' in owner
+    assert "ExecutionAttemptError::<ChainReadError>::Deferred(original).to_string()" in owner
+    build = (ROOT / "crates/iroha_core/build.rs").read_text()
+    assert 'cfg({CFG}, values(any()))' in build
+    assert 'mentions(Path::new("src"), &needle)' in build
+
+
+@pytest.mark.parametrize("statuses,expected", [
+    (("ok", "ok"), "survived"),
+    (("FAILED", "ok"), "killed_by_test"),
+    (("ok", "FAILED"), "killed_by_test"),
+    (("FAILED", "FAILED"), "killed_by_test"),
+    (("FAILED", "ignored"), "error"),
+])
+def test_native_tip_mutation_accounts_both_original_named_controls(monkeypatch, tmp_path, statuses, expected):
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC216"]
+    rows = tuple(zip(rule.tests, statuses))
+    monkeypatch.setattr(gate, "has_switch", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    code, output = exact_control_output(rows)
+    selected_cargo_results(monkeypatch, code, output, names=rule.tests)
+    args = SimpleNamespace(core=True, target_dir=tmp_path, timeout_test=5, fast=True)
+    result = gate.evaluate(args, tmp_path, rule)
+    assert result["verdict"] == expected
+    assert result["named"]["selected"] == list(rule.tests)
+    assert result["named"]["ran"] == sorted(name for name, status in rows if status != "ignored")
+    assert result["named"]["failed"] == sorted(name for name, status in rows if status == "FAILED")
+
+
+
+def test_restarted_prepared_intent_mutation_uses_original_funded_delivery_and_final_namespace():
+    mid = "HC217"
+    prefix = "sumeragi::amx::native::tests::paid_borrowed_custody::"
+    names = (
+        "restarted_paid_intent_delivers_exact_native_prepared_relay_and_refunds_original_pool",
+        "restarted_paid_intent_final_namespace_refusal_retains_exact_funded_instruction_until_original_retry",
+    )
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == tuple(prefix + name for name in names) and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True},
+                   {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(core).as_posix() for p in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"query/native_receipts/amx_intents.rs"}
+    owner = (core / "query/native_receipts/amx_intents.rs").read_text()
+    joined = owner.split("// The actual complete instruction remains owned here", 1)[1]
+    compact = re.sub(r"\s+", "", joined)
+    assert compact.index(f'sumeragi_core_mutation="{mid}"') < compact.index("self.recheck()?") < compact.index("self.instruction.take()")
+    assert "self.pending" in owner and "matches_completed_execution" in owner
+    assert "AllocationBudget::new" not in owner and "witness_value()" not in owner
+    assert 'height >= 2' in owner and '.block_hashes()' in owner
+    assert "prepared_intent_read_job(height, carrier)" in owner
+    assert "classify_decode_attempt" in owner and "Decode(#[from] norito::core::DecodeAttemptError)" in owner
+    assert "TODO(S6)" in owner and "No selector" in owner
+    controls = (core / "sumeragi/amx/native/tests/paid_borrowed_custody.rs").read_text()
+    fixture = controls.split("fn with_restarted_paid_prepared_intent(", 1)[1].split("fn prepared_intent_path", 1)[0]
+    for evidence in ("paid_roots()", "roots.prepare(", "authenticate_original_prepared(",
+                     "CertifiedTestChain::start(", "restored.replay_from(", "same_pool("):
+        assert evidence in fixture
+    refusal = controls.split("fn " + names[1] + "()", 1)[1].split("#[test]", 1)[0]
+    assert refusal.index("replacement.borrow_mut().restore()") < refusal.index("assert!(matches!(refused")
+    assert "completed restarted intent must retain exact funded relay through final original namespace refusal" in refusal
+    assert "retained_instruction()" in refusal and "original_pointers" in refusal
+    for name in names + (
+        "restarted_paid_intent_original_pool_refusal_keeps_frame_and_selected_source_without_reread",
+        "restarted_paid_intent_rejects_substituted_authority_carrier_and_execution_claims",
+    ):
+        assert "fn " + name + "(" in controls
+    assert "acquired_frame_is_complete()" in controls
+    assert "DecodeAttemptErrorKind::EnclosingLimit" in controls
+    assert "original_release" in controls and "drop(instruction)" in controls
+    codec = (core / "query/native_context_archive/prepared_intents.rs").read_text()
+    assert "struct Decoded {" not in codec
+    for boundary in ("framed_field", "visit_binary_sequence_with_count", "decode_exact_with", "from_bytes_view",
+                     "SchemaMismatch", "NonCanonicalEncoding", "sole_intent_decoder_borrows_original_charged_ranges"):
+        assert boundary in codec
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and all(prefix + name in rows[0] for name in names)
+    build = (ROOT / "crates/iroha_core/build.rs").read_text()
+    assert 'cfg({CFG}, values(any()))' in build
+    assert 'mentions(Path::new("src"), &needle)' in build
+
+
+@pytest.mark.parametrize("statuses,expected", [
+    (("ok", "ok"), "survived"),
+    (("ok", "FAILED"), "killed_by_test"),
+    (("FAILED", "ok"), "killed_by_test"),
+    (("FAILED", "FAILED"), "killed_by_test"),
+    (("ok", "ignored"), "error"),
+])
+def test_restarted_prepared_intent_mutation_accounts_each_genuine_control(monkeypatch, tmp_path, statuses, expected):
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC217"]
+    rows = tuple(zip(rule.tests, statuses))
+    monkeypatch.setattr(gate, "has_switch", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    code, output = exact_control_output(rows)
+    selected_cargo_results(monkeypatch, code, output, names=rule.tests)
+    args = SimpleNamespace(core=True, target_dir=tmp_path, timeout_test=5, fast=True)
+    result = gate.evaluate(args, tmp_path, rule)
+    assert result["verdict"] == expected
+    assert result["named"]["selected"] == list(rule.tests)
+    assert result["named"]["ran"] == sorted(name for name, status in rows if status != "ignored")
+    assert result["named"]["failed"] == sorted(name for name, status in rows if status == "FAILED")
+
+
+
+def test_restarted_prepared_intent_completeness_mutation_uses_authenticated_full_witness():
+    mid = "HC218"
+    name = "restarted_paid_intent_refuses_authenticated_row_subset_before_any_delivery"
+    selector = "sumeragi::amx::native::tests::paid_borrowed_custody::" + name
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    core = ROOT / "crates/iroha_core/src"
+    owner = (core / "query/native_receipts/amx_intents.rs").read_text()
+    assert owner.index('sumeragi_core_mutation = "HC218"') < owner.index(".authenticated_prepared_count()?") < owner.index(".into_relay()")
+    proof = (core / "query/native_receipts/amx_read.rs").read_text()
+    count = proof.split("fn authenticated_prepared_count", 1)[1].split("// Only this sibling", 1)[0]
+    assert "source.completed && source.authenticated" in count
+    assert re.search(r"prepared_intents::count\(&projection\.witness\.get\(\)\.writes,?\)", re.sub(r"\s+", "", count))
+    assert "clone()" not in count and "collect(" not in count
+    controls = (core / "sumeragi/amx/native/tests/paid_borrowed_custody.rs").read_text()
+    control = controls.split("fn " + name + "()", 1)[1]
+    for evidence in ("roots.transaction(40", "roots.transaction(60", "roots.participants[0].sign(&payer(), prepares",
+                     "restored.replay_from(", "one_row_subset(&original)",
+                     "restarted canonical intent must match every authenticated Prepared row before first delivery",
+                     "retained_instruction().is_none()", "let first = complete.complete_next()", "let second = complete.complete_next()"):
+        assert evidence in control
+    assert control.index("std::fs::write(&path, &original)") < control.index("assert!(matches!(refused")
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and selector in rows[0]
+
+
+@pytest.mark.parametrize("status,expected", [("ok", "survived"), ("FAILED", "killed_by_test"), ("ignored", "error")])
+def test_restarted_prepared_intent_completeness_accounts_exact_named_native_control(monkeypatch, tmp_path, status, expected):
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC218"]
+    rows = ((rule.tests[0], status),)
+    monkeypatch.setattr(gate, "has_switch", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    code, output = exact_control_output(rows)
+    selected_cargo_results(monkeypatch, code, output, names=rule.tests)
+    args = SimpleNamespace(core=True, target_dir=tmp_path, timeout_test=5, fast=True)
+    result = gate.evaluate(args, tmp_path, rule)
+    assert result["verdict"] == expected
+    assert result["named"]["selected"] == list(rule.tests)
+
+
+def test_returned_native_amx_context_mutation_uses_exact_original_graph_custody():
+    mid = "HC219"
+    name = "native_amx_returned_global_context_keeps_every_original_graph_charge_until_retirement"
+    selector = "sumeragi::amx::native::tests::returned_context::" + name
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    assert rule.tests == (selector,) and not rule.scenarios
+    assert gate.has_switch(mid, core=True)
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True},
+                   {"deploy": True}, {"torii": True}):
+        assert not gate.has_switch(mid, **family)
+    core = ROOT / "crates/iroha_core/src"
+    owners = {path.relative_to(core).as_posix() for path in core.rglob("*.rs")
+              if f'sumeragi_core_mutation = "{mid}"' in path.read_text()}
+    assert owners == {"sumeragi/amx/native/retained.rs"}
+    retained = (core / "sumeragi/amx/native/retained.rs").read_text()
+    owner = retained.split("pub(super) struct RetainedGlobalSource", 1)[1].split("/// Original initial registration inputs", 1)[0]
+    assert "RetainedPayload<AmxForeignInstanceV1>" in owner
+    assert 'all(test, sumeragi_core_mutation = "HC219")' in owner
+    assert "current: context.clone()" in owner
+    assert "demand.context(context)?" in owner and "construction.context(context, budget)?" in owner
+    assert "RetainedPayload::try_new(value, charges, budget)" in owner
+    assert "AllocationBudget::new" not in owner
+    assert "into_uncharged" not in retained and "fn uncharged(" not in retained
+    production = (core / "sumeragi/amx/native.rs").read_text()
+    source = production.split("fn authenticated_global_source(", 1)[1].split("impl Execute for RegisterAmxParticipantV1", 1)[0]
+    assert source.index("RetainedGlobalSource::admit") < source.index("authenticate_global_successor") < source.index(".validate()")
+    assert 'sumeragi_core_mutation = "HC219"' not in production
+    assert "TODO(S6)" in production
+    controls = (core / "sumeragi/amx/native/tests/returned_context.rs").read_text()
+    for boundary in ("CertifiedTestChain::start(config)", "global.commit_at(1_500", "global.committed(2)",
+                     "committee_pointer", "key_pointers", "pop_pointers", "retained_allocation_layout()",
+                     "owner.belongs_to(&budget)", "!owner.belongs_to(&foreign)", "registration.poll_wait(&release",
+                     "drop(owner)", "drop(retry)",
+                     "returned native AMX context must retain exact original-pool committee/key/PoP custody after genuine H2"):
+        assert boundary in controls
+    rows = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and selector in rows[0]
+    build = (ROOT / "crates/iroha_core/build.rs").read_text()
+    assert 'cfg({CFG}, values(any()))' in build and 'mentions(Path::new("src"), &needle)' in build
+
+
+@pytest.mark.parametrize("status,expected", [("ok", "survived"), ("FAILED", "killed_by_test"), ("ignored", "error")])
+def test_returned_native_amx_context_accounts_exact_named_custody_control(monkeypatch, tmp_path, status, expected):
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC219"]
+    rows = ((rule.tests[0], status),)
+    monkeypatch.setattr(gate, "has_switch", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    code, output = exact_control_output(rows)
+    selected_cargo_results(monkeypatch, code, output, names=rule.tests)
+    args = SimpleNamespace(core=True, target_dir=tmp_path, timeout_test=5, fast=True)
+    result = gate.evaluate(args, tmp_path, rule)
+    assert result["verdict"] == expected
+    assert result["named"]["selected"] == list(rule.tests)
+    assert result["named"]["ran"] == sorted(name for name, state in rows if state != "ignored")
+    assert result["named"]["failed"] == sorted(name for name, state in rows if state == "FAILED")
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--norito", "--core"], ["--norito", "--daemon"], ["--norito", "--model"],
+    ["--norito", "--sdk"], ["--norito", "--deploy"], ["--norito", "--torii"],
+    ["--norito", "--core-profile", "test"], ["--norito", "--strict", "--skip-baseline"],
+    ["--norito", "--only", "HC32"], ["--core", "--only", "NC1"],
+    ["--only", "NC1"], ["--norito", "--only", "NC1,NC1"], ["--norito", "--only", ","],
+])
+def test_norito_owner_refuses_cross_owner_and_incomplete_qualification(monkeypatch, tmp_path, arguments):
+    target = tmp_path / "refused-norito"
+    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", *arguments, "--target-dir", str(target)])
+    with pytest.raises(SystemExit) as error:
+        gate.main()
+    assert error.value.code == 2 and not target.exists()
+
+
+def test_norito_registry_matches_actual_owner_switches_and_original_controls():
+    indexed = gate.index_mutations(gate.NORITO_MUTATIONS)
+    assert set(indexed) == {"NC1", "NC2", "NC3", "NC4", "NC5"}
+    assert indexed["NC1"].tests == ("core::decode_attempt::tests::direct_json_refusal_keeps_original_context_and_retry",)
+    assert indexed["NC2"].tests == (
+        "core::decode_attempt::tests::direct_attempt_replay_under_same_counter_owner_is_invalid",
+        "core::decode_attempt::tests::direct_attempt_cross_thread_replay_with_original_shared_context_is_invalid",
+        "core::decode_attempt::tests::direct_nested_attempts_preserve_parent_origin_and_refuse_old_sibling",
+        "core::decode_attempt::tests::already_active_direct_attempt_rejects_later_foreign_thread_root",
+    )
+    assert indexed["NC3"].tests == ("core::decode_attempt::tests::observer_boundary_sequence_exhaustion_never_wraps",)
+    assert indexed["NC4"].tests == (
+        "json::tests::core_resource_errors_roundtrip_exact_fields_without_fresh_scope",
+        "json::tests::direct_json_parser_retains_unscoped_fields_and_same_input_retry",
+    )
+    assert indexed["NC5"].tests == ("json::tests::non_resource_core_errors_cannot_become_json_allocator_refusals",)
+    source = ROOT / "crates/norito"
+    texts = "\n".join(path.read_text() for path in (source / "src").rglob("*.rs"))
+    assert set(re.findall(r'sumeragi_norito_mutation\s*=\s*"([^"]+)"', texts)) == set(indexed)
+    for identifier, rule in indexed.items():
+        assert gate.has_switch(identifier, norito=True)
+        assert not gate.has_switch(identifier, core=True)
+        assert not gate.has_switch(identifier)
+        assert not rule.scenarios
+        assert f'all(test, sumeragi_norito_mutation = "{identifier}")' in texts
+        for selector in rule.tests:
+            assert f'fn {selector.rsplit("::", 1)[-1]}(' in texts
+    manifest = (source / "Cargo.toml").read_text()
+    assert "mutation-testing = []" in manifest and "/mutation-testing" not in manifest
+    build = (source / "build.rs").read_text()
+    declared = re.search(r'const IDS: &\[&str\] = &\[(.*?)\];', build, re.S)
+    assert declared is not None
+    assert set(re.findall(r'"(NC[0-9]+)"', declared.group(1))) == set(indexed)
+    assert 'const CFG: &str = "sumeragi_norito_mutation";' in build
+    assert 'const ENV: &str = "SUMERAGI_NORITO_MUTATION";' in build
+    assert '!rustflags.contains(CFG)' in build and 'CARGO_FEATURE_MUTATION_TESTING' in build
+    assert 'IDS.contains(&id.as_str())' in build
+    assert 'mentions_mutation(std::path::Path::new("src"), &needle)' in build
+    assert 'mod norito_mutation_guard;' in (source / "src/lib.rs").read_text()
+    with pytest.raises(ValueError, match="exactly one implementation owner"):
+        gate.has_switch("NC1", norito=True, core=True)
+
+
+def test_model_scoped_multisig_refusal_mutation_omits_only_original_error_return():
+    """DM20 restores nonmatch only at the original scoped JSON inspection boundary."""
+    mid = "DM20"
+    model = ROOT / "crates/iroha_data_model"
+    path = model / "src/smart_contract/multisig_call.rs"
+    source = path.read_text()
+    registered = gate.index_mutations(gate.MODEL_MUTATIONS)
+    assert registered[mid].tests == (MODEL_NAMES[mid],)
+    assert not registered[mid].scenarios
+    owners = {p.relative_to(model / "src").as_posix()
+              for p in (model / "src").rglob("*.rs")
+              if f'sumeragi_model_mutation = "{mid}"' in p.read_text()}
+    assert owners == {"smart_contract/multisig_call.rs"}
+    assert source.count(f'sumeragi_model_mutation = "{mid}"') == 1
+    assert gate.has_switch(mid, model=True)
+    for family in ({}, {"core": True}, {"daemon": True}, {"sdk": True},
+                   {"deploy": True}, {"torii": True}, {"norito": True}):
+        assert not gate.has_switch(mid, **family)
+    kernel = source.split("fn read_recognition_json<", 1)[1].split("/// Recognize only", 1)[0]
+    assert 'Err(error @ norito::json::Error::ScopedDecodeResource(_))' in kernel
+    assert 'if !cfg!(all(test, sumeragi_model_mutation = "DM20"))' in kernel
+    assert kernel.count('Err(MultisigContractCallRecognitionError::Json(error))') == 2
+    assert 'Err(_) => Ok(None)' in kernel
+    assert 'norito::json::Error::DecodeResource(_)' in kernel
+    assert 'norito::json::Error::AllocationFailed' in kernel
+    assert 'from_decode_resource' not in kernel and 'classify_decode_attempt' not in kernel
+    control = source.split('fn ' + MODEL_NAMES[mid].rsplit('::', 1)[1] + '()', 1)[1]
+    control = control.split('    #[test]', 1)[0]
+    for required in ('recognition_fixture()', 'recognize_multisig_contract_call(',
+                     'classify_decode_attempt(', 'DecodeAttemptErrorKind::EnclosingLimit',
+                     'assert_eq!(returned, observed)', 'call.instructions.as_ptr()',
+                     'original_wire', 'pool.reserved_bytes()', '&malformed',
+                     '&call.instructions[..1]',
+                     'a genuine scoped refusal must not become a nonmatching multisig envelope'):
+        assert required in control
+    assert f'sumeragi_model_mutation = "{mid}"' not in control
+
+
+@pytest.mark.parametrize("mid,path,function,required", [
+    ("DM21", "account/address.rs", "fn from_decode_error", "error.decode_resource_error().is_some()"),
+    ("DM22", "account.rs", "fn from_address_error", "error.is_decode_resource_limit()"),
+])
+def test_account_resource_mutations_have_one_owning_omission_and_unchanged_genuine_controls(mid, path, function, required):
+    """Typed account causes may be erased only by the owning test-only omission."""
+    model = ROOT / "crates/iroha_data_model"
+    source = (model / "src" / path).read_text()
+    registered = gate.index_mutations(gate.MODEL_MUTATIONS)
+    rules = {
+        "DM21": (
+            MODEL_NAMES["DM21"],
+            "account::address::tests::account_address_value_and_map_key_json_decoders_are_borrowed_and_measured",
+            "account::address::tests::address_resource_conversions_preserve_fields_and_anonymous_bounds_without_minting_scope"),
+        "DM22": (
+            MODEL_NAMES["DM22"],
+            "account::json_tests::account_id_json_roundtrips_large_multisig_as_canonical_i105",
+            "account::json_tests::account_id_value_and_map_key_json_decoders_are_borrowed_and_measured",
+            "account::json_tests::canonical_account_public_parser_preserves_original_address_cause_and_diagnostics"),
+    }
+    assert registered[mid].tests == rules[mid]
+    assert not registered[mid].scenarios
+    owners = {p.relative_to(model / "src").as_posix() for p in (model / "src").rglob("*.rs")
+              if f'sumeragi_model_mutation = "{mid}"' in p.read_text()}
+    assert owners == {path}
+    assert source.count(f'sumeragi_model_mutation = "{mid}"') == 1
+    kernel = source.split(function, 1)[1].split("    #[test]", 1)[0]
+    assert f'cfg!(all(test, sumeragi_model_mutation = "{mid}"))' in kernel
+    assert required in kernel
+    assert "DecodeResourceLimit" in kernel
+    assert gate.has_switch(mid, model=True)
+    for family in ({}, {"core": True}, {"daemon": True}, {"sdk": True},
+                   {"deploy": True}, {"torii": True}, {"norito": True}):
+        assert not gate.has_switch(mid, **family)
+    for selector in rules[mid]:
+        body = source.split("fn " + selector.rsplit("::", 1)[1] + "()", 1)[1]
+        body = body.split("    #[test]", 1)[0]
+        assert f'sumeragi_model_mutation = "{mid}"' not in body
+    primary = source.split("fn " + MODEL_NAMES[mid].rsplit("::", 1)[1] + "()", 1)[1]
+    for text in ("classify_decode_attempt(", "DecodeAttemptErrorKind::EnclosingLimit", "original.with(decode)",
+                 "assert_eq!(returned, observed.unwrap())", "pool.reserved_bytes()", "total_allocated_bytes()",
+                 "from_json::<", "from_json_key_text", "Value::Bool(false)"):
+        assert re.sub(r"\s+", "", text) in re.sub(r"\s+", "", primary)
+
+
+@pytest.mark.parametrize("mid", ["DM21", "DM22"])
+@pytest.mark.parametrize("status,verdict", [("pass", "survived"), ("fail", "killed_by_test"), ("execution-error", "error"), ("missing-test", "error"), ("timeout", "error")])
+def test_account_resource_mutation_gate_requires_declared_native_results(monkeypatch, tmp_path, mid, status, verdict):
+    """No missing/failed execution can masquerade as an account custody kill."""
+    rule = gate.index_mutations(gate.MODEL_MUTATIONS)[mid]
+    monkeypatch.setattr(gate, "has_switch", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *args, **kwargs: gate.Step(status="pass"))
+    monkeypatch.setattr(gate, "run_step", lambda *args, **kwargs: gate.Step(status=status, failed=list(rule.tests) if status == "fail" else []))
+    args = SimpleNamespace(norito=False, core=False, daemon=False, model=True, sdk=False, deploy=False, torii=False,
+                           core_profile="test", model_profile="test", fast=True, jobs=1, timeout_test=900,
+                           rand_timeout=3600, build_timeout=1200, target_dir=tmp_path, seed_count=200,
+                           output=tmp_path / "result.json", require_all=False, strict=True)
+    assert gate.evaluate(args, tmp_path, rule)["verdict"] == verdict
+
+
+@pytest.mark.parametrize("mid,owner,count,causal", [
+    ("DM23", "fn decode_i105_literal_with_embedded_discriminant(", 3,
+     "a numeric I105 resource refusal must terminate before later candidate allocations"),
+    ("DM24", "fn decode_i105_literal(", 1,
+     "expected I105 prefix diagnostics must not allocate another payload after resource refusal"),
+])
+def test_i105_terminal_resource_mutations_keep_distinct_owning_phases_and_genuine_controls(mid, owner, count, causal):
+    """Each omission restores only its original post-refusal candidate or diagnostic work."""
+    path = ROOT / "crates/iroha_data_model/src/account/address.rs"
+    source = path.read_text()
+    rule = gate.index_mutations(gate.MODEL_MUTATIONS)[mid]
+    assert rule.tests == (MODEL_NAMES[mid],)
+    assert not rule.scenarios
+    assert gate.has_switch(mid, model=True)
+    assert source.count(f'sumeragi_model_mutation = "{mid}"') == count
+    kernel = source.split(owner, 1)[1].split("fn numeric_i105_sentinel_candidate(", 1)[0]
+    if mid == "DM24":
+        kernel = kernel.split("fn decode_i105_literal_with_embedded_discriminant(", 1)[0]
+    normalized = re.sub(r"\s+", "", kernel)
+    variable = "err" if mid == "DM23" else "error"
+    assert normalized.count(f'if{variable}.is_decode_resource_limit()&&!cfg!(all(test,sumeragi_model_mutation="{mid}"))') == count
+    other = "DM24" if mid == "DM23" else "DM23"
+    assert f'sumeragi_model_mutation = "{other}"' not in kernel
+    control = source.split("fn " + MODEL_NAMES[mid].rsplit("::", 1)[1] + "()", 1)[1].split("    #[test]", 1)[0]
+    assert causal in control
+    assert f'sumeragi_model_mutation = "{mid}"' not in control
+    for text in ("observed_i105_terminal_refusal", "actual_requests", "expected_requests", "original.with(",
+                 "before_retry", "consumed_allocated_bytes()", "source_pointer", "pool.reserved_bytes()"):
+        assert re.sub(r"\s+", "", text) in re.sub(r"\s+", "", control)
+    shared = source.split("fn observed_i105_terminal_refusal(", 1)[1].split("fn first_i105_controller_charge(", 1)[0]
+    for text in ("amx_prepare_streaming_allocations::measured", "classify_decode_attempt", "DecodeAttemptErrorKind::EnclosingLimit", "assert_eq!(returned, observed.unwrap())"):
+        assert re.sub(r"\s+", "", text) in re.sub(r"\s+", "", shared)
+
+
+@pytest.mark.parametrize("mid", ["DM23", "DM24"])
+@pytest.mark.parametrize("status,failed,verdict", [
+    ("pass", "none", "survived"), ("fail", "required", "killed_by_test"),
+    ("fail", "unrelated", "error"), ("execution-error", "required", "error"),
+    ("missing-test", "none", "error"), ("timeout", "none", "error"),
+])
+def test_i105_terminal_resource_mutations_require_exact_native_causal_failure(monkeypatch, tmp_path, mid, status, failed, verdict):
+    """A surviving, missing, unrelated or crashed control cannot close the custody rule."""
+    rule = gate.index_mutations(gate.MODEL_MUTATIONS)[mid]
+    failures = list(rule.tests) if failed == "required" else ["unrelated::test"] if failed == "unrelated" else []
+    monkeypatch.setattr(gate, "has_switch", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *args, **kwargs: gate.Step(status="pass"))
+    monkeypatch.setattr(gate, "run_step", lambda *args, **kwargs: gate.Step(status=status, failed=failures))
+    args = SimpleNamespace(norito=False, core=False, daemon=False, model=True, sdk=False, deploy=False, torii=False,
+                           core_profile="test", model_profile="test", fast=True, jobs=1, timeout_test=900,
+                           rand_timeout=3600, build_timeout=1200, target_dir=tmp_path, seed_count=200,
+                           output=tmp_path / "result.json", require_all=False, strict=True)
+    assert gate.evaluate(args, tmp_path, rule)["verdict"] == verdict
+
+
+def test_account_cause_mutation_owns_all_actual_parser_address_projections():
+    """DM22 must reach final controller refusal instead of mutating an earlier unused error arm."""
+    source = (ROOT / "crates/iroha_data_model/src/account.rs").read_text()
+    helper = source.split("fn from_address_error(", 1)[1].split("    /// Stable diagnostic label", 1)[0]
+    assert source.count('sumeragi_model_mutation = "DM22"') == 1
+    assert 'cfg!(all(test, sumeragi_model_mutation = "DM22"))' in helper
+    assert 'error.is_decode_resource_limit()' in helper
+    assert 'Self::Address(AccountAddressError::DecodeResourceLimit)' in helper
+    assert 'Self::Address(error)' in helper
+    parser = source.split('pub fn parse_encoded(input: &str)', 1)[1].split('impl fmt::Display for AccountId', 1)[0]
+    assert 'AccountIdParseError::Address(' not in parser
+    assert '.map_err(AccountIdParseError::Address)' not in parser
+    assert parser.count('AccountIdParseError::from_address_error') == 4
+    assert 'AccountIdParseError::InvalidFormat' in parser
+    assert 'AccountAddressError::ChecksumMismatch' not in parser
+    assert '.to_account_controller()' in parser
+    assert '.canonical_i105()' in parser
+    rules = gate.index_mutations(gate.MODEL_MUTATIONS)
+    assert rules['DM22'].tests == (MODEL_NAMES['DM22'],
+        'account::json_tests::account_id_json_roundtrips_large_multisig_as_canonical_i105',
+        'account::json_tests::account_id_value_and_map_key_json_decoders_are_borrowed_and_measured',
+        'account::json_tests::canonical_account_public_parser_preserves_original_address_cause_and_diagnostics')

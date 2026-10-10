@@ -63,7 +63,7 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 406)
+        self.assertEqual(len(names), 442)
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
@@ -305,4 +305,88 @@ class NativeInventoryTests(unittest.TestCase):
             'admitted_prefix_initializes_every_field_like_the_owned_constructor',
             'admitted_prefix_finish_matches_original_step_and_retains_original_slot_until_finish',
             'admitted_prefix_finish_preserves_original_pool_refusal_and_certificate_error_order',
+            'walk_parent_link_retains_original_body_and_exact_native_continuity_without_result_copy',
         ))
+
+    def test_reviewed_resume_restore_and_reader_additions_require_exact_source_owners(self):
+        expected = {
+            'native persisted AMX original proof custody': (
+                'persisted_amx_detached_source_keeps_original_frame_pool_and_retry_after_view_drop',
+                'persisted_amx_detach_pins_partial_inode_and_continues_without_original_view',
+                'persisted_amx_detach_namespace_refusal_preserves_original_reader_for_retry',
+                'persisted_amx_detach_after_final_guard_refusal_moves_completed_graph_without_work',
+                'persisted_amx_detach_preserves_borrowed_probe_and_authenticated_absence',
+                'persisted_amx_detached_source_rejects_substituted_uncertified_archive_fields',
+            ),
+            'native publication custody': (
+                'context_proof_decoder_refusal_retains_original_inputs_and_retries',
+                'native_context_archive_decoder_refusal_retains_original_execution_and_retries',
+                'native_context_archive_corrupt_commitment_remains_sticky_recovery',
+                'original_worker_world_cut_retains_completed_tail_after_final_control_refusal',
+                'original_worker_completed_world_cut_refuses_changed_publication_source',
+                'native_lane_proof_scratch_ceiling_remains_terminal_in_both_worker_stages',
+            ),
+            'native original execution and undo': (
+                'restore_preserves_original_pool_refusal_release_and_same_source_retry',
+                'restore_preserves_cumulative_prefix_decode_refusal_and_same_source_retry',
+                'restore_keeps_corrupt_native_history_a_completed_schema_rejection',
+            ),
+            'native certified history': (
+                'signed_genesis_initialization_does_not_repeat_completed_scope_decode',
+            ),
+            'native certified prefix authority': (
+                'walk_parent_link_retains_original_body_and_exact_native_continuity_without_result_copy',
+            ),
+            'native driver scheduling': (
+                'execution_certification_survives_parking',
+            ),
+            'native returned AMX context custody': (
+                'native_amx_returned_global_context_keeps_every_original_graph_charge_until_retirement',
+                'native_amx_returned_context_final_registration_refusal_keeps_original_graph_and_retry_pool',
+            ),
+            'native borrowed paid AMX proof custody': (
+                'restarted_paid_intent_delivers_exact_native_prepared_relay_and_refunds_original_pool',
+                'restarted_paid_intent_final_namespace_refusal_retains_exact_funded_instruction_until_original_retry',
+                'restarted_paid_intent_original_pool_refusal_keeps_frame_and_selected_source_without_reread',
+                'restarted_paid_intent_rejects_substituted_authority_carrier_and_execution_claims',
+                'restarted_paid_intent_refuses_authenticated_row_subset_before_any_delivery',
+            ),
+            'native original archive and prepared intent frame custody': (
+                'refused_archive_read_never_reopens_the_original_selected_inode',
+                'archive_read_keeps_partial_prefix_and_exact_allocation_until_move_or_drop',
+                'refused_archive_read_preserves_original_length_and_namespace_checks',
+                'archive_pool_ceiling_refusal_retries_original_owner_but_record_limit_is_permanent',
+                'one_shot_interruption_retries_the_original_partial_read_without_reopening',
+                'returning_archive_cancels_pending_bytes_but_preserves_completed_byte_owner',
+                'original_intent_read_shares_exact_descriptor_capacity_and_prefix_custody',
+            ),
+            'native canonical prepared intent framing and row identity': (
+                'borrowed_intent_coordinates_declare_exact_owned_frame_without_erasing_nominal_lifetime',
+                'original_prepared_key_selection_refuses_malformed_and_preserves_transaction',
+                'borrowed_prepared_rows_use_canonical_sequence_and_refuse_changed_cardinality',
+                'sole_intent_decoder_borrows_original_charged_ranges_and_refuses_framing_or_cumulative_limits',
+            ),
+        }
+        for label, leaves in expected.items():
+            with self.subTest(owner=label):
+                owner, = (row for row in inventory.NATIVE_CORE_TEST_OWNERS if row[0] == label)
+                for leaf in leaves:
+                    self.assertEqual(owner[-1].count(leaf), 1)
+                for relative in owner[1:3]:
+                    target = self.package / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(ROOT / "crates/iroha_core/src" / relative, target)
+                source = self.package / owner[2]
+                original = source.read_text()
+                self.assertEqual(inventory.validate_native_source_inventory(self.root, owners=(owner,)),
+                                 {owner[4] + "::" + leaf for leaf in owner[-1]})
+                for leaf in leaves:
+                    with self.subTest(leaf=leaf):
+                        declaration = "fn " + leaf + "("
+                        self.assertEqual(original.count(declaration), 1)
+                        source.write_text(original.replace(declaration, "fn unreviewed_resume_replacement("))
+                        with self.assertRaisesRegex(ValueError, "census differs") as refusal:
+                            inventory.validate_native_source_inventory(self.root, owners=(owner,))
+                        self.assertIn(leaf, str(refusal.exception))
+                        self.assertIn("unreviewed_resume_replacement", str(refusal.exception))
+                source.write_text(original)

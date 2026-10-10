@@ -648,12 +648,29 @@ fn argument_node_word_count(
     *node_index = end;
     Ok(words)
 }
+// The canonical owner captures enclosing resource provenance before its
+// decoder scopes unwind. Protocol limits and malformed frames stay DecodeError.
+fn decode_argument_frame<T>(payload: &[u8]) -> Result<T, VMError>
+where
+    T: norito::NoritoSerialize,
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
+    norito::decode_canonical_for_admission(payload, norito::canonical_decode_limits(payload.len()))
+        .map_err(|error| match error.kind() {
+            norito::core::DecodeAttemptErrorKind::Allocator => {
+                VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+            }
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit => {
+                VMError::ExecutionDeferred(crate::error::ExecutionDeferral::ActiveMemoryCapacity)
+            }
+            norito::core::DecodeAttemptErrorKind::Invalid => VMError::DecodeError,
+        })
+}
 fn decode_schema(payload: &[u8]) -> Result<EntrypointArgumentSchemaV1, VMError> {
     if payload.len() > MAX_ENTRYPOINT_ARGUMENT_SCHEMA_BYTES {
         return Err(VMError::DecodeError);
     }
-    let schema: EntrypointArgumentSchemaV1 =
-        norito::decode_canonical(payload).map_err(|_| VMError::DecodeError)?;
+    let schema: EntrypointArgumentSchemaV1 = decode_argument_frame(payload)?;
     if !schema.validate() || schema.fields.len() > MAX_ENTRYPOINT_ARGUMENTS {
         return Err(VMError::DecodeError);
     }
@@ -665,7 +682,7 @@ fn decode_record(payload: &[u8]) -> Result<EntrypointArgumentRecordV1, VMError> 
     }
     #[cfg(any(test, debug_assertions))]
     RECORD_DECODE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
-    norito::decode_canonical(payload).map_err(|_| VMError::DecodeError)
+    decode_argument_frame(payload)
 }
 fn validate_argument_envelope_lengths(record: &Tlv<'_>, schema: &Tlv<'_>) -> Result<(), VMError> {
     validate_argument_envelope_payload_lengths(record.payload.len(), schema.payload.len())
@@ -3858,5 +3875,135 @@ mod tests {
             Err(VMError::DecodeError)
         ));
         RECORD_DECODE_COUNT.with(|count| assert_eq!(count.get(), 0));
+    }
+
+    #[test]
+    fn prepared_argument_record_preserves_original_enclosing_decode_refusal_and_retry() {
+        use crate::error::ExecutionDeferral;
+        use iroha_allocation::AllocationBudget;
+        use norito::core::{DecodeBudgetContext, DecodeLimits, with_decode_limits_scope};
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "ready".into(),
+                ty: argument_type(EntrypointValueKindV1::Bool),
+            }],
+        };
+        let canonical: Arc<[u8]> = Arc::from(
+            encode_argument_record_from_json(&schema, &Json::new(norito::json!({"ready": true})))
+                .unwrap(),
+        );
+        let original_pointer = canonical.as_ptr();
+        let original_bytes = canonical.to_vec();
+        let pool = AllocationBudget::new(32 * 1024 * 1024);
+        let context = DecodeBudgetContext::try_new_owned(
+            DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX),
+            &pool,
+        )
+        .unwrap();
+        let mut vm = IVM::try_new_with_memory_budget(u64::MAX, &pool).unwrap();
+        let baseline = (
+            pool.reserved_bytes(),
+            vm.remaining_gas(),
+            vm.register(10),
+            vm.register(11),
+        );
+        context.with(|| {
+            let error = with_decode_limits_scope(
+                DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || prepare_argument_record_with_gas_limit(&schema, canonical.clone(), u64::MAX),
+            )
+            .expect_err("the actual canonical record cannot decode under zero caller allocation");
+            assert_eq!(
+                error,
+                VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity),
+                "canonical prepared record must retain its original enclosing decoder deferral"
+            );
+            assert_eq!(
+                (
+                    pool.reserved_bytes(),
+                    vm.remaining_gas(),
+                    vm.register(10),
+                    vm.register(11)
+                ),
+                baseline
+            );
+            let prepared =
+                prepare_argument_record_with_gas_limit(&schema, canonical.clone(), u64::MAX)
+                    .expect(
+                        "unchanged original record retries after only the narrower scope retires",
+                    );
+            assert_eq!(prepared.canonical_bytes().as_ptr(), original_pointer);
+            assert_eq!(prepared.canonical_bytes(), original_bytes);
+            prepared.precharge_vm(&mut vm).unwrap();
+            prepared.install_call_arguments(&mut vm, 1).unwrap();
+            assert_eq!(vm.load_u64(vm.register(10)), Ok(1));
+            assert!(vm.allocation_budget().unwrap().same_pool(&pool));
+        });
+        let mut malformed = original_bytes.clone();
+        malformed[0] ^= 0xff;
+        let invalid = context
+            .with(|| {
+                with_decode_limits_scope(
+                    DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                    || {
+                        prepare_argument_record_with_gas_limit(
+                            &schema,
+                            Arc::from(malformed),
+                            u64::MAX,
+                        )
+                    },
+                )
+            })
+            .unwrap_err();
+        assert_eq!(
+            invalid,
+            VMError::DecodeError,
+            "invalid framing remains a protocol rejection"
+        );
+        assert_eq!(canonical.as_ref(), original_bytes);
+        drop(vm);
+        drop(context);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn schema_bound_argument_syscall_preserves_original_decode_refusal_before_table_writes() {
+        use crate::error::ExecutionDeferral;
+        use norito::core::{DecodeBudgetContext, DecodeLimits, with_decode_limits_scope};
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "ready".into(),
+                ty: argument_type(EntrypointValueKindV1::Bool),
+            }],
+        };
+        let mut vm = install_record(&schema, &Json::new(norito::json!({"ready": true})));
+        let original = (vm.register(10), vm.register(11), vm.remaining_gas());
+        let context = DecodeBudgetContext::new(DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+        ));
+        context.with(|| {
+            let error = with_decode_limits_scope(
+                DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || decode_argument_record(&mut vm),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity),
+                "canonical argument schema must retain its original enclosing decoder deferral"
+            );
+            assert_eq!(
+                (vm.register(10), vm.register(11), vm.remaining_gas()),
+                original
+            );
+            decode_argument_record(&mut vm)
+                .expect("same schema and record retry under the original context");
+            assert_eq!(vm.load_u64(vm.register(10)), Ok(1));
+            assert_eq!(vm.register(11), 1);
+        });
     }
 }

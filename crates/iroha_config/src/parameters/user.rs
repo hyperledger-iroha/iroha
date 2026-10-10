@@ -82,8 +82,8 @@ const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_TELEMETRY_RETRY_DELAY_EXPONENT: u8 = 16;
 const MAX_TELEMETRY_SIGNING_KEY_ID_LENGTH: usize = 128;
 const MAX_TELEGRAM_CREDENTIAL_LENGTH: usize = 256;
-const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
-const MAX_PUBLIC_IDENTITY_FILE_BYTES: u64 = 512;
+const MAX_PRIVATE_KEY_FILE_BYTES: usize = 4 * 1024;
+const MAX_PUBLIC_IDENTITY_FILE_BYTES: usize = 512;
 
 enum ConfigFiles<'a> {
     Native,
@@ -300,7 +300,7 @@ fn read_private_key_file(
         &path,
         ConfigFileRequest {
             access: ConfigFileAccess::Private,
-            maximum: MAX_PRIVATE_KEY_FILE_BYTES as usize,
+            maximum: MAX_PRIVATE_KEY_FILE_BYTES,
         },
     )
     .map_err(|error| format!("failed to read {file_field} `{}`: {error}", path.display()))?;
@@ -309,7 +309,7 @@ fn read_private_key_file(
     let encoded = encoded
         .strip_suffix("\r\n")
         .or_else(|| encoded.strip_suffix('\n'))
-        .unwrap_or(&encoded);
+        .unwrap_or(encoded);
     if encoded.is_empty() || encoded.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
         return Err(format!(
             "{file_field} `{}` must contain exactly one canonical private key",
@@ -373,7 +373,7 @@ fn read_network_identity_file(
         &path,
         ConfigFileRequest {
             access: ConfigFileAccess::Public,
-            maximum: MAX_PUBLIC_IDENTITY_FILE_BYTES as usize,
+            maximum: MAX_PUBLIC_IDENTITY_FILE_BYTES,
         },
     )
     .map_err(|error| format!("failed to read {file_field} `{}`: {error}", path.display()))?;
@@ -18396,7 +18396,7 @@ impl AccountOnboarding {
             path,
             ConfigFileRequest {
                 access: ConfigFileAccess::Private,
-                maximum: MAX_PRIVATE_KEY_FILE_BYTES as usize,
+                maximum: MAX_PRIVATE_KEY_FILE_BYTES,
             },
         ) {
             Ok(bytes) => bytes,
@@ -18411,15 +18411,12 @@ impl AccountOnboarding {
                 return None;
             }
         };
-        let encoded = match std::str::from_utf8(&bytes) {
-            Ok(encoded) => encoded,
-            Err(_) => {
-                emit_torii_config_error(
-                    emitter,
-                    "torii.account_onboarding.private_key_file must contain UTF-8",
-                );
-                return None;
-            }
+        let Ok(encoded) = std::str::from_utf8(&bytes) else {
+            emit_torii_config_error(
+                emitter,
+                "torii.account_onboarding.private_key_file must contain UTF-8",
+            );
+            return None;
         };
         let encoded = encoded.trim_end_matches(['\r', '\n']);
         if encoded.is_empty() {
@@ -19057,7 +19054,7 @@ impl ToriiFaucet {
             path,
             ConfigFileRequest {
                 access: ConfigFileAccess::Private,
-                maximum: MAX_PRIVATE_KEY_FILE_BYTES as usize,
+                maximum: MAX_PRIVATE_KEY_FILE_BYTES,
             },
         ) {
             Ok(bytes) => bytes,
@@ -19072,15 +19069,9 @@ impl ToriiFaucet {
                 return None;
             }
         };
-        let encoded = match std::str::from_utf8(&bytes) {
-            Ok(encoded) => encoded,
-            Err(_) => {
-                emit_torii_config_error(
-                    emitter,
-                    "torii.faucet.private_key_file must contain UTF-8",
-                );
-                return None;
-            }
+        let Ok(encoded) = std::str::from_utf8(&bytes) else {
+            emit_torii_config_error(emitter, "torii.faucet.private_key_file must contain UTF-8");
+            return None;
         };
         let encoded = encoded.trim_end_matches(['\r', '\n']);
         if encoded.is_empty() {

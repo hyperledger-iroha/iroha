@@ -613,7 +613,7 @@ pub(crate) fn parse_account_literal_with_world(
             });
         match parsed {
             Ok(account_id) => return Ok(Some(account_id)),
-            Err(AccountAddressError::DecodeResourceLimit) => {
+            Err(error) if error.is_decode_resource_limit() => {
                 if cfg!(all(test, sumeragi_core_mutation = "HC37")) {
                     return Ok(None);
                 }

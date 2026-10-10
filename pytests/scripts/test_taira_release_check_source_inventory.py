@@ -287,7 +287,13 @@ class SelectedSourceInventoryTests(unittest.TestCase):
         core_source = root / "crates/iroha_core/src/executor_contract_owner_permission_tests.rs"
         core_names = tuple("executor::tests::" + name for name in re.findall(
             r"#\[test\]\s*fn\s+([A-Za-z_]\w*)\s*\(", core_source.read_text()))
-        self.assertEqual(len(core_names), 3)
+        self.assertEqual(core_names, (
+            "executor::tests::current_contract_owner_originates_and_revokes_exact_tokens_without_code_management",
+            "executor::tests::suspended_contract_permissions_can_be_repaired_without_authorizing_invocation",
+            "executor::tests::contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_authority",
+            "executor::tests::ordinary_owner_self_grant_enables_guarded_call_and_revocation_closes_it",
+            "executor::tests::scoped_permission_delegation_requires_current_declaration_and_exact_instance",
+        ))
         groups = {
             "core": core_names,
             "schema": tuple(name for _, names in gate.SCHEMA_STAGES for name in names),
@@ -385,8 +391,8 @@ class SelectedSourceInventoryTests(unittest.TestCase):
         required = (
             "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
             "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
-            "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
-            "localnet::tests::taira_asset_validation_rejects_builtin_identity_or_alias_collision",
+            "localnet::tests::localnet_assets_contain_only_explicit_requests",
+            "localnet::tests::localnet_asset_validation_rejects_duplicate_identity_or_alias",
             "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
             "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
             "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
@@ -469,6 +475,48 @@ class SelectedSourceInventoryTests(unittest.TestCase):
             with self.subTest(target=target), patch.dict(gate.HARNESS_TARGETS, {"cli": target}):
                 with self.assertRaisesRegex(gate.CheckError, "CLI seating Cargo target registration"):
                     gate.validate_selected_source_test_inventory(self.root, selected(correct))
+
+    def test_restarted_prepared_intent_controls_are_exact_required_in_both_scopes(self):
+        required = (
+            'query::native_context_archive::read::tests::original_intent_read_shares_exact_descriptor_capacity_and_prefix_custody',
+            'query::native_context_archive::prepared_intents::tests::sole_intent_decoder_borrows_original_charged_ranges_and_refuses_framing_or_cumulative_limits',
+            'sumeragi::amx::native::tests::paid_borrowed_custody::restarted_paid_intent_delivers_exact_native_prepared_relay_and_refunds_original_pool',
+            'sumeragi::amx::native::tests::paid_borrowed_custody::restarted_paid_intent_final_namespace_refusal_retains_exact_funded_instruction_until_original_retry',
+            'sumeragi::amx::native::tests::paid_borrowed_custody::restarted_paid_intent_original_pool_refusal_keeps_frame_and_selected_source_without_reread',
+            'sumeragi::amx::native::tests::paid_borrowed_custody::restarted_paid_intent_rejects_substituted_authority_carrier_and_execution_claims',
+            'sumeragi::amx::native::tests::paid_borrowed_custody::restarted_paid_intent_refuses_authenticated_row_subset_before_any_delivery',
+        )
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)["core"]
+            names = tuple(name for _, cases in selected for name in cases)
+            for name in required:
+                with self.subTest(scope=scope, selector=name):
+                    self.assertEqual(names.count(name), 1)
+                    focused = gate.focused_regression_stages(scope, ("core=" + name,))
+                    self.assertEqual(tuple(focused), ("core",))
+                    gate.validate_selected_source_test_inventory(SCRIPT.parents[1], focused)
+                    listing = "\n".join(case + ": test" for case in names if case != name)
+                    with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                        gate.require_tests(listing, selected)
+
+
+    def test_returned_native_amx_context_controls_are_exact_required_in_both_scopes(self):
+        required = (
+            'sumeragi::amx::native::tests::returned_context::native_amx_returned_global_context_keeps_every_original_graph_charge_until_retirement',
+            'sumeragi::amx::native::tests::returned_context::native_amx_returned_context_final_registration_refusal_keeps_original_graph_and_retry_pool',
+        )
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)["core"]
+            names = tuple(name for _, cases in selected for name in cases)
+            for name in required:
+                with self.subTest(scope=scope, selector=name):
+                    self.assertEqual(names.count(name), 1)
+                    focused = gate.focused_regression_stages(scope, ("core=" + name,))
+                    self.assertEqual(tuple(focused), ("core",))
+                    gate.validate_selected_source_test_inventory(SCRIPT.parents[1], focused)
+                    listing = "\n".join(case + ": test" for case in names if case != name)
+                    with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                        gate.require_tests(listing, selected)
 
 
 if __name__ == "__main__":

@@ -22,15 +22,16 @@ from unittest.mock import MagicMock, patch
 
 # Exact current-source native census. Both scopes retain the closed MV/Concread
 # ownership suite, including funded replacement/snapshot and deletion controls.
-# Prepared signature custody and exact parent activation add six Core controls.
+# Reviewed resume/restore/readers add34Core census entries; current contract
+# owner delegation adds2required controls. Every accepted leaf remains explicit.
 # Linux additionally selects OpenSSH descriptor custody. All platforms select
 # the same genuine four-peer beacon workload.
 EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1830 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1863 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1866 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1899 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -1771,8 +1772,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             ),
             "deploy": (
                 "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
-                "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
-                "localnet::tests::taira_asset_validation_rejects_builtin_identity_or_alias_collision",
+                "localnet::tests::localnet_assets_contain_only_explicit_requests",
+                "localnet::tests::localnet_asset_validation_rejects_duplicate_identity_or_alias",
                 "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
                 "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
                 "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
@@ -4516,7 +4517,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
             "test", "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
         "-p", "iroha_config", "-p", "iroha_data_model", "-p", "iroha_deploy", "-p", "fastpq_prover", "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core", "-p", "iroha_sumeragi", "-p", "iroha_schema_gen", "-p", "iroha_test_network",
             "-p", "iroha", "-p", "iroha_wallet", "-p", "iroha_torii", "-p", "iroha_torii_shared", "--test", "taira_config_contracts", "--lib", "--test", "fastpq_integration", "--test", "taira_app_contracts",
-            "--test", "torii_nexus_sorafs", "--test", "taira_consensus_contracts", "--features", "iroha_data_model/transparent_api", "--no-run", "--message-format=json-render-diagnostics"])
+            "--test", "torii_nexus_sorafs", "--test", "taira_consensus_contracts", "--features", "iroha_data_model/transparent_api,iroha_torii/test-fixtures", "--no-run", "--message-format=json-render-diagnostics"])
         for missing in ("config", "deploy", "torii", "torii-shared", "torii-lifecycle", "network"):
             incomplete = "".join(self.artifact(name) for name in names if name != missing)
             with self.subTest(missing=missing), \

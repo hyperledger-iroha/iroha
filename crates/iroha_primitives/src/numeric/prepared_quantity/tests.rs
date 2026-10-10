@@ -132,7 +132,7 @@ fn prepared_quantity_one_byte_short_and_foreign_charge_preserve_exact_original_p
     let (charge, error) = PreparedQuantityDecode::try_from_charge(&plan, &foreign, charge)
         .err()
         .unwrap();
-    assert!(matches!(error, QuantityDestinationError::ForeignPool));
+    assert!(matches!(error, QuantityBackingError::ForeignPool));
     assert!(charge.belongs_to(&original));
     assert_eq!(charge.layout(), layout);
     assert_eq!(original.reserved_bytes(), layout.size());
@@ -283,7 +283,7 @@ fn prepared_quantity_wrong_layout_returns_same_charge_without_physical_construct
     let (charge, reason) = PreparedQuantityDecode::try_from_charge(&plan, &original, charge)
         .err()
         .unwrap();
-    assert!(matches!(reason, QuantityDestinationError::Allocation(
+    assert!(matches!(reason, QuantityBackingError::Allocation(
         ChargedBufferFromChargeError::LayoutMismatch { expected, actual }
     ) if expected == plan.allocation_layout() && actual == wrong_layout));
     assert!(charge.belongs_to(&original));
@@ -655,4 +655,36 @@ fn one_pass_quantity_capacity_precedes_late_scalar_and_refunds_only_physical_cre
     );
     drop(owner);
     assert_eq!(zero_pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn quantity_backing_errors_preserve_original_diagnostics_and_sources() {
+    use std::error::Error as _;
+
+    let foreign = QuantityBackingError::ForeignPool;
+    assert_eq!(
+        foreign.to_string(),
+        "quantity backing belongs to another pool"
+    );
+    assert!(foreign.source().is_none());
+    let expected = Layout::from_size_align(16, 8).unwrap();
+    let actual = Layout::from_size_align(8, 8).unwrap();
+    for original in [
+        ChargedBufferFromChargeError::DemandOverflow,
+        ChargedBufferFromChargeError::LayoutMismatch { expected, actual },
+        ChargedBufferFromChargeError::Allocator { layout: expected },
+    ] {
+        let diagnostic = original.to_string();
+        let error = QuantityBackingError::Allocation(original);
+        assert_eq!(error.to_string(), diagnostic);
+        let QuantityBackingError::Allocation(original) = &error else {
+            unreachable!("constructed original allocation cause");
+        };
+        let retained = error
+            .source()
+            .unwrap()
+            .downcast_ref::<ChargedBufferFromChargeError>()
+            .unwrap();
+        assert!(core::ptr::eq(retained, original));
+    }
 }

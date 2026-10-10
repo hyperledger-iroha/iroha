@@ -356,7 +356,9 @@ fn supplied_proved_staking_effects_require_signed_monetary_plan() {
                 .iter()
                 .cloned()
                 .map(|instruction| QueuedEffect {
-            payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(instruction),
+                    payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
+                        instruction,
+                    ),
                     authority: authority.clone(),
                     contract_runtime_context: None,
                     entrypoint_authorization: None,

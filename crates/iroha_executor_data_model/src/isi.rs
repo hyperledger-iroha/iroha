@@ -1086,9 +1086,12 @@ pub mod multisig {
                         .expect_err("the actual JSON decoder must honor its zero-allocation scope");
                     assert!(
                         matches!(
-                            error,
-                            norito::Error::Json(norito::json::Error::DecodeResourceLimit)
-                        ) || norito::core::decode_error_matches_active_limits(&error),
+                            error.decode_resource_error(),
+                            Some(norito::core::DecodeResourceError::TotalAllocationExceeded {
+                                limit: 0,
+                                ..
+                            })
+                        ),
                         "original JSON refusal was erased: {error:?}",
                     );
                 },
@@ -1100,10 +1103,7 @@ pub mod multisig {
             let malformed = Json::new(norito::json!({"UnknownMultisigVariant": {}}));
             let error = MultisigInstructionBox::try_from(&malformed)
                 .expect_err("unknown variants remain deterministic errors");
-            assert!(!matches!(
-                error,
-                norito::Error::Json(norito::json::Error::DecodeResourceLimit)
-            ));
+            assert!(error.decode_resource_error().is_none());
             assert!(!norito::core::decode_error_matches_active_limits(&error));
         }
         #[test]

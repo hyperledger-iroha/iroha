@@ -320,6 +320,17 @@ pub(crate) fn canonical_decode_attempt_error<E>(
     error: norito::core::DecodeAttemptError,
     rejected: impl FnOnce(norito::core::DecodeAttemptError) -> E,
 ) -> ExecutionAttemptError<E> {
+    if let Some(original) = canonical_decode_deferral(&error) {
+        return ExecutionAttemptError::Deferred(original);
+    }
+    ExecutionAttemptError::Rejected(rejected(error))
+}
+
+/// Borrow the decoder's captured origin while its actual error owner stays retained for retry.
+/// This shares the consuming boundary's classification and invents no pool release source.
+pub(crate) fn canonical_decode_deferral(
+    error: &norito::core::DecodeAttemptError,
+) -> Option<ExecutionDeferred> {
     let reason = match error.kind() {
         norito::core::DecodeAttemptErrorKind::Allocator => {
             Some(ExecutionDeferral::AllocationUnavailable)
@@ -329,12 +340,10 @@ pub(crate) fn canonical_decode_attempt_error<E>(
         }
         norito::core::DecodeAttemptErrorKind::Invalid => None,
     };
-    if !cfg!(all(test, sumeragi_core_mutation = "HC32"))
-        && let Some(reason) = reason
-    {
-        return ExecutionAttemptError::Deferred(reason.into());
+    if cfg!(all(test, sumeragi_core_mutation = "HC32")) {
+        return None;
     }
-    ExecutionAttemptError::Rejected(rejected(error))
+    reason.map(Into::into)
 }
 
 /// Preserve an original native storage/decode refusal before its caller formats a rejection.
@@ -381,12 +390,18 @@ pub(crate) fn json_decode_attempt_error<E>(
     rejected: impl FnOnce(norito::json::Error) -> E,
 ) -> ExecutionAttemptError<E> {
     match error {
-        norito::json::Error::DecodeResourceLimit => {
-            ExecutionAttemptError::Deferred(ExecutionDeferral::ActiveMemoryCapacity.into())
-        }
-        norito::json::Error::AllocationFailed => {
-            ExecutionAttemptError::Deferred(ExecutionDeferral::AllocationUnavailable.into())
-        }
+        norito::json::Error::DecodeResourceLimit
+        | norito::json::Error::DecodeResource(
+            norito::core::DecodeResourceError::ArchiveLengthExceeded { .. }
+            | norito::core::DecodeResourceError::SequenceLengthExceeded { .. }
+            | norito::core::DecodeResourceError::FieldLengthExceeded { .. }
+            | norito::core::DecodeResourceError::TotalElementsExceeded { .. }
+            | norito::core::DecodeResourceError::TotalAllocationExceeded { .. },
+        ) => ExecutionAttemptError::Deferred(ExecutionDeferral::ActiveMemoryCapacity.into()),
+        norito::json::Error::AllocationFailed
+        | norito::json::Error::DecodeResource(
+            norito::core::DecodeResourceError::AllocationFailed { .. },
+        ) => ExecutionAttemptError::Deferred(ExecutionDeferral::AllocationUnavailable.into()),
         error => ExecutionAttemptError::Rejected(rejected(error)),
     }
 }

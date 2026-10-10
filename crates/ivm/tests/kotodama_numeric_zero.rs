@@ -305,7 +305,9 @@ fn actual_numeric_zero_pairs_preserve_permission_authorization_and_denial_before
                 .find(|entrypoint| entrypoint.name == "main")
                 .unwrap()
                 .authorization,
-            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission("ManageRoles".parse().unwrap())
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission(
+                "ManageRoles".parse().unwrap()
+            )
         );
         for authorized in [false, true] {
             let caller =

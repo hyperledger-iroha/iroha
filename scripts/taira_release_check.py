@@ -1275,8 +1275,8 @@ HARNESS_TARGETS = {
 DEPLOY_STAGES = (("native generated genesis and independent localnet profiles", (
     "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
-    "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
-    "localnet::tests::taira_asset_validation_rejects_builtin_identity_or_alias_collision",
+    "localnet::tests::localnet_assets_contain_only_explicit_requests",
+    "localnet::tests::localnet_asset_validation_rejects_duplicate_identity_or_alias",
     "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
     "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
     "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
@@ -1390,6 +1390,8 @@ CORE_CONTRACT_OWNER_STAGES = (("exact contract lifecycle owner delegation and in
     'executor::tests::current_contract_owner_originates_and_revokes_exact_tokens_without_code_management',
     'executor::tests::contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_authority',
     'executor::tests::ordinary_owner_self_grant_enables_guarded_call_and_revocation_closes_it',
+    'executor::tests::suspended_contract_permissions_can_be_repaired_without_authorizing_invocation',
+    'executor::tests::scoped_permission_delegation_requires_current_declaration_and_exact_instance',
 )),)
 CORE_STARTUP_STAGES = CORE_CONTRACT_OWNER_STAGES + CORE_STARTUP_STAGES
 CORE_ADMISSION_STARTUP_STAGES = CORE_CONTRACT_OWNER_STAGES + CORE_ADMISSION_STARTUP_STAGES
@@ -2696,8 +2698,12 @@ def native_harness_selection(harnesses: tuple[str, ...]) -> list[str]:
     # The portable proof fixtures use the model's explicit deterministic constructors.
     # Select the feature even for a focused model-only graph; dependency unification
     # must not decide whether required cryptographic regressions exist.
-    features = (["--features", "iroha_data_model/transparent_api"]
-                if "data-model" in harnesses else [])
+    selected_features = []
+    if "data-model" in harnesses:
+        selected_features.append("iroha_data_model/transparent_api")
+    if "torii-lifecycle" in harnesses:
+        selected_features.append("iroha_torii/test-fixtures")
+    features = ["--features", ",".join(selected_features)] if selected_features else []
     return [*selection, *targets, *features]
 
 
@@ -4283,14 +4289,25 @@ def validate_torii_lifecycle_test_registration(root: Path) -> None:
         if len(rows) != 1:
             raise ValueError("lifecycle test target must be explicitly registered once")
         features = manifest.get("features", {})
-        active, pending = set(), ["default"]
+        # Test-owned fixtures are explicit Cargo inputs. Keep them outside the
+        # shipping default closure while verifying this selected libtest graph.
+        selection = native_harness_selection(("torii-lifecycle",))
+        requested = []
+        for index, argument in enumerate(selection):
+            if argument == "--features":
+                requested.extend(feature.removeprefix("iroha_torii/")
+                                 for feature in selection[index + 1].split(",")
+                                 if feature.startswith("iroha_torii/"))
+        if any(feature not in features for feature in requested):
+            raise ValueError("lifecycle selected feature is not declared")
+        active, pending = set(), ["default", *requested]
         while pending:
             feature = pending.pop()
             if feature not in active:
                 active.add(feature)
                 pending.extend(value for value in features.get(feature, []) if value in features)
         if not set(rows[0].get("required-features", [])).issubset(active):
-            raise ValueError("lifecycle target requires non-default features")
+            raise ValueError("lifecycle target requires unselected features")
         grouped = package / rows[0]["path"]
         if not grouped.resolve().is_relative_to(package.resolve()):
             raise ValueError("lifecycle target path leaves package")

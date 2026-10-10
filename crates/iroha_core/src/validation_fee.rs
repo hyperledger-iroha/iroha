@@ -711,15 +711,21 @@ fn validated_policy_registry_in_world<W: WorldReadOnly + ?Sized>(
     let registry: ValidationFeePolicyRegistryV1 = norito::json::from_str(custom.payload().get())
         .map_err(|error| match error {
             norito::json::Error::DecodeResourceLimit
-                if !cfg!(all(test, sumeragi_core_mutation = "HC30")) =>
-            {
+            | norito::json::Error::DecodeResource(
+                norito::core::DecodeResourceError::ArchiveLengthExceeded { .. }
+                | norito::core::DecodeResourceError::SequenceLengthExceeded { .. }
+                | norito::core::DecodeResourceError::FieldLengthExceeded { .. }
+                | norito::core::DecodeResourceError::TotalElementsExceeded { .. }
+                | norito::core::DecodeResourceError::TotalAllocationExceeded { .. },
+            ) if !cfg!(all(test, sumeragi_core_mutation = "HC30")) => {
                 ExecutionAttemptError::Deferred(
                     ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
                 )
             }
             norito::json::Error::AllocationFailed
-                if !cfg!(all(test, sumeragi_core_mutation = "HC30")) =>
-            {
+            | norito::json::Error::DecodeResource(
+                norito::core::DecodeResourceError::AllocationFailed { .. },
+            ) if !cfg!(all(test, sumeragi_core_mutation = "HC30")) => {
                 ExecutionAttemptError::Deferred(
                     ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
                 )

@@ -123,6 +123,58 @@ fn vm_deferrals_are_local_unavailable_and_never_deterministic_faults() -> Result
     Ok(())
 }
 #[test]
+fn nested_call_faults_remain_distinct_deterministic_mailbox_results_through_metering() -> Result<()>
+{
+    let bundle = load_deployment_bundle_fixture()?;
+    let request = sample_ordered_mailbox_request(
+        &bundle,
+        "update",
+        sample_mailbox_message(&bundle, "update", b"nested-call-fault".to_vec()),
+    );
+    let mut commitments = Vec::new();
+    for (fault, label) in [
+        (VMError::ReentrantCall, "reentrant_call"),
+        (VMError::CallDepthExceeded, "call_depth_exceeded"),
+    ] {
+        let mut original_receipt = None;
+        for error in [fault.clone(), VMError::metered(17, fault)] {
+            assert_eq!(vm_error_label(&error), label);
+            assert_eq!(
+                vm_error_kind(&error),
+                SoracloudRuntimeExecutionErrorKind::Internal
+            );
+            let result = ordered_mailbox_vm_failure(request.clone(), &error)
+                .expect("nested-call policy violations are deterministic guest failures");
+            assert_eq!(
+                result.runtime_state.expect("runtime state").health_status,
+                SoraServiceHealthStatusV1::Degraded
+            );
+            assert!(result.state_mutations.is_empty());
+            assert!(result.outbound_mailbox_messages.is_empty());
+            assert!(result.response_bytes.is_empty());
+            assert_eq!(
+                result.runtime_receipt.mailbox_message_id,
+                Some(request.mailbox_message.message_id)
+            );
+            if let Some(original) = original_receipt.as_ref() {
+                assert_eq!(
+                    &result.runtime_receipt, original,
+                    "metering must preserve the canonical failure identity"
+                );
+            } else {
+                commitments.push(result.runtime_receipt.result_commitment);
+                original_receipt = Some(result.runtime_receipt);
+            }
+        }
+    }
+    assert_ne!(
+        commitments[0], commitments[1],
+        "distinct guest faults must have distinct receipts"
+    );
+    Ok(())
+}
+
+#[test]
 fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
     let state = test_state()?;
     let mut bundle = load_deployment_bundle_fixture()?;

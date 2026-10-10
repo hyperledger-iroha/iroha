@@ -322,9 +322,9 @@ mod axt_spend_issuer;
 mod block_proofs;
 mod bounded_authority;
 mod callback_journal;
-mod contract_event_journal;
 mod canonical_history;
 mod committed_execution_read;
+mod contract_event_journal;
 pub(crate) mod native_execution_tip;
 pub use native_execution_tip::NativeExecutionTip;
 mod carrier_da_effects;
@@ -14492,6 +14492,7 @@ pub fn derive_committee_key_id(public_key: &PublicKey) -> ConsensusKeyId {
 /// Fetch the stored BLS proof-of-possession for a consensus public key.
 ///
 /// Prefers the `consensus_keys_by_pk` index and falls back to a scan if absent.
+#[cfg(test)]
 pub(crate) fn consensus_key_pop_for_public_key(
     snapshot: &impl WorldReadOnly,
     public_key: &PublicKey,
@@ -42560,16 +42561,22 @@ impl StateTransaction<'_, '_> {
             crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
         > {
             norito::json::to_value(source).map_err(|error| match error {
-                norito::json::Error::DecodeResourceLimit => {
-                    crate::execution_attempt::ExecutionAttemptError::Deferred(
-                        ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
-                    )
-                }
-                norito::json::Error::AllocationFailed => {
-                    crate::execution_attempt::ExecutionAttemptError::Deferred(
-                        ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
-                    )
-                }
+                norito::json::Error::DecodeResourceLimit
+                | norito::json::Error::DecodeResource(
+                    norito::core::DecodeResourceError::ArchiveLengthExceeded { .. }
+                    | norito::core::DecodeResourceError::SequenceLengthExceeded { .. }
+                    | norito::core::DecodeResourceError::FieldLengthExceeded { .. }
+                    | norito::core::DecodeResourceError::TotalElementsExceeded { .. }
+                    | norito::core::DecodeResourceError::TotalAllocationExceeded { .. },
+                ) => crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
+                ),
+                norito::json::Error::AllocationFailed
+                | norito::json::Error::DecodeResource(
+                    norito::core::DecodeResourceError::AllocationFailed { .. },
+                ) => crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                ),
                 error => crate::execution_attempt::ExecutionAttemptError::Rejected(
                     ValidationFail::InternalError(error.to_string()),
                 ),
