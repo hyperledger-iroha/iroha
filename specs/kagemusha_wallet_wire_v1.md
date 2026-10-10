@@ -148,8 +148,8 @@ and the local custody records (B1):
 | `asset-scope` | asset scope transcript (§3.1) | 54 | fixed identity; ledger boundary |
 | `account` | complete canonical Norito frame of the domainless `AccountId` | var | ledger boundary; the ledger derives it from the `AccountId` |
 | `enrollment-challenge` | §3.1 | 194 | platform-attestation challenge, used only by the issuer |
-| `app-policy` | NEW [typed app identity](kagemusha_wallet_enrollment_policy_v1.md) | ≤334 | fixed initial selection; no approval implied |
-| `enrollment-policy` | NEW [typed platform/regulator/lifetime policy](kagemusha_wallet_enrollment_policy_v1.md) | 183 Android, 167 Apple | selected issuer inputs; no approval implied |
+| `app-policy` | NEW [typed app identity](kagemusha_wallet_enrollment_policy_v1.md) | ≤431 Android, ≤294 Apple | fixed initial selection; no approval implied; the Android arm changes at the proposal §9.1 cutover |
+| `enrollment-policy` | NEW [typed platform/regulator/lifetime policy](kagemusha_wallet_enrollment_policy_v1.md) | 174–572 Android, 167 Apple | selected issuer inputs; no approval implied; the Android arm changes at the proposal §9.1 cutover |
 | `enrollment-id`, `enrollment-key-binding` | `challenge_digest ‖ payment_key` | 97 | enrollment transcript; App Attest client data |
 | `wallet-id` | `scheme_id ‖ asset_digest ‖ payment_key ‖ enrollment_id` | 161 | fixed identity; carried, never recomputed in a relation |
 | `artifact-manifest` | `m ‖ sig` of the signed artifact manifest | 96 | artifact digest |

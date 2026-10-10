@@ -809,8 +809,12 @@ Bootstrap has never been selected. Once Bootstrap is selected or commits,
 including an uncertain activation response, recover that incarnation and use
 §6.3; do not abandon funded obligations. Abandonment has two forms, chosen by the
 slot's durable state. The names below are Native's slot statuses
-(`KagemushaWalletSlotStatusV1`). Native's `Pending(marker)` is a selected head
-waiting for its receipt: Bootstrap is selected, so it is never abandoned.
+(`KagemushaWalletSlotStatusV1`). Two different Native names say Pending. The
+enrollment progress `EnrollmentProgressV1::Pending`, which Native reports for
+slot status `Empty` or `IntentOnly`, is the no-marker form below; "abandon from
+Pending" means that form. The slot status `Pending(marker)` is a selected head
+waiting for its receipt, and Native reports it as progress `BootstrapSelected`:
+Bootstrap is selected, so it is never abandoned.
 
 - **No marker (Native `Empty` or `IntentOnly`, or an intent whose key is
   unknown).** No enrollment marker exists. Either the slot was selected but no
@@ -849,7 +853,12 @@ Bootstrap from this custody. Ledger acceptance of an Abandonment matters only
 for the old `wallet_id`: it permanently disables activation and loads even
 against a restored or compromised copy, and it is the terminal evidence that
 releasing an unused quota allocation requires; that release does not erase
-historical quota usage.
+historical quota usage. Only the marker form can hold such an allocation, and
+only after an issued credential. Until the issuer authenticates finalized
+inclusion of the Abandonment, the old `wallet_id`'s quota share stays reserved
+(§7), so with quota controls enabled the issuer allocates the new wallet's
+share from the remaining allowance. The new enrollment itself still starts at
+once; the no-marker form holds no allocation and has nothing to wait for.
 
 ### 3.3 Stable offline verification
 
@@ -1628,9 +1637,12 @@ driver builds and releases it:
    deploys mobile natives.
 
 Before Native implements this revision, the Native owner reviews it. The
-review covers the §3.2 no-marker abandonment (local, no ledger bytes, a
-holder-abandoned reason) and the rule that a fresh slot does not wait for
-ledger acceptance of an Abandonment.
+review covers the §3.2 no-marker abandonment, which is abandonment from Native
+progress `EnrollmentProgressV1::Pending` (local, no ledger bytes, a
+holder-abandoned reason); the rule that a fresh slot does not wait for ledger
+acceptance of an Abandonment; and the quota-share reservation that lasts until
+that acceptance. Until the review signs off, these rules are the proposed
+design and no Native code implements them.
 
 ## 10. Goals and execution order
 
