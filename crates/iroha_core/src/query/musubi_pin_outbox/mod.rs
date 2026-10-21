@@ -284,9 +284,16 @@ pub fn begin_musubi_pin_outbox_check_v1(
             SignerCertifiedWalkV1::new(&view).map_err(|error| error.map_rejection(Error::from))?;
         let expected_instance = global_instance(&prepared)?;
         let floor = prepared.instruction.floor;
-        for receipt in chain.walk(floor.height, floor.height.max(2)) {
+        // Borrow the iterator in place so IntoIterator does not duplicate its large
+        // retained parent/successor receipt slots on the native debug stack.
+        let mut walk = chain.walk(floor.height, floor.height.max(2));
+        for receipt in &mut walk {
             prepared.round.ensure_live().map_err(Error::from)?;
-            let receipt = receipt.map_err(|error| error.map_rejection(Error::from))?;
+            // Map only the small refusal; keep the decoded receipt out of Result::map_err.
+            let receipt = match receipt {
+                Ok(receipt) => receipt,
+                Err(error) => return Err(error.map_rejection(Error::from)),
+            };
             let block = receipt.in_view(&view).map_err(Error::from)?;
             if block.height() == floor.height
                 && (*block.block_hash().as_ref() != floor.block_hash
@@ -302,6 +309,7 @@ pub fn begin_musubi_pin_outbox_check_v1(
                 return Err(Error::Finality.into());
             }
         }
+        drop(walk);
         prepared.round.ensure_live().map_err(Error::from)?;
         if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
             return Err(Error::CurrentState.into());
@@ -389,9 +397,14 @@ fn authenticate<'view, 'state, 'bound>(
         let chain =
             SignerCertifiedWalkV1::new(view).map_err(|error| error.map_rejection(Error::from))?;
         let instance = global_instance(prepared)?;
-        for receipt in chain.walk(proof.floor_height(), proof.applied_height()) {
+        // Keep the original walk and its receipt owners in one stack slot.
+        let mut walk = chain.walk(proof.floor_height(), proof.applied_height());
+        for receipt in &mut walk {
             prepared.round.ensure_live().map_err(Error::from)?;
-            let receipt = receipt.map_err(|error| error.map_rejection(Error::from))?;
+            let receipt = match receipt {
+                Ok(receipt) => receipt,
+                Err(error) => return Err(error.map_rejection(Error::from)),
+            };
             let block = receipt.in_view(view).map_err(Error::from)?;
             if block.height() >= 2
                 && block
@@ -404,6 +417,7 @@ fn authenticate<'view, 'state, 'bound>(
                 .consume(&receipt)
                 .map_err(|error| error.map_rejection(Error::from))?;
         }
+        drop(walk);
         current_row(view, &prepared.instruction)?;
         proof
             .finish()

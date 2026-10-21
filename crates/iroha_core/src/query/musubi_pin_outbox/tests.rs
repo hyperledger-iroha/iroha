@@ -445,6 +445,18 @@ fn original_floor_and_global_network_chain_are_independently_required() {
 
 #[test]
 fn completed_proof_retains_exact_original_backing_without_a_second_allocation() {
+    // Pin the ordinary Rust worker stack so RUST_MIN_STACK cannot hide regressions
+    // in preparation, certified history decoding or the final current-row proof.
+    std::thread::Builder::new()
+        .name("musubi-proof-default-stack".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(completed_proof_retains_original_backing)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn completed_proof_retains_original_backing() {
     let mut f = Fixture::new();
     let pending = f.applied();
     let original = exact(&pending);
@@ -459,9 +471,12 @@ fn completed_proof_retains_exact_original_backing_without_a_second_allocation() 
     )
     .unwrap();
     let reader = SignerCertifiedWalkV1::new(&view).unwrap();
-    for receipt in reader.walk(proof.floor_height(), proof.applied_height()) {
+    // Retain one iterator owner, as the production proof path does.
+    let mut walk = reader.walk(proof.floor_height(), proof.applied_height());
+    for receipt in &mut walk {
         proof.consume(&receipt.unwrap()).unwrap();
     }
+    drop(walk);
     let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
     let cut = match norito::with_decode_limits_scope(zero, || proof.finish()) {
         Ok(success) => success,
