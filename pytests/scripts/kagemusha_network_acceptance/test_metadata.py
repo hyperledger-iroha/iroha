@@ -23,7 +23,7 @@ class MetadataAdmissionTests(unittest.TestCase):
             path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);self.paths.add(path)
             if raw is not None:path.write_bytes(raw)
             administration[name]=None if raw is None else c.sha(path)
-        self.before={'head':'12'*20,'branch':'optimizations','unmerged':[],'read_failures':{},
+        self.before={'head':'12'*20,'branch':'optimizations','unmerged':[],'merge_head':False,'read_failures':{},
                      'files':{},'links':{},'dependencies':{},'administration':administration}
         self.after=copy.deepcopy(self.before)
 
@@ -32,6 +32,14 @@ class MetadataAdmissionTests(unittest.TestCase):
         c.bind_watches(self.paths,self.before,self.after)
 
     def test_exact_original_values_join_passes(self):self.admit()
+
+    def test_merge_absence_is_explicit_not_a_legacy_default(self):
+        for value in (True, None, 0, '', 'false', []):
+            with self.subTest(value=value):
+                self.after=copy.deepcopy(self.before);self.after['merge_head']=value
+                with self.assertRaisesRegex(ValueError,'unresolved'):self.admit()
+        self.after=copy.deepcopy(self.before);del self.after['merge_head']
+        with self.assertRaisesRegex(ValueError,'inventory'):self.admit()
 
     def test_capture_commit_and_branch_substitution_refuse(self):
         for field,value in [('head','34'*20),('branch','foreign')]:

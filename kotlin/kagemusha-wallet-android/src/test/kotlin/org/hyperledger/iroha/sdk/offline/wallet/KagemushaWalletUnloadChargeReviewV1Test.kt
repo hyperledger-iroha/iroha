@@ -16,7 +16,7 @@ class KagemushaWalletUnloadChargeReviewV1Test {
         assertContentEquals(byteArrayOf(0, 16, 0, 0), frame.copyOfRange(10_012, 10_016))
         certificates.fill(0); beneficiary.fill(0)
         KagemushaWalletUnloadChargeReviewV1.validate(frame)
-        val input = KagemushaWalletReviewInputV1(8, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), frame)
+        val input = KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 8, KagemushaWalletReviewExpectationV1.Fresh, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), frame)
         frame.fill(0)
         assertContentEquals(ByteArray(10_000) { 7 }, input.second().copyOfRange(12, 10_012))
         assertContentEquals(ByteArray(4_096) { 8 }, input.second().copyOfRange(10_016, 14_112))

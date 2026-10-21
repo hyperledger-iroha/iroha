@@ -14,7 +14,8 @@ storage using that build's host sha2 rlib; no Cargo build or download is run.
 RUSTC, when set, selects the same compiler used for the native build.
 """
 from pathlib import Path
-import argparse, ast, hashlib, json, os, re, shlex, subprocess, tarfile, tempfile
+from subprocess import CalledProcessError
+import argparse, ast, hashlib, json, locale, os, re, shlex, subprocess, sys, tarfile, tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / 'scripts/native_source_snapshot.rs'
@@ -274,12 +275,25 @@ def actual_snapshot(tool):
             or Path(record['helperPath']).resolve(strict=True) != HELPER
             or Path(record['driverPath']).resolve(strict=True) != DRIVER):
         raise ValueError('Snapshot diagnostic driver must be rebuilt from the current maintained helper')
-    result = subprocess.run([str(tool), str(ROOT)], cwd=ROOT, capture_output=True, text=True, check=True)
-    lines = result.stdout.splitlines()
-    if not lines or not re.fullmatch('digest=[0-9a-f]{64}', lines[0]):
-        raise ValueError('Unexpected actual snapshot output')
-    watched = {Path(line.removeprefix('watch=')).resolve() for line in lines[1:] if line.startswith('watch=')}
-    return lines[0].removeprefix('digest='), watched
+    # Retain exact bytes even when the evaluator refuses or emits malformed text.
+    # The caller's existing stderr capture keeps these diagnostics on Python 3.10+;
+    # no retry, replacement census or successful result is produced after refusal.
+    result = subprocess.run([str(tool), str(ROOT)], cwd=ROOT, capture_output=True)
+    try:
+        # A nonzero exit takes precedence over decoding its diagnostic streams.
+        result.check_returncode()
+        encoding = locale.getpreferredencoding(False)
+        lines = result.stdout.decode(encoding).splitlines()
+        result.stderr.decode(encoding)  # Keep the previous strict text-stream validation.
+        if not lines or not re.fullmatch('digest=[0-9a-f]{64}', lines[0]):
+            raise ValueError('Unexpected actual snapshot output')
+        watched = {Path(line.removeprefix('watch=')).resolve() for line in lines[1:] if line.startswith('watch=')}
+        return lines[0].removeprefix('digest='), watched
+    except (CalledProcessError, ValueError, OSError, RuntimeError):
+        print(f'Snapshot evaluator refusal diagnostics:\n'
+              f'command={result.args!r}\nreturncode={result.returncode}\n'
+              f'stdout_bytes={result.stdout!r}\nstderr_bytes={result.stderr!r}', file=sys.stderr)
+        raise
 
 
 def build_snapshot_tool(directory, events):

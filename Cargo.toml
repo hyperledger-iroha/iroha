@@ -255,7 +255,6 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(feature, values("cuda-stage1"))',
     'cfg(feature, values("gpu-compression"))',
     'cfg(feature, values("iroha-core-tests"))',
-    'cfg(feature, values("halo2-dev-tests"))',
     'cfg(feature, values("json"))',
     'cfg(feature, values("json-std-io"))',
     'cfg(feature, values("local-quic-proxy"))',

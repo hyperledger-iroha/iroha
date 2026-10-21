@@ -10,7 +10,7 @@ import org.hyperledger.iroha.sdk.core.model.instructions.RegisterZkAssetInstruct
 class NativeSignerBridge private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 31
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 32
         const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 7
         private const val HASH_BYTES = 32
         private val nativeAvailable: Boolean = loadLibrary()
@@ -33,7 +33,7 @@ class NativeSignerBridge private constructor() {
 
         @JvmStatic private external fun nativeInspectDetachedTransactionScaffold(scaffold: ByteArray): ByteArray?
 
-        /** Admit a complete canonical account controller through the ABI-31 Rust owner. */
+        /** Admit a complete canonical account controller through the ABI-32 Rust owner. */
         @JvmStatic
         internal fun validateAccountAddressCanonical(canonical: ByteArray) {
             require(canonical.size in 1..64 * 1024 * 1024) { "canonical account address exceeds the JNI input bound" }

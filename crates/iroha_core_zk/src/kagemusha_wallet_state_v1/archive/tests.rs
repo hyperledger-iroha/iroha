@@ -71,6 +71,46 @@ fn prepared() -> (SimFs, Dir, FsArchive<SimFs>) {
     (fs, dir, archive)
 }
 
+#[test]
+fn zero_payload_draft_probe_distinguishes_absence_from_every_present_or_failed_read() {
+    let (fs, directory, mut archive) = prepared();
+    let absent = ArchiveKey::PreparationDraft([90; 32]);
+    assert!(archive.get(absent, 0).unwrap().is_none());
+    for (id, payload) in [(91, Vec::new()), (92, vec![1]), (93, vec![0; 4096])] {
+        let key = ArchiveKey::PreparationDraft([id; 32]);
+        archive.put(key, &payload).unwrap();
+        if payload.is_empty() {
+            assert_eq!(archive.get(key, 0).unwrap().unwrap().as_slice(), &[]);
+        } else {
+            assert!(archive.get(key, 0).is_err());
+        }
+        assert_eq!(
+            archive.get(key, payload.len()).unwrap().unwrap().as_slice(),
+            payload
+        );
+    }
+    let malformed = ArchiveKey::PreparationDraft([94; 32]);
+    replace(
+        &fs,
+        &directory,
+        &malformed.name(),
+        b"not an archive envelope",
+    );
+    replace(
+        &fs,
+        &directory,
+        &format!("{}.r", malformed.name()),
+        b"not an archive envelope",
+    );
+    assert!(matches!(
+        archive.get(malformed, 0),
+        Err(Error::WitnessLost(_))
+    ));
+    fs.inject(fs.steps(), Fault::Error);
+    assert!(matches!(archive.get(absent, 0), Err(Error::Storage(_))));
+    assert!(archive.get(absent, 0).unwrap().is_none());
+}
+
 fn replace(fs: &SimFs, directory: &Dir, name: &str, original: &[u8]) {
     let staged = fs.staging_name().expect("staging name");
     let mut file = fs.create_new(directory, &staged).unwrap();

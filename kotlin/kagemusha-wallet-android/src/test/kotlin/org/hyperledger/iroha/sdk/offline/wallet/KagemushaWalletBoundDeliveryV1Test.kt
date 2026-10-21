@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test
 /** Intake shape only. No local object or test original establishes a Native delivery. */
 class KagemushaWalletBoundDeliveryV1Test {
     @Test fun boundReceiptRequiresSendIdentityAndExactBoundedOriginal() {
-        for (selector in listOf(41, 42)) {
+        for (selector in listOf(56, 42)) {
             val id = ByteArray(32) { 7 }; val receipt = ByteArray(10_000) { 5 }
             val input = KagemushaWalletSetupInputV1(selector, identity = id, first = receipt)
             id[0] = 8; receipt[0] = 9

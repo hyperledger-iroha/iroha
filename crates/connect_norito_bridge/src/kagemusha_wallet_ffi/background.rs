@@ -1,16 +1,17 @@
-//! One bounded native fold worker per opaque wallet, with cooperative payment priority.
+//! One bounded maintenance worker per opaque wallet, with Core-owned admission.
 //!
-//! Each turn prepares one sub-proof under the wallet owner, proves it without the owner and
-//! publishes it under the owner again. While it proves, ingests and status reads take the
-//! owner; a payment cancels the proof through the scheduler before it takes the owner. The
-//! backlog comes from each turn's own result, never from a snapshot: it is a scheduling hint
-//! that only decides whether an activity update wakes the worker.
+//! Recovery, receipt verification, one eligible fold sub-proof and one exact Archive
+//! attempt share this worker. It parks without custody or proof priority. Coalesced events
+//! and relative timer hints select another source read; they never grant admission.
 
 use super::*;
 mod observation;
+mod runner;
 pub(crate) use observation::FoldBridgeTurnV1;
+use runner::worker;
 use std::sync::{Condvar, Weak};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 struct Control {
@@ -19,6 +20,8 @@ struct Control {
     started: bool,
     running: bool,
     wake: bool,
+    deadline: Option<Instant>,
+    pending_attempts: u32,
     payments: usize,
     // Backlog of the last finished turn; `None` when unknown. A hint, never readiness.
     backlog: Option<u128>,
@@ -38,13 +41,22 @@ impl Inner {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
-    fn wake(&self) {
+    fn notify(&self) {
+        let mut state = self.lock();
+        if !state.stopped {
+            state.wake = true;
+            self.ready.notify_all();
+        }
+    }
+    fn retry(&self) {
         let mut state = self.lock();
         if state.error.is_some_and(|(_, observed)| observed) {
             state.error = None;
         }
-        state.wake = true;
-        self.ready.notify_all();
+        if !state.stopped {
+            state.wake = true;
+            self.ready.notify_all();
+        }
     }
 }
 impl state::FoldObserverV1 for Inner {
@@ -80,9 +92,19 @@ fn peak_rss_bytes() -> Option<u64> {
     None
 }
 #[derive(Default)]
+enum WorkerJoin {
+    #[default]
+    NeverStarted,
+    Running(JoinHandle<()>),
+    Joining,
+    Joined,
+    Failed(Failure),
+}
+#[derive(Default)]
 pub(super) struct Background {
     inner: Arc<Inner>,
-    join: Mutex<Option<JoinHandle<()>>>,
+    join: Mutex<WorkerJoin>,
+    join_ready: Condvar,
 }
 impl Background {
     /// A background that keeps the fold telemetry its owner's scheduler reports.
@@ -91,61 +113,75 @@ impl Background {
         scheduler.observe(background.inner.clone());
         background
     }
-    pub(super) fn activity(&self, owner: &Arc<Owner>, enabled: bool) -> Result<()> {
-        self.activity_with(owner, enabled, |task| {
+    /// Ensure exactly one worker and discover retained work even while inactive.
+    pub(super) fn start(&self, owner: &Arc<Owner>) -> Result<()> {
+        self.start_with(owner, |task| {
             thread::Builder::new()
-                .name("kagemusha-fold".into())
+                .name("kagemusha-maintenance".into())
                 .spawn(task)
         })
     }
-    fn activity_with(
+    fn start_with(
         &self,
         owner: &Arc<Owner>,
-        enabled: bool,
         spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<JoinHandle<()>>,
     ) -> Result<()> {
+        owner.closing.require_open()?;
         // Serialize spawn with close, but never hold this mutex during a join.
         let mut join = self.join.lock().map_err(|_| Failure::code(INTERNAL))?;
-        let wake = {
+        {
             let mut state = self.inner.lock();
             if state.stopped {
                 return Err(Failure::code(CLOSED));
             }
-            // Wake only when a turn can find work: a new worker, eligibility appearing, an
-            // unknown or non-zero backlog, or an error a retry may clear. Leaving activity
-            // needs no wake; the scheduler has already cancelled any running sub-proof.
-            let wake = enabled
-                && (join.is_none()
-                    || !state.enabled
-                    || state.backlog != Some(0)
-                    || state.error.is_some());
-            state.enabled = enabled;
-            if enabled && join.is_none() {
-                state.started = true;
+            match &*join {
+                WorkerJoin::NeverStarted => {}
+                WorkerJoin::Running(_) => return Ok(()),
+                WorkerJoin::Joining | WorkerJoin::Joined => return Err(Failure::code(CLOSED)),
+                WorkerJoin::Failed(error) => return Err(*error),
             }
-            wake
-        };
-        if enabled && join.is_none() {
-            let weak = Arc::downgrade(owner);
-            let inner = self.inner.clone();
-            match spawn(Box::new(move || worker(weak, inner))) {
-                Ok(handle) => *join = Some(handle),
-                Err(_) => {
-                    let mut state = self.inner.lock();
-                    state.started = false;
-                    state.enabled = false;
-                    return Err(Failure::code(RESOURCE));
-                }
+            state.started = true;
+            state.wake = true;
+        }
+        let weak = Arc::downgrade(owner);
+        let inner = self.inner.clone();
+        match spawn(Box::new(move || worker(weak, inner))) {
+            Ok(handle) => {
+                *join = WorkerJoin::Running(handle);
+                Ok(())
+            }
+            Err(_) => {
+                self.inner.lock().started = false;
+                Err(Failure::code(RESOURCE))
             }
         }
-        if wake {
-            self.inner.wake();
+    }
+    /// Publish fold-eligibility telemetry; Core separately owns actual charging admission.
+    pub(super) fn activity(&self, owner: &Arc<Owner>, enabled: bool) -> Result<()> {
+        {
+            let mut control = self.inner.lock();
+            if control.stopped {
+                return Err(Failure::code(CLOSED));
+            }
+            control.enabled = enabled;
+            control.wake = true;
+            self.inner.ready.notify_all();
+        }
+        if let Err(error) = self.start(owner) {
+            self.inner.lock().enabled = false;
+            return Err(error);
         }
         Ok(())
     }
-    /// Resume the worker after a speculative σ_send released the scheduler's slot.
-    pub(super) fn wake(&self) {
-        self.inner.wake();
+    /// Internal/event notifications never acknowledge or clear a sticky failure.
+    pub(super) fn notify(&self) {
+        self.inner.notify();
+    }
+    /// A subsequent external request retries once; an unobserved failure remains visible.
+    pub(super) fn retry(&self, owner: &Arc<Owner>) -> Result<()> {
+        owner.closing.require_open()?;
+        self.inner.retry();
+        self.start(owner)
     }
     pub(super) fn stop(&self) {
         let mut state = self.inner.lock();
@@ -154,15 +190,52 @@ impl Background {
         self.inner.ready.notify_all();
     }
     pub(super) fn join(&self) -> Result<()> {
-        let thread = self
-            .join
-            .lock()
-            .map_err(|_| Failure::code(INTERNAL))?
-            .take();
-        if let Some(thread) = thread {
-            thread.join().map_err(|_| Failure::code(INTERNAL))?;
-        }
-        Ok(())
+        let mut state = self.join.lock().map_err(|_| Failure::code(INTERNAL))?;
+        let handle = loop {
+            match &*state {
+                WorkerJoin::NeverStarted | WorkerJoin::Joined => {
+                    *state = WorkerJoin::Joined;
+                    return Ok(());
+                }
+                WorkerJoin::Failed(error) => return Err(*error),
+                WorkerJoin::Joining => {
+                    state = self
+                        .join_ready
+                        .wait(state)
+                        .map_err(|_| Failure::code(INTERNAL))?;
+                }
+                WorkerJoin::Running(_) => {
+                    let WorkerJoin::Running(handle) =
+                        std::mem::replace(&mut *state, WorkerJoin::Joining)
+                    else {
+                        unreachable!("running worker owns its join handle");
+                    };
+                    break handle;
+                }
+            }
+        };
+        self.join_ready.notify_all();
+        drop(state);
+        // Consuming the handle is not a successful join. Keep concurrent callers waiting,
+        // and latch any panic before releasing its payload or allowing a close retry.
+        let joined = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle.join()));
+        let result = if matches!(&joined, Ok(Ok(()))) {
+            Ok(())
+        } else {
+            Err(Failure::code(INTERNAL))
+        };
+        let (mut state, result) = match self.join.lock() {
+            Ok(state) => (state, result),
+            Err(poisoned) => (poisoned.into_inner(), Err(Failure::code(INTERNAL))),
+        };
+        *state = match result {
+            Ok(()) => WorkerJoin::Joined,
+            Err(error) => WorkerJoin::Failed(error),
+        };
+        self.join_ready.notify_all();
+        drop(state);
+        drop(joined);
+        result
     }
     pub(super) fn payment<'a>(
         &'a self,
@@ -176,23 +249,18 @@ impl Background {
             background: self,
         }
     }
-    /// Take an explicit fold call's result as this owner's latest turn. A background turn
-    /// that started while that call held the scheduler slot ended idle without reading the
-    /// manifest and nothing else wakes it, so a checkpoint, a folded head or a failure
-    /// resumes the worker; a caught-up or idle result only keeps its backlog.
+    /// Keep fold telemetry from the explicit result and notify source discovery after its
+    /// fence. Even a caught-up result can release a previously observed Archive-fold wait.
+    /// The internal worker does not call this external notification wrapper.
     pub(super) fn after_explicit_fold(&self, result: &Result<Response>) {
-        let resume = if let Some(Ok((kind, backlog))) = result.as_ref().ok().map(finished) {
+        if let Some(Ok((_, backlog))) = result.as_ref().ok().map(finished) {
             if let Some(backlog) = backlog {
                 self.inner.lock().backlog = Some(backlog);
             }
-            matches!(kind, 8 | 9)
         } else {
             self.inner.lock().backlog = None;
-            true
-        };
-        if resume {
-            self.inner.wake();
         }
+        self.inner.notify();
     }
     /// Record a finished execution/speculation observation without scheduling work.
     pub(super) fn record_native_work(&self, record: state::NativeWorkRecordV1) {
@@ -235,7 +303,7 @@ impl Drop for Payment<'_> {
         // Release core payment priority before notifying the parked runner.
         drop(self.priority.take());
         self.background.inner.lock().payments -= 1;
-        self.background.inner.wake();
+        self.background.inner.notify();
     }
 }
 impl Drop for Background {
@@ -243,105 +311,17 @@ impl Drop for Background {
         self.stop();
         // Explicit close joins. Defensive destruction cannot join its own worker when
         // its temporary upgrade happens to be the final owner reference.
-        let handle = self
+        let join = self
             .join
             .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(handle) = handle
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let WorkerJoin::Running(handle) = std::mem::replace(join, WorkerJoin::Joined)
             && handle.thread().id() != thread::current().id()
         {
             let _ = handle.join();
         }
     }
 }
-fn worker(owner: Weak<Owner>, inner: Arc<Inner>) {
-    loop {
-        {
-            let mut state = inner.lock();
-            while !(state.stopped
-                || state.enabled && state.wake && state.payments == 0 && state.error.is_none())
-            {
-                state = inner
-                    .ready
-                    .wait(state)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-            }
-            if state.stopped {
-                return;
-            }
-            state.wake = false;
-            state.running = true;
-        }
-        let Some(owner) = owner.upgrade() else {
-            return;
-        };
-        let observation = FoldBridgeTurnV1::of(&owner.background);
-        let result = run(|| {
-            let proof = {
-                let mut wallet = {
-                    let _timer = state::NativeBridgeTimerV1::start(
-                        state::NativeBridgePhaseV1::WalletLockWait,
-                    );
-                    owner.wallet.lock().map_err(|_| Failure::code(INTERNAL))?
-                };
-                let wallet = wallet.as_deref_mut().ok_or(Failure::code(CLOSED))?;
-                // A payment can arrive while this worker waits for the wallet mutex.
-                // The core prepare also checks its own payment guard and exact cancellation token.
-                {
-                    let state = inner.lock();
-                    if state.stopped || !state.enabled || state.payments != 0 {
-                        return Ok((6, None));
-                    }
-                }
-                // Each owner acquisition is one archive call, published before its release.
-                match archive_call(wallet, |wallet| wallet.fold())? {
-                    ControlFlow::Break(response) => return finished(&response),
-                    ControlFlow::Continue(proof) => proof,
-                }
-            };
-            // The owner is free while this sub-proof proves. The proof releases its scheduler
-            // slot before this worker takes the owner again to publish.
-            let publication = proof()?;
-            let mut wallet = {
-                let _timer =
-                    state::NativeBridgeTimerV1::start(state::NativeBridgePhaseV1::WalletLockWait);
-                owner.wallet.lock().map_err(|_| Failure::code(INTERNAL))?
-            };
-            let wallet = wallet.as_deref_mut().ok_or(Failure::code(CLOSED))?;
-            finished(&archive_call(wallet, publication)?)
-        });
-        observation.finish(result.is_ok());
-        drop(owner); // Never keep custody alive while parked on the condition variable.
-        let mut state = inner.lock();
-        state.running = false;
-        match result {
-            Ok((kind, backlog)) => {
-                if let Some(backlog) = backlog {
-                    state.backlog = Some(backlog);
-                }
-                if matches!(kind, 8 | 9) {
-                    state.wake = true;
-                }
-            }
-            Err(error) => {
-                // A turn that did not finish leaves the backlog unknown, so the next activity
-                // update wakes the worker again.
-                state.backlog = None;
-                if error.status == CANCELLED {
-                    // A cancelled sub-proof waits for its eligibility and payment gates as
-                    // before. A proof discarded at publication has no other waker: resume
-                    // from durable state.
-                    state.wake = true;
-                } else {
-                    state.error = Some((error, false));
-                }
-            }
-        }
-        inner.ready.notify_all();
-    }
-}
-
 /// Check one fold response and take the backlog of the manifest its turn ended on: none for
 /// an idle turn, none or zero when caught up (none before Bootstrap), at least one after a
 /// checkpoint and any count after a folded head.

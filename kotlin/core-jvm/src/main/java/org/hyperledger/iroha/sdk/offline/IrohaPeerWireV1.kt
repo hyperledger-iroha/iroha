@@ -605,7 +605,7 @@ object IrohaPeerKagemushaWalletAdapterV1 {
 
     /**
      * Exact payer companion DATA a Payment carries; hand it unchanged with the extracted Payment to
-     * `KagemushaWalletV1.receiveWithCompanion`, which checks it against the Payment.
+     * `KagemushaWalletExchangeCallV1.receiveWithCompanion`, which checks it against the Payment.
      */
     @JvmStatic fun payerCompanion(message: IrohaPeerWireMessageV1): ByteArray {
         require(message.canonicalPayload.profile == IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1 &&

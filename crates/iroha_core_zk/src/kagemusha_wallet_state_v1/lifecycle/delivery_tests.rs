@@ -206,7 +206,7 @@ fn bound_delivery_query_and_exact_retry_survive_collected_send_and_lost_app_ack(
             RequestStatusV1::Outcome(Completion::Complete(original.clone()))
         );
         assert_eq!(
-            wallet.accept_credited_for_send(&send, &credited).unwrap(),
+            lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
             Completion::Complete(original.clone())
         );
     }
@@ -223,14 +223,10 @@ fn bound_delivery_foreign_request_and_unavailable_custody_never_mean_complete_or
             .credited_status_for_send(&[82; 32], &credited)
             .is_err()
     );
-    assert!(
-        wallet
-            .accept_credited_for_send(&[82; 32], &credited)
-            .is_err()
-    );
+    assert!(lifecycle::fixture_archive_attempt(&mut wallet, &[82; 32], &credited).is_err());
     wallet.custody.unavailable = true;
     assert!(wallet.credited_status_for_send(&send, &credited).is_err());
-    assert!(wallet.accept_credited_for_send(&send, &credited).is_err());
+    assert!(lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).is_err());
     assert_eq!(wallet.custody.signatures, 0);
 }
 
@@ -245,7 +241,7 @@ fn bound_delivery_after_send_pruning_rejects_changed_private_tombstone() {
         .unwrap()
         .capsule_digest[0] ^= 1;
     assert!(wallet.credited_status_for_send(&send, &credited).is_err());
-    assert!(wallet.accept_credited_for_send(&send, &credited).is_err());
+    assert!(lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).is_err());
     assert_eq!(wallet.custody.signatures, 0);
     assert_eq!(wallet.proofs.preparation_proofs.load(Ordering::SeqCst), 0);
 }
@@ -261,7 +257,7 @@ fn bound_delivery_after_send_pruning_rejects_mismatched_archive_completion_pair(
             retained.record.capsule_digest[0] ^= 1;
         }
         assert!(wallet.credited_status_for_send(&send, &credited).is_err());
-        assert!(wallet.accept_credited_for_send(&send, &credited).is_err());
+        assert!(lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).is_err());
         assert_eq!(wallet.custody.signatures, 0);
         assert_eq!(wallet.proofs.preparation_proofs.load(Ordering::SeqCst), 0);
     }
@@ -281,7 +277,7 @@ fn delivery_read_refusal_preserves_collected_send_and_exact_retry_without_signin
         assert!(matches!(status, Err(Error::DecodeResource(ref cause))
             if cause.kind() == norito::core::DecodeLocalRefusalKind::EnclosingLimit));
         let retry = norito::with_decode_limits_scope(limits, || {
-            wallet.accept_credited_for_send(&send, &credited)
+            lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited)
         });
         assert!(matches!(retry, Err(Error::DecodeResource(ref cause))
             if cause.kind() == norito::core::DecodeLocalRefusalKind::EnclosingLimit));
@@ -291,7 +287,7 @@ fn delivery_read_refusal_preserves_collected_send_and_exact_retry_without_signin
             RequestStatusV1::Outcome(Completion::Complete(original.clone()))
         );
         assert_eq!(
-            wallet.accept_credited_for_send(&send, &credited).unwrap(),
+            lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
             Completion::Complete(original.clone())
         );
     }

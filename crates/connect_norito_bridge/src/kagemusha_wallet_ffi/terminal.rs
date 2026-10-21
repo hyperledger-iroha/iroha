@@ -15,8 +15,13 @@ pub(super) fn is_terminal_input(input: &setup::Setup) -> bool {
     )
 }
 
-pub(super) fn dispatch(id: u64, input: setup::Setup) -> Result<Response> {
-    let owner = owner(id)?;
+pub(super) fn dispatch(
+    invocation: &exchange::Invocation,
+    input: setup::Setup,
+    delivery: &mut review::CapabilityDelivery,
+) -> Result<Response> {
+    invocation.validate()?;
+    let owner = invocation.owner();
     // Cancel/join proof work before locking custody. This remains callable after an uncertain
     // destructive attempt solely so the same actual provider can reconcile its outcome.
     let _priority = owner
@@ -26,54 +31,11 @@ pub(super) fn dispatch(id: u64, input: setup::Setup) -> Result<Response> {
     owner.closing.require_open()?;
     // Deleting custody discards the open call's staged records with the slot.
     let wallet = guard.as_deref_mut().ok_or(Failure::code(CLOSED))?;
-    archive_call(wallet, |wallet| wallet.setup(input))
-}
-
-/// Carries only a newly issued unused destructive review across foreign response delivery.
-/// Failure drops that review; it never reverts an attempted or completed deletion.
-pub(crate) struct ReviewDelivery {
-    retained: Option<(u64, u64)>,
-}
-impl ReviewDelivery {
-    pub(crate) fn new(handle: u64, selector: u32, result: &Result<Response>) -> Self {
-        let retained = match result {
-            Ok(value)
-                if selector == 48
-                    && value.kind == 53
-                    && value.sequence > 0
-                    && value.sequence <= i64::MAX as u128 =>
-            {
-                Some((handle, value.sequence as u64))
-            }
-            _ => None,
-        };
-        Self { retained }
-    }
-    pub(crate) fn delivered(&mut self) {
-        self.retained = None;
-    }
-}
-impl Drop for ReviewDelivery {
-    fn drop(&mut self) {
-        if let Some((handle, token)) = self.retained.take() {
-            let _ = run(|| dispatch(handle, setup::Setup::DiscardCustodyDeletion { token }));
-        }
-    }
-}
-/// JNI's null result is a delivery refusal (allocation, class lookup or constructor failure).
-/// The emitter reports that exact outcome without requiring a JNI call during cleanup.
-pub(crate) fn deliver<T>(
-    handle: u64,
-    selector: u32,
-    result: Result<Response>,
-    emit: impl FnOnce(Result<Response>) -> (T, bool),
-) -> T {
-    let mut pending = ReviewDelivery::new(handle, selector, &result);
-    let (value, delivered) = emit(result);
-    if delivered {
-        pending.delivered();
-    }
-    value
+    archive_call(wallet, |wallet| {
+        let response = wallet.setup(invocation.origin(), input)?;
+        delivery.issued(invocation, &response);
+        Ok(response)
+    })
 }
 
 fn projection(value: &state::CustodyDeletionReviewV1) -> Result<Vec<u8>> {
@@ -129,11 +91,13 @@ fn progress(value: state::CustodyDeletionProgressV1) -> Response {
     }
 }
 impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWallet<P, S> {
-    pub(super) fn review_deletion(&mut self) -> Result<Response> {
+    pub(super) fn review_deletion(&mut self, exchange_id: u64) -> Result<Response> {
         self.deletion_reviews.capacity()?;
         let review = self.wallet.review_custody_deletion()?;
         let bytes = projection(review.projection())?;
-        let token = self.deletion_reviews.put(review)?;
+        let token = self
+            .deletion_reviews
+            .put(review::OriginBound::new(exchange_id, review))?;
         Ok(Response {
             kind: 53,
             sequence: token.into(),
@@ -141,10 +105,10 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
             ..Response::default()
         })
     }
-    pub(super) fn confirm_deletion(&mut self, token: u64) -> Result<Response> {
+    pub(super) fn confirm_deletion(&mut self, exchange_id: u64, token: u64) -> Result<Response> {
         // Wrong owner/purpose tokens are rejected without consuming that owner's other review.
         // The genuine token is consumed even if the subsequent current-state check refuses it.
-        let review = self.deletion_reviews.take(token)?;
+        let review = self.deletion_reviews.take_bound(token, exchange_id)?;
         self.times.clear();
         self.reviews.clear();
         self.deletion_reviews.clear();
@@ -153,8 +117,8 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
     pub(super) fn resume_deletion(&mut self) -> Result<Response> {
         Ok(progress(self.wallet.resume_custody_deletion()?))
     }
-    pub(super) fn discard_deletion(&mut self, token: u64) -> Result<Response> {
-        self.deletion_reviews.take(token)?;
+    pub(super) fn discard_deletion(&mut self, exchange_id: u64, token: u64) -> Result<Response> {
+        self.deletion_reviews.take_bound(token, exchange_id)?;
         Ok(Response {
             kind: 55,
             ..Response::default()

@@ -404,6 +404,9 @@ carry no live authorization, source-currentness or deadline verdict. A changed r
 inspection/reparse error clears the readers; the workspace ends before Finish returns. Standalone
 reads and inherited or late active decoders preserve their original validation recipe. The
 unchanged 64-body expiry test still requires successful native qualification.
+Eligible terminal wallet reads also share one closed journal inventory/read ancestry scope;
+fresh inventory, original-lock, leaf and decoder checks remain in their original order.
+The scope closes before purpose and expected Plan/fee comparisons, including on ordinary errors.
 After an exact successful local body publication, the inactive body owner consumes a private
 write receipt into a freshly admitted head. Receipts come only from the original native
 anchor, reservation, retirement, activation and signed-Original writers and their exact readback;
@@ -486,11 +489,19 @@ operation custody failure can supersede an ordinary inner error; a change restor
 inside a scope may be unobserved. Active or newly inherited decode budgets, unmatched owners and
 reads without a tree retain their original scope sequence. Full graph checks remain independent
 of wallet or write operations; no native freshness result survives the census.
+Within that admitted census, the two attempts-root inventories share a borrowed root reader.
+Each attempt keeps its own native suffix scope; reserved empty tails keep their original
+open, inventory and revalidation sequence. The root closes before operation metadata exit.
 For the exact immutable snapshot layout, the root inventory and its adjacent Original and
 anchor reads share one native scope. The external selection reference remains independently
 checked, and the enclosing tree still closes on every ordinary result. Active budgets and
 custom layouts keep their independent root checks; root changes restored entirely inside
 the combined scope may be unobserved.
+After those base and external-reference checks, the bodies-container inventory and ordered
+activation/unused records share one container scope under the same enrollment tree anchor.
+Every body retains its own suffix checks and Reserved metadata reads. The container closes
+on every ordinary result before the tree exit; persistent custody failure overrides an inner
+error. Active or late decoders and custom layouts retain their independent scopes.
 Within the complete read-only graph traversal, a separate borrowed capability covers only an
 exact body's immutable Original already checked by the enclosing snapshot entry and exit.
 Persistent source failure at exit supersedes any ordinary inner result; a change restored
@@ -714,6 +725,9 @@ and retains one operation deadline plus bounded per-peer tip retries. Every succ
 read still requires independent contiguous-chain and exact-committee verification.
 Authenticated bundle distribution, recurring signed checkpoint publication, fresh committee
 observation and combined dataspace provisioning remain required for remote qualification.
+Checkpoint retrieval failures identify the installed network and credential-free URL while
+preserving the original cause. HTTP 404 directs users to publication or routing at that exact
+location and retry of the same command; absent status does not imply absent retained work.
 Key rotation requires an authenticated
 migration of retained release custody, not a silent fresh store.
 

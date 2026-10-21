@@ -1141,11 +1141,16 @@ fn dataspace_failure(
         }
         if let Some(status) = status {
             print_dataspace_status(writer, status, false)?;
+            writeln!(
+                writer,
+                "Inspect the requested data space with these read-only actions:"
+            )?;
+        } else {
+            writeln!(
+                writer,
+                "If this context contains retained work, inspect it with these read-only actions:"
+            )?;
         }
-        writeln!(
-            writer,
-            "Inspect the requested dataspace with these action fields:"
-        )?;
         print_managed_action(writer, root, name, "dataspace", "status")?;
         print_managed_action(writer, root, name, "localnet", "logs")
     })();
@@ -1485,8 +1490,16 @@ mod tests {
                 Ok(())
             }
         }
-        for (json, dataspace) in [(false, false), (true, false), (false, true), (true, true)] {
-            let original = iroha_deploy::managed::Error::Timeout(Duration::from_secs(9));
+        for (json, dataspace, checkpoint) in [false, true].into_iter().flat_map(|json| {
+            [false, true].into_iter().flat_map(move |dataspace| {
+                [false, true].map(move |checkpoint| (json, dataspace, checkpoint))
+            })
+        }) {
+            let original = if checkpoint {
+                missing_checkpoint_error()
+            } else {
+                iroha_deploy::managed::Error::Timeout(Duration::from_secs(9))
+            };
             let error = if dataspace {
                 dataspace_failure(
                     &mut BrokenWriter,
@@ -1507,12 +1520,76 @@ mod tests {
                 )
             }
             .unwrap_err();
-            assert!(matches!(
-                error.downcast_ref::<iroha_deploy::managed::Error>(),
-                Some(iroha_deploy::managed::Error::Timeout(duration))
-                    if *duration == Duration::from_secs(9)
-            ));
+            if checkpoint {
+                assert!(matches!(
+                    error.downcast_ref::<managed::Error>(),
+                    Some(managed::Error::ParentCheckpoint { source, .. })
+                        if matches!(source.as_ref(), iroha_deploy::bootstrap::CheckpointReadError::Http(
+                            iroha::http::PublicHttpError::Status(404)
+                        ))
+                ));
+            } else {
+                assert!(matches!(
+                    error.downcast_ref::<iroha_deploy::managed::Error>(),
+                    Some(iroha_deploy::managed::Error::Timeout(duration))
+                        if *duration == Duration::from_secs(9)
+                ));
+            }
         }
+    }
+
+    fn missing_checkpoint_error() -> managed::Error {
+        let key = iroha_crypto::KeyPair::from_seed(vec![91; 32], iroha_crypto::Algorithm::Ed25519);
+        managed::Error::ParentCheckpoint {
+            profile: Box::new(
+                iroha_deploy::bootstrap::InstalledNetworkProfile::new(
+                    "taira".into(),
+                    key.public_key().clone(),
+                    1,
+                    "https://taira.sora.org/bootstrap/checkpoint.nrt",
+                )
+                .unwrap(),
+            ),
+            source: Box::new(iroha_deploy::bootstrap::CheckpointReadError::Http(
+                iroha::http::PublicHttpError::Status(404),
+            )),
+        }
+    }
+
+    #[test]
+    fn checkpoint_failure_without_status_keeps_conditional_recovery_and_original_cause() {
+        let root = Path::new("/workspace with spaces/state 'quoted'");
+        let mut output = Vec::new();
+        let error = dataspace_failure(
+            &mut output,
+            root,
+            "custom-local-name",
+            None,
+            false,
+            missing_checkpoint_error().into(),
+        )
+        .unwrap_err();
+        let human = String::from_utf8(output).unwrap();
+        assert!(human.contains("If this context contains retained work"));
+        assert!(!human.contains("Inspect the requested data space"));
+        assert!(human.contains("action: kagami dataspace status"));
+        assert!(human.contains("action: kagami localnet logs"));
+        assert!(human.contains("  name: custom-local-name"));
+        assert!(human.contains(&format!("--state (quoted path): {root:?}")));
+        assert!(matches!(
+            error.downcast_ref::<managed::Error>(),
+            Some(managed::Error::ParentCheckpoint { source, .. })
+                if matches!(source.as_ref(), iroha_deploy::bootstrap::CheckpointReadError::Http(
+                    iroha::http::PublicHttpError::Status(404)
+                ))
+        ));
+        assert!(error.to_string().contains("network `taira`"));
+        assert!(
+            error
+                .to_string()
+                .contains("https://taira.sora.org/bootstrap/checkpoint.nrt")
+        );
+        assert!(error.to_string().contains("retry the same command"));
     }
 
     #[test]
@@ -1792,21 +1869,39 @@ mod tests {
         // A ready child must remain distinguishable from the failed parent attachment in
         // recovery output, including when no retained attachment was published at all.
         let root = Path::new("/workspace with spaces/state 'quoted'");
-        for retained in [None, Some(&status)] {
+        for (retained, checkpoint) in [None, Some(&status)]
+            .into_iter()
+            .flat_map(|retained| [false, true].map(move |checkpoint| (retained, checkpoint)))
+        {
             let mut output = Vec::new();
+            let original: color_eyre::Report = if checkpoint {
+                missing_checkpoint_error().into()
+            } else {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, "original detail").into()
+            };
             let error = dataspace_failure(
                 &mut output,
                 root,
                 "custom-local-name",
                 retained,
                 true,
-                std::io::Error::new(std::io::ErrorKind::PermissionDenied, "original detail").into(),
+                original,
             )
             .unwrap_err();
-            assert_eq!(
-                error.downcast_ref::<std::io::Error>().unwrap().kind(),
-                std::io::ErrorKind::PermissionDenied
-            );
+            if checkpoint {
+                assert!(matches!(
+                    error.downcast_ref::<managed::Error>(),
+                    Some(managed::Error::ParentCheckpoint { source, .. })
+                        if matches!(source.as_ref(), iroha_deploy::bootstrap::CheckpointReadError::Http(
+                            iroha::http::PublicHttpError::Status(404)
+                        ))
+                ));
+            } else {
+                assert_eq!(
+                    error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                    std::io::ErrorKind::PermissionDenied
+                );
+            }
             let text = std::str::from_utf8(&output).unwrap();
             assert_eq!(text.lines().count(), 1);
             assert!(!text.contains("original detail"));

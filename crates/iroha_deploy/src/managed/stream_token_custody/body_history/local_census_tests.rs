@@ -498,7 +498,12 @@ fn graph_local_census_keeps_genuine_order_sources_and_reduces_actual_native_work
     let native = history.current_history().unwrap();
     let run = |original| native_work(|| observe(original, None, || graph_read(native)));
     let ((old, old_counts), old_work) = run(true);
-    let ((new, new_counts), new_work) = run(false);
+    let (((new, new_counts), new_work), attempts_roots) =
+        attempts_root_scope_tests::count_roots(|| run(false));
+    assert_eq!(
+        attempts_roots, 4,
+        "two populated predecessors in both graph directions"
+    );
     assert_eq!(old, new);
     assert!(new.result.is_ok());
     assert_eq!(new.visits, [6, 3, 6]);
@@ -542,7 +547,11 @@ fn graph_local_census_keeps_genuine_order_sources_and_reduces_actual_native_work
     );
     // Actual native counters, not inferred timing: two entry/exit trios plus standalone
     // validation used six observations; the same closed operation body now uses two.
-    assert_eq!(old_work.ancestry_walks, new_work.ancestry_walks + 4 * 6);
+    // Each actually visited populated attempts root independently removes four more walks.
+    assert_eq!(
+        old_work.ancestry_walks,
+        new_work.ancestry_walks + 4 * 6 + 4 * attempts_roots as u64
+    );
     assert!(old_work.ancestry_opens > new_work.ancestry_opens);
 
     // A genuine independent parse has different snapshot owners. A missing or foreign

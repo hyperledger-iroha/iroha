@@ -9,8 +9,9 @@ enum KagemushaMonetaryProbeManifest {
   // Optional bundles are represented as separate complete input sets; partial bundles fail.
   static let schemas: [String: [Set<String>]] = [
     "nearby-identity": [[]],
-    "nearby-prepare": [["setup-id", "offer"], ["setup-id", "offer", "fee-schedule", "fee-certificate"]],
-    "nearby-send": [["request-id", "session-id", "request-hash", "peer-certificate"]], "nearby-recover-send": [["request-id", "session-id", "request-hash", "peer-certificate"]],
+    "nearby-prepare": [["setup-id", "amount"], ["setup-id", "amount", "fee-schedule", "fee-certificate"]],
+    "nearby-send": [["request-id", "session-id", "request-hash", "peer-certificate"]],
+    "nearby-continue-send": [["request-id", "session-id", "request-hash", "peer-certificate"]], "nearby-recover-send": [["request-id", "session-id", "request-hash", "peer-certificate"]],
     "nearby-receive": [["request-id", "session-id", "request-hash", "peer-certificate", "setup-id"]], "nearby-recover-receive": [["request-id", "session-id", "request-hash", "peer-certificate", "setup-id"]],
     "open": [["result"]], "release-wallet": [[]], "bootstrap": [[]], "activation": [[]],
     "retain-activation": [["signed-wire"]], "activation-status": [["signed-wire"]],
@@ -18,14 +19,20 @@ enum KagemushaMonetaryProbeManifest {
     "prepare-load": [["request-id", "amount"]], "prepared-load": [["request-id"]],
     "load": [["request-id", "receipt", "finality"]], "ledger-finality": [["finality"]],
     "ledger-status": [[]], "epoch-boundary": [["epoch", "boundary"]], "epoch-status": [[]],
-    "offer": [["setup-id", "amount"]],
-    "request": [["setup-id", "offer"], ["setup-id", "offer", "fee-schedule", "fee-certificate"]],
+    "request": [["setup-id", "amount"], ["setup-id", "amount", "fee-schedule", "fee-certificate"]],
     "review-send": [["request-id", "request", "destination"]],
+    "continue-review-send": [["request-id", "request", "destination"]],
+    "continue-review-unload": [
+      ["request-id", "amount"], ["request-id", "amount", "quote", "certificates", "beneficiary"],
+    ],
+    "retry-reviewed": [[]],
     "review-unload": [
       ["request-id", "amount"], ["request-id", "amount", "quote", "certificates", "beneficiary"],
     ],
-    "decide-review": [["decision"]], "receive": [["request-id", "payment", "offer"]],
-    "credit": [["request-id"]], "accept-credited": [["request-id", "credited"]],
+    "decide-review": [["decision"]], "receive": [["request-id", "payment", "payer-companion"]],
+    "credit": [["request-id"]], "observe-credited": [["request-id", "credited"]],
+    "begin-exchange": [[]], "end-exchange": [[]], "discard-review": [[]],
+    "resume-deferred-receipt": [[]], "drain-deferred-archive": [[]],
     "credited-status": [["request-id", "credited"]], "fold-once": [[]], "fold-status": [[]],
     "snapshot": [[]], "request-status": [["request-id"]], "retry": [["operation-id"]],
     "resume": [[]], "released-request": [["request-id"]], "released-operation": [["operation-id"]],
@@ -33,7 +40,7 @@ enum KagemushaMonetaryProbeManifest {
     "unload-status": [["transaction-hash", "claim"]],
     "unload-finality": [["transaction-hash", "claim", "finality"]],
     "confirm-unload": [["transaction-hash", "claim"]],
-    "decode-offer": [["envelope"]], "decode-request": [["envelope"]],
+    "decode-request": [["envelope"]],
     "decode-payment": [["envelope"]], "decode-credited": [["envelope"]],
     "refresh-time": [["request-id", "anchor", "certificates"]],
     "begin-time": [[]], "finish-time": [["anchor", "certificate"]], "cancel-time": [[]],
@@ -59,7 +66,8 @@ enum KagemushaMonetaryProbeManifest {
     case "receipt", "fee-certificate", "anchor", "certificate": return 512
     case "fee-schedule", "quote": return 1024
     case "destination", "beneficiary": return 4096
-    case "offer", "request", "payment", "credited", "certificates", "envelope": return 10_000
+    case "payer-companion": return KagemushaWalletWireV1.payerCompanionMaximumBytes
+    case "request", "payment", "credited", "certificates", "envelope": return 10_000
     case "decision": return 4096
     default: throw EnrollmentProbeFailure.input
     }
@@ -86,6 +94,16 @@ enum KagemushaMonetaryProbeManifest {
     Data(
       ([kind] + inputs.keys.sorted().map { $0 + ":" + EnrollmentProbeFiles.digest(inputs[$0]!) })
         .joined(separator: "\n").utf8)
+  }
+  /// Admission classification only; full exact-review binding is checked by Decision below.
+  /// A cancellation remains cleanup after exchange end; malformed input never admits work.
+  static func reviewDecisionConfirms(_ bytes: Data) throws -> Bool {
+    guard let row = try PropertyListSerialization.propertyList(from: bytes, format: nil)
+      as? [String: Any],
+      Set(row.keys) == ["decision", "invocation", "reviewSequence", "reviewSHA256"],
+      let choice = row["decision"] as? String, ["confirm", "cancel"].contains(choice)
+    else { throw EnrollmentProbeFailure.input }
+    return choice == "confirm"
   }
   struct Decision {
     let confirmed: Bool
@@ -186,5 +204,64 @@ enum EnrollmentProbeFailureMetadata {
       return ["confirmationFailure": "localAuthentication", "confirmationCode": ns.code]
     }
     return [:]
+  }
+}
+
+/// Diagnostic approval lifetime only. No phase is Native absence or monetary permission.
+struct KagemushaProbeReviewApproval {
+  enum Phase { case awaitingConfirmation, fenced, executing, approvedLiveRetained, finished }
+  private(set) var phase = Phase.awaitingConfirmation
+  mutating func acknowledgedFence() throws {
+    guard phase == .awaitingConfirmation else { throw EnrollmentProbeFailure.lifecycle }
+    phase = .fenced
+  }
+  mutating func dispatch(retry: Bool) throws {
+    guard phase == (retry ? .approvedLiveRetained : .fenced) else {
+      throw EnrollmentProbeFailure.lifecycle
+    }
+    phase = .executing
+  }
+  mutating func retained() throws {
+    guard phase == .executing else { throw EnrollmentProbeFailure.lifecycle }
+    phase = .approvedLiveRetained
+  }
+  mutating func finish() { phase = .finished }
+}
+
+/// Exact private diagnostic originals, separate from Native monetary custody. A hash cannot
+/// replace a missing original. Conditional attempts never create the missing old record.
+enum KagemushaProbeReviewCustody {
+  static func expectation(files: EnrollmentProbeFiles, actorPath: String, requestID: Data,
+    family: String, originals: [String: Data], continuation: Bool) throws -> KagemushaWalletReviewExpectationV1 {
+    let digest = EnrollmentProbeFiles.digest(requestID)
+    let root = actorPath + "/private/intents/executed-" + digest
+    let directory = actorPath + "/private/intents/review-originals-" + digest
+    var exact = originals
+    exact["request-id"] = requestID; exact["family"] = Data(family.utf8)
+    let names = Data(exact.keys.sorted().joined(separator: "\n").utf8)
+    if continuation {
+      guard try files.exists(root), try files.exists(directory + "/names"),
+        try files.read(directory + "/names", maximum: 1024) == names else {
+        throw EnrollmentProbeFailure.lifecycle
+      }
+      for name in exact.keys.sorted() {
+        guard let value = exact[name], try files.exists(directory + "/" + name),
+          try files.read(directory + "/" + name, maximum: max(1,value.count)) == value else {
+          throw EnrollmentProbeFailure.lifecycle
+        }
+      }
+      let original = try files.read(root, maximum: 4591)
+      // The one current full layout refuses old64-byte bodies, malformed and trailing bytes.
+      let projection = try KagemushaWalletReviewProjectionV1(original)
+      guard projection.kind == (family == "review-send" ? .send : .unload) else {
+        throw EnrollmentProbeFailure.lifecycle
+      }
+      return .originalUnstarted(original)
+    }
+    guard try !files.exists(root) else { throw EnrollmentProbeFailure.lifecycle }
+    try files.mkdir(directory)
+    for name in exact.keys.sorted() { try files.publish(directory + "/" + name, bytes: exact[name]!) }
+    try files.publish(directory + "/names", bytes: names)
+    return .fresh
   }
 }

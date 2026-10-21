@@ -1116,7 +1116,7 @@ fn finish_exchange(
     let (payment_bc, derivations) = derived(|| complete(b.execute(send_bc.clone()).unwrap()));
     assert_eq!(derivations, 2, "Send after a refused attempt");
     require_payment_bound(&payment_bc, &f.config.scheme.scheme_id());
-    assert_eq!(complete(b.execute(send_bc).unwrap()), payment_bc);
+    assert_eq!(complete(b.execute(send_bc.clone()).unwrap()), payment_bc);
     require_completed_send(&mut b, &request_bc, &payment_bc);
     let companion_bc = companion(&mut b, &payment_bc);
     // A companion is only ever the wallet's own: another wallet's Payment is refused.
@@ -1206,11 +1206,25 @@ fn finish_exchange(
     let credited_bc =
         norito::encode_canonical(&KagemushaWalletCreditedV1::from_status(status_bc).unwrap())
             .unwrap();
-    let (reopened_a, archived_ab) =
-        archive::exercise(a, &device_a, &sources, &f, &frames_a, &credited_ab);
+    let (reopened_a, archived_ab) = archive::exercise(
+        a,
+        &device_a,
+        &sources,
+        &f,
+        &frames_a,
+        &send_ab.request_id,
+        &credited_ab,
+    );
     a = reopened_a;
-    let (reopened_b, archived_bc) =
-        archive::exercise(b, &device_b, &sources, &f_b, &frames_b, &credited_bc);
+    let (reopened_b, archived_bc) = archive::exercise(
+        b,
+        &device_b,
+        &sources,
+        &f_b,
+        &frames_b,
+        &send_bc.request_id,
+        &credited_bc,
+    );
     b = reopened_b;
     finish_unload(
         output,
@@ -1359,8 +1373,60 @@ fn finish_unload(
         },
     );
     let unload_id = unload.request_id;
-    let (unloaded, derivations) = derived(|| complete(c.execute(unload.clone()).unwrap()));
+    let before_review = c.snapshot().unwrap();
+    let signatures_before_review = device_c.platform.with(|state| state.sign_calls);
+    let state::ReviewDecisionV1::Ready(review) = c
+        .review_unload(
+            unload_id,
+            LOAD_AMOUNT,
+            None,
+            None,
+            state::ReviewExpectationV1::Fresh,
+        )
+        .unwrap()
+    else {
+        panic!("fresh Unload review");
+    };
+    let original_projection = review.projection().clone();
+    drop(review);
+    assert_eq!(
+        c.retry_request(&unload_id).unwrap(),
+        state::RequestStatusV1::Unknown
+    );
+    assert_eq!(c.snapshot().unwrap(), before_review);
+    assert_eq!(
+        device_c.platform.with(|state| state.sign_calls),
+        signatures_before_review
+    );
+    drop(c);
+    let mut c = sources.open(&device_c, &f_c, &frames_c);
+    let state::ReviewDecisionV1::Ready(review) = c
+        .review_unload(
+            unload_id,
+            LOAD_AMOUNT,
+            None,
+            None,
+            state::ReviewExpectationV1::OriginalUnstarted(original_projection.clone()),
+        )
+        .unwrap()
+    else {
+        panic!("same unstarted Unload after restart");
+    };
+    assert_eq!(review.projection(), &original_projection);
+    // This actual renewed review represents a new explicit test approval, not restoration
+    // of the dropped capability. Only its privately retained ID reaches the sole dispatcher.
+    let (unloaded, derivations) = derived(|| match c.execute_reviewed(review).unwrap() {
+        state::ReviewedExecutionV1::Executed(completion) => complete(completion),
+        other => panic!("fresh reviewed Unload: {other:?}"),
+    });
     assert_eq!(derivations, 2, "fresh Unload");
+    assert_eq!(
+        device_c.platform.with(|state| state.sign_calls),
+        signatures_before_review + 1
+    );
+    assert!(matches!(c.review_unload(unload_id, LOAD_AMOUNT, None, None,
+        state::ReviewExpectationV1::OriginalUnstarted(original_projection)).unwrap(),
+        state::ReviewDecisionV1::Existing(state::BoundRequestStatusV1::Outcome(state::Completion::Complete(ref bytes))) if bytes == &unloaded));
     assert_eq!(
         derived(|| complete(c.execute(unload).unwrap())),
         (unloaded.clone(), 0)

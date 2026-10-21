@@ -862,6 +862,7 @@ pub(super) struct TestProofs {
     verifies: Arc<AtomicUsize>,
     folds: Arc<AtomicUsize>,
     reject: bool,
+    deferred_receipt_refusal: Option<bool>,
     burn: bool,
     checkpoint_bytes: u32,
     checkpoint_stages: u8,
@@ -930,8 +931,12 @@ impl TestProofs {
     }
 }
 
+mod deferred_archive_capacity_tests;
+mod deferred_archive_tests;
 mod fold_retention_tests;
 mod folding_preemption_tests;
+mod maintenance_tests;
+mod resume_scheduling_tests;
 mod storage_counters;
 mod verification_baseline_tests;
 
@@ -952,6 +957,13 @@ impl NativeProofs for TestProofs {
         payment: &KagemushaWalletPaymentV1,
     ) -> Result<(), Error> {
         // Explicit host probe only; never installed monetary proof authority.
+        if let Some(rejected) = self.deferred_receipt_refusal {
+            return Err(if rejected {
+                Error::ReceiptRejected("mock completed incoming receipt verdict")
+            } else {
+                Error::NativeVerification(crate::kagemusha_wallet_proofs_v1::Error::Profile)
+            });
+        }
         if self.reject {
             return Err(Error::Proof("mock Credited proof refusal"));
         }
@@ -1220,6 +1232,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         capsule_sources: IndexRoot::default(),
         issued_requests: IndexRoot::default(),
         sessions: IndexRoot::default(),
+        deferred_archive: deferred_archive::DeferredIndex::default(),
         activation: None,
         close_loads: IndexRoot::default(),
         ledger_checkpoint: None,
@@ -2759,6 +2772,14 @@ fn snapshot_unfolded_bootstrap_preserves_owned_value_and_reports_the_actual_back
     let boot = bootstrap();
     w.commit(boot.clone()).unwrap();
     let snapshot = w.snapshot().unwrap();
+    assert_eq!(
+        w.snapshot_selected().unwrap(),
+        (
+            snapshot,
+            KagemushaWalletOperationKindV1::Bootstrap,
+            boot.capsule.custody_digest()
+        )
+    );
     assert_eq!(snapshot.head, boot.capsule.body().statement.successor.value);
     assert_eq!(
         snapshot.credential_digest,
@@ -2778,12 +2799,35 @@ fn snapshot_unfolded_bootstrap_preserves_owned_value_and_reports_the_actual_back
     assert_eq!(snapshot.fold_backlog, 1);
 }
 #[test]
+fn selected_snapshot_preserves_archive_kind_and_fold_coverage_after_reopen() {
+    for folded in [None, Some(false)] {
+        let (mut w, _, _) = credit_projection::payer_projection_wallet(false, folded);
+        let selected = w.snapshot_selected().unwrap();
+        assert_eq!(selected.1, KagemushaWalletOperationKindV1::ArchiveSent);
+        assert_eq!(selected.0, w.snapshot().unwrap());
+        assert_eq!(selected.2, w.manifest().unwrap().1.capsule);
+        assert_eq!(selected.0.fold_backlog == 0, folded.is_some());
+        let mut reopened =
+            Coordinator::new(w.custody, w.archive, w.proofs, w.scheme_id, w.wallet_id).unwrap();
+        assert_eq!(reopened.snapshot_selected().unwrap(), selected);
+    }
+}
+
+#[test]
 fn snapshot_only_the_exact_current_fold_reports_folded_balance() {
     let mut w = wallet();
     let boot = bootstrap();
     w.commit(boot.clone()).unwrap();
     snapshot_test_fold(&mut w);
     let before = w.snapshot().unwrap();
+    assert_eq!(
+        w.snapshot_selected().unwrap(),
+        (
+            before,
+            KagemushaWalletOperationKindV1::Bootstrap,
+            boot.capsule.custody_digest()
+        )
+    );
     assert_eq!(before.folded_balance, Some(20));
     assert_eq!(before.fold_backlog, 0);
     let receive = frozen(
@@ -2796,6 +2840,14 @@ fn snapshot_only_the_exact_current_fold_reports_folded_balance() {
     );
     w.commit(receive.clone()).unwrap();
     let after = w.snapshot().unwrap();
+    assert_eq!(
+        w.snapshot_selected().unwrap(),
+        (
+            after,
+            KagemushaWalletOperationKindV1::Receive,
+            receive.capsule.custody_digest()
+        )
+    );
     assert_eq!(after.head, receive.capsule.body().statement.successor.value);
     assert_eq!(after.verified_fold.unwrap().head, before.head);
     assert_eq!(after.verified_fold.unwrap().sequence, 0);
@@ -3974,13 +4026,13 @@ fn every_preparation_draft_unlink_crash_retires_before_replacement_and_keeps_ori
     }
 }
 
-/// Decode a pinned payload retained from the installed d7 wallet without rewriting it.
+/// Decode an owner-pinned current-schema payload without rewriting its persisted bytes.
 /// This is the persisted Manifest boundary only; the fixture contains no protected marker.
 #[test]
-#[ignore = "requires an owner-retained d7 checkpoint payload and its pinned provider digest"]
-fn retained_d7_manifest_payload_decodes_and_reencodes_exactly() {
+#[ignore = "requires an owner-retained current-schema checkpoint payload and its pinned provider digest"]
+fn retained_current_manifest_payload_decodes_and_reencodes_exactly() {
     let path = std::env::var_os("IROHA_KAGEMUSHA_RETAINED_MANIFEST")
-        .expect("owner-retained d7 checkpoint path is required");
+        .expect("owner-retained current-schema checkpoint path is required");
     let expected = std::env::var("IROHA_KAGEMUSHA_RETAINED_MANIFEST_DIGEST")
         .expect("owner-recorded archive-checkpoint digest is required");
     let expected: [u8; 32] = hex::decode(expected)
@@ -4002,7 +4054,7 @@ fn retained_d7_manifest_payload_decodes_and_reencodes_exactly() {
         "exact owner-pinned checkpoint payload"
     );
     let manifest: super::manifest::Manifest =
-        archive::decode(&bytes).expect("installed d7 checkpoint remains readable");
+        archive::decode(&bytes).expect("current-schema checkpoint is readable");
     assert!(
         manifest.indexed.is_some(),
         "retained selected checkpoint has an indexed source"

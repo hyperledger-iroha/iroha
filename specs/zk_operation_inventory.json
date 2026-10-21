@@ -3856,7 +3856,7 @@
     }
    ],
    "test_evidence": "not_default",
-   "test_note": "The default handler tests of this crate record usage in transparent mode, without a proof. The handler is executed with a usage proof only by the integration test compiled with `zk-tests`, `zk-halo2` and `halo2-dev-tests`.",
+   "test_note": "Default handler tests record usage in transparent mode, without a proof. The kaigi_privacy integration target requires `zk-tests` and exercises the handler with a native PIPA-R usage proof; it is not part of the default test run.",
    "status": {
     "presence": "registered",
     "verification": "implemented",
@@ -11067,7 +11067,7 @@
       "symbol": "use sha2::{Digest, Sha256};"
      }
     ],
-    "in_circuit": {"none": "Spartan/Nova/Hyrax over T256; its inner hashes belong to the vendored prover and are not inventoried here."},
+    "in_circuit": {"none": "Spartan/Nova/Hyrax over T256; native transcript and generator hashes are owned by iroha_zkp_halo2::vega and recorded in primitive_roles below. vendor/vega-prover supplies independent test reference material."},
     "primitive_roles": [
      {"inventory": "primitive", "key": "digest_roles/vega.transcript-keccak"},
      {"inventory": "primitive", "key": "digest_roles/vega.xof-shake256"}

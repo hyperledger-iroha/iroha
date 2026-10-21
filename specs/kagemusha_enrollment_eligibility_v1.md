@@ -41,6 +41,15 @@ only the existing scheme-rooted Enrollment-role P-256 signer can issue a credent
 
 Configuration names the canonical template originals as `eligibility_template_hex` and
 `enrollment_template_hex`; retired per-asset configuration fields have no decoder fallback.
+The optional `observation_tls_root` names one existing private DER certificate, bounded to
+16 KiB, added to the middleware HTTPS client's native system roots. Omission adds no trust
+anchor. Hostname checks, HTTPS-only transport, redirect refusal and signed eligibility
+response verification remain mandatory. The transport retains the selected certificate
+file and its native snapshot, checking custody before dispatch and before returning an
+observation. Missing, malformed, replaced or unavailable configured root custody fails
+closed; it never falls back to the system-only selection or reloads a changed certificate.
+This TLS anchor authenticates the HTTPS service, not bank approval or enrollment authority.
+
 The private verifier keeps one exclusive store generation and the same attestation counters
 across token selections. It joins the old child before switching to the exact retained
 asset-specific configuration. Returning to an earlier token reopens that same configuration

@@ -54,6 +54,76 @@ fn provider_error(result: Result<impl std::fmt::Debug, StateError>) -> Error {
 }
 
 #[test]
+fn zero_payload_preparation_probe_observes_staged_durable_and_unavailable_records() {
+    for staged in [false, true] {
+        for (offset, payload) in [Vec::new(), vec![1], vec![0; 4096]].into_iter().enumerate() {
+            let (device, _slot, _handle, mut archive) = wallet(0x98);
+            let absent = ArchiveKey::PreparationDraft([90; 32]);
+            let key = ArchiveKey::PreparationDraft([91 + offset as u8; 32]);
+            assert!(archive.get(absent, 0).unwrap().is_none());
+            if staged {
+                archive.open_call();
+            }
+            archive.put(key, &payload).unwrap();
+            if payload.is_empty() {
+                assert!(archive.get(key, 0).unwrap().unwrap().is_empty());
+            } else {
+                assert!(archive.get(key, 0).is_err());
+            }
+            // An errored bounded read must never be treated as absence or remove the exact
+            // staged original. A failed call may discard staging; that is not absence proof.
+            if staged {
+                archive.close_call(true).unwrap();
+            }
+            assert_eq!(
+                archive.get(key, payload.len()).unwrap().unwrap().as_slice(),
+                payload
+            );
+            device
+                .platform
+                .with(|state| state.storage_lock_after = Some(0));
+            assert!(matches!(
+                provider_error(archive.get(absent, 0)),
+                Error::Unavailable(Unavailable::Locked)
+            ));
+            device.platform.clear_faults();
+            assert!(archive.get(absent, 0).unwrap().is_none());
+        }
+    }
+}
+
+#[test]
+fn zero_payload_preparation_probe_preserves_provider_envelope_corruption() {
+    let (device, f, slot, _) = bootstrapped_device(Policy::NotRequired, 0x99);
+    let mut provider = device.open();
+    let key = ArchiveKey::PreparationDraft([95; 32]);
+    let identity = kagemusha_wallet_provider_digest_v1(
+        "wallet-archive-key",
+        &norito::encode_canonical(&key).unwrap(),
+    );
+    provider
+        .with_archive(&slot, |archive| {
+            archive.write_record(
+                &identity,
+                b"valid provider prefix, malformed state envelope",
+            )
+        })
+        .unwrap();
+    let handle = AdvanceHandle::new(provider, slot);
+    let mut archive = handle.archive(f.scheme_id(), f.wallet_id());
+    assert!(matches!(
+        archive.get(key, 0),
+        Err(StateError::WitnessLost(_))
+    ));
+    assert!(
+        archive
+            .get(ArchiveKey::PreparationDraft([96; 32]), 0)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn archive_phase_reconciles_once_and_probes_after_each_storage_access() {
     let (_device, _slot, mut handle, mut archive) = wallet(0x91);
     let (_, status) = Counters::observe(|| Custody::status(&mut handle).expect("status"));

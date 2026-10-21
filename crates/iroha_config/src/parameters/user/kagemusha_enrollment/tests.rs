@@ -84,6 +84,7 @@ fn fixture() -> KagemushaEnrollmentIssuer {
             service_origin_digest_hex: "13".repeat(32),
             observation_endpoint: "https://provider.example/eligibility".into(),
             observation_credential: "/var/lib/iroha/private/provider-credential".into(),
+            observation_tls_root: None,
             worker: KagemushaEnrollmentWorker {
                 python_executable: "/opt/issuer/python".into(),
                 python_sha256_hex: "41".repeat(32),
@@ -164,6 +165,85 @@ fn complete_bank_route_preserves_exact_originals_and_runtime_selection() {
     );
     assert_eq!(provider.worker.python_sha256, [0x41; 32]);
     assert_eq!(actual.request_timeout, Duration::from_millis(5000));
+    assert_eq!(provider.observation_tls_root, None);
+}
+
+#[test]
+fn optional_observation_tls_root_defaults_to_none_and_preserves_explicit_file_selection() {
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+    let provider = fixture().providers.remove(0);
+    let mut table = toml::Table::new();
+    for (name, value) in [
+        (
+            "eligibility_template_hex",
+            provider.eligibility_template_hex,
+        ),
+        ("scheme_hex", provider.scheme_hex),
+        ("app_hex", provider.app_hex),
+        ("enrollment_template_hex", provider.enrollment_template_hex),
+        ("certificate_hex", provider.certificate_hex),
+        ("manifest_digest_hex", provider.manifest_digest_hex),
+        ("release_digest_hex", provider.release_digest_hex),
+        (
+            "service_origin_digest_hex",
+            provider.service_origin_digest_hex,
+        ),
+        ("observation_endpoint", provider.observation_endpoint),
+        ("observation_credential", "/private/transport".to_owned()),
+        ("signer_private_key", "/private/signer".to_owned()),
+    ] {
+        table.insert(name.into(), toml::Value::String(value));
+    }
+    let worker: toml::Table = toml::from_str(&format!(
+        r#"
+python_executable = "/private/python"
+python_sha256_hex = "{}"
+verifier_archive = "/private/verifier.pyz"
+verifier_sha256_hex = "{}"
+openssl_executable = "/private/openssl"
+openssl_sha256_hex = "{}"
+attestation_root = "/private/apple-root.pem"
+store_directory = "/private/store"
+exchange_timeout_ms = 60000
+"#,
+        "41".repeat(32),
+        "42".repeat(32),
+        "43".repeat(32),
+    ))
+    .unwrap();
+    table.insert("worker".into(), toml::Value::Table(worker));
+    let parsed = ConfigReader::new()
+        .without_env()
+        .with_toml_source(TomlSource::inline(table.clone()))
+        .read_and_complete::<KagemushaEnrollmentProvider>()
+        .unwrap();
+    assert_eq!(parsed.observation_tls_root, None);
+    assert_eq!(parsed.checked().unwrap().observation_tls_root, None);
+    table.insert(
+        "observation_tls_root".into(),
+        toml::Value::String("/private/middleware-root.der".into()),
+    );
+    let parsed = ConfigReader::new()
+        .without_env()
+        .with_toml_source(TomlSource::inline(table))
+        .read_and_complete::<KagemushaEnrollmentProvider>()
+        .unwrap()
+        .checked()
+        .unwrap();
+    assert_eq!(
+        parsed.observation_tls_root,
+        Some(PathBuf::from("/private/middleware-root.der"))
+    );
+}
+
+#[test]
+fn optional_observation_tls_root_refuses_relative_and_traversing_paths() {
+    for path in ["", "relative.der", "/private/../root.der"] {
+        let mut selected = fixture();
+        selected.providers[0].observation_tls_root = Some(path.into());
+        assert!(selected.checked().is_err(), "{path}");
+    }
 }
 
 #[test]
@@ -238,7 +318,8 @@ fn absent_trust_and_unbounded_limits_never_fall_back() {
 
 #[test]
 fn debug_omits_custody_paths_handles_and_endpoints() {
-    let input = fixture();
+    let mut input = fixture();
+    input.providers[0].observation_tls_root = Some("/var/lib/private/tls-root.der".into());
     for text in [
         format!("{input:?}"),
         format!("{:?}", input.providers[0]),

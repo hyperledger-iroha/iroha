@@ -453,7 +453,10 @@ fn authenticate_parent(
     remaining(deadline)?;
     CheckpointTransport::new()
         .fetch_and_authenticate(profile, &release, deadline)
-        .map_err(|error| Error::Invalid(error.to_string()))
+        .map_err(|source| Error::ParentCheckpoint {
+            profile: Box::new(profile.clone()),
+            source: Box::new(source),
+        })
 }
 
 /// Explicit administrative authorization, separate from config-free SNS attachment.

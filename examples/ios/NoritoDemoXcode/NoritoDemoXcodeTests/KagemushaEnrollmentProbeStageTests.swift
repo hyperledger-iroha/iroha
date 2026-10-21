@@ -17,8 +17,8 @@ final class KagemushaEnrollmentProbeStageTests: XCTestCase {
       "native-activation-confirmed": "activated",
       "native-complete-load": "loaded",
       "native-complete-send": "sent",
-      "native-exact-send-delivery-admitted-over-nearby": "sent",
-      "native-exact-send-delivery-admitted-over-qr": "sent",
+      "native-exact-send-delivery-verified-over-nearby": "sent",
+      "native-exact-send-delivery-verified-over-qr": "sent",
       "native-durable-receive-credited-display-closed-over-qr": "received",
       "native-complete-receive": "received",
       "native-durable-receive-acknowledged-over-nearby": "received",
@@ -54,11 +54,32 @@ final class KagemushaEnrollmentProbeStageTests: XCTestCase {
       "native-load-plan-retained", "native-review-awaiting-explicit-decision",
       "native-peer-envelope-decoded-not-admitted", "native-unload-claim-exported-not-settled",
       "native-unload-prefix-retained-not-confirmed", "native-current-head-not-folded",
-    ] + (0...60).map { "native-call-status-\($0)" }
+    ] + (0...67).map { "native-call-status-\($0)" }
     for outcome in outcomes {
       XCTAssertNil(KagemushaEnrollmentProbeStage.observed(outcome), outcome)
     }
     let recoveredBurned = ["native-call-status-10", "native-credit-evidence-3"]
     XCTAssertTrue(recoveredBurned.compactMap(KagemushaEnrollmentProbeStage.observed).isEmpty)
   }
+  func testReadOnlyDeliveryObservationsAndRetiredCarrierOutcomesDoNotGrantStages() {
+    for outcome in [
+      "native-payer-delivery-evidence-1", "native-payer-delivery-evidence-2",
+      "native-payer-delivery-evidence-3", "native-verified-delivery",
+      "native-exact-send-delivery-admitted-over-nearby",
+      "native-exact-send-delivery-admitted-over-qr",
+      "native-exact-send-delivery-burned-over-nearby",
+      "native-exact-send-delivery-burned-over-qr",
+    ] {
+      XCTAssertNil(KagemushaEnrollmentProbeStage.observed(outcome), outcome)
+    }
+  }
+  func testExchangeAndMaintenanceObservationsNeverGrantPaymentStages() {
+    let outcomes = ["native-exchange-requested", "native-deferred-receipt-idle",
+      "native-deferred-archive-idle"] + (0...6).flatMap { value in [
+        "native-exchange-end-\(value)", "native-review-retained-\(value)",
+        "native-deferred-archive-wait-\(value)", "native-deferred-receipt-evidence-\(value)",
+        "native-deferred-archive-reconciled-status-\(value)", "native-deferred-archive-executed-status-\(value)"] }
+    for outcome in outcomes { XCTAssertNil(KagemushaEnrollmentProbeStage.observed(outcome), outcome) }
+  }
+
 }

@@ -4,18 +4,41 @@ package org.hyperledger.iroha.sdk.offline.wallet
 
 import android.os.SystemClock
 
+/** One live actual capability shared by the existing monetary and carrier command owners. */
+internal class KagemushaProbeReviewAttempt(
+    val review: KagemushaWalletReviewV1, val origin: KagemushaWalletExchangeV1,
+    val wallet: KagemushaWalletV1, val sequence: Int, val fence: String, val continuation: Boolean,
+) {
+    val requestId = review.requestId()
+    val phase = KagemushaProbeReviewPhase()
+}
+internal class KagemushaProbeReviewHolder {
+    var current: KagemushaProbeReviewAttempt? = null
+        private set
+    fun retain(value: KagemushaProbeReviewAttempt) { check(current == null); current = value }
+    fun clear(value: KagemushaProbeReviewAttempt) { check(current === value); current = null }
+    fun released() { current?.phase?.finish(); current = null }
+    fun endRequested(origin: KagemushaWalletExchangeV1): KagemushaProbeReviewAttempt? {
+        val selected = current ?: return null
+        check(selected.origin === origin)
+        selected.phase.endRequested(); selected.phase.finish(); current = null
+        return selected
+    }
+}
+
 /** Worker-only real SDK monetary lifecycle. This driver neither signs ledger transactions nor owns keys. */
 internal class KagemushaWalletDeviceStages(
     private val config: EnrollmentProbeConfiguration,
     private val walletOwner: () -> KagemushaWalletV1,
+    private val exchangeOwner: () -> KagemushaWalletExchangeV1,
     private val output: (String, ByteArray, Int) -> Unit,
     private val requireLive: () -> Unit,
+    private val reviews: KagemushaProbeReviewHolder,
 ) {
-    private class PendingReview(val review: KagemushaWalletReviewV1, val requestId: ByteArray, val sequence: Int)
-    private var pendingReview: PendingReview? = null
-    private var timeExchange: KagemushaWalletTimeExchangeV1? = null
+    private class PendingTime(val challenge: KagemushaWalletTimeExchangeV1, val origin: KagemushaWalletExchangeV1)
+    private var timeExchange: PendingTime? = null
     /** Call only after the owning wallet acknowledged close. Native owns the actual lifetime. */
-    fun released() { pendingReview = null; timeExchange = null }
+    fun released() { reviews.released(); timeExchange = null }
     private fun event(name: String, sequence: Int, vararg fields: Pair<String, String>) =
         output("$name.json", probeJson(*fields), sequence)
     private fun hex(bytes: ByteArray) = EnrollmentProbeFiles.hex(bytes)
@@ -104,7 +127,20 @@ internal class KagemushaWalletDeviceStages(
         return if (value.headIsFolded) "native-current-head-folded" else "native-current-head-not-folded"
     }
     fun execute(command: EnrollmentProbeCommand, sequence: Int): String {
-        requireLive()
+        // The mailbox is worker-synchronous. Admission precedes every SDK worker and UI wait.
+        val fresh = command.action in setOf("bootstrap", "activation", "retain-activation",
+            "activation-finality", "confirm-activation", "prepare-load", "load", "ledger-finality",
+            "epoch-boundary", "request", "review-send", "review-unload", "continue-review-send", "continue-review-unload", "receive", "observe-credited",
+            "unload-finality", "confirm-unload", "refresh-time", "begin-time")
+        val origin = if (fresh) exchangeOwner() else null
+        val admitted = origin?.admit()
+        try { return executeAccepted(command, sequence, origin, admitted) }
+        finally { admitted?.finish() }
+    }
+    private fun executeAccepted(command: EnrollmentProbeCommand, sequence: Int,
+        origin: KagemushaWalletExchangeV1?, admitted: KagemushaWalletExchangeCallV1?): String {
+        if (command.action !in setOf("discard-review", "cancel-time", "decide-review", "retry-reviewed")) requireLive()
+        fun accepted() = admitted ?: throw EnrollmentProbeFailure("exchange-required")
         val values = inputs(command, sequence)
         fun input(name: String) = values[name] ?: throw EnrollmentProbeFailure("input")
         fun id(name: String = "request-id") = KagemushaMonetaryProbeManifest.word(input(name))
@@ -112,10 +148,10 @@ internal class KagemushaWalletDeviceStages(
         val wallet = walletOwner()
         return when (command.action) {
             "bootstrap" -> {
-                val value = wallet.bootstrap(); call(value, SystemClock.elapsedRealtimeNanos(), sequence)
+                val value = accepted().bootstrap(); call(value, SystemClock.elapsedRealtimeNanos(), sequence)
             }
             "activation" -> {
-                val original = wallet.activation(); val returned = SystemClock.elapsedRealtimeNanos()
+                val original = accepted().activation(); val returned = SystemClock.elapsedRealtimeNanos()
                 output("activation.norito", original, sequence)
                 output("ledger-instruction.norito", wallet.ledgerInstruction(KagemushaWalletLedgerTransportV1.ACTIVATE, original), sequence)
                 event("activation-export", sequence, "nativeReturnedTicks" to returned.toString(), "confirmed" to "false")
@@ -124,14 +160,14 @@ internal class KagemushaWalletDeviceStages(
             "retain-activation", "activation-status", "activation-finality", "confirm-activation" -> {
                 val wire = input("signed-wire")
                 if (command.action == "confirm-activation") {
-                    val value = wallet.confirmLedgerActivation(wire); val returned = SystemClock.elapsedRealtimeNanos()
+                    val value = accepted().confirmLedgerActivation(wire); val returned = SystemClock.elapsedRealtimeNanos()
                     event("activation-confirmation", sequence, "nativeReturnedTicks" to returned.toString(),
                         "height" to unsigned(value.heightBits), "blockHash" to hex(value.blockHash()))
                     "native-activation-confirmed"
                 } else {
                     val value = when (command.action) {
-                        "retain-activation" -> wallet.retainActivationAttempt(wire)
-                        "activation-finality" -> wallet.ingestActivationFinality(wire, input("finality"))
+                        "retain-activation" -> accepted().retainActivationAttempt(wire)
+                        "activation-finality" -> accepted().ingestActivationFinality(wire, input("finality"))
                         else -> wallet.activationFinalityProgress(wire)
                     }
                     val returned = SystemClock.elapsedRealtimeNanos()
@@ -146,7 +182,7 @@ internal class KagemushaWalletDeviceStages(
             "prepare-load" -> {
                 val identity = id(); val amount = KagemushaMonetaryProbeManifest.amount(input("amount"))
                 bind("load-plan", identity, values)
-                val original = wallet.prepareLedgerLoad(identity, amount); val returned = SystemClock.elapsedRealtimeNanos()
+                val original = accepted().prepareLedgerLoad(identity, amount); val returned = SystemClock.elapsedRealtimeNanos()
                 output("ledger-load-instruction.norito", original, sequence)
                 event("prepared-load", sequence, "nativeReturnedTicks" to returned.toString(),
                     "requestID" to hex(identity), "settlementClaimed" to "false")
@@ -164,15 +200,15 @@ internal class KagemushaWalletDeviceStages(
             }
             "load" -> {
                 val identity = id(); bind("operation", identity, family("load"))
-                val value = wallet.load(identity, input("receipt"), input("finality"))
+                val value = accepted().load(identity, input("receipt"), input("finality"))
                 completion(value, SystemClock.elapsedRealtimeNanos(), identity, sequence)
             }
             "ledger-finality", "ledger-status" -> {
-                val value = if (command.action == "ledger-finality") wallet.ingestLedgerFinality(input("finality")) else wallet.ledgerProgress()
+                val value = if (command.action == "ledger-finality") accepted().ingestLedgerFinality(input("finality")) else wallet.ledgerProgress()
                 ledgerState(value, SystemClock.elapsedRealtimeNanos(), sequence); "native-ledger-prefix-observed"
             }
             "epoch-boundary", "epoch-status" -> {
-                val value = if (command.action == "epoch-boundary") wallet.ingestEpochBoundary(
+                val value = if (command.action == "epoch-boundary") accepted().ingestEpochBoundary(
                     KagemushaMonetaryProbeManifest.limb(input("epoch")), input("boundary")) else wallet.epochProgress()
                 event("epoch", sequence, "nativeReturnedTicks" to SystemClock.elapsedRealtimeNanos().toString(),
                     "epoch" to value.epoch.toString(), "firstHeight" to value.firstHeight.toString(),
@@ -181,7 +217,7 @@ internal class KagemushaWalletDeviceStages(
             }
             "request" -> {
                 val identity = id("setup-id"); bind("setup", identity, family(command.action))
-                val original = wallet.request(identity, KagemushaMonetaryProbeManifest.amount(input("amount")),
+                val original = accepted().request(identity, KagemushaMonetaryProbeManifest.amount(input("amount")),
                     values["fee-schedule"], values["fee-certificate"])
                 val returned = SystemClock.elapsedRealtimeNanos()
                 val kind = KagemushaWalletTransportKindV1.REQUEST
@@ -191,28 +227,62 @@ internal class KagemushaWalletDeviceStages(
                     "kind" to kind.name, "setupID" to hex(identity), "carrierDeliveryClaimed" to "false")
                 "native-${command.action}-exported-carrier-unobserved"
             }
-            "review-send", "review-unload" -> {
-                probeRequire(pendingReview == null, "lifecycle")
-                val identity = id(); bind("operation", identity, family(command.action))
-                probeRequire(!config.files.exists(executedPath(identity)), "recovery-required")
-                val review = if (command.action == "review-send") wallet.reviewSend(input("request"), input("destination"))
-                    else wallet.reviewUnload(KagemushaMonetaryProbeManifest.amount(input("amount")),
-                        values["quote"], values["certificates"], values["beneficiary"])
+            "review-send", "review-unload", "continue-review-send", "continue-review-unload" -> {
+                probeRequire(reviews.current == null, "lifecycle")
+                val continuation = command.action.startsWith("continue-")
+                val actionFamily = command.action.removePrefix("continue-")
+                val identity = id()
+                val binding = "private/intents/operation-${EnrollmentProbeFiles.digest(identity)}"
+                if (continuation) probeRequire(config.files.exists(binding), "recovery-required")
+                bind("operation", identity, family(actionFamily))
+                val root = executedPath(identity)
+                val expectation = if (continuation) KagemushaWalletReviewExpectationV1.OriginalUnstarted(
+                    config.files.read(root, KagemushaWalletReviewProjectionV1.MAXIMUM_BYTES)) else {
+                    probeRequire(!config.files.exists(root), "recovery-required")
+                    KagemushaWalletReviewExpectationV1.Fresh
+                }
+                val decision = if (actionFamily == "review-send") accepted().reviewSend(identity, input("request"), input("destination"), expectation)
+                    else accepted().reviewUnload(identity, KagemushaMonetaryProbeManifest.amount(input("amount")),
+                        values["quote"], values["certificates"], values["beneficiary"], expectation)
                 val returned = SystemClock.elapsedRealtimeNanos()
-                pendingReview = PendingReview(review, identity, sequence)
-                val p = review.projection
-                output("native-review.bin", p.bytes(), sequence)
-                event("native-review", sequence, *(listOf("nativeReturnedTicks" to returned.toString(),
-                    "reviewSHA256" to EnrollmentProbeFiles.digest(p.bytes()), "kind" to p.kind.name,
-                    "requestID" to hex(identity), "head" to hex(p.currentHead()),
-                    "sourceStateCommitment" to hex(p.sourceStateCommitment()),
-                    "destinationAccountDigest" to hex(p.destinationAccountDigest()),
-                    "onwardSendReviewReadyObserved" to (p.kind == KagemushaWalletReviewProjectionV1.Kind.SEND).toString()) +
-                    scalar("amount", p.amount) + scalar("fee", p.fee) + scalar("grossDebit", p.grossDebit) +
-                    scalar("netDestinationAmount", p.netDestinationAmount)).toTypedArray())
-                "native-review-awaiting-explicit-decision"
+                when (decision) {
+                    is KagemushaWalletReviewDecisionV1.Existing -> existing(decision.status, returned, sequence)
+                    is KagemushaWalletReviewDecisionV1.Waiting -> {
+                        event("review-waiting", sequence, "wait" to decision.wait.name, "requestID" to hex(identity))
+                        "native-review-waiting-${decision.wait.name}"
+                    }
+                    is KagemushaWalletReviewDecisionV1.Ready -> {
+                        val review = decision.review
+                        val fence = if (continuation) "$root-attempt-${config.invocation}-$sequence" else root
+                        val attempt = KagemushaProbeReviewAttempt(review, origin ?: throw EnrollmentProbeFailure("exchange-required"),
+                            wallet, sequence, fence, continuation)
+                        reviews.retain(attempt)
+                        try {
+                            if (continuation) config.files.publish("$fence-binding", KagemushaMonetaryProbeManifest.binding("review-attempt",
+                                mapOf("request-id" to identity, "root-projection" to expectation.bytes(), "projection" to review.projection.bytes())), exclusive = true)
+                            val p = review.projection
+                            output("native-review.bin", p.bytes(), sequence)
+                            event("native-review", sequence, *(listOf("nativeReturnedTicks" to returned.toString(),
+                                "reviewSHA256" to EnrollmentProbeFiles.digest(p.bytes()), "kind" to p.kind.name,
+                                "requestID" to hex(identity), "head" to hex(p.currentHead()),
+                                "sourceStateCommitment" to hex(p.sourceStateCommitment()),
+                                "destinationAccountDigest" to hex(p.destinationAccountDigest()), "continuation" to continuation.toString(),
+                                "onwardSendReviewReadyObserved" to (p.kind == KagemushaWalletReviewProjectionV1.Kind.SEND).toString()) +
+                                scalar("amount", p.amount) + scalar("fee", p.fee) + scalar("grossDebit", p.grossDebit) +
+                                scalar("netDestinationAmount", p.netDestinationAmount)).toTypedArray())
+                        } catch (failure: Throwable) { discardAfterFailure(attempt, failure); throw failure }
+                        "native-review-awaiting-explicit-decision"
+                    }
+                }
             }
             "decide-review" -> decideReview(input("decision"), sequence)
+            "retry-reviewed" -> retryReviewed(sequence)
+            "discard-review" -> {
+                val pending = reviews.current ?: throw EnrollmentProbeFailure("lifecycle")
+                reviews.clear(pending); pending.phase.finish()
+                pending.origin.discardReview(pending.review)
+                "native-review-cancelled"
+            }
             "payment-companion" -> {
                 val companion = wallet.paymentCompanion(input("payment")); val returned = SystemClock.elapsedRealtimeNanos()
                 output("payer-companion.norito", companion, sequence)
@@ -222,7 +292,7 @@ internal class KagemushaWalletDeviceStages(
             }
             "receive" -> {
                 val identity = id(); bind("operation", identity, family("receive"))
-                val value = wallet.receiveWithCompanion(identity, input("payment"), input("companion"))
+                val value = accepted().receiveWithCompanion(identity, input("payment"), input("companion"))
                 completion(value, SystemClock.elapsedRealtimeNanos(), identity, sequence)
             }
             "credit" -> {
@@ -236,10 +306,42 @@ internal class KagemushaWalletDeviceStages(
                 }
                 "native-credit-evidence-${value.evidence.name}"
             }
-            "accept-credited", "credited-status" -> {
-                val value = if (command.action == "accept-credited") wallet.acceptCreditedForSend(id(), input("credited"))
-                    else wallet.creditedStatusForSend(id(), input("credited"))
+            "observe-credited" -> {
+                val credited = input("credited")
+                output("verified-credited-original.norito", credited, sequence)
+                val value = accepted().observeCreditedForSend(id(), credited)
+                val returned = SystemClock.elapsedRealtimeNanos()
+                event("verified-delivery", sequence, *(listOf(
+                    "nativeReturnedTicks" to returned.toString(), "creditedSHA256" to EnrollmentProbeFiles.digest(credited),
+                    "evidence" to value.evidence.name, "archive" to value.archive.name,
+                    "corePending" to value.corePending.toString(), "creditID" to hex(value.creditId()),
+                    "paymentDigest" to hex(value.paymentDigest()), "carrierDeliveryClaimed" to "false") +
+                    scalar("amount", value.amount)).toTypedArray())
+                "native-payer-delivery-evidence-${value.evidence.name}"
+            }
+            "credited-status" -> {
+                val value = wallet.creditedStatusForSend(id(), input("credited"))
                 call(value, SystemClock.elapsedRealtimeNanos(), sequence)
+            }
+            "resume-deferred-receipt" -> {
+                val value = wallet.verifyNextDeferredCredited()
+                val returned = SystemClock.elapsedRealtimeNanos()
+                event("deferred-receipt", sequence, "nativeReturnedTicks" to returned.toString(),
+                    "evidence" to (value?.evidence?.name ?: "none"),
+                    "archive" to (value?.archive?.name ?: "none"),
+                    "corePending" to (value?.corePending?.toString() ?: "unknown"),
+                    "carrierDeliveryClaimed" to "false")
+                if (value == null) "native-deferred-receipt-no-work" else "native-payer-delivery-evidence-${value.evidence.name}"
+            }
+            "drain-deferred-archive" -> {
+                val value = wallet.drainDeferredArchive()
+                val returned = SystemClock.elapsedRealtimeNanos()
+                when (value) {
+                    KagemushaWalletDeferredArchiveDrainV1.NoWork -> "native-deferred-archive-no-work"
+                    is KagemushaWalletDeferredArchiveDrainV1.Blocked -> "native-deferred-archive-blocked-${value.wait.name}"
+                    is KagemushaWalletDeferredArchiveDrainV1.Reconciled -> call(value.completion, returned, sequence)
+                    is KagemushaWalletDeferredArchiveDrainV1.Executed -> call(value.completion, returned, sequence)
+                }
             }
             "fold-once" -> {
                 val value = wallet.foldOnce(); call(value, SystemClock.elapsedRealtimeNanos(), sequence); snapshot(sequence)
@@ -288,11 +390,11 @@ internal class KagemushaWalletDeviceStages(
                 if (value.confirmation == null) "native-unload-unconfirmed" else "native-unload-confirmed"
             }
             "unload-finality" -> {
-                val value = wallet.ingestUnloadFinality(id("transaction-hash"), input("claim"), input("finality"))
+                val value = accepted().ingestUnloadFinality(id("transaction-hash"), input("claim"), input("finality"))
                 ledgerState(value, SystemClock.elapsedRealtimeNanos(), sequence); "native-unload-prefix-retained-not-confirmed"
             }
             "confirm-unload" -> {
-                val value = wallet.confirmLedgerUnload(id("transaction-hash"), input("claim")); val returned = SystemClock.elapsedRealtimeNanos()
+                val value = accepted().confirmLedgerUnload(id("transaction-hash"), input("claim")); val returned = SystemClock.elapsedRealtimeNanos()
                 event("unload-confirmation", sequence, "nativeReturnedTicks" to returned.toString(),
                     "height" to unsigned(value.heightBits), "blockHash" to hex(value.blockHash()))
                 "native-unload-confirmed"
@@ -311,60 +413,124 @@ internal class KagemushaWalletDeviceStages(
             }
             "refresh-time" -> {
                 val identity = id(); bind("operation", identity, family("refresh-time"))
-                val value = wallet.refresh(identity, KagemushaWalletRefreshKindV1.TIME_ANCHOR, input("anchor"), input("certificates"))
+                val value = accepted().refresh(identity, KagemushaWalletRefreshKindV1.TIME_ANCHOR, input("anchor"), input("certificates"))
                 completion(value, SystemClock.elapsedRealtimeNanos(), identity, sequence)
             }
             "begin-time" -> {
                 probeRequire(timeExchange == null, "lifecycle")
-                val exchange = wallet.beginTimeExchange(); val returned = SystemClock.elapsedRealtimeNanos()
-                timeExchange = exchange; output("time-nonce.bin", exchange.nonce(), sequence)
+                val exchange = accepted().beginTimeExchange(); val returned = SystemClock.elapsedRealtimeNanos()
+                timeExchange = PendingTime(exchange, origin ?: throw EnrollmentProbeFailure("exchange-required")); output("time-nonce.bin", exchange.nonce(), sequence)
                 event("time-exchange", sequence, "nativeReturnedTicks" to returned.toString())
                 "native-time-exchange-awaiting-issuer"
             }
             "finish-time" -> {
                 val exchange = timeExchange ?: throw EnrollmentProbeFailure("lifecycle")
                 // All bounded input reads precede consumption; never reconstruct the Native token.
-                val anchor = input("anchor"); val certificate = input("certificate"); timeExchange = null
-                wallet.finishTimeExchange(exchange, anchor, certificate)
+                val anchor = input("anchor"); val certificate = input("certificate")
+                exchange.origin.admit().use { accepted ->
+                    timeExchange = null
+                    accepted.finishTimeExchange(exchange.challenge, anchor, certificate)
+                }
                 event("time-retained", sequence, "nativeReturnedTicks" to SystemClock.elapsedRealtimeNanos().toString())
                 "native-time-response-retained-refresh-required"
             }
             "cancel-time" -> {
                 val exchange = timeExchange ?: throw EnrollmentProbeFailure("lifecycle")
-                timeExchange = null; wallet.cancelTimeExchange(exchange); "native-time-exchange-cancelled"
+                timeExchange = null; exchange.origin.cancelTimeExchange(exchange.challenge); "native-time-exchange-cancelled"
             }
             else -> throw EnrollmentProbeFailure("input")
         }
     }
+    private fun existing(value: KagemushaWalletBoundRequestStatusV1, returned: Long, sequence: Int): String {
+        val status = when (value) {
+            KagemushaWalletBoundRequestStatusV1.Preparing -> KagemushaWalletCallV1.PREPARING
+            is KagemushaWalletBoundRequestStatusV1.Outcome -> { call(value.completion, returned, sequence); value.completion.status }
+        }
+        event("existing-request", sequence, "status" to status.toString(), "newExecutionClaimed" to "false", "latencyUsable" to "false")
+        return "native-existing-request-status-$status"
+    }
+    private fun requireAttempt(pending: KagemushaProbeReviewAttempt) {
+        requireLive()
+        probeRequire(reviews.current === pending && walletOwner() === pending.wallet && exchangeOwner() === pending.origin, "lifecycle")
+    }
+    private fun discardAfterFailure(pending: KagemushaProbeReviewAttempt, failure: Throwable) {
+        if (reviews.current === pending) reviews.clear(pending)
+        pending.phase.finish()
+        try { pending.origin.discardReview(pending.review) }
+        catch (cleanup: Throwable) {
+            if (cleanup !is KagemushaWalletExceptionV1 || cleanup.status != -2) if (cleanup !== failure) failure.addSuppressed(cleanup)
+        }
+    }
+    private fun executeReview(pending: KagemushaProbeReviewAttempt, accepted: KagemushaWalletExchangeCallV1,
+        sequence: Int, retry: Boolean): String {
+        requireAttempt(pending)
+        event("execute-reviewed-start", sequence, "ticks" to SystemClock.elapsedRealtimeNanos().toString(),
+            "requestID" to hex(pending.requestId), "reviewSHA256" to EnrollmentProbeFiles.digest(pending.review.projection.bytes()),
+            "liveRetry" to retry.toString(), "continuation" to pending.continuation.toString(),
+            "originalLatencyUsable" to (!retry && !pending.continuation).toString())
+        return try {
+            when (val result = accepted.executeReviewed(pending.review)) {
+                is KagemushaWalletReviewedExecutionV1.RetainedReview -> {
+                    probeRequire(result.review === pending.review, "native-projection")
+                    pending.phase.retained()
+                    event("review-retained", sequence, "wait" to result.wait.name, "reviewSequence" to pending.sequence.toString(),
+                        "dispatchFenceRetained" to "true", "latencyUsable" to "false")
+                    "native-review-retained-${result.wait.name}"
+                }
+                is KagemushaWalletReviewedExecutionV1.Existing -> {
+                    reviews.clear(pending); pending.phase.finish()
+                    existing(result.status, SystemClock.elapsedRealtimeNanos(), sequence)
+                }
+                is KagemushaWalletReviewedExecutionV1.Executed -> {
+                    reviews.clear(pending); pending.phase.finish()
+                    completion(result.completion, SystemClock.elapsedRealtimeNanos(), pending.requestId, sequence)
+                }
+            }
+        } catch (failure: Throwable) { discardAfterFailure(pending, failure); throw failure }
+    }
+    private fun retryReviewed(sequence: Int): String {
+        val pending = reviews.current ?: throw EnrollmentProbeFailure("lifecycle")
+        probeRequire(pending.phase.state == KagemushaProbeReviewPhase.State.APPROVED_LIVE_RETAINED, "lifecycle")
+        try {
+            pending.origin.admit().use { accepted ->
+                requireAttempt(pending)
+                pending.phase.retry {
+                    probeRequire(config.files.read(pending.fence, KagemushaWalletReviewProjectionV1.MAXIMUM_BYTES)
+                        .contentEquals(pending.review.projection.bytes()), "recovery-required")
+                }
+                return executeReview(pending, accepted, sequence, retry = true)
+            }
+        } catch (failure: Throwable) { discardAfterFailure(pending, failure); throw failure }
+    }
     private fun decideReview(bytes: ByteArray, sequence: Int): String {
-        val pending = pendingReview ?: throw EnrollmentProbeFailure("lifecycle")
-        val wallet = walletOwner(); val projection = pending.review.projection
+        val pending = reviews.current ?: throw EnrollmentProbeFailure("lifecycle")
+        probeRequire(pending.phase.state == KagemushaProbeReviewPhase.State.AWAITING_CONFIRMATION, "lifecycle")
+        val projection = pending.review.projection
         val decision = KagemushaMonetaryProbeManifest.Decision(bytes, config.invocation, pending.sequence, projection.bytes())
         if (!decision.confirmed) {
-            pendingReview = null; wallet.discardReview(pending.review)
+            reviews.clear(pending); pending.phase.finish(); pending.origin.discardReview(pending.review)
             event("review-cancelled", sequence, "nativeReturnedTicks" to SystemClock.elapsedRealtimeNanos().toString(),
                 "reviewSequence" to pending.sequence.toString())
             return "native-review-cancelled"
         }
-        // A prior marker whose fsync acknowledgement was lost fences this retained review too.
-        probeRequire(!config.files.exists(executedPath(pending.requestId)), "recovery-required")
-        val digest = EnrollmentProbeFiles.digest(projection.bytes())
-        event("confirmation-start", sequence, "ticks" to SystemClock.elapsedRealtimeNanos().toString(),
-            "reviewSequence" to pending.sequence.toString(), "reviewSHA256" to digest)
-        val authenticated = KagemushaProbeConfirmation.authenticate(projection)
-        requireLive()
-        event("confirmation", sequence, "deviceOwnerAuthenticatedTicks" to authenticated.ticks.toString(),
-            "authenticationType" to authenticated.authenticationType.toString(),
-            "promptStartedTicks" to authenticated.promptStartedTicks.toString(),
-            "reviewSequence" to pending.sequence.toString(), "reviewSHA256" to digest,
-            "requestID" to hex(pending.requestId),
-            "confirmationSurface" to "external-exact-review-plus-android-device-owner-authentication")
-        // Persist before dispatch; even an uncertain marker write permits only Native recovery.
-        config.files.publish(executedPath(pending.requestId), digest.toByteArray(Charsets.US_ASCII), exclusive = true)
-        pendingReview = null
-        event("execute-reviewed-start", sequence, "ticks" to SystemClock.elapsedRealtimeNanos().toString(),
-            "requestID" to hex(pending.requestId), "reviewSHA256" to digest)
-        val value = wallet.executeReviewed(pending.review, pending.requestId)
-        return completion(value, SystemClock.elapsedRealtimeNanos(), pending.requestId, sequence)
+        pending.origin.admit().use { accepted ->
+            requireAttempt(pending)
+            probeRequire(!config.files.exists(pending.fence), "recovery-required")
+            pending.phase.beginConfirmation()
+            val digest = EnrollmentProbeFiles.digest(projection.bytes())
+            val authenticated = try {
+                event("confirmation-start", sequence, "ticks" to SystemClock.elapsedRealtimeNanos().toString(),
+                    "reviewSequence" to pending.sequence.toString(), "reviewSHA256" to digest)
+                KagemushaProbeConfirmation.authenticate(projection).also { requireAttempt(pending) }
+            } catch (failure: Throwable) { pending.phase.confirmationFailed(); throw failure }
+            try {
+                event("confirmation", sequence, "deviceOwnerAuthenticatedTicks" to authenticated.ticks.toString(),
+                    "authenticationType" to authenticated.authenticationType.toString(), "promptStartedTicks" to authenticated.promptStartedTicks.toString(),
+                    "reviewSequence" to pending.sequence.toString(), "reviewSHA256" to digest, "requestID" to hex(pending.requestId),
+                    "confirmationSurface" to "external-exact-review-plus-android-device-owner-authentication")
+                pending.phase.publishFence { config.files.publish(pending.fence, projection.bytes(), exclusive = true) }
+                return executeReview(pending, accepted, sequence, retry = false)
+            } catch (failure: Throwable) { discardAfterFailure(pending, failure); throw failure }
+        }
     }
 }

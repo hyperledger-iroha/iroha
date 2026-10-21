@@ -17,7 +17,7 @@ guard let packageManifestPath = canonicalExistingFilesystemPath(#filePath) else 
 }
 let packageDirectory = URL(fileURLWithPath: packageManifestPath).deletingLastPathComponent()
 let bridgeRelativePath = "../dist/NoritoBridge.xcframework"
-let requiredBridgeAbiVersion = 31
+let requiredBridgeAbiVersion = 33
 let repositoryDirectory = packageDirectory.deletingLastPathComponent()
 let localIntegrationArtifactDirectory = repositoryDirectory
     .appendingPathComponent("target/norito-bridge-local/artifacts", isDirectory: true).path

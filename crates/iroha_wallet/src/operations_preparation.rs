@@ -13,7 +13,9 @@ use sha2::{Digest as _, Sha256};
 mod terminal_reader;
 pub use terminal_reader::CustodyPreparationReader;
 #[cfg(test)]
-pub(super) use terminal_reader::{count_request_commitments, count_request_verifications};
+pub(super) use terminal_reader::{
+    count_request_commitments, count_request_verifications, with_original_child_custody,
+};
 
 const PAYLOAD_MAX: usize = 1024 * 1024;
 // Norito counts raw byte vectors as sequence elements. Bound them by the admitted journal
@@ -330,6 +332,13 @@ impl Retained {
     }
     fn read_with_recipe(
         journal: &Journal,
+        config: &Config,
+        recipe: ReadRecipe<'_>,
+    ) -> Result<(Self, Option<TerminalRead>)> {
+        Self::read_from_inspection(&journal.native_inspection(), config, recipe)
+    }
+    fn read_from_inspection(
+        journal: &iroha_operation_journal::NativeJournalInspection<'_>,
         config: &Config,
         recipe: ReadRecipe<'_>,
     ) -> Result<(Self, Option<TerminalRead>)> {

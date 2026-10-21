@@ -291,7 +291,7 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
     let driver = try KagemushaWalletNativeDriverV1()
     let input = try KagemushaWalletSetupInputV1(selector: 45, identity: Data(repeating: 9, count: 32))
     XCTAssertThrowsError(try driver.result { output in
-      input.withRequest { driver.setup(0, $0, output) }
+      input.withRequest { driver.setup(0, input.requiresExchange ? 1 : 0, $0, output) }
     }) { error in
       XCTAssertEqual(error as? KagemushaWalletErrorV1, .closed)
     }
@@ -301,14 +301,14 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
     let driver = try KagemushaWalletNativeDriverV1()
     // Opaque DATA only: an admitted request shape reaches the missing-owner check,
     // before any wallet, receipt proof, or monetary operation can run.
-    for selector in [UInt32(54), 55] {
+    for selector in [UInt32(56), 55] {
       for count in [1, 10_000] {
         let input = try KagemushaWalletSetupInputV1(selector: selector,
-          identity: Data(repeating: selector == 54 ? 9 : 0, count: 32),
+          identity: Data(repeating: selector == 56 ? 9 : 0, count: 32),
           first: Data(repeating: 0xa5, count: count))
         XCTAssertThrowsError(try driver.result { output in
           input.withRequest { request in
-            let status = driver.setup(0, request, output)
+            let status = driver.setup(0, input.requiresExchange ? 1 : 0, request, output)
             XCTAssertEqual(status, -2, "selector \(selector), first length \(count)")
             XCTAssertEqual(output.pointee.status, -2)
             XCTAssertEqual(output.pointee.reason, -1)
@@ -329,9 +329,9 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
 
   func testActualNativeDeliverySelectorsRejectForeignScalarsAndUnknownSelector() throws {
     let driver = try KagemushaWalletNativeDriverV1()
-    for selector in [UInt32(54), 55] {
+    for selector in [UInt32(56), 55] {
       let input = try KagemushaWalletSetupInputV1(selector: selector,
-        identity: Data(repeating: selector == 54 ? 9 : 0, count: 32), first: Data([0xa5]))
+        identity: Data(repeating: selector == 56 ? 9 : 0, count: 32), first: Data([0xa5]))
       for field in ["token", "amount.low", "amount.high", "selector"] {
         XCTAssertThrowsError(try driver.result { output in
           input.withRequest { request in
@@ -342,9 +342,9 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
             case "token": malformed.token = 1
             case "amount.low": malformed.amount.low = 1
             case "amount.high": malformed.amount.high = 1
-            default: malformed.selector = 56
+            default: malformed.selector = 59
             }
-            let status = driver.setup(0, &malformed, output)
+            let status = driver.setup(0, input.requiresExchange ? 1 : 0, &malformed, output)
             XCTAssertEqual(status, -1, "selector \(selector), invalid \(field)")
             XCTAssertEqual(output.pointee.status, -1)
             XCTAssertEqual(output.pointee.reason, -1)
@@ -654,9 +654,9 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
     XCTAssertThrowsError(try KagemushaWalletRequestFeeSelectionV1(completion))
   }
 
-  func testCreditedArchiveRequestsBindTheSelectedSendAndKeepExactOriginal() throws {
+  func testQueuedCreditedAndExactArchiveStatusBindSendAndKeepOriginal() throws {
     let id = Data(repeating: 7, count: 32), original = Data([0, 255, 1])
-    for selector in [UInt32(41), 42] {
+    for selector in [UInt32(56), 42] {
       let input = try KagemushaWalletSetupInputV1(selector: selector, identity: id, first: original)
       input.withRequest { request in
         XCTAssertEqual(request.pointee.selector, selector)

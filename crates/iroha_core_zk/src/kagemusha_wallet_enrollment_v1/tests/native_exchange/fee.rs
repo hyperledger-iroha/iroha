@@ -532,8 +532,15 @@ fn actual_native_fee_send_retains_historical_claim_across_restart_and_archive() 
             credited: decode(&acknowledgement),
         },
     );
-    let (mut a, archived) =
-        archive::exercise(a, &device_a, &sources, &f, &frames_a, &acknowledgement);
+    let (mut a, archived) = archive::exercise(
+        a,
+        &device_a,
+        &sources,
+        &f,
+        &frames_a,
+        &send.request_id,
+        &acknowledgement,
+    );
     assert_eq!(
         a.fee_claim(digests.credit_id).unwrap(),
         Some(retained.clone()),

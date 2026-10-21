@@ -47,12 +47,14 @@ mod capacity;
 mod collection;
 mod credit_tree;
 mod custody;
+mod deferred_archive;
 mod fee_claims;
 mod fold_custody;
 mod fold_metrics;
 mod folding;
 mod index;
 mod lifecycle;
+mod maintenance;
 mod manifest;
 mod map_custody;
 mod map_tree;
@@ -64,7 +66,8 @@ pub use native_owner::{
     NativeOpenFailureV1, NativeOperationReviewV1, NativePreparedLedgerLoadV1,
     NativeReleasedOutputV1, NativeStartupFailureV1, NativeWalletCoordinatorV1,
     NativeWalletMetadataV1, NativeWalletProofsV1, NativeWalletRuntimeV1,
-    PAYOUT_RECORD_MAX_BYTES_V1, PendingNativeWalletOpenV1, ReviewedOperationV1, SpeculativeProofV1,
+    PAYOUT_RECORD_MAX_BYTES_V1, PendingNativeWalletOpenV1, ReviewDecisionV1, ReviewExpectationV1,
+    ReviewMaintenanceWaitV1, ReviewedExecutionFailureV1, ReviewedOperationV1, SpeculativeProofV1,
     SpeculativeSendJobV1, SpeculativeSendV1, UnloadFinalityProgressV1,
 };
 mod preparation_custody;
@@ -79,6 +82,10 @@ pub(crate) use custody::NativeObservationsV1;
 pub use custody::{
     AdvanceHandle, Custody, CustodyDeletionProgressV1, CustodyDeletionReviewV1, ProviderArchive,
     ReviewedCustodyDeletionV1, TransitionOwner,
+};
+pub use deferred_archive::{
+    DeferredArchiveAgeV1, DeferredArchiveDrainV1, DeferredArchiveEntryV1, DeferredArchiveReceiptV1,
+    DeferredArchiveSummaryV1, DeferredArchiveWaitV1, DeferredArchiveWakeHintV1,
 };
 pub use fee_claims::{FEE_CLAIM_MAX_BYTES_V1, FinalizedPayoutEvidence, RetainedFeeClaim};
 pub use fold_custody::FoldCustodyV1;
@@ -95,18 +102,20 @@ pub use index::{IndexRoot, ObjectStore, ObjectWorkspace};
 mod object_workspace;
 pub(crate) use lifecycle::ArchiveIntentV1;
 pub use lifecycle::{
-    ChargeOriginalsV1, CreditProjectionV1, NativeIntentV1, NativePreparation, OperationActionV1,
-    OperationRequestV1, PREPARATION_MAX_BYTES, PreparationSourceV1, REQUEST_MAX_BYTES,
-    RequestStatusV1,
+    BoundRequestStatusV1, ChargeOriginalsV1, CreditProjectionV1, NativeIntentV1, NativePreparation,
+    OperationActionV1, OperationRequestV1, PREPARATION_MAX_BYTES, PreparationSourceV1,
+    REQUEST_MAX_BYTES, RequestStatusV1, ReviewedExecutionV1,
 };
+pub use maintenance::MaintenanceViewV1;
 pub use map_custody::{PreparationMapV1, PreparationMapsV1};
 pub(crate) use native_worker::NativeFoldWorkerV1;
 #[cfg(test)]
 pub(crate) use native_worker::{FoldRetentionCountsV1, perturb_retained_key_for_test};
 pub use preparation_custody::{PreparationCustodyV1, PreparationOriginalV1};
 pub use scheduling::{
-    Cancellation, FoldRetentionV1, PaymentGuard, Scheduler, Speculation, SpeculationJob,
-    SpeculationRun,
+    ArchiveAdmissionErrorV1, ArchiveTurnV1, Cancellation, ExchangeCallV1, ExchangeEndV1,
+    ExchangeErrorV1, ExchangeLeaseV1, FoldRetentionV1, PaymentGuard, Scheduler, Speculation,
+    SpeculationJob, SpeculationRun,
 };
 pub use session_custody::DirectTimeExchangeV1;
 pub use snapshot::{Snapshot, SnapshotFold};
@@ -115,6 +124,9 @@ pub use transition_custody::TransitionCustodyV1;
 /// Errors distinguish uncertain custody from invalid input and missing retained witnesses.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// A local Archive turn or maintenance obligation refused admission; no monetary verdict.
+    #[error(transparent)]
+    ArchiveAdmission(#[from] ArchiveAdmissionErrorV1),
     /// The source custody authority could not complete the request.
     #[error(transparent)]
     Provider(#[from] ProviderError),
@@ -162,6 +174,12 @@ pub enum Error {
     /// A required native proof, source or key failed verification.
     #[error("native proof rejected: {0}")]
     Proof(&'static str),
+    /// Original local verifier, kernel or installed-context failure; never a receipt verdict.
+    #[error("native verification did not complete: {0}")]
+    NativeVerification(#[source] crate::kagemusha_wallet_proofs_v1::Error),
+    /// Completed receipt-specific rejection after authenticating its selected Send context.
+    #[error("Credited receipt rejected: {0}")]
+    ReceiptRejected(&'static str),
     /// Design §5.3: free custody storage does not cover this operation's reservation and fold
     /// witnesses. Refused before commit; nothing was debited or credited, and the retained
     /// Request, receipt or Payment stays deliverable. Retry after freeing storage.
@@ -727,11 +745,18 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     /// # Errors
     /// Invalid proofs/inputs, conflicting replay, missing fold or unavailable custody reject
     /// before mutation. Once Advance selects a head its own Pending/Released rule applies.
-    pub fn commit(&mut self, frozen: FrozenTransition) -> Result<Completion, Error> {
+    fn commit(&mut self, frozen: FrozenTransition) -> Result<Completion, Error> {
+        self.commit_with_archive(frozen, None)
+    }
+
+    fn commit_with_archive(
+        &mut self,
+        frozen: FrozenTransition,
+        archive_permit: Option<&scheduling::ArchiveDispatchPermit>,
+    ) -> Result<Completion, Error> {
         let _timer = iroha_plonk::work_metrics::WorkTimer::start(
             iroha_plonk::work_metrics::WorkPhase::Commit,
         );
-        let _payment = self.scheduler.payment();
         frozen.validate()?;
         let c = &frozen.capsule;
         if c.body().scheme_id != self.scheme_id || c.body().wallet_id != self.wallet_id {
@@ -755,6 +780,10 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             KagemushaWalletEffectV1::Receive { .. }
         ) && matches!(&lookup, Lookup::Retained(_) | Lookup::Archived(_));
         if lookup != Lookup::Unknown && !released_receive {
+            // Exact selected recovery keeps priority. Retained observations need not
+            // interrupt the fold required by an already completed Archive.
+            let _recovery =
+                matches!(lookup, Lookup::SelectedUnsigned { .. }).then(|| self.scheduler.payment());
             let outcome = self.custody.advance(&owner, &request)?;
             if let AdvanceOutcome::Released { retained, .. } = &outcome {
                 self.require_retained_output(&c.body().operation_id, retained)?;
@@ -798,6 +827,36 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         if released_receive {
             return Err(Error::WitnessLost("released Receive index"));
         }
+        let _payment = if c.body().kind == KagemushaWalletOperationKindV1::ArchiveSent {
+            let permit = archive_permit.ok_or(Error::Invalid(
+                "Archive dispatch requires Native reservation",
+            ))?;
+            let target = permit.target();
+            let (source, _, _) = self.selected_archive_head()?;
+            permit.validate_for(&self.scheduler, &target.request_id, source)?;
+            let (operation, capsule, kind) = self.prepared_output_mapping(&target.request_id)?;
+            if operation != c.body().operation_id
+                || capsule != c.custody_digest()
+                || kind != KagemushaWalletOperationKindV1::ArchiveSent
+                || c.body().predecessor_capsule_digest != source.capsule
+                || c.body().statement.predecessor.value != source.head
+            {
+                return Err(ArchiveAdmissionErrorV1::InvalidResolution.into());
+            }
+            None
+        } else {
+            if archive_permit.is_some() {
+                return Err(Error::Invalid("Archive permit operation"));
+            }
+            if c.body().kind == KagemushaWalletOperationKindV1::Bootstrap
+                && matches!(self.status()?, SlotStatus::Enrollment(_))
+            {
+                self.scheduler.require_archive_clear()?;
+            } else {
+                self.require_fresh_work()?;
+            }
+            Some(self.scheduler.payment())
+        };
         // Design §5.3: a fresh transition checks this phone again before it commits. Retained
         // and duplicate outcomes above never depend on current capacity.
         self.require_runtime_capacity(NativeAdmissionPhaseV1::BeforeCommit)?;
@@ -887,11 +946,26 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(outcome)
     }
 
+    /// Inspect source-selected Pending custody without taking payment priority.
+    ///
+    /// This is a current observation, not permission to recover a previously observed head.
+    /// A caller must use [`Self::resume`], which rechecks custody after taking priority.
+    ///
+    /// # Errors
+    /// Custody reconciliation, unavailable storage or an inconsistent wallet incarnation.
+    pub fn has_pending_operation(&mut self) -> Result<bool, Error> {
+        Ok(matches!(self.status()?, SlotStatus::Pending(_)))
+    }
+
     /// Resume the source-selected operation using its frozen capsule; no new proof or inputs.
+    /// A poll with no selected Pending operation leaves active and retained fold work alone.
     ///
     /// # Errors
     /// Missing frozen inputs are custody loss. Provider failures retain pending semantics.
     pub fn resume(&mut self) -> Result<Option<Completion>, Error> {
+        if !self.has_pending_operation()? {
+            return Ok(None);
+        }
         let _payment = self.scheduler.payment();
         let status = self.status()?;
         let SlotStatus::Pending(marker) = status else {
@@ -905,6 +979,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         if matches!(outcome, Completion::Complete(_)) {
             self.sync_manifest()?;
         }
+        self.reconcile_archive_admission()?;
         Ok(Some(outcome))
     }
 }

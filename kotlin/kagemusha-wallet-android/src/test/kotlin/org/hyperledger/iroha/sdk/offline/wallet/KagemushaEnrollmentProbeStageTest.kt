@@ -25,7 +25,7 @@ class KagemushaEnrollmentProbeStageTest {
             "native-activation-confirmed" to "activated",
             "native-complete-load" to "loaded",
             "native-complete-send" to "sent",
-            "native-exact-send-delivery-admitted-over-nearby" to "sent",
+            "native-exact-send-delivery-verified-over-nearby" to "sent",
             "native-complete-receive" to "received",
             "native-durable-receive-acknowledged-over-nearby" to "received",
             "native-current-head-folded" to "folded",
@@ -58,5 +58,12 @@ class KagemushaEnrollmentProbeStageTest {
         for (outcome in outcomes) assertNull(enrollmentProbeStage(outcome), outcome)
         val recoveredBurned = listOf("native-call-status-10", "native-credit-evidence-BURNED")
         assertTrue(recoveredBurned.mapNotNull(::enrollmentProbeStage).isEmpty())
+    }
+
+    @Test fun payerProjectionObservationsAndRetiredCarrierOutcomeDoNotEstablishStages() {
+        for (evidence in listOf("UNFOLDED", "CREDITED", "BURNED")) {
+            assertNull(enrollmentProbeStage("native-payer-delivery-evidence-$evidence"))
+        }
+        assertNull(enrollmentProbeStage("native-exact-send-delivery-admitted-over-nearby"))
     }
 }

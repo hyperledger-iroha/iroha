@@ -18,6 +18,9 @@ class CampaignTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='network-controller-test-', dir=r.QUAL)
         self.root = Path(self.temp.name)
+        (self.root / '.git').mkdir()
+        checkout = patch.object(r.admission.capture, 'REPO', self.root)
+        checkout.start(); self.addCleanup(checkout.stop)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -76,21 +79,37 @@ class CampaignTests(unittest.TestCase):
         child = Mock(); child.poll.return_value = 1
         with self.assertRaisesRegex(ValueError, 'same live network owner exited'):
             r.wait_document(self.root / 'funded.json', child, float('inf'))
-        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertEqual(list(self.root.iterdir()), [self.root / '.git'])
         self.assertEqual(child.method_calls, [unittest.mock.call.poll()])
 
     def test_current_source_drift_and_binary_changes_refused(self):
         binary = self.root / 'binary'; binary.write_bytes(b'executable')
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         admitted = {'source': {}, 'retained': {}, 'binaries': {'selected': {'path': str(binary), 'sha256': digest}}}
-        r.unchanged(admitted, {})
-        admitted['source'] = {'crates/example.rs': OTHER}
-        with patch.object(r.admission, 'sha', return_value=PIN):
-            with self.assertRaisesRegex(ValueError, 'current consumed source differs'):
-                r.unchanged(admitted, {})
-        admitted['source'] = {}; binary.write_bytes(b'changed')
-        with self.assertRaisesRegex(ValueError, 'captured executable changed'):
+        responses = {('branch', '--show-current'): 'optimizations',
+                     ('diff', '--name-only', '--diff-filter=U'): ''}
+        with patch.object(r.admission.capture, 'git', side_effect=lambda *args: responses[args]):
             r.unchanged(admitted, {})
+            admitted['source'] = {'crates/example.rs': OTHER}
+            with patch.object(r.admission, 'sha', return_value=PIN):
+                with self.assertRaisesRegex(ValueError, 'current consumed source differs'):
+                    r.unchanged(admitted, {})
+            admitted['source'] = {}; binary.write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError, 'captured executable changed'):
+                r.unchanged(admitted, {})
+
+    def test_branch_or_conflicts_refused_before_source_and_binary_checks(self):
+        admitted = {'source': {'crates/unread.rs': PIN}, 'retained': {},
+                    'binaries': {'selected': {'path': '/never/read', 'sha256': PIN}}}
+        for branch, conflicts in [('other-branch', ''), ('optimizations', 'conflicted.rs')]:
+            with self.subTest(branch=branch, conflicts=conflicts):
+                responses = {('branch', '--show-current'): branch,
+                             ('diff', '--name-only', '--diff-filter=U'): conflicts}
+                with patch.object(r.admission.capture, 'git', side_effect=lambda *args: responses[args]), \
+                     patch.object(r.admission, 'sha') as sha:
+                    with self.assertRaisesRegex(ValueError, 'original resolved branch required'):
+                        r.unchanged(admitted, {})
+                    sha.assert_not_called()
 
     def write_case(self, value, field, case):
         path = self.root / (case['name'] + '-observation.json')
@@ -248,12 +267,15 @@ class CampaignTests(unittest.TestCase):
 
     def test_owner_and_native_build_commands_must_be_release(self):
         commands = [['cargo', 'test', '--release', '--no-run', '--test', name] for name in ('sumeragi', 'iroha_core_zk')]
-        self.assertEqual(r.release_commands({'commands': commands}), commands)
-        self.assertEqual(r.release_commands({'command': commands[0]}), [commands[0]])
-        changed = copy.deepcopy(commands); changed[1].remove('--release')
-        for value in [{'commands': changed}, {'commands': []}, {'commands': commands, 'command': commands[0]}]:
+        for command in commands:
+            self.assertEqual(r.release_command(command), command)
+            for flag in ('--release', 'test', '--no-run'):
+                changed = command.copy(); changed.remove(flag)
+                with self.assertRaises(ValueError): r.release_command(changed)
+        for value in [[], commands, {'commands': commands}, {'command': commands[0]},
+                      {'commands': commands, 'command': commands[0]}, commands[0] + [None]]:
             with self.assertRaises(ValueError):
-                r.release_commands(value)
+                r.release_command(value)
 
     def test_readiness_failure_can_request_normal_abort_from_original_setup(self):
         live = self.root / 'live'; live.mkdir(); (live / 'setup').mkdir()

@@ -6,13 +6,6 @@ public enum KagemushaWalletLedgerTransportV1: UInt64, Sendable {
 }
 
 extension KagemushaWalletV1 {
-    /// Freeze an exact next Load instruction under durable Native request custody.
-    /// Retry the same request ID and amount after uncertain delivery.
-    public func prepareLedgerLoad(requestId: Data, amount: KagemushaWalletUInt128V1) throws -> Data {
-        let result = try setup(.init(selector: 27, identity: requestId, amount: amount))
-        guard result.status == 40 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-        return result.bytes
-    }
 
     /// Canonical instruction framing only; ledger execution still validates every authority.
     public func ledgerInstruction(kind: KagemushaWalletLedgerTransportV1, original: Data) throws -> Data {
@@ -25,42 +18,13 @@ extension KagemushaWalletV1 {
     public func unloadFinalityProgress(transactionHash: Data, original: Data) throws -> KagemushaWalletUnloadFinalityV1 {
         try .init(setup(.init(selector: 33, identity: transactionHash, first: original)))
     }
-    /// Verify one next original block for this Unload's own durable history cursor.
-    public func ingestUnloadFinality(transactionHash: Data, original: Data, finality: Data) throws -> KagemushaWalletLedgerProgressV1 {
-        try .init(setup(.init(selector: 34, identity: transactionHash, first: original, second: finality)))
-    }
-
-    /// Retain this exact same-Activation outer attempt before its first dispatch.
-    /// Intake alone establishes neither ledger inclusion nor permission to Load.
-    public func retainActivationAttempt(signedWire: Data) throws -> KagemushaWalletActivationFinalityV1 {
-        try .init(setup(.init(selector: 46, first: signedWire)))
-    }
-
-    /// Recover wallet activation through successful inclusion of any retained attempt.
-    /// Confirmation does not assert that every outer transaction executed successfully.
-    public func confirmLedgerActivation(signedWire: Data) throws -> KagemushaWalletActivationConfirmationV1 {
-        try .init(setup(.init(selector: 35, first: signedWire)))
-    }
-
-    /// Verify one next original block for this registered attempt's independent Native history.
-    public func ingestActivationFinality(signedWire: Data, original: Data) throws -> KagemushaWalletActivationFinalityV1 {
-        try .init(setup(.init(selector: 36, first: signedWire, second: original)))
-    }
 
     /// Read this registered attempt's progress or the wallet's common activation confirmation.
     public func activationFinalityProgress(signedWire: Data) throws -> KagemushaWalletActivationFinalityV1 {
         try .init(setup(.init(selector: 37, first: signedWire)))
     }
 
-    /// Confirm exact successful input/output inclusion of this original Unload in its own Native-selected block.
-    public func confirmLedgerUnload(transactionHash: Data, original: Data) throws -> KagemushaWalletUnloadConfirmationV1 {
-        let result = try setup(.init(selector: 30, identity: transactionHash, first: original))
-        guard result.status == 42 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-        return .init(height: result.sequenceLow, blockHash: result.bytes)
-    }
-
 }
-
 
 /// Native-verified successful execution of the exact submitted Unload claim.
 public struct KagemushaWalletUnloadConfirmationV1: Sendable {
@@ -130,6 +94,52 @@ public struct KagemushaWalletActivationFinalityV1: Sendable {
             blockHash = nil
         default:
             throw KagemushaWalletErrorV1.invalidNativeOutput
+        }
+    }
+}
+
+extension KagemushaWalletExchangeCallV1 {
+    /// Freeze an exact next Load instruction under durable Native request custody.
+    /// Retry the same request ID and amount after uncertain delivery.
+    public func prepareLedgerLoad(requestId: Data, amount: KagemushaWalletUInt128V1) throws -> Data {
+        return try task.withUse {
+            let result = try setup(.init(selector: 27, identity: requestId, amount: amount))
+            guard result.status == 40 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+            return result.bytes
+        }
+    }
+    /// Verify one next original block for this Unload's own durable history cursor.
+    public func ingestUnloadFinality(transactionHash: Data, original: Data, finality: Data) throws -> KagemushaWalletLedgerProgressV1 {
+        return try task.withUse {
+            try .init(setup(.init(selector: 34, identity: transactionHash, first: original, second: finality)))
+        }
+    }
+    /// Retain this exact same-Activation outer attempt before its first dispatch.
+    /// Intake alone establishes neither ledger inclusion nor permission to Load.
+    public func retainActivationAttempt(signedWire: Data) throws -> KagemushaWalletActivationFinalityV1 {
+        return try task.withUse {
+            try .init(setup(.init(selector: 46, first: signedWire)))
+        }
+    }
+    /// Recover wallet activation through successful inclusion of any retained attempt.
+    /// Confirmation does not assert that every outer transaction executed successfully.
+    public func confirmLedgerActivation(signedWire: Data) throws -> KagemushaWalletActivationConfirmationV1 {
+        return try task.withUse {
+            try .init(setup(.init(selector: 35, first: signedWire)))
+        }
+    }
+    /// Verify one next original block for this registered attempt's independent Native history.
+    public func ingestActivationFinality(signedWire: Data, original: Data) throws -> KagemushaWalletActivationFinalityV1 {
+        return try task.withUse {
+            try .init(setup(.init(selector: 36, first: signedWire, second: original)))
+        }
+    }
+    /// Confirm exact successful input/output inclusion of this original Unload in its own Native-selected block.
+    public func confirmLedgerUnload(transactionHash: Data, original: Data) throws -> KagemushaWalletUnloadConfirmationV1 {
+        return try task.withUse {
+            let result = try setup(.init(selector: 30, identity: transactionHash, first: original))
+            guard result.status == 42 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+            return .init(height: result.sequenceLow, blockHash: result.bytes)
         }
     }
 }

@@ -30,11 +30,13 @@ class KagemushaWalletCurrentReviewIntegrationV1Test {
         high: Long = 0, detail: Int = 0, reason: Int = -1, platform: Int = 0) =
         KagemushaWalletReviewReplyV1(status, reason, platform, token, high, detail, bytes)
 
+    private fun KagemushaWalletReviewReplyV1.ready(owner: Any, expected: KagemushaWalletReviewProjectionV1.Kind): KagemushaWalletReviewV1 =
+        (decision(owner, ByteArray(32) { 1 }, expected) as KagemushaWalletReviewDecisionV1.Ready).review
     @Test fun `review DATA preserves all unsigned bits and defensive byte copies`() {
         val original = projection()
         val holder = reply(original)
         original.fill(0)
-        val value = holder.review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND).projection
+        val value = holder.ready(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND).projection
         assertEquals(KagemushaWalletReviewProjectionV1.Kind.SEND, value.kind)
         for (scalar in listOf(value.amount, value.fee, value.grossDebit, value.netDestinationAmount)) {
             assertEquals(KagemushaWalletUInt128V1(-1, -1), scalar)
@@ -51,7 +53,7 @@ class KagemushaWalletCurrentReviewIntegrationV1Test {
     }
     @Test fun `wrong owner does not consume review while aliases never permit replay`() {
         val owner = Any(); val another = Any()
-        val review = reply().review(owner,KagemushaWalletReviewProjectionV1.Kind.SEND)
+        val review = reply().ready(owner,KagemushaWalletReviewProjectionV1.Kind.SEND)
         assertFailsWith<IllegalStateException> { review.consume(another) }
         val alias = review
         assertEquals(19L, alias.consume(owner))
@@ -59,7 +61,7 @@ class KagemushaWalletCurrentReviewIntegrationV1Test {
         assertTrue(review.toString().contains("[REDACTED]"))
     }
     @Test fun `concurrent managed consumption has exactly one winner`() {
-        val owner = Any(); val review = reply().review(owner,KagemushaWalletReviewProjectionV1.Kind.SEND)
+        val owner = Any(); val review = reply().ready(owner,KagemushaWalletReviewProjectionV1.Kind.SEND)
         val start = CountDownLatch(1); val executor = Executors.newFixedThreadPool(2)
         try {
             val attempts = List(2) {
@@ -73,64 +75,68 @@ class KagemushaWalletCurrentReviewIntegrationV1Test {
         assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(18, -1, 0, 19, 0, 0, projection()) }
         for (value in listOf(reply(status = 1), reply(token = 0), reply(token = -1), reply(high = 1),
             reply(detail = 1), reply(reason = 0), reply(platform = 1))) {
-            assertFailsWith<KagemushaWalletExceptionV1> { value.review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
+            assertFailsWith<KagemushaWalletExceptionV1> { value.ready(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
         }
         for (count in listOf(0, 490, 491, 494, 4_592)) {
-            assertFailsWith<KagemushaWalletExceptionV1> { reply(ByteArray(count)).review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
+            assertFailsWith<KagemushaWalletExceptionV1> { reply(ByteArray(count)).ready(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
         }
         for ((offset, byte) in listOf(0 to 0, 8 to 2, 73 to 2, 73 to 0, 426 to 3)) {
             val changed = projection(); changed[offset] = byte.toByte()
-            assertFailsWith<KagemushaWalletExceptionV1> { reply(changed).review(Any(),if(changed.getOrNull(8)==8.toByte())KagemushaWalletReviewProjectionV1.Kind.UNLOAD else KagemushaWalletReviewProjectionV1.Kind.SEND) }
+            assertFailsWith<KagemushaWalletExceptionV1> { reply(changed).ready(Any(),if(changed.getOrNull(8)==8.toByte())KagemushaWalletReviewProjectionV1.Kind.UNLOAD else KagemushaWalletReviewProjectionV1.Kind.SEND) }
         }
-        val unload = reply(projection(8)).review(Any(),KagemushaWalletReviewProjectionV1.Kind.UNLOAD).projection
+        val unload = reply(projection(8)).ready(Any(),KagemushaWalletReviewProjectionV1.Kind.UNLOAD).projection
         assertEquals(KagemushaWalletReviewProjectionV1.Kind.UNLOAD, unload.kind)
         assertEquals(null, unload.receiverWalletId())
         assertEquals(null, unload.destinationAccountOriginal())
         val changed = projection(8); changed[74] = 1
-        assertFailsWith<KagemushaWalletExceptionV1> { reply(changed).review(Any(),if(changed.getOrNull(8)==8.toByte())KagemushaWalletReviewProjectionV1.Kind.UNLOAD else KagemushaWalletReviewProjectionV1.Kind.SEND) }
+        assertFailsWith<KagemushaWalletExceptionV1> { reply(changed).ready(Any(),if(changed.getOrNull(8)==8.toByte())KagemushaWalletReviewProjectionV1.Kind.UNLOAD else KagemushaWalletReviewProjectionV1.Kind.SEND) }
     }
     @Test fun `review input bounds both originals without foreign financial authority`() {
         val request = ByteArray(10_000) { 7 }
         val account = ByteArray(4_096) { 9 }
-        val send = KagemushaWalletReviewInputV1(1, first = request, second = account)
+        val send = KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 1, KagemushaWalletReviewExpectationV1.Fresh, first = request, second = account)
         request.fill(0); account.fill(0); send.first()[0] = 0; send.second()[0] = 0
         assertEquals(7.toByte(), send.first()[0])
         assertContentEquals(ByteArray(4_096){9},send.second())
-        KagemushaWalletReviewInputV1(8, KagemushaWalletUInt128V1(-1, -1))
-        KagemushaWalletReviewInputV1(8, KagemushaWalletUInt128V1(1, 0), ByteArray(1_024),
+        KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 8, KagemushaWalletReviewExpectationV1.Fresh, KagemushaWalletUInt128V1(-1, -1))
+        KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 8, KagemushaWalletReviewExpectationV1.Fresh, KagemushaWalletUInt128V1(1, 0), ByteArray(1_024),
             KagemushaWalletUnloadChargeReviewV1.encode(ByteArray(10_000), ByteArray(4_096)))
         for (make in listOf<() -> KagemushaWalletReviewInputV1>(
-            { KagemushaWalletReviewInputV1(2, first = byteArrayOf(1)) },
-            { KagemushaWalletReviewInputV1(1) },
-            { KagemushaWalletReviewInputV1(1, first = ByteArray(10_001), second = byteArrayOf(1)) },
-            { KagemushaWalletReviewInputV1(1, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), byteArrayOf(1)) },
-            { KagemushaWalletReviewInputV1(1, first = byteArrayOf(1)) },
-            { KagemushaWalletReviewInputV1(1, second = byteArrayOf(1)) },
-            { KagemushaWalletReviewInputV1(1, first = byteArrayOf(1), second = ByteArray(4_097)) },
-            { KagemushaWalletReviewInputV1(8) },
-            { KagemushaWalletReviewInputV1(8, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1)) },
-            { KagemushaWalletReviewInputV1(8, KagemushaWalletUInt128V1(1, 0), second = byteArrayOf(1)) },
-            { KagemushaWalletReviewInputV1(8, KagemushaWalletUInt128V1(1, 0), ByteArray(1_025), byteArrayOf(1)) },
-            { KagemushaWalletReviewInputV1(8, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), ByteArray(10_001)) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 2, KagemushaWalletReviewExpectationV1.Fresh, first = byteArrayOf(1)) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 1, KagemushaWalletReviewExpectationV1.Fresh) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 1, KagemushaWalletReviewExpectationV1.Fresh, first = ByteArray(10_001), second = byteArrayOf(1)) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 1, KagemushaWalletReviewExpectationV1.Fresh, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), byteArrayOf(1)) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 1, KagemushaWalletReviewExpectationV1.Fresh, first = byteArrayOf(1)) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 1, KagemushaWalletReviewExpectationV1.Fresh, second = byteArrayOf(1)) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 1, KagemushaWalletReviewExpectationV1.Fresh, first = byteArrayOf(1), second = ByteArray(4_097)) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 8, KagemushaWalletReviewExpectationV1.Fresh) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 8, KagemushaWalletReviewExpectationV1.Fresh, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1)) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 8, KagemushaWalletReviewExpectationV1.Fresh, KagemushaWalletUInt128V1(1, 0), second = byteArrayOf(1)) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 8, KagemushaWalletReviewExpectationV1.Fresh, KagemushaWalletUInt128V1(1, 0), ByteArray(1_025), byteArrayOf(1)) },
+            { KagemushaWalletReviewInputV1(ByteArray(32) { 1 }, 8, KagemushaWalletReviewExpectationV1.Fresh, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), ByteArray(10_001)) },
         )) assertFailsWith<IllegalArgumentException> { make() }
         assertTrue(send.toString().contains("[REDACTED]"))
     }
     @Test fun `invalid public review calls never dispatch Native or consume another owner`() {
         // An unadmitted managed holder for local refusal tests only. No JNI invocation.
         val wallet = KagemushaWalletV1(1)
-        assertFailsWith<IllegalArgumentException> { wallet.reviewSend(byteArrayOf(),byteArrayOf(1)) }
-        assertFailsWith<IllegalArgumentException> { wallet.reviewSend(byteArrayOf(1),byteArrayOf()) }
-        assertFailsWith<IllegalArgumentException> { wallet.reviewSend(byteArrayOf(1),ByteArray(4_097)) }
-        assertFailsWith<IllegalArgumentException> { wallet.reviewUnload(KagemushaWalletUInt128V1(0, 0)) }
-        assertFailsWith<IllegalArgumentException> { wallet.reviewUnload(KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), null) }
-        assertFailsWith<IllegalArgumentException> { wallet.reviewUnload(KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), byteArrayOf(1)) }
-        assertFailsWith<IllegalArgumentException> { wallet.reviewUnload(KagemushaWalletUInt128V1(1, 0), null, null, byteArrayOf(1)) }
-        assertFailsWith<IllegalArgumentException> { wallet.reviewUnload(KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), byteArrayOf(1), byteArrayOf()) }
-        val origin = Any(); val review = reply().review(origin,KagemushaWalletReviewProjectionV1.Kind.SEND)
-        assertFailsWith<IllegalArgumentException> { wallet.executeReviewed(review, ByteArray(31)) }
-        assertFailsWith<IllegalArgumentException> { wallet.executeReviewed(review, ByteArray(32)) }
-        assertFailsWith<IllegalStateException> { wallet.executeReviewed(review, ByteArray(32) { 1 }) }
-        assertFailsWith<IllegalStateException> { wallet.cancelReview(review) }
+        // Local refusal fixture only; this token grants no Native authority.
+        val exchange = KagemushaWalletExchangeV1(wallet, 1) { KagemushaWalletExchangeEndV1.ENDED }
+        val call = exchange.admit()
+        assertFailsWith<IllegalArgumentException> { call.reviewSend(ByteArray(32) { 1 }, byteArrayOf(),byteArrayOf(1), KagemushaWalletReviewExpectationV1.Fresh) }
+        assertFailsWith<IllegalArgumentException> { call.reviewSend(ByteArray(32) { 1 }, byteArrayOf(1),byteArrayOf(), KagemushaWalletReviewExpectationV1.Fresh) }
+        assertFailsWith<IllegalArgumentException> { call.reviewSend(ByteArray(32) { 1 }, byteArrayOf(1),ByteArray(4_097), KagemushaWalletReviewExpectationV1.Fresh) }
+        assertFailsWith<IllegalArgumentException> { call.reviewUnload(ByteArray(32) { 1 }, KagemushaWalletUInt128V1(0, 0), expectation = KagemushaWalletReviewExpectationV1.Fresh) }
+        assertFailsWith<IllegalArgumentException> { call.reviewUnload(ByteArray(32) { 1 }, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), null, expectation = KagemushaWalletReviewExpectationV1.Fresh) }
+        assertFailsWith<IllegalArgumentException> { call.reviewUnload(ByteArray(32) { 1 }, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), byteArrayOf(1), expectation = KagemushaWalletReviewExpectationV1.Fresh) }
+        assertFailsWith<IllegalArgumentException> { call.reviewUnload(ByteArray(32) { 1 }, KagemushaWalletUInt128V1(1, 0), null, null, byteArrayOf(1), expectation = KagemushaWalletReviewExpectationV1.Fresh) }
+        assertFailsWith<IllegalArgumentException> { call.reviewUnload(ByteArray(32) { 1 }, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), byteArrayOf(1), byteArrayOf(), expectation = KagemushaWalletReviewExpectationV1.Fresh) }
+        val origin = Any(); val review = reply().ready(origin,KagemushaWalletReviewProjectionV1.Kind.SEND)
+        assertFailsWith<IllegalArgumentException> { call.reviewSend(ByteArray(31), byteArrayOf(1), byteArrayOf(2), KagemushaWalletReviewExpectationV1.Fresh) }
+        assertFailsWith<IllegalArgumentException> { call.reviewSend(ByteArray(32), byteArrayOf(1), byteArrayOf(2), KagemushaWalletReviewExpectationV1.Fresh) }
+        assertFailsWith<IllegalStateException> { call.executeReviewed(review) }
+        assertFailsWith<IllegalStateException> { exchange.discardReview(review) }
         assertEquals(19L, review.consume(origin))
+        call.finish(); exchange.end()
     }
 }

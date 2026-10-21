@@ -218,6 +218,7 @@ fn continue_retained_b_archive_then_unload_without_repeating_transfers() {
             &sources,
             &f,
             &frames_a,
+            &[212; 32],
             &credited_ab,
             ab.signed_request().unwrap().body.credit_id()
         ),
@@ -228,6 +229,7 @@ fn continue_retained_b_archive_then_unload_without_repeating_transfers() {
         &sources,
         &f_b,
         &frames_b,
+        &[222; 32],
         &credited_bc,
         bc.signed_request().unwrap().body.credit_id(),
     );
@@ -308,6 +310,7 @@ fn continue_retained_b_archive_then_unload_without_repeating_transfers() {
             &sources,
             &f_b,
             &frames_b,
+            &[222; 32],
             &credited_bc,
             bc.signed_request().unwrap().body.credit_id()
         ),

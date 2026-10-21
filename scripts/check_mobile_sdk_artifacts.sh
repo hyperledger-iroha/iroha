@@ -483,6 +483,8 @@ REQUIRED_PROTOCOL_C_SYMBOLS=(
   connect_norito_kagemusha_wallet_open_cancel_v1
   connect_norito_kagemusha_wallet_close_v1
   connect_norito_kagemusha_wallet_activity_v1
+  connect_norito_kagemusha_wallet_begin_exchange_v1
+  connect_norito_kagemusha_wallet_end_exchange_v1
   connect_norito_kagemusha_wallet_setup_v1
   connect_norito_kagemusha_wallet_execute_v1
   connect_norito_kagemusha_wallet_load_original_validate_v1

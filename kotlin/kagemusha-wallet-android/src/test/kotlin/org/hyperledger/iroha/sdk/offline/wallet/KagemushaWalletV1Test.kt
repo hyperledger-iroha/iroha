@@ -96,8 +96,41 @@ class KagemushaWalletV1Test {
     }
     @Test fun `native API contains only opaque state machine calls`() {
         val type = JvmApiInventory.read(KagemushaWalletNativeV1::class.java)
-        assertEquals(setOf("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "snapshot", "execute", "setup", "enrollment", "enrollmentRefusal", "review", "executeReviewed", "discardReview"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
+        assertEquals(setOf("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "snapshot", "execute", "setup", "enrollment", "enrollmentRefusal", "review", "executeReviewed", "discardReview", "beginExchange", "endExchange"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
+        val review = type.methods.single { it.isNative && it.name == "review" }
+        val executed = type.methods.single { it.isNative && it.name == "executeReviewed" }
+        assertEquals(listOf("J", "J", "[B", "I", "J", "J", "I", "[B", "[B", "[B"), review.parameterTypes)
+        assertEquals(listOf("J", "J", "J"), executed.parameterTypes)
         assertEquals(-4, KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE)
+    }
+    @Test fun `fresh mutations require a call and retired delivery producers are absent`() {
+        val wallet = JvmApiInventory.read(KagemushaWalletV1::class.java).methods.filter { it.isPublic }.map { it.name }.toSet()
+        val call = JvmApiInventory.read(KagemushaWalletExchangeCallV1::class.java).methods.filter { it.isPublic }.map { it.name }.toSet()
+        val exchange = JvmApiInventory.read(KagemushaWalletExchangeV1::class.java).methods.filter { it.isPublic }.map { it.name }.toSet()
+        for (name in listOf("bootstrap", "request", "requestWithFeePolicy", "reviewSend", "reviewUnload",
+            "executeReviewed", "receiveWithCompanion", "beginTimeExchange", "finishTimeExchange",
+            "observeCreditedForSend", "reviewCustodyDeletion", "destructivelyDeleteCustody")) {
+            assertTrue(name in call, name)
+            assertTrue(name !in wallet, name)
+        }
+        for (name in listOf("discardReview", "cancelTimeExchange", "discardCustodyDeletionReview")) {
+            assertTrue(name in exchange, name)
+            assertTrue(name !in wallet && name !in call, name)
+        }
+        for (retired in listOf("acceptCredited", "acceptCreditedForSend", "verifiedDelivery")) {
+            assertTrue(retired !in wallet && retired !in call && retired !in exchange, retired)
+        }
+    }
+    @Test fun `review API requires identity at issuance and execution accepts only the actual capability`() {
+        val methods = JvmApiInventory.read(KagemushaWalletExchangeCallV1::class.java).methods
+        val send = methods.single { it.isPublic && it.name == "reviewSend" }
+        val unload = methods.single { it.isPublic && it.name == "reviewUnload" }
+        val execution = methods.single { it.isPublic && it.name == "executeReviewed" }
+        val prefix = "Lorg/hyperledger/iroha/sdk/offline/wallet/"
+        assertEquals(listOf("[B", "[B", "[B", prefix + "KagemushaWalletReviewExpectationV1;"), send.parameterTypes)
+        assertEquals(listOf("[B", prefix + "KagemushaWalletUInt128V1;", "[B", "[B", "[B",
+            prefix + "KagemushaWalletReviewExpectationV1;"), unload.parameterTypes)
+        assertEquals(listOf(prefix + "KagemushaWalletReviewV1;"), execution.parameterTypes)
     }
     @Test fun `typed lifecycle inputs bound originals and preserve unsigned scalar bits`() {
         for (selector in (0..10).filter { it != 1 && it != 8 }) {
@@ -266,11 +299,15 @@ class KagemushaWalletV1Test {
         assertEquals(-1L, KagemushaWalletSetupInputV1(2, ByteArray(32) { 1 }, KagemushaWalletUInt128V1(-1, -1)).amount.low)
         assertTrue(input.toString().contains("[REDACTED]"))
         val wallet = KagemushaWalletV1(1)
+        // Local validation fixture only, never an admitted Native owner or exchange.
+        val exchange = KagemushaWalletExchangeV1(wallet, 1) { KagemushaWalletExchangeEndV1.ENDED }
+        val call = exchange.admit()
         assertFailsWith<IllegalArgumentException> {
-            wallet.request(ByteArray(32) { 1 }, one, byteArrayOf(), byteArrayOf())
+            call.request(ByteArray(32) { 1 }, one, byteArrayOf(), byteArrayOf())
         }
-        assertFailsWith<IllegalArgumentException> { wallet.request(ByteArray(32) { 1 }, one, byteArrayOf(7), null) }
-        assertFailsWith<IllegalArgumentException> { wallet.requestWithFeePolicy(ByteArray(32) { 1 }, one, byteArrayOf(7), null) }
-        assertFailsWith<IllegalArgumentException> { wallet.requestWithFeePolicy(ByteArray(32) { 1 }, one, byteArrayOf(), byteArrayOf(7)) }
+        assertFailsWith<IllegalArgumentException> { call.request(ByteArray(32) { 1 }, one, byteArrayOf(7), null) }
+        assertFailsWith<IllegalArgumentException> { call.requestWithFeePolicy(ByteArray(32) { 1 }, one, byteArrayOf(7), null) }
+        assertFailsWith<IllegalArgumentException> { call.requestWithFeePolicy(ByteArray(32) { 1 }, one, byteArrayOf(), byteArrayOf(7)) }
+        call.finish(); exchange.end()
     }
 }

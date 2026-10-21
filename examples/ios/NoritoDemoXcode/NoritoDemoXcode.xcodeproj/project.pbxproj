@@ -40,6 +40,9 @@
 		BF026000000000000000030D /* KagemushaQRDeviceStages.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF026000000000000000030C /* KagemushaQRDeviceStages.swift */; };
 		BF0260000000000000000321 /* KagemushaQRProbeManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF0260000000000000000320 /* KagemushaQRProbeManifest.swift */; };
 		BF0260000000000000000323 /* KagemushaQRProbeManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF0260000000000000000322 /* KagemushaQRProbeManifestTests.swift */; };
+		BF0260000000000000000341 /* KagemushaProbeActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF0260000000000000000340 /* KagemushaProbeActivity.swift */; };
+		BF0260000000000000000361 /* KagemushaProbeExchange.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF0260000000000000000360 /* KagemushaProbeExchange.swift */; };
+		BF0260000000000000000343 /* KagemushaProbeActivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF0260000000000000000342 /* KagemushaProbeActivityTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -78,6 +81,9 @@
 		BF026000000000000000030C /* KagemushaQRDeviceStages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KagemushaQRDeviceStages.swift; sourceTree = "<group>"; };
 		BF0260000000000000000320 /* KagemushaQRProbeManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KagemushaQRProbeManifest.swift; sourceTree = "<group>"; };
 		BF0260000000000000000322 /* KagemushaQRProbeManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KagemushaQRProbeManifestTests.swift; sourceTree = "<group>"; };
+		BF0260000000000000000340 /* KagemushaProbeActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KagemushaProbeActivity.swift; sourceTree = "<group>"; };
+		BF0260000000000000000360 /* KagemushaProbeExchange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KagemushaProbeExchange.swift; sourceTree = "<group>"; };
+		BF0260000000000000000342 /* KagemushaProbeActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KagemushaProbeActivityTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -128,6 +134,9 @@
 			BF0250000000000000000109 /* KagemushaEnrollmentPhysicalDeviceTests.swift */,
 			BF0250000000000000000212 /* KagemushaEnrollmentProbeStage.swift */,
 			BF0250000000000000000214 /* KagemushaEnrollmentProbeStageTests.swift */,
+			BF0260000000000000000340 /* KagemushaProbeActivity.swift */,
+			BF0260000000000000000360 /* KagemushaProbeExchange.swift */,
+			BF0260000000000000000342 /* KagemushaProbeActivityTests.swift */,
 			BF0250000000000000000107 /* KagemushaEnrollmentDeviceActor.swift */,
 			BF0250000000000000000105 /* KagemushaEnrollmentProbeFiles.swift */,
 			3F1C3AB02C7F11B500C1C001 /* Info.plist */,
@@ -194,6 +203,9 @@
 			BF025000000000000000010A /* KagemushaEnrollmentPhysicalDeviceTests.swift in Sources */,
 			BF0250000000000000000213 /* KagemushaEnrollmentProbeStage.swift in Sources */,
 			BF0250000000000000000215 /* KagemushaEnrollmentProbeStageTests.swift in Sources */,
+			BF0260000000000000000341 /* KagemushaProbeActivity.swift in Sources */,
+			BF0260000000000000000361 /* KagemushaProbeExchange.swift in Sources */,
+			BF0260000000000000000343 /* KagemushaProbeActivityTests.swift in Sources */,
 			BF0250000000000000000108 /* KagemushaEnrollmentDeviceActor.swift in Sources */,
 			BF0250000000000000000106 /* KagemushaEnrollmentProbeFiles.swift in Sources */,
 		); runOnlyForDeploymentPostprocessing = 0; };

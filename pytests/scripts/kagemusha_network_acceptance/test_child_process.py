@@ -58,6 +58,9 @@ class ChildProcessTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
+        (self.root / '.git').mkdir()
+        checkout = patch.object(capture, 'REPO', self.root)
+        checkout.start(); self.addCleanup(checkout.stop)
 
     def test_natural_terminal_preserves_byte_streams_and_requested_options(self):
         child = FakeChild()
@@ -148,10 +151,17 @@ class ChildProcessTests(unittest.TestCase):
         self.assertEqual(result['head'], 'a' * 40)
         self.assertEqual(result['branch'], 'optimizations')
         self.assertEqual(result['unmerged'], [])
-        self.assertEqual([tuple(argv) for argv, _ in calls], list(outputs))
-        self.assertEqual(calls[0][1], {'cwd': self.root, 'stdout': subprocess.PIPE})
-        for _, kwargs in calls[1:]:
-            self.assertEqual(kwargs, {'cwd': self.root, 'text': True, 'stdout': subprocess.PIPE})
+        self.assertIs(result['merge_head'], False)
+        branch = ('git', 'branch', '--show-current')
+        conflicts = ('git', 'diff', '--name-only', '--diff-filter=U')
+        listing = ('git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z')
+        self.assertEqual([tuple(argv) for argv, _ in calls],
+                         [branch, conflicts, listing, ('git', 'rev-parse', 'HEAD'), branch, conflicts])
+        for argv, kwargs in calls:
+            expected = {'cwd': self.root, 'stdout': subprocess.PIPE}
+            if tuple(argv) != listing:
+                expected['text'] = True
+            self.assertEqual(kwargs, expected)
 
     def tool_outputs(self, platform):
         outputs = {('rustup', 'which', name): str(self.root / name) + '\n' for name in ('rustc', 'cargo')}
@@ -193,7 +203,7 @@ class ChildProcessTests(unittest.TestCase):
     def test_uncertain_git_query_propagates_identity_without_followup(self):
         for caller, expected in (
                 (lambda: capture.git('rev-parse', 'HEAD'), ['git', 'rev-parse', 'HEAD']),
-                (capture.snapshot, ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'])):
+                (capture.snapshot, ['git', 'branch', '--show-current'])):
             child = FakeChild(error=KeyboardInterrupt('DATA'))
             with self.subTest(expected=expected), patch.object(owner.subprocess, 'Popen', return_value=child) as spawn:
                 with self.assertRaises(owner.UnfinishedChild) as caught:

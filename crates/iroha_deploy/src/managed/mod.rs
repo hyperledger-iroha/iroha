@@ -120,6 +120,20 @@ pub enum Error {
     /// Stored metadata or caller input is invalid.
     #[error("{0}")]
     Invalid(String),
+    /// The signed checkpoint at an independently installed parent location could not be read.
+    #[error(
+        "could not authenticate the signed checkpoint for network `{}` at {}: {source}{}",
+        .profile.network_name(),
+        .profile.checkpoint_url(),
+        checkpoint_read_followup(.source)
+    )]
+    ParentCheckpoint {
+        /// Validated credential-free installation context, never selected by a response.
+        profile: Box<crate::bootstrap::InstalledNetworkProfile>,
+        /// Original transport or authentication failure.
+        #[source]
+        source: Box<crate::bootstrap::CheckpointReadError>,
+    },
     /// Native call work failed or remains unresolved; its original journal and cause survive.
     #[error("{source}\nCall journal: {journal:?}")]
     ContractCall {
@@ -164,6 +178,17 @@ pub enum Error {
         /// Closed classification containing no request, response or custody text.
         failure: ManagedAttachmentFailure,
     },
+}
+
+fn checkpoint_read_followup(source: &crate::bootstrap::CheckpointReadError) -> &'static str {
+    if matches!(
+        source,
+        crate::bootstrap::CheckpointReadError::Http(iroha::http::PublicHttpError::Status(404))
+    ) {
+        "\nCheck publication or routing of the signed checkpoint at this installed location, then retry the same command. Keep any existing context and journals."
+    } else {
+        ""
+    }
 }
 
 fn worker_failure_followup(cleanup: Option<&Error>, publication: Option<&Error>) -> String {

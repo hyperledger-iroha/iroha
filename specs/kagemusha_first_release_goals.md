@@ -35,7 +35,7 @@ their component ownership.
 | KR1 — iOS release and restore | Native/Swift, G2 | Trace Selected, journal, signature, anchor and exposed Payment through interrupted/ambiguous writes, concurrency, restart and replay. Exercise supported stock-device backup/restore and migration schedules. A released Payment must exclude an old head under the same usable key through a nonrollback authority, or make that key unusable. Retain the existing double-anchor-loss counterexample until an actual platform guarantee excludes it; Keychain readback and additional writes alone do not close it. |
 | KR2 — Complete monetary lifecycle | Wallet/Core/SDK, G4/G5, NF1–NF6 | Execute enrollment → activation → funded Load → offline A→B→C → Unload → once-only ledger payout. Include receiver restart with a fresh-ID duplicate Receive, reverse-direction payments, Receive folding, ArchiveReceive, ArchiveStatus, fees, quota/lease controls, local blacklists and charge continuations. At every durable boundary cover crashes, lost acknowledgements, exact retries, duplicate credits, conflicting inputs, invalid proofs and stale state; preserve conservation and every committed payment. Run host, four local validators and live Taira separately. |
 | KR3 — Physical phones | Android/Swift/carriers, G2/G4/G7 | On the specified Pixel 6 / Android 17 and iPhone 16 Pro Max, retain actual key attestation/App Attest, activation, funded Load, bidirectional offline payments over each supported NFC/QR/Nearby carrier, restart/interruption and Unload. Record actual model/OS/build/carrier; a different phone or a simulator does not close this goal. Request concrete unlock, biometric and tap actions when the device harness is ready. |
-| KR4 — Complete envelopes and resources | Model/proofs/SDK, G1/G4/G7 | Retain genuine canonical Offer, Request, Payment, both Credited forms, CreditStatus and Lineage envelopes for every current supported selector. Every session envelope is ≤2,048 B and every monetary envelope ≤10,000 B. On a declared physical-device/OS/carrier population measure two-second p95 durable completion, cold opening, peak memory, retained storage, energy and separate time until received value is spendable. Preserve failed, cancelled and slow trials; calibration cannot convert a failure into a pass. |
+| KR4 — Complete envelopes and resources | Model/proofs/SDK, G1/G4/G7 | Retain genuine canonical Request, Payment, payer companion, both Credited forms, CreditStatus and Lineage envelopes for every current supported selector. The payer companion and simple session-control frames are ≤2,048 B; Request, Payment and Credited envelopes, with their required dependencies, are each ≤10,000 B (§8). On a declared physical-device/OS/carrier population measure two-second p95 durable completion, cold opening, peak memory, retained storage, energy and separate time until received value is spendable. Preserve failed, cancelled and slow trials; calibration cannot convert a failure into a pass. |
 | KR5 — Proof correctness and privacy | Proof owners/independent reviewer, G3 | Run genuine native/circuit binding mutations for every consumer, Ω opening and both exposed accumulator decisions. Discharge [C12](kagemusha_c12_composition_v1.md) for the actual setup, three-Q prefix, RP57 interfaces, exposed challenges, adaptive histories, retained private state, checkpoints, retries and joint folding/publication, with explicit assumptions and independent review. Regenerate descriptors, keys and catalog and rerun affected genuine proofs after any construction change. |
 | KR6 — Retirement and generated delivery | Component/release owners, G6/G7 | Remove every confirmed superseded implementation and its unused build edges without losing assertions or runtime bindings. Regenerate OpenAPI manifests, `release/openapi-cargo-lock-v1.txt`, environment inventory, panic-boundary inventory and release feature-graph seal from the final source. Prepare a concrete dependency-budget baseline for owner review. Update concise source-adjacent truth and coordinate affected public documentation in `iroha-docs`. |
 | KR7 — Verified delivery | All component owners, G7 | Rebuild matching consumers and pass focused regressions, required workspace tests, applicable strict clippy, Kotlin/Swift/Python/JavaScript/C# suites and release checks on the identified candidate. The final §10.1 report names defects/regressions, artifact identities, network/device measurements, cryptographic assumptions, and every remaining external dependency with its smallest necessary decision. No unexecuted or failed requirement is marked complete. |
@@ -43,6 +43,46 @@ their component ownership.
 KR1 and the independent proof, lifecycle, retirement and harness work may proceed
 while the KR0 freeze or a physical dependency is unavailable. Final qualification
 must still use matching inputs after those changes.
+
+KR2 has two distinct scheduling prerequisites before the phone journey:
+
+- Qualify the implemented phone-probe bindings from actual OS foreground and
+  charging observations to the existing `setActivity` API. The bindings await
+  initial publication, use independent control queues and retain failed cleanup
+  ownership. Compile matching consumers and execute the authored regressions;
+  on physical phones cover activity changes during a synchronous fold, close
+  failures, teardown and reopen without stale callbacks reaching a new owner.
+  Source review alone does not qualify OS notification timing or fold progress.
+- Qualify the implemented Core admission, Native source barrier and ABI32 C/JNI/SDK
+  integration around the [deferred ArchiveSent queue](../crates/iroha_core_zk/src/kagemusha_wallet_state_v1/deferred_archive.rs)
+  required by §5.3. Exact Credited originals enter custody before verification;
+  first verified receipt and age observations remain bound to their actual Send.
+  Only exact Archive Complete permits dequeue. Definitive receipt rejection
+  advances intake; local read, resource and verifier failures remain retryable.
+  Core owns logical exchange leases, accepted child calls and a private dispatch
+  permit bound to the current source and exact queued request. SDKs register
+  exchanges before worker/UI waits, join accepted tasks before end and retain
+  exact cleanup ownership on failure. Fresh mutations require an exchange;
+  public raw commit and direct receipt-to-Archive entry points are removed.
+  Selected Pending recovery precedes new idle admission. Immediately before an
+  unselected Archive, Native requires no open/requested exchange, empty fold
+  backlog and actual charging, at least 16 deferred steps or oldest age of 24
+  hours. Native wall time governs only this local age alternative, never monetary
+  authority or the §7 time-control clock. One Archive runs at a time. Later fresh
+  head mutations wait outside Payment priority for its covering fold; delayed
+  speculation cannot interrupt that fold. The current selected head reconstructs
+  this obligation after restart. Typed preflight refusals preserve only an exact
+  unused review; operational failures do not masquerade as retained reviews.
+  The existing maintenance worker now discovers retained work on open and
+  performs bounded recovery, receipt verification, eligible folding and exact
+  Archive dispatch. Exchange release and intake notify it; oldest-age timers
+  requery Native source and time. Qualify this automatic progress, event/park
+  races, explicit retry of observed failures and close ownership; source
+  integration alone does not establish runtime liveness.
+  Rebuild matching ABI32 consumers and execute authored queue, admission,
+  recovery, cancellation and lifecycle regressions, genuine native fixtures,
+  four-validator journeys and phone probes. Source checks and read-only delivery
+  projections do not establish runtime durability, liveness or phone timing.
 
 ## Verified source starting points
 
@@ -74,6 +114,10 @@ The supplied older capture is not the current catalog or size authority:
   keeps the fresh genesis owner, native DKG, catalog and six monetary handoffs
   attached to one live four-validator occurrence. Rebuild both daemon and harness
   from the same captured source; controller tests alone do not qualify that journey.
+  The [engineering issuer composer](../integration_tests/tests/kagemusha_network_setup/continuation/issuer/README.md)
+  prepares the same-network configuration from explicit worker, platform and application-session scope originals;
+  its empty eligibility table grants no approval. Native compilation, Linux startup
+  and actual online enrollment remain separate acceptance steps.
 - The iOS residual model is
   `wallet_advance_v1_crash_matrix_keychain_multiple_write_loss_remains_unqualified`
   in [`crash_matrix_tests.rs`](../crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/crash_matrix_tests.rs).

@@ -529,3 +529,473 @@ fn snapshot_closed_reader_suffix_exit_keeps_typed_body_refusal_and_restored_boun
     store.snapshot.revalidate().unwrap();
     store.snapshot.revalidate_in_tree(None).unwrap();
 }
+
+// Observe the actual shared producers. These hooks never select production validity,
+// replace native reads, or carry a verdict across Snapshot::revalidate calls.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ContainerPoint {
+    Record(usize, String, Option<(usize, [u8; 32])>),
+    Names(usize, Vec<std::ffi::OsString>),
+    NodeClosed(usize),
+}
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ContainerCounts {
+    entered: usize,
+    points: Vec<ContainerPoint>,
+}
+type ContainerHook = Box<dyn FnMut(&ContainerPoint) -> Result<()>>;
+struct ContainerState {
+    original: bool,
+    counts: ContainerCounts,
+    hook: Option<ContainerHook>,
+}
+thread_local! {
+    static CONTAINER_STATE: std::cell::RefCell<Option<ContainerState>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+pub(super) fn original_container_recipe() -> bool {
+    CONTAINER_STATE.with(|state| state.borrow().as_ref().is_some_and(|state| state.original))
+}
+pub(super) fn container_entered() {
+    CONTAINER_STATE.with(|state| {
+        if let Some(state) = state.borrow_mut().as_mut() {
+            state.counts.entered += 1;
+        }
+    });
+}
+fn container_point(make: impl FnOnce() -> ContainerPoint) -> Result<()> {
+    let Some((point, mut hook)) = CONTAINER_STATE.with(|state| {
+        state.borrow_mut().as_mut().map(|state| {
+            let point = make();
+            state.counts.points.push(point.clone());
+            (point, state.hook.take())
+        })
+    }) else {
+        return Ok(());
+    };
+    let result = hook.as_mut().map_or(Ok(()), |hook| hook(&point));
+    CONTAINER_STATE.with(|state| {
+        if let Some(state) = state.borrow_mut().as_mut() {
+            state.hook = hook;
+        }
+    });
+    result
+}
+pub(super) fn after_container_record(
+    record: &RecordSnapshot,
+    observed: Option<(usize, [u8; 32])>,
+) -> Result<()> {
+    container_point(|| {
+        ContainerPoint::Record(
+            Arc::as_ptr(&record.directory).addr(),
+            record.name.clone(),
+            observed,
+        )
+    })
+}
+pub(super) fn after_container_names(
+    names: &NamesSnapshot,
+    observed: &[std::ffi::OsString],
+) -> Result<()> {
+    container_point(|| {
+        ContainerPoint::Names(Arc::as_ptr(&names.directory).addr(), observed.to_vec())
+    })
+}
+pub(super) fn after_container_node(snapshot: &Snapshot) -> Result<()> {
+    container_point(|| ContainerPoint::NodeClosed(std::ptr::from_ref(snapshot).addr()))
+}
+fn observe_container<T>(
+    original: bool,
+    hook: Option<ContainerHook>,
+    read: impl FnOnce() -> T,
+) -> (T, ContainerCounts, iroha_fs::CustodyWorkV1) {
+    struct Restore(Option<ContainerState>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CONTAINER_STATE.with(|state| state.replace(self.0.take()));
+        }
+    }
+    let _restore = Restore(CONTAINER_STATE.with(|state| {
+        state.replace(Some(ContainerState {
+            original,
+            counts: ContainerCounts::default(),
+            hook,
+        }))
+    }));
+    let before = iroha_fs::CustodyWorkV1::current_thread();
+    let result = read();
+    let work = iroha_fs::CustodyWorkV1::current_thread().since(before);
+    let counts = CONTAINER_STATE.with(|state| state.take().unwrap().counts);
+    (result, counts, work)
+}
+fn expected_container_order(snapshot: &Snapshot, points: &mut Vec<ContainerPoint>) {
+    if let Some(previous) = &snapshot.previous {
+        expected_container_order(previous, points);
+    }
+    for record in &snapshot.records {
+        points.push(ContainerPoint::Record(
+            Arc::as_ptr(&record.directory).addr(),
+            record.name.clone(),
+            record.observed,
+        ));
+    }
+    for names in &snapshot.names {
+        points.push(ContainerPoint::Names(
+            Arc::as_ptr(&names.directory).addr(),
+            names.names.clone(),
+        ));
+    }
+    points.push(ContainerPoint::NodeClosed(
+        std::ptr::from_ref(snapshot).addr(),
+    ));
+}
+fn container_outcome(result: Result<()>) -> std::result::Result<(), String> {
+    result.map_err(|error| error.to_string())
+}
+fn container_limits(allocation: usize) -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        MAX_BODY_BYTES,
+        MAX_ALL_BODY_BYTES,
+        MAX_ALL_BODY_BYTES,
+        allocation,
+        64,
+    )
+}
+
+#[test]
+fn snapshot_container_shares_actual_native_work_with_all_ordered_bytes_and_inventories() {
+    let store = Store::new();
+    let read = |original| {
+        observe_container(original, None, || {
+            shared_snapshot_tests::snapshot_work(|| store.snapshot.revalidate())
+        })
+    };
+    let ((old, old_visits), old_order, old_work) = read(true);
+    let ((new, new_visits), new_order, new_work) = read(false);
+    old.unwrap();
+    new.unwrap();
+    assert_eq!(old_visits, (11, 4)); // Three base records plus four per body; base/container counted.
+    assert_eq!(old_visits, new_visits);
+    assert_eq!((old_order.entered, new_order.entered), (0, 1));
+    assert_eq!(old_order.points, new_order.points);
+    let mut expected = Vec::new();
+    expected_container_order(&store.snapshot, &mut expected);
+    assert_eq!(new_order.points, expected);
+    // Both unsigned bodies retain two independent inventories and the real metadata decoder.
+    // Only the two activation/unused container brackets are removed; body suffixes stay intact.
+    assert_eq!(old_work.ancestry_walks, new_work.ancestry_walks + 4);
+    assert_eq!(old_work.ancestry_opens, new_work.ancestry_opens + 4);
+    let names = new_order
+        .points
+        .iter()
+        .filter(|point| matches!(point, ContainerPoint::Names(..)))
+        .count();
+    assert_eq!(names, 3);
+    metadata::require_reserved(&store.first).unwrap();
+    store.snapshot.revalidate().unwrap();
+
+    let _resources = crate::managed::native_test_guard();
+    let (_fixture, history) = shared_snapshot_tests::history_with_bodies(3);
+    let head = &history.bodies.last().unwrap().snapshots;
+    let read = |original| {
+        observe_container(original, None, || {
+            shared_snapshot_tests::snapshot_work(|| head.revalidate())
+        })
+    };
+    let ((old, old_visits), old_order, old_work) = read(true);
+    let ((new, new_visits), new_order, new_work) = read(false);
+    old.unwrap();
+    new.unwrap();
+    assert_eq!(old_visits, (15, 5));
+    assert_eq!(old_visits, new_visits);
+    assert_eq!((old_order.entered, new_order.entered), (0, 1));
+    assert_eq!(old_order.points, new_order.points);
+    assert_eq!(old_work.ancestry_walks, new_work.ancestry_walks + 6);
+    assert_eq!(old_work.ancestry_opens, new_work.ancestry_opens + 6);
+    history
+        .current_history()
+        .unwrap()
+        .test_require_current(6)
+        .0
+        .unwrap();
+}
+
+#[test]
+fn snapshot_container_keeps_custom_owners_and_inherited_or_late_decoder_recipes() {
+    let store = Store::new();
+    let cloned = || Snapshot {
+        previous: store.snapshot.previous.clone(),
+        records: store.snapshot.records.clone(),
+        names: store.snapshot.names.clone(),
+        root: store.snapshot.root.clone(),
+    };
+    for change in ["rootless", "bound", "foreign"] {
+        let mut snapshot = cloned();
+        match change {
+            "rootless" => snapshot.previous = None,
+            "bound" => snapshot.records[0].maximum -= 1,
+            "foreign" => {
+                let foreign =
+                    Arc::new(PrivateDirectory::open_exact(store.container.path()).unwrap());
+                snapshot.records[2].directory = Arc::clone(&foreign);
+                snapshot.records[3].directory = foreign;
+            }
+            _ => unreachable!(),
+        }
+        assert!(snapshot.tree_root().is_none());
+        let read = |original| {
+            observe_container(original, None, || container_outcome(snapshot.revalidate()))
+        };
+        let old = read(true);
+        assert_eq!(old, read(false), "{change}");
+        assert!(old.0.is_ok());
+        assert_eq!(old.1.entered, 0);
+    }
+    let encoded = encode(&vec![7_u8; 32], MAX_BODY_BYTES).unwrap();
+    let read = |original, allocation| {
+        norito::core::with_decode_limits_measured(container_limits(allocation), || {
+            observe_container(original, None, || {
+                container_outcome(store.snapshot.revalidate().and_then(|()| {
+                    assert_eq!(decode::<Vec<u8>>(&encoded, MAX_BODY_BYTES)?, vec![7_u8; 32]);
+                    Ok(())
+                }))
+            })
+        })
+    };
+    let wide = read(true, usize::MAX);
+    assert_eq!(wide, read(false, usize::MAX));
+    assert!(wide.0.0.is_ok());
+    let exact = wide.1.total_allocated_bytes();
+    assert!(exact >= 32); // The actual owning Vec control, not an empty metadata image assumption.
+    for allocation in [0, 1, exact - 1, exact] {
+        let old = read(true, allocation);
+        assert_eq!(old, read(false, allocation));
+        assert_eq!(old.0.1.entered, 0);
+        assert_eq!(old.0.0.is_ok(), allocation == exact);
+    }
+    // Install the real decoder owner after the outer tree has already admitted its root.
+    for allocation in [0, 1, usize::MAX] {
+        let late = |original| {
+            store
+                .root
+                .read_tree_scope(|tree| {
+                    Ok::<_, Error>(norito::core::with_decode_limits_measured(
+                        container_limits(allocation),
+                        || {
+                            observe_container(original, None, || {
+                                container_outcome(
+                                    store.snapshot.revalidate_with_container(tree, &store.root),
+                                )
+                            })
+                        },
+                    ))
+                })
+                .unwrap()
+        };
+        let old = late(true);
+        assert_eq!(old, late(false));
+        assert!(old.0.0.is_ok());
+        assert_eq!(old.0.1.entered, 0);
+        assert_eq!(old.1.total_allocated_bytes(), 0);
+    }
+    // A decoder arriving after the container reader exists still disables every reader reuse.
+    let container = store
+        .snapshot
+        .previous
+        .as_ref()
+        .unwrap()
+        .previous
+        .as_ref()
+        .unwrap();
+    let base = container.previous.as_ref().unwrap();
+    for allocation in [0, 1, usize::MAX] {
+        let late = |original| {
+            store
+                .root
+                .read_tree_scope(|tree| {
+                    base.revalidate_in_tree_with_root(Some(tree), Some(&store.root))?;
+                    tree.read_scope_with_tree(&store.container, |tree, reader| {
+                        let mut shared = SnapshotContainerRead {
+                            directory: &store.container,
+                            reader,
+                        };
+                        Ok::<_, Error>(norito::core::with_decode_limits_measured(
+                            container_limits(allocation),
+                            || {
+                                assert!(!shared.covers(&store.container));
+                                observe_container(original, None, || {
+                                    container_outcome(store.snapshot.revalidate_in_scope(
+                                        Some(tree),
+                                        Some(&store.root),
+                                        Some(base),
+                                        if original { None } else { Some(&mut shared) },
+                                    ))
+                                })
+                            },
+                        ))
+                    })
+                })
+                .unwrap()
+        };
+        let old = late(true);
+        assert_eq!(old, late(false));
+        assert!(old.0.0.is_ok());
+        assert_eq!(old.1.total_allocated_bytes(), 0);
+    }
+    store.snapshot.revalidate().unwrap();
+}
+
+#[test]
+fn snapshot_container_keeps_fresh_inventory_absence_metadata_and_base_error_order() {
+    let store = Store::new();
+    let assert_same_refusal = |expected: &str| {
+        let read = |original| {
+            observe_container(original, None, || {
+                shared_snapshot_tests::snapshot_work(|| {
+                    container_outcome(store.snapshot.revalidate())
+                })
+            })
+        };
+        let old = read(true);
+        let new = read(false);
+        assert_eq!(old.0, new.0);
+        assert_eq!(old.1.points, new.1.points);
+        assert!(new.0.0.unwrap_err().contains(expected));
+    };
+    store
+        .first
+        .write_atomic("reserved.nrt", b"modified", PublishMode::Replace)
+        .unwrap();
+    assert_same_refusal("retained enrollment body material changed");
+    store
+        .first
+        .write_atomic("reserved.nrt", b"reserved", PublishMode::Replace)
+        .unwrap();
+    store
+        .first
+        .write_atomic("original.nrt", b"appeared", PublishMode::CreateNew)
+        .unwrap();
+    assert_same_refusal("retained enrollment body material changed");
+    std::fs::remove_file(store.first.path().join("original.nrt")).unwrap();
+    store
+        .container
+        .write_atomic("0001-activation.nrt", b"appeared", PublishMode::CreateNew)
+        .unwrap();
+    assert_same_refusal("retained enrollment namespace changed");
+    std::fs::remove_file(store.container.path().join("0001-activation.nrt")).unwrap();
+    let image = store
+        .first
+        .read(metadata::FILE, metadata::MAX_IMAGE_BYTES)
+        .unwrap();
+    store
+        .first
+        .write_atomic(metadata::FILE, b"broken", PublishMode::Replace)
+        .unwrap();
+    assert_same_refusal("invalid canonical operation metadata image");
+    store
+        .first
+        .write_atomic(metadata::FILE, &image, PublishMode::Replace)
+        .unwrap();
+    store.snapshot.revalidate().unwrap();
+    #[cfg(unix)]
+    {
+        use std::{fs, os::unix::fs::PermissionsExt as _};
+        // The base external reference must refuse before entry notices a bad container.
+        fs::set_permissions(store.container.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        store
+            .reference
+            .write_atomic("enroll-selection.nrt", b"changed", PublishMode::Replace)
+            .unwrap();
+        for original in [true, false] {
+            let (result, counts, _) = observe_container(original, None, || {
+                container_outcome(store.snapshot.revalidate())
+            });
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("retained enrollment body material changed")
+            );
+            assert_eq!(counts.entered, 0);
+            assert!(
+                !counts
+                    .points
+                    .iter()
+                    .any(|point| matches!(point, ContainerPoint::Names(..)))
+            );
+        }
+        store
+            .reference
+            .write_atomic("enroll-selection.nrt", b"reference", PublishMode::Replace)
+            .unwrap();
+        fs::set_permissions(store.container.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        store.snapshot.revalidate().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_container_closes_persistent_mutation_after_inner_error_and_retries_same_owners() {
+    use std::{fs, os::unix::fs::PermissionsExt as _};
+    let store = Store::new();
+    let head = Arc::as_ptr(&store.snapshot).addr();
+    let identity = store.container.identity().unwrap();
+    for original in [true, false] {
+        let path = store.container.path().to_owned();
+        let hook = Box::new(move |point: &ContainerPoint| {
+            if *point == ContainerPoint::NodeClosed(head) {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+                return Err(invalid("ordinary completed body refusal"));
+            }
+            Ok(())
+        });
+        let (result, _, _) =
+            observe_container(original, Some(hook), || store.snapshot.revalidate());
+        fs::set_permissions(store.container.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        if original {
+            assert!(
+                matches!(result, Err(Error::Invalid(message)) if message == "ordinary completed body refusal")
+            );
+        } else {
+            assert!(
+                matches!(result, Err(Error::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied)
+            );
+        }
+        assert_eq!(store.container.identity().unwrap(), identity);
+        store.snapshot.revalidate().unwrap();
+    }
+    // Rename the original container after its last inner suffix has closed. The new outer
+    // container fence must reject that different directory even when the inner result failed.
+    let held = store.temporary.path().join("held-snapshot-container");
+    let path = store.container.path().to_owned();
+    let hook_path = path.clone();
+    let hook_held = held.clone();
+    let hook = Box::new(move |point: &ContainerPoint| {
+        if *point == ContainerPoint::NodeClosed(head) {
+            fs::rename(&hook_path, &hook_held)?;
+            fs::create_dir(&hook_path)?;
+            fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o700))?;
+            return Err(invalid("ordinary completed body refusal"));
+        }
+        Ok(())
+    });
+    let (result, _, _) = observe_container(false, Some(hook), || store.snapshot.revalidate());
+    fs::remove_dir(&path).unwrap();
+    fs::rename(&held, &path).unwrap();
+    assert!(matches!(result, Err(Error::Io(_))));
+    store.snapshot.revalidate().unwrap();
+    // Fully restored changes within the retained bracket have the documented endpoint limit.
+    let path = store.container.path().to_owned();
+    let hook = Box::new(move |point: &ContainerPoint| {
+        if *point == ContainerPoint::NodeClosed(head) {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(())
+    });
+    observe_container(false, Some(hook), || store.snapshot.revalidate())
+        .0
+        .unwrap();
+    assert_eq!(store.container.identity().unwrap(), identity);
+    store.snapshot.revalidate().unwrap();
+}

@@ -28,8 +28,8 @@ pub const GLOBAL_THRESHOLD_BEACON_VERSION_V1: u16 = 1;
 /// envelopes across configuration, runtime admission, and restart recovery.
 pub const MAX_LANE_CONSENSUS_VALIDATORS: usize = 128;
 /// Finite protocol ceiling for one canonical parent service `CommitQC` original.
-/// The complete verifier still checks the actual bitmap, signature, attestation
-/// geometry and independently authenticated epoch; byte size grants no authority.
+/// The complete verifier still checks the actual bitmap, exact quorum, signature
+/// and independently authenticated epoch; byte size grants no authority.
 pub const PARENT_SERVICE_COMMIT_QC_MAX_BYTES: usize = 512 * 1024;
 
 /// Deterministic native service and `NPoS` state effects embedded in a signed block.

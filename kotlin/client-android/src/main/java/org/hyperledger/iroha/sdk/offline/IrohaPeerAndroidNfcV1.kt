@@ -171,7 +171,7 @@ interface IrohaPeerNfcCardCallbacksV1 {
 
     /**
      * COMMIT: ingest the Payment of [context] natively (with the payer companion its carrier holds,
-     * `KagemushaWalletV1.receiveWithCompanion`), persist the Credited acknowledgement and complete
+     * `KagemushaWalletExchangeCallV1.receiveWithCompanion`), persist the Credited acknowledgement and complete
      * with its `IDA1` record ([IrohaPeerNfcDurableAcknowledgementV1]).
      */
     fun durableCommit(

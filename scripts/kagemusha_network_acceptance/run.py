@@ -163,6 +163,8 @@ CATALOG_POLICY = native_catalog.CATALOG_POLICY
 
 SCHEMA = 'iroha.kagemusha.real-network-campaign-selection.v1'
 OWNER = 'kagemusha_network_setup::continuation::execute_four_validator_monetary_continuation'
+ISSUER = 'kagemusha_network_setup::continuation::issuer::'
+ISSUER_COMPOSER = ISSUER + 'provisioning::prepare_same_live_engineering_issuer_configuration'
 NATIVE = 'kagemusha_wallet_advance_v1::enrollment_owner_tests::native_exchange::'
 CATALOG = 'kagemusha_wallet_artifacts_v1::producer_inventory::compiler::full_catalog::complete_wallet_catalog_from_pinned_genesis'
 TARGET = NATIVE + 'export_actual_a_load_target_with_retained_native_custody'
@@ -170,6 +172,8 @@ RETENTION = NATIVE + 'load::activation_retention::retain_actual_a_activation_bef
 LOAD = NATIVE + 'load::export_native_load_finality_from_executed_history'
 EXCHANGE = NATIVE + 'actual_native_a_to_b_to_c_then_unload_with_restart_and_replay'
 CONFIRM = NATIVE + 'network_settlement::actual_c_confirms_network_unload_after_process_restart'
+PREFLIGHT_TESTS = (('sumeragi', OWNER), ('sumeragi', ISSUER_COMPOSER)) + tuple(
+    ('iroha_core_zk', test) for test in (CATALOG, TARGET, RETENTION, LOAD, EXCHANGE, CONFIRM))
 HELPERS = (
     'kagemusha_network_setup::registration_incarnation_uses_lifecycle_ordinal_not_instruction_position',
     'kagemusha_network_setup::provisioning::tests::native_provisioning_binds_the_actual_genesis_owner_and_rejects_foreign_keys',
@@ -183,6 +187,24 @@ HELPERS = (
     'kagemusha_network_setup::continuation::settlement::rejection_status_requires_exact_global_state_and_certified_height',
     'kagemusha_network_setup::continuation::settlement::claim_failure_requires_typed_instruction_invariant_and_retains_exact_reason',
     'kagemusha_network_setup::continuation::settlement::canonical_observation_retains_exact_bytes_and_refuses_oversized_or_replaced_original',
+    ISSUER + 'tests::issuer_command_is_closed_and_selects_one_of_four_existing_peers',
+    ISSUER + 'tests::issuer_layer_cannot_change_topology_storage_or_registered_selection',
+    ISSUER + 'tests::issuer_configuration_requires_exact_private_original_and_rechecks_its_pin',
+    ISSUER + 'provisioning::tests::issuer_composition_refuses_cross_occurrence_handoffs_and_wrong_destination',
+    ISSUER + 'provisioning::tests::issuer_certificate_is_rooted_enrollment_only_and_foreign_root_is_refused',
+    ISSUER + 'provisioning::tests::issuer_platform_uses_selected_originals_and_preserves_default_off_controls',
+    ISSUER + 'provisioning::tests::selected_inputs_require_exact_bounded_bytes_and_private_custody',
+    ISSUER + 'provisioning::tests::configuration_preserves_canonical_policies_worker_and_optional_tls_selection',
+    ISSUER + 'provisioning::tests::selection_is_published_only_after_originals_and_never_overwrites',
+    ISSUER + 'provisioning::tests::provisioning_request_has_closed_fields_and_explicit_worker_selection',
+    ISSUER + 'provisioning::tests::issuer_output_parent_is_bound_to_current_qualification_before_creation',
+    ISSUER + 'provisioning::tests::issuer_output_refuses_external_and_traversing_parent_before_creation',
+    ISSUER + 'provisioning::tests::issuer_output_refuses_non_child_names_and_preserves_existing_custody',
+    ISSUER + 'provisioning::tests::issuer_output_refuses_aliased_parent_and_dangling_output',
+    ISSUER + 'provisioning::scopes::tests::scope_preimages_match_native_roles_and_known_answers',
+    ISSUER + 'provisioning::scopes::tests::scope_originals_require_matching_pins_and_retained_custody',
+    ISSUER + 'provisioning::scopes::tests::scope_text_and_origin_reject_noncanonical_preimages_without_rewriting',
+    ISSUER + 'provisioning::scopes::tests::scope_release_is_exact_opaque_bounded_data',
 )
 NATIVE_HELPERS = (
     NATIVE + 'network_settlement::observed_network_inventory_rejects_missing_duplicate_extra_and_invented_heights',
@@ -192,6 +214,7 @@ NATIVE_HELPERS = (
 SOURCE_PINS = component.SOURCE_PINS
 require, pin = component.require, component.pin
 JSON_CAP = 64 << 20
+ISSUER_REQUEST_CAP = 64 << 10  # Native provisioning::INPUT_MAX.
 _UNFINISHED_CHILDREN = []
 
 
@@ -324,14 +347,11 @@ def request_owned_abort(live, setup, failure, child):
         'setup_sha256': setup['sha256'], 'failure_sha256': failure['sha256']})
 
 
-def release_commands(started):
-    require(('command' in started) != ('commands' in started), 'one exact build command grammar required')
-    commands = started.get('commands', [started.get('command')])
-    require(type(commands) is list and commands
-            and all(type(command) is list and command and '--release' in command
-                    and 'test' in command and '--no-run' in command for command in commands),
-            'every owner/native producer build command must be an optimized no-run test build')
-    return commands
+def release_command(command):
+    require(type(command) is list and command and all(type(arg) is str for arg in command)
+            and '--release' in command and 'test' in command and '--no-run' in command,
+            'owner producer command must be one optimized no-run test build')
+    return command
 
 
 def compile_selection(selection):
@@ -348,11 +368,11 @@ def compile_selection(selection):
     native_owner = None
     for role, item in selection['captures'].items():
         if role == 'native':
-            owner, native_pins, source_digest = native_capture.admit(item)
+            owner, source_digest = native_capture.admit(item)
             for name, digest in owner['source'].items():
                 require(name not in source or source[name] == digest, 'shared consumed source differs: ' + name)
                 source[name] = digest
-            retained.update(owner['retained'] | native_pins)
+            retained.update(owner['retained'])
             binaries['iroha_core_zk'] = dict(owner['binary'], source_sha256=source_digest)
             native_owner = owner
             captures[role] = {'classification': owner['classification'], 'heads': owner['heads'], 'selected': item}
@@ -360,7 +380,7 @@ def compile_selection(selection):
         result, inventory, pins, custody = admission.admit_selection(item, required[role])
         require(result['profile'] == 'release', 'optimized current phase executables required')
         if role == 'owner':
-            release_commands({'command': result['command']})
+            release_command(result['command'])
         for name, digest in pins.items():
             require(name not in source or source[name] == digest, 'shared consumed source differs: ' + name)
             source[name] = digest
@@ -387,8 +407,7 @@ def tools():
 
 
 def unchanged(admitted, selected_tools):
-    require(admission.capture.git('branch', '--show-current') == 'optimizations'
-            and not admission.capture.git('diff', '--name-only', '--diff-filter=U'), 'original resolved branch required at every stage')
+    admission.capture.require_resolved_checkout()
     for name, digest in admitted['source'].items():
         require(admission.sha(ROOT / name) == digest, 'current consumed source differs: ' + name)
     for name, digest in (admitted['retained'] | selected_tools).items():
@@ -457,6 +476,15 @@ def retained_listing(binary, test, directory, stem, extra, env):
     exact_inventory(test, stdout, stderr, code)
 
 
+def preflight(binaries, directory, env, admitted, selected_tools):
+    """List required ignored entry points without executing their native work."""
+    unchanged(admitted, selected_tools)
+    for number, (binary, test) in enumerate(PREFLIGHT_TESTS):
+        for stem, extra in [('list', []), ('ignored-list', ['--ignored'])]:
+            retained_listing(binaries[binary], test, directory, f'preflight-{number}-{stem}', extra, env)
+    unchanged(admitted, selected_tools)
+
+
 def exact_test(binary, test, directory, env, admitted, selected_tools, ignored=True):
     private(directory)
     unchanged(admitted, selected_tools)
@@ -489,6 +517,61 @@ def exact_test(binary, test, directory, env, admitted, selected_tools, ignored=T
     save(directory / 'result.json', receipt)
     require(receipt['accepted_component'], 'producer failed or source drifted; retained ' + str(directory))
     return receipt
+
+
+def compose_issuer(campaign, issuer_request, setup, registered, child, deadline,
+                   env, admitted, selected_tools):
+    """Own one explicit native composition before consuming its published selection."""
+    selection_path = campaign / 'issuer-selection.json'
+    require(not os.path.lexists(selection_path), 'pre-existing issuer selection requires reconciliation')
+    input_ref, input_value = wait_document(campaign / 'issuer-composer-input.json', child, deadline)
+    private_selected(ref(input_ref), 16384)
+    request = protocol.issuer_composer_input(
+        input_value, ref(issuer_request), lambda item: private_selected(item, ISSUER_REQUEST_CAP))
+    # Only this bounded DATA projection is decoded by Python. Native owns the full
+    # request grammar, policy and private originals. Never retain its body in receipts.
+    try:
+        request_data = document(request, ISSUER_REQUEST_CAP)
+    except (OSError, ValueError):
+        raise ValueError('invalid private issuer request DATA') from None
+    expected = {'issuer_request': ref(issuer_request), 'setup': ref(setup), 'registered': ref(registered)}
+    require(type(request_data) is dict
+            and all(request_data.get(name) == item for name, item in expected.items()),
+            'issuer request must select the three exact current controller originals')
+    del request_data
+    originals = {'issuer-composer-input': input_ref, 'issuer-provisioning-request': observe(request['path'], ISSUER_REQUEST_CAP),
+                 'issuer-request': issuer_request, 'issuer-setup': observe(setup['path'], ISSUER_REQUEST_CAP),
+                 'issuer-registered': registered}
+    require(ref(originals['issuer-setup']) == ref(setup), 'current issuer setup changed before invocation')
+    for item in originals.values():
+        private_selected(ref(item), ISSUER_REQUEST_CAP)
+        admitted['retained'][item['path']] = item['sha256']
+    require(originals['issuer-provisioning-request']['sha256'] == request['sha256'],
+            'selected issuer request changed before invocation')
+    require(not os.path.lexists(selection_path), 'pre-existing issuer selection requires reconciliation')
+    directory = campaign / 'issuer-composition'
+    composer_env = env | {'KAGEMUSHA_ENGINEERING_ISSUER_REQUEST': request['path'],
+                          'KAGEMUSHA_ENGINEERING_ISSUER_REQUEST_SHA256': request['sha256']}
+    exact_test(admitted['binaries']['sumeragi'], ISSUER_COMPOSER, directory,
+               composer_env, admitted, selected_tools)
+    # A visible publication is insufficient: exact_test must have observed the
+    # named producer's natural success and post-source checks before this point.
+    for item in originals.values():
+        private_selected(ref(item), ISSUER_REQUEST_CAP)
+    require(child.poll() is None, 'same live network owner exited during issuer composition')
+    selection = observe(selection_path, 16384)
+    private_selected(ref(selection), 16384)
+    inputs = protocol.issuer_selection(document(ref(selection), 16384), setup['sha256'],
+                                       registered['sha256'], private_selected)
+    originals['issuer-selection'] = selection
+    for name in ('started.json', 'process.json', 'exit.json', 'result.json'):
+        originals['issuer-composition-' + name] = observe(directory / name)
+    for name in ('started.json', 'process.json', 'exit.json', 'result.json', 'run.log', 'run.stderr',
+                 'list.stdout', 'list.stderr', 'list-process.json', 'list-exit.json',
+                 'ignored-list.stdout', 'ignored-list.stderr', 'ignored-list-process.json', 'ignored-list-exit.json'):
+        path = directory / name
+        admitted['retained'][str(path)] = component.log_pin(path)
+    return inputs, originals
 
 
 def native_environment(admitted, fixture, catalog, setup, pins):
@@ -694,8 +777,8 @@ def main():
         Path(__file__).resolve().with_name('manifest.json'), args.manifest_sha256),
         'controller runtime changed after import')
     os.umask(0o077)
-    require(Path.cwd() == ROOT and admission.capture.git('branch', '--show-current') == 'optimizations'
-            and not admission.capture.git('diff', '--name-only', '--diff-filter=U'), 'resolved original optimizations checkout required')
+    require(Path.cwd() == ROOT, 'run from original checkout')
+    admission.capture.require_resolved_checkout()
     require(not any(key.startswith(('KAGEMUSHA_', 'IROHA_TEST_', 'TEST_NETWORK_', 'IROHA_RELEASE_')) for key in os.environ), 'ambient campaign controls refused')
     base_env = CATALOG_POLICY.inherited_environment(os.environ)
     selection_ref = {'path': str(args.selection), 'sha256': pin(args.selection_sha256)}
@@ -725,9 +808,7 @@ def main():
         'TEST_NETWORK_BIN_IROHAD': stock['iroha3d']['path'], 'TEST_NETWORK_BIN_IROHA': stock['iroha']['path'],
         'RUST_BACKTRACE': '1', 'RUST_LOG': 'warn,iroha_test_network=info'}
     command = [owner['path'], OWNER, '--exact', '--ignored', '--nocapture', '--test-threads=1']
-    for number, (binary, test) in enumerate([(owner, OWNER)] + [(stock['iroha_core_zk'], test) for test in (CATALOG, TARGET, RETENTION, LOAD, EXCHANGE, CONFIRM)]):
-        for stem, extra in [('list', []), ('ignored-list', ['--ignored'])]:
-            retained_listing(binary, test, campaign, f'preflight-{number}-{stem}', extra, env)
+    preflight(stock, campaign, env, admitted, selected_tools)
     save(campaign / 'owner-started.json', {'command': command, 'environment': {key: value for key, value in owner_env.items() if key.startswith(('KAGEMUSHA_', 'IROHA_TEST_', 'TEST_NETWORK_', 'RUST_')) or key in ('TMPDIR', 'TMP', 'TEMP')}, 'tools': selected_tools})
     log = (campaign / 'owner.log').open('x')
     owner_stderr = (campaign / 'owner.stderr').open('x')
@@ -768,22 +849,22 @@ def main():
             require(registration_source['sha256'] == registered['registration_source_sha256'], 'registration source original differs')
             remember({'registration-command': registration_command, 'registered': registered_ref,
                       'registration-source': registration_source})
-            save(campaign / 'issuer-request.json', {
+            issuer_request = save(campaign / 'issuer-request.json', {
                 'schema': 'iroha.kagemusha.network-controller-issuer-request.v1',
                 'setup_sha256': setup['sha256'], 'registered_sha256': registered_ref['sha256'],
                 'scheme_id': pins['KAGEMUSHA_WALLET_SCHEME_ID'],
                 'manifest_digest': pins['KAGEMUSHA_WALLET_MANIFEST_DIGEST'],
                 'verifier_pack': pack, 'selection_path': str(campaign / 'issuer-selection.json'),
-                'scope': 'Machine-to-machine provisioning handoff: supply a private configuration reference for this registered Scheme; never serialize secret configuration in a receipt.'})
-            issuer_selection_ref, issuer_choice = wait_document(campaign / 'issuer-selection.json', child, deadline)
-            private_selected(ref(issuer_selection_ref), 16384)
-            issuer_inputs = protocol.issuer_selection(issuer_choice, setup['sha256'], registered_ref['sha256'], private_selected)
+                'scope': 'Machine-to-machine engineering handoff: select an explicit private native composer request for these current originals; never serialize private request or configuration bodies in receipts.'})
+            issuer_inputs, issuer_originals = compose_issuer(campaign, issuer_request, setup, registered_ref,
+                child, deadline, env, admitted, selected_tools)
+            remember(issuer_originals)
             phase_command(live, 'issuer', setup['sha256'], registered_ref['sha256'], **issuer_inputs)
             issuer_ref, issuer = wait_document(live / 'issuer-ready.json', child, deadline)
             protocol.issuer_ready(issuer, setup['sha256'], registered_ref, registered, issuer_inputs,
                                  setup_originals['signed-genesis.wire']['sha256'])
             admitted['retained'][issuer_inputs['configuration']['path']] = issuer_inputs['configuration']['sha256']
-            remember({'issuer-selection': issuer_selection_ref, 'issuer': issuer_ref})
+            remember({'issuer': issuer_ref})
             native_env = native_environment(admitted, fixture, catalog, setup, pins) | {key: env[key] for key in ('TMPDIR', 'TMP', 'TEMP')}
             selected_data, clone_receipt = sealed_data.prepare(
                 catalog, ref(catalog_outputs['qualified-source-membership.json']), pins, campaign / 'sealed-data')

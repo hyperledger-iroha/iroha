@@ -27,6 +27,15 @@ use super::{
     fold_metrics::{FoldCallClassV1, FoldCancelCauseV1, FoldObserverV1, FoldTurnV1},
 };
 
+mod exchanges;
+pub use exchanges::{ExchangeCallV1, ExchangeEndV1, ExchangeErrorV1, ExchangeLeaseV1};
+mod archive_admission;
+pub use archive_admission::{ArchiveAdmissionErrorV1, ArchiveTurnV1};
+pub(super) use archive_admission::{
+    ArchiveCoverageV1, ArchiveDispatchPermit, ArchiveHeadV1, ArchiveReconciliationV1,
+    ArchiveResolutionV1, ArchiveTargetV1,
+};
+
 /// Cloneable cancellation token checked at proving task boundaries.
 #[derive(Debug, Clone)]
 pub struct Cancellation(iroha_pasta::CancellationToken);
@@ -96,6 +105,9 @@ enum Slot {
 #[derive(Default)]
 struct State {
     eligible: bool,
+    charging: bool,
+    exchanges: exchanges::Exchanges,
+    archive: archive_admission::ArchiveState,
     payments: usize,
     running: Option<Cancellation>,
     // The first signal that cancelled the running sub-proof; fold telemetry only.
@@ -109,7 +121,7 @@ struct State {
     attempts: u64,
     // The signal of the admitted speculative proof while it holds the speculation slot.
     speculating: Option<Cancellation>,
-    // Close admits no later speculation.
+    // Terminal shutdown admits no later fold or speculative proof.
     closed: bool,
 }
 
@@ -143,7 +155,8 @@ impl Inner {
 /// it permits resumption from the last durable checkpoint. No payment state is rolled back.
 /// An `ingest` never cancels or waits: the sub-proof keeps proving outside the wallet owner.
 /// Payment priority, inactivity and close also drop the volatile fold state retained between
-/// sub-proofs; an ingest leaves it.
+/// sub-proofs; an ingest leaves it. Exhausting fold attempt identities drops retained state
+/// and refuses further folds; a reopened owner uses a fresh scheduler.
 #[derive(Clone)]
 pub struct Scheduler(Arc<Inner>);
 
@@ -164,11 +177,12 @@ impl Scheduler {
     }
 
     /// Update app/device activity. Leaving both states cancels an existing sub-proof and drops
-    /// the retained fold state.
+    /// the retained fold state. Activity updates cannot restart a closed scheduler.
     pub fn set_activity(&self, foreground: bool, charging: bool) {
         let released = {
             let mut state = self.0.lock();
-            state.eligible = foreground || charging;
+            state.eligible = !state.closed && (foreground || charging);
+            state.charging = !state.closed && charging;
             if state.eligible {
                 None
             } else {
@@ -178,16 +192,19 @@ impl Scheduler {
         };
         // Retained fold memory is released after the state lock.
         drop(released);
+        self.0.idle.notify_all();
     }
 
-    /// The owner is closing: leave both states like [`Self::set_activity`], reporting a
-    /// cancelled sub-proof as closed. A running speculative proof is cancelled and no later
-    /// one is admitted.
+    /// Permanently close this scheduler, reporting a cancelled sub-proof as closed.
+    /// Running speculative proofs are cancelled and no later fold or speculation is admitted,
+    /// even after an activity update. A reopened wallet uses a fresh scheduler.
     pub fn close(&self) {
         let released = {
             let mut state = self.0.lock();
             state.eligible = false;
+            state.charging = false;
             state.closed = true;
+            state.exchanges.close();
             state.cancel(FoldCancelCauseV1::Close);
             if let Some(token) = &state.speculating {
                 token.cancel();
@@ -268,19 +285,27 @@ impl Scheduler {
 
     pub(super) fn start(&self) -> Option<FoldGuard> {
         let mut state = self.0.lock();
-        if !state.eligible
+        if state.closed
+            || !state.eligible
             || state.payments != 0
             || state.running.is_some()
             || state.speculating.is_some()
         {
             return None;
         }
+        let Some(attempt) = state.attempts.checked_add(1) else {
+            // A released publication may outlive arbitrarily many later attempts.
+            // Never reuse its identity or retain a value no later fold can take.
+            let released = state.retained.take();
+            drop(state);
+            drop(released);
+            return None;
+        };
         let token = Cancellation::new();
         state.running = Some(token.clone());
         state.cause = None;
         state.ingests = 0;
-        // One identity per started attempt; 2^64 attempts never wrap in practice.
-        state.attempts = state.attempts.wrapping_add(1);
+        state.attempts = attempt;
         Some(FoldGuard {
             scheduler: self.clone(),
             token,
@@ -466,7 +491,8 @@ impl Scheduler {
     /// Admit `job`'s speculative proof. It waits until no payment holds priority and no other
     /// speculation runs, then cancels and joins a running fold sub-proof and drops the
     /// retained fold state, like payment priority. `None` after close, or once the job's call
-    /// has ended its speculation.
+    /// has ended its speculation, or while an Archive turn/obligation needs to finish.
+    /// An earlier prepared job must never cancel the Archive's required covering fold.
     ///
     /// Call it without the wallet owner, and keep the admitted proof off that owner: payments
     /// wait for the proof while possibly holding it.
@@ -474,7 +500,7 @@ impl Scheduler {
     pub fn speculate<T>(&self, job: &SpeculationJob<T>) -> Option<SpeculationRun<T>> {
         let mut state = self.0.lock();
         loop {
-            if state.closed || job.0.token.check().is_err() {
+            if state.closed || state.archive.blocks_speculation() || job.0.token.check().is_err() {
                 return None;
             }
             if state.payments == 0 && state.speculating.is_none() {
@@ -714,6 +740,38 @@ mod cancellation_tests {
     }
 
     #[test]
+    fn close_remains_terminal_after_activity_updates_from_a_shared_handle() {
+        let scheduler = Scheduler::new();
+        let activity = scheduler.clone();
+        scheduler.set_activity(true, false);
+        let fold = scheduler.start().unwrap();
+        let closed_token = fold.token.prover_token().clone();
+        scheduler.close();
+        assert_eq!(closed_token.check(), Err(iroha_pasta::Cancelled));
+        assert_eq!(fold.cause(), Some(FoldCancelCauseV1::Close));
+        // A delayed foreground callback cannot undo shutdown while the old job
+        // releases its allocations, or after it has released its slot.
+        activity.set_activity(true, true);
+        drop(fold);
+        for (foreground, charging) in [(true, false), (false, true), (true, true), (false, false)] {
+            activity.set_activity(foreground, charging);
+            assert!(
+                scheduler.start().is_none(),
+                "closed after {foreground}/{charging}"
+            );
+        }
+        // The shutdown owner can still join through payment priority. Closing
+        // again is harmless and a new wallet's scheduler has independent work.
+        drop(scheduler.payment());
+        scheduler.close();
+        let reopened = Scheduler::new();
+        reopened.set_activity(true, false);
+        let fresh = reopened.start().unwrap();
+        fresh.token.check().unwrap();
+        assert_eq!(closed_token.check(), Err(iroha_pasta::Cancelled));
+    }
+
+    #[test]
     fn the_first_cancelling_signal_is_the_reported_cause_of_one_sub_proof() {
         let scheduler = Scheduler::new();
         scheduler.set_activity(true, false);
@@ -732,6 +790,8 @@ mod cancellation_tests {
         drop(fold);
         payment.join().unwrap();
 
+        // Close is terminal; a reopened owner gets a fresh scheduler.
+        let scheduler = Scheduler::new();
         scheduler.set_activity(true, false);
         let fold = scheduler.start().unwrap();
         assert_eq!(fold.cause(), None, "each sub-proof starts without a cause");

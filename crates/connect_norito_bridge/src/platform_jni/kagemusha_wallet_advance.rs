@@ -212,6 +212,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     handle: jlong,
+    exchange_id: jlong,
     request_id: JByteArray<'_>,
     selector: jint,
     amount_low: jlong,
@@ -221,6 +222,8 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     second: JByteArray<'_>,
     third: JByteArray<'_>,
 ) -> jobject {
+    let mut admitted = None;
+    let mut delivery = wallet::review::CapabilityDelivery::default();
     let result = wallet::run(|| {
         let selector =
             u32::try_from(selector).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
@@ -249,9 +252,20 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
             token,
             [&first, &second, &third],
         )?;
-        wallet::setup(handle as u64, request)
+        admitted = Some(wallet::exchange::Invocation::setup(
+            handle as u64,
+            exchange_id as u64,
+            selector,
+        )?);
+        wallet::setup(
+            admitted
+                .as_ref()
+                .ok_or(wallet::Failure::code(wallet::INTERNAL))?,
+            request,
+            &mut delivery,
+        )
     });
-    wallet::terminal::deliver(handle as u64, selector as u32, result, |result| {
+    wallet::review::deliver(delivery, result, |result| {
         let value = response(&mut env, result);
         (value, !value.is_null())
     })
@@ -263,6 +277,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     handle: jlong,
+    exchange_id: jlong,
     request_id: JByteArray<'_>,
     selector: jint,
     amount_low: jlong,
@@ -271,6 +286,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     second: JByteArray<'_>,
     third: JByteArray<'_>,
 ) -> jobject {
+    let mut admitted = None;
     let result = wallet::run(|| {
         let selector =
             u32::try_from(selector).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
@@ -285,7 +301,16 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
             u128::from(amount_low as u64) | (u128::from(amount_high as u64) << 64),
             [&first, &second, &third],
         )?;
-        wallet::execute(handle as u64, request)
+        admitted = Some(wallet::exchange::Invocation::admit(
+            handle as u64,
+            exchange_id as u64,
+        )?);
+        wallet::execute(
+            admitted
+                .as_ref()
+                .ok_or(wallet::Failure::code(wallet::INTERNAL))?,
+            request,
+        )
     });
     response(&mut env, result)
 }

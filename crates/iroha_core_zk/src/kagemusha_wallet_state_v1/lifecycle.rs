@@ -35,6 +35,25 @@ pub enum RequestStatusV1 {
     Outcome(Completion),
 }
 
+/// An exact request already bound by the authenticated permanent preparation index.
+/// Absence is deliberately not a status: it cannot authorize another dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundRequestStatusV1 {
+    /// The exact intent is bound, but no authoritative outcome is selected.
+    Preparing,
+    /// The existing operation's current authoritative outcome; no new execution occurred.
+    Outcome(Completion),
+}
+
+/// Result of consuming a request-bound financial review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewedExecutionV1 {
+    /// This review admitted the fresh request through the ordinary single dispatcher.
+    Executed(Completion),
+    /// The request was already bound; this review performed no planning or execution.
+    Existing(BoundRequestStatusV1),
+}
+
 /// Actual selected source, supplied exclusively by the coordinator under its owner lock.
 /// The optional fold is the source-bound record already read by the coordinator.
 pub struct PreparationSourceV1<'a> {

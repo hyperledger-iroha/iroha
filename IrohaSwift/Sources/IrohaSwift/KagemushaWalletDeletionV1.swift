@@ -48,17 +48,18 @@ public struct KagemushaWalletDeletionProjectionV1: Sendable {
   }
 }
 
-/// One-use review bound to its wallet instance. Its DATA cannot authorize another owner.
+/// One-use review bound to its wallet and logical exchange. Its DATA grants no authority.
 public final class KagemushaWalletDeletionReviewV1: @unchecked Sendable, CustomStringConvertible {
   public let projection: KagemushaWalletDeletionProjectionV1
   fileprivate let origin: KagemushaWalletDeletionGateV1
+  fileprivate let exchange: AnyObject
   fileprivate let epoch: UInt64
   fileprivate let token: UInt64
   // Accessed only while holding origin.lock.
   fileprivate var consumed = false
-  fileprivate init(origin: KagemushaWalletDeletionGateV1, epoch: UInt64, token: UInt64,
+  fileprivate init(origin: KagemushaWalletDeletionGateV1, exchange: AnyObject, epoch: UInt64, token: UInt64,
                    projection: KagemushaWalletDeletionProjectionV1) {
-    self.origin = origin; self.epoch = epoch; self.token = token; self.projection = projection
+    self.origin = origin; self.exchange = exchange; self.epoch = epoch; self.token = token; self.projection = projection
   }
   public var description: String { "KagemushaWalletDeletionReviewV1(review=[REDACTED])" }
 }
@@ -81,7 +82,7 @@ final class KagemushaWalletDeletionGateV1: @unchecked Sendable {
     lock.lock(); defer { lock.unlock() }
     guard !frozen else { throw KagemushaWalletErrorV1.closed }
   }
-  func review(_ call: () throws -> KagemushaWalletCallV1) throws -> KagemushaWalletDeletionReviewV1 {
+  func review(exchange: AnyObject, _ call: () throws -> KagemushaWalletCallV1) throws -> KagemushaWalletDeletionReviewV1 {
     lock.lock()
     guard !frozen else { lock.unlock(); throw KagemushaWalletErrorV1.closed }
     let issuedEpoch = epoch
@@ -91,20 +92,21 @@ final class KagemushaWalletDeletionGateV1: @unchecked Sendable {
     let projection = try KagemushaWalletDeletionProjectionV1(result.bytes)
     lock.lock(); defer { lock.unlock() }
     guard !frozen, epoch == issuedEpoch else { throw KagemushaWalletErrorV1.closed }
-    return .init(origin: self, epoch: epoch, token: result.sequenceLow, projection: projection)
+    return .init(origin: self, exchange: exchange, epoch: epoch, token: result.sequenceLow, projection: projection)
   }
-  private func consume(_ review: KagemushaWalletDeletionReviewV1) throws -> UInt64 {
-    guard !frozen, !inFlight, review.origin === self, review.epoch == epoch, !review.consumed else {
+  private func consume(_ review: KagemushaWalletDeletionReviewV1, exchange: AnyObject) throws -> UInt64 {
+    guard !frozen, !inFlight, review.origin === self, review.exchange === exchange,
+      review.epoch == epoch, !review.consumed else {
       throw KagemushaWalletErrorV1.invalidInput
     }
     review.consumed = true
     return review.token
   }
-  func confirm(_ review: KagemushaWalletDeletionReviewV1,
+  func confirm(_ review: KagemushaWalletDeletionReviewV1, exchange: AnyObject,
                call: (UInt64) throws -> KagemushaWalletCallV1) throws -> Data {
     lock.lock()
     let token: UInt64
-    do { token = try consume(review) } catch { lock.unlock(); throw error }
+    do { token = try consume(review, exchange: exchange) } catch { lock.unlock(); throw error }
     frozen = true; inFlight = true; epoch &+= 1
     lock.unlock()
     defer { finishFlight() }
@@ -130,11 +132,11 @@ final class KagemushaWalletDeletionGateV1: @unchecked Sendable {
     frozen = false
     return .notDeleted
   }
-  func discard(_ review: KagemushaWalletDeletionReviewV1,
+  func discard(_ review: KagemushaWalletDeletionReviewV1, exchange: AnyObject,
                call: (UInt64) throws -> KagemushaWalletCallV1) throws {
     lock.lock()
     let token: UInt64
-    do { token = try consume(review) } catch { lock.unlock(); throw error }
+    do { token = try consume(review, exchange: exchange) } catch { lock.unlock(); throw error }
     lock.unlock()
     guard try call(token).status == 55 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
   }

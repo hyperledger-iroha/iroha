@@ -39,19 +39,6 @@ impl Plan {
         Ok(())
     }
 }
-fn credited_credit(credited: &KagemushaWalletCreditedV1) -> Result<[u8; 32], Error> {
-    match &credited.evidence {
-        KagemushaWalletCreditedEvidenceV1::Receive { package } => {
-            let KagemushaWalletEffectV1::Receive { credit_id, .. } = package.statement.effect
-            else {
-                return Err(Error::Invalid("Credited Receive kind"));
-            };
-            Ok(credit_id)
-        }
-        KagemushaWalletCreditedEvidenceV1::Status { status } => Ok(status.opening.credit_id),
-    }
-}
-
 fn nonce() -> Result<[u8; 32], Error> {
     for _ in 0..128 {
         let mut value = [0; 32];
@@ -241,26 +228,6 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
     Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>
 {
-    /// Verify incoming delivery evidence and derive its private Archive intent from the
-    /// permanent local Send index. No caller supplies an Archive selector, pending path,
-    /// historical credential or Payment. Exact replay retains the original native intent.
-    ///
-    /// # Errors
-    /// Malformed, foreign or unverifiable evidence, unknown local Send, unavailable custody
-    /// or artifacts, and the ordinary preparation/Advance errors.
-    pub fn accept_credited(&mut self, bytes: &[u8]) -> Result<Completion, Error> {
-        if bytes.is_empty() || bytes.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
-            return Err(Error::Invalid("Credited input bound"));
-        }
-        let credited: KagemushaWalletCreditedV1 = archive::decode(bytes)?;
-        valid(credited.validate())?;
-        if credited.scheme_id != self.scheme_id {
-            return Err(Error::Invalid("Credited scheme"));
-        }
-        let credit = credited_credit(&credited)?;
-        self.archive_credited(&credit, bytes.to_vec())
-    }
-
     /// Issue one exact open receiver Request for `amount` from selected local policy: any payer
     /// completes it with its own wallet, account and next ordinal. A nonzero held fee schedule
     /// requires its signed original and issuer. The exact signed Request is durable before any
@@ -278,6 +245,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             KagemushaWalletSignerCertificateV1,
         )>,
     ) -> Result<Vec<u8>, Error> {
+        self.require_fresh_work()?;
         let _payment = self.scheduler.payment();
         if amount == 0 {
             return Err(Error::Invalid("Request amount"));

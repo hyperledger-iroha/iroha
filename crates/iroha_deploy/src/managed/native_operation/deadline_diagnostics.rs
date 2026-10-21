@@ -412,6 +412,7 @@ pub(in crate::managed) fn retained_error(error: &crate::managed::Error) {
             Error::WorkerFailure { .. } => ("WorkerFailure", None),
             Error::ParentDeadline => ("ParentDeadline", None),
             Error::ParentProgressDeadline { .. } => ("ParentProgressDeadline", None),
+            Error::ParentCheckpoint { .. } => ("ParentCheckpoint", None),
         };
         let mut text = ErrorText::new();
         let _ = write!(&mut text, "{error}");

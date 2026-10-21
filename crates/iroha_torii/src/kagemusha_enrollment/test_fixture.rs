@@ -87,6 +87,7 @@ pub(super) fn provider(path: PathBuf) -> KagemushaEnrollmentProvider {
         service_origin_digest: [11; 32],
         observation_endpoint: "https://provider.example/eligibility".parse().unwrap(),
         observation_credential: path.with_file_name("transport"),
+        observation_tls_root: None,
         worker: iroha_config::parameters::actual::KagemushaEnrollmentWorker {
             python_executable: "/opt/issuer/python".into(),
             python_sha256: [41; 32],

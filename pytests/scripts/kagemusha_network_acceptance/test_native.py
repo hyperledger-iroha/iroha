@@ -16,6 +16,9 @@ class NativeMigrationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='native-controller-data-', dir=r.QUAL)
         self.root = Path(self.temp.name)
+        (self.root / '.git').mkdir()
+        checkout = patch.object(r.admission.capture, 'REPO', self.root)
+        checkout.start(); self.addCleanup(checkout.stop)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -287,6 +290,39 @@ class NativeMigrationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'no supplements'):
                     r.native_capture.admit(native | {extra: {}})
             touched.assert_not_called()
+
+    def test_current_native_projection_preserves_all_source_and_retained_custody(self):
+        selected = {'directory': '/DATA', 'result_sha256': PIN, 'review_sha256': OTHER}
+        source = {'crates/native.rs': PIN}
+        original = {'/DATA/current-native-input': OTHER}
+        binary = {'path': '/DATA/current-native', 'sha256': PIN}
+        custody = {'reviewed_originals': original, 'before_head': '1' * 40, 'after_head': '1' * 40}
+        result = {'profile': 'release', 'binaries': {'iroha_core_zk': binary},
+                  'classification': 'current_complete_compiler_closure', 'source_before_sha256': OTHER}
+        with patch.object(r.compiler_capture, 'admit', return_value=(result, {'actual_packages': ['crates/native']}, source, custody)) as admit:
+            owner, digest = r.native_capture.admit(selected)
+        admit.assert_called_once_with(selected, {'iroha_core_zk'})
+        self.assertEqual(digest, OTHER)
+        self.assertEqual(owner['source'], source)
+        self.assertEqual(owner['retained'], original)
+        self.assertEqual(owner['binary'], binary)
+        self.assertEqual(owner['packages'], ['crates/native'])
+        self.assertEqual(owner['heads'], ['1' * 40, '1' * 40])
+
+        def captured(item, expected):
+            role = 'stock' if 'iroha3d' in expected else 'owner'
+            result = {'profile': 'release', 'command': ['cargo', 'test', '--release', '--no-run'],
+                      'classification': 'current_complete_compiler_closure', 'source_before_sha256': PIN,
+                      'binaries': {name: {'path': '/DATA/' + name, 'sha256': PIN} for name in expected}}
+            return result, {}, {'crates/' + role + '.rs': PIN}, dict(custody, reviewed_originals={'/DATA/' + role + '-input': PIN})
+        with patch.object(r.native_capture, 'admit', return_value=(owner, digest)), \
+             patch.object(r.admission, 'admit_selection', side_effect=captured):
+            joined = r.compile_selection({'schema': r.SCHEMA, 'captures': dict.fromkeys(('stock', 'owner', 'native'), selected)})
+        self.assertEqual(joined['native_owner'], owner)
+        self.assertEqual(joined['binaries']['iroha_core_zk'], dict(binary, source_sha256=OTHER))
+        self.assertEqual(joined['source'], source | {'crates/stock.rs': PIN, 'crates/owner.rs': PIN})
+        for name, value in original.items(): self.assertEqual(joined['retained'][name], value)
+        for name in ('stock', 'owner'): self.assertEqual(joined['retained']['/DATA/' + name + '-input'], PIN)
 
     def test_package_namespace_drift_is_refused_even_with_unchanged_file_pins(self):
         admitted = {'source': {}, 'retained': {}, 'binaries': {}, 'captures': {

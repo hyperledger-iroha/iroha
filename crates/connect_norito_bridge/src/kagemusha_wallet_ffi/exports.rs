@@ -20,6 +20,9 @@ pub struct WalletResult {
     /// Destructive review53: token+254 DATA bytes; deleted54: marker32; discarded55/not-deleted56 empty.
     /// Background29: phase/eligibility/backlog-known in detail; sequence is last observed backlog.
     /// CreditProjection47: exact typed header92 plus receiver original up to10000 bytes.
+    /// Exchange60 (sequence token)/end61 (detail0 ended,1 ending,2 already ended).
+    /// Deferred62 empty/63 blocked detail1..6/64 nested completion header28+original<=10000.
+    /// Reviewed65 retains the exact token in sequence, with typed maintenance detail and no bytes.
     /// Negative is failure.
     pub status: i32,
     /// Failure platform reason or -1. Never conflate `UNAVAILABLE` with unknown/absent.
@@ -270,9 +273,11 @@ pub struct WalletOperationRequest {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_wallet_execute_v1(
     handle: u64,
+    exchange_id: u64,
     request: *const WalletOperationRequest,
     out: *mut WalletResult,
 ) -> i32 {
+    let mut admitted = None;
     unsafe {
         output(out, || {
             if request.is_null() {
@@ -290,16 +295,19 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_execute_v1(
                     input(request.third, request.third_length, bounds[2])?,
                 ],
             )?;
-            execute(handle, value)
+            admitted = Some(exchange::Invocation::admit(handle, exchange_id)?);
+            execute(admitted.as_ref().ok_or(Failure::code(INTERNAL))?, value)
         })
     }
 }
 /// Typed setup input for the same exclusive Native wallet owner.
-/// Selectors: Bootstrap0, Request2, Credited3, BeginTime4, FinishTime5, CancelTime6,
+/// Selectors: Bootstrap0, Request2, BeginTime4, FinishTime5, CancelTime6,
 /// PaymentCompanion55. Request2 issues an open Request for a positive amount (no first
 /// original; optional fee schedule and signer certificate). PaymentCompanion55 takes this
 /// wallet's own Payment and returns its payer companion. Envelope wrap8..10/unwrap12..14
-/// follows Request, Payment, Credited order. The Offer selectors 1, 7 and 11 are retired.
+/// follows Request, Payment, Credited order. Offer1/7/11, direct Archive3/41 and nonretaining
+/// delivery54 are retired. ObserveCredited56 durably selects the exact Send+receipt before
+/// verification; ResumeDeferredReceipt57 and DrainDeferredArchive58 are bounded owner controls.
 /// Unused fields must be zero/empty. No field supplies a clock, nonce or signature body.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -327,7 +335,7 @@ pub struct WalletSetupRequest {
     pub third_length: usize,
 }
 /// Execute source-bound setup through the existing exclusive Native wallet owner.
-/// Bootstrap/Credited return existing completion statuses. Request/PaymentCompanion return original12;
+/// Bootstrap returns existing completion statuses. Request/PaymentCompanion return original12;
 /// BeginTime returns challenge13 with its opaque token in sequence; FinishTime returns retained14.
 /// CancelTime returns idle6; envelope conversion returns original12 without monetary authority.
 /// # Safety
@@ -336,19 +344,22 @@ pub struct WalletSetupRequest {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_wallet_setup_v1(
     handle: u64,
+    exchange_id: u64,
     request: *const WalletSetupRequest,
     out: *mut WalletResult,
 ) -> i32 {
-    unsafe { setup_output_with(handle, request, out, allocate_bytes) }
+    unsafe { setup_output_with(handle, exchange_id, request, out, allocate_bytes) }
 }
 // Shared exact C intake/delivery path; the allocator seam is private and never configurable.
 pub(super) unsafe fn setup_output_with(
     handle: u64,
+    exchange_id: u64,
     request: *const WalletSetupRequest,
     out: *mut WalletResult,
     allocate: impl FnOnce(&mut WalletResult, &[u8]) -> std::result::Result<(), ()>,
 ) -> i32 {
-    let mut pending = None;
+    let mut delivery = review::CapabilityDelivery::default();
+    let mut admitted = None;
     let status = unsafe {
         output_with(
             out,
@@ -381,22 +392,21 @@ pub(super) unsafe fn setup_output_with(
                         input(request.third, request.third_length, bounds[2])?,
                     ],
                 )?;
-                let result = setup(handle, value);
-                pending = Some(terminal::ReviewDelivery::new(
+                admitted = Some(exchange::Invocation::setup(
                     handle,
+                    exchange_id,
                     request.selector,
-                    &result,
-                ));
-                result
+                )?);
+                setup(
+                    admitted.as_ref().ok_or(Failure::code(INTERNAL))?,
+                    value,
+                    &mut delivery,
+                )
             },
             allocate,
         )
     };
-    if status >= 0
-        && let Some(pending) = &mut pending
-    {
-        pending.delivered();
-    }
+    delivery.complete(status == 0);
     status
 }
 #[cfg(test)]
@@ -409,7 +419,36 @@ mod setup_boundary_tests {
         panic: bool,
     }
     impl Wallet for SetupWallet {
-        fn setup(&mut self, input: setup::Setup) -> Result<Response> {
+        fn observe_receipt(
+            &mut self,
+            send_request: &[u8; 32],
+            original: &[u8],
+        ) -> Result<maintenance::ReceiptStep> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.panic, "contained setup boundary panic");
+            assert_eq!(*send_request, [7; 32]);
+            assert_eq!(original, [0, 255, 7]);
+            Ok(maintenance::ReceiptStep::Verified(vec![0xc4; 92]))
+        }
+
+        fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
+            Ok(maintenance::ReceiptStep::Empty)
+        }
+        fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+            Ok(maintenance::WakeHint::Age(
+                state::DeferredArchiveWakeHintV1::NoAgeWake,
+            ))
+        }
+        fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
+            Ok(maintenance::DrainPlan::Finished(
+                state::DeferredArchiveDrainV1::NoWork,
+            ))
+        }
+
+        fn maintenance(&mut self) -> Result<maintenance::View> {
+            Ok(maintenance::View::Released)
+        }
+        fn setup(&mut self, _exchange_id: u64, input: setup::Setup) -> Result<Response> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             assert!(!self.panic, "contained setup boundary panic");
             let (kind, sequence, bytes) = match input {
@@ -449,9 +488,8 @@ mod setup_boundary_tests {
                     assert!(fee.is_none());
                     (12, 0, vec![0, 255, 3])
                 }
-                setup::Setup::Credited(bytes) => {
-                    assert_eq!(bytes, [0, 255, 7]);
-                    (4, 0, vec![])
+                setup::Setup::ObserveCredited { .. } => {
+                    panic!("receipt has a fenced typed owner route")
                 }
                 setup::Setup::CreditedOriginal { status, original } => {
                     assert_eq!(original, [0, 255, 7]);
@@ -459,10 +497,9 @@ mod setup_boundary_tests {
                 }
                 setup::Setup::BeginTime => (13, 19, vec![0, 255, 4]),
                 setup::Setup::BoundCredited { .. } => panic!("unexpected bound Credited fixture"),
-                setup::Setup::CreditProjection { id, anchor, newer } => {
+                setup::Setup::CreditProjection { id, anchor } => {
                     assert_eq!(id, [7; 32]);
                     assert!(anchor.is_empty());
-                    assert!(newer.is_empty());
                     (47, 0, vec![0xc3; 92])
                 }
                 setup::Setup::CancelTime { token } => {
@@ -536,6 +573,9 @@ mod setup_boundary_tests {
                 | setup::Setup::DiscardCustodyDeletion { .. } => {
                     panic!("separate terminal fixture")
                 }
+                setup::Setup::ResumeDeferredReceipt | setup::Setup::DrainDeferredArchive => {
+                    panic!("separate queue fixture")
+                }
                 setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
                 setup::Setup::EpochStatus => {
                     (57, 0, [1u64.to_le_bytes(), 3u64.to_le_bytes()].concat())
@@ -573,6 +613,9 @@ mod setup_boundary_tests {
             panic!("not setup")
         }
         fn retry(&mut self, _: &[u8; 32]) -> Result<Response> {
+            panic!("not setup")
+        }
+        fn has_pending_operation(&mut self) -> Result<bool> {
             panic!("not setup")
         }
         fn resume(&mut self) -> Result<Response> {
@@ -623,7 +666,14 @@ mod setup_boundary_tests {
             length: 99,
         };
         assert_eq!(
-            unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, request, &mut out) },
+            unsafe {
+                connect_norito_kagemusha_wallet_setup_v1(
+                    handle,
+                    test_setup_exchange_request(handle, request),
+                    request,
+                    &mut out,
+                )
+            },
             expected
         );
         assert_eq!(
@@ -648,7 +698,14 @@ mod setup_boundary_tests {
             };
             let mut out = WalletResult::default();
             assert_eq!(
-                unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &input, &mut out) },
+                unsafe {
+                    connect_norito_kagemusha_wallet_setup_v1(
+                        handle,
+                        test_setup_exchange_request(handle, &input),
+                        &input,
+                        &mut out,
+                    )
+                },
                 0
             );
             assert_eq!(
@@ -700,7 +757,7 @@ mod setup_boundary_tests {
         for (selector, expected, sequence, bytes) in [
             (0, 1, 0, vec![0, 255, 1]),
             (2, 12, 0, vec![0, 255, 3]),
-            (3, 4, 0, vec![]),
+            (56, 47, 0, vec![0xc4; 92]),
             (4, 13, 19, vec![0, 255, 4]),
             (15, 17, 0, vec![0xa1; 16_384]),
             (16, 12, 0, vec![0, 0, 255]),
@@ -738,7 +795,10 @@ mod setup_boundary_tests {
             (55, 12, 0, vec![0, 255, 2]),
         ] {
             let mut request = request(
-                if matches!(selector, 2 | 19 | 20 | 25 | 27 | 30 | 33 | 34 | 43 | 45) {
+                if matches!(
+                    selector,
+                    2 | 19 | 20 | 25 | 27 | 30 | 33 | 34 | 43 | 45 | 56
+                ) {
                     &id
                 } else {
                     &zero
@@ -751,7 +811,7 @@ mod setup_boundary_tests {
                     high: u64::MAX,
                 };
             }
-            if matches!(selector, 3 | 16 | 17 | 21..=23 | 25 | 26 | 29 | 30 | 33..=37 | 45 | 46 | 55)
+            if matches!(selector, 56 | 16 | 17 | 21..=23 | 25 | 26 | 29 | 30 | 33..=37 | 45 | 46 | 55)
             {
                 request.first = original.as_ptr();
                 request.first_length = original.len();
@@ -765,7 +825,14 @@ mod setup_boundary_tests {
             }
             let mut out = WalletResult::default();
             assert_eq!(
-                unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &request, &mut out) },
+                unsafe {
+                    connect_norito_kagemusha_wallet_setup_v1(
+                        handle,
+                        test_setup_exchange_request(handle, &request),
+                        &request,
+                        &mut out,
+                    )
+                },
                 0
             );
             assert_eq!(
@@ -787,7 +854,12 @@ mod setup_boundary_tests {
         let mut status = WalletResult::default();
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_wallet_setup_v1(handle, &request(&zero, 18), &mut status)
+                connect_norito_kagemusha_wallet_setup_v1(
+                    handle,
+                    test_setup_exchange_request(handle, &request(&zero, 18)),
+                    &request(&zero, 18),
+                    &mut status,
+                )
             },
             0
         );
@@ -831,7 +903,14 @@ mod setup_boundary_tests {
             }
             let mut out = WalletResult::default();
             assert_eq!(
-                unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &value, &mut out) },
+                unsafe {
+                    connect_norito_kagemusha_wallet_setup_v1(
+                        handle,
+                        test_setup_exchange_request(handle, &value),
+                        &value,
+                        &mut out,
+                    )
+                },
                 0
             );
             assert_eq!((out.sequence_low, out.sequence_high, out.detail), (0, 0, 0));
@@ -905,13 +984,25 @@ mod setup_boundary_tests {
         let value = request(&zero, 0);
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_wallet_setup_v1(handle, &value, std::ptr::null_mut())
+                connect_norito_kagemusha_wallet_setup_v1(
+                    handle,
+                    test_setup_exchange_request(handle, &value),
+                    &value,
+                    std::ptr::null_mut(),
+                )
             },
             INVALID
         );
         let mut out = WalletResult::default();
         assert_eq!(
-            unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, std::ptr::null(), &mut out) },
+            unsafe {
+                connect_norito_kagemusha_wallet_setup_v1(
+                    handle,
+                    test_setup_exchange_request(handle, std::ptr::null()),
+                    std::ptr::null(),
+                    &mut out,
+                )
+            },
             INVALID
         );
         assert_eq!(out.status, INVALID);

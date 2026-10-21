@@ -22,6 +22,11 @@ pub(super) fn proof<T>(result: core::result::Result<T, Error>) -> Result<T> {
         Error::DecodeResource(original) => state::Error::DecodeResource(original),
         Error::Unavailable => state::Error::ArtifactsUnavailable("native operation artifact"),
         Error::Cancelled => state::Error::Cancelled,
+        original @ (Error::Verification(_)
+        | Error::Recursion(_)
+        | Error::RuntimeBinding
+        | Error::Inventory
+        | Error::Profile) => state::Error::NativeVerification(original),
         Error::Blocked(field) => state::Error::Blocked(field),
         Error::Entropy => {
             crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderErrorV1::Unavailable(
@@ -1140,13 +1145,29 @@ mod error_tests {
                 "native operation artifact"
             ))
         ));
-        for rejected in [
-            Error::Authority,
+        for original in [
             Error::RuntimeBinding,
             Error::Inventory,
             Error::Profile,
-            Error::Proof,
+            Error::Verification(iroha_plonk::VerifyError::Ipa(
+                iroha_plonk::pcs::ipa::IpaError::Msm(iroha_pasta::msm::MsmError::Budget(
+                    iroha_pasta::msm::BudgetExceeded {
+                        required: 4096,
+                        budget: 1024,
+                    },
+                )),
+            )),
+            Error::Recursion(iroha_plonk_recursion::Error::Kernel(
+                iroha_pasta::msm::MsmError::ScalarBound,
+            )),
         ] {
+            let expected = original.clone();
+            assert!(matches!(
+                proof::<()>(Err(original)),
+                Err(state::Error::NativeVerification(actual)) if actual == expected
+            ));
+        }
+        for rejected in [Error::Authority, Error::Proof] {
             assert!(matches!(
                 proof::<()>(Err(rejected)),
                 Err(state::Error::Proof(

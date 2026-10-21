@@ -27,15 +27,15 @@ extension KagemushaEnrollmentDeviceActor {
     let directory = config.actorPath + "/private/nearby"
     try config.files.mkdir(directory)
     if command.action == "nearby-prepare" {
-      let id = try word("setup-id"), offer = try input("offer")
+      let id = try word("setup-id")
+      let amount = try KagemushaMonetaryProbeManifest.amount(input("amount"))
       try bind("setup", id: id, inputs: inputs.merging(["family": Data("request".utf8)]) { first, _ in first })
       let path = directory + "/setup-" + EnrollmentProbeFiles.digest(id)
       try config.files.publish(path + "-binding", bytes: KagemushaMonetaryProbeManifest.binding("nearby-prepare", inputs: inputs))
-      let raw = try KagemushaNearbyDiagnostic.prepare(wallet: wallet, setupID: id, offer: offer,
+      let raw = try KagemushaNearbyDiagnostic.prepare(wallet: wallet, call: try mutationOwner(), setupID: id, amount: amount,
         feeSchedule: inputs["fee-schedule"], feeCertificate: inputs["fee-certificate"])
       let message = try IrohaPeerWireMessageV1.decode(raw, expectedProfile: .kagemushaWalletV1, expectedKind: .request)
       try config.files.publish(path + "-request", bytes: raw)
-      try config.files.publish(path + "-offer", bytes: offer)
       try output("nearby-request-ipm1.bin", raw, sequence: sequence)
       try output("nearby-request-hash.bin", message.canonicalHash, sequence: sequence)
       return "native-request-ready-for-nearby"
@@ -44,11 +44,10 @@ extension KagemushaEnrollmentDeviceActor {
     let recovery = command.action.contains("recover")
     let requestID = try word("request-id"), sessionID = try word("session-id", size: 16)
     let requestHash = try word("request-hash"), peer = try word("peer-certificate")
-    var request: Data?, offer: Data?
+    var request: Data?
     if !sender {
       let path = directory + "/setup-" + EnrollmentProbeFiles.digest(try word("setup-id"))
       request = try config.files.read(path + "-request", maximum: 32_768)
-      offer = try config.files.read(path + "-offer", maximum: 10_000)
     }
     let prompt = try await MainActor.run { () throws -> KagemushaNearbyPrompt in
       let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
@@ -60,8 +59,8 @@ extension KagemushaEnrollmentDeviceActor {
     let attemptPath = config.actorPath + "/public/" + config.invocation
       + String(format: "/%04d-nearby", sequence)
     let runner = try KagemushaNearbyDiagnostic(selection: .init(role: sender ? .sender : .receiver,
-      recovery: recovery, requestID: requestID, sessionID: sessionID, requestHash: requestHash,
-      peerIdentity: peer, requestMessage: request, offer: offer), wallet: wallet,
+      recovery: recovery, continuation: command.action.contains("continue"), requestID: requestID, sessionID: sessionID, requestHash: requestHash,
+      peerIdentity: peer, requestMessage: request), wallet: wallet, call: try mutationOwner(),
       identity: nearbyIdentity, files: config.files, actorPath: config.actorPath,
       attemptPath: attemptPath, prompt: prompt)
     nearbyRun = runner
@@ -73,7 +72,7 @@ extension KagemushaEnrollmentDeviceActor {
     } onCancel: {
       runner.cancel()
     }
-    return sender ? "native-exact-send-delivery-admitted-over-nearby"
+    return sender ? "native-exact-send-delivery-verified-over-nearby"
       : "native-durable-receive-acknowledged-over-nearby"
   }
 }

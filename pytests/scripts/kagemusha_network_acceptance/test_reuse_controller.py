@@ -26,6 +26,9 @@ class ReuseControllerTests(unittest.TestCase):
         self.assertEqual(Path(self.temp.name).stat().st_mode & 0o777, 0o700)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
+        (self.root / '.git').mkdir()
+        checkout = patch.object(r.admission.capture, 'REPO', self.root)
+        checkout.start(); self.addCleanup(checkout.stop)
         self.raw = self.root / 'raw' / 'originals'
         self.raw.mkdir(parents=True)
         self.content = b'raw DATA, no receipt or signing authority'
@@ -156,10 +159,13 @@ class ReuseControllerTests(unittest.TestCase):
     def test_remaining_phase_rechecks_only_the_controlled_link_change(self):
         self.run_catalog()
         self.admitted['binaries'] = {}
-        r.unchanged(self.admitted, {})
-        os.link(self.file, self.root / 'late-extra-link')
-        with self.assertRaisesRegex(ValueError, 'unexpected raw hard-link mutation'):
+        responses = {('branch', '--show-current'): 'optimizations',
+                     ('diff', '--name-only', '--diff-filter=U'): ''}
+        with patch.object(r.admission.capture, 'git', side_effect=lambda *args: responses[args]):
             r.unchanged(self.admitted, {})
+            os.link(self.file, self.root / 'late-extra-link')
+            with self.assertRaisesRegex(ValueError, 'unexpected raw hard-link mutation'):
+                r.unchanged(self.admitted, {})
 
     def test_reviewed_external_loader_rejects_foreign_preloaded_module(self):
         import types

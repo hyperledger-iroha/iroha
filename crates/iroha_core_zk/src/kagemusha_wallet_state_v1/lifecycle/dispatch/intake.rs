@@ -169,6 +169,24 @@ fn encode_batch(batch: &IntakeBatch) -> Result<PrivateArchiveBytes, Error> {
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
+    // A reviewed request must not adopt even an unindexed staging batch. The binding is
+    // acknowledged before any draft is written, so presence with authenticated absence is
+    // inconsistent custody. A zero payload bound reads only the bounded archive envelope;
+    // every original provider/size/decode error remains an error, never absence.
+    pub(in crate::kagemusha_wallet_state_v1) fn require_no_preparation_draft(
+        &mut self,
+        request_id: [u8; 32],
+    ) -> Result<(), Error> {
+        if self
+            .archive
+            .get(ArchiveKey::PreparationDraft(request_id), 0)?
+            .is_some()
+        {
+            return Err(Error::WitnessLost("unbound request has preparation draft"));
+        }
+        Ok(())
+    }
+
     fn read_intake_batch(
         &mut self,
         request_id: [u8; 32],
@@ -207,39 +225,6 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         Ok(Some(batch))
     }
-
-    /// Model the real pre-publication state where the batch is the sole original owner.
-    #[cfg(test)]
-    pub(in crate::kagemusha_wallet_state_v1) fn retain_intake_batch_only_test_original(
-        &mut self,
-        request_id: [u8; 32],
-    ) -> Result<(), Error> {
-        let (mut selected, mut manifest) = self.manifest()?;
-        let mut entry = self
-            .preparation_entry(&manifest, &request_id)?
-            .ok_or(Error::WitnessLost("test intake entry"))?;
-        let batch = self
-            .read_intake_batch(request_id, &entry)?
-            .ok_or(Error::WitnessLost("test intake batch"))?;
-        if entry.plan.is_some()
-            || entry.capsule.is_some()
-            || entry.request != Some(batch.plan.request_object)
-        {
-            return Err(Error::WitnessLost("test intake publication boundary"));
-        }
-        entry.request = None;
-        self.publish_preparation(&mut selected, &mut manifest, request_id, &entry)
-    }
-
-    pub(super) fn pending_intake_original(
-        &mut self,
-        request_id: [u8; 32],
-        entry: &Entry,
-    ) -> Result<Option<PrivateArchiveBytes>, Error> {
-        Ok(self
-            .read_intake_batch(request_id, entry)?
-            .map(|batch| batch.original))
-    }
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
@@ -264,8 +249,8 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         let mut planned = None;
         let recovered = match self.read_intake_batch(request.request_id(), entry)? {
             // A stale Archive batch can be replaced only before a plan/capsule was selected.
-            // Its immutable key cannot be overwritten. First retain its exact original under
-            // the authenticated Entry, then retire the old copies before staging a new batch.
+            // Its immutable key cannot be overwritten. Reaffirm the queue-selected exact
+            // original under the authenticated Entry before retiring the old batch.
             Some(batch)
                 if batch.plan.source != source_digest
                     && request.kind() == KagemushaWalletOperationKindV1::ArchiveSent =>
@@ -284,7 +269,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                 entry.request = Some(request_object);
                 self.publish_preparation(selected, manifest, request.request_id(), entry)?;
                 // Publication ends the grouped-write phase. Verify the retained original
-                // through the fresh phase before deleting its formerly sole batch copy.
+                // through the fresh phase before deleting the old batch copy.
                 let retained = zeroize::Zeroizing::new(
                     self.archive
                         .read_object(&request_object, REQUEST_MAX_BYTES)?,

@@ -42,7 +42,6 @@ norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = fals
 iroha_core_zk = { path = "../iroha_core_zk", default-features = false, features = ["proofs-stark", "zk-preverify"] }
 iroha_genesis = { workspace = true }
 iroha_fs = { workspace = true }
-iroha_kagemusha_proof = { workspace = true }
 iroha_pasta = { workspace = true }
 iroha_plonk = { workspace = true }
 iroha_torii_shared = { workspace = true }

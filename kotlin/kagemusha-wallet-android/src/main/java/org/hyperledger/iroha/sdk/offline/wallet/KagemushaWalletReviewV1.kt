@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package org.hyperledger.iroha.sdk.offline.wallet
 
-import java.io.Closeable
 import java.util.concurrent.atomic.AtomicLong
 
 /** Exact authenticated Native review DATA. This projection cannot construct an operation. */
@@ -62,64 +61,176 @@ class KagemushaWalletReviewProjectionV1 internal constructor(original: ByteArray
     override fun toString() = "KagemushaWalletReviewProjectionV1(kind=$kind, source=[REDACTED])"
 }
 
-/** JNI result has a separate parser; review18 is never an ordinary monetary completion. */
+/** Comparison DATA for a new Native review; never a reconstructed approval or capability. */
+sealed class KagemushaWalletReviewExpectationV1 {
+    object Fresh : KagemushaWalletReviewExpectationV1()
+    class OriginalUnstarted(originalProjection: ByteArray) : KagemushaWalletReviewExpectationV1() {
+        private val retained = KagemushaWalletReviewProjectionV1(originalProjection)
+        internal fun projection() = retained
+    }
+    internal fun bytes(): ByteArray = when (this) {
+        Fresh -> byteArrayOf()
+        is OriginalUnstarted -> projection().bytes()
+    }
+    internal val tag: Int get() = if (this === Fresh) 0 else 1
+}
+
+/** Only genuine preflight maintenance reasons, without permission to dispatch. */
+enum class KagemushaWalletReviewMaintenanceWaitV1 {
+    SELECTED_PENDING, ARCHIVE_FOLD, BUSY;
+    internal companion object {
+        fun from(tag: Int): KagemushaWalletReviewMaintenanceWaitV1 = when (tag) {
+            1 -> SELECTED_PENDING; 2 -> ARCHIVE_FOLD; 6 -> BUSY
+            else -> invalidReviewOutput()
+        }
+    }
+}
+
+/** Exact already-bound request observation. There is deliberately no Unknown case. */
+sealed class KagemushaWalletBoundRequestStatusV1 {
+    object Preparing : KagemushaWalletBoundRequestStatusV1()
+    class Outcome internal constructor(val completion: KagemushaWalletCallV1) : KagemushaWalletBoundRequestStatusV1()
+    internal companion object {
+        fun from(reply: KagemushaWalletCallV1): KagemushaWalletBoundRequestStatusV1 {
+            if (reply.status != KagemushaWalletCallV1.REVIEW_EXISTING) invalidReviewOutput()
+            val bytes = reply.bytes()
+            fun u32(at: Int): Long = (0..3).fold(0L) { value, i -> value or ((bytes[at + i].toLong() and 255) shl (8 * i)) }
+            fun u64(at: Int): Long = (0..7).fold(0L) { value, i -> value or ((bytes[at + i].toLong() and 255) shl (8 * i)) }
+            if (bytes.size !in 28..10_028) invalidReviewOutput()
+            val kind = u32(0); val detail = u32(4); val low = u64(8); val high = u64(16); val length = u32(24)
+            if (kind !in listOf(1L, 2L, 3L, 4L, 5L, 10L, 11L) || length > 10_000 || bytes.size.toLong() != 28 + length) invalidReviewOutput()
+            if (kind == 11L) {
+                if (detail != 0L || low != 0L || high != 0L || length != 0L) invalidReviewOutput()
+                return Preparing
+            }
+            return Outcome(KagemushaWalletCallV1(kind.toInt(), -1, 0, low, high, detail.toInt(),
+                bytes.copyOfRange(28, bytes.size)).completion())
+        }
+    }
+}
+
+/** Only Ready carries a newly authenticated one-use review. */
+sealed class KagemushaWalletReviewDecisionV1 {
+    class Ready internal constructor(val review: KagemushaWalletReviewV1) : KagemushaWalletReviewDecisionV1()
+    class Existing internal constructor(val status: KagemushaWalletBoundRequestStatusV1) : KagemushaWalletReviewDecisionV1()
+    class Waiting internal constructor(val wait: KagemushaWalletReviewMaintenanceWaitV1) : KagemushaWalletReviewDecisionV1()
+}
+
+/** Existing work and retained approval are distinct from a newly executed operation. */
+sealed class KagemushaWalletReviewedExecutionV1 {
+    class Executed internal constructor(val completion: KagemushaWalletCallV1) : KagemushaWalletReviewedExecutionV1()
+    class Existing internal constructor(val status: KagemushaWalletBoundRequestStatusV1) : KagemushaWalletReviewedExecutionV1()
+    class RetainedReview internal constructor(val review: KagemushaWalletReviewV1,
+        val wait: KagemushaWalletReviewMaintenanceWaitV1) : KagemushaWalletReviewedExecutionV1()
+}
+
+/** Route-specific parser shared by the actual executor and pure contract regression tests. */
+internal fun KagemushaWalletCallV1.reviewedExecution(owner: Any, review: KagemushaWalletReviewV1,
+    consumedToken: Long): KagemushaWalletReviewedExecutionV1 {
+    if (status < 0) throw KagemushaWalletExceptionV1(status, reason, platformCode)
+    return when (status) {
+        KagemushaWalletCallV1.REVIEW_RETAINED -> KagemushaWalletReviewedExecutionV1.RetainedReview(
+            review, review.restoreRetained(owner, consumedToken, this))
+        KagemushaWalletCallV1.REVIEW_EXISTING -> KagemushaWalletReviewedExecutionV1.Existing(
+            KagemushaWalletBoundRequestStatusV1.from(this))
+        1, 2, 3, 4, 5, 10 -> KagemushaWalletReviewedExecutionV1.Executed(completion())
+        else -> invalidReviewOutput()
+    }
+}
+
+/** Dedicated JNI issuance parser: ordinary monetary kind18 has another ABI meaning. */
 internal class KagemushaWalletReviewReplyV1(
     @JvmField val status: Int, @JvmField val reason: Int, @JvmField val platformCode: Int,
     private val sequenceLow: Long, private val sequenceHigh: Long, private val detail: Int, original: ByteArray,
 ) {
     private val retained = original.copyOf()
-    internal fun review(owner: Any, expected: KagemushaWalletReviewProjectionV1.Kind): KagemushaWalletReviewV1 {
+    internal fun decision(owner: Any, requestId: ByteArray, expected: KagemushaWalletReviewProjectionV1.Kind): KagemushaWalletReviewDecisionV1 {
+        requireReviewRequestId(requestId)
         if (status < 0) {
-            if (sequenceLow != 0L || sequenceHigh != 0L || detail != 0 || retained.isNotEmpty()) invalid()
+            if (sequenceLow != 0L || sequenceHigh != 0L || detail != 0 || retained.isNotEmpty()) invalidReviewOutput()
             throw KagemushaWalletExceptionV1(status, reason, platformCode)
         }
-        if (status != 18 || reason != -1 || platformCode != 0 || sequenceLow <= 0 || sequenceHigh != 0L || detail != 0) invalid()
-        val projection = KagemushaWalletReviewProjectionV1(retained)
-        if (projection.kind != expected) invalid()
-        return KagemushaWalletReviewV1.fromNative(owner, sequenceLow, projection)
+        if (reason != -1 || platformCode != 0) invalidReviewOutput()
+        return when (status) {
+            18 -> {
+                if (sequenceLow <= 0 || sequenceHigh != 0L || detail != 0) invalidReviewOutput()
+                val projection = KagemushaWalletReviewProjectionV1(retained)
+                if (projection.kind != expected) invalidReviewOutput()
+                KagemushaWalletReviewDecisionV1.Ready(KagemushaWalletReviewV1.fromNative(owner, sequenceLow, requestId, projection))
+            }
+            KagemushaWalletCallV1.REVIEW_EXISTING -> KagemushaWalletReviewDecisionV1.Existing(
+                KagemushaWalletBoundRequestStatusV1.from(KagemushaWalletCallV1(status, reason, platformCode,
+                    sequenceLow, sequenceHigh, detail, retained)))
+            KagemushaWalletCallV1.REVIEW_WAITING -> {
+                KagemushaWalletCallV1(status, reason, platformCode, sequenceLow, sequenceHigh, detail, retained)
+                KagemushaWalletReviewDecisionV1.Waiting(KagemushaWalletReviewMaintenanceWaitV1.from(detail))
+            }
+            else -> invalidReviewOutput()
+        }
     }
-    internal fun cleanupToken(): Long? = sequenceLow.takeIf { it > 0 }
-    private fun invalid(): Nothing = throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+    internal fun cleanupToken(): Long? = sequenceLow.takeIf { status == 18 && it > 0 }
     override fun toString() = "KagemushaWalletReviewReplyV1(status=$status, source=[REDACTED])"
 }
 
-/** Owner-local move-only capability. Only a genuine Native reply creates it; projection DATA cannot. */
+/** Owner-local move-only capability, bound to its original request at Native issuance. */
 class KagemushaWalletReviewV1 private constructor(
-    private val origin: Any, token: Long, val projection: KagemushaWalletReviewProjectionV1,
+    private val origin: Any, token: Long, requestId: ByteArray, val projection: KagemushaWalletReviewProjectionV1,
 ) {
+    private val identity = requestId.copyOf()
     private val selected = AtomicLong(token)
+    /** Original identity, for exact recovery only; execution never accepts a replacement ID. */
+    fun requestId(): ByteArray = identity.copyOf()
     internal fun consume(owner: Any): Long {
-        check(owner === origin) { "review belongs to another wallet" }
+        check(owner === origin) { "review belongs to another exchange" }
         return selected.getAndSet(0).takeIf { it > 0 } ?: throw KagemushaWalletExceptionV1(-2)
     }
+    /** Restore only the exact token returned by Native's typed absent-ID preflight refusal. */
+    internal fun restoreRetained(owner: Any, expectedToken: Long, reply: KagemushaWalletCallV1): KagemushaWalletReviewMaintenanceWaitV1 {
+        check(owner === origin)
+        if (reply.status != KagemushaWalletCallV1.REVIEW_RETAINED || reply.sequenceLow != expectedToken ||
+            expectedToken <= 0 || !selected.compareAndSet(0, expectedToken)) invalidReviewOutput()
+        return KagemushaWalletReviewMaintenanceWaitV1.from(reply.detail)
+    }
     internal companion object {
-        internal fun fromNative(owner: Any, token: Long, projection: KagemushaWalletReviewProjectionV1) =
-            KagemushaWalletReviewV1(owner, token, projection)
+        internal fun fromNative(owner: Any, token: Long, requestId: ByteArray, projection: KagemushaWalletReviewProjectionV1): KagemushaWalletReviewV1 {
+            requireReviewRequestId(requestId)
+            return KagemushaWalletReviewV1(owner, token, requestId, projection)
+        }
     }
     override fun toString() = "KagemushaWalletReviewV1(owner=[REDACTED])"
 }
 
-/** Copy/bounds only. Native authenticates all financial originals and retains the review. */
+/** Copy/bounds only. Native authenticates originals, request absence and comparison DATA. */
 internal class KagemushaWalletReviewInputV1(
-    val selector: Int,
+    requestId: ByteArray, val selector: Int, val expectation: KagemushaWalletReviewExpectationV1,
     val amount: KagemushaWalletUInt128V1 = KagemushaWalletUInt128V1(0, 0),
     first: ByteArray = byteArrayOf(), second: ByteArray = byteArrayOf(),
 ) {
+    private val identity = requestId.copyOf()
     private val originals: List<ByteArray>
     init {
+        requireReviewRequestId(requestId)
         val nonzero = amount.low != 0L || amount.high != 0L
         when (selector) {
-            1 -> require(!nonzero && first.isNotEmpty() && first.size <= 10_000 &&
-                second.isNotEmpty() && second.size <= 4_096)
+            1 -> require(!nonzero && first.isNotEmpty() && first.size <= 10_000 && second.isNotEmpty() && second.size <= 4_096)
             8 -> {
                 require(nonzero && first.size <= 1_024 && first.isEmpty() == second.isEmpty())
                 if (second.isNotEmpty()) KagemushaWalletUnloadChargeReviewV1.validate(second)
             }
             else -> throw IllegalArgumentException("unknown review operation")
         }
+        if (expectation is KagemushaWalletReviewExpectationV1.OriginalUnstarted) {
+            require(expectation.projection().kind == if (selector == 1) KagemushaWalletReviewProjectionV1.Kind.SEND else KagemushaWalletReviewProjectionV1.Kind.UNLOAD)
+        }
         originals = listOf(first.copyOf(), second.copyOf())
     }
+    fun requestId(): ByteArray = identity.copyOf()
     fun first(): ByteArray = originals[0].copyOf()
     fun second(): ByteArray = originals[1].copyOf()
     override fun toString(): String = "KagemushaWalletReviewInputV1(originals=[REDACTED])"
 }
+
+internal fun requireReviewRequestId(value: ByteArray) {
+    require(value.size == 32 && value.any { it != 0.toByte() }) { "nonzero32-byte request identity required" }
+}
+private fun invalidReviewOutput(): Nothing = throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)

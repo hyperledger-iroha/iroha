@@ -8,8 +8,9 @@
 //!
 //! The one signed identity includes the complete producer-catalog commitment; a
 //! verifier-only view need not hold that catalog's original proving tables.
-//! TODO(G3/G4): qualify every original against its complete Q/A/W/terminal source
-//! and connect the native preparation/fold owner. This type grants no wallet-open capability;
+//! The native state owner connects preparation and folding through separately admitted
+//! `QualifiedWalletSourcesV1`. Regenerated artifacts and genuine operations still require
+//! qualification on the current candidate. This type grants no wallet-open capability;
 //! there is no boolean or argument that upgrades verifier-only admission to producer readiness.
 
 use ff::PrimeField;

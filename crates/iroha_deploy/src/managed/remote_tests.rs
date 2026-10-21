@@ -5,6 +5,62 @@ use crate::bootstrap::InstalledNetworkProfiles;
 use iroha_crypto::{Algorithm, KeyPair};
 
 #[test]
+fn parent_checkpoint_diagnostic_preserves_installed_context_and_typed_cause() {
+    use crate::bootstrap::CheckpointReadError;
+    use iroha::http::PublicHttpError;
+
+    let installed = profile(91, 1, "https://taira.sora.org/bootstrap/checkpoint.nrt");
+    for (source, publication_hint) in [
+        (
+            CheckpointReadError::Http(PublicHttpError::Status(404)),
+            true,
+        ),
+        (
+            CheckpointReadError::Http(PublicHttpError::Status(500)),
+            false,
+        ),
+        (CheckpointReadError::Http(PublicHttpError::Deadline), false),
+        (CheckpointReadError::Http(PublicHttpError::Transport), false),
+        (
+            CheckpointReadError::Bootstrap(BootstrapError::Invalid(
+                "checkpoint signature rejected",
+            )),
+            false,
+        ),
+    ] {
+        let original = source.to_string();
+        let error = Error::ParentCheckpoint {
+            profile: Box::new(installed.clone()),
+            source: Box::new(source),
+        };
+        let text = error.to_string();
+        assert!(text.contains("network `fixture`"));
+        assert!(text.contains(installed.checkpoint_url().as_str()));
+        assert!(text.contains(&original));
+        assert_eq!(text.contains("publication or routing"), publication_hint);
+        assert_eq!(text.contains("retry the same command"), publication_hint);
+        assert_eq!(
+            text.contains("Keep any existing context and journals"),
+            publication_hint
+        );
+        let source = std::error::Error::source(&error).unwrap();
+        let source = source.downcast_ref::<Box<CheckpointReadError>>().unwrap();
+        assert_eq!(source.as_ref().to_string(), original);
+        assert_eq!(
+            matches!(
+                source.as_ref(),
+                CheckpointReadError::Http(PublicHttpError::Status(404))
+            ),
+            publication_hint
+        );
+        assert_eq!(
+            ManagedAttachmentFailure::from(error),
+            ManagedAttachmentFailure::ParentAuthenticationFailed
+        );
+    }
+}
+
+#[test]
 fn attachment_deadline_optional_record_preserves_parent_errors_and_original_retry() {
     let temporary = tempfile::tempdir().unwrap();
     let directory = PrivateDirectory::open_or_create(temporary.path().join("attachment")).unwrap();

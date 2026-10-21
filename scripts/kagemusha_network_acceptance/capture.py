@@ -32,7 +32,23 @@ def git(*arguments):
         ['git', *arguments], cwd=REPO, text=True, check=True, stdout=subprocess.PIPE
     ).stdout.strip()
 
+def require_resolved_checkout():
+    """Refuse pending merges, even with a clean index, before further work."""
+    directory = REPO / '.git'
+    if directory.is_symlink() or not directory.is_dir() or os.path.lexists(directory / 'commondir'):
+        raise ValueError('original checkout required')
+    if os.path.lexists(directory / 'MERGE_HEAD'):
+        raise ValueError('merge in progress; conclude MERGE_HEAD before capture or execution')
+    branch = git('branch', '--show-current')
+    unmerged = git('diff', '--name-only', '--diff-filter=U').splitlines()
+    if os.path.lexists(directory / 'MERGE_HEAD'):
+        raise ValueError('merge in progress; conclude MERGE_HEAD before capture or execution')
+    if branch != 'optimizations' or unmerged:
+        raise ValueError('original resolved branch required at every stage')
+    return {'branch': branch, 'unmerged': unmerged, 'merge_head': False}
+
 def snapshot(package_roots=()):
+    require_resolved_checkout()
     paths = child_process.natural_run(
         ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
         cwd=REPO, check=True, stdout=subprocess.PIPE
@@ -47,11 +63,10 @@ def snapshot(package_roots=()):
                 files[relative] = digest(stable_read(path))
         except (OSError, ValueError) as error:
             failures[relative] = str(error)
+    head = git('rev-parse', 'HEAD')
     return {
         'files': files, 'links': links, 'read_failures': failures,
-        'head': git('rev-parse', 'HEAD'),
-        'branch': git('branch', '--show-current'),
-        'unmerged': git('diff', '--name-only', '--diff-filter=U').splitlines(),
+        'head': head, **require_resolved_checkout(),
     }
 
 def changes(before, after):
@@ -63,7 +78,7 @@ def changes(before, after):
             for name in sorted(set(left) | set(right)) if left.get(name) != right.get(name)
         }
     result['metadata'] = {
-        key: [before[key], after[key]] for key in ('head', 'branch', 'unmerged')
+        key: [before[key], after[key]] for key in ('head', 'branch', 'unmerged', 'merge_head')
         if before[key] != after[key]
     }
     return result

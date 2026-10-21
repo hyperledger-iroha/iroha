@@ -222,6 +222,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Unreleased/missing Bootstrap, lost selected originals, invalid installed proofs,
     /// unavailable hardware/storage, or uncertain publication. No failure re-signs a selected output.
     pub fn activation(&mut self) -> Result<Vec<u8>, Error> {
+        self.require_fresh_work()?;
         let _payment = self.scheduler.payment();
         let asset = self.proofs.asset.clone();
         let plan = self.activation_plan(&asset)?;

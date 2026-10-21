@@ -97,6 +97,7 @@ final class KagemushaEnrollmentPhysicalDeviceTests: XCTestCase {
       try files.publish(
         publicPath + "/invocation.plist", bytes: EnrollmentProbeFiles.encode(header))
       var failedCommands = 0
+      var activityFailureRecorded = false
       var achievedStages = Set<String>()
       do {
         for sequence in 0..<10_000 {
@@ -104,6 +105,25 @@ final class KagemushaEnrollmentPhysicalDeviceTests: XCTestCase {
           let base = "inbox/" + invocation + "/" + name
           var ready: String? = nil
           while ready == nil {
+            if !activityFailureRecorded {
+              do { try await driver.checkActivityFailure() } catch {
+                activityFailureRecorded = true
+                // Stay available for explicit release/stop. Never persist error descriptions.
+                var failure: [String: Any] = [
+                  "status": "activity-publication-failed", "ticks": mach_continuous_time(),
+                  "errorType": String(reflecting: type(of: error)),
+                ]
+                if let native = error as? KagemushaWalletErrorV1,
+                  case .native(let status, let reason, let platformCode) = native
+                {
+                  failure["nativeStatus"] = status
+                  failure["nativeReason"] = reason
+                  failure["platformCode"] = platformCode
+                }
+                try files.publish(
+                  publicPath + "/activity-failed.plist", bytes: EnrollmentProbeFiles.encode(failure))
+              }
+            }
             ready = try deadline.select { try files.readyDigest(base + ".ready") }
             if ready == nil { try await Task.sleep(nanoseconds: 200_000_000) }
           }
@@ -126,7 +146,11 @@ final class KagemushaEnrollmentPhysicalDeviceTests: XCTestCase {
           // A filesystem operation or suspension cannot authorize dispatch after expiry.
           try deadline.check()
           let outcome: String
-          do { outcome = try await driver.execute(command, sequence: sequence) } catch {
+          do {
+            // These short controls run before the actor enqueue, even when it is busy.
+            let admission = try driver.admit(command)
+            outcome = try await driver.execute(command, sequence: sequence, admission: admission)
+          } catch {
             failedCommands += 1
             let after = mach_continuous_time()
             // Preserve failure without serializing an error description or any sensitive input.
@@ -164,9 +188,11 @@ final class KagemushaEnrollmentPhysicalDeviceTests: XCTestCase {
               publicPath + "/closed.plist",
               bytes: EnrollmentProbeFiles.encode([
                 "failedCommands": failedCommands, "commands": sequence + 1, "ticks": after,
+                "activityFailureRecorded": activityFailureRecorded,
                 "requiredStage": config.requiredStage, "achievedStages": achievedStages.sorted(),
               ]))
             guard failedCommands == 0 else { throw EnrollmentProbeFailure.commandFailures }
+            guard !activityFailureRecorded else { throw EnrollmentProbeFailure.lifecycle }
             guard achievedStages.contains(config.requiredStage) else {
               throw EnrollmentProbeFailure.lifecycle
             }

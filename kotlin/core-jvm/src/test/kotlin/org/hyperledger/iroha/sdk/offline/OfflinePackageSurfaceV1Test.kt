@@ -155,10 +155,12 @@ class OfflinePackageSurfaceV1Test {
             "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletAndroidStorageV1.kt",
             "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletNativeCallsV1.kt",
             "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletNativeWorkerV1.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletWorkerMetricsV1.kt",
             "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaNearbyAttemptGateTest.kt",
             "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletAndroidCustodyStorageV1Test.kt",
             "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletAndroidStorageV1Test.kt",
             "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletNativeWorkerV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletWorkerMetricsV1Test.kt",
             "kagemusha-wallet-android/src/testSupport/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaNearbyAttemptGate.kt",
         )
 

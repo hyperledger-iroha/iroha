@@ -34,7 +34,13 @@ mod background;
 pub(crate) use background::FoldBridgeTurnV1;
 mod closing;
 pub(crate) mod enrollment;
+pub(crate) mod exchange;
+pub use exchange::{
+    connect_norito_kagemusha_wallet_begin_exchange_v1,
+    connect_norito_kagemusha_wallet_end_exchange_v1,
+};
 mod exports;
+mod maintenance;
 pub(crate) mod observation;
 pub use observation::{
     connect_norito_kagemusha_wallet_account_display_v1,
@@ -66,6 +72,9 @@ pub use review::{
 };
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod verification_error_tests;
 
 /// Invalid input or malformed callback result.
 pub const INVALID: i32 = -1;
@@ -206,10 +215,29 @@ impl From<state::Error> for Failure {
             E::WitnessLost(_) => Self::code(CUSTODY_LOST),
             E::CreditConflict | E::OperationConflict => Self::code(CONFLICT),
             E::FoldRequired => Self::code(FOLD_REQUIRED),
+            E::ArchiveAdmission(error) => {
+                use state::ArchiveAdmissionErrorV1 as A;
+                Self::code(match error {
+                    A::Closed => CLOSED,
+                    A::Foreign | A::Stale | A::NotDue => INVALID,
+                    A::Busy | A::ExchangeOpen => UNCERTAIN,
+                    A::FoldBacklog => FOLD_REQUIRED,
+                    A::Exhausted => RESOURCE,
+                    A::InvalidResolution => INTERNAL,
+                })
+            }
             E::Pending => Self::code(UNCERTAIN),
             E::NoHead => Self::code(INVALID),
             E::Cancelled => Self::code(CANCELLED),
             E::ArtifactsUnavailable(_) => Self::code(ARTIFACTS_UNAVAILABLE),
+            E::NativeVerification(original) => {
+                Self::code(if original.is_verification_memory_budget() {
+                    RESOURCE
+                } else {
+                    INTERNAL
+                })
+            }
+            E::ReceiptRejected(_) => Self::code(PROOF_REJECTED),
             E::Proof(_) => Self::code(PROOF_REJECTED),
             E::NotEnoughStorage => Self::code(NOT_ENOUGH_STORAGE),
             E::NotEnoughMemory => Self::code(NOT_ENOUGH_MEMORY),
@@ -290,14 +318,49 @@ trait Wallet: Send {
         Ok(())
     }
     fn snapshot(&mut self) -> Result<state::Snapshot>;
-    fn review(&mut self, _input: review::Input) -> Result<Response> {
+    fn maintenance(&mut self) -> Result<maintenance::View>;
+    fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
         Err(Failure::code(INVALID))
     }
-    fn execute_reviewed(&mut self, _token: u64, _request: [u8; 32]) -> Result<Response> {
+    fn drain_archive(
+        &mut self,
+        _turn: state::ArchiveTurnV1,
+    ) -> Result<state::DeferredArchiveDrainV1> {
         Err(Failure::code(INVALID))
     }
-    fn discard_review(&mut self, _token: u64) -> Result<()> {
+    fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
         Err(Failure::code(INVALID))
+    }
+    fn observe_receipt(
+        &mut self,
+        _send: &[u8; 32],
+        _original: &[u8],
+    ) -> Result<maintenance::ReceiptStep> {
+        Err(Failure::code(INVALID))
+    }
+    fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+        Err(Failure::code(INVALID))
+    }
+    fn review(&mut self, _exchange_id: u64, _input: review::Input) -> Result<Response> {
+        Err(Failure::code(INVALID))
+    }
+    fn execute_reviewed(&mut self, _exchange_id: u64, _token: u64) -> Result<Response> {
+        Err(Failure::code(INVALID))
+    }
+    fn discard_review(&mut self, _exchange_id: u64, _token: u64) -> Result<()> {
+        Err(Failure::code(INVALID))
+    }
+    /// Remove only an exact in-memory capability; never enter durable custody/proof work.
+    fn discard_capability(
+        &mut self,
+        kind: review::CapabilityKind,
+        origin: u64,
+        token: u64,
+    ) -> Result<()> {
+        match kind {
+            review::CapabilityKind::Financial => self.discard_review(origin, token),
+            _ => Err(Failure::code(INVALID)),
+        }
     }
     /// The job that may prove retained review `token`'s σ_send speculatively, taken under
     /// the owner right after the review was retained.
@@ -315,13 +378,15 @@ trait Wallet: Send {
     fn observe(&mut self, _selector: u32, _identity: &[u8]) -> Result<Response> {
         Err(Failure::code(INVALID))
     }
-    fn setup(&mut self, input: setup::Setup) -> Result<Response>;
+    fn setup(&mut self, exchange_id: u64, input: setup::Setup) -> Result<Response>;
     fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response>;
     fn install_blacklist(&mut self, _list: &[u8], _certificates: &[u8]) -> Result<Response> {
         Err(Failure::code(INVALID))
     }
     fn request_status(&mut self, request: &[u8; 32]) -> Result<Response>;
     fn retry(&mut self, operation: &[u8; 32]) -> Result<Response>;
+    /// Reconcile selected Pending custody without cancelling or joining fold work.
+    fn has_pending_operation(&mut self) -> Result<bool>;
     fn resume(&mut self) -> Result<Response>;
     /// Locked prepare of at most one fold sub-proof: `Break` is the finished response, and
     /// `Continue` the proof to run after releasing the wallet owner.
@@ -362,9 +427,9 @@ fn fold_response(ended: state::FoldTurnStatusV1) -> Response {
 }
 struct NativeWallet<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     wallet: state::NativeWalletCoordinatorV1<advance::KagemushaWalletStdFsV1, P, S>,
-    times: BTreeMap<u64, state::DirectTimeExchangeV1>,
-    reviews: review::Tokens<state::ReviewedOperationV1>,
-    deletion_reviews: review::Tokens<state::ReviewedCustodyDeletionV1>,
+    times: BTreeMap<u64, review::OriginBound<state::DirectTimeExchangeV1>>,
+    reviews: review::Tokens<review::OriginBound<state::ReviewedOperationV1>>,
+    deletion_reviews: review::Tokens<review::OriginBound<state::ReviewedCustodyDeletionV1>>,
 }
 impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
     for NativeWallet<P, S>
@@ -381,21 +446,72 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
     fn observe(&mut self, selector: u32, identity: &[u8]) -> Result<Response> {
         self.observe_inner(selector, identity)
     }
-    fn setup(&mut self, input: setup::Setup) -> Result<Response> {
-        self.setup_inner(input)
+    fn setup(&mut self, exchange_id: u64, input: setup::Setup) -> Result<Response> {
+        self.setup_inner(exchange_id, input)
     }
-    fn review(&mut self, input: review::Input) -> Result<Response> {
-        self.review_inner(input)
+    fn maintenance(&mut self) -> Result<maintenance::View> {
+        self.maintenance_inner()
     }
-    fn execute_reviewed(&mut self, token: u64, request: [u8; 32]) -> Result<Response> {
-        self.execute_reviewed_inner(token, request)
+    fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
+        self.drain_plan_inner()
     }
-    fn discard_review(&mut self, token: u64) -> Result<()> {
+    fn drain_archive(
+        &mut self,
+        turn: state::ArchiveTurnV1,
+    ) -> Result<state::DeferredArchiveDrainV1> {
+        match self.wallet.drain_deferred_archive(turn) {
+            Ok(value) => Ok(value),
+            Err(state::Error::Pending) => Ok(state::DeferredArchiveDrainV1::Blocked(
+                state::DeferredArchiveWaitV1::SelectedPending,
+            )),
+            Err(error) => Err(error.into()),
+        }
+    }
+    fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
+        self.receipt_inner()
+    }
+    fn observe_receipt(
+        &mut self,
+        send: &[u8; 32],
+        original: &[u8],
+    ) -> Result<maintenance::ReceiptStep> {
+        self.observe_receipt_inner(send, original)
+    }
+    fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+        match self.wallet.deferred_archive_wake_hint() {
+            Ok(value) => Ok(maintenance::WakeHint::Age(value)),
+            Err(state::Error::Pending) => Ok(maintenance::WakeHint::Pending),
+            Err(error) => Err(error.into()),
+        }
+    }
+    fn review(&mut self, exchange_id: u64, input: review::Input) -> Result<Response> {
+        self.review_inner(exchange_id, input)
+    }
+    fn execute_reviewed(&mut self, exchange_id: u64, token: u64) -> Result<Response> {
+        self.execute_reviewed_inner(exchange_id, token)
+    }
+    fn discard_review(&mut self, exchange_id: u64, token: u64) -> Result<()> {
         // Dropping the review cancels its speculation and drops any σ unsigned.
-        self.reviews.take(token).map(drop)
+        self.reviews.take_bound(token, exchange_id).map(drop)
+    }
+    fn discard_capability(
+        &mut self,
+        kind: review::CapabilityKind,
+        origin: u64,
+        token: u64,
+    ) -> Result<()> {
+        match kind {
+            review::CapabilityKind::Financial => self.reviews.take_bound(token, origin).map(drop),
+            review::CapabilityKind::Time => {
+                setup::take_time(&mut self.times, token, origin).map(drop)
+            }
+            review::CapabilityKind::Deletion => {
+                self.deletion_reviews.take_bound(token, origin).map(drop)
+            }
+        }
     }
     fn review_speculation(&mut self, token: u64) -> Option<state::SpeculativeSendJobV1> {
-        self.reviews.get(token)?.speculation()
+        self.reviews.get(token)?.value.speculation()
     }
     fn prepare_speculation(
         &mut self,
@@ -424,6 +540,9 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
     }
     fn retry(&mut self, operation: &[u8; 32]) -> Result<Response> {
         completion(self.wallet.retry(operation)?)
+    }
+    fn has_pending_operation(&mut self) -> Result<bool> {
+        Ok(self.wallet.has_pending_operation()?)
     }
     fn resume(&mut self) -> Result<Response> {
         completion(self.wallet.resume()?)
@@ -462,6 +581,7 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
 struct Owner {
     background: background::Background,
     closing: Arc<closing::CloseState>,
+    exchanges: Mutex<exchange::Tokens>,
     scheduler: state::Scheduler,
     // The shared closing state blocks new calls; this owner remains registered until
     // the actual scheduler join and custody drop complete successfully.
@@ -494,11 +614,53 @@ fn install(wallet: Box<dyn Wallet>, scheduler: state::Scheduler) -> Result<u64> 
         Arc::new(Owner {
             background: background::Background::observing(&scheduler),
             closing: Arc::new(closing::CloseState::default()),
+            exchanges: Mutex::new(exchange::Tokens::default()),
             scheduler,
             wallet: Mutex::new(Some(wallet)),
         }),
     );
     Ok(id)
+}
+
+#[cfg(test)]
+fn test_exchange_id(id: u64) -> u64 {
+    let Ok(owner) = owner(id) else {
+        return 0;
+    };
+    let existing = owner.exchanges.lock().unwrap().first_live();
+    existing.unwrap_or_else(|| exchange::begin(id).unwrap().delivered())
+}
+
+#[cfg(test)]
+fn test_invocation(id: u64) -> Result<exchange::Invocation> {
+    exchange::Invocation::admit(id, test_exchange_id(id))
+}
+
+#[cfg(test)]
+fn test_setup_exchange_request(id: u64, request: *const exports::WalletSetupRequest) -> u64 {
+    // Test callers own their request storage for the complete boundary invocation.
+    let Some(request) = (unsafe { request.as_ref() }) else {
+        return 0;
+    };
+    if exchange::setup_exempt(request.selector) {
+        0
+    } else {
+        test_exchange_id(id)
+    }
+}
+#[cfg(test)]
+fn test_setup(invocation: &exchange::Invocation, input: setup::Setup) -> Result<Response> {
+    let mut delivery = review::CapabilityDelivery::default();
+    let result = setup(invocation, input, &mut delivery);
+    delivery.complete(result.is_ok());
+    result
+}
+#[cfg(test)]
+fn test_review(invocation: &exchange::Invocation, input: review::Input) -> Result<Response> {
+    let mut delivery = review::CapabilityDelivery::default();
+    let result = review::review(invocation, input, &mut delivery);
+    delivery.complete(result.is_ok());
+    result
 }
 fn owner(id: u64) -> Result<Arc<Owner>> {
     let owner = registry()
@@ -634,7 +796,7 @@ fn setup_priority(input: &setup::Setup) -> Priority {
         // Collection uses the same background scheduler as folding. A payment reservation
         // here would make its own scheduler start return Idle forever; real payments still
         // cancel/join collection before acquiring this wallet mutex.
-        S::CollectRetained { .. } => Priority::None,
+        S::CollectRetained { .. } | S::Bootstrap => Priority::None,
         S::ActivationProofProgress(_)
         | S::UnloadProofProgress { .. }
         | S::LedgerStatus
@@ -659,34 +821,74 @@ fn setup_priority(input: &setup::Setup) -> Priority {
         | S::PaymentCompanion { .. }
         | S::CreditedOriginal { .. }
         | S::CreditProjection { .. }
-        | S::BoundCredited { query: true, .. }
+        | S::BoundCredited { .. }
+        | S::ObserveCredited { .. }
+        | S::ResumeDeferredReceipt
         | S::BeginTime
         | S::CancelTime { .. }
         | S::FinishTime { .. } => Priority::Ingest,
         _ => Priority::Payment,
     }
 }
-pub(crate) fn setup(id: u64, input: setup::Setup) -> Result<Response> {
+pub(crate) fn setup(
+    invocation: &exchange::Invocation,
+    input: setup::Setup,
+    delivery: &mut review::CapabilityDelivery,
+) -> Result<Response> {
+    invocation.validate()?;
+    if matches!(
+        input,
+        setup::Setup::ObserveCredited { .. } | setup::Setup::ResumeDeferredReceipt
+    ) {
+        let owner = invocation.owner();
+        owner.background.retry(&owner)?;
+        let result = match input {
+            setup::Setup::ObserveCredited {
+                send_request,
+                original,
+            } => maintenance::observe_receipt(&owner, &send_request, &original),
+            setup::Setup::ResumeDeferredReceipt => maintenance::receipt_step(&owner),
+            _ => unreachable!("closed receipt route"),
+        };
+        // Exact intake can already be durable when verification/publication later refuses.
+        owner.background.notify();
+        return maintenance::receipt_response(result?);
+    }
+    if matches!(input, setup::Setup::DrainDeferredArchive) {
+        return maintenance::drain(invocation);
+    }
+    if matches!(
+        input,
+        setup::Setup::Request { .. }
+            | setup::Setup::RequestWithFeePolicy { .. }
+            | setup::Setup::Activation
+            | setup::Setup::CloseLoads { .. }
+    ) {
+        maintenance::require_fresh(invocation)?;
+    }
     if terminal::is_terminal_input(&input) {
-        return terminal::dispatch(id, input);
+        return terminal::dispatch(invocation, input, delivery);
     }
     if matches!(input, setup::Setup::BackgroundStatus) {
-        return owner(id)?.background.status();
+        return invocation.owner().background.status();
     }
     let kind = match &input {
         setup::Setup::Request { .. } | setup::Setup::RequestWithFeePolicy { .. } => {
             Some(state::NativeWorkKindV1::Request)
         }
         setup::Setup::Bootstrap => Some(state::NativeWorkKindV1::Bootstrap),
-        setup::Setup::Credited(_) | setup::Setup::BoundCredited { .. } => {
+        setup::Setup::ObserveCredited { .. } | setup::Setup::BoundCredited { .. } => {
             Some(state::NativeWorkKindV1::Credited)
         }
         _ => None,
     };
-    let owner = owner(id)?;
+    invocation.validate()?;
+    let owner = invocation.owner();
     let turn = kind.map(state::NativeWorkTurnV1::start);
     let result = with_wallet_owner(Arc::clone(&owner), setup_priority(&input), |wallet| {
-        wallet.setup(input)
+        let response = wallet.setup(invocation.origin(), input)?;
+        delivery.issued(invocation, &response);
+        Ok(response)
     });
     if let Some(turn) = turn {
         owner
@@ -695,11 +897,13 @@ pub(crate) fn setup(id: u64, input: setup::Setup) -> Result<Response> {
     }
     result
 }
-pub(crate) fn execute(id: u64, call: requests::Call) -> Result<Response> {
+pub(crate) fn execute(invocation: &exchange::Invocation, call: requests::Call) -> Result<Response> {
+    invocation.validate()?;
     let request = match call {
         requests::Call::Operation(request) => request,
         requests::Call::InstallBlacklist { list, certificates } => {
-            return with_wallet(id, true, |wallet| {
+            maintenance::require_fresh(invocation)?;
+            return with_wallet_owner(invocation.owner(), Priority::Payment, |wallet| {
                 wallet.install_blacklist(&list, &certificates)
             });
         }
@@ -710,7 +914,9 @@ pub(crate) fn execute(id: u64, call: requests::Call) -> Result<Response> {
     ) {
         return Err(Failure::code(INVALID));
     }
-    let owner = owner(id)?;
+    maintenance::require_fresh(invocation)?;
+    invocation.validate()?;
+    let owner = invocation.owner();
     let turn = state::NativeWorkTurnV1::start(state::NativeWorkKindV1::Execute);
     let result = with_wallet_owner(Arc::clone(&owner), Priority::Payment, |wallet| {
         wallet.execute(request)
@@ -733,17 +939,32 @@ pub(crate) fn retry(id: u64, operation: &[u8]) -> Result<Response> {
     let operation = operation.try_into().map_err(|_| Failure::code(INVALID))?;
     // Exact-byte output lookup cannot advance custody. A transport retry must not restart
     // the sender's local proof; only resume can finish a pending hardware-signed operation.
-    with_wallet_owner(owner(id)?, Priority::Ingest, |wallet| {
-        wallet.retry(operation)
-    })
+    let owner = owner(id)?;
+    owner.background.retry(&owner)?;
+    with_wallet_owner(owner, Priority::Ingest, |wallet| wallet.retry(operation))
 }
 pub(crate) fn resume(id: u64) -> Result<Response> {
-    with_wallet(id, true, |wallet| wallet.resume())
+    let owner = owner(id)?;
+    owner.background.retry(&owner)?;
+    resume_selected(owner)
+}
+fn resume_selected(owner: Arc<Owner>) -> Result<Response> {
+    let pending = with_wallet_owner(Arc::clone(&owner), Priority::Ingest, |wallet| {
+        wallet.has_pending_operation()
+    })?;
+    if !pending {
+        return completion(None);
+    }
+    // Only an observed selection warrants cancelling a useful fold. The coordinator
+    // rechecks the current selection after this reservation and its wallet acquisition;
+    // the observation itself never authorizes recovery of a cached capsule.
+    with_wallet_owner(owner, Priority::Payment, |wallet| wallet.resume())
 }
 /// One fold sub-proof: prepared and published under the wallet owner, proved without it.
 pub(crate) fn fold(id: u64) -> Result<Response> {
     let owner = owner(id)?;
-    let result = explicit_fold(&owner);
+    owner.background.retry(&owner)?;
+    let result = run(|| explicit_fold(&owner));
     // A background turn that started while this call held the scheduler slot ended idle;
     // this result is the owner's latest turn and resumes that worker when work may remain.
     owner.background.after_explicit_fold(&result);

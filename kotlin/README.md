@@ -10,7 +10,7 @@ APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
 ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
 ```
 
-Account and public-key admission requires the ABI-31 `connect_norito_bridge`
+Account and public-key admission requires the ABI-32 `connect_norito_bridge`
 native library, including `nativeValidateAccountAddressCanonical`. Address
 construction and parsing use Rust to validate every key and complete multisig
 policy, then require identical canonical bytes. The V1 identity catalog includes
@@ -41,7 +41,7 @@ choice-free conviction update to Kotlin and Java callers. It emits the registere
 transaction encoding reject direction fields, noncanonical selectors, account
 addresses, quantities, durations, and malformed frames. The focused
 `UpdatePlainConviction*` Kotlin/Java-source tests compiled on 2026-09-24, but
-execution still requires a same-source ABI-31 native bridge for account
+execution still requires a same-source ABI-32 native bridge for account
 admission. This SDK slice does not establish Rust fixture parity or complete
 private standalone elections.
 
@@ -622,10 +622,20 @@ signing domains pack the full transcript. The SDK checks the result only as a ca
 Only `artifactManifestDigest` hashes a signed object with SHA-256. Circuit-visible
 object, package, statement, operation and nullifier digests use the canonical
 58-domain Poseidon table. Quota usage is a depth-6 array. A signed blacklist is
-local-only: `KagemushaWalletV1.installBlacklist` stores it on the phone (a replacement's
+local-only: `KagemushaWalletExchangeCallV1.installBlacklist` stores it on the phone (a replacement's
 version must increase), and Native then refuses to pay a listed receiver or
 accept a Payment from a listed payer with `KagemushaWalletExceptionV1.BLOCKED` (-15). No proof,
 wallet state or peer message carries it.
+ABI32 wallet mutations require an explicit logical exchange. Call
+`wallet.beginExchange()` synchronously before UI or worker enqueue, then
+`exchange.admit()` for each accepted task and finish that task after its last
+result. Keep the exchange across confirmation and carrier waits. Fence it with
+`requestEnd()` before enqueueing an off-UI `end()`; end joins accepted tasks.
+Cleanup methods retain the exact review/time origin and remain available after
+the end fence. `observeCreditedForSend` retains receipt custody before Native
+verification; `verifyNextDeferredCredited` and `drainDeferredArchive` expose
+bounded Native maintenance. An explicit drain is not automatic idle progress.
+
 `KagemushaP256Codec` is the P-256 device-key boundary: uncompressed SEC1 public keys
 and fixed-width low-S `r || s` signatures. The Android payment key
 (`kagemusha-wallet-android`) is a `DIGEST_SHA256` KeyMint key that signs exactly the
@@ -645,7 +655,7 @@ application without its own uses `PROTOCOL` (`F0504B45504B524E464301`, the aid-f
 card: an `IrohaPeerAsyncHostApduServiceV1` subclass, whose `applicationIdentifier` matches its
 aid-filter, routes commands to an `IrohaPeerNfcCardApduBridgeV1` around
 `IrohaPeerNfcCardEndpointV1.direct`, initialized with the receiver's native open Request.
-The receiver chooses the amount and calls `KagemushaWalletV1.request(setupId, amount)` (or
+The receiver chooses the amount and calls `KagemushaWalletExchangeCallV1.request(setupId, amount)` (or
 `requestWithFeePolicy`) before presenting the Request. The payer reads it with
 `IrohaPeerNfcReaderExchangeV1.readRequest`, reviews the exact destination, amount and fee
 with `reviewSend`, and approves through hardware confirmation while the same
@@ -681,7 +691,7 @@ NFC Offer/Ask commands have no fallback; GET_INTAKE remains the direct card's
 REQUEST_READY session record.
 
 `KagemushaWalletAccountOriginalV1` encodes and renders the bounded complete
-canonical Norito `AccountId` frame used by `KagemushaWalletV1.reviewSend`.
+canonical Norito `AccountId` frame used by `KagemushaWalletExchangeCallV1.reviewSend`.
 Supply both the receiver's original Request and destination account frame;
 Native authenticates their binding before returning a review. Display the
 reviewed account under the application's independently selected network and

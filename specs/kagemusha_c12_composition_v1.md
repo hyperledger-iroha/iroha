@@ -225,6 +225,48 @@ remain subject to the declared scheduling projection and physical refinement
 below. A hit's cancellation checkpoint does not establish cold/warm equivalence
 under wall-clock cancellation.
 
+Volatile fold retention can be included in that same private causal state.
+Each scheduler owns checked, monotonically increasing attempt identities.
+Exhaustion refuses a new fold before installing its running token, leaves the
+counter at its maximum, and drops only volatile retention after unlocking;
+it does not close payment or speculation admission. An old publication keeps
+its original scheduler, so neither later attempts nor a freshly opened scheduler
+can reuse its settlement identity. The single retention slot is absent,
+Pending for one attempt, or Ready. Prepare consumes Ready and evicts Pending.
+Proof completion parks a value only while eligible, uncancelled and without
+payment priority; only that attempt's successful durable checkpoint publication
+can promote it. Abandonment, refusal or terminal Omega drops its own pending
+value. Settlement cannot recreate an evicted value or affect another attempt's
+value. Payment joins the running proof and drops retention before returning;
+inactivity drops it too. Close permanently prevents new fold or speculation
+admission and clears the slot; delayed activity cannot reopen it. A reopened
+owner uses a fresh, initially inactive scheduler and resumes from durable originals.
+
+This is an admission and retention invariant, not cancellation of a proof that
+already released its slot. Such a publication still checks the current folded
+head, checkpoint count/digest, capsule, predecessor and empty publication slot;
+an unchanged selection may publish after an intervening payment or close.
+Successful checkpoint publication alone does not recreate invalidated retention.
+The native warm path separately requires the current installation, route,
+wallet, capsule, source identities and roots, plus an exact durable checkpoint
+prefix under the stated hash-binding premise. Newly produced Q/A/W checkpoint
+proof originals are restored from durable bytes on a later turn; a freshly
+sampled sigma fold preparation is not retained as restore state. Existing
+interrupted publication is adopted byte-for-byte instead of invoking the fresh
+prover.
+
+The control argument follows by induction on the mutex-serialized slot
+transitions in `scheduling.rs`, with `folding.rs` supplying the durable
+publication guard and `native_worker/retention.rs` supplying warm admission.
+Couple the same private derived state and actual scheduling transitions in the
+already-coupled custody histories: this control step adds no distance and does
+not add or erase proof-coin draws. This does not discharge the retained native
+state's source-validity premise, the local proof law, or real-catalog warm/cold
+execution. Warm and cold traces need not have equal timing, cancellation cuts,
+RSS or public scheduling leakage. Attempt-identity exhaustion remains an actual
+stopped branch of this service, not a discarded event or an assumption that the
+counter never reaches its bound.
+
 The selected transactional intake rule is part of the source invariant: native
 semantic refusal before acknowledged batch retention retains only the fixed
 request binding, without durably retaining variable rejected originals or map

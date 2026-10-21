@@ -119,7 +119,7 @@ and wire definitions below describe that candidate, not a claim of release or li
    |---|---|---|
    | Sumeragi kinds `0x01`–`0x05`; RS16 statements | `DST_SIG` | `SHA-256(P)`, allowlist only |
    | Consensus-key proof of possession | w3f transcript | `H("iroha:bls:pop:v1" ‖ pk)` |
-   | P2P handshake and relay digests; Torii finality attestation; block-header signatures; `SignatureOf`; genesis signature; consensus-key lifecycle certificates; private settlement; jurisdiction; KAGEMUSHA reserve and state certificates; BLS account controllers; SoraFS | w3f transcript (unchanged) | unchanged bytes |
+   | P2P handshake and relay digests; Torii finality attestation; block-header signatures; `SignatureOf`; genesis signature; consensus-key lifecycle certificates; private settlement; jurisdiction; BLS account controllers; SoraFS | w3f transcript (unchanged) | unchanged bytes |
 
    Only the consensus API hashes under `DST_SIG`, so no signature obtained in another context (a
    chosen-challenge node attestation, a relay digest) can verify as a vote or certificate share,

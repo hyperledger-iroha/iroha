@@ -1537,9 +1537,12 @@ chain's age; transport and durable-custody qualification are tracked in NF6.
 
 The offline Load relation binds the exact receipt transcript, monetary effect,
 ordinal, recovery-map insertion and credential-bound own Advance signature.
-Its two A stages and one W continuation, with one own-receipt signature leaf and
-no own σ leaf, retain monetary proof obligations without a finality proof or
-carried finality accumulators. The existing selected
+Its [single terminal A_Load](../crates/iroha_kagemusha_proof/src/a_relation/native/load.rs),
+one hard own-receipt signature Q and final Ω retain monetary proof obligations
+with no W continuation or own σ leaf. A_Load checks the hard predecessor, proves
+the transition and depth-32 recovery insertion, and binds the own receipt under
+the predecessor payment key. It carries no finality proof or finality accumulator.
+The existing selected
 trust model (§2.1) requires the released app on a stock uncompromised OS to perform
 native verification before requesting that signature. Consequently, offline
 funding lineage relies on that application/provider assumption; PLONK does not
@@ -1557,7 +1560,7 @@ A completed retry returns the exact retained output. Receipt evidence is not par
 of the 10,000-byte offline Payment envelope.
 
 TODO(G3/G5): complete the [native finality goals](kagemusha_native_finality_goals.md),
-rebuild affected A/W/Omega keys, and qualify Load, subsequent Receive/Unload and
+rebuild the affected Load A/Ω keys and downstream artifacts, and qualify Load, subsequent Receive/Unload and
 the common terminal catalog. Measure real complete Payment envelopes against
 10,000 bytes and native verification on physical phones. Historical recursive
 finality runs and structural fixtures do not establish those gates.
@@ -1915,7 +1918,7 @@ historical test artifacts remain evidence only.
 ### 9.1 Cutover sequencing
 
 The first release uses chain-only Android E1 attestation, the closed E5/E6
-exchange, the signed client runtime and bridge ABI 31. No first-device
+exchange, the signed client runtime and bridge ABI 32. No first-device
 Google authentication or Play Integrity input remains. Fact bit 9 is reserved
 zero for every credential evidence record, including retained enrollment
 evidence and renewal fresh evidence. Native record validation and the
@@ -2015,7 +2018,7 @@ and wallet installation remain mandatory after lossless decoding.
 Nothing in this revision is deployed piecemeal. The cutover is one coordinated
 change, and the release driver builds and releases it:
 
-1. **Bridge ABI 31.** `connect_norito_bridge` deletes the first-device
+1. **Bridge ABI 32.** `connect_norito_bridge` deletes the first-device
    authentication-key C/JNI exports (`first_device_auth_key_v1.rs` and its JNI
    adapter), its enrollment `prepare_request` takes the Android chain only, and
    the runtime capacity results of §5.3 become typed. Abandonment returns an
@@ -2024,9 +2027,14 @@ change, and the release driver builds and releases it:
    Refusals carry the closed §2.4
    codes. The first-device authentication and Play Integrity token inputs leave
    every startup consumer together (step 2). The export inventory changes
-   accordingly. The current ABI also carries open-Request setup, Payment-companion
-   setup 55 and verified-delivery setup 54. ABI 31 artifacts refuse older callers;
-   there is no compatibility export.
+   accordingly. The current ABI also carries open-Request setup and Payment-companion
+   setup 55. Logical exchange begin/end controls and the mandatory exchange identity
+   on mutation calls bind accepted work before SDK worker or UI queues. Receipt setup
+   56 retains the exact Send-bound original before verification; setups 57/58 retry
+   verification and drain one scheduler-admitted Archive. Setups 3/41/54 are retired;
+   setup 44 observes only the retained anchor. ABI 32 artifacts refuse older callers;
+   there is no compatibility export. These source interfaces require matching
+   rebuilt artifacts and qualification before release.
 2. **`firstDeviceAuthentication` is removed everywhere at once.** That selection
    carries a Google OAuth client, a Play Integrity cloud project and a second
    attested sign-up key. It goes from the signed v7 runtime the release driver
@@ -2069,7 +2077,7 @@ change, and the release driver builds and releases it:
    READMEs that still describe Play Integrity change with their code.
 4. **Mobile Native rebuild.** The release driver rebuilds Native for the three
    Android ABIs and the Apple xcframework from the cutover source, and the
-   Android and iOS apps bind ABI 31. No other work package builds, promotes or
+   Android and iOS apps bind ABI 32. No other work package builds, promotes or
    deploys mobile natives.
 
 **Cutover acceptance.** Each case below passes against the cutover source and

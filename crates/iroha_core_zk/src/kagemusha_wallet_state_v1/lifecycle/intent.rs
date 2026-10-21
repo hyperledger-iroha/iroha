@@ -193,7 +193,7 @@ impl NativeIntentV1 {
         })
     }
 
-    pub(super) fn archive_identity(
+    pub(in crate::kagemusha_wallet_state_v1) fn archive_identity(
         capsule: &[u8; 32],
         wallet: &[u8; 32],
         credited: &[u8],

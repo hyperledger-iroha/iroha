@@ -1,6 +1,7 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 import XCTest
+import IrohaSwift
 import Darwin
 
 final class KagemushaNearbyAttemptGateTests: XCTestCase {
@@ -19,13 +20,13 @@ final class KagemushaNearbyAttemptGateTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(actual, before)
     XCTAssertLessThanOrEqual(actual, after)
   }
-  func testContinuousElapsedRetainsInterruptionAndSeparateAdmissionDelay() throws {
+  func testContinuousElapsedRetainsInterruptionAndSeparateVerificationDelay() throws {
     var gate = try sender()
     try gate.confirmed(at: 100)
     try gate.sentPayment(); try gate.admit(.credited)
     // A three-second interruption must not become a sub-two-second observation.
     // These are synthetic continuous-clock ticks, not a physical sleep experiment.
-    let elapsed = try XCTUnwrap(gate.credited(status: 1, arrival: 3_000_000_100, admitted: 3_200_000_100))
+    let elapsed = try XCTUnwrap(gate.credited(evidence: .credited, archive: .notArchived, corePending: true, arrival: 3_000_000_100, verified: 3_200_000_100))
     XCTAssertEqual(elapsed.0, 3_000_000_000)
     XCTAssertEqual(elapsed.1, 3_200_000_000)
     XCTAssertGreaterThan(elapsed.0, 2_000_000_000)
@@ -35,23 +36,24 @@ final class KagemushaNearbyAttemptGateTests: XCTestCase {
     try gate.admit(.hello); try gate.admit(.authentication); try gate.admit(.request)
     return gate
   }
-  func testTimingRequiresConfirmationReleaseAndCompleteNativeAdmission() throws {
+  func testTimingRequiresConfirmationReleaseAndPayerDeliveryEvidence() throws {
     var gate = try sender()
     XCTAssertThrowsError(try gate.admit(.credited))
     XCTAssertThrowsError(try gate.sentPayment())
     try gate.confirmed(at: 100); try gate.sentPayment(); try gate.admit(.credited)
-    XCTAssertThrowsError(try gate.credited(status: 2, arrival: 150, admitted: 175))
-    XCTAssertThrowsError(try gate.credited(status: 1, arrival: 99, admitted: 175))
+    XCTAssertThrowsError(try gate.credited(evidence: .credited, archive: .receiver, corePending: false, arrival: 150, verified: 175))
+    XCTAssertThrowsError(try gate.credited(evidence: .credited, archive: .notArchived, corePending: true, arrival: 99, verified: 175))
+    XCTAssertThrowsError(try gate.credited(evidence: .credited, archive: .notArchived, corePending: true, arrival: 150, verified: 149))
     XCTAssertFalse(gate.terminal)
-    let elapsed = try XCTUnwrap(gate.credited(status: 1, arrival: 150, admitted: 175))
+    let elapsed = try XCTUnwrap(gate.credited(evidence: .credited, archive: .notArchived, corePending: true, arrival: 150, verified: 175))
     XCTAssertEqual(elapsed.0, 50); XCTAssertEqual(elapsed.1, 75)
-    XCTAssertThrowsError(try gate.credited(status: 1, arrival: 150, admitted: 175))
+    XCTAssertThrowsError(try gate.credited(evidence: .credited, archive: .notArchived, corePending: true, arrival: 150, verified: 175))
   }
   func testRecoveryNeverConstructsMissingOriginalClockAnchor() throws {
     var gate = try sender(recovery: true)
     XCTAssertThrowsError(try gate.confirmed(at: 100))
     try gate.sentPayment(); try gate.admit(.credited)
-    XCTAssertNil(try gate.credited(status: 1, arrival: 150, admitted: 175))
+    XCTAssertNil(try gate.credited(evidence: .credited, archive: .notArchived, corePending: true, arrival: 150, verified: 175))
     XCTAssertTrue(gate.terminal)
   }
   func testReceiverRejectsReorderedAndExtraRecords() throws {
@@ -63,7 +65,7 @@ final class KagemushaNearbyAttemptGateTests: XCTestCase {
     XCTAssertThrowsError(try gate.admit(.hello))
   }
   func testFailureIsTerminalAndOtherStatusesDoNotMeanComplete() throws {
-    for status: Int32 in [0,2,3,4,5,6,7,8,9,10,11,12,59] {
+    for status: Int32 in [0,2,3,4,5,6,7,8,9,10,11,12,47,59] {
       XCTAssertThrowsError(try KagemushaNearbyAttemptGate.requireComplete(status))
     }
     var gate = try sender(); gate.fail()
@@ -203,4 +205,65 @@ final class KagemushaNearbyAttemptGateTests: XCTestCase {
     gate.cancel()
     XCTAssertNil(gate.activeID)
   }
+  func testPayerDeliveryDoesNotWaitForArchiveOrCorePending() throws {
+    let evidence: [KagemushaWalletCreditProjectionV1.Evidence] = [.unfolded, .credited]
+    let archives: [KagemushaWalletCreditProjectionV1.Archive] = [.awaitingFold, .removed, .retained, .notArchived]
+    for recovery in [false, true] {
+      for value in evidence { for archive in archives { for pending in [false, true] {
+        var gate = try sender(recovery: recovery)
+        if !recovery { try gate.confirmed(at: 100) }
+        try gate.sentPayment(); try gate.admit(.credited)
+        let sample = try gate.credited(evidence: value, archive: archive, corePending: pending,
+          arrival: 150, verified: 175)
+        if recovery { XCTAssertNil(sample) }
+        else {
+          let elapsed = try XCTUnwrap(sample)
+          XCTAssertEqual(elapsed.0, 50); XCTAssertEqual(elapsed.1, 75)
+        }
+        XCTAssertTrue(gate.terminal)
+      } } }
+    }
+  }
+  func testVerifiedBurnedDeliveryNeverPassesPositiveTrialOrProducesLatency() throws {
+    let archives: [KagemushaWalletCreditProjectionV1.Archive] = [.awaitingFold, .removed, .retained, .notArchived]
+    for recovery in [false, true] {
+      for archive in archives { for pending in [false, true] {
+        var gate = try sender(recovery: recovery)
+        if !recovery { try gate.confirmed(at: 100) }
+        try gate.sentPayment(); try gate.admit(.credited)
+        XCTAssertThrowsError(try gate.credited(evidence: .burned, archive: archive, corePending: pending,
+          arrival: 150, verified: 175)) { error in
+          guard case KagemushaNearbyAttemptGate.Failure.burned = error else {
+            return XCTFail("Native verified burn evidence must remain distinct from invalid evidence")
+          }
+        }
+        XCTAssertFalse(gate.terminal, "burned evidence cannot mark a successful positive trial")
+        gate.fail(); XCTAssertTrue(gate.terminal)
+      } }
+    }
+  }
+  func testConditionalNearbyReviewRequiresRenewalAndNoFreshTiming() throws {
+    var gate = KagemushaNearbyAttemptGate(role: .sender, recovery: false, continuation: true)
+    XCTAssertThrowsError(try gate.renewed())
+    try gate.admit(.hello); try gate.admit(.authentication); try gate.admit(.request)
+    XCTAssertThrowsError(try gate.confirmed(at: 10))
+    try gate.renewed(); XCTAssertThrowsError(try gate.renewed())
+    try gate.confirmed(at: 10); try gate.sentPayment(); try gate.admit(.credited)
+    XCTAssertNil(try gate.credited(evidence: .credited, archive: .notArchived, corePending: true,
+      arrival: 20, verified: 25))
+  }
+  func testRetainedAndHistoricalNearbyResultsExcludeTimingWithoutNewAuthentication() throws {
+    for existing in [false, true] {
+      var gate = try sender()
+      if existing { try gate.observedExisting() }
+      else {
+        XCTAssertThrowsError(try gate.retainedReview())
+        try gate.confirmed(at: 10); try gate.retainedReview()
+      }
+      try gate.sentPayment(); try gate.admit(.credited)
+      XCTAssertNil(try gate.credited(evidence: .credited, archive: .notArchived, corePending: false,
+        arrival: 20, verified: 25))
+    }
+  }
+
 }

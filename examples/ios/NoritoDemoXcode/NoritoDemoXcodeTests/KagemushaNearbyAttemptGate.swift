@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import Foundation
 import Darwin
+import IrohaSwift
 
 /// One local clock for all attempt timestamps, including time the phone spends asleep.
 /// Different phones and reboots have unrelated origins; never subtract their timestamps.
@@ -14,16 +15,23 @@ enum KagemushaNearbyClock {
 
 /// Local diagnostic ordering and same-clock sample admission; Native owns all money.
 struct KagemushaNearbyAttemptGate {
-  enum Failure: Error { case order, incomplete, unknownStart }
+  enum Failure: Error { case order, incomplete, unknownStart, burned }
   enum Role { case sender, receiver }
   enum Record { case hello, authentication, request, payment, credited }
   let role: Role
   let recovery: Bool
+  var continuation = false
+  private var renewedReview = false
+  private var existingOutcome = false
+  private var excludedTiming = false
   private(set) var inboundCount = 0
   private(set) var confirmationNanoseconds: UInt64?
   private(set) var terminal = false
   private var paymentReleased = false
 
+  init(role: Role, recovery: Bool, continuation: Bool = false) {
+    self.role = role; self.recovery = recovery; self.continuation = continuation
+  }
   mutating func admit(_ record: Record) throws {
     guard !terminal else { throw Failure.order }
     let expected: [Record] = role == .sender
@@ -35,14 +43,27 @@ struct KagemushaNearbyAttemptGate {
     if record == .credited && !paymentReleased { throw Failure.order }
     inboundCount += 1
   }
+  mutating func renewed() throws {
+    guard !terminal, role == .sender, continuation, !recovery, inboundCount == 3,
+      !renewedReview else { throw Failure.order }
+    renewedReview = true
+  }
+  mutating func observedExisting() throws {
+    guard !terminal, role == .sender, inboundCount == 3, !paymentReleased else { throw Failure.order }
+    existingOutcome = true
+  }
+  mutating func retainedReview() throws {
+    guard !terminal, confirmationNanoseconds != nil, !paymentReleased else { throw Failure.order }
+    excludedTiming = true
+  }
   mutating func confirmed(at nanoseconds: UInt64) throws {
     guard !terminal, role == .sender, !recovery, inboundCount == 3,
-      confirmationNanoseconds == nil, nanoseconds > 0 else { throw Failure.order }
+      (!continuation || renewedReview), confirmationNanoseconds == nil, nanoseconds > 0 else { throw Failure.order }
     confirmationNanoseconds = nanoseconds
   }
   mutating func sentPayment() throws {
     guard !terminal, role == .sender, inboundCount == 3, !paymentReleased,
-      recovery || confirmationNanoseconds != nil else { throw Failure.order }
+      recovery || existingOutcome || confirmationNanoseconds != nil else { throw Failure.order }
     paymentReleased = true
   }
   static func requireComplete(_ status: Int32) throws {
@@ -68,16 +89,22 @@ struct KagemushaNearbyAttemptGate {
     let isBurned: Bool
     let original: Data?
   }
-  mutating func credited(status: Int32, arrival: UInt64, admitted: UInt64) throws -> (UInt64, UInt64)? {
+  /// Call after Native verifies the exact Send-bound receipt. Archive progress and a pending
+  /// outgoing descriptor do not invalidate delivery; burned evidence cannot pass this positive trial.
+  mutating func credited(evidence: KagemushaWalletCreditProjectionV1.Evidence,
+                        archive: KagemushaWalletCreditProjectionV1.Archive, corePending _: Bool,
+                        arrival: UInt64, verified: UInt64) throws -> (UInt64, UInt64)? {
     guard !terminal, role == .sender, inboundCount == 4 else { throw Failure.order }
-    try Self.requireComplete(status)
-    guard admitted >= arrival else { throw Failure.order }
-    guard confirmationNanoseconds != nil || recovery else { throw Failure.unknownStart }
+    guard archive != .receiver else { throw Failure.incomplete }
+    guard evidence != .burned else { throw Failure.burned }
+    guard verified >= arrival else { throw Failure.order }
+    guard confirmationNanoseconds != nil || recovery || existingOutcome else { throw Failure.unknownStart }
     // A reconnect/restart never invents the missing historical confirmation timestamp.
     guard let start = confirmationNanoseconds else { terminal = true; return nil }
     guard arrival >= start else { throw Failure.order }
     terminal = true
-    return (arrival - start, admitted - start)
+    guard !continuation, !existingOutcome, !excludedTiming else { return nil }
+    return (arrival - start, verified - start)
   }
   mutating func receiverDelivered() throws {
     guard !terminal, role == .receiver, inboundCount == 3 else { throw Failure.order }

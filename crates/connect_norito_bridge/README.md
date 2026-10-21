@@ -44,7 +44,7 @@ retains an initialized owner until promotion succeeds. No foreign digest, proof
 verdict or replacement payment key can open a wallet.
 
 Typed setup and lifecycle calls cover Bootstrap, the open Request, the payer companion,
-Credited archival, direct time exchanges, Load, Send, Receive, policy refresh, Unload and
+durable Credited intake and guarded deferred Archive, direct time exchanges, Load, Send, Receive, policy refresh, Unload and
 Retiring. Request and payer-companion setup outputs are canonical object frames; peer
 transports carry `KagemushaWalletEnvelopeV1` frames. Typed native `envelope`/`original`
 helpers wrap or extract Request, Payment and Credited with exact scheme/kind and full-frame
@@ -169,6 +169,34 @@ cover the largest installed relation's peak proving memory. A shortfall is the t
 receipt or Payment stays deliverable, and the holder retries after freeing space. It is never a
 device verdict. An unanswered memory probe evaluates storage only. Retained outcomes and resumed
 selections never depend on current capacity.
+
+Recovery polls inspect source-selected Pending custody without payment priority, so a
+wallet with nothing selected keeps its active fold and retained fold workspace. An observed
+Pending selection takes the existing payment priority, then Native rechecks custody before
+resuming its frozen operation. Inspection errors remain errors; an absent selection retains
+the existing no-operation result. Core's deferred receipt queue retains exact originals
+before verification and separates receipt rejection from unfinished verification. Its
+bridge intake selects exact Send/receipt custody before verification. ABI32 requires a separate
+exchange identity on mutation/review routes: synchronous begin precedes worker or UI queueing,
+end fences new calls, and already accepted calls retain the exact owner through response delivery.
+The Native scheduler owns exchange occupancy and Archive admission. Queue selector56 observes a
+receipt,57 retries one retained verification, and58 performs bounded recovery/reconciliation or
+one guarded drain. Direct Archive selectors3/41 and nonretaining delivery54 are retired;44 is
+anchor-only observation. A fresh mutation waits for the source-selected Archive covering fold
+without wallet or Payment ownership. Expected maintenance returns typed DATA, never a success
+alias. The existing worker discovers retained work on open, independently of activity.
+Each bounded pass recovers selected Pending, verifies one receipt, performs one eligible
+fold sub-proof and attempts one exact guarded Archive. Authenticated pre-Bootstrap Enrollment
+parks without granting fresh-work readiness. Intake, exchange release, activity and publication
+notify this same worker; a relative timer rechecks the oldest receipt's Native wall age without
+turning elapsed sleep into admission authority. Operational failures remain visible until
+observed and explicitly retried; internal notifications do not clear them. Compilation, SDK
+execution and physical-device qualification of this source remain open.
+
+Wallet close keeps the exact owner registered until its worker has joined successfully.
+A worker panic remains a failed join on every retry, including concurrent join callers;
+consuming the thread handle does not establish successful cleanup. Closing fences activity
+and keeps custody owned when joining fails.
 
 Issuer refusals carry the closed `u16` codes 1–12 of the design's refusal table. Core and the
 SDKs relay a code unchanged; `connect_norito_kagemusha_wallet_enrollment_refusal_v1` (JNI

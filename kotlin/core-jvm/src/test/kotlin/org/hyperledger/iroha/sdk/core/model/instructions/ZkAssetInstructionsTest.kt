@@ -293,11 +293,11 @@ class ZkAssetInstructionsTest {
 
     @Test
     fun nativeSignerRegisterZkAssetBindsFeePaymentWhenBridgeAvailable() {
-        assertEquals(31, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(32, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
         assertEquals(7, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
         assertTrue(
             NativeSignerBridge.isNativeAvailable(),
-            "connect_norito_bridge ABI 31 native-signer contract revision 7 is required",
+            "connect_norito_bridge ABI 32 native-signer contract revision 7 is required",
         )
 
         val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(

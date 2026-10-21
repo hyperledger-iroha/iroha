@@ -65,6 +65,17 @@ def issuer_selection(value, setup, registered, select):
     return inputs
 
 
+def issuer_composer_input(value, issuer_request, select):
+    """Select explicit private composer inputs for this exact controller handoff."""
+    require(type(value) is dict and set(value) == {'schema', 'issuer_request', 'request'}
+            and value['schema'] == 'iroha.kagemusha.network-controller-issuer-composer-input.v1',
+            'exact issuer composer input required')
+    require(value['issuer_request'] == issuer_request,
+            'issuer composer input belongs to another handoff')
+    select(value['request'])
+    return value['request']
+
+
 def registered(value, setup, setup_value, pins, pack):
     """Join source-selected Scheme/pack and the next real certified height."""
     before = setup_value['live_height']

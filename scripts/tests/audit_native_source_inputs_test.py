@@ -167,7 +167,8 @@ def test_external_generated_dependency_version_is_not_silently_upgraded(selected
              'package_id': 'registry+https://github.com/rust-lang/crates.io-index#serde@9.9.9'}])
 
 
-def test_snapshot_rejects_changed_maintained_driver(tmp_path, monkeypatch):
+@pytest.fixture
+def pinned_snapshot_tool(tmp_path, monkeypatch):
     helper, driver, tool = [tmp_path / name for name in ['helper.rs', 'driver.rs', 'source-snapshot']]
     for path in [helper, driver, tool]:
         path.write_text(path.name)
@@ -177,27 +178,110 @@ def test_snapshot_rejects_changed_maintained_driver(tmp_path, monkeypatch):
         'helperPath': str(helper), 'helperSha256': audit.sha(helper),
         'driverPath': str(driver), 'driverSha256': audit.sha(driver),
         'binarySha256': audit.sha(tool)}))
-    driver.write_text('changed driver')
+    return SimpleNamespace(helper=helper, driver=driver, binary=tool)
+
+
+@pytest.mark.parametrize('component', ['helper', 'driver', 'binary'])
+def test_snapshot_rejects_changed_pinned_input(pinned_snapshot_tool, monkeypatch, capsys, component):
+    getattr(pinned_snapshot_tool, component).write_text('changed pinned input')
     monkeypatch.setattr(audit.subprocess, 'run', lambda *a, **k: pytest.fail('must not execute'))
     with pytest.raises(ValueError, match='rebuilt from the current maintained helper'):
-        audit.actual_snapshot(tool)
+        audit.actual_snapshot(pinned_snapshot_tool.binary)
+    assert capsys.readouterr().err == ''  # No fabricated evaluator output before execution.
 
 
-def test_snapshot_uses_explicit_root_and_current_pins(tmp_path, monkeypatch):
-    helper, driver, tool = [tmp_path / name for name in ['helper.rs', 'driver.rs', 'source-snapshot']]
-    for path in [helper, driver, tool]:
-        path.write_text(path.name)
-    monkeypatch.setattr(audit, 'HELPER', helper)
-    monkeypatch.setattr(audit, 'DRIVER', driver)
-    tool.with_name('source-snapshot-build.json').write_text(json.dumps({
-        'helperPath': str(helper), 'helperSha256': audit.sha(helper),
-        'driverPath': str(driver), 'driverSha256': audit.sha(driver),
-        'binarySha256': audit.sha(tool)}))
+def test_snapshot_uses_explicit_root_and_current_pins(pinned_snapshot_tool, monkeypatch, capsys):
+    selected = pinned_snapshot_tool
     def execute(command, **kwargs):
-        assert command == [str(tool), str(audit.ROOT)]
-        return subprocess.CompletedProcess(command, 0, 'digest=' + 'ab' * 32 + '\nwatch=' + str(helper), '')
+        assert command == [str(selected.binary), str(audit.ROOT)]
+        assert kwargs == {'cwd': audit.ROOT, 'capture_output': True}
+        return subprocess.CompletedProcess(command, 0,
+            ('digest=' + 'ab' * 32 + '\nwatch=' + str(selected.helper)).encode(), b'ordinary diagnostic\n')
     monkeypatch.setattr(audit.subprocess, 'run', execute)
-    assert audit.actual_snapshot(tool) == ('ab' * 32, {helper})
+    assert audit.actual_snapshot(selected.binary) == ('ab' * 32, {selected.helper})
+    assert capsys.readouterr() == ('', '')
+
+
+@pytest.mark.parametrize('returncode', [101, -9])
+def test_snapshot_nonzero_retains_exact_streams_and_original_exit_without_retry(
+        pinned_snapshot_tool, monkeypatch, capsys, returncode):
+    selected = pinned_snapshot_tool
+    # Even a valid-looking digest cannot turn a failed evaluator into success.
+    stdout = ('digest=' + 'ab' * 32 + '\nwatch=' + str(selected.helper)).encode() + b'\r\n'
+    stderr = b'original refusal\r\ninvalid text remains exact: \xff\x00\x1b'
+    calls = []
+    def execute(command, **kwargs):
+        calls.append(command)
+        assert kwargs == {'cwd': audit.ROOT, 'capture_output': True}
+        return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+    monkeypatch.setattr(audit.subprocess, 'run', execute)
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        audit.actual_snapshot(selected.binary)
+    expected_command = [str(selected.binary), str(audit.ROOT)]
+    assert calls == [expected_command]
+    assert raised.value.cmd == expected_command
+    assert raised.value.returncode == returncode
+    assert raised.value.stdout == stdout
+    assert raised.value.stderr == stderr
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == (
+        f'Snapshot evaluator refusal diagnostics:\ncommand={expected_command!r}\n'
+        f'returncode={returncode}\nstdout_bytes={stdout!r}\nstderr_bytes={stderr!r}\n')
+
+
+def test_snapshot_run_only_process_owner_retains_original_refusal(
+        pinned_snapshot_tool, monkeypatch, capsys):
+    # compiler_capture.maintained installs exactly this run-only process facade.
+    # The exception class must not be looked up through the replaceable owner.
+    stdout, stderr = b'partial stdout \xff', b'original evaluator refusal \xfe\r\n'
+    calls = []
+    def execute(command, **kwargs):
+        calls.append(command)
+        assert kwargs == {'cwd': audit.ROOT, 'capture_output': True}
+        return subprocess.CompletedProcess(command, 101, stdout, stderr)
+    monkeypatch.setattr(audit, 'subprocess', SimpleNamespace(run=execute))
+    monkeypatch.setattr(audit.locale, 'getpreferredencoding',
+                        lambda _setlocale: pytest.fail('nonzero exit must precede stream decoding'))
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        audit.actual_snapshot(pinned_snapshot_tool.binary)
+    command = [str(pinned_snapshot_tool.binary), str(audit.ROOT)]
+    assert calls == [command]
+    assert raised.value.cmd == command
+    assert raised.value.returncode == 101
+    assert raised.value.stdout == stdout
+    assert raised.value.stderr == stderr
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == (
+        f'Snapshot evaluator refusal diagnostics:\ncommand={command!r}\n'
+        f'returncode=101\nstdout_bytes={stdout!r}\nstderr_bytes={stderr!r}\n')
+
+
+@pytest.mark.parametrize('stdout,stderr,error', [
+    (b'', b'completed with no digest\n', ValueError),
+    (b'digest=short\n', b'original malformed digest\r\n', ValueError),
+    (b'not a digest\nwatch=/retained', b'original malformed header', ValueError),
+    (b'\xff', b'original malformed stdout encoding', UnicodeDecodeError),
+    (b'digest=' + b'ab' * 32 + b'\n', b'\xff', UnicodeDecodeError),
+    (b'digest=' + b'ab' * 32 + b'\nwatch=\x00', b'original malformed path', ValueError),
+])
+def test_snapshot_malformed_output_retains_both_streams_without_retry(
+        pinned_snapshot_tool, monkeypatch, capsys, stdout, stderr, error):
+    monkeypatch.setattr(audit.locale, 'getpreferredencoding', lambda _setlocale: 'utf-8')
+    calls = []
+    def execute(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout, stderr)
+    monkeypatch.setattr(audit.subprocess, 'run', execute)
+    with pytest.raises(error):
+        audit.actual_snapshot(pinned_snapshot_tool.binary)
+    assert len(calls) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == (
+        f'Snapshot evaluator refusal diagnostics:\ncommand={calls[0]!r}\n'
+        f'returncode=0\nstdout_bytes={stdout!r}\nstderr_bytes={stderr!r}\n')
 
 
 def test_evaluator_cannot_guess_a_host_dependency(tmp_path):

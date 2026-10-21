@@ -174,13 +174,29 @@ retains the runtime for a fresh begin. `cancelPendingOpen` recovers interrupted
 begin delivery; `retryOpenCompletion` recovers an interrupted finish response for
 the same live handle without repeating authorization.
 
-`KagemushaWalletV1` exposes typed setup, Load/Send/Receive/refresh/Unload/Retiring,
-retry/status, folding and activity. Request publication durably selects its exact
-original. Once `executeReviewed` dispatches to Native, its review remains consumed
-when execution fails, and the original execution error is preserved. Cleanup of
-that consumed token does not close the wallet; use the same request identity's
-status to recover a selected operation or retained Payment. An unresolved cleanup
-failure still retires the owner. A signed blacklist is local-only:
+`KagemushaWalletV1` exposes observations, exact recovery, folding and activity.
+Fresh mutations belong to an admitted `KagemushaWalletExchangeCallV1`.
+`reviewSend(requestId:request:destinationAccountOriginal:expectation:)` and
+`reviewUnload(requestId:expectation:amount:quote:certificates:chargeBeneficiary:)`
+bind the original request ID before Native issues a review. Their closed result is
+`ready`, `existing` (Preparing or a retained outcome), or tokenless `waiting`.
+Only `ready` is displayed for fresh owner confirmation; `executeReviewed(review)`
+uses the ID already bound to that actual capability.
+
+The expectation is mandatory: `.fresh` or `.originalUnstarted(exactProjection)`.
+A continuation retains the original request ID, full original projection and every
+exact action/companion original, and needs a newly issued Native review plus fresh
+confirmation. Native authenticates current source and definite absence; a generic
+Unknown status or a hash-only old marker grants no continuation. ABI33 has no
+old review overload or request-ID-at-execute fallback.
+
+Execution returns `executed`, `existing`, or `retainedReview`. Only typed Native65
+restores the exact same live capability after maintenance preflight; an explicit
+retry uses that same review and acknowledged approval fence without new confirmation.
+A generic execution failure leaves the review consumed. Cleanup preserves the
+original error and retires the exact owner if cleanup remains uncertain. Existing
+outcomes, conditional attempts and retained-review retries provide no fresh latency
+sample. Use exact request status/recovery for selected work. A signed blacklist is local-only:
 `installBlacklist(list:certificates:)` stores
 it on the phone (a replacement's version must increase), and Native then refuses to pay a
 listed receiver or accept a Payment from a listed payer with
@@ -377,7 +393,7 @@ of an exchange use the same one. Pass it as
 their own registration use the protocol identifier `F0504B45504B524E464301`
 (`IrohaPeerNfcApplicationIdentifierV1.protocolDefault`), as shown.
 
-The receiver creates its open Request with `KagemushaWalletV1.request(setupId:amount:)`
+The receiver creates its open Request with `KagemushaWalletExchangeCallV1.request(setupId:amount:)`
 and hosts its carrier with `IrohaPeerNfcCardSessionControllerV1.start(sessionID:receiveRequest:)`.
 The payer uses `IrohaPeerNfcReaderServiceV1.readRequest()` to read the open Request.
 The result returns after CoreNFC invalidates that exact reader session; a missing
@@ -452,8 +468,22 @@ Request uses the `KWRQAC1` carrier with its destination-account original; Paymen
 `KWPYPC1` with its exact payer companion. Their respective payload bounds are 14,112
 and 12,064 bytes; each envelope remains bounded at 10,000 bytes. Native authenticates
 both originals when `receiveWithCompanion(requestId:payment:companion:)` receives the Payment.
-`paymentCompanion(payment:)` uses setup selector 55; `verifiedDelivery(sendRequestId:credited:)`
-uses selector 54 to verify receipt evidence separately from the later ArchiveSent operation.
+`paymentCompanion(payment:)` uses setup selector 55. Call `wallet.beginExchange()` and
+`exchange.admit()` synchronously before UI, actor or worker enqueue. Fresh mutations belong
+to the admitted `KagemushaWalletExchangeCallV1`; keep the exchange through Request, review,
+time and carrier waits. Finish accepted tasks after teardown, then end the exchange off the
+main thread. `requestEnd()` fences admission before enqueueing that join. Exact-origin
+review/time cleanup remains available after the fence.
+
+`call.observeCredited(sendRequestId:credited:)` uses selector 56 to retain the exact receipt
+in Native before verification; it returns payer evidence without dispatching ArchiveSent.
+`wallet.resumeDeferredReceipt()` (57) processes at most one retained intake, and
+`wallet.drainDeferredArchive()` (58) performs a bounded Native-selected maintenance turn.
+Its wait/reconciled/executed outcomes remain distinct from Payment delivery and from the
+nested completion status. Native alone checks recovery, exchange occupancy, fold coverage,
+charging, count and age. No host queue handle or force flag exists. The read-only
+`deliveryProjection` accepts only the exact completed Archive anchor; newer receipts use
+`observeCredited`. Direct Archive producers and selectors 3, 41 and 54 are retired.
 
 #### NoritoBridge policy (SwiftPM)
 
@@ -528,7 +558,7 @@ A separate `MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR` input may select a producer-vali
 single-host macOS archive for debug unit tests. It requires genuine current-source
 static capture, normalization, complete-archive native consumer checks, and the
 explicit `local-unit` artifact schema. It retains every package test and exact
-ABI-31 admission. It cannot be selected together with the external/release input;
+ABI-33 admission. It cannot be selected together with the external/release input;
 iOS and Release compilation reject it. It is never accepted by the canonical
 three-slice validator, pin owner, archive owner, or release publication.
 
@@ -1130,7 +1160,7 @@ let finality = try await torii.waitForDetachedAssetTransferFinality(
 )
 ```
 
-Preparation fails closed unless ABI-31 native inspection proves the versioned
+Preparation fails closed unless ABI-33 native inspection proves the versioned
 scaffold has the exact authority, network identity, protocol receipt chain, definition, source scope, amount,
 destination, memo, typed fee payer, creation time, TTL, and no extra metadata.
 The prepare route obtains the canonical fee quote and replaces only the charge
@@ -1169,7 +1199,7 @@ guard assessment.intentHash == intentHash.map { String(format: "%02X", $0) }.joi
 let canonicalMarker = try assessment.marker()
 ```
 
-The three ABI-31 retail fee operations use native typed Norito and reject
+The three ABI-33 retail fee operations use native typed Norito and reject
 noncanonical markers. Local decoding does not verify that an assessment is
 current or authorized. Signed read and verified finality remain required before
 payment approval; admission checks the assessment against ledger state.
@@ -1640,7 +1670,7 @@ stale native bridge fail closed. The signed fetch bypasses local cached response
 and sends `Cache-Control: no-cache, no-store` for current committed state.
 `PrivacyExact12CapabilityAdmissionV1` issues
 an opaque per-protocol token only when the committed row is active, ready, and
-byte-identical to the ABI31 native-validated compiled catalog. The generic
+byte-identical to the ABI33 native-validated compiled catalog. The generic
 transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
 complete final V1 envelope profile tuple both at construction and final encoding.
@@ -1651,7 +1681,7 @@ Final batch encoding also compares the token and statement against the batch's
 exact `networkId`; an admission from another network cannot be reused. Managed
 fixture projection and standalone native validation do not mint network authority.
 
-ABI31 requires exactly six privacy C exports, including
+ABI33 requires exactly six privacy C exports, including
 `iroha_privacy_validate_exact12_capability_manifest_v1`. Swift passes the exact
 Torii archive to the canonical Rust validator before projecting its fields.
 Rust checks the complete release and deployment records, artifact counts,
@@ -1663,7 +1693,7 @@ without the manifest validator is unavailable.
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
-accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 31
+accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 33
 availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
 the capability-manifest validator, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
@@ -2709,7 +2739,7 @@ one scalar field. They have no hash marker, alias tag or issuance timestamp.
 The roster root remains a separate marked Iroha hash.
 
 Account-controller policies retain the full u16 member count (1–65,535). The
-public address constructors and parsers require the ABI-31 Rust address codec
+public address constructors and parsers require the ABI-33 Rust address codec
 for complete key and policy admission. Canonical I105 parsers reject surrounding
 Unicode whitespace; unavailable native validation is an
 explicit error. The
@@ -2733,7 +2763,7 @@ account ordering, establish rekey authority or verify an authorization proof.
 all five private actions and a complex private create to Rust-owned model
 bytes. Its synthetic proofs are wire fixtures. Proof generation, native bridge
 qualification and four-validator execution require separate evidence. The
-canonical Swift package always requires the real ABI31 NoritoBridge artifact.
+canonical Swift package always requires the real ABI33 NoritoBridge artifact.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,

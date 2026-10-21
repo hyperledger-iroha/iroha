@@ -25,12 +25,14 @@ use zeroize::Zeroizing;
 
 type Result<T> = std::result::Result<T, Error>;
 const MAX_CREDENTIAL: usize = 4096;
+const MAX_TLS_ROOT: usize = 16 << 10;
 const MIME: &str = "application/x-norito";
 
 /// One configured provider endpoint; redirects, ambient proxies and credential replacement reject.
 pub(super) struct EligibilityObservationTransport {
     selected: KagemushaEnrollmentProvider,
     http: ObservationHttp,
+    tls_root: Option<TlsRoot>,
 }
 
 impl EligibilityObservationTransport {
@@ -40,14 +42,27 @@ impl EligibilityObservationTransport {
             .eligibility
             .validate()
             .map_err(|_| Error::Invalid)?;
-        Ok(Self {
+        let (tls_root, builder) = match provider.observation_tls_root.as_deref() {
+            Some(path) => {
+                let (root, certificate) = TlsRoot::open(path)?;
+                (
+                    Some(root),
+                    client_builder().add_root_certificate(certificate),
+                )
+            }
+            None => (None, client_builder()),
+        };
+        let owner = Self {
             selected: provider.clone(),
             http: ObservationHttp::open(
                 &provider.observation_endpoint,
                 &provider.observation_credential,
-                client_builder(),
+                builder,
             )?,
-        })
+            tls_root,
+        };
+        owner.revalidate(provider)?;
+        Ok(owner)
     }
 
     /// Check retained custody even when no observation is currently being sent.
@@ -55,7 +70,11 @@ impl EligibilityObservationTransport {
         if &self.selected != provider {
             return Err(Error::Selection);
         }
-        self.http.credential.revalidate()
+        self.http.credential.revalidate()?;
+        if let Some(root) = &self.tls_root {
+            root.revalidate()?;
+        }
+        Ok(())
     }
 
     /// POST exactly one canonical scoped request, without retries or cached approval.
@@ -175,6 +194,55 @@ fn bounded_body(body: impl io::Read) -> Result<Vec<u8>> {
         return Err(Error::Invalid);
     }
     Ok(original)
+}
+
+/// One explicitly configured extra TLS anchor with retained private file custody.
+///
+/// The HTTP client owns the admitted certificate bytes. Changes to the selected
+/// file invalidate the owner before a request or before returning its response;
+/// they never silently update the client's trust roots.
+struct TlsRoot {
+    original: RetainedFile,
+    snapshot: FileSnapshot,
+}
+
+impl TlsRoot {
+    fn open(path: &Path) -> Result<(Self, reqwest::Certificate)> {
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|part| matches!(part, Component::CurDir | Component::ParentDir))
+        {
+            return Err(Error::Selection);
+        }
+        let original = RetainedFile::open_private(path).map_err(custody)?;
+        let snapshot = original.snapshot().map_err(custody)?;
+        let length = original.file().metadata().map_err(custody)?.len();
+        if !(1..=MAX_TLS_ROOT as u64).contains(&length) {
+            return Err(Error::Invalid);
+        }
+        let mut bytes = vec![0; usize::try_from(length).map_err(|_| Error::Invalid)?];
+        iroha_fs::read_exact_at(original.file(), &mut bytes, 0).map_err(custody)?;
+        let owner = Self { original, snapshot };
+        owner.revalidate()?;
+        // Reject a PEM bundle, concatenated certificate, or trailing DATA. The
+        // existing X.509 parser checks the certificate; reqwest still applies its
+        // normal TLS validation and hostname checks.
+        let (remaining, _) =
+            x509_parser::parse_x509_certificate(&bytes).map_err(|_| Error::Invalid)?;
+        if !remaining.is_empty() {
+            return Err(Error::Invalid);
+        }
+        let certificate = reqwest::Certificate::from_der(&bytes).map_err(|_| Error::Invalid)?;
+        Ok((owner, certificate))
+    }
+
+    fn revalidate(&self) -> Result<()> {
+        if self.original.snapshot().map_err(custody)? != self.snapshot {
+            return Err(Error::Selection);
+        }
+        Ok(())
+    }
 }
 
 struct Credential {

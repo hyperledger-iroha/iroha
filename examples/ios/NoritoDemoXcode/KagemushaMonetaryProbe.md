@@ -17,6 +17,25 @@ Pixel6 is the other selected device; its corresponding driver is maintained in
 Android or a cross-OS population. Monetary qualification requires a matching
 authenticated package cohort and actual execution on each selected device.
 
+The test host binds each admitted wallet to actual UIKit app/scene foreground
+state and battery charging/full state. Foreground-inactive authentication remains
+foreground; unknown battery state does not count as charging. Observation starts
+before the initial sample, and `open` acknowledges publication before reporting
+success. Complete state pairs run on a separate serial control queue so a busy
+Native command cannot delay inactivity. Battery monitoring is shared within the
+test host and restores its previous setting after the last observer detaches.
+
+Activity errors stay visible to subsequent commands and mailbox idle polling,
+which emits one bounded `activity-failed.plist` and prevents successful qualification.
+Release/stop remain available. Teardown detaches observers, fences admitted updates,
+publishes inactive and closes the exact wallet off the main thread. Setup failure
+retains its admitted owner for cleanup; failed close retains that retired owner
+for another explicit close. These observations enable the existing Native folding
+scheduler. `fold-once` may still return Idle while the background worker owns the
+slot; judge current Native state. Explicit deferred receipt recovery and guarded Archive turns use Native queue selection; the probe supplies no eligibility verdict.
+The added ordering/lifetime tests and physical lifecycle behavior have not yet
+been executed against the changed sources.
+
 ## Mailbox originals
 
 Use the enrollment interface's private root, pins, independently pinned catalog,
@@ -32,6 +51,23 @@ exactly16 bytes, unsigned little-endian low64 then high64, nonzero. `epoch` is
 exactly8 unsigned little-endian bytes. These scalar inputs are forwarded as typed
 SDK values; the harness does not encode ledger or wallet protocol frames. All
 fees, account identity, scale and proof authority come from Native verification.
+
+Use `begin-exchange` before Bootstrap or a fresh monetary protocol, including Request
+preparation, review, issuer-time exchange and either carrier. The mailbox records the Native
+reservation and accepts each task before enqueueing it on the actor. Keep that exchange
+across `nearby-prepare` and its continuation, review confirmation, and all carrier teardown.
+`end-exchange` fences future admission before its actor hop and joins off MainActor.
+`discard-review` and `cancel-time` remain cleanup-only after that fence; a new exchange
+cannot consume an old review or time challenge. Release/stop fences ingress before closing
+the exact wallet. A failed close retains the same owner for cleanup.
+
+A typed Native65 result keeps the exact approved live review and acknowledged on-disk
+fence. `retry-reviewed` explicitly retries that same review on the same exchange;
+`discard-review` remains cleanup. QR/Nearby keep the actual carrier attempt alive and
+show a separate “Retry approved Send” button. This button performs no new confirmation
+or authentication and never republishes the fence. Cancellation/deadline/background
+loss drains and discards the capability. No generic error clears a fence or restores
+approval, and these retries provide no latency sample.
 
 The closed commands and exact sets of input names are:
 
@@ -52,15 +88,20 @@ The closed commands and exact sets of input names are:
 | `ledger-status` | none | Observe retained prefix, including absence |
 | `epoch-boundary` | `epoch`, `boundary` | Verify the exact incumbent epoch boundary |
 | `epoch-status` | none | Observe Native epoch authority |
-| `offer` | `setup-id`, `amount` | Export actual signed Offer and envelope |
-| `request` | `setup-id`, `offer`; optionally both `fee-schedule`, `fee-certificate` | Export native Request from received signed Offer |
-| `decode-offer`, `decode-request`, `decode-payment`, `decode-credited` | `envelope` | Native extract of expected peer type; no monetary admission |
+| `request` | `setup-id`, `amount`; optionally both `fee-schedule`, `fee-certificate` | Export the receiver's Native Request and envelope |
+| `decode-request`, `decode-payment`, `decode-credited` | `envelope` | Native extract of expected peer type; no monetary admission |
 | `review-send` | `request-id`, `request`, `destination` | Retain live native review and exact projection |
 | `review-unload` | `request-id`, `amount`; optionally all `quote`, `certificates`, `beneficiary` | Review actual native Unload terms |
+| `continue-review-send`, `continue-review-unload` | Same exact inputs as the corresponding original review | Conditional review using retained full original projection and companions; same request ID |
+| `retry-reviewed` | none | Explicit retry of an actual approved-live Native65 review on its original exchange |
 | `decide-review` | `decision` | Explicit exact-review confirm/cancel; confirmation also invokes iOS authentication |
-| `receive` | `request-id`, `payment`, `offer` | `receiveFromOffer` using the originally retained signed Offer |
+| `receive` | `request-id`, `payment`, `payer-companion` | `receiveWithCompanion` using exact Payment and companion originals |
 | `credit` | `request-id` | Native credit projection and original Credited evidence |
-| `accept-credited`, `credited-status` | `request-id`, `credited` | Native handling/status for the original payer Send ID |
+| `observe-credited` | `request-id`, `credited` | Native retains the exact receipt before verification; no Archive dispatch |
+| `credited-status` | `request-id`, `credited` | Exact original payer Archive status without dispatch |
+| `resume-deferred-receipt`, `drain-deferred-archive` | none | One bounded Native-selected intake recovery or guarded maintenance turn |
+| `begin-exchange`, `end-exchange` | none | Synchronous requested reservation before actor enqueue; explicit fence and off-main join |
+| `discard-review` | none | Cleanup of the exact retained review, including after end was requested |
 | `fold-once`, `fold-status`, `snapshot` | none | Native local fold or exact current-head observations |
 | `request-status`, `released-request` | `request-id` | Recover/observe actual native request mapping |
 | `retry`, `released-operation` | `operation-id` | Retry/observe the exact Native operation |
@@ -79,7 +120,27 @@ fresh native `UNFOLDED` or `CREDITED` evidence satisfies the invocation's
 This records recovered credit without reconstructing the old receipt or its
 completion time.
 
+`observe-credited` retains `verified-credited-original.norito` before calling Native
+and records the typed evidence, Archive state, pending-core flag, credit/payment
+identities and amount. Burned evidence remains an explicit observation; it is not
+unburned credit or a successful timing sample. A not-yet-archived receipt or a
+pending core descriptor does not invalidate verified unburned delivery. The command
+grants no new actor stage. Native errors, unavailable custody or lost outcomes
+remain failures; an ordinary unknown status cannot replace receipt verification.
+For later idle Archive work, finish the logical exchange with `end-exchange`, then
+invoke `drain-deferred-archive`. Native selects the retained entry and rechecks eligibility;
+`resume-deferred-receipt` recovers retained unverified intake. `credited-status` observes
+the exact original Archive without dispatch. The receipt observation command
+does not dispatch ArchiveSent, erase Payment, or authorize regeneration.
+
+Released Send exports include `payer-companion.norito`, recovered by Native from
+the exact retained Payment, including after payer credential renewal. Carry those
+bytes beside the Payment using `IrohaPeerWalletPaymentV1`; the receiving mailbox
+requires them as `payer-companion`. A companion supplies credential DATA, not
+monetary authority, and changing either original under a retained Receive ID fails.
+
 Receipt/anchor/certificate bounds are512 bytes; fee schedule/quote1024;
+payer companion2048;
 canonical account/beneficiary4096; peer originals/envelopes/certificate bundle10000;
 signed transaction/claim65536; epoch boundary256KiB. Finality intake is capped at
 36MiB overall; `load` itself has the SDK's stricter256KiB finality bound. E6 uses the
@@ -156,7 +217,7 @@ its complete source. An exported projection can never recreate that capability.
 ## Physical QR commands
 
 The iOS probe uses the system CoreImage renderer and AVFoundation rear camera with
-existing IAK1/IRQR/IPM1 codecs. `NSCameraUsageDescription` belongs to the host app.
+existing IRQR/IPM1 codecs. `NSCameraUsageDescription` belongs to the host app.
 These closed actions select local identities; none accepts imported QR text,
 images, envelopes, Payment, Credited or a caller success verdict:
 
@@ -168,13 +229,14 @@ images, envelopes, Payment, Credited or a caller success verdict:
 | `qr-recover-receive` | the original `setup-id`, `request-id` |
 
 Start `qr-receive` on the recipient and `qr-send` on the payer. The recipient
-shows the Ask for its selected amount and Native account digest. Point the payer's
-rear camera at that screen. The payer then shows its Native Offer; after the other
-phone has scanned it, use the visible button to switch to scanning the response.
-Repeat this explicit screen/camera exchange for Request, Payment and Credited.
+shows its Native Request for the selected amount, together with its mandatory
+account original. Point the payer's rear camera at that screen. The payer reviews
+the Native amount and destination, authenticates, and displays the released Payment
+with its exact payer companion. The receiver scans it and displays Credited only
+after Native observes durable credit. This is the receiver-first three-code
+Request → Payment → Credited exchange.
 Only the payer's exact Native Request review plus fresh system authentication
-permits dispatch. The signed Request's Native destination digest and amount must
-match the camera-read Ask; Request carries its mandatory account original.
+permits dispatch. Native authenticates the Request and its account companion.
 Request/Payment correspondence is checked against the exact displayed/scanned
 Request before Receive or Payment display. Native retains all proof, signature,
 custody, conservation and Send-bound acknowledgement checks.
@@ -191,30 +253,39 @@ These limits belong to this test actor, not the wire protocol.
 
 The receiver's **Close display (delivery unconfirmed)** button records only that
 its already proven durable credit's Credited screen was closed locally. It does
-not prove payer receipt. The payer completes only after camera reconstruction of
-Credited and `acceptCreditedForSend` returns Native COMPLETE for the selected Send.
-Payer timing retains camera arrival and Native admission separately, measured from
+not prove payer receipt. The payer's diagnostic succeeds only after camera
+reconstruction of Credited and Native-backed `observeCredited` returns unburned payer
+evidence for the selected Send. Payer timing retains camera arrival and Native
+verification separately, measured from
 that same phone's fresh authentication callback; operator handling and retention
-costs remain included. No clock from another phone is subtracted. Recovery has no
-new end-to-end latency sample for the original operation.
+costs remain included. Archive completion is outside this measurement. Both QR and
+Nearby retain the exact Credited original before verification for a later explicit
+Native-selected `drain-deferred-archive` turn after `end-exchange`. Neither carrier starts Archive work.
+Burned evidence is recorded before the positive-payment diagnostic fails, with no
+successful latency sample. Native Archive state and pending-core observations are
+recorded independently of the evidence verdict. No clock from another phone is
+subtracted. Recovery has no new end-to-end latency sample for the original operation.
 
-A recovered setup retains its original Ask, Offer, Request, account companion,
-amount/fee inputs and IDs. Rescan the exact retained Request or Payment as prompted.
+A recovered setup retains its original Request, account companion, Payment and
+payer companion, amount/fee inputs and IDs. Rescan the exact retained Request or
+Payment carrier as prompted; its paired originals must match.
 If a dispatch fence already exists, recovery uses Native status and retained
 release/current credit projection; it never re-confirms or creates a replacement
 Send/Receive. An incomplete Native result remains a failed QR attempt. Resolve
 that exact pending operation through the existing `request-status`, `resume` or
-`retry` commands before another QR recovery attempt. The conservative
-fence-published-but-Native-not-started case remains a recovery limitation; never
-erase its marker. Foreground loss, cancellation and scene disconnection drain the
+`retry` commands before another QR recovery attempt. A full current review fence with
+all original companions can instead use `qr-continue-send` (the same setup/request IDs)
+or `nearby-continue-send` (the same request ID and Request, with a fresh radio session).
+These ask Native for a conditional new review and require fresh owner confirmation.
+A historical Native66 result is observed without dispatch. Never erase the original marker. Foreground loss, cancellation and scene disconnection drain the
 camera and Native worker before releasing the shared carrier owner.
 
-Current QR validation covers source parsing, system-only iOS adapter typechecking
-and portable gate/renderer/schema/stage tests. The package now requires bridge
-ABI 30; no matching authenticated iOS SDK/native candidate was available for the
-full hosted QR target check. Full hosted compilation/linking and execution on the
-specified physical phones remain open. Android has no corresponding optical QR
-actor yet; existing text codec tests do not establish cross-platform QR delivery.
+The three-code migration has source review and updated gate/schema tests. Those
+tests, full hosted compilation/linking against a matching authenticated SDK/native
+candidate and execution on the specified physical phones remain open. Earlier
+parser, adapter and portable-test results do not validate these changed sources.
+Android has no corresponding optical QR actor yet; existing text codec tests do
+not establish cross-platform QR delivery.
 
 ## Recovery and timing
 
@@ -224,13 +295,20 @@ are similarly frozen. New inbox paths with identical bytes are valid retries;
 changed intent under the same ID is rejected. The harness cannot replace Native's
 journal or infer success after uncertain delivery.
 
-Before dispatching a confirmed review, an immutable execution marker is retained.
-A failure/crash then requires `request-status`, `resume`, `retry` or `released-*`
-on the same custody and exact IDs. This increment refuses another review for a
-marked ID even if the process died just before Native selected it. That narrow
-conservative case remains a harness recovery limitation: do not erase the marker
-or invent a replacement debit. Reviews and direct-time tokens cannot survive
-process reopening; Native monetary outcomes do. `release-wallet`, `install`,
+Before dispatching a confirmed review, the exact full Native projection is published
+as an exclusive immutable execution fence. Exact action originals and companions were
+retained before review. After interruption, `request-status`, `resume`, `retry` or
+`released-*` observe the same custody and IDs. `continue-review-send` or
+`continue-review-unload` may request conditional review only with those retained originals
+and the initial full projection. Native independently checks current source and definite
+absence before issuing a new capability. Each confirmed continuation publishes a separate
+exclusive attempt fence; the initial fence and original request ID never change.
+Old 64-byte hash-only fences, malformed projections, missing/changed originals and
+restored/rollback-uncertain custody remain refused. No compatibility decoder recreates
+their lost evidence. Native67 is tokenless waiting; Native66 is an already bound request,
+never a new review or dispatch. The local awaiting-confirmation and approved-live65 states
+are distinct. Reviews, approval and direct-time tokens cannot survive process reopening;
+Native monetary outcomes do. The stock iOS double-anchor-loss residual remains open. `release-wallet`, `install`,
 `open` provide a non-destructive same-process reopen sequence. `stop` closes all
 owners. Neither command abandons enrollment, deletes keys, replaces custody,
 erases apps, restores arbitrary developer files or claims power-loss testing.
@@ -266,8 +344,9 @@ Receive output collection. It reads fresh covering evidence through
 An ordinary `COMPLETE` result still records its retained release separately before
 reading fresh credit evidence. Missing, burned or nonreceiver evidence fails the
 diagnostic; only the exact native Credited original enters the acknowledgement.
-Sender recovery remains `COMPLETE`-only. Recovery does not reconstruct the
-original completion time.
+Sender Payment recovery remains `COMPLETE`-only; receipt verification uses the
+typed payer projection independently of Archive progress. Recovery does not
+reconstruct the original completion time.
 
 For A→B→C, select the actual carrier and preserve independent physical
 ingress/egress evidence. The QR actor performs its own camera/display exchange;

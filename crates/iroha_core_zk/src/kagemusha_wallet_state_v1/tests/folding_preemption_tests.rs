@@ -280,9 +280,10 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
     scheduler.set_activity(true, false);
     (wallet, _) = interrupt(wallet, Scheduler::close);
     scheduler.set_activity(true, false);
-    wallet.proofs.fold_pause = None;
 
     let cancelled = observed.metrics();
+    assert_eq!(wallet.fold_once().unwrap(), FoldStatus::Idle);
+    assert_eq!(observed.metrics(), cancelled, "closed wakes report nothing");
     let outcomes: Vec<_> = cancelled
         .records()
         .iter()
@@ -317,6 +318,29 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
             .map(|r| r.phase(FoldPhaseV1::Prove))
             .sum::<Duration>()
     );
+
+    // Close is terminal. Reopen the retained owners and attach the same observer
+    // so the earlier cancellation records and the resumed sub-proofs stay in one ledger.
+    let selected = wallet.custody.checkpoint.clone();
+    let (custody, archive, mut proofs, scheme, wallet_id) = (
+        wallet.custody,
+        wallet.archive,
+        wallet.proofs,
+        wallet.scheme_id,
+        wallet.wallet_id,
+    );
+    proofs.fold_pause = None;
+    let mut wallet = Coordinator::new(custody, archive, proofs, scheme, wallet_id).unwrap();
+    let reopened = wallet.scheduler();
+    reopened.observe(observed.clone());
+    assert_eq!(wallet.custody.checkpoint, selected);
+    assert_eq!(wallet.fold_once().unwrap(), FoldStatus::Idle);
+    assert_eq!(
+        observed.metrics(),
+        cancelled,
+        "inactive restart reports nothing"
+    );
+    reopened.set_activity(true, false);
 
     // The cancelled work resumes from the durable checkpoint; Ω is the final stage.
     for ordinal in 1..3 {

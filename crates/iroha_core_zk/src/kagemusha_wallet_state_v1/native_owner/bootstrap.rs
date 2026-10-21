@@ -48,7 +48,6 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Missing/corrupt source custody, changed admission, unavailable original keys or proof,
     /// and uncertain provider outcomes. Lost released bytes never cause a new signature.
     pub fn bootstrap(&mut self) -> Result<Completion, Error> {
-        let _payment = self.scheduler.payment();
         let marker = match self.status()? {
             SlotStatus::Enrollment(marker) => marker,
             SlotStatus::Pending(marker) => {
@@ -74,6 +73,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             }
             _ => return Err(Error::Invalid("Bootstrap requires enrolled custody")),
         };
+        self.scheduler.require_archive_clear()?;
+        let _payment = self.scheduler.payment();
         let marker_digest = *marker.marker_digest();
         let credential = self.proofs.enrollment.credential_digest();
         let manifest = self.proofs.installed.verifier().manifest_digest();

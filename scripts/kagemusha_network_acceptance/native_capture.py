@@ -15,7 +15,7 @@ def admit(item):
                  retained=custody['reviewed_originals'], packages=inventory['actual_packages'],
                  classification=result['classification'], heads=[custody['before_head'], custody['after_head']],
                  current_source_qualified=True)
-    return owner, {}, result['source_before_sha256']
+    return owner, result['source_before_sha256']
 
 
 def unchanged(owner, pins):

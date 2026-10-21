@@ -27,7 +27,9 @@ use iroha_plonk_recursion::{ACCUMULATOR_BYTES, AccumulatorT, K};
 
 mod cancellation;
 pub(crate) mod randomness;
+mod verification_errors;
 pub(crate) use cancellation::NativeProofError;
+use verification_errors::{recursion_error, verification_error};
 pub mod verification_counts;
 pub use verification_counts::KagemushaWalletVerificationCountsV1;
 
@@ -59,6 +61,14 @@ pub enum Error {
     /// The caller cancelled proof work; no invalid-proof verdict or monetary effect follows.
     #[error("wallet proof work cancelled")]
     Cancelled,
+    /// The verifier could not complete against its installed context or local kernel.
+    /// Preserve the original cause; this is not an invalid incoming-proof verdict.
+    #[error("wallet verification unavailable: {0}")]
+    Verification(#[source] iroha_plonk::VerifyError),
+    /// An accumulator operation could not complete against local parameters or resources.
+    /// Preserve the original cause; this never authorizes rejecting a retained receipt.
+    #[error("wallet accumulator verification unavailable: {0}")]
+    Recursion(#[source] iroha_plonk_recursion::Error),
     /// Canonical transport, proof equation or complete accumulator decide failed.
     #[error("wallet proof rejected")]
     Proof,
@@ -90,22 +100,6 @@ impl Error {
     #[must_use]
     pub const fn is_cancelled(&self) -> bool {
         matches!(self, Self::Cancelled)
-    }
-}
-
-fn verification_error(error: iroha_plonk::VerifyError) -> Error {
-    if error.is_cancelled() {
-        Error::Cancelled
-    } else {
-        Error::Proof
-    }
-}
-
-fn recursion_error(error: iroha_plonk_recursion::Error) -> Error {
-    if error.is_cancelled() {
-        Error::Cancelled
-    } else {
-        Error::Proof
     }
 }
 

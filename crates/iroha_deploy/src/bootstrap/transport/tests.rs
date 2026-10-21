@@ -1,7 +1,7 @@
 //! Exact installed-location retrieval and independent native-checkpoint authentication tests.
 
 use super::*;
-use iroha::http::{HttpTransport, TransportFuture, TransportRequest};
+use iroha::http::{HttpTransport, StatusCode, TransportFuture, TransportRequest};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
 use std::{
@@ -11,6 +11,7 @@ use std::{
 
 #[derive(Debug)]
 struct Transport {
+    status: StatusCode,
     bytes: Vec<u8>,
     requests: Mutex<Vec<TransportRequest>>,
 }
@@ -21,7 +22,9 @@ impl HttpTransport for Transport {
         request: TransportRequest,
     ) -> color_eyre::eyre::Result<iroha::http::Response<Vec<u8>>> {
         self.requests.lock().unwrap().push(request);
-        Ok(iroha::http::Response::new(self.bytes.clone()))
+        let mut response = iroha::http::Response::new(self.bytes.clone());
+        *response.status_mut() = self.status;
+        Ok(response)
     }
     fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
         Box::pin(async move { self.send_blocking(request) })
@@ -49,6 +52,7 @@ fn fixture() -> (InstalledNetworkProfile, Vec<u8>) {
 
 fn transport(bytes: Vec<u8>) -> (CheckpointTransport, Arc<Transport>) {
     let raw = Arc::new(Transport {
+        status: StatusCode::OK,
         bytes,
         requests: Mutex::new(vec![]),
     });
@@ -88,6 +92,40 @@ fn checkpoint_reader_uses_exact_installed_unsigned_request_and_authenticates_nat
             .is_some_and(|value| value <= Duration::from_secs(5))
     );
     assert!(store.read_watermark().unwrap().accepted.is_some());
+}
+
+#[test]
+fn checkpoint_http_404_uses_exact_installed_url_once_per_call_without_accepting_release() {
+    let (profile, bytes) = fixture();
+    // Even a valid signed checkpoint body cannot turn an HTTP refusal into acceptance.
+    let raw = Arc::new(Transport {
+        status: StatusCode::NOT_FOUND,
+        bytes,
+        requests: Mutex::new(vec![]),
+    });
+    let reader = CheckpointTransport::with_client(PublicHttpClient::with_transport(raw.clone()));
+    let temporary = tempfile::tempdir().unwrap();
+    let store = ReleaseCheckpointStore::open(&temporary.path().join("release")).unwrap();
+    assert!(store.read_watermark().unwrap().accepted.is_none());
+
+    for expected_requests in 1..=2 {
+        assert!(matches!(
+            reader.fetch_and_authenticate(&profile, &store, deadline()),
+            Err(CheckpointReadError::Http(PublicHttpError::Status(404)))
+        ));
+        assert!(store.read_watermark().unwrap().accepted.is_none());
+        let requests = raw.requests.lock().unwrap();
+        assert_eq!(requests.len(), expected_requests);
+        let request = requests.last().unwrap();
+        assert_eq!(request.url, *profile.checkpoint_url());
+        assert_eq!(
+            request.url.as_str(),
+            "https://installed.example/checkpoint.nrt"
+        );
+        assert_eq!(request.method, iroha::http::Method::GET);
+        assert!(request.headers.is_empty());
+        assert!(request.body.is_empty());
+    }
 }
 
 #[test]

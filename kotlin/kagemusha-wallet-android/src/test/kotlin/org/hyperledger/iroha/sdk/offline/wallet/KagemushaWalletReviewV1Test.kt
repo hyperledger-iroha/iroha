@@ -17,6 +17,8 @@ class KagemushaWalletReviewV1Test {
     private fun reply(bytes: ByteArray = data(), status: Int=18, token: Long=8, high: Long=0, detail: Int=0) =
         KagemushaWalletReviewReplyV1(status, -1, 0, token, high, detail, bytes)
     private fun rejects(action: () -> Unit) { try { action(); fail("expected refusal") } catch (_: IllegalStateException) {} }
+    private fun KagemushaWalletReviewReplyV1.ready(owner: Any, expected: KagemushaWalletReviewProjectionV1.Kind): KagemushaWalletReviewV1 =
+        (decision(owner, ByteArray(32) { 1 }, expected) as KagemushaWalletReviewDecisionV1.Ready).review
     @Test fun preservesAllUnsignedScalarBitsAndWholeProjection() {
         val bytes=data(); for(i in 9..24) bytes[i]=0xff.toByte()
         val p=KagemushaWalletReviewProjectionV1(bytes)
@@ -55,18 +57,39 @@ class KagemushaWalletReviewV1Test {
         rejects { KagemushaWalletReviewProjectionV1(data().also{it.fill(0,9,25)}) }
     }
     @Test fun dedicatedReviewNeverAcceptsOpenActivationOrMalformedToken() {
-        for(status in listOf(0,1,12,13,14,15,16,17,19)) rejects { reply(status=status).review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
-        for(r in listOf(reply(token=0),reply(token=-1),reply(high=1),reply(detail=1))) rejects { r.review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
-        rejects { reply().review(Any(),KagemushaWalletReviewProjectionV1.Kind.UNLOAD) }
+        for(status in listOf(0,1,12,13,14,15,16,17,19)) rejects { reply(status=status).ready(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
+        for(r in listOf(reply(token=0),reply(token=-1),reply(high=1),reply(detail=1))) rejects { r.ready(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
+        rejects { reply().ready(Any(),KagemushaWalletReviewProjectionV1.Kind.UNLOAD) }
         rejects { KagemushaWalletCallV1(18,-1,0,8,0,0,data()) }
     }
     @Test fun negativeFailureMustCarryNoTokenOrProjection() {
         val failure=KagemushaWalletReviewReplyV1(-4,-1,0,0,0,0,byteArrayOf())
-        try { failure.review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND); fail() } catch(e:KagemushaWalletExceptionV1){assertEquals(-4,e.status)}
-        rejects { reply(status=-4).review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
+        try { failure.ready(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND); fail() } catch(e:KagemushaWalletExceptionV1){assertEquals(-4,e.status)}
+        rejects { reply(status=-4).ready(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
     }
     @Test fun foreignOwnerCannotConsumeAndOriginCanConsumeOnlyOnce() {
-        val owner=Any(); val review=reply().review(owner,KagemushaWalletReviewProjectionV1.Kind.SEND)
+        val owner=Any(); val review=reply().ready(owner,KagemushaWalletReviewProjectionV1.Kind.SEND)
         rejects { review.consume(Any()) }; assertEquals(8L,review.consume(owner)); rejects { review.consume(owner) }
     }
+    @Test fun retainedReviewRequiresExactOriginTokenAndOnlyTypedMaintenanceReply() {
+        fun retained(token: Long = 8, detail: Int = 1) =
+            KagemushaWalletCallV1(65, -1, 0, token, 0, detail, byteArrayOf())
+        for ((detail, wait) in listOf(1 to KagemushaWalletReviewMaintenanceWaitV1.SELECTED_PENDING,
+            2 to KagemushaWalletReviewMaintenanceWaitV1.ARCHIVE_FOLD, 6 to KagemushaWalletReviewMaintenanceWaitV1.BUSY)) {
+            val origin = Any()
+            val review = reply().ready(origin, KagemushaWalletReviewProjectionV1.Kind.SEND)
+            assertEquals(8L, review.consume(origin))
+            rejects { review.restoreRetained(Any(), 8, retained(detail = detail)) }
+            rejects { review.restoreRetained(origin, 8, retained(token = 9, detail = detail)) }
+            rejects { review.restoreRetained(origin, 8, KagemushaWalletCallV1(-12, -1, 0, 0, 0, 0, byteArrayOf())) }
+            rejects { review.restoreRetained(origin, 8, KagemushaWalletCallV1(2, -1, 0, 0, 0, 0, byteArrayOf())) }
+            assertEquals(wait, review.restoreRetained(origin, 8, retained(detail = detail)))
+            rejects { review.restoreRetained(origin, 8, retained(detail = detail)) }
+            rejects { review.consume(Any()) }
+            assertEquals(8L, review.consume(origin))
+            rejects { review.consume(origin) }
+        }
+        for (detail in listOf(0, 3, 4, 5, 7)) rejects { retained(detail = detail) }
+    }
+
 }

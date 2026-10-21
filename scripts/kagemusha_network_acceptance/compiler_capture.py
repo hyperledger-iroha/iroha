@@ -138,11 +138,13 @@ def metadata():
 
 def source_snapshot(meta, role, modules):
     """Prospective full local packages plus exact external metadata dependencies."""
+    capture.require_resolved_checkout()
     custody = modules['native_sdk_source_custody.py']
     require(meta['workspace_root'] == str(ROOT), 'foreign Cargo workspace')
     roots = source_audit.local_roots(ROOT, meta)
     value = capture.snapshot(roots)
-    require(value['branch'] == 'optimizations' and not value['unmerged'] and not value['read_failures'], 'unresolved source capture')
+    require(value['branch'] == 'optimizations' and value['merge_head'] is False
+            and not value['unmerged'] and not value['read_failures'], 'unresolved source capture')
     dependency = custody.source_identity(meta, ROOT, ROLES[role][0], sha)
     for name, digest in dependency.items():
         if not name.startswith(('registry:', 'git:')):
@@ -161,13 +163,14 @@ def source_snapshot(meta, role, modules):
 
 def validate_source_pair(before, after):
     """Original captured values only; no synthesized Git or source equivalence."""
-    fields = {'files', 'links', 'read_failures', 'head', 'branch', 'unmerged', 'dependencies', 'administration'}
+    fields = {'files', 'links', 'read_failures', 'head', 'branch', 'unmerged', 'merge_head', 'dependencies', 'administration'}
     administration = {'.git/HEAD', '.git/index', '.git/info/exclude', '.git/packed-refs', '.git/refs/heads/optimizations'}
     for value in (before, after):
         require(type(value) is dict and set(value) == fields and type(value['administration']) is dict
                 and set(value['administration']) == administration, 'incomplete original source/metadata inventory')
         require(value['branch'] == 'optimizations' and re.fullmatch('[0-9a-f]{40}', value['head'])
-                and not value['unmerged'] and not value['read_failures'], 'unresolved original source/metadata')
+                and value['merge_head'] is False and not value['unmerged']
+                and not value['read_failures'], 'unresolved original source/metadata')
     require(before == after, 'prospective source/metadata originals changed')
 
 
@@ -571,6 +574,7 @@ def selected_binaries(events, meta, config, directory, *, create):
 
 def producer(output, config):
     """Explicit capture only; failures retain all originals and never kill a child."""
+    capture.require_resolved_checkout()
     output = exact_path(output, absent=True)
     require(output.is_relative_to(QUAL) and not output.exists(), 'fresh absent qualification output required')
     require(Path.cwd() == ROOT, 'run from original checkout')
@@ -636,6 +640,7 @@ def selection_paths(selection):
 
 
 def admit(selection, expected):
+    capture.require_resolved_checkout()
     directory = selection_paths(selection)
     review, result = read(directory / 'review.json'), read(directory / 'result.json')
     require(review == {'schema': REVIEW_SCHEMA, 'result_sha256': selection['result_sha256'], 'accepted_current_compiler_closure': True,

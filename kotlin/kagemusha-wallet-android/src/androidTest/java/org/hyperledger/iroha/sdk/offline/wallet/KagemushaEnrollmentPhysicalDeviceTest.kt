@@ -71,7 +71,9 @@ class KagemushaEnrollmentPhysicalDeviceTest {
                 val timeout = required("kagemushaTimeoutSeconds").toLongOrNull()
                     ?: throw EnrollmentProbeFailure("input")
                 probeRequire(timeout in 1..1800)
-                val driver = EnrollmentDeviceDriver(config, KagemushaWalletAndroidPlatformV1.create(context))
+                val driver = EnrollmentDeviceDriver(config, KagemushaWalletAndroidPlatformV1.create(context)) { wallet, generation ->
+                    kagemushaProbeActivityBinding(InstrumentationRegistry.getInstrumentation(), wallet, generation)
+                }
                 var failures = 0
                 val stages = mutableSetOf<String>()
                 val started = SystemClock.elapsedRealtimeNanos()
@@ -83,6 +85,7 @@ class KagemushaEnrollmentPhysicalDeviceTest {
                         val base = "inbox/$currentInvocation/$name"
                         var commandBytes = deadline.select { ownedFiles.committedCommand(base, 131_072) }
                         while (commandBytes == null) {
+                            driver.checkActivity()
                             Thread.sleep(200)
                             commandBytes = deadline.select { ownedFiles.committedCommand(base, 131_072) }
                         }

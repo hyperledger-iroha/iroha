@@ -7,6 +7,8 @@ use advance::{
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod resume_tests;
+
 pub(super) struct TestWallet {
     pub(super) calls: Arc<AtomicUsize>,
     pub(super) drops: Arc<AtomicUsize>,
@@ -18,7 +20,24 @@ impl Drop for TestWallet {
     }
 }
 impl Wallet for TestWallet {
-    fn setup(&mut self, _: setup::Setup) -> Result<Response> {
+    fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
+        Ok(maintenance::ReceiptStep::Empty)
+    }
+    fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+        Ok(maintenance::WakeHint::Age(
+            state::DeferredArchiveWakeHintV1::NoAgeWake,
+        ))
+    }
+    fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
+        Ok(maintenance::DrainPlan::Finished(
+            state::DeferredArchiveDrainV1::NoWork,
+        ))
+    }
+
+    fn maintenance(&mut self) -> Result<maintenance::View> {
+        Ok(maintenance::View::Released)
+    }
+    fn setup(&mut self, _exchange_id: u64, _: setup::Setup) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(Response {
             kind: 12,
@@ -49,9 +68,11 @@ impl Wallet for TestWallet {
             }),
         })
     }
-    fn review(&mut self, input: review::Input) -> Result<Response> {
+    fn review(&mut self, _exchange_id: u64, input: review::Input) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let review::Input::Unload {
+            request_id,
+            expectation,
             amount,
             charge,
             beneficiary,
@@ -59,6 +80,8 @@ impl Wallet for TestWallet {
         else {
             panic!("expected Unload review fixture")
         };
+        assert_ne!(request_id, [0; 32]);
+        assert!(matches!(expectation, state::ReviewExpectationV1::Fresh));
         assert_eq!(beneficiary, Some(vec![3, 255, 0, 1]));
         assert_eq!(
             state::OperationActionV1::Unload { amount, charge },
@@ -99,6 +122,10 @@ impl Wallet for TestWallet {
             3 => completion(Some(state::Completion::DeliveryDataLoss)),
             _ => Err(Failure::unavailable(UNAVAILABLE, U::Io(5))),
         }
+    }
+    fn has_pending_operation(&mut self) -> Result<bool> {
+        // This fixture's resume always returns the same selected Pending outcome.
+        Ok(true)
     }
     fn resume(&mut self) -> Result<Response> {
         completion(Some(state::Completion::Pending))
@@ -196,7 +223,14 @@ fn c_calls_preserve_exact_retry_unknown_pending_loss_and_platform_failure() {
         (8, 7, 1 << 29, 3)
     );
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, std::ptr::null(), &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                std::ptr::null(),
+                &mut result,
+            )
+        },
         INVALID
     );
     assert_eq!(
@@ -778,7 +812,14 @@ fn c_typed_execute_preserves_intake_bounds_and_distinct_preparation_status() {
     };
     let mut result = WalletResult::default();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         PROOF_REJECTED
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -786,7 +827,14 @@ fn c_typed_execute_preserves_intake_bounds_and_distinct_preparation_status() {
     assert!(result.bytes.is_null());
     request.first_length = 1;
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -823,7 +871,14 @@ fn c_selector_five_installs_the_local_list_through_the_owner_and_is_no_operation
     // The stand-in install owner echoes the exact list and certificate originals; the
     // stand-in operation owner would refuse as PROOF_REJECTED.
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         0
     );
     assert_eq!(result.status, 1);
@@ -837,13 +892,27 @@ fn c_selector_five_installs_the_local_list_through_the_owner_and_is_no_operation
     let identity = [1; 32];
     request.request_id = identity.as_ptr();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     request.selector = 6;
     request.request_id = zero.as_ptr();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     // The list needs its certificate set.
@@ -851,13 +920,20 @@ fn c_selector_five_installs_the_local_list_through_the_owner_and_is_no_operation
     request.second = std::ptr::null();
     request.second_length = 0;
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     // The typed call reaches Wallet::install_blacklist, never Wallet::execute.
     let response = execute(
-        id,
+        &test_invocation(id).unwrap(),
         requests::Call::InstallBlacklist {
             list: vec![9],
             certificates: vec![10],
@@ -869,11 +945,11 @@ fn c_selector_five_installs_the_local_list_through_the_owner_and_is_no_operation
     close(id).unwrap();
     assert_eq!(
         execute(
-            id,
+            &test_invocation(id).unwrap(),
             requests::Call::InstallBlacklist {
                 list: vec![9],
                 certificates: vec![10],
-            },
+            }
         )
         .unwrap_err()
         .status,
@@ -903,7 +979,24 @@ fn a_local_blacklist_refusal_is_its_own_status_never_invalid_or_a_proof_verdict(
     // A wallet without a local-list owner refuses the install as invalid input.
     struct Bare;
     impl Wallet for Bare {
-        fn setup(&mut self, _: setup::Setup) -> Result<Response> {
+        fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
+            Ok(maintenance::ReceiptStep::Empty)
+        }
+        fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+            Ok(maintenance::WakeHint::Age(
+                state::DeferredArchiveWakeHintV1::NoAgeWake,
+            ))
+        }
+        fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
+            Ok(maintenance::DrainPlan::Finished(
+                state::DeferredArchiveDrainV1::NoWork,
+            ))
+        }
+
+        fn maintenance(&mut self) -> Result<maintenance::View> {
+            Ok(maintenance::View::Released)
+        }
+        fn setup(&mut self, _exchange_id: u64, _: setup::Setup) -> Result<Response> {
             unreachable!()
         }
         fn snapshot(&mut self) -> Result<state::Snapshot> {
@@ -916,6 +1009,9 @@ fn a_local_blacklist_refusal_is_its_own_status_never_invalid_or_a_proof_verdict(
             unreachable!()
         }
         fn retry(&mut self, _: &[u8; 32]) -> Result<Response> {
+            unreachable!()
+        }
+        fn has_pending_operation(&mut self) -> Result<bool> {
             unreachable!()
         }
         fn resume(&mut self) -> Result<Response> {
@@ -1016,7 +1112,14 @@ fn c_operation_request_layout_and_reviewed_unsigned_amount_reach_the_exact_typed
     let mut result = WalletResult::default();
     // Unload must first pass review; direct execution never reaches the owner.
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(handle, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                handle,
+                test_exchange_id(handle),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1027,7 +1130,11 @@ fn c_operation_request_layout_and_reviewed_unsigned_amount_reach_the_exact_typed
     companion.extend_from_slice(&[3, 255, 0, 1]);
     let review = WalletReviewRequest {
         selector: request.selector,
+        expectation: 0,
         amount: request.amount,
+        request_id32: request.request_id,
+        expected_projection: std::ptr::null(),
+        expected_projection_length: 0,
         first: request.first,
         first_length: request.first_length,
         second: companion.as_ptr(),
@@ -1035,7 +1142,14 @@ fn c_operation_request_layout_and_reviewed_unsigned_amount_reach_the_exact_typed
     };
     // The stand-in review owner asserts the exact unsigned amount and charge originals.
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_review_v1(handle, &review, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_review_v1(
+                handle,
+                test_exchange_id(handle),
+                &review,
+                &mut result,
+            )
+        },
         PROOF_REJECTED
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1104,7 +1218,14 @@ fn setup_c_layout_and_bounds_preserve_exact_identity_amount_and_unused_slots() {
     };
     let mut result = WalletResult::default();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                handle,
+                test_setup_exchange_request(handle, &request),
+                &request,
+                &mut result,
+            )
+        },
         0
     );
     assert_eq!(result.status, 12);
@@ -1115,7 +1236,14 @@ fn setup_c_layout_and_bounds_preserve_exact_identity_amount_and_unused_slots() {
     crate::connect_norito_free(result.bytes);
     request.token = 1;
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                handle,
+                test_setup_exchange_request(handle, &request),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     assert!(result.bytes.is_null());
@@ -1141,7 +1269,14 @@ fn unload_setup_c_refuses_unknown_owner_and_invalid_shape_without_output() {
     };
     let mut result = WalletResult::default();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                0,
+                test_setup_exchange_request(0, &request),
+                &request,
+                &mut result,
+            )
+        },
         CLOSED
     );
     assert_eq!(result.status, CLOSED);
@@ -1149,13 +1284,27 @@ fn unload_setup_c_refuses_unknown_owner_and_invalid_shape_without_output() {
     assert_eq!(result.length, 0);
     request.setup_id = zero.as_ptr();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                0,
+                test_setup_exchange_request(0, &request),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     request.setup_id = id.as_ptr();
     request.token = 1;
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                0,
+                test_setup_exchange_request(0, &request),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     request.token = 0;
@@ -1163,7 +1312,14 @@ fn unload_setup_c_refuses_unknown_owner_and_invalid_shape_without_output() {
     request.first = overlong.as_ptr();
     request.first_length = overlong.len();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                0,
+                test_setup_exchange_request(0, &request),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     assert!(result.bytes.is_null());
@@ -1430,6 +1586,23 @@ fn archive_call_publishes_on_success_discards_on_failure_and_reports_publication
         close_failure: Option<Failure>,
     }
     impl Wallet for Bracket {
+        fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
+            Ok(maintenance::ReceiptStep::Empty)
+        }
+        fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+            Ok(maintenance::WakeHint::Age(
+                state::DeferredArchiveWakeHintV1::NoAgeWake,
+            ))
+        }
+        fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
+            Ok(maintenance::DrainPlan::Finished(
+                state::DeferredArchiveDrainV1::NoWork,
+            ))
+        }
+
+        fn maintenance(&mut self) -> Result<maintenance::View> {
+            Ok(maintenance::View::Released)
+        }
         fn open_archive_call(&mut self) {
             self.events.push("open");
         }
@@ -1438,7 +1611,7 @@ fn archive_call_publishes_on_success_discards_on_failure_and_reports_publication
                 .push(if succeeded { "publish" } else { "discard" });
             self.close_failure.map_or(Ok(()), Err)
         }
-        fn setup(&mut self, _: setup::Setup) -> Result<Response> {
+        fn setup(&mut self, _exchange_id: u64, _: setup::Setup) -> Result<Response> {
             unreachable!()
         }
         fn snapshot(&mut self) -> Result<state::Snapshot> {
@@ -1451,6 +1624,9 @@ fn archive_call_publishes_on_success_discards_on_failure_and_reports_publication
             unreachable!()
         }
         fn retry(&mut self, _: &[u8; 32]) -> Result<Response> {
+            unreachable!()
+        }
+        fn has_pending_operation(&mut self) -> Result<bool> {
             unreachable!()
         }
         fn resume(&mut self) -> Result<Response> {

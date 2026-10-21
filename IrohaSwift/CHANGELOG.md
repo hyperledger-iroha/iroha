@@ -14,7 +14,7 @@ All notable changes to `IrohaSwift` are documented in this file.
   anonymous-ballot result binding is supported.
 
 - 2026-10-17: KAGEMUSHA blacklists are local-only. Added
-  `KagemushaWalletV1.installBlacklist(list:certificates:)`, which stores a signed list on the
+  `KagemushaWalletExchangeCallV1.installBlacklist(list:certificates:)`, which stores a signed list on the
   phone (a replacement's version must increase; it has no retry identity); Native then refuses
   to pay a listed receiver and to request or accept money from a listed payer with
   `KagemushaWalletErrorV1.blockedStatus` (-15). Nothing is sent to peers or proved:

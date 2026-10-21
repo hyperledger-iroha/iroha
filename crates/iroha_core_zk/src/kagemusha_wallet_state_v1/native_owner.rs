@@ -38,7 +38,8 @@ use iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier;
 use iroha_pasta::msm::MemoryBudget;
 use iroha_plonk::keys::pk::artifact::ReadConfig;
 pub use review::{
-    NativeOperationReviewV1, ReviewedOperationV1, SpeculativeProofV1, SpeculativeSendJobV1,
+    NativeOperationReviewV1, ReviewDecisionV1, ReviewExpectationV1, ReviewMaintenanceWaitV1,
+    ReviewedExecutionFailureV1, ReviewedOperationV1, SpeculativeProofV1, SpeculativeSendJobV1,
     SpeculativeSendV1,
 };
 use runtime::RuntimeCustodyV1;
@@ -75,6 +76,11 @@ fn proof<T>(value: Result<T, ProofError>) -> Result<T, Error> {
         ProofError::DecodeResource(original) => Error::DecodeResource(original),
         ProofError::Unavailable => Error::ArtifactsUnavailable("native operation artifact"),
         ProofError::Cancelled => Error::Cancelled,
+        original @ (ProofError::Verification(_)
+        | ProofError::Recursion(_)
+        | ProofError::RuntimeBinding
+        | ProofError::Inventory
+        | ProofError::Profile) => Error::NativeVerification(original),
         ProofError::Blocked(field) => Error::Blocked(field),
         ProofError::Entropy => {
             crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderErrorV1::Unavailable(
@@ -84,6 +90,17 @@ fn proof<T>(value: Result<T, ProofError>) -> Result<T, Error> {
         }
         _ => Error::Proof("native operation source or proof"),
     })
+}
+
+// Only use this after authenticating the exact retained Send context, on the incoming
+// Credited object itself. Generic proof/source/snapshot errors are never receipt verdicts.
+fn receipt_proof<T>(value: Result<T, ProofError>) -> Result<T, Error> {
+    match value {
+        Err(ProofError::Authority | ProofError::Proof) => {
+            Err(Error::ReceiptRejected("Credited proof or binding"))
+        }
+        other => proof(other),
+    }
 }
 
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P> {
@@ -439,17 +456,24 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         request: &KagemushaWalletRequestV1,
         payment: &KagemushaWalletPaymentV1,
     ) -> Result<(), Error> {
-        valid(credited.verify_for(self.installed.verifier().scheme(), request, payment))?;
+        read_model_original(
+            || credited.verify_for(self.installed.verifier().scheme(), request, payment),
+            Error::ReceiptRejected("Credited binding"),
+        )?;
         match &credited.evidence {
             KagemushaWalletCreditedEvidenceV1::Receive { package } => {
-                proof(self.installed.verifier().verify_package_proofs_cancellable(
+                receipt_proof(self.installed.verifier().verify_package_proofs_cancellable(
                     package,
                     self.budget,
                     None,
                 ))
             }
             KagemushaWalletCreditedEvidenceV1::Status { status } => {
-                self.verify_lineage(&status.lineage, None)
+                receipt_proof(self.installed.verifier().verify_lineage_cancellable(
+                    &status.lineage,
+                    self.budget,
+                    None,
+                ))
             }
         }
     }
@@ -536,5 +560,58 @@ mod resource_tests {
             proof::<()>(Err(ProofError::Authority)),
             Err(Error::Proof("native operation source or proof"))
         ));
+    }
+
+    #[test]
+    fn receipt_verdict_excludes_original_verifier_and_installed_context_failures() {
+        let original = iroha_plonk::VerifyError::BatchItem {
+            index: 7,
+            error: Box::new(iroha_plonk::VerifyError::Ipa(
+                iroha_plonk::pcs::ipa::IpaError::Msm(iroha_pasta::msm::MsmError::Budget(
+                    iroha_pasta::msm::BudgetExceeded {
+                        required: 4096,
+                        budget: 1024,
+                    },
+                )),
+            )),
+        };
+        for error in [
+            ProofError::Verification(original),
+            ProofError::Recursion(iroha_plonk_recursion::Error::Kernel(
+                iroha_pasta::msm::MsmError::ScalarBound,
+            )),
+            ProofError::Profile,
+            ProofError::Inventory,
+            ProofError::RuntimeBinding,
+        ] {
+            let expected = error.clone();
+            assert!(matches!(
+                proof::<()>(Err(error.clone())),
+                Err(Error::NativeVerification(actual)) if actual == expected
+            ));
+            assert!(matches!(
+                receipt_proof::<()>(Err(error)),
+                Err(Error::NativeVerification(actual)) if actual == expected
+            ));
+        }
+        for error in [ProofError::Authority, ProofError::Proof] {
+            assert!(matches!(
+                proof::<()>(Err(error.clone())),
+                Err(Error::Proof(_))
+            ));
+            assert!(matches!(
+                receipt_proof::<()>(Err(error)),
+                Err(Error::ReceiptRejected(_))
+            ));
+        }
+        assert!(matches!(
+            receipt_proof::<()>(Err(ProofError::Cancelled)),
+            Err(Error::Cancelled)
+        ));
+        assert!(matches!(
+            receipt_proof::<()>(Err(ProofError::Unavailable)),
+            Err(Error::ArtifactsUnavailable(_))
+        ));
+        assert_eq!(receipt_proof(Ok(17)).unwrap(), 17);
     }
 }

@@ -207,10 +207,10 @@ if (Encoding.UTF8.GetString(canonicalMessage) != expectedMessage)
     throw new InvalidOperationException("Canonical request package smoke failed");
 }
 
-if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 31u
+if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 32u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {
-    throw new InvalidOperationException("Packed ABI-31 SoraFS native bridge is unavailable");
+    throw new InvalidOperationException("Packed ABI-33 SoraFS native bridge is unavailable");
 }
 
 // Probe the actual library resolved from the installed, manifest-verified package.

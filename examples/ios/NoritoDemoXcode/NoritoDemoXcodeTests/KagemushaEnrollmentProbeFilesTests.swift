@@ -392,4 +392,60 @@ final class KagemushaEnrollmentProbeFilesTests: XCTestCase {
     ticks = 10
     XCTAssertThrowsError(try deadline.select { "ready" })
   }
+  /// Full current projection DATA only; it cannot manufacture a Native review capability.
+  private func reviewOriginal() -> Data {
+    var bytes = Data(count: 495)
+    bytes.replaceSubrange(0..<8, with: [75,87,79,82,86,49,0,0]); bytes[8] = 8
+    for at in [9,41,57,106,202,234,266,298,330,362,394] { bytes[at] = 1 }
+    bytes[426] = 4; bytes[427] = 1
+    return bytes
+  }
+  func testConditionalCustodyRequiresExactOriginalCompanionsAndImmutableInitialProjection() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
+      attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: root) }
+    let files = try mailbox(root: root), identity = Data(repeating: 1, count: 32)
+    let originals = ["amount": Data([1]), "quote": Data([2]), "certificates": Data([3]), "beneficiary": Data([4])]
+    let marker = "actor/private/intents/executed-" + EnrollmentProbeFiles.digest(identity)
+    func selection(_ originals: [String: Data], _ continuation: Bool) throws {
+      _ = try KagemushaProbeReviewCustody.expectation(files: files, actorPath: "actor", requestID: identity,
+        family: "review-unload", originals: originals, continuation: continuation)
+    }
+    XCTAssertThrowsError(try selection(originals, true))
+    try selection(originals, false)
+    XCTAssertThrowsError(try selection(originals, true), "retained originals alone do not replace the initial fence")
+    try files.publishDispatchFence(marker, bytes: reviewOriginal())
+    try selection(originals, true)
+    var changed = originals; changed["certificates"] = Data([8])
+    XCTAssertThrowsError(try selection(changed, true), "companion bytes are retained even outside projection digests")
+    XCTAssertThrowsError(try selection(originals, false))
+    try files.mkdir("actor/private/attempt")
+    let attempt = "actor/private/attempt/review-dispatch.norito"
+    try files.publishDispatchFence(attempt, bytes: reviewOriginal())
+    XCTAssertThrowsError(try files.publishDispatchFence(attempt, bytes: reviewOriginal()))
+    XCTAssertEqual(try files.read(marker, maximum: 4591), reviewOriginal())
+    let missing = "actor/private/intents/review-originals-" + EnrollmentProbeFiles.digest(identity) + "/certificates"
+    try FileManager.default.removeItem(at: root.appendingPathComponent(missing))
+    XCTAssertThrowsError(try selection(originals, true), "continuation cannot recreate missing originals")
+    XCTAssertFalse(try files.exists(missing))
+  }
+  func testOldHashOnlyOrMalformedFenceCannotBecomeConditionalExpectation() throws {
+    for body in [Data(repeating: 65, count: 64), Data(reviewOriginal().dropLast()), reviewOriginal()+Data([0])] {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700])
+      defer { try? FileManager.default.removeItem(at: root) }
+      let files = try mailbox(root: root), identity = Data(repeating: 1, count: 32)
+      let inputs = ["amount": Data([1])]
+      _ = try KagemushaProbeReviewCustody.expectation(files: files, actorPath: "actor", requestID: identity,
+        family: "review-unload", originals: inputs, continuation: false)
+      let marker = "actor/private/intents/executed-" + EnrollmentProbeFiles.digest(identity)
+      try files.publishDispatchFence(marker, bytes: body)
+      XCTAssertThrowsError(try KagemushaProbeReviewCustody.expectation(files: files, actorPath: "actor",
+        requestID: identity, family: "review-unload", originals: inputs, continuation: true))
+      XCTAssertEqual(try files.read(marker, maximum: 4591), body)
+    }
+  }
+
 }

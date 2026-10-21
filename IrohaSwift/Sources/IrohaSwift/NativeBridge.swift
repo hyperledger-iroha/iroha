@@ -165,7 +165,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 31
+        return 33
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -1981,7 +1981,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }) else {
             self.loadedBridgeAbiVersion = nil
             NSLog(
-                "[NoritoNativeBridge] statically linked bridge is missing mandatory ABI-31 exports"
+                "[NoritoNativeBridge] statically linked bridge is missing mandatory ABI-33 exports"
             )
             return
         }
