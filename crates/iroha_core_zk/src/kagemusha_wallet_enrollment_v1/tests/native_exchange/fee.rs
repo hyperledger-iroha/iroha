@@ -471,7 +471,12 @@ fn actual_native_fee_send_retains_historical_claim_across_restart_and_archive() 
     assert_eq!(retained.payment, payment_bytes);
     assert_eq!(
         retained.request,
-        norito::encode_canonical(&request.complete_with(&payment.signed_request().unwrap()).unwrap()).unwrap()
+        norito::encode_canonical(
+            &request
+                .complete_with(&payment.signed_request().unwrap())
+                .unwrap()
+        )
+        .unwrap()
     );
     let beneficiary_original = norito::encode_canonical(&setup.accounts[2]).unwrap();
     let claim_bytes = retained
@@ -493,10 +498,10 @@ fn actual_native_fee_send_retains_historical_claim_across_restart_and_archive() 
         3
     );
     let signatures = device_a.platform.with(|state| state.sign_calls);
-    let sent = a.snapshot().unwrap();
+    let retained_snapshot = a.snapshot().unwrap();
     drop(a);
     let mut a = sources.open(&device_a, &f, &frames_a);
-    assert_eq!(a.snapshot().unwrap(), sent);
+    assert_eq!(a.snapshot().unwrap(), retained_snapshot);
     assert_eq!(complete(a.execute(send.clone()).unwrap()), payment_bytes);
     assert_eq!(
         a.fee_claim(digests.credit_id).unwrap(),

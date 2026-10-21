@@ -70,7 +70,10 @@ The supplied older capture is not the current catalog or size authority:
 - The real network owners are
   [`continuation.rs`](../integration_tests/tests/kagemusha_network_setup/continuation.rs)
   (`execute_four_validator_monetary_continuation`) and its `fee` module.
-  Rebuild both daemon and harness from the same captured source.
+  The maintained [acceptance controller](../scripts/kagemusha_network_acceptance/README.md)
+  keeps the fresh genesis owner, native DKG, catalog and six monetary handoffs
+  attached to one live four-validator occurrence. Rebuild both daemon and harness
+  from the same captured source; controller tests alone do not qualify that journey.
 - The iOS residual model is
   `wallet_advance_v1_crash_matrix_keychain_multiple_write_loss_remains_unqualified`
   in [`crash_matrix_tests.rs`](../crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/crash_matrix_tests.rs).
@@ -104,6 +107,6 @@ decision. Do not request these decisions before the concrete work is reviewable.
 The [device checklist](kagemusha_evidence_gate.md#6-complete-device-exchanges)
 records the selected models and current availability observations. Capture
 actual hardware identity before declaring the device population; do not transfer
-captures between models. The four-validator monetary harness also requires an external
-controller and a catalog built from that campaign's actual emitted genesis;
-starting its ignored test alone cannot complete the campaign.
+captures between models. The four-validator monetary harness requires the maintained
+controller, actual issuer configuration and a catalog built from that campaign's
+actual emitted genesis; starting its ignored test alone cannot complete the campaign.

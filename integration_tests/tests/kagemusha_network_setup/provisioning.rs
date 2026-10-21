@@ -1,16 +1,16 @@
-//! Native H2–H5 beacon provisioning over the same retained four-validator network.
+//! Native H2–H5 beacon provisioning over the same freshly generated four-validator network.
 //!
 //! Ordinary peers use `iroha3d`. The maintained DKG helper resolves `iroha3d_taira`
 //! only for its native `beacon-bootstrap` worker commands, then provisions a separate
 //! disposable provider broker per seat. Keep the returned DKG owner alive throughout
 //! the campaign: its private credentials belong to individual seat roots.
-use super::super::{account, key};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use iroha::{blocking::Client, data_model::prelude::*};
 use iroha_core::{
     beacon::credential::global_beacon_partial_signer_public_inventory_digest_v1,
     sumeragi::native_journal::NativeJournalCursor,
 };
+use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
     block::consensus::SumeragiRootScope,
     sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
@@ -38,7 +38,7 @@ use std::{
 use tokio::runtime::Runtime;
 use zeroize::Zeroizing;
 
-#[path = "../../support/committee_status.rs"]
+#[path = "../support/committee_status.rs"]
 mod committee_status;
 
 const INSTALL_HEIGHT: u64 = 5;
@@ -197,23 +197,32 @@ fn require_provider(
     Ok(())
 }
 
+/// Authenticate the runtime-only signer against this Network's original genesis.
+///
+/// The caller obtains the public key from its validated native genesis bundle;
+/// matching a key never substitutes for that original or any validator proof.
+pub(super) fn require_genesis_owner(expected: &PublicKey, owner: &KeyPair) -> Result<AccountId> {
+    ensure!(
+        expected.algorithm() == Algorithm::Ed25519 && owner.public_key() == expected,
+        "runtime genesis owner differs from the authenticated original"
+    );
+    Ok(AccountId::new(expected.clone()))
+}
+
 /// Provision an already started exact-H1 network and retain its native private seat owners.
 /// No unrelated transaction may be submitted until this function returns at H5.
 pub(crate) fn provision(
     network: &Network,
     runtime: &Runtime,
     root: &Path,
+    genesis_owner: &KeyPair,
 ) -> Result<DisposableGenesisDkgOutput> {
     ensure!(
         network.validators().len() == 4 && network.peers().len() == 4,
         "four exact ordinary validators required"
     );
     let original = network.native_genesis_provisioning_bundle()?;
-    let admin_key = key(0xCE);
-    ensure!(
-        &original.public_key == admin_key.public_key(),
-        "retained genesis is not the maintained engineering authority"
-    );
+    let admin = require_genesis_owner(&original.public_key, genesis_owner)?;
     let discriminant = original.chain_discriminant;
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
     let clients = network
@@ -224,7 +233,7 @@ pub(crate) fn provision(
                 peer.is_running(),
                 "ordinary node must have reached H1 before native DKG"
             );
-            Ok(peer.client_for(&account(0xCE), admin_key.private_key().clone()))
+            Ok(peer.client_for(&admin, genesis_owner.private_key().clone()))
         })
         .collect::<Result<Vec<_>>>()?;
     require_height(&heights(&clients, Instant::now() + PHASE_BUDGET)?, 1)?;
@@ -384,7 +393,23 @@ pub(crate) fn provision(
 
 #[cfg(test)]
 mod tests {
+    use super::super::key;
     use super::*;
+
+    #[test]
+    fn native_provisioning_binds_the_actual_genesis_owner_and_rejects_foreign_keys() {
+        let selected = key(19);
+        let actual = require_genesis_owner(selected.public_key(), &selected).unwrap();
+        assert_eq!(actual, AccountId::new(selected.public_key().clone()));
+        // Neither the historical engineering seed nor an ordinary role can
+        // replace this occurrence's independently authenticated genesis owner.
+        for foreign in [key(0xCE), key(41), key(95)] {
+            assert!(require_genesis_owner(selected.public_key(), &foreign).is_err());
+            assert!(require_genesis_owner(foreign.public_key(), &selected).is_err());
+        }
+        let non_ed25519 = KeyPair::from_seed(vec![19; 32], Algorithm::BlsNormal);
+        assert!(require_genesis_owner(non_ed25519.public_key(), &non_ed25519).is_err());
+    }
 
     #[test]
     fn phase_requires_all_four_exact_predecessors() {

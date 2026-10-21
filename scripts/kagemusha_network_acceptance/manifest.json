@@ -1,0 +1,31 @@
+{
+  "runtime": {
+    "external": {
+      "scripts/audit_native_source_inputs.py": "409f980578f928f8e69f57e11ebbdd0b51a63a12f8e5c423cb76910bdeb79781",
+      "scripts/kagemusha_qualify.py": "4f77eeb4a1c11c8c28d8864e5ac90d6715360373e6a0af03d59732826e2a9f89",
+      "scripts/native_sdk_source_custody.py": "458b427ac15e0b7cad8e9e55df0e2ddafa17332378466c8e680ed39bd8434dce"
+    },
+    "local": {
+      "capture.py": "46aa327fc0c86ac09381984d07144122ec288f954fb75e0a24fc1a66ac9a1de4",
+      "capture_build.py": "b4a56d44cdfa7f945631bcc6d475d3425ef2cfc332f7674e7f02b1c0358eb2dd",
+      "catalog_policy.py": "8d40fe8d84c79db1ae0c438f2c13aaa3e441810ff3d435c73dc31f76b12c2946",
+      "child_process.py": "0be57631e8902085731ae4a657b0656e62b307ebaa19317c70b351dd511d9c7c",
+      "compiler_capture.py": "f93cf8659af3b542430638d34e813662f829512e9b591201712eaab8321958d8",
+      "custody.py": "d6eb69754505093b7a9fee6eec62fab53f097f6a2ccca9b2cbe72c9c4d325f8b",
+      "monetary_depfile.py": "083063c5e8a4267db65c724ae5a5a98c2c5c2ad1a5d8c73626bd76bf7117f95f",
+      "native_capture.py": "b3bfcdf31c3af43919de079bae44f4d22fa5916c4e756aec3c488bd666d31ae6",
+      "native_catalog.py": "160a192c5f3ddc5c0cd847efb57fc225b588520ac1ce7b1876164cadd642fc5d",
+      "native_data.py": "f5ab23cf6ca3882e641300aa358d7de5d3bd49364434ecedeb28a770c8c594b4",
+      "paths.py": "8f308411618be38cc9fe4b4839a9e7b96d15574df285ae0af4771c300d8a33c9",
+      "protocol.py": "8850037f8404b7036a23451884b2dc60ac48c776b5da3efeba4aa9ffd188927a",
+      "raw_reuse.py": "1ce2e912be5f8445395c89cef6a821d230c626c3b30d0e12d5de6d169eb4c949",
+      "raw_reuse_policy.py": "251fff1f8339e3b85ec371dff833437f1ea8f2c2640a6c8c34746099f7372cfe",
+      "run.py": "ee37453e3e93d21cd776cdeb9cedbb791468f7468826342d35c92fce01fc969b",
+      "sealed_data.py": "e01667d708b90ff7a8829f64b2ac2ed8054326247dccc9718b46c105ca36d989",
+      "source_admission.py": "81fff10838b397f4fcf9aba4e7f28129562912fa73ecd245fef6460a98172a87",
+      "source_audit.py": "438809d58e0a32fc94663e418e07dfacb42fc43fca4025287f59587e92607294"
+    }
+  },
+  "schema": "iroha.kagemusha.network-acceptance-runtime.v1",
+  "scope": "Engineering runtime sources only; current reviewed compiler captures and actual network/proof/issuer execution remain required."
+}

@@ -7,8 +7,8 @@ use eyre::{ensure, eyre};
 
 #[path = "kagemusha_network_setup/collections.rs"]
 mod collections;
-#[path = "kagemusha_network_setup/retained.rs"]
-mod retained;
+#[path = "kagemusha_network_setup/provisioning.rs"]
+mod provisioning;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetDefinition},
@@ -74,8 +74,9 @@ fn network_builder() -> NetworkBuilder {
     for seed in [41, 42, 43, 95] {
         network = network.with_genesis_instruction(Register::account(Account::new(account(seed))));
     }
-    // The standalone generated fixture isolates the creation at lifecycle ordinal zero.
-    // The monetary campaign instead retains its exact grouped engineering genesis.
+    // Both source setup and the monetary owner generate this current recipe. The
+    // creation is isolated at lifecycle ordinal zero; its actual signed genesis
+    // and registered incarnation are exported before any catalog is constructed.
     network
         .next_genesis_transaction()
         .with_genesis_instruction(Register::asset_definition(definition()))
@@ -390,8 +391,12 @@ fn export(network: &Network, root: &Path) -> Result<()> {
 
 fn fund_fee_successor(network: &Network) -> Result<()> {
     // The automatic fee definition is registered at the end of genesis. Use
-    // one ordinary ALICE-signed H2 transaction to fund the already registered
-    // role accounts, preserving the selected genesis and fee policy.
+    // one ordinary ALICE-signed successor to fund the already registered role
+    // accounts, preserving the selected genesis and fee policy. The standalone
+    // setup calls this at H1; the monetary owner first completes native DKG.
+    let next_height = committed_height(network)?
+        .checked_add(1)
+        .ok_or_else(|| eyre!("fee-funding successor height overflow"))?;
     let fee_asset: AssetDefinitionId =
         iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
     let mut successor: Vec<InstructionBox> =
@@ -410,7 +415,7 @@ fn fund_fee_successor(network: &Network) -> Result<()> {
         successor,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    wait_for_committed(network, 2, network.sync_timeout(), &[])?;
+    wait_for_committed(network, next_height, network.sync_timeout(), &[])?;
     for peer in network.peers() {
         let client = peer.client();
         let native = client.client();

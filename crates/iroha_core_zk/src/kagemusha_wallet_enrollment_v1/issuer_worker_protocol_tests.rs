@@ -500,7 +500,7 @@ fn rust_packets_drive_actual_python_prepare_claim_and_recovery_protocol() {
     // prepared claim and serving loop. Fixed test clock samples and an external verifier
     // returning Unavailable keep this platform-independent protocol fixture deterministic;
     // neither Linux clock/launch qualification nor attestation admission is claimed.
-    const SCRIPT: &str = r#"
+    const SCRIPT: &str = r"
 import base64, hashlib, io, json, os, pathlib, sys, tempfile
 from unittest.mock import patch
 from iroha_app_attestation import wallet_enrollment_worker as w
@@ -557,7 +557,7 @@ for vector in json.load(sys.stdin):
             counters.close()
             os.close(fd)
 json.dump(results, sys.stdout, separators=(',', ':'))
-"#;
+";
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()

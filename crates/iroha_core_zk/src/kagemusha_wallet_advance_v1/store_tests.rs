@@ -1237,10 +1237,10 @@ fn wallet_advance_v1_store_batch_power_loss_subsets_leave_each_name_absent_or_ex
         assert_eq!(trace.last(), Some(&KagemushaWalletSimStepV1::SyncDir));
         let last = u64::try_from(trace.len()).expect("steps") - 1;
         // A crash before step `s` leaves the state of a crash after step `s - 1`.
-        let crashes = std::iter::once((0, KagemushaWalletSimFaultV1::CrashBefore))
+        let fault_schedule = std::iter::once((0, KagemushaWalletSimFaultV1::CrashBefore))
             .chain((0..=last).map(|step| (step, KagemushaWalletSimFaultV1::CrashAfter)));
         let mut models = 0_usize;
-        for (step, fault) in crashes {
+        for (step, fault) in fault_schedule {
             let crashed = base.fork();
             crashed.inject(crashed.steps() + step, fault);
             assert_ne!(

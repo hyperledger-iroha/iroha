@@ -475,17 +475,22 @@ same-candidate `TEST_NETWORK_BIN_IROHAD` and `TEST_NETWORK_BIN_IROHA`, set
 `IROHA_TEST_REQUIRE_NETWORK=1` and `IROHA_TEST_SKIP_BUILD=1`, and supply a new absolute
 `KAGEMUSHA_REAL_NETWORK_CAMPAIGN` under checkout-local `target/qualification`. Keep
 test-network and temporary directories under `target`; select the exact ignored test
-with `--exact --ignored --nocapture --test-threads=1`. By default the owner creates
-fresh canonical signed genesis with current chain parameters. To use the maintained
-engineering originals, set `KAGEMUSHA_RETAINED_NETWORK_INPUTS` to a pinned selection
-with schema `iroha.kagemusha.retained-four-validator-inputs.v1` and exact
-`signed_genesis:{path,sha256}` and `manifest:{path,sha256}` fields. The retained
-constructor verifies the original signatures, policy and all four validator owners
-without re-signing genesis. It completes native beacon provisioning at H2–H5 before
-exporting readiness; registration follows that authenticated predecessor height.
+with `--exact --ignored --nocapture --test-threads=1`. The owner creates fresh
+canonical signed genesis with current chain parameters and retains its runtime-only
+signer alongside the four validator owners. It completes native beacon provisioning
+at H2–H5, restarts all four validators, then funds the ordinary fee buckets before
+exporting that same live network's setup. Registration follows its authenticated
+predecessor height. Historical genesis selection and fixed fixture signing keys
+are removed from this owner.
 The asset incarnation uses its lifecycle ordinal, independently of its instruction
 position. Retired genesis layouts cannot be used as catalog inputs. This disposable
 engineering network does not deploy to production.
+
+The maintained [acceptance controller](../scripts/kagemusha_network_acceptance/README.md)
+coordinates explicit compiler captures, the current 22-route catalog and the
+six receipt-bound stages below. Its pure tests do not establish a real network
+result. Actual issuer provisioning, matching native artifacts and the complete
+monetary campaign remain required.
 
 After `ready.json`, publish `registration-command.json` with schema
 `iroha.kagemusha.real-network-command.v1`, phase `registration`, the exact

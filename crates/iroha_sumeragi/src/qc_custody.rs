@@ -634,7 +634,7 @@ impl<'source> PreparedQc<'source> {
         range: SequenceSpan,
         limits: DecodeLimits,
     ) -> Result<(), QcCustodyError> {
-        self.prepare_source(QcSource::Borrowed(source), range, limits)
+        self.prepare_source(&QcSource::Borrowed(source), range, limits)
     }
     /// Resume the sole field kernel using the same immutable source control and range.
     /// Cloning this shared handle retains existing custody and allocates no bytes.
@@ -647,11 +647,11 @@ impl<'source> PreparedQc<'source> {
         range: SequenceSpan,
         limits: DecodeLimits,
     ) -> Result<(), QcCustodyError> {
-        self.prepare_source(QcSource::Shared(source.clone()), range, limits)
+        self.prepare_source(&QcSource::Shared(source.clone()), range, limits)
     }
     fn prepare_source(
         &mut self,
-        source: QcSource<'_>,
+        source: &QcSource<'_>,
         range: SequenceSpan,
         limits: DecodeLimits,
     ) -> Result<(), QcCustodyError> {

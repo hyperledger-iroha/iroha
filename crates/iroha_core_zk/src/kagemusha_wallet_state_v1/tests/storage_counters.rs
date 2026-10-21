@@ -323,10 +323,10 @@ fn coordinator_run<F: KagemushaWalletFsV1>(
     body.successor_state.core.policy_epoch = template.request.policy_epoch;
     body.successor_state.rest.scheme_policy = template.request.scheme_policy;
     rebind(&mut send, body);
-    let sent = recorder.record(&mut w, "send_commit", |w| {
+    let completion = recorder.record(&mut w, "send_commit", |w| {
         w.commit(send.clone()).expect("Send")
     });
-    assert!(matches!(sent, Completion::Complete(_)));
+    assert!(matches!(completion, Completion::Complete(_)));
     recorder.fold(&mut w, "send");
 
     let mut load = frozen(

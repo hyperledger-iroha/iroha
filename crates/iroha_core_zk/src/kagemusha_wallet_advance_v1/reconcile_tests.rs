@@ -306,10 +306,10 @@ fn wallet_advance_v1_reconcile_released_record_loss_never_signs_again() {
             assert!(steps > 5);
             continue;
         }
-        let loss = KagemushaWalletProviderErrorV1::LostCustody(
+        let cause = KagemushaWalletProviderErrorV1::LostCustody(
             KagemushaWalletLostCustodyV1::CompletionLost,
         );
-        let lost = Err(loss);
+        let lost = Err(cause);
         assert_eq!(provider.status(&slot), lost, "{damage}");
         assert_eq!(
             provider.reconcile(&slot, &TestOwnerV1),
@@ -327,7 +327,7 @@ fn wallet_advance_v1_reconcile_released_record_loss_never_signs_again() {
                 &TestOwnerV1,
                 &advance_request(&enrollment, &bootstrap)
             ),
-            Err(loss),
+            Err(cause),
             "{damage}: a retry never re-signs"
         );
         assert_eq!(

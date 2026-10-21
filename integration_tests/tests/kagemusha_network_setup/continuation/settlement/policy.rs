@@ -23,30 +23,30 @@ fn outgoing_disabled() -> TransactionRejectionReason {
     ))
 }
 
-fn require_retained_owner(actual: &AccountId) -> Result<()> {
-    ensure!(
-        actual == &account(0xCE),
-        "retained engineering asset owner differs"
-    );
+fn require_asset_owner(actual: &AccountId, selected: &AccountId) -> Result<()> {
+    ensure!(actual == selected, "current genesis asset owner differs");
     Ok(())
 }
 
-// The retained engineering genesis creates this asset under its CE authority.
-// Query and bind that actual owner before ordinary fee preparation and signing.
+// The current generated genesis creates this asset under its retained signer.
+// Bind that same runtime-only owner to the authenticated genesis and queried
+// asset before ordinary fee preparation and signing; no fixed fixture seed.
 fn set_availability(
     network: &Network,
+    genesis_owner: &KeyPair,
     output: &Path,
     expected_revision: u64,
     outgoing: AssetTransferAvailability,
     name: &str,
     expected_balances: [u128; 4],
 ) -> Result<norito::json::Value> {
-    let owner = account(0xCE);
-    let client = running_peer(network)?.client_for(&owner, key(0xCE).private_key().clone());
+    let genesis = network.native_genesis_provisioning_bundle()?;
+    let owner = provisioning::require_genesis_owner(&genesis.public_key, genesis_owner)?;
+    let client = running_peer(network)?.client_for(&owner, genesis_owner.private_key().clone());
     let actual = client
         .client()
         .query_single(FindAssetDefinitionById::new(definition_id()))?;
-    require_retained_owner(actual.owned_by())?;
+    require_asset_owner(actual.owned_by(), &owner)?;
     let instruction = SetAssetTransferAvailability::new(
         account(95),
         definition_id(),
@@ -107,6 +107,7 @@ fn set_availability(
 
 pub(crate) fn before_payout(
     network: &Network,
+    genesis_owner: &KeyPair,
     output: &Path,
     instruction: &KagemushaWalletLedgerV1,
     submitter: u8,
@@ -119,6 +120,7 @@ pub(crate) fn before_payout(
     let transaction_hash = hex::encode(transaction.hash().as_ref());
     let disabled = set_availability(
         network,
+        genesis_owner,
         output,
         0,
         AssetTransferAvailability::Disabled,
@@ -140,6 +142,7 @@ pub(crate) fn before_payout(
     );
     let enabled = set_availability(
         network,
+        genesis_owner,
         output,
         1,
         AssetTransferAvailability::Enabled,
@@ -214,13 +217,15 @@ fn policy_failure_requires_exact_reserve_asset_revision_and_direction() {
 }
 
 #[test]
-fn policy_authority_requires_exact_retained_genesis_owner() {
-    require_retained_owner(&account(0xCE)).unwrap();
+fn policy_authority_requires_exact_current_genesis_owner() {
+    let selected = account(19);
+    require_asset_owner(&selected, &selected).unwrap();
     for foreign in [
         account(41),
         account(95),
+        account(0xCE),
         (*iroha_test_samples::ALICE_ID).clone(),
     ] {
-        assert!(require_retained_owner(&foreign).is_err());
+        assert!(require_asset_owner(&foreign, &selected).is_err());
     }
 }

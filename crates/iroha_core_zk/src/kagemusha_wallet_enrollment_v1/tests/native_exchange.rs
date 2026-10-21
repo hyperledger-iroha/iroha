@@ -1127,13 +1127,13 @@ fn finish_exchange(
     let before_mismatch = c.snapshot().unwrap();
     assert!(c.execute(receive(&payment_bc, &companion_ab, 225)).is_err());
     assert_eq!(c.snapshot().unwrap(), before_mismatch);
-    let receive_bc = receive(&payment_bc, &companion_bc, 223);
-    let received_bc = complete(c.execute(receive_bc.clone()).unwrap());
+    let credit_operation = receive(&payment_bc, &companion_bc, 223);
+    let received_bc = complete(c.execute(credit_operation.clone()).unwrap());
     let signed = device_c.platform.with(|state| state.sign_calls);
     drop(c);
     let mut c = sources.open(&device_c, &f_c, &frames_c);
     assert_eq!(
-        complete(c.execute(receive_bc.clone()).unwrap()),
+        complete(c.execute(credit_operation.clone()).unwrap()),
         received_bc
     );
     assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
@@ -1146,10 +1146,10 @@ fn finish_exchange(
     let mut c = sources.open(&device_c, &f_c, &frames_c);
     assert_eq!(c.snapshot().unwrap(), folded_c);
     assert_eq!(
-        complete(c.execute(receive_bc.clone()).unwrap()),
+        complete(c.execute(credit_operation.clone()).unwrap()),
         received_bc
     );
-    let mut duplicate_after_restart = receive_bc.clone();
+    let mut duplicate_after_restart = credit_operation.clone();
     duplicate_after_restart.request_id = [224; 32];
     assert!(matches!(
         c.execute(duplicate_after_restart),
@@ -1157,7 +1157,7 @@ fn finish_exchange(
     ));
     assert_eq!(c.snapshot().unwrap(), folded_c);
     assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
-    assert_eq!(complete(c.execute(receive_bc).unwrap()), received_bc);
+    assert_eq!(complete(c.execute(credit_operation).unwrap()), received_bc);
     assert_eq!(c.snapshot().unwrap(), folded_c);
     assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
     publish(

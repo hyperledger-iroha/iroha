@@ -40,7 +40,7 @@ fn fixture(
     let temp = tempfile::tempdir().unwrap();
     let root =
         PrivateDirectory::open_or_create(temp.path().canonicalize().unwrap().join("data")).unwrap();
-    let mut rows = Vec::new();
+    let mut entries = Vec::new();
     for raw in raws {
         let stored = zstd::stream::encode_all(*raw, 1).unwrap();
         let row = EncodedOriginalV1 {
@@ -52,12 +52,12 @@ fn fixture(
             .unwrap();
         file.write_all(&stored).unwrap();
         file.seal_read_only().unwrap();
-        rows.push(row);
+        entries.push(row);
     }
-    rows.sort_by_key(|row| row.original.sha256);
+    entries.sort_by_key(|row| row.original.sha256);
     let source = EncodedDirectoryOriginalsV1::open_existing(
         root.path(),
-        &EncodedTransportV1::new(rows).unwrap(),
+        &EncodedTransportV1::new(entries).unwrap(),
     )
     .unwrap();
     (temp, root, source)
