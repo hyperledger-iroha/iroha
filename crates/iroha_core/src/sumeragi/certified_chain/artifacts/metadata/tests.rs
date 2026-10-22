@@ -280,6 +280,17 @@ fn metadata_preflight_retains_original_limits_after_retirement_for_both_destinat
                     );
                 });
                 assert_eq!(original.into_local_refusal().unwrap(), refusal);
+                let retained_counter_bytes = if is_funded {
+                    ncore::PreparedDecodeWorkspace::allocation_layouts()[0].size()
+                } else {
+                    0
+                };
+                assert_eq!(
+                    pool.reserved_bytes(),
+                    retained_counter_bytes,
+                    "the original refusal keeps its funded counter alive after workspace retirement"
+                );
+                drop(refusal);
                 assert_eq!(pool.reserved_bytes(), 0);
                 read().expect("unchanged original metadata retries after scope retirement");
                 assert_eq!(pool.reserved_bytes(), 0);
@@ -351,6 +362,17 @@ fn qc_preflight_rejects_one_byte_allocation_ceiling_at_all_three_destinations() 
                 limit: 1
             }
         );
+        let retained_counter_bytes = if destination == 1 {
+            ncore::PreparedDecodeWorkspace::allocation_layouts()[0].size()
+        } else {
+            0
+        };
+        assert_eq!(
+            pool.reserved_bytes(),
+            retained_counter_bytes,
+            "only the original funded refusal counter survives the failed graph"
+        );
+        drop(original);
         assert_eq!(pool.reserved_bytes(), 0);
     }
 }

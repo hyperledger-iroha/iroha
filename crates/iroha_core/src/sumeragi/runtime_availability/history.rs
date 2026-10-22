@@ -937,6 +937,16 @@ mod artifact_tests {
             ));
             assert_eq!(artifacts.source().encode_wire().unwrap(), wire);
             drop(artifacts);
+            let retained_counter_bytes =
+                norito::core::PreparedDecodeWorkspace::allocation_layouts()[0].size();
+            assert_eq!(
+                budget.reserved_bytes(),
+                retained_counter_bytes,
+                "both refusal readers retain the same original funded decode counter"
+            );
+            drop(local);
+            assert_eq!(budget.reserved_bytes(), retained_counter_bytes);
+            drop(retained);
             assert_eq!(budget.reserved_bytes(), 0);
         }
     }

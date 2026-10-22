@@ -218,6 +218,16 @@ mod tests {
             return;
         }
         let (chain, job) = source();
+        let (kura, source_hash, key) = persist_verified_artifact_after_refusal(job);
+        recover_verified_artifact_from_fresh_cursor(&chain, &kura, source_hash, key);
+    }
+
+    // Keep proof/persistence and fresh-read temporaries out of native genesis
+    // construction's stack frame. All phases still use the ordinary harness stack.
+    #[inline(never)]
+    fn persist_verified_artifact_after_refusal(
+        job: FastpqWitnessJob,
+    ) -> (Arc<Kura>, HashOf<BlockHeader>, Hash) {
         let source_hash = job.block_hash();
         let key = position(&job).unwrap();
         let original = std::ptr::from_ref(job.source.entry(0).unwrap().effects());
@@ -255,7 +265,16 @@ mod tests {
             proof_hash
         );
         drop(job);
+        (kura, source_hash, key)
+    }
 
+    #[inline(never)]
+    fn recover_verified_artifact_from_fresh_cursor(
+        chain: &crate::sumeragi::test_chain::CertifiedTestChain,
+        kura: &Kura,
+        source_hash: HashOf<BlockHeader>,
+        key: Hash,
+    ) {
         // Restart source identity comes from an independent authenticated native read,
         // not the old in-memory cursor, file presence, or the offered proof identity.
         let pool = AllocationBudget::new(2 * 1024 * 1024 * 1024);
@@ -284,7 +303,7 @@ mod tests {
         assert!(
             recovered
                 .recover_next(
-                    &kura,
+                    kura,
                     ProvingLimits::default(),
                     &ExecutionEffectVerificationLimits::default()
                 )
@@ -294,7 +313,7 @@ mod tests {
         assert!(
             !recovered
                 .recover_next(
-                    &kura,
+                    kura,
                     ProvingLimits::default(),
                     &ExecutionEffectVerificationLimits::default()
                 )

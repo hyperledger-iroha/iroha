@@ -846,40 +846,42 @@ fn admitted_prefix_rebuilds_funded_configuration_for_same_epoch_parameter_change
     with_same_epoch_parameter_change(assert_same_epoch_parameter_change);
 }
 
-// Genesis admits 16 KiB of transactions per block. A permitted lag-two update raises the
+// Genesis admits 32 KiB of transactions per block. A permitted lag-two update raises the
 // block cap that the signed-availability verifier consumes, and the activation height
 // carries a genuine payload above the original cap: a stale native configuration rejects it.
 const ORIGINAL_MAX_BLOCK_BYTES: u32 =
-    iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + 16 * 1024;
+    iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + 32 * 1024;
 const RAISED_MAX_BLOCK_BYTES: u32 =
     iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + 128 * 1024;
 
 #[inline(never)]
 fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
     use iroha_data_model::{
-        isi::{Grant, SetParameter},
-        parameter::{Parameter, SumeragiParameter, TransactionParameter},
-        privacy::{PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1},
+        isi::{Grant, SetParameter, privacy::SchedulePrivacyConsensusPolicyTighteningV1},
+        parameter::{
+            Parameter, SumeragiParameter, TransactionParameter,
+            system::resource_coherence::maximal_action_transaction_bytes,
+        },
+        privacy::PrivacyConsensusLimitsV1,
     };
     use std::num::{NonZeroU32, NonZeroU64};
 
-    const INCLUDABLE: u32 = 16 * 1024;
-    let mut world = World::new();
-    // Every contained privacy byte bound must fit the small genesis transaction cap.
+    const INCLUDABLE: u32 = 32 * 1024;
+    let signatures = NonZeroU64::MIN;
+    let context = maximal_action_transaction_bytes(0, signatures).unwrap();
+    let action = u32::try_from(u64::from(INCLUDABLE) - context).unwrap();
+    // The signed genesis must admit one maximal privacy action together with its
+    // required signer and framing context, not just the action's payload bytes.
     let mut limits = PrivacyConsensusLimitsV1::taira_default();
-    limits.max_proof_bytes_per_action = INCLUDABLE;
-    limits.max_action_bytes = INCLUDABLE;
+    limits.max_proof_bytes_per_action = action;
+    limits.max_action_bytes = action;
     limits.max_privacy_bytes_per_transaction = INCLUDABLE;
     limits.max_privacy_bytes_per_block = INCLUDABLE;
-    limits.max_statement_and_encrypted_output_bytes_per_transaction = INCLUDABLE;
+    limits.max_statement_and_encrypted_output_bytes_per_transaction = action;
     limits
         .validate()
         .expect("coherent small fixture privacy limits");
-    world.privacy_consensus_policy = mv::cell::Cell::new(PrivacyConsensusPolicyV1 {
-        current_limits: limits,
-        pending_tightening: None,
-    });
-    let mut config = TestChainConfig::new(world, 1_000);
+    let mut config = TestChainConfig::new(World::new(), 1_000);
     config
         .genesis_parameters
         .push(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
@@ -890,6 +892,14 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
         .push(Parameter::Transaction(TransactionParameter::MaxTxBytes(
             NonZeroU64::new(u64::from(INCLUDABLE)).unwrap(),
         )));
+    config
+        .genesis_parameters
+        .push(Parameter::Transaction(TransactionParameter::MaxSignatures(
+            signatures,
+        )));
+    config
+        .genesis_instructions
+        .push(SchedulePrivacyConsensusPolicyTighteningV1::new(2, limits).into());
     let author = config.genesis_key.clone();
     config.genesis_instructions.push(
         Grant::account_permission(
@@ -911,14 +921,14 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
     );
     assert_eq!(chain.commit_at(2_000, vec![update]), [true]);
     chain.commit_at(3_000, Vec::new());
-    // Six near-cap transactions fit only the raised cap that activates at height 4.
+    // Six transactions fit only the raised block cap that activates at height 4.
     let large = (0..6_u64)
         .map(|index| {
             chain.sign(
                 &author,
                 [InstructionBox::from(Log::new(
                     Level::DEBUG,
-                    "x".repeat(15_000),
+                    "x".repeat(20_000),
                 ))],
                 3_500 + index,
             )
