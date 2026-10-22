@@ -2902,6 +2902,7 @@ fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
 // A fresh committed Send (production commit and indexing; explicit mock step proofs) with no
 // Archive intent. The receiver's fixture receipt is rebound to this Send's own Payment and
 // signed again with the receiver's fixture payment key, so binding and signatures are real.
+<<<<<<< HEAD
 pub(super) fn fresh_delivery_receipt() -> (
     Wallet,
     FrozenTransition,
@@ -2911,6 +2912,36 @@ pub(super) fn fresh_delivery_receipt() -> (
     Vec<u8>,
 ) {
     let (wallet, send, request) = historical_send();
+=======
+#[test]
+fn verified_delivery_checks_a_fresh_send_receipt_without_any_archive_intent() {
+    check_fresh_send_receipt(false);
+}
+
+#[test]
+fn verified_delivery_checks_open_request_receipt_without_any_archive_intent() {
+    check_fresh_send_receipt(true);
+}
+
+fn check_fresh_send_receipt(open: bool) {
+    let (mut wallet, send, mut request) = historical_send();
+    if open {
+        let OperationActionV1::Send { request: original } = &mut request.action else {
+            panic!("Send request")
+        };
+        let mut issued: KagemushaWalletRequestV1 = archive::decode(original).unwrap();
+        issued.body = issued.body.open();
+        *original = archive::encode(&issued).unwrap();
+        wallet
+            .retain_delivery_test_mapping(
+                NativeIntentV1::user(request.clone()),
+                send.capsule.custody_digest(),
+                send.capsule.receipt_commitment(),
+                send.capsule.body().operation_id,
+            )
+            .unwrap();
+    }
+>>>>>>> origin/optimizations
     let OperationActionV1::Send { request: original } = &request.action else {
         panic!("Send request")
     };

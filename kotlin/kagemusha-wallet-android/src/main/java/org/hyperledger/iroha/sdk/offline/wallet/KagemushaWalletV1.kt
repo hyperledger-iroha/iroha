@@ -380,6 +380,93 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
     /** Extract an expected original kind under this native wallet's scheme, without accepting value. */
     fun original(kind: KagemushaWalletTransportKindV1, envelope: ByteArray): ByteArray =
         setup(KagemushaWalletSetupInputV1(10 + kind.tag, first = envelope)).original()
+<<<<<<< HEAD
+=======
+    /** Load the exact ordinary-ledger receipt and native BLS finality evidence. */
+    fun load(requestId: ByteArray, receipt: ByteArray, finality: ByteArray): KagemushaWalletCallV1 =
+        execute(KagemushaWalletOperationInputV1(requestId, 0, first = receipt, second = finality))
+    /** Authenticate Send and its fully folded source before fresh hardware UI confirmation. */
+    fun reviewSend(request: ByteArray, destinationAccountOriginal: ByteArray): KagemushaWalletReviewV1 {
+        require(request.isNotEmpty() && request.size <= 10_000)
+        require(destinationAccountOriginal.isNotEmpty() && destinationAccountOriginal.size <= 4_096)
+        return review(1, KagemushaWalletUInt128V1(0, 0), request, destinationAccountOriginal, KagemushaWalletReviewProjectionV1.Kind.SEND)
+    }
+    /** Receive selects the durably issued Request locally by the Payment's digest. */
+    fun receive(requestId: ByteArray, payment: ByteArray, payerCredential: ByteArray, certificates: ByteArray): KagemushaWalletCallV1 =
+        execute(KagemushaWalletOperationInputV1(requestId, 2, first = payment, second = payerCredential, third = certificates))
+    /** Receive the exact Payment and payer companion of one carrier (`IrohaPeerWalletPaymentV1`). Native
+     * checks the companion against the Payment, completes the durably issued open Request from it and
+     * performs ordinary Receive authentication; the companion is never payment authority.
+     */
+    fun receiveWithCompanion(requestId: ByteArray, payment: ByteArray, companion: ByteArray): KagemushaWalletCallV1 =
+        execute(KagemushaWalletOperationInputV1(requestId, 10, first = payment, second = companion))
+
+    /** Refresh from exact signed originals; Native derives maps and all effective values. */
+    fun refresh(requestId: ByteArray, kind: KagemushaWalletRefreshKindV1, update: ByteArray, certificates: ByteArray): KagemushaWalletCallV1 =
+        execute(KagemushaWalletOperationInputV1(requestId, kind.selector, first = update, second = certificates))
+    /** Install a signed blacklist locally; a replacement's list version must increase and
+     * reinstalling the held list is idempotent. The wallet then refuses to pay a listed receiver
+     * and to request or accept money from a listed payer ([KagemushaWalletExceptionV1.BLOCKED]).
+     * Nothing is sent to peers or proved; this is no wallet operation and has no retry identity.
+     * COMPLETE carries the held list's 32-byte object digest.
+     */
+    fun installBlacklist(list: ByteArray, certificates: ByteArray): KagemushaWalletCallV1 =
+        execute(KagemushaWalletOperationInputV1(ByteArray(32), 5, first = list, second = certificates))
+    /** Authenticate the exact payout, signed charge and canonical beneficiary before confirmation. */
+    fun reviewUnload(amount: KagemushaWalletUInt128V1, quote: ByteArray? = null, certificates: ByteArray? = null,
+        chargeBeneficiary: ByteArray? = null): KagemushaWalletReviewV1 {
+        require((quote == null) == (certificates == null) && (quote == null) == (chargeBeneficiary == null)) {
+            "quote, certificates and beneficiary must be supplied together"
+        }
+        if (quote != null) require(quote.isNotEmpty())
+        require(amount.low != 0L || amount.high != 0L)
+        require((quote?.size ?: 0) <= 1_024)
+        val companion = if (quote == null) byteArrayOf()
+            else KagemushaWalletUnloadChargeReviewV1.encode(checkNotNull(certificates), checkNotNull(chargeBeneficiary))
+        return review(8, amount, quote ?: byteArrayOf(), companion, KagemushaWalletReviewProjectionV1.Kind.UNLOAD)
+    }
+    private fun review(selector: Int, amount: KagemushaWalletUInt128V1, first: ByteArray, second: ByteArray, expected: KagemushaWalletReviewProjectionV1.Kind): KagemushaWalletReviewV1 {
+        val wallet = handle()
+        var reply: KagemushaWalletReviewReplyV1? = null
+        try {
+            reply = KagemushaWalletNativeCallsV1.review(wallet, selector, amount.low, amount.high, first.copyOf(), second.copyOf())
+            return (reply ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)).review(this, expected)
+        } catch (failure: KagemushaWalletExceptionV1) {
+            if (failure.status == KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT) {
+                val token = reply?.cleanupToken()
+                try {
+                    if (token == null) close()
+                    else checked(KagemushaWalletNativeCallsV1.discardReview(wallet, token))
+                } catch (cleanup: Throwable) {
+                    if(failure !== cleanup)failure.addSuppressed(cleanup)
+                    try { close() } catch (retirement: Throwable) { if(failure !== retirement)failure.addSuppressed(retirement) }
+                }
+            }
+            throw failure
+        }
+    }
+    /** Consume the exact reviewed Native operation after fresh hardware confirmation. Native rechecks its whole source. */
+    fun executeReviewed(review: KagemushaWalletReviewV1, requestId: ByteArray): KagemushaWalletCallV1 {
+        word(requestId); require(requestId.any { it != 0.toByte() })
+        val value = handle()
+        val token = review.consume(this)
+        return KagemushaWalletReviewedExecutionV1.run(execute = {
+            val reply = KagemushaWalletNativeCallsV1.executeReviewed(value, token, requestId.copyOf())
+                ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+            if (reply.status < 0) throw KagemushaWalletExceptionV1(reply.status, reply.reason, reply.platformCode)
+            reply.completion()
+        }, discard = { KagemushaWalletNativeCallsV1.discardReview(value, token) }, close = ::close)
+    }
+    /** Discard an unused review on a worker without creating intent, payment or monetary authority. */
+    fun discardReview(review: KagemushaWalletReviewV1) {
+        val value = handle(); val token = review.consume(this)
+        checked(KagemushaWalletNativeCallsV1.discardReview(value, token))
+    }
+    /** Same actual one-use discard operation, retained for the current managed integration. */
+    fun cancelReview(review:KagemushaWalletReviewV1)=discardReview(review)
+    /** Enter Retiring under native folded-state checks. */
+    fun retire(requestId: ByteArray): KagemushaWalletCallV1 = execute(KagemushaWalletOperationInputV1(requestId, 9))
+>>>>>>> origin/optimizations
     /** Resolve the local request identity, including distinct Preparing and irreversible Pending. */
     fun requestStatus(requestId: ByteArray): KagemushaWalletCallV1 {
         word(requestId); require(requestId.any { it != 0.toByte() }); return call(5, requestId)

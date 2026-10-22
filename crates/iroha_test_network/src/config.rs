@@ -519,6 +519,11 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     strip_handshake_metadata_transactions(&mut extra_transactions);
     strip_handshake_metadata_transactions(&mut post_topology_transactions);
     let bind_generated_policy = consensus_handshake_meta.is_none();
+    // Genesis-domain transactions do not encode the display chain label. Retain
+    // the authoring context separately, including when no runtime config exists.
+    let display_chain = runtime_config
+        .as_ref()
+        .map_or_else(|| chain_id.clone(), |config| config.common.chain.clone());
     let (block, genesis_account, topology_vec, genesis_key_pair, raw_genesis) =
         build_minimal_genesis_unexecuted_with_post_topology(
             extra_transactions,
@@ -542,16 +547,17 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
         &genesis_key_pair,
         bind_generated_policy,
         |proposal| {
-            preexecute_genesis_with_runtime_config(
+            let (validated, hashes) = validate_genesis_with_display_chain(
                 proposal,
                 &genesis_account,
                 &topology_vec,
-                &genesis_key_pair,
                 pipeline_config.as_ref(),
                 nexus_config.as_ref(),
                 zk_config.as_ref(),
                 runtime_config.as_ref(),
-            )
+                &display_chain,
+            )?;
+            Ok((resign_genesis(&validated, &genesis_key_pair), hashes))
         },
     )
     .expect("minimal genesis must pre-execute without synthetic results")
@@ -1217,6 +1223,38 @@ pub(crate) fn validate_genesis_with_runtime_config(
     ),
     Report,
 > {
+    // A retained signed Genesis proposal has no display label. Without an
+    // explicit runtime context this validation API uses the standard test label;
+    // generated manifests retain their authored label through the helper below.
+    let display_chain = runtime_config.map_or_else(chain_id, |config| config.common.chain.clone());
+    validate_genesis_with_display_chain(
+        block,
+        genesis_account,
+        topology,
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        runtime_config,
+        &display_chain,
+    )
+}
+
+fn validate_genesis_with_display_chain(
+    block: &GenesisBlock,
+    genesis_account: &AccountId,
+    topology: &[PeerId],
+    pipeline_config: Option<&ActualPipeline>,
+    nexus_config: Option<&ActualNexus>,
+    zk_config: Option<&ActualZk>,
+    runtime_config: Option<&ActualRoot>,
+    display_chain: &ChainId,
+) -> Result<
+    (
+        iroha_data_model::block::SignedBlock,
+        StagedGenesisPolicyHashes,
+    ),
+    Report,
+> {
     if topology.is_empty() {
         return Err(eyre!("genesis topology is empty"));
     }
@@ -1238,6 +1276,7 @@ pub(crate) fn validate_genesis_with_runtime_config(
         nexus_config,
         zk_config,
         runtime_config,
+        display_chain,
     )
 }
 
@@ -1249,6 +1288,7 @@ fn validate_genesis_on_current_thread(
     nexus_config: Option<&ActualNexus>,
     zk_config: Option<&ActualZk>,
     runtime_config: Option<&ActualRoot>,
+    display_chain: &ChainId,
 ) -> Result<
     (
         iroha_data_model::block::SignedBlock,
@@ -1271,7 +1311,17 @@ fn validate_genesis_on_current_thread(
         Account::new(effective_genesis_account.clone()).build(&effective_genesis_account);
     let mut world = World::with([genesis_domain], [genesis_account_entry], []);
     iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, &nexus.dataspace_catalog)?;
-    let mut state = State::new_with_pre_genesis_nexus_for_testing(world, nexus, query_handle);
+    // This isolated execution owns this exact signed proposal. A generated-policy
+    // rebind starts another fresh State for the newly signed proposal; neither its
+    // network identity nor its provisional effects cross that boundary.
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(block.0.hash());
+    let mut state = State::new_with_pre_genesis_nexus_and_identities_for_testing(
+        world,
+        nexus,
+        query_handle,
+        display_chain.clone(),
+        network_id,
+    );
     if let Some(pipeline_config) = runtime_config
         .map(|config| &config.pipeline)
         .or(pipeline_config)
@@ -2268,6 +2318,21 @@ mod tests {
             stale_signature,
             "mutating header should stale existing signature"
         );
+        let authentication_error =
+            iroha_data_model::sumeragi_finality::authenticated_genesis(&block.0)
+                .expect_err("the changed proposal's original signature must not authenticate");
+        assert!(matches!(
+            &authentication_error,
+            iroha_data_model::sumeragi_finality::GenesisReadError::Invalid(_)
+        ));
+        let original_wire = block
+            .0
+            .canonical_wire()
+            .expect("the stale signed proposal remains encodable")
+            .as_framed()
+            .to_vec();
+        let attempts_before = super::genesis_preexecution_count();
+        let signings_before = super::genesis_signing_count();
         let error = super::populate_genesis_results(
             &block,
             &genesis_account,
@@ -2277,9 +2342,34 @@ mod tests {
             None,
         )
         .expect_err("strict preexecution must reject the stale proposal signature");
+        // SNS bootstrap authenticates the original before State construction. Match
+        // that typed rejection and its original cause, not a later verifier's prose.
         assert!(
-            format!("{error:#}").contains("must be signed with genesis private key"),
-            "the strict verifier must reject the stale signature before execution: {error:#}"
+            matches!(
+                error.downcast_ref::<iroha_core::sns::SnsError>(),
+                Some(iroha_core::sns::SnsError::BadRequest(message))
+                    if message == &format!("invalid SNS bootstrap genesis: {authentication_error}")
+            ),
+            "strict bootstrap must retain the original authentication rejection: {error:#}"
+        );
+        assert_eq!(
+            super::genesis_preexecution_count(),
+            attempts_before + 1,
+            "the strict validation attempt must not retry or rebind the proposal"
+        );
+        assert_eq!(
+            super::genesis_signing_count(),
+            signings_before,
+            "rejecting an unauthenticated proposal must not sign replacement bytes"
+        );
+        assert_eq!(
+            block.0.canonical_wire().unwrap().as_framed(),
+            original_wire.as_slice(),
+            "rejection must preserve the exact original proposal and stale signature"
+        );
+        assert!(
+            !block.0.has_results(),
+            "rejection must not synthesize execution results"
         );
         // A new DA alias changes the actual staged policy. A refreshed signature
         // alone must still reject the old policy commitment. Only this fixture's
