@@ -22,7 +22,22 @@ fn invalid(message: impl std::fmt::Display) -> QueryExecutionFail {
 /// [`permanent_refusal`]) is the typed permanent [`crate::Error::HistoryReadExceedsBudget`],
 /// which names the required quantity and the request's own limit and carries no retry hint.
 /// Every other deferral is transient capacity: a retryable `CapacityLimit` (HTTP 429).
+///
+/// Committed-history reads charge their cold frames and decoded graphs to the current query
+/// owner, so a capacity refusal may be that owner's own limit: it marks the owner, and a
+/// routed read is served again with a larger one.
 pub fn query_attempt_error(error: ExecutionAttemptError<QueryExecutionFail>) -> crate::Error {
+    if matches!(
+        error,
+        ExecutionAttemptError::Deferred(_)
+            | ExecutionAttemptError::Rejected(
+                QueryExecutionFail::CapacityLimit | QueryExecutionFail::GasBudgetExceeded
+            )
+    ) && let Ok(Some(owner)) =
+        crate::history_producer::HistoryProducerOwner::current_if_admitted()
+    {
+        owner.note_owner_limit_refused();
+    }
     let query_error = match error {
         ExecutionAttemptError::Deferred(deferred) => {
             if let Some((resource, required, limit)) = permanent_refusal(&deferred) {

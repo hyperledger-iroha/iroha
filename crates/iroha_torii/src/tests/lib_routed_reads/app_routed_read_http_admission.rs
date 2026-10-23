@@ -1282,6 +1282,38 @@ mod app_routed_read_http_admission_tests {
     }
 
     #[tokio::test]
+    async fn history_capacity_refusal_marks_the_routed_owner_for_a_larger_retry() {
+        use iroha_core::execution_attempt::ExecutionAttemptError;
+        use iroha_data_model::query::error::QueryExecutionFail;
+        let app = mk_app_state_for_tests();
+        let smallest = routed_read_owner_working_sets(&app).next().unwrap();
+        for (error, marks) in [
+            (
+                ExecutionAttemptError::Rejected(QueryExecutionFail::GasBudgetExceeded),
+                true,
+            ),
+            (
+                ExecutionAttemptError::Rejected(QueryExecutionFail::CapacityLimit),
+                true,
+            ),
+            (
+                ExecutionAttemptError::Rejected(QueryExecutionFail::NotFound),
+                false,
+            ),
+        ] {
+            let owner = acquire_app_routed_read_http_memory(&app, smallest)
+                .await
+                .unwrap();
+            COLLECTION_READ_MEMORY_RESERVATION
+                .scope(owner.clone(), async {
+                    drop(crate::canonical_history::query_attempt_error(error));
+                })
+                .await;
+            assert_eq!(owner.owner_limit_refused(), marks);
+        }
+    }
+
+    #[tokio::test]
     async fn proof_read_credit_waits_for_the_pool_within_its_deadline() {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
