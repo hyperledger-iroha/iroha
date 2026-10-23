@@ -15265,6 +15265,15 @@ fn torii_visibility_account_from_headers(
             }
         };
 
+    // A larger-owner retry reruns this handler with the original HTTP request.
+    // Its first successful authentication already published the nonce, just as
+    // in the canonical body-auth middlewares. Reuse only that request's proof;
+    // every separate HTTP request receives its own admission scope.
+    if let Some(verified) = routed_read_canonical_auth() {
+        return Ok(verified.map_or(ToriiAccountReadVisibility::None, |request| {
+            ToriiAccountReadVisibility::Signed(request.account)
+        }));
+    }
     if torii_signed_visibility_headers_present(headers) {
         let verified = crate::app_auth::verify_canonical_network_request(
             &app.state,
@@ -15275,6 +15284,7 @@ fn torii_visibility_account_from_headers(
             authentication_owner.allocation_context(),
         )
         .map_err(crate::app_auth::canonical_authentication_error)?;
+        remember_routed_read_canonical_auth(verified.as_ref());
         return Ok(
             verified.map_or(ToriiAccountReadVisibility::None, |request| {
                 ToriiAccountReadVisibility::Signed(request.account)
@@ -15288,6 +15298,7 @@ fn torii_visibility_account_from_headers(
                 .to_owned(),
         });
     }
+    remember_routed_read_canonical_auth(None);
     Ok(ToriiAccountReadVisibility::None)
 }
 
@@ -30290,14 +30301,25 @@ fn require_signed_account_request(
             }
         };
 
-    match crate::app_auth::verify_canonical_network_request(
-        &app.state,
-        app.state.network_id_ref(),
-        headers,
-        crate::app_auth::CanonicalRequestParts { method, uri, body },
-        None,
-        authentication_owner.allocation_context(),
-    )? {
+    // Required header-auth reads participate in the same owner retries as
+    // optional visibility reads. A cached unsigned request remains unsigned;
+    // the required-auth check below still refuses it.
+    let verified = match routed_read_canonical_auth() {
+        Some(verified) => verified,
+        None => {
+            let verified = crate::app_auth::verify_canonical_network_request(
+                &app.state,
+                app.state.network_id_ref(),
+                headers,
+                crate::app_auth::CanonicalRequestParts { method, uri, body },
+                None,
+                authentication_owner.allocation_context(),
+            )?;
+            remember_routed_read_canonical_auth(verified.as_ref());
+            verified
+        }
+    };
+    match verified {
         Some(verified) => Ok(verified.account),
         None => Err(Error::AppUnauthorized {
             code: error_code,

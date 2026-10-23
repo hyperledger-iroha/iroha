@@ -1457,6 +1457,281 @@ mod app_routed_read_http_admission_tests {
     }
 
     #[tokio::test]
+    async fn signed_accounts_get_owner_retry_preserves_auth_and_rejects_external_replay() {
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+        let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(
+            crate::tests_runtime_handlers::world_with_account(&ALICE_ID),
+        );
+        let routes = torii_visible_account_read_routes(app.as_ref(), Some(&ALICE_ID));
+        let route = collection_execution_route(app.as_ref(), &routes)
+            .expect("signed accounts fixture has an execution route");
+        assert!(should_execute_route_locally(app.as_ref(), route));
+        let ceiling = app.query_fanout_working_set_bytes;
+        let descriptor = route_catalog::application_api::ACCOUNTS_GET;
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let route_app = Arc::clone(&app);
+        let route_owners = Arc::clone(&owners);
+        let route = any(move |method: Method, uri: Uri, headers: HeaderMap| {
+            let app = Arc::clone(&route_app);
+            let owners = Arc::clone(&route_owners);
+            async move {
+                let working_set = current_routed_read_memory_envelope(&app)
+                    .expect("accounts handler has an admitted owner")
+                    .working_set_bytes;
+                owners.lock().unwrap().push(working_set);
+                let response = match handler_accounts_list(
+                    State(app),
+                    method,
+                    uri,
+                    headers,
+                    crate::loopback_connect_info(),
+                )
+                .await
+                {
+                    Ok(response) => response.into_response(),
+                    Err(error) => return error.into_response(),
+                };
+                // Exercise the real authenticated GET handler before making its owner
+                // insufficient. This deterministic capacity boundary reproduces a page
+                // whose retained rows fit only a larger owner, without a huge fixture.
+                if response.status().is_success() && working_set < ceiling {
+                    drop(response);
+                    torii_proxy_error_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "query_capacity_exceeded",
+                        "accounts page exceeds this test owner",
+                    )
+                } else {
+                    response
+                }
+            }
+        });
+        let router = admission_router_with(Arc::clone(&app), descriptor, route).layer(from_fn(
+            |request, next: Next| async move {
+                utils::with_current_response_format(ResponseFormat::Json, next.run(request)).await
+            },
+        ));
+        let uri: Uri = "/v1/accounts?limit=500".parse().expect("accounts URI");
+        let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+            app.state.network_id_ref(),
+            &ALICE_ID,
+            &ALICE_KEYPAIR,
+            &Method::GET,
+            &uri,
+            &[],
+        );
+        let request = |headers: HeaderMap| {
+            let mut request = Request::builder()
+                .method(Method::GET)
+                .uri(uri.clone())
+                .body(Body::empty())
+                .expect("signed accounts request");
+            *request.headers_mut() = headers;
+            request
+        };
+        let response = router
+            .clone()
+            .oneshot(request(headers.clone()))
+            .await
+            .expect("accounts response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("accounts response body");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "an internal owner retry must not consume its own canonical nonce twice; owners={:?}; body={}",
+            *owners.lock().unwrap(),
+            String::from_utf8_lossy(&body),
+        );
+        drop(body);
+        let first_owners = owners.lock().unwrap().clone();
+        assert!(
+            first_owners.len() >= 2,
+            "the signed GET must actually retry"
+        );
+        assert!(first_owners.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(first_owners.last(), Some(&ceiling));
+        assert!(
+            routed_read_canonical_auth().is_none(),
+            "authentication stays request-local"
+        );
+
+        let replay = router
+            .clone()
+            .oneshot(request(headers))
+            .await
+            .expect("replay response");
+        assert_eq!(
+            replay.status(),
+            StatusCode::UNAUTHORIZED,
+            "another HTTP request with the consumed nonce must remain forbidden"
+        );
+        let body = axum::body::to_bytes(replay.into_body(), usize::MAX)
+            .await
+            .expect("replay error body");
+        let body = String::from_utf8(body.to_vec()).expect("JSON error text");
+        assert!(body.contains("canonical_authentication_invalid"), "{body}");
+        assert!(body.contains("request nonce already used"), "{body}");
+        assert_eq!(
+            owners.lock().unwrap().len(),
+            first_owners.len() + 1,
+            "an external replay must fail before owner escalation"
+        );
+
+        let fresh_headers = crate::tests_runtime_handlers::signed_network_app_headers(
+            app.state.network_id_ref(),
+            &ALICE_ID,
+            &ALICE_KEYPAIR,
+            &Method::GET,
+            &uri,
+            &[],
+        );
+        let fresh = router
+            .oneshot(request(fresh_headers))
+            .await
+            .expect("fresh request response");
+        assert_eq!(
+            fresh.status(),
+            StatusCode::OK,
+            "a fresh nonce still authenticates"
+        );
+    }
+
+    #[tokio::test]
+    async fn required_header_auth_owner_retry_preserves_auth_and_rejects_unsigned_and_replay() {
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            crate::tests_runtime_handlers::world_with_account(&ALICE_ID),
+        );
+        let ceiling = app.query_fanout_working_set_bytes;
+        let descriptor = route_catalog::aliases::RESOLVE_INDEX;
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let route_app = Arc::clone(&app);
+        let route_owners = Arc::clone(&owners);
+        let route = any(
+            move |method: Method, uri: Uri, headers: HeaderMap, body: Bytes| {
+                let app = Arc::clone(&route_app);
+                let owners = Arc::clone(&route_owners);
+                async move {
+                    let caller = match require_signed_account_request(
+                        &app,
+                        &headers,
+                        &method,
+                        &uri,
+                        body.as_ref(),
+                        "test_auth_required",
+                        "signed account headers are required",
+                    ) {
+                        Ok(caller) => caller,
+                        Err(error) => return error.into_response(),
+                    };
+                    assert_eq!(caller, *ALICE_ID);
+                    let working_set = current_routed_read_memory_envelope(&app)
+                        .expect("required-auth read has an admitted owner")
+                        .working_set_bytes;
+                    owners.lock().unwrap().push(working_set);
+                    if working_set < ceiling {
+                        torii_proxy_error_response(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "query_capacity_exceeded",
+                            "alias index exceeds this test owner",
+                        )
+                    } else {
+                        StatusCode::OK.into_response()
+                    }
+                }
+            },
+        );
+        let router = admission_router_with(Arc::clone(&app), descriptor, route).layer(from_fn(
+            |request, next: Next| async move {
+                utils::with_current_response_format(ResponseFormat::Json, next.run(request)).await
+            },
+        ));
+        let uri: Uri = descriptor.path().parse().expect("alias index URI");
+        let body = b"{}";
+        let request = |mut headers: HeaderMap| {
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("2"));
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(uri.clone())
+                .body(Body::from(body.as_slice()))
+                .expect("alias index request");
+            *request.headers_mut() = headers;
+            request
+        };
+        let unsigned = router
+            .clone()
+            .oneshot(request(HeaderMap::new()))
+            .await
+            .expect("unsigned response");
+        assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
+        drop(unsigned);
+        assert!(
+            owners.lock().unwrap().is_empty(),
+            "unsigned reads never execute"
+        );
+
+        let headers = crate::tests_runtime_handlers::signed_app_headers(
+            &ALICE_ID,
+            &ALICE_KEYPAIR,
+            &Method::POST,
+            &uri,
+            body,
+        );
+        let response = router
+            .clone()
+            .oneshot(request(headers.clone()))
+            .await
+            .expect("signed response");
+        assert_eq!(response.status(), StatusCode::OK);
+        drop(response);
+        let successful_owners = owners.lock().unwrap().clone();
+        assert!(
+            successful_owners.len() >= 2,
+            "required authentication must survive a real retry"
+        );
+        assert!(successful_owners.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(successful_owners.last(), Some(&ceiling));
+
+        let replay = router
+            .clone()
+            .oneshot(request(headers))
+            .await
+            .expect("replay response");
+        assert_eq!(
+            replay.status(),
+            StatusCode::FORBIDDEN,
+            "required header auth preserves its existing credential-refusal status"
+        );
+        let replay_body = axum::body::to_bytes(replay.into_body(), usize::MAX)
+            .await
+            .expect("replay body");
+        assert!(String::from_utf8_lossy(&replay_body).contains("request nonce already used"));
+        let unsigned = router
+            .oneshot(request(HeaderMap::new()))
+            .await
+            .expect("unsigned response");
+        assert_eq!(
+            unsigned.status(),
+            StatusCode::UNAUTHORIZED,
+            "a separate unsigned request cannot inherit the earlier signed caller"
+        );
+        assert_eq!(
+            *owners.lock().unwrap(),
+            successful_owners,
+            "refused requests never reach the owner-bound read"
+        );
+    }
+
+    #[tokio::test]
     async fn solo_bodyless_burst_queues_under_one_unchanged_memory_working_set() {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
