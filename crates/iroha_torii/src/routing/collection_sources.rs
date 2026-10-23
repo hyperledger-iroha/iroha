@@ -1270,7 +1270,7 @@ fn account_subrow_page(
             std::ops::ControlFlow::Continue(())
         },
     )
-    .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
+    .map_err(crate::canonical_history::history_page_error)?;
     drop(view);
     if let Some((height, hash)) = anchor {
         require_history_anchor(state, height, hash)?;
@@ -1600,7 +1600,7 @@ fn transaction_page(
             std::ops::ControlFlow::Continue(())
         },
     )
-    .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
+    .map_err(crate::canonical_history::history_page_error)?;
     drop(view);
     if let Some((height, hash)) = anchor {
         require_history_anchor(state, height, hash)?;

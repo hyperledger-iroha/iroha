@@ -33,10 +33,8 @@ pub fn query_attempt_error(error: ExecutionAttemptError<QueryExecutionFail>) -> 
             | ExecutionAttemptError::Rejected(
                 QueryExecutionFail::CapacityLimit | QueryExecutionFail::GasBudgetExceeded
             )
-    ) && let Ok(Some(owner)) =
-        crate::history_producer::HistoryProducerOwner::current_if_admitted()
-    {
-        owner.note_owner_limit_refused();
+    ) {
+        note_owner_capacity_refusal();
     }
     let query_error = match error {
         ExecutionAttemptError::Deferred(deferred) => {
@@ -52,6 +50,27 @@ pub fn query_attempt_error(error: ExecutionAttemptError<QueryExecutionFail>) -> 
         ExecutionAttemptError::Rejected(error) => error,
     };
     crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(query_error))
+}
+
+/// Project a committed-history page walk's refusal (Core's transaction and movement pages).
+///
+/// Those walks report a source or decoder capacity deferral as `GasBudgetExceeded`, and
+/// their decoded graphs are charged to the current query owner, so capacity outcomes mark
+/// the owner exactly as [`query_attempt_error`] does.
+pub fn history_page_error(error: QueryExecutionFail) -> crate::Error {
+    if matches!(
+        error,
+        QueryExecutionFail::CapacityLimit | QueryExecutionFail::GasBudgetExceeded
+    ) {
+        note_owner_capacity_refusal();
+    }
+    crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(error))
+}
+
+fn note_owner_capacity_refusal() {
+    if let Ok(Some(owner)) = crate::history_producer::HistoryProducerOwner::current_if_admitted() {
+        owner.note_owner_limit_refused();
+    }
 }
 
 /// Project authenticated target work or forward the original execution refusal unchanged.
