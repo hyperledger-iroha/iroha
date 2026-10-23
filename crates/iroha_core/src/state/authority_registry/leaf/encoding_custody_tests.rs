@@ -132,7 +132,7 @@ fn codec_and_io_error_adapters_keep_fixed_categories_without_rendering() {
     let actual = without_allocations(|| {
         EncodingError::io(
             EncodingOperation::WriteFrame,
-            io::ErrorKind::WriteZero.into(),
+            &(io::ErrorKind::WriteZero.into()),
         )
     });
     assert_eq!(

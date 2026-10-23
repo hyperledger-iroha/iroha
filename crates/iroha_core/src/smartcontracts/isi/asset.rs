@@ -3468,6 +3468,15 @@ pub mod isi {
         )?
         .apply(state_transaction)
     }
+    /// Independent authorization policies for one checked numeric transfer.
+    #[derive(Clone, Copy)]
+    struct NumericAssetTransferPolicy {
+        scope_policy: NumericAssetTransferScopePolicy,
+        authority_policy: NumericAssetTransferAuthorityPolicy,
+        source_policy: NumericAssetTransferSourcePolicy,
+        control_policy: NumericAssetTransferControlPolicy,
+        destination_admission: NumericAssetDestinationAdmissionPolicy,
+    }
     #[derive(Clone, Copy)]
     enum VerifiedPrivacyPublicBalancePurpose {
         General,
@@ -6354,11 +6363,13 @@ pub mod isi {
                 event_source_id,
                 event_destination_id,
                 amount,
-                NumericAssetTransferScopePolicy::Ambient,
-                NumericAssetTransferAuthorityPolicy::UserSource,
-                NumericAssetTransferSourcePolicy::User,
-                NumericAssetTransferControlPolicy::Enforce,
-                NumericAssetDestinationAdmissionPolicy::ImplicitReceive,
+                NumericAssetTransferPolicy {
+                    scope_policy: NumericAssetTransferScopePolicy::Ambient,
+                    authority_policy: NumericAssetTransferAuthorityPolicy::UserSource,
+                    source_policy: NumericAssetTransferSourcePolicy::User,
+                    control_policy: NumericAssetTransferControlPolicy::Enforce,
+                    destination_admission: NumericAssetDestinationAdmissionPolicy::ImplicitReceive,
+                },
             )
         }
         fn prepare_explicit_bilateral(
@@ -6374,11 +6385,13 @@ pub mod isi {
                 event_source_id,
                 event_destination_id,
                 amount,
-                NumericAssetTransferScopePolicy::ExplicitBilateral,
-                NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
-                NumericAssetTransferSourcePolicy::User,
-                NumericAssetTransferControlPolicy::Enforce,
-                NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+                NumericAssetTransferPolicy {
+                    scope_policy: NumericAssetTransferScopePolicy::ExplicitBilateral,
+                    authority_policy: NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
+                    source_policy: NumericAssetTransferSourcePolicy::User,
+                    control_policy: NumericAssetTransferControlPolicy::Enforce,
+                    destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+                },
             )
         }
         fn prepare(
@@ -6387,11 +6400,13 @@ pub mod isi {
             event_source_id: AssetId,
             event_destination_id: AssetId,
             amount: Quantity,
-            scope_policy: NumericAssetTransferScopePolicy,
-            authority_policy: NumericAssetTransferAuthorityPolicy,
-            source_policy: NumericAssetTransferSourcePolicy,
-            control_policy: NumericAssetTransferControlPolicy,
-            destination_admission: NumericAssetDestinationAdmissionPolicy,
+            NumericAssetTransferPolicy {
+                scope_policy,
+                authority_policy,
+                source_policy,
+                control_policy,
+                destination_admission,
+            }: NumericAssetTransferPolicy,
         ) -> Result<Self, Error> {
             // Reject no-op transfers before account admission, control usage, transcripts,
             // balances, or events can be staged.
@@ -8609,13 +8624,11 @@ pub mod isi {
                     |supply_after| {
                         state.prepare_quantity_supply_candidate(
                             authority,
-                            entry_hash,
-                            context,
+                            (entry_hash, context),
                             &original.id,
                             amount,
                             mint,
-                            &original.balance_after,
-                            supply_after,
+                            (&original.balance_after, supply_after),
                         )
                     },
                 )

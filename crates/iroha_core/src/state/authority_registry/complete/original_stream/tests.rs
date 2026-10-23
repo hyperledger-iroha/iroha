@@ -514,21 +514,24 @@ fn replacement_membership_shrinks_current_and_retains_exact_distinct_rollback() 
     assert!(!rollback.contains_key(&norito::codec::encode_adaptive(&key(3))));
 }
 
-fn validated_original(state: &State, header: BlockHeader) -> Box<StateBlock<'_>> {
-    validated_original_with_crypto_source(state, header, false)
+fn validated_original<'state>(
+    state: &'state State,
+    header: &BlockHeader,
+) -> Box<StateBlock<'state>> {
+    validated_original_with_crypto_source(state, &(header), false)
 }
 
-fn validated_original_with_crypto_source(
-    state: &State,
-    header: BlockHeader,
+fn validated_original_with_crypto_source<'state>(
+    state: &'state State,
+    header: &BlockHeader,
     replace_live: bool,
-) -> Box<StateBlock<'_>> {
+) -> Box<StateBlock<'state>> {
     use crate::state::deserialize::musubi_source_read::ReadFailure;
     use crate::state::publication::{
         RetainedMusubiGroupReadError, RetainedPackageReadError,
         musubi_materializer_test_support::{staged_block, start},
     };
-    let mut block = Box::new(staged_block(state, header, false, true));
+    let mut block = Box::new(staged_block(state, *header, false, true));
     let owner = std::ptr::from_ref(block.runtime_policy.static_inputs()) as usize;
     let captured_crypto = std::sync::Arc::clone(&block.crypto);
     if replace_live {
@@ -618,7 +621,7 @@ fn complete_original_fixture_covers_every_table_and_all_cells() {
     // while this test measures admission, refusal and capture-only refunds.
     let _retirement_pin = crossbeam_epoch::pin();
     let (state, proposal) = crate::state::publication::musubi_materializer_test_support::fixture();
-    let block = validated_original(&state, proposal.header());
+    let block = validated_original(&state, &(proposal.header()));
     let mut cut = OriginalCut::new(&block, limits(), CaptureIntent::Complete).unwrap();
     cut.advance().unwrap();
     let mut identities = Vec::new();
@@ -774,7 +777,7 @@ fn validated_publication_refuses_foreign_manifest_rebinding_and_runtime_target_a
         sync::Arc,
     };
     let (state, proposal) = crate::state::publication::musubi_materializer_test_support::fixture();
-    let mut block = validated_original(&state, proposal.header());
+    let mut block = validated_original(&state, &(proposal.header()));
     let original = Arc::clone(&block.lane_manifests);
     let foreign = Arc::new(original.rebind(&block.nexus.lane_catalog, &block.nexus.governance));
     assert!(!Arc::ptr_eq(&original, &foreign));
@@ -894,7 +897,7 @@ fn original_static_input_survives_prepublication_foreign_source_and_deferred_cut
     let _retirement_pin = crossbeam_epoch::pin();
     let (state, proposal) = crate::state::publication::musubi_materializer_test_support::fixture();
     let expected = state.crypto();
-    let block = validated_original_with_crypto_source(&state, proposal.header(), true);
+    let block = validated_original_with_crypto_source(&state, &(proposal.header()), true);
     let owner = std::ptr::from_ref(block.runtime_policy.static_inputs());
     let mut cut = OriginalCut::new(&block, limits(), CaptureIntent::Complete).unwrap();
     cut.advance().unwrap();

@@ -272,7 +272,7 @@ impl BlockHashes {
         initial: impl IntoIterator<Item = HashOf<BlockHeader>>,
         budget: iroha_allocation::AllocationBudget,
     ) -> Result<Self, BlockHashAdmissionError> {
-        budget.with_deferred_refund_notifications(|_| {
+        budget.clone().with_deferred_refund_notifications(|_| {
             let control_layout = ChargedBlockHashMap::layout();
             let mut control_reservation = budget
                 .try_reserve(control_layout)
@@ -288,7 +288,7 @@ impl BlockHashes {
             .map_err(BlockHashAdmissionError::Capacity)?;
             let owner = Self {
                 inner: BlockHashStorage::Owned(ChargedBlockHashMap::new(map, control_charge)),
-                budget: budget.clone(),
+                budget,
                 released: iroha_allocation::release::ReleaseNotification::default(),
                 committed_height: AtomicUsize::new(0),
             };

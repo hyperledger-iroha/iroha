@@ -321,8 +321,8 @@ fn stream_bare_payload_digests<T: Encode>(
     if length > max_payload_bytes {
         return Err(LeafError::PayloadLimit);
     }
-    let first_raw =
-        first_raw.map_err(|error| EncodingError::io(EncodingOperation::MeasurePayload, error))?;
+    let first_raw = first_raw
+        .map_err(|error| EncodingError::io(EncodingOperation::MeasurePayload, &(error)))?;
     let length32 = u32::try_from(length).map_err(|_| LeafError::PayloadLimit)?;
     let length64 = u64::from(length32);
     let identity_len = u64::try_from(schema_identity.len()).map_err(|_| LeafError::PayloadLimit)?;
@@ -372,7 +372,7 @@ fn stream_bare_payload_digests<T: Encode>(
         .into());
     }
     let lookup_digest = lookup_digest
-        .map_err(|error| EncodingError::io(EncodingOperation::HashPairedValue, error))?;
+        .map_err(|error| EncodingError::io(EncodingOperation::HashPairedValue, &(error)))?;
     if second_raw != Some(first_raw) {
         return Err(EncodingError::new(
             EncodingOperation::HashPairedValue,
@@ -491,7 +491,7 @@ fn typed_payload_hash<T: Encode + NoritoSchema>(
         return Err(LeafError::PayloadLimit);
     }
     encoded.map_err(|error| EncodingError::codec(EncodingOperation::HashTypedPayload, error))?;
-    digest.map_err(|error| EncodingError::io(EncodingOperation::HashTypedPayload, error).into())
+    digest.map_err(|error| EncodingError::io(EncodingOperation::HashTypedPayload, &(error)).into())
 }
 
 #[path = "leaf/frame.rs"]

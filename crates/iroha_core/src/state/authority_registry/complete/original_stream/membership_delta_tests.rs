@@ -164,7 +164,7 @@ fn membership_delta_base_refusal_precedes_every_change_and_retains_original_retr
     let _retirement_pin = crossbeam_epoch::pin();
     let (state, proposal) = crate::state::publication::musubi_materializer_test_support::fixture();
     let before = committed_membership_bytes(&state);
-    let block = validated_original(&state, proposal.header());
+    let block = validated_original(&state, &(proposal.header()));
     let mut cut = OriginalCut::new(&block, limits(), CaptureIntent::Changes).unwrap();
     cut.advance().unwrap();
     let pointer = cut.collector.fields.as_slice().as_ptr();

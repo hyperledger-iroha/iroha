@@ -95,7 +95,7 @@ impl EncodingError {
         Self::new(operation, reason)
     }
 
-    pub(super) fn io(operation: EncodingOperation, error: io::Error) -> Self {
+    pub(super) fn io(operation: EncodingOperation, error: &io::Error) -> Self {
         Self::new(operation, EncodingReason::Io(error.kind()))
     }
 }

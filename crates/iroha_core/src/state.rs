@@ -27532,12 +27532,15 @@ impl State {
     #[inline(never)]
     #[allow(clippy::too_many_lines)]
     fn new_inner(
-        execution_budget: AllocationBudget,
+        execution_budget: &AllocationBudget,
         mut world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
         (exact_durable_height, process_runtime): (usize, ProcessRuntimeInstallation),
-        (chain_id, network_id): (iroha_model_base::chain::ChainId, iroha_data_model::NetworkId),
+        (chain_id, network_id): (
+            iroha_model_base::chain::ChainId,
+            iroha_data_model::NetworkId,
+        ),
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> core::result::Result<Self, MergeLedgerCommitError> {
         #[cfg(not(all(test, sumeragi_core_mutation = "HC385")))]
@@ -28418,10 +28421,12 @@ impl State {
     ) -> Result<Self, MergeLedgerCommitError> {
         let exact_durable_height = kura.exact_durable_blocks_count()?;
         let s = Self::new_inner(
-            execution_budget,
+            &(execution_budget),
             world,
             kura,
-            query_handle,(exact_durable_height, ProcessRuntimeInstallation::Install),(chain_id, network_id),
+            query_handle,
+            (exact_durable_height, ProcessRuntimeInstallation::Install),
+            (chain_id, network_id),
             #[cfg(feature = "telemetry")]
             telemetry,
         )?;
@@ -28516,10 +28521,12 @@ impl State {
             .exact_durable_blocks_count()
             .map_err(MergeLedgerCommitError::from)?;
         let mut state = Self::new_inner(
-            execution_budget,
+            &(execution_budget),
             world,
             kura,
-            query_handle,(exact_durable_height, ProcessRuntimeInstallation::Preserve),(chain_id, network_id),
+            query_handle,
+            (exact_durable_height, ProcessRuntimeInstallation::Preserve),
+            (chain_id, network_id),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         )?;
@@ -30830,11 +30837,9 @@ impl State {
                 // instead of entering a second blocking State reader on this event path.
                 crate::smartcontracts::isi::tx::read_finalized_execution_carrier(
                     &self.kura,
-                    self.chain_id_ref(),
-                    *self.network_id_ref(),
+                    (self.chain_id_ref(), *self.network_id_ref()),
                     &hashes,
-                    height,
-                    expected,
+                    (height, expected),
                     max_work,
                     max_bytes,
                     &budget,
@@ -30846,8 +30851,7 @@ impl State {
                     &self.kura,
                     self.chain_id_ref(),
                     *self.network_id_ref(),
-                    height,
-                    expected,
+                    (height, expected),
                     max_work,
                     max_bytes,
                 )?
@@ -30966,11 +30970,9 @@ impl State {
         })?;
         let carrier = crate::smartcontracts::isi::tx::read_finalized_execution_carrier(
             &self.kura,
-            self.chain_id_ref(),
-            *self.network_id_ref(),
+            (self.chain_id_ref(), *self.network_id_ref()),
             &hashes,
-            height,
-            expected,
+            (height, expected),
             max_work,
             max_bytes,
             budget,
@@ -33145,7 +33147,18 @@ impl State {
                 "emergency Fast startup skipped lane-geometry publication and backend reconciliation"
             );
         } else {
-            self.apply_lane_geometry_updates((&previous_lane_config, &nexus.lane_config),(&previous_lane_incarnations, &updated_lane_incarnations),(&previous_lane_incarnation_activation_heights, &updated_lane_incarnation_activation_heights),(&previous_lane_incarnation_lineage, &updated_lane_incarnation_lineage),(&geometry_replaced_lane_ids, current_block_height),
+            self.apply_lane_geometry_updates(
+                (&previous_lane_config, &nexus.lane_config),
+                (&previous_lane_incarnations, &updated_lane_incarnations),
+                (
+                    &previous_lane_incarnation_activation_heights,
+                    &updated_lane_incarnation_activation_heights,
+                ),
+                (
+                    &previous_lane_incarnation_lineage,
+                    &updated_lane_incarnation_lineage,
+                ),
+                (&geometry_replaced_lane_ids, current_block_height),
                 &mut releases,
             )?;
             if let Err(failure) = self.mark_lane_geometry_catalog_published(
@@ -33165,7 +33178,12 @@ impl State {
                 }
                 self.rollback_lane_geometry_updates(
                     &previous_lane_config,
-                    &nexus.lane_config,(&previous_lane_incarnations, &previous_lane_incarnation_activation_heights, &previous_lane_incarnation_lineage),
+                    &nexus.lane_config,
+                    (
+                        &previous_lane_incarnations,
+                        &previous_lane_incarnation_activation_heights,
+                        &previous_lane_incarnation_lineage,
+                    ),
                     &geometry_replaced_lane_ids,
                     current_block_height,
                     &mut releases,
@@ -33565,7 +33583,12 @@ impl State {
                 let nexus = self.nexus_snapshot();
                 ensure_lane_lifecycle_compliance_ready(&nexus, compliance_engine.as_deref(), plan)?;
                 let lifecycle_update = prepare_lane_lifecycle_update(
-                    &nexus,(&previous_lane_incarnations, &previous_lane_incarnation_lineage, &previous_lane_incarnation_activation_heights),
+                    &nexus,
+                    (
+                        &previous_lane_incarnations,
+                        &previous_lane_incarnation_lineage,
+                        &previous_lane_incarnation_activation_heights,
+                    ),
                     &self.network_id,
                     committing_header_hash,
                     plan,
@@ -33599,7 +33622,24 @@ impl State {
                 &lifecycle_update.updated_lane_config,
             );
             let reset_height = current_block_height;
-            self.apply_lane_geometry_updates((&lifecycle_update.previous_lane_config, &lifecycle_update.updated_lane_config),(&lifecycle_update.previous_lane_incarnations, &lifecycle_update.updated_lane_incarnations),(&lifecycle_update.previous_lane_incarnation_activation_heights, &lifecycle_update.updated_lane_incarnation_activation_heights),(&lifecycle_update.previous_lane_incarnation_lineage, &lifecycle_update.updated_lane_incarnation_lineage),(&lifecycle_update.replaced_lane_ids, current_block_height),
+            self.apply_lane_geometry_updates(
+                (
+                    &lifecycle_update.previous_lane_config,
+                    &lifecycle_update.updated_lane_config,
+                ),
+                (
+                    &lifecycle_update.previous_lane_incarnations,
+                    &lifecycle_update.updated_lane_incarnations,
+                ),
+                (
+                    &lifecycle_update.previous_lane_incarnation_activation_heights,
+                    &lifecycle_update.updated_lane_incarnation_activation_heights,
+                ),
+                (
+                    &lifecycle_update.previous_lane_incarnation_lineage,
+                    &lifecycle_update.updated_lane_incarnation_lineage,
+                ),
+                (&lifecycle_update.replaced_lane_ids, current_block_height),
                 &mut releases,
             )?;
             if let Err(failure) = self.mark_lane_geometry_catalog_published(
@@ -33619,7 +33659,12 @@ impl State {
                 }
                 self.rollback_lane_geometry_updates(
                     &lifecycle_update.previous_lane_config,
-                    &lifecycle_update.updated_lane_config,(&lifecycle_update.previous_lane_incarnations, &lifecycle_update.previous_lane_incarnation_activation_heights, &lifecycle_update.previous_lane_incarnation_lineage),
+                    &lifecycle_update.updated_lane_config,
+                    (
+                        &lifecycle_update.previous_lane_incarnations,
+                        &lifecycle_update.previous_lane_incarnation_activation_heights,
+                        &lifecycle_update.previous_lane_incarnation_lineage,
+                    ),
                     &lifecycle_update.replaced_lane_ids,
                     current_block_height,
                     &mut releases,
@@ -33753,10 +33798,22 @@ impl State {
     }
     fn apply_lane_geometry_updates(
         &self,
-        (previous, current): (&iroha_config::parameters::actual::LaneConfig, &iroha_config::parameters::actual::LaneConfig),
-        (previous_incarnations, current_incarnations): (&BTreeMap<LaneId, Hash>, &BTreeMap<LaneId, Hash>),
-        (previous_activation_heights, current_activation_heights): (&BTreeMap<LaneId, u64>, &BTreeMap<LaneId, u64>),
-        (previous_lineage, current_lineage): (&BTreeMap<LaneId, LaneIncarnationLineage>, &BTreeMap<LaneId, LaneIncarnationLineage>),
+        (previous, current): (
+            &iroha_config::parameters::actual::LaneConfig,
+            &iroha_config::parameters::actual::LaneConfig,
+        ),
+        (previous_incarnations, current_incarnations): (
+            &BTreeMap<LaneId, Hash>,
+            &BTreeMap<LaneId, Hash>,
+        ),
+        (previous_activation_heights, current_activation_heights): (
+            &BTreeMap<LaneId, u64>,
+            &BTreeMap<LaneId, u64>,
+        ),
+        (previous_lineage, current_lineage): (
+            &BTreeMap<LaneId, LaneIncarnationLineage>,
+            &BTreeMap<LaneId, LaneIncarnationLineage>,
+        ),
         (replaced_lane_ids, transition_height): (&BTreeSet<LaneId>, u64),
         releases: &mut LaneLifecycleReleases<'_>,
     ) -> Result<(), LaneLifecycleError> {
@@ -33816,7 +33873,8 @@ impl State {
         releases: &mut LaneLifecycleReleases<'_>,
     ) -> Result<(), LaneGeometryCatalogPublicationFailure> {
         self.finish_lane_geometry_publication(
-            lane_config,(incarnations, activation_heights),
+            lane_config,
+            (incarnations, activation_heights),
             lane_incarnation_lineage_root(&self.network_id, lineage),
             configured_baseline,
             None,
@@ -33827,12 +33885,18 @@ impl State {
         &self,
         previous: &iroha_config::parameters::actual::LaneConfig,
         current: &iroha_config::parameters::actual::LaneConfig,
-        (previous_incarnations, previous_activation_heights, previous_lineage): (&BTreeMap<LaneId, Hash>, &BTreeMap<LaneId, u64>, &BTreeMap<LaneId, LaneIncarnationLineage>),
+        (previous_incarnations, previous_activation_heights, previous_lineage): (
+            &BTreeMap<LaneId, Hash>,
+            &BTreeMap<LaneId, u64>,
+            &BTreeMap<LaneId, LaneIncarnationLineage>,
+        ),
         replaced_lane_ids: &BTreeSet<LaneId>,
         transition_height: u64,
         releases: &mut LaneLifecycleReleases<'_>,
     ) -> Result<(), LaneLifecycleError> {
-        self.rollback_owned_lane_geometry((previous, current),(previous_incarnations, previous_activation_heights),
+        self.rollback_owned_lane_geometry(
+            (previous, current),
+            (previous_incarnations, previous_activation_heights),
             lane_incarnation_lineage_root(&self.network_id, previous_lineage),
             replaced_lane_ids,
             transition_height,
@@ -33959,7 +34023,12 @@ impl State {
         }
         let derivation_header_hash = block_header_hash;
         let mut expected_update = prepare_lane_lifecycle_update(
-            &prospective_nexus,(&lane_incarnations, &lane_incarnation_lineage, &lane_incarnation_activation_heights),
+            &prospective_nexus,
+            (
+                &lane_incarnations,
+                &lane_incarnation_lineage,
+                &lane_incarnation_activation_heights,
+            ),
             &self.network_id,
             derivation_header_hash,
             &pending.plan,
@@ -34299,7 +34368,7 @@ impl State {
         let Some(max_disk) = nexus
             .storage
             .effective_local_budget_bytes
-            .map(iroha_config_base::util::Bytes::get)
+            .map(iroha_config::base::util::Bytes::get)
         else {
             return;
         };
@@ -34458,7 +34527,15 @@ include!("state/runtime_catalog_startup.rs");
 include!("state/runtime_catalog_commit.rs");
 fn prepare_lane_lifecycle_update(
     nexus: &iroha_config::parameters::actual::Nexus,
-    (previous_lane_incarnations, previous_lane_incarnation_lineage, previous_lane_incarnation_activation_heights): (&BTreeMap<LaneId, Hash>, &BTreeMap<LaneId, LaneIncarnationLineage>, &BTreeMap<LaneId, u64>),
+    (
+        previous_lane_incarnations,
+        previous_lane_incarnation_lineage,
+        previous_lane_incarnation_activation_heights,
+    ): (
+        &BTreeMap<LaneId, Hash>,
+        &BTreeMap<LaneId, LaneIncarnationLineage>,
+        &BTreeMap<LaneId, u64>,
+    ),
     network_id: &iroha_data_model::NetworkId,
     committing_header_hash: HashOf<BlockHeader>,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
@@ -34561,7 +34638,12 @@ fn prepare_lane_lifecycle_update(
         network_id,
         committing_header_hash,
         &nexus.lane_catalog,
-        &updated_catalog,(previous_lane_incarnations, previous_lane_incarnation_activation_heights, previous_lane_incarnation_lineage),
+        &updated_catalog,
+        (
+            previous_lane_incarnations,
+            previous_lane_incarnation_activation_heights,
+            previous_lane_incarnation_lineage,
+        ),
         plan,
     )?;
     let updated_lane_incarnation_activation_heights =
@@ -41820,7 +41902,12 @@ impl StateTransaction<'_, '_> {
             });
         }
         let lifecycle_update = prepare_lane_lifecycle_update(
-            &self.nexus,(&self.lane_incarnations, &self.lane_incarnation_lineage, &self.lane_incarnation_activation_heights),
+            &self.nexus,
+            (
+                &self.lane_incarnations,
+                &self.lane_incarnation_lineage,
+                &self.lane_incarnation_activation_heights,
+            ),
             &self.network_id,
             self._curr_block.hash(),
             &payload.plan,

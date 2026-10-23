@@ -88,8 +88,8 @@ fn bare_payload_with_bound<T: Encode, B: Write + AsRef<[u8]>>(
     if length > max_payload_bytes {
         return Err(LeafError::PayloadLimit);
     }
-    let first_pass =
-        first_pass.map_err(|error| EncodingError::io(EncodingOperation::MeasurePayload, error))?;
+    let first_pass = first_pass
+        .map_err(|error| EncodingError::io(EncodingOperation::MeasurePayload, &(error)))?;
     let mut bytes = allocate(length)?;
     let mut exceeded = false;
     let encoded = {

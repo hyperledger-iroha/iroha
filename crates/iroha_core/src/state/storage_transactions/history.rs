@@ -429,7 +429,7 @@ impl TransactionsStorage {
 
     /// Construct the sole historical representation from an explicit original pool.
     pub fn try_new(budget: AllocationBudget) -> Result<Self, MembershipAdmissionError> {
-        budget.with_deferred_refund_notifications(|_| {
+        budget.clone().with_deferred_refund_notifications(|_| {
             let mut identity_charge = None;
             let mut history_released = None;
             let mut released = None;
@@ -482,7 +482,7 @@ impl TransactionsStorage {
                 released: released.expect("logical notification admitted with original root"),
                 history_released: history_released
                     .expect("physical notification admitted with original root"),
-                budget: budget.clone(),
+                budget,
                 pending: Mutex::new(None),
                 publication_sequence: AtomicU64::new(0),
             })

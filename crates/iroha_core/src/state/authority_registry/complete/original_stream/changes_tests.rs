@@ -166,7 +166,7 @@ fn change_intent_matches_complete_stream_but_cannot_emit_a_snapshot() {
     let _retirement_pin = crossbeam_epoch::pin();
     let (state, proposal) = crate::state::publication::musubi_materializer_test_support::fixture();
     let membership_before = committed_membership_bytes(&state);
-    let block = validated_original(&state, proposal.header());
+    let block = validated_original(&state, &(proposal.header()));
     let mut complete = OriginalCut::new(&block, limits(), CaptureIntent::Complete).unwrap();
     let mut delta = OriginalCut::new(&block, limits(), CaptureIntent::Changes).unwrap();
     let mut observations = Vec::new();

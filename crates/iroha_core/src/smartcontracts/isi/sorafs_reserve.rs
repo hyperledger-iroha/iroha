@@ -89,8 +89,7 @@ impl VerifiedSorafsReserveWithdrawal {
     fn new(
         provider_id: ProviderId,
         movement_id: [u8; 32],
-        policy_digest: [u8; 32],
-        expected_provider_revision: u64,
+        (policy_digest, expected_provider_revision): ([u8; 32], u64),
         decision_authority: AccountId,
         source_id: AssetId,
         destination_id: AssetId,
@@ -1729,8 +1728,7 @@ impl Execute for DecideSorafsReserveMovement {
                     let authorization = VerifiedSorafsReserveWithdrawal::new(
                         movement.provider_id,
                         movement.movement_id,
-                        policy.policy_digest,
-                        self.expected_provider_revision,
+                        (policy.policy_digest, self.expected_provider_revision),
                         authority.clone(),
                         source_id,
                         destination_id,

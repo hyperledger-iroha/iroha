@@ -197,9 +197,7 @@ impl VerifiedModerationChallengeBondMovement {
         }
     }
     fn settlement(
-        case_id: String,
-        round_id: String,
-        challenge_id: String,
+        (case_id, round_id, challenge_id): (String, String, String),
         decision: ModerationChallengeDecisionV1,
         leg: ModerationChallengeBondSettlementLeg,
         source_id: AssetId,
@@ -623,9 +621,11 @@ fn settle_moderation_challenge_bond(
             record.challenger.clone(),
         );
         let movement = VerifiedModerationChallengeBondMovement::settlement(
-            record.case_id.clone(),
-            record.round_id.clone(),
-            record.challenge_id.clone(),
+            (
+                record.case_id.clone(),
+                record.round_id.clone(),
+                record.challenge_id.clone(),
+            ),
             decision,
             ModerationChallengeBondSettlementLeg::Refund,
             source_id.clone(),
@@ -643,9 +643,11 @@ fn settle_moderation_challenge_bond(
             record.bond.slash_receiver_account.clone(),
         );
         let movement = VerifiedModerationChallengeBondMovement::settlement(
-            record.case_id.clone(),
-            record.round_id.clone(),
-            record.challenge_id.clone(),
+            (
+                record.case_id.clone(),
+                record.round_id.clone(),
+                record.challenge_id.clone(),
+            ),
             decision,
             ModerationChallengeBondSettlementLeg::Slash,
             source_id,

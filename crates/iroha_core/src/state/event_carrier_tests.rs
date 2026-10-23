@@ -60,8 +60,10 @@ fn event_carrier_keeps_original_execution_source_while_state_appends() {
             &kura,
             state.chain_id_ref(),
             *state.network_id_ref(),
-            NonZeroUsize::new(usize::try_from(original_height).unwrap()).unwrap(),
-            target_hash,
+            (
+                NonZeroUsize::new(usize::try_from(original_height).unwrap()).unwrap(),
+                target_hash,
+            ),
             work,
             bytes,
         )
@@ -103,8 +105,7 @@ fn event_carrier_refuses_unanchored_and_changed_original_execution_source() {
             &kura,
             state.chain_id_ref(),
             *state.network_id_ref(),
-            height,
-            expected,
+            (height, expected),
             work,
             bytes,
         )
@@ -412,8 +413,7 @@ fn event_carrier_refuses_substituted_opaque_tip_and_intermediate_hash_ancestry()
             chain.kura(),
             state.chain_id_ref(),
             *state.network_id_ref(),
-            height,
-            expected,
+            (height, expected),
             work,
             bytes,
         )
@@ -438,8 +438,7 @@ fn event_carrier_refuses_substituted_opaque_tip_and_intermediate_hash_ancestry()
             chain.kura(),
             state.chain_id_ref(),
             *state.network_id_ref(),
-            height,
-            expected,
+            (height, expected),
             work,
             bytes,
         )

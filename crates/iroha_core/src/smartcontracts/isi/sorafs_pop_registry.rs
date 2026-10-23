@@ -2398,8 +2398,7 @@ mod tests {
     fn batch(
         keypair: &KeyPair,
         root_byte: u8,
-        tree_size: u64,
-        tree_version: u64,
+        (tree_size, tree_version): (u64, u64),
         list_version: u64,
         previous_root_digest: Option<[u8; 32]>,
         commitments: Vec<PopCredentialCommitmentV1>,
@@ -2552,8 +2551,7 @@ mod tests {
         batch(
             operator,
             1,
-            1,
-            1,
+            (1, 1),
             1,
             None,
             vec![commitment(1, nonce(1), root_digest, 1, 1)],
@@ -2758,7 +2756,7 @@ mod tests {
                 candidate
             })
             .collect();
-        let oversized = batch(&operator, 1, 257, 1, 1, None, commitments, Vec::new());
+        let oversized = batch(&operator, 1, (257, 1), 1, None, commitments, Vec::new());
         assert!(
             CommitSorafsPopCredentialBatch::new(encode(&oversized))
                 .execute(&authority, &mut stx)
@@ -2780,8 +2778,7 @@ mod tests {
         let duplicate = batch(
             &operator,
             2,
-            2,
-            2,
+            (2, 2),
             2,
             Some([1; 32]),
             vec![commitment(1, nonce(2), [2; 32], 2, 2)],
@@ -2795,8 +2792,7 @@ mod tests {
         let outdated = batch(
             &operator,
             2,
-            2,
-            1,
+            (2, 1),
             2,
             Some([1; 32]),
             vec![commitment(2, nonce(2), [2; 32], 1, 2)],
@@ -2900,7 +2896,7 @@ mod tests {
         let commitments = (1_u8..=17)
             .map(|value| commitment(value, nonce(value), root_digest, 1, 1))
             .collect();
-        let initial = batch(&operator, 1, 17, 1, 1, None, commitments, Vec::new());
+        let initial = batch(&operator, 1, (17, 1), 1, None, commitments, Vec::new());
         CommitSorafsPopCredentialBatch::new(encode(&initial))
             .execute(&authority, &mut stx)
             .expect("initial credential batch");
