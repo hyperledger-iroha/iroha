@@ -3309,6 +3309,8 @@ type ToriiRuntimeNamespaceExport =
   | "ToriiStreamGapError"
   | "ListQueryError"
   | "FilterSyntaxError"
+  | "ACCOUNT_ALIAS_FIELDS"
+  | "ACCOUNT_ALIAS_ROW_FIELDS"
   | "AGGREGATE_FUNCTIONS"
   | "CURSOR_MAX_BYTES"
   | "FIELD_PATH_MAX_BYTES"
@@ -3327,6 +3329,10 @@ type ToriiRuntimeNamespaceExport =
   | "ListQuery"
   | "SortKey"
   | "ToriiCollection"
+  | "accountAliasScope"
+  | "accountsInAliasScope"
+  | "decodeAccountAliasRows"
+  | "decodeAccountAliases"
   | "decodePage"
   | "field"
   | "isDecimalText"
@@ -9454,6 +9460,63 @@ export interface Page<T> {
 
 /** Decode a `{"items", "next_cursor", "total"}` page envelope. */
 export declare function decodePage<T = ToriiJsonValue>(value: unknown, context?: string): Page<T>;
+
+/**
+ * Account rows can join the alias bindings the caller may read. Torii computes the two fields
+ * only for queries that mention them; every other accounts read keeps today's rows.
+ */
+export declare const ACCOUNT_ALIAS_FIELDS: readonly ["alias_scopes", "aliases"];
+
+/** Fields `accountsInAliasScope` selects; `decodeAccountAliasRows` requires exactly these. */
+export declare const ACCOUNT_ALIAS_ROW_FIELDS: readonly ["id", "uaid", "aliases"];
+
+/** One active alias binding of an account, as `POST /v1/aliases/by-account` lists it. */
+export interface ToriiAccountAliasBinding {
+  readonly alias: string;
+  readonly dataspace: string;
+  readonly domain: string | null;
+  readonly is_primary: boolean;
+}
+
+/** One account row read by `accountsInAliasScope`. */
+export interface ToriiAccountAliasRow {
+  readonly id: string;
+  readonly uaid: string | null;
+  readonly aliases: ReadonlyArray<ToriiAccountAliasBinding>;
+}
+
+export interface AccountsInAliasScopeOptions {
+  limit?: number;
+  cursor?: string;
+  /** Read this one account (a point lookup) instead of the whole scope. */
+  accountId?: string;
+}
+
+/** The text after `@` of an alias literal: `domain.dataspace`, or `dataspace`. */
+export declare function accountAliasScope(alias: string): string;
+
+/**
+ * Query for the accounts holding an active alias in `scope` (`domain.dataspace`, or
+ * `dataspace`), selecting `id`, `uaid` and `aliases`. Page it with `torii.accounts.pages(query)`
+ * or a signed `GET` of `query.toQueryPairs()`, then decode `page.items` with
+ * `decodeAccountAliasRows`.
+ */
+export declare function accountsInAliasScope(
+  scope: string,
+  options?: AccountsInAliasScopeOptions,
+): ListQuery;
+
+/** Decode an `aliases` field exactly; unknown members and wrong types are `invalid_response`. */
+export declare function decodeAccountAliases(
+  value: unknown,
+  context?: string,
+): ToriiAccountAliasBinding[];
+
+/** Decode the items of a page read with `accountsInAliasScope`. */
+export declare function decodeAccountAliasRows(
+  items: unknown,
+  context?: string,
+): ToriiAccountAliasRow[];
 
 export interface CollectionRequestOptions {
   /** Abort the request (and, for `pages()`/`iterate()`, further paging). */

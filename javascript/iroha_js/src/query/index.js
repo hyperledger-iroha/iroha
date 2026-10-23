@@ -39,6 +39,14 @@ export {
   ListQuery,
   SELECT_MAX_FIELDS,
 } from "./listQuery.js";
+export {
+  ACCOUNT_ALIAS_FIELDS,
+  ACCOUNT_ALIAS_ROW_FIELDS,
+  accountAliasScope,
+  accountsInAliasScope,
+  decodeAccountAliasRows,
+  decodeAccountAliases,
+} from "./accountAliases.js";
 export { decodePage } from "./page.js";
 export {
   TORII_COLLECTION_PATHS,

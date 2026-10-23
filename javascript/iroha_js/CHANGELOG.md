@@ -4,6 +4,14 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added the account alias join of `GET /v1/accounts`: `accountsInAliasScope(scope, { limit, cursor,
+  accountId })` builds the query for the accounts that hold an active alias in `scope` (`domain.dataspace`,
+  or `dataspace`) and selects `id`, `uaid` and `aliases`; `decodeAccountAliasRows` and `decodeAccountAliases`
+  decode the items exactly; `accountAliasScope` returns the scope of an alias literal;
+  `ACCOUNT_ALIAS_FIELDS` and `ACCOUNT_ALIAS_ROW_FIELDS` name the fields. One page replaces one
+  `POST /v1/aliases/by-account` per account. Torii computes `alias_scopes` and `aliases` only for queries that
+  mention them, from the bindings the signed caller may read, and needs a validator build that includes
+  the join.
 - Removed the Parliament timed-OVN ballot and Parliament TLE client APIs: the
   wallet and release reads and the proof request on `ToriiClient`, their path
   builders, response parsers, frame codec and constants, the nine ballot

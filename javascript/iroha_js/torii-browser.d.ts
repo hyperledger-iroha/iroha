@@ -2,6 +2,8 @@
 export type * from "./index.js";
 
 export {
+  ACCOUNT_ALIAS_FIELDS,
+  ACCOUNT_ALIAS_ROW_FIELDS,
   AGGREGATE_FUNCTIONS,
   CURSOR_MAX_BYTES,
   FIELD_PATH_MAX_BYTES,
@@ -25,6 +27,10 @@ export {
   ToriiError,
   ToriiHttpError,
   ToriiStreamGapError,
+  accountAliasScope,
+  accountsInAliasScope,
+  decodeAccountAliasRows,
+  decodeAccountAliases,
   decodePage,
   field,
   isDecimalText,

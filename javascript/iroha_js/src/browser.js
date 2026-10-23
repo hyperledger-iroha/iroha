@@ -113,6 +113,8 @@ export {
   FilterSyntaxError,
 } from "./toriiErrors.js";
 export {
+  ACCOUNT_ALIAS_FIELDS,
+  ACCOUNT_ALIAS_ROW_FIELDS,
   AGGREGATE_FUNCTIONS,
   CURSOR_MAX_BYTES,
   FIELD_PATH_MAX_BYTES,
@@ -131,6 +133,10 @@ export {
   ListQuery,
   SortKey,
   ToriiCollection,
+  accountAliasScope,
+  accountsInAliasScope,
+  decodeAccountAliasRows,
+  decodeAccountAliases,
   decodePage,
   field,
   isDecimalText,
