@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test
  * Only the KAGEMUSHA wallet V1 wire, typed ordinary Activate/IssueLoad constructors, account originals and check codes, enrollment binding,
  * E1 policy originals and the closed E1 refusal table, P-256 codec,
  * Eligibility middleware, native installation/admission and operation owners, ledger and output
- * projections, platform adapter, and private native replies remain. The retired coordinator,
+ * projections, bounded process-local worker diagnostics, platform adapter, and private native replies remain. The retired coordinator,
  * ordinary-runtime, device-lifecycle, probe, provider and
  * Torii sources must not return in production source sets. The explicit `androidTest` inventory
  * includes the maintained enrollment and monetary qualification harness. Neither Android module

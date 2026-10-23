@@ -12,13 +12,15 @@ const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta
 const hashes = "node_modules/@scure/bip39/node_modules/@noble/hashes";
 function copies() { return [structuredClone(pkg), structuredClone(lock)]; }
 
-test("published exact floor covers all nine locked production dependency locations", () => {
+test("published exact floor covers all eight locked production dependency locations", () => {
+  // Bip39 2.4 owns its base conversion and no longer depends on @scure/base.
+  assert.equal(Object.hasOwn(lock.packages, "node_modules/@scure/base"), false);
   assert.equal(pkg.engines.node, ">=20.19.0");
   assert.equal(lock.packages[""].engines.node, ">=20.19.0");
   assert.equal(lock.packages[hashes].engines.node, ">= 20.19.0");
   for (const runtime of ["20.19.0", "20.20.0", "22.0.0", "24.0.0"]) {
     assert.deepEqual(validateNodeEngineContract(pkg, lock, runtime), {
-      minimum: "20.19.0", productionDependencies: 9,
+      minimum: "20.19.0", productionDependencies: 8,
     });
   }
 });
@@ -57,7 +59,7 @@ for (const [name, mutate, error] of [
 test("development-only tool minimum does not alter the published runtime closure", () => {
   const [p, l] = copies();
   l.packages["node_modules/typescript"].engines.node = ">=999.0.0";
-  assert.equal(validateNodeEngineContract(p, l, "20.19.0").productionDependencies, 9);
+  assert.equal(validateNodeEngineContract(p, l, "20.19.0").productionDependencies, 8);
 });
 
 test("a scoped nested dependency is checked even when the hoisted version accepts older Node", () => {
@@ -80,7 +82,7 @@ test("the fixed CLI reads its package and lock without SDK/native loading", () =
     encoding: "utf8", env: {}, timeout: 10_000,
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^Node >=20\.19\.0 covers 9 locked production dependencies; current /u);
+  assert.match(result.stdout, /^Node >=20\.19\.0 covers 8 locked production dependencies; current /u);
   const unexpected = spawnSync(process.execPath, [fileURLToPath(new URL("../scripts/check-node-engine.mjs", import.meta.url)), "--skip"], {
     encoding: "utf8", env: {}, timeout: 10_000,
   });

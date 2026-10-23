@@ -605,9 +605,7 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
         let mut block = state.block(header(2));
         let mut transaction = block.transaction();
         let mut declares = ExecutorDataModel::default();
-        declares
-            .parameters
-            .insert(PipelineValidityPolicyV1::parameter_id(), attacker);
+        declares.parameters.insert(attacker);
         transaction.world.apply_executor_data_model(declares);
         assert_eq!(
             committed(transaction.world.parameters.get()),
@@ -638,10 +636,9 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
     let mut block = state.block(header(2));
     let mut transaction = block.transaction();
     let mut declares = ExecutorDataModel::default();
-    declares.parameters.insert(
-        PipelineValidityPolicyV1::parameter_id(),
-        committed_policy().into_custom_parameter(),
-    );
+    declares
+        .parameters
+        .insert(committed_policy().into_custom_parameter());
     transaction.world.apply_executor_data_model(declares);
     assert_eq!(committed(transaction.world.parameters.get()), Ok(None));
     assert!(
@@ -1082,7 +1079,7 @@ fn committed_fees_use_one_predecessor_for_quotes_execution_and_effects() {
             )
             .into(),
         ];
-        config.genesis_parameters = vec![
+        config.genesis_parameters.extend([
             parameter("ivm_gas_tech_account_id", Json::new(BOB_ID.to_string())),
             parameter(
                 "ivm_gas_accepted_assets",
@@ -1096,7 +1093,7 @@ fn committed_fees_use_one_predecessor_for_quotes_execution_and_effects() {
                 ))
                 .unwrap(),
             ),
-        ];
+        ]);
         let mut prepared = CertifiedTestChain::prepare(config).unwrap();
         if divergent {
             let state = Arc::get_mut(&mut prepared.state).unwrap();

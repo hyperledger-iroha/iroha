@@ -45,7 +45,7 @@ hex = { workspace = true, features = ["alloc"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 base64 = { workspace = true }
 quinn = "0.11.12"
-rustls = { version = "0.23.35", default-features = false, features = ["std"] }
+rustls = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net", "io-util", "sync"] }
 tracing = { workspace = true }

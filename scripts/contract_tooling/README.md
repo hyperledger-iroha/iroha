@@ -68,9 +68,9 @@ code.
 
 ## EVM runtime
 
-`evm-runtime/` pins the native EDR `0.12.1` Node-API engine, ethers `6.16.0`
-and `@noble/curves` `1.2.0` (the BLS12-381 implementation of the independent
-JavaScript model; ethers already resolves the same version) for the EDR suites
+`evm-runtime/` pins the native EDR `0.12.1` Node-API engine, ethers `6.17.0`
+and `@noble/curves` `1.9.7` (the BLS12-381 implementation of the independent
+JavaScript model) for the EDR suites
 under `contracts/evm/sccp/test/`. Install it with `npm ci --ignore-scripts` in
 that directory; `node_modules/` is ignored by git. `edr-provider.js` creates
 isolated in-memory chains with explicit chain ids, gas limits and

@@ -7,9 +7,9 @@
     "node": ">=22 <27"
   },
   "dependencies": {
-    "@noble/curves": "1.2.0",
+    "@noble/curves": "1.9.7",
     "@nomicfoundation/edr": "0.12.1",
-    "ethers": "6.16.0"
+    "ethers": "6.17.0"
   },
   "overrides": {
     "ws": "8.21.0"

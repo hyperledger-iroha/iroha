@@ -33,7 +33,7 @@ across Rust, Python, and Java.
 
 ### Runtime dependency (v0.1.0)
 - Zstandard support is part of the release codec, so the published artifact depends directly on
-  `com.github.luben:zstd-jni:1.5.7-7` and fails at linkage time if that dependency is broken.
+  `com.github.luben:zstd-jni:1.5.7-24` and fails at linkage time if that dependency is broken.
 
 ## Runtime qualification
 
@@ -97,13 +97,13 @@ dependencies {
 ### Bundling `zstd-jni`
 `CompressionConfig.zstdProfile` and `CompressionConfig.zstd(level)` call into
 `com.github.luben:zstd-jni` directly. Gradle and Maven consumers receive version
-`1.5.7-7` transitively from `norito-java`; do not add a second optional backend or probe for one.
+`1.5.7-24` transitively from `norito-java`; do not add a second optional backend or probe for one.
 If dependency constraints are managed centrally, keep the resolved version aligned:
 
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("com.github.luben:zstd-jni:1.5.7-7")
+    implementation("com.github.luben:zstd-jni:1.5.7-24")
 }
 ```
 

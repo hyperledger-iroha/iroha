@@ -199,4 +199,4 @@ operations, Android artifacts or physical devices.
 
 ## Version Catalog
 
-Dependencies managed in `gradle/libs.versions.toml`: Kotlin 2.3.10, AGP 9.0.1, JUnit 5.11.4, BouncyCastle 1.78.1, zstd-jni 1.5.7-7, OkHttp 4.12.0, Netty 4.2.17.Final.
+Dependencies managed in `gradle/libs.versions.toml`: Kotlin 2.4.21, AGP 9.0.1, JUnit 5.14.4, BouncyCastle 1.86, zstd-jni 1.5.7-24, OkHttp 5.5.1, Netty 4.1.139.Final.

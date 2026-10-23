@@ -333,11 +333,11 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
-    "esbuild": "0.28.1",
+    "esbuild": "0.28.2",
     "eslint": "^8.57.0",
     "typescript": "^5.8.3"
   },
   "allowScripts": {
-    "esbuild@0.28.1": true
+    "esbuild@0.28.2": true
   }
 }

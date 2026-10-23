@@ -31,7 +31,7 @@ sees the same semantics that the refreshed `norito.md` documents.
   is missing.
 
 ## Installation
-Install directly from the workspace root:
+Python 3.10 or newer is required. Install directly from the workspace root:
 
 ```bash
 python3 -m pip install ./python/norito_py

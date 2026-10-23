@@ -81,9 +81,9 @@ dependencies {
     implementation(project(":core"))
     testImplementation(project(":core"))
     testImplementation("junit:junit:4.13.2")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
-    testImplementation("com.squareup.okhttp3:okhttp:4.12.0")
-    testImplementation("com.squareup.okio:okio:3.6.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.5.1")
+    testImplementation("com.squareup.okhttp3:okhttp:5.5.1")
+    testImplementation("com.squareup.okio:okio:3.18.2")
 }
 
 val coreMain =

@@ -1456,7 +1456,7 @@ def test_evm_runtime_is_locked_audited_native_edr_that_mines_reverts() -> None:
     tooling = ROOT / "scripts" / "contract_tooling" / "evm-runtime"
     package = json.loads((tooling / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((tooling / "package-lock.json").read_text(encoding="utf-8"))
-    assert package["dependencies"] == {"@noble/curves": "1.2.0", "ethers": "6.16.0", "@nomicfoundation/edr": "0.12.1"}
+    assert package["dependencies"] == {"@noble/curves": "1.9.7", "ethers": "6.17.0", "@nomicfoundation/edr": "0.12.1"}
     assert package["overrides"] == {"ws": "8.21.0"}
     assert_registry_locked(package_lock)
     assert package_lock["packages"][""]["dependencies"] == package["dependencies"]

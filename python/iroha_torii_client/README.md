@@ -1,5 +1,7 @@
 # Iroha Torii client
 
+Python 3.10 or newer is required for the supported HTTP and build dependencies.
+
 ## Collection queries
 
 `iroha_torii_client.list_query` is the single Python implementation of the

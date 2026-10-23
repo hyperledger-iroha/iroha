@@ -83,7 +83,7 @@ dependencies {
     implementation(libs.bundles.androidxUi)
     implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
     implementation(libs.jxingCore)
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
 
     testImplementation(libs.junit)
     testImplementation(kotlin("test-junit"))

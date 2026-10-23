@@ -568,7 +568,8 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
   );
   // Exact observed closure includes event declarations, typed faults, durable
   // schemas, product identities, and the two shared Norito metadata/value owners.
-  assert.equal(Object.keys(result.metafile.inputs).length, 129);
+  // Bip39 2.4 removes the previously bundled @scure/base module.
+  assert.equal(Object.keys(result.metafile.inputs).length, 128);
   assertSplitByteInventory(result, metrics);
   assert.deepEqual(metrics.lazyChunks.map(({ specifier }) => specifier), [
     "./sumeragiTyped.js",
@@ -611,10 +612,10 @@ test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
 
 test("bundle targets retain canonical module ownership and accurate byte inventories", async () => {
   const expected = new Map([
-    ["toriiClient.js", { modules: 157 }],
+    ["toriiClient.js", { modules: 156 }],
     ["transactionCodec.js (browser)", { modules: 70 }],
     ["nexusApp.js (browser)", { modules: 81 }],
-    ["canonicalRequest.js (browser)", { modules: 49 }],
+    ["canonicalRequest.js (browser)", { modules: 48 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
