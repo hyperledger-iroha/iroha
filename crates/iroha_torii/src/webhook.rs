@@ -1975,6 +1975,29 @@ async fn http_post_plain(
 }
 
 #[cfg(feature = "app_api_https")]
+fn https_delivery_client(
+    url: &Url,
+    connect_addrs: &[SocketAddr],
+) -> std::io::Result<reqwest::Client> {
+    // Redirects are not followed: the destination guard only vets the
+    // registered URL, so a 3xx would let the delivery reach an unvetted host.
+    let mut client_builder = reqwest::Client::builder()
+        .timeout(
+            http_timeout_config().connect
+                + http_timeout_config().write
+                + http_timeout_config().read,
+        )
+        .redirect(reqwest::redirect::Policy::none())
+        .http1_only();
+    if let Some((domain, pinned_addrs)) = https_delivery_dns_override(url, connect_addrs) {
+        client_builder = client_builder.resolve_to_addrs(&domain, &pinned_addrs);
+    }
+    client_builder
+        .build()
+        .map_err(|e| std::io::Error::other(format!("https client build: {e}")))
+}
+
+#[cfg(feature = "app_api_https")]
 async fn http_post_https(
     url: &Url,
     connect_addrs: &[SocketAddr],
@@ -1983,19 +2006,7 @@ async fn http_post_https(
 ) -> std::io::Result<u16> {
     use reqwest::header::{HeaderName, HeaderValue};
 
-    let mut client_builder = reqwest::Client::builder()
-        .timeout(
-            http_timeout_config().connect
-                + http_timeout_config().write
-                + http_timeout_config().read,
-        )
-        .http1_only();
-    if let Some((domain, pinned_addrs)) = https_delivery_dns_override(url, connect_addrs) {
-        client_builder = client_builder.resolve_to_addrs(&domain, &pinned_addrs);
-    }
-    let client = client_builder
-        .build()
-        .map_err(|e| std::io::Error::other(format!("https client build: {e}")))?;
+    let client = https_delivery_client(url, connect_addrs)?;
 
     let mut req = client
         .post(url.as_str())
@@ -3316,6 +3327,60 @@ mod tests {
             super::https_delivery_dns_override(&url, &addrs).is_none(),
             "ip-literal URLs should not install a DNS override"
         );
+    }
+
+    #[cfg(feature = "app_api_https")]
+    #[test]
+    fn https_delivery_client_does_not_follow_redirects() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let rt = Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let internal = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let internal_addr = internal.local_addr().expect("addr");
+            let redirector = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let redirector_addr = redirector.local_addr().expect("addr");
+
+            tokio::spawn(async move {
+                let (mut stream, _) = redirector.accept().await.expect("accept");
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await;
+                let response = format!(
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{internal_addr}/internal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+            let internal_hit = tokio::spawn(async move {
+                let (mut stream, _) = internal.accept().await.expect("accept");
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+            });
+
+            let url = Url::parse(&format!("http://{redirector_addr}/hook")).expect("valid url");
+            let client = super::https_delivery_client(&url, &[]).expect("client");
+            let status = client
+                .post(url.as_str())
+                .body("{}")
+                .send()
+                .await
+                .expect("send")
+                .status()
+                .as_u16();
+
+            assert_eq!(status, 307, "redirect must be returned, not followed");
+            sleep(Duration::from_millis(100)).await;
+            assert!(
+                !internal_hit.is_finished(),
+                "redirect target must not be contacted"
+            );
+            internal_hit.abort();
+        });
     }
 
     #[cfg(feature = "app_api_wss")]
