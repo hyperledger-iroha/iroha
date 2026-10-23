@@ -9,6 +9,11 @@ use super::*;
 #[cfg(test)]
 mod account_history_multisig_tests;
 
+mod account_aliases;
+#[cfg(test)]
+mod account_aliases_tests;
+use account_aliases::AccountAliasJoin;
+
 use crate::collections::{self, CollectionError, CollectionSpec, Limits, RowPage, specs};
 use iroha_torii_shared::list_query::ListQuery;
 
@@ -489,6 +494,7 @@ fn execute_prepared_collection_local(
         }
         CollectionTarget::Accounts => {
             let world = state.world_view();
+            let aliases = AccountAliasJoin::for_query(state, query, visibility);
             let scan = prepared.ordered_scan();
             let after = cursor_key(scan.and_then(|scan| scan.after), |id| {
                 AccountId::parse_encoded(id).ok()
@@ -510,6 +516,12 @@ fn execute_prepared_collection_local(
                     visibility
                         .allows_account(&world, id)
                         .then(|| {
+                            // The joined alias fields are exact, so they sit in the cheap prefix
+                            // too: an account the filter rejects never serializes its metadata.
+                            let joined = aliases
+                                .as_ref()
+                                .map(|join| join.fields(&world, (id, value.as_ref()), limits.bytes))
+                                .transpose()?;
                             source_filtered_row(
                                 prepared,
                                 || {
@@ -518,13 +530,23 @@ fn execute_prepared_collection_local(
                                         .as_ref()
                                         .map(|uaid| limits.bytes.display(uaid))
                                         .transpose()?;
-                                    limits.bytes.row_fields([
+                                    let mut prefix = limits.bytes.row_fields([
                                         ("id", id),
                                         ("label", &None::<&str>),
                                         ("uaid", &uaid),
-                                    ])
+                                    ])?;
+                                    if let Some(joined) = &joined {
+                                        prefix.extend(joined.clone());
+                                    }
+                                    Ok(prefix)
                                 },
-                                || account_row(id, value.as_ref(), limits.bytes),
+                                || {
+                                    let mut row = account_row(id, value.as_ref(), limits.bytes)?;
+                                    if let Some(joined) = &joined {
+                                        row.extend(joined.clone());
+                                    }
+                                    Ok(row)
+                                },
                             )
                         })
                         .transpose()?,

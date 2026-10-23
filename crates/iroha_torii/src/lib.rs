@@ -15435,6 +15435,7 @@ fn torii_dataspace_read_visibility_in(
         .map(|route| route.dataspace_id)
         .collect();
     routing::DataspaceReadVisibility::new(visible_dataspaces, can_read_all)
+        .with_alias_resolver(caller.cloned())
 }
 #[cfg(feature = "app_api")]
 #[expect(

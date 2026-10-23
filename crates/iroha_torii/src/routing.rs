@@ -296,6 +296,9 @@ pub struct DataspaceReadVisibility {
     fixed_scope: Option<crate::stream_control::FixedScopeOwner>,
     can_read_all: bool,
     exact_account: Option<AccountId>,
+    /// The signed caller whose `CanResolveAccountAlias` grants open the aliases of restricted
+    /// dataspaces in account rows; without one only public-dataspace aliases are disclosed.
+    alias_resolver: Option<AccountId>,
 }
 
 impl DataspaceReadVisibility {
@@ -305,7 +308,19 @@ impl DataspaceReadVisibility {
             fixed_scope: None,
             can_read_all,
             exact_account: None,
+            alias_resolver: None,
         }
+    }
+
+    /// Name the signed caller whose alias-resolve permissions apply to account rows.
+    #[must_use]
+    pub(crate) fn with_alias_resolver(mut self, caller: Option<AccountId>) -> Self {
+        self.alias_resolver = caller;
+        self
+    }
+
+    pub(crate) fn alias_resolver(&self) -> Option<&AccountId> {
+        self.alias_resolver.as_ref()
     }
 
     /// Restrict an authorized account-assets read to one exact account on its
@@ -317,6 +332,7 @@ impl DataspaceReadVisibility {
             fixed_scope: None,
             can_read_all: false,
             exact_account: Some(account),
+            alias_resolver: None,
         }
     }
 
@@ -331,6 +347,7 @@ impl DataspaceReadVisibility {
             fixed_scope: None,
             can_read_all: true,
             exact_account: None,
+            alias_resolver: None,
         }
     }
 
@@ -352,6 +369,7 @@ impl DataspaceReadVisibility {
             fixed_scope: Some(scope),
             can_read_all,
             exact_account: None,
+            alias_resolver: None,
         }
     }
 

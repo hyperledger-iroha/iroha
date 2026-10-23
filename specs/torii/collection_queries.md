@@ -273,7 +273,7 @@ absent.
 | Collection | Fields (type) | Default order |
 | --- | --- | --- |
 | domains | `id` (string, *sort*), `owned_by` (string, *sort*), `logo` (string or null), `metadata.*` | `id` |
-| accounts | `id` (string, *sort*), `label` (string or null, *sort*), `uaid` (string or null, *sort*), `metadata.*` | `id` |
+| accounts | `id` (string, *sort*), `label` (string or null, *sort*), `uaid` (string or null, *sort*), `metadata.*`; on request [`alias_scopes`](#account-aliases) (list of strings), [`aliases`](#account-aliases) (JSON) | `id` |
 | asset definitions | `id`, `name`, `alias`, `owned_by`, `owning_domain` (strings, *sort*), `mintable` (string), `alias_binding.alias`, `alias_binding.status` (strings), `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms`, `alias_binding.bound_at_ms` (numbers, *sort*), `metadata.*` | `id` |
 | NFTs | `id`, `owned_by` (strings, *sort*), `metadata.*` (the NFT content) | `id` |
 | RWA lots | `id`, `owned_by`, `primary_reference`, `status` (strings, *sort*), `quantity` (decimal, *sort*), `is_frozen` (bool), `metadata.*` | `id` |
@@ -303,6 +303,41 @@ Asset definition items carry the complete definition record (including
 List-valued fields match element-wise: `asset_definition_ids = "…"` and
 `asset_ids in […]` select rows where any element matches, and `!=`/`not in`
 select rows where none does. Lists cannot be sorted or range-compared.
+
+### Account aliases
+
+An account's alias bindings are not stored on its row. `alias_scopes` and `aliases` join them
+onto it, and only for a query that mentions one of them (in `filter`, `select`, `sort` or
+`aggregate`); every other accounts read returns exactly the fields above. Both come from the
+bindings that are active now and still resolve to the account, as the caller may read them: an
+alias of a public dataspace needs nothing, any other needs the signed caller's
+`CanResolveAccountAlias` for the alias, its domain or (for a domainless alias) its dataspace. An
+alias is disclosed exactly when `POST /v1/aliases/by-account` for that account, naming the
+alias's own dataspace and domain, would return it.
+
+| Field | Value |
+| --- | --- |
+| `alias_scopes` | List of strings, one per distinct scope: the text after `@` in the alias (`domain.dataspace`, or `dataspace` for a domainless alias). Filterable, not sortable. |
+| `aliases` | List of `{alias, dataspace, domain, is_primary}` (`domain` is absent for a domainless alias), ordered by `alias` as in the by-account response; at most 64 per account, else `query_capacity_exceeded`. Selectable, not filterable. |
+
+`alias_scopes` is a list so that a condition applies to one binding: `alias_scopes = "mibank.bpng"`
+keeps the accounts holding an alias in that scope, and never one with a `mibank` alias in another
+dataspace and a `bpng` alias in another domain. It is computed from the disclosed bindings only, so
+a filter cannot reveal an alias the caller may not read; an account without disclosed aliases has
+`alias_scopes = []`, so `alias_scopes != "x"` keeps it. Rows keep the visibility and the
+page/scan limits of every accounts read (see Order and scan cost): a selective filter can return a
+short page with a `next_cursor`.
+
+```text
+GET /v1/accounts?filter=alias_scopes = "mibank.bpng"&select=id,uaid,aliases&limit=500
+→ {"items": [{"id": "sorau…", "uaid": null,
+              "aliases": [{"alias": "alice@mibank.bpng", "dataspace": "bpng",
+                           "domain": "mibank", "is_primary": true}]}, …],
+   "next_cursor": null}
+```
+
+One page of such a read replaces one `POST /v1/aliases/by-account` per account. With `id = "…" and`
+in the filter it is a point lookup of one account.
 
 ## History collections
 

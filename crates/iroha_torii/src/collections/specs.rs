@@ -221,7 +221,14 @@ pub static DOMAINS: CollectionSpec = CollectionSpec {
 pub static ACCOUNTS: CollectionSpec = CollectionSpec {
     id: "accounts",
     tag: 2,
-    fields: &[account("id"), text("label"), text("uaid")],
+    fields: &[
+        account("id"),
+        text("label"),
+        text("uaid"),
+        // Joined only for queries that mention them (`routing::collection_sources`).
+        text_list("alias_scopes"),
+        json("aliases"),
+    ],
     metadata: true,
     default_sort: &[("id", Order::Asc)],
     identity: &["id"],
@@ -701,6 +708,18 @@ mod tests {
         assert_eq!(field.ty, FieldType::String);
         assert!(field.sortable);
         assert!(!field.account);
+    }
+
+    #[test]
+    fn account_alias_fields_are_a_filterable_list_and_a_selectable_value() {
+        let scopes = ACCOUNTS.field("alias_scopes").expect("alias scopes");
+        assert_eq!(scopes.ty, FieldType::String);
+        assert!(scopes.list && !scopes.sortable && !scopes.account);
+        let aliases = ACCOUNTS.field("aliases").expect("aliases");
+        assert_eq!(aliases.ty, FieldType::Json);
+        assert!(!aliases.list && !aliases.sortable);
+        assert!(ACCOUNTS.field("aliases.alias").is_none());
+        assert!(DOMAINS.field("aliases").is_none());
     }
 
     #[test]
