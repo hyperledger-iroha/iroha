@@ -311,9 +311,10 @@ onto it, and only for a query that mentions one of them (in `filter`, `select`, 
 `aggregate`); every other accounts read returns exactly the fields above. Both come from the
 bindings that are active now and still resolve to the account, as the caller may read them: an
 alias of a public dataspace needs nothing, any other needs the signed caller's
-`CanResolveAccountAlias` for the alias, its domain or (for a domainless alias) its dataspace. An
-alias is disclosed exactly when `POST /v1/aliases/by-account` for that account, naming the
-alias's own dataspace and domain, would return it.
+`CanResolveAccountAlias` for the alias, its domain or (for a domainless alias) its dataspace. For
+an account whose row the caller can see (the ordinary accounts visibility rules), an alias is
+disclosed exactly when `POST /v1/aliases/by-account` for that account, naming the alias's own
+dataspace and domain, would return it.
 
 | Field | Value |
 | --- | --- |
