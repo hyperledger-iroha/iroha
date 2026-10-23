@@ -35,7 +35,7 @@ their component ownership.
 | KR1 — iOS release and restore | Native/Swift, G2 | Trace Selected, journal, signature, anchor and exposed Payment through interrupted/ambiguous writes, concurrency, restart and replay. Exercise supported stock-device backup/restore and migration schedules. A released Payment must exclude an old head under the same usable key through a nonrollback authority, or make that key unusable. Retain the existing double-anchor-loss counterexample until an actual platform guarantee excludes it; Keychain readback and additional writes alone do not close it. |
 | KR2 — Complete monetary lifecycle | Wallet/Core/SDK, G4/G5, NF1–NF6 | Execute enrollment → activation → funded Load → offline A→B→C → Unload → once-only ledger payout. Include receiver restart with a fresh-ID duplicate Receive, reverse-direction payments, Receive folding, ArchiveReceive, ArchiveStatus, fees, quota/lease controls, local blacklists and charge continuations. At every durable boundary cover crashes, lost acknowledgements, exact retries, duplicate credits, conflicting inputs, invalid proofs and stale state; preserve conservation and every committed payment. Run host, four local validators and live Taira separately. |
 | KR3 — Physical phones | Android/Swift/carriers, G2/G4/G7 | On the specified Pixel 6 / Android 17 and iPhone 16 Pro Max, retain actual key attestation/App Attest, activation, funded Load, bidirectional offline payments over each supported NFC/QR/Nearby carrier, restart/interruption and Unload. Record actual model/OS/build/carrier; a different phone or a simulator does not close this goal. Request concrete unlock, biometric and tap actions when the device harness is ready. |
-| KR4 — Complete envelopes and resources | Model/proofs/SDK, G1/G4/G7 | Retain genuine canonical Request, Payment, payer companion, both Credited forms, CreditStatus and Lineage envelopes for every current supported selector. The payer companion and simple session-control frames are ≤2,048 B; Request, Payment and Credited envelopes, with their required dependencies, are each ≤10,000 B (§8). On a declared physical-device/OS/carrier population measure two-second p95 durable completion, cold opening, peak memory, retained storage, energy and separate time until received value is spendable. Preserve failed, cancelled and slow trials; calibration cannot convert a failure into a pass. |
+| KR4 — Complete envelopes and resources | Model/proofs/SDK, G1/G4/G7 | Retain genuine canonical Request, Payment, payer companion, both Credited forms, CreditStatus and Lineage envelopes for every current supported selector. The payer companion and simple session-control frames are ≤2,048 B; Request, Payment and Credited envelopes, with their required dependencies, are each ≤10,034 B (§8). On a declared physical-device/OS/carrier population measure two-second p95 durable completion, cold opening, peak memory, retained storage, energy and separate time until received value is spendable. Preserve failed, cancelled and slow trials; calibration cannot convert a failure into a pass. |
 | KR5 — Proof correctness and privacy | Proof owners/independent reviewer, G3 | Run genuine native/circuit binding mutations for every consumer, Ω opening and both exposed accumulator decisions. Discharge [C12](kagemusha_c12_composition_v1.md) for the actual setup, three-Q prefix, RP57 interfaces, exposed challenges, adaptive histories, retained private state, checkpoints, retries and joint folding/publication, with explicit assumptions and independent review. Regenerate descriptors, keys and catalog and rerun affected genuine proofs after any construction change. |
 | KR6 — Retirement and generated delivery | Component/release owners, G6/G7 | Remove every confirmed superseded implementation and its unused build edges without losing assertions or runtime bindings. Regenerate OpenAPI manifests, `release/openapi-cargo-lock-v1.txt`, environment inventory, panic-boundary inventory and release feature-graph seal from the final source. Prepare a concrete dependency-budget baseline for owner review. Update concise source-adjacent truth and coordinate affected public documentation in `iroha-docs`. |
 | KR7 — Verified delivery | All component owners, G7 | Rebuild matching consumers and pass focused regressions, required workspace tests, applicable strict clippy, Kotlin/Swift/Python/JavaScript/C# suites and release checks on the identified candidate. The final §10.1 report names defects/regressions, artifact identities, network/device measurements, cryptographic assumptions, and every remaining external dependency with its smallest necessary decision. No unexecuted or failed requirement is marked complete. |
@@ -53,7 +53,7 @@ KR2 has two distinct scheduling prerequisites before the phone journey:
   on physical phones cover activity changes during a synchronous fold, close
   failures, teardown and reopen without stale callbacks reaching a new owner.
   Source review alone does not qualify OS notification timing or fold progress.
-- Qualify the implemented Core admission, Native source barrier and ABI32 C/JNI/SDK
+- Qualify the implemented Core admission, Native source barrier and ABI33 C/JNI/SDK
   integration around the [deferred ArchiveSent queue](../crates/iroha_core_zk/src/kagemusha_wallet_state_v1/deferred_archive.rs)
   required by §5.3. Exact Credited originals enter custody before verification;
   first verified receipt and age observations remain bound to their actual Send.
@@ -79,7 +79,7 @@ KR2 has two distinct scheduling prerequisites before the phone journey:
   requery Native source and time. Qualify this automatic progress, event/park
   races, explicit retry of observed failures and close ownership; source
   integration alone does not establish runtime liveness.
-  Rebuild matching ABI32 consumers and execute authored queue, admission,
+  Rebuild matching ABI33 consumers and execute authored queue, admission,
   recovery, cancellation and lifecycle regressions, genuine native fixtures,
   four-validator journeys and phone probes. Source checks and read-only delivery
   projections do not establish runtime durability, liveness or phone timing.
@@ -89,7 +89,7 @@ KR2 has two distinct scheduling prerequisites before the phone journey:
 The supplied older capture is not the current catalog or size authority:
 
 - The current model's Payment overhead is **1,394 B**, its sigma capacity is
-  **3,520 B**, and its Omega transport capacity is **5,086 B**. These are
+  **3,520 B**, and its Omega transport capacity is **5,120 B**. These are
   structural capacities, not newly measured genuine proofs. See
   [`kagemusha_wallet_v1.rs`](../crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1.rs)
   and its `size_tests` and role-capacity tests.

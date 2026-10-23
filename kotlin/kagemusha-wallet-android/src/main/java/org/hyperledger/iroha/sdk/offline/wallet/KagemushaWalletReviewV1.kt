@@ -96,9 +96,9 @@ sealed class KagemushaWalletBoundRequestStatusV1 {
             val bytes = reply.bytes()
             fun u32(at: Int): Long = (0..3).fold(0L) { value, i -> value or ((bytes[at + i].toLong() and 255) shl (8 * i)) }
             fun u64(at: Int): Long = (0..7).fold(0L) { value, i -> value or ((bytes[at + i].toLong() and 255) shl (8 * i)) }
-            if (bytes.size !in 28..10_028) invalidReviewOutput()
+            if (bytes.size !in 28..10_062) invalidReviewOutput()
             val kind = u32(0); val detail = u32(4); val low = u64(8); val high = u64(16); val length = u32(24)
-            if (kind !in listOf(1L, 2L, 3L, 4L, 5L, 10L, 11L) || length > 10_000 || bytes.size.toLong() != 28 + length) invalidReviewOutput()
+            if (kind !in listOf(1L, 2L, 3L, 4L, 5L, 10L, 11L) || length > 10_034 || bytes.size.toLong() != 28 + length) invalidReviewOutput()
             if (kind == 11L) {
                 if (detail != 0L || low != 0L || high != 0L || length != 0L) invalidReviewOutput()
                 return Preparing
@@ -212,7 +212,8 @@ internal class KagemushaWalletReviewInputV1(
         requireReviewRequestId(requestId)
         val nonzero = amount.low != 0L || amount.high != 0L
         when (selector) {
-            1 -> require(!nonzero && first.isNotEmpty() && first.size <= 10_000 && second.isNotEmpty() && second.size <= 4_096)
+            1 -> require(!nonzero && first.isNotEmpty() && first.size <= 10_034 &&
+                second.isNotEmpty() && second.size <= 4_096)
             8 -> {
                 require(nonzero && first.size <= 1_024 && first.isEmpty() == second.isEmpty())
                 if (second.isNotEmpty()) KagemushaWalletUnloadChargeReviewV1.validate(second)

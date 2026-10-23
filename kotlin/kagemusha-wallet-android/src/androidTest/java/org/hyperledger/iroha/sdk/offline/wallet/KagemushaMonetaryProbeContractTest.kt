@@ -112,10 +112,11 @@ class KagemushaMonetaryProbeContractTest {
         for (status in listOf("native-activation-exported-not-submitted", "native-activation-rejected",
             "native-load-plan-retained", "native-review-awaiting-explicit-decision",
             "native-peer-envelope-decoded-not-admitted", "native-unload-claim-exported-not-settled",
-            "native-unload-prefix-retained-not-confirmed", "native-current-head-not-folded") + listOf("native-exchange-open", "native-exchange-ended", "native-deferred-receipt-no-work",
+            "native-activation-unconfirmed", "native-activation-epoch-required", "native-unload-unconfirmed",
+            "native-unload-rejected", "native-unload-epoch-required", "native-current-head-not-folded") + listOf("native-exchange-open", "native-exchange-ended", "native-deferred-receipt-no-work",
             "native-deferred-archive-no-work", "native-deferred-archive-blocked-ARCHIVE_FOLD",
-            "native-review-retained-SELECTED_PENDING") + (0..67).map { "native-call-status-$it" } +
-            (0..67).map { "native-existing-request-status-$it" } +
+            "native-review-retained-SELECTED_PENDING") + (0..70).map { "native-call-status-$it" } +
+            (0..70).map { "native-existing-request-status-$it" } +
             listOf("SELECTED_PENDING", "ARCHIVE_FOLD", "BUSY").map { "native-review-waiting-$it" }) {
             assertNull(status, enrollmentProbeStage(status))
         }
@@ -244,25 +245,25 @@ class KagemushaMonetaryProbeContractTest {
     @Test fun activationRetentionReceiptOnlyAdmitsTheInitialNativeRetentionResult() {
         val invocation = "11111111-1111-4111-8111-111111111111"
         val wire = byteArrayOf(8, 9, 10)
-        fun value(status: Int): KagemushaWalletActivationFinalityV1 {
-            val empty = status == KagemushaWalletCallV1.ACTIVATION_NOT_STARTED
-            return KagemushaWalletActivationFinalityV1(KagemushaWalletCallV1(status, 0, 0,
-                if (empty) 0L else 2L, 0, 0, if (empty) ByteArray(0) else ByteArray(32) { 1 }))
+        fun value(status: Int): KagemushaWalletLedgerOutcomeV1 {
+            val awaiting = status == KagemushaWalletCallV1.LEDGER_AWAITING
+            return KagemushaWalletLedgerOutcomeV1.of(KagemushaWalletCallV1(status, 0, 0,
+                if (awaiting) 0L else 2L, 0, 0, if (awaiting) ByteArray(32) { 0x0f } else ByteArray(32) { 1 }))
         }
-        val initial = value(KagemushaWalletCallV1.ACTIVATION_NOT_STARTED)
+        val initial = value(KagemushaWalletCallV1.LEDGER_AWAITING)
         val original = activationRetentionReceipt(wire, initial, 44, invocation, 12)!!
         val row = probeObject(original)
         assertEquals(setOf("schema", "action", "signedWireSHA256", "signedWireBytes", "nativeResult",
-            "nativeReturnedTicks", "invocation", "sequence"), row.keys)
+            "entrypointHex", "nativeReturnedTicks", "invocation", "sequence"), row.keys)
         assertEquals("iroha.kagemusha.wallet-activation-retained.v1", row.text("schema"))
         assertEquals("retain-activation", row.text("action"))
         assertEquals(EnrollmentProbeFiles.digest(wire), row.text("signedWireSHA256"))
-        assertEquals("3", row.text("signedWireBytes")); assertEquals("not_started", row.text("nativeResult"))
+        assertEquals("3", row.text("signedWireBytes")); assertEquals("awaiting", row.text("nativeResult"))
+        assertEquals("0f".repeat(32), row.text("entrypointHex"))
         assertEquals("44", row.text("nativeReturnedTicks")); assertEquals(invocation, row.text("invocation"))
         assertEquals("12", row.text("sequence"))
         assertFalse(original.contentEquals(activationRetentionReceipt(byteArrayOf(8, 9, 11), initial, 44, invocation, 12)))
-        for (status in listOf(KagemushaWalletCallV1.ACTIVATION_PROGRESS,
-            KagemushaWalletCallV1.ACTIVATION_REJECTED, KagemushaWalletCallV1.ACTIVATION_CONFIRMATION)) {
+        for (status in listOf(KagemushaWalletCallV1.LEDGER_REJECTED, KagemushaWalletCallV1.LEDGER_CONFIRMED)) {
             assertNull(activationRetentionReceipt(wire, value(status), 44, invocation, 12))
         }
         refused { activationRetentionReceipt(ByteArray(0), initial, 44, invocation, 12) }

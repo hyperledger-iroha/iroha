@@ -42,34 +42,68 @@ class KagemushaWalletExchangeCallV1 internal constructor(
         return result.bytes()
     }
 
-    /** Native authenticates this exact Unload in the selected committed block's successful transaction. */
-    fun confirmLedgerUnload(transactionHash: ByteArray, original: ByteArray): KagemushaWalletUnloadConfirmationV1 = task.useCall { confirmLedgerUnloadAccepted(transactionHash, original) }
-    private fun confirmLedgerUnloadAccepted(transactionHash: ByteArray, original: ByteArray): KagemushaWalletUnloadConfirmationV1 =
-        KagemushaWalletUnloadConfirmationV1(setup(KagemushaWalletSetupInputV1(30, identity = transactionHash, first = original)))
-
-    /** Verify the next contiguous ordinary proof for this exact Unload's independent cursor. */
-    fun ingestUnloadFinality(transactionHash: ByteArray, original: ByteArray,
-        finality: ByteArray): KagemushaWalletLedgerProgressV1 = task.useCall { ingestUnloadFinalityAccepted(transactionHash, original, finality) }
-    private fun ingestUnloadFinalityAccepted(transactionHash: ByteArray, original: ByteArray,
-        finality: ByteArray): KagemushaWalletLedgerProgressV1 = KagemushaWalletLedgerProgressV1(
-        setup(KagemushaWalletSetupInputV1(34, identity = transactionHash, first = original, second = finality)))
+    /** Verify one direct ledger finality original for this exact signed Unload envelope. */
+    fun ingestUnloadFinality(claim: ByteArray, signedWire: ByteArray,
+        finality: ByteArray): KagemushaWalletLedgerIngestV1 = task.useCall {
+        ingestUnloadFinalityAccepted(claim, signedWire, finality)
+    }
+    private fun ingestUnloadFinalityAccepted(claim: ByteArray, signedWire: ByteArray,
+        finality: ByteArray): KagemushaWalletLedgerIngestV1 =
+        KagemushaWalletLedgerIngestV1.of(setup(KagemushaWalletSetupInputV1(34,
+            first = claim, second = signedWire, third = finality)))
 
     /** Durably admit this exact existing-account-signed outer Activate before its first POST.
-     * Intake is DATA only. An already retained attempt may report family confirmation from
-     * another retained same-Activation transaction; this is not this outer's execution result. */
-    fun retainActivationAttempt(signedWire: ByteArray): KagemushaWalletActivationFinalityV1 = task.useCall { retainActivationAttemptAccepted(signedWire) }
-    private fun retainActivationAttemptAccepted(signedWire: ByteArray): KagemushaWalletActivationFinalityV1 =
-        KagemushaWalletActivationFinalityV1(setup(KagemushaWalletSetupInputV1(46, first = signedWire)))
+     * An already retained attempt may report family confirmation from another retained attempt;
+     * it is not this outer's execution result. */
+    fun retainActivationAttempt(signedWire: ByteArray): KagemushaWalletLedgerOutcomeV1 = task.useCall {
+        KagemushaWalletLedgerOutcomeV1.of(setup(KagemushaWalletSetupInputV1(46, first = signedWire)))
+    }
 
-    /** Recover Native's durable same-Activation family confirmation for a retained attempt. */
-    fun confirmLedgerActivation(signedWire: ByteArray): KagemushaWalletActivationConfirmationV1 = task.useCall { confirmLedgerActivationAccepted(signedWire) }
-    private fun confirmLedgerActivationAccepted(signedWire: ByteArray): KagemushaWalletActivationConfirmationV1 =
-        KagemushaWalletActivationConfirmationV1(setup(KagemushaWalletSetupInputV1(35, first = signedWire)))
+    /** Verify one direct ledger finality original for this retained Activate attempt. */
+    fun ingestActivationFinality(signedWire: ByteArray, finality: ByteArray): KagemushaWalletLedgerIngestV1 = task.useCall {
+        ingestActivationFinalityAccepted(signedWire, finality)
+    }
+    private fun ingestActivationFinalityAccepted(signedWire: ByteArray, finality: ByteArray): KagemushaWalletLedgerIngestV1 =
+        KagemushaWalletLedgerIngestV1.of(setup(KagemushaWalletSetupInputV1(36, first = signedWire, second = finality)))
 
-    /** Verify one contiguous original for this Activate's independent Native history. */
-    fun ingestActivationFinality(signedWire: ByteArray, original: ByteArray): KagemushaWalletActivationFinalityV1 = task.useCall { ingestActivationFinalityAccepted(signedWire, original) }
-    private fun ingestActivationFinalityAccepted(signedWire: ByteArray, original: ByteArray): KagemushaWalletActivationFinalityV1 =
-        KagemushaWalletActivationFinalityV1(setup(KagemushaWalletSetupInputV1(36, first = signedWire, second = original)))
+    /** Confirm one retained attempt with at most one finality read. An unselected epoch advances
+     * at most [maximumBoundaries] boundaries before retrying the same in-memory original once.
+     * The accepted exchange retains every asynchronous continuation until it settles. */
+    fun confirmLedgerAttempt(
+        attempt: KagemushaWalletLedgerAttemptV1, schemeId: ByteArray, walletId: ByteArray,
+        transport: org.hyperledger.iroha.sdk.client.HttpClientTransport,
+        canonicalAuth: org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth,
+        requireCurrentOwner: Runnable, maximumBoundaries: Int = 64,
+    ): java.util.concurrent.CompletableFuture<KagemushaWalletLedgerConfirmationV1> = task.useFuture { continuation ->
+        val retainedScheme = schemeId.copyOf()
+        val retainedWallet = walletId.copyOf()
+        val currentOwner = Runnable { continuation.useCall { requireCurrentOwner.run() } }
+        fun selection(entrypoint: ByteArray) =
+            org.hyperledger.iroha.sdk.client.ToriiKagemushaWalletLedgerSelectionV1(retainedScheme, retainedWallet, entrypoint)
+        confirmKagemushaLedgerAttemptV1(currentOwner,
+            { continuation.useCall { ledgerAttemptOutcome(attempt) } },
+            { entrypoint -> continuation.useCall {
+                transport.getKagemushaWalletLedgerAttemptFinalityV1(selection(entrypoint), canonicalAuth, currentOwner)
+            } },
+            { finality -> continuation.useCall { ingestLedgerAttemptAccepted(attempt, finality) } },
+            { entrypoint, targetHeight -> continuation.useCall {
+                val selected = selection(entrypoint)
+                synchronizeKagemushaLedgerEpochsV1(targetHeight, maximumBoundaries, currentOwner,
+                    { continuation.useCall { wallet.epochProgress() } },
+                    { height -> continuation.useCall {
+                        transport.getKagemushaWalletLedgerAttemptEpochV1(selected, height, canonicalAuth, currentOwner)
+                    } },
+                    { epoch, bytes -> continuation.useCall { ingestEpochBoundaryAccepted(epoch, bytes) } })
+            } })
+    }
+    private fun ledgerAttemptOutcome(attempt: KagemushaWalletLedgerAttemptV1): KagemushaWalletLedgerOutcomeV1 = when (attempt) {
+        is KagemushaWalletLedgerAttemptV1.Activation -> wallet.activationAttemptOutcome(attempt.signedWire())
+        is KagemushaWalletLedgerAttemptV1.Unload -> wallet.unloadAttemptOutcome(attempt.claim(), attempt.signedWire())
+    }
+    private fun ingestLedgerAttemptAccepted(attempt: KagemushaWalletLedgerAttemptV1, finality: ByteArray): KagemushaWalletLedgerIngestV1 = when (attempt) {
+        is KagemushaWalletLedgerAttemptV1.Activation -> ingestActivationFinalityAccepted(attempt.signedWire(), finality)
+        is KagemushaWalletLedgerAttemptV1.Unload -> ingestUnloadFinalityAccepted(attempt.claim(), attempt.signedWire(), finality)
+    }
 
     /** Exact retained Activate frame for ledger submission; this is not activation confirmation. */
     fun activation(): ByteArray = task.useCall { activationAccepted() }
@@ -174,7 +208,7 @@ class KagemushaWalletExchangeCallV1 internal constructor(
     }
     private fun reviewSendAccepted(requestId: ByteArray, request: ByteArray, destinationAccountOriginal: ByteArray,
         expectation: KagemushaWalletReviewExpectationV1): KagemushaWalletReviewDecisionV1 {
-        require(request.isNotEmpty() && request.size <= 10_000)
+        require(request.isNotEmpty() && request.size <= 10_034)
         require(destinationAccountOriginal.isNotEmpty() && destinationAccountOriginal.size <= 4_096)
         return review(KagemushaWalletReviewInputV1(requestId, 1, expectation, first = request, second = destinationAccountOriginal),
             KagemushaWalletReviewProjectionV1.Kind.SEND)
@@ -232,22 +266,11 @@ class KagemushaWalletExchangeCallV1 internal constructor(
     private fun executeReviewedAccepted(review: KagemushaWalletReviewV1): KagemushaWalletReviewedExecutionV1 {
         val value = handle()
         val token = review.consume(exchange)
-        try {
+        return KagemushaWalletReviewExecutionCleanupV1.run(execute = {
             val reply = KagemushaWalletNativeCallsV1.executeReviewed(value, exchange.token, token)
                 ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-            return reply.reviewedExecution(exchange, review, token)
-        } catch (failure: Throwable) {
-            // Native may have consumed this token before failure. Closed then means no unused
-            // review remains; it is never treated as acknowledgement of owner release.
-            try {
-                val status=KagemushaWalletNativeCallsV1.discardReview(value,exchange.token,token)
-                if(status!=0 && status!=-2)checked(status)
-            }catch(cleanup:Throwable){
-                if(failure !== cleanup)failure.addSuppressed(cleanup)
-                try{wallet.close()}catch(retirement:Throwable){if(failure !== retirement)failure.addSuppressed(retirement)}
-            }
-            throw failure
-        }
+            reply.reviewedExecution(exchange, review, token)
+        }, discard = { KagemushaWalletNativeCallsV1.discardReview(value, exchange.token, token) }, close = wallet::close)
     }
 
     /** Enter Retiring under native folded-state checks. */

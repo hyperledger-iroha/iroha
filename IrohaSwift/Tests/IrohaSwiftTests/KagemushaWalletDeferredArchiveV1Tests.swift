@@ -83,9 +83,9 @@ final class KagemushaWalletDeferredArchiveV1Tests: XCTestCase {
     XCTAssertThrowsError(try call(64, sequence: 1, detail: 2, bytes: valid))
     XCTAssertThrowsError(try call(64, detail: 0, bytes: valid))
     XCTAssertThrowsError(try call(64, detail: 3, bytes: valid))
-    XCTAssertThrowsError(try call(64, detail: 2, bytes: Data(repeating: 0, count: 10_029)))
+    XCTAssertThrowsError(try call(64, detail: 2, bytes: Data(repeating: 0, count: 10_063)))
     XCTAssertNoThrow(try KagemushaWalletDeferredArchiveTurnV1(call(64, detail: 2,
-      bytes: wrapped(kind: 1, bytes: Data(repeating: 1, count: 10_000)))))
+      bytes: wrapped(kind: 1, bytes: Data(repeating: 1, count: 10_034)))))
   }
 
   func testNativeSelectedMaintenanceInputsRejectHostAuthorityAndRetiredProducers() throws {

@@ -10,7 +10,7 @@ APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
 ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
 ```
 
-Account and public-key admission requires the ABI-32 `connect_norito_bridge`
+Account and public-key admission requires the ABI-33 `connect_norito_bridge`
 native library, including `nativeValidateAccountAddressCanonical`. Address
 construction and parsing use Rust to validate every key and complete multisig
 policy, then require identical canonical bytes. The V1 identity catalog includes
@@ -41,7 +41,7 @@ choice-free conviction update to Kotlin and Java callers. It emits the registere
 transaction encoding reject direction fields, noncanonical selectors, account
 addresses, quantities, durations, and malformed frames. The focused
 `UpdatePlainConviction*` Kotlin/Java-source tests compiled on 2026-09-24, but
-execution still requires a same-source ABI-32 native bridge for account
+execution still requires a same-source ABI-33 native bridge for account
 admission. This SDK slice does not establish Rust fixture parity or complete
 private standalone elections.
 
@@ -626,7 +626,7 @@ local-only: `KagemushaWalletExchangeCallV1.installBlacklist` stores it on the ph
 version must increase), and Native then refuses to pay a listed receiver or
 accept a Payment from a listed payer with `KagemushaWalletExceptionV1.BLOCKED` (-15). No proof,
 wallet state or peer message carries it.
-ABI32 wallet mutations require an explicit logical exchange. Call
+ABI33 wallet mutations require an explicit logical exchange. Call
 `wallet.beginExchange()` synchronously before UI or worker enqueue, then
 `exchange.admit()` for each accepted task and finish that task after its last
 result. Keep the exchange across confirmation and carrier waits. Fence it with
@@ -635,6 +635,14 @@ Cleanup methods retain the exact review/time origin and remain available after
 the end fence. `observeCreditedForSend` retains receipt custody before Native
 verification; `verifyNextDeferredCredited` and `drainDeferredArchive` expose
 bounded Native maintenance. An explicit drain is not automatic idle progress.
+
+Ledger finality uses the exact retained signed Activate or Unload envelope. Wallet reads
+`activationAttemptOutcome` and `unloadAttemptOutcome` return Native's `Awaiting`,
+`Rejected` or `Confirmed` outcome; only `Confirmed` establishes success. An admitted
+`KagemushaWalletExchangeCallV1` owns attempt retention, finality ingestion and
+`confirmLedgerAttempt`, including its bounded epoch synchronization and asynchronous
+continuations. No caller transaction hash, separate confirmation call or manual
+history walk participates in this contract.
 
 `KagemushaP256Codec` is the P-256 device-key boundary: uncompressed SEC1 public keys
 and fixed-width low-S `r || s` signatures. The Android payment key
@@ -672,9 +680,9 @@ Reconnect only to recover interrupted contact; an exact retry never creates anot
 
 There are three user-visible codes: receiver Request, payer Payment, receiver Credited.
 The Request carrier is `KWRQAC1` (envelope plus canonical destination account original,
-maximum 14,112 bytes); the Payment carrier is `KWPYPC1` (envelope plus payer companion,
-maximum 12,064 bytes). The envelope bound remains 10,000 bytes. IPM1 hashes bind both
-originals and the NFC bounds include its 84-byte header: 14,196 overall and 12,148 for
+maximum 14,146 bytes); the Payment carrier is `KWPYPC1` (envelope plus payer companion,
+maximum 12,098 bytes). The envelope bound remains 10,034 bytes. IPM1 hashes bind both
+originals and the NFC bounds include its 84-byte header: 14,230 overall and 12,182 for
 Payment. `IrohaPeerKagemushaWalletAdapterV1.decode` returns the bare envelope;
 `destinationAccountOriginal` and `payerCompanion` return the respective exact companions.
 Only Native authenticates monetary and credential bindings.
@@ -685,7 +693,9 @@ advertise with `IrohaPeerNearbyDiscoveryContextV1.freshReceiver` while preparing
 that random discovery context does not authorize payment. The per-direction record budgets
 are four on the payer (HELLO, AUTH, Request, Credited) and three on the receiver (HELLO, AUTH,
 Payment). Pairing derives a picture with `IrohaPeerNearbyPictureCodeV1.targetIndex` from the
-transport's authentication digits; never show the digits. The shared picture fixture is
+connection's pairing token, which the transport rebuilds from `rawAuthenticationToken` with
+`IrohaPeerNearbyPairingTokenV1.fromRawAuthenticationToken` so it matches iOS; never show the
+token. The shared picture fixture is
 `fixtures/kagemusha/nearby_picture_v1.json`. Retired Offer/Ask/Lineage message kinds and
 NFC Offer/Ask commands have no fallback; GET_INTAKE remains the direct card's
 REQUEST_READY session record.

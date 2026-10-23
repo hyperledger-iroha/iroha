@@ -10,14 +10,14 @@ import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 
 /** One-use review cleanup transport fixtures only; no Native admission or payment is simulated. */
-class KagemushaWalletReviewedExecutionV1Test {
+class KagemushaWalletReviewExecutionCleanupV1Test {
     @Test fun consumedReviewDoesNotCloseWalletOrReplaceExecutionFailure() {
         for (status in listOf(-1, -5, -6, -9, KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)) {
             val primary = KagemushaWalletExceptionV1(status)
             var tokenPresent = true
             val trace = mutableListOf<String>()
             val actual = assertFailsWith<KagemushaWalletExceptionV1> {
-                KagemushaWalletReviewedExecutionV1.run(execute = {
+                KagemushaWalletReviewExecutionCleanupV1.run(execute = {
                     trace += "execute"
                     assertTrue(tokenPresent)
                     tokenPresent = false // Native consumes before its source recheck and execution.
@@ -39,7 +39,7 @@ class KagemushaWalletReviewedExecutionV1Test {
         var tokenPresent = true
         var closes = 0
         val actual = assertFailsWith<KagemushaWalletExceptionV1> {
-            KagemushaWalletReviewedExecutionV1.run(execute = { throw primary }, discard = {
+            KagemushaWalletReviewExecutionCleanupV1.run(execute = { throw primary }, discard = {
                 assertTrue(tokenPresent)
                 tokenPresent = false
                 0
@@ -55,7 +55,7 @@ class KagemushaWalletReviewedExecutionV1Test {
         val primary = KagemushaWalletExceptionV1(-2)
         var closes = 0
         val actual = assertFailsWith<KagemushaWalletExceptionV1> {
-            KagemushaWalletReviewedExecutionV1.run(execute = { throw primary }, discard = { -2 }, close = { closes++ })
+            KagemushaWalletReviewExecutionCleanupV1.run(execute = { throw primary }, discard = { -2 }, close = { closes++ })
         }
         assertSame(primary, actual)
         assertEquals(0, closes)
@@ -67,7 +67,7 @@ class KagemushaWalletReviewedExecutionV1Test {
             val primary = KagemushaWalletExceptionV1(-1)
             var closes = 0
             val actual = assertFailsWith<KagemushaWalletExceptionV1> {
-                KagemushaWalletReviewedExecutionV1.run(execute = { throw primary }, discard = { status }, close = { closes++ })
+                KagemushaWalletReviewExecutionCleanupV1.run(execute = { throw primary }, discard = { status }, close = { closes++ })
             }
             assertSame(primary, actual)
             assertEquals(1, closes)
@@ -80,7 +80,7 @@ class KagemushaWalletReviewedExecutionV1Test {
         val cleanup = IllegalStateException("discard transport")
         val retirement = IllegalStateException("close transport")
         val actual = assertFailsWith<KagemushaWalletExceptionV1> {
-            KagemushaWalletReviewedExecutionV1.run(execute = { throw primary }, discard = { throw cleanup },
+            KagemushaWalletReviewExecutionCleanupV1.run(execute = { throw primary }, discard = { throw cleanup },
                 close = { throw retirement })
         }
         assertSame(primary, actual)
@@ -90,7 +90,7 @@ class KagemushaWalletReviewedExecutionV1Test {
     @Test fun sameFailureObjectNeverSuppressesItself() {
         val primary = KagemushaWalletExceptionV1(-9)
         val actual = assertFailsWith<KagemushaWalletExceptionV1> {
-            KagemushaWalletReviewedExecutionV1.run(execute = { throw primary }, discard = { throw primary },
+            KagemushaWalletReviewExecutionCleanupV1.run(execute = { throw primary }, discard = { throw primary },
                 close = { throw primary })
         }
         assertSame(primary, actual)
@@ -99,7 +99,7 @@ class KagemushaWalletReviewedExecutionV1Test {
 
     @Test fun completedDispatchReturnsExactResultWithoutCleanup() {
         val expected = Any()
-        val actual = KagemushaWalletReviewedExecutionV1.run(execute = { expected },
+        val actual = KagemushaWalletReviewExecutionCleanupV1.run(execute = { expected },
             discard = { error("successful execution must not discard") },
             close = { error("successful execution must not close") })
         assertSame(expected, actual)

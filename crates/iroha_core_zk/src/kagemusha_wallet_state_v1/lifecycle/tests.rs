@@ -1511,7 +1511,7 @@ fn canonical_request_bounds_and_originals_are_checked_before_publication() {
             charge: None,
         },
         OperationActionV1::Send {
-            request: vec![0; 10_001],
+            request: vec![0; 10_035],
         },
         OperationActionV1::Load {
             receipt: vec![],
@@ -2815,10 +2815,9 @@ fn stale_archive_retirement_refuses_uncertain_or_indexed_operation_absence() {
     }
 }
 
-#[test]
-fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
-    let mut wallet = prepared_wallet();
-    let (send, credited, _) = deferred_archive(&mut wallet);
+// A tombstoned Send fixture that will finish an Archive fold needs the same retained
+// descriptor and map as a folded real Send. Keep source-selection checks active.
+fn retain_historical_send_pending(wallet: &mut Wallet) {
     // This tombstone fixture represents a historical Send. Its explicit mock Ω must
     // retain that Send's actual pending descriptor before Archive can remove it.
     let payment: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
@@ -2848,7 +2847,7 @@ fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
         .insert(&mut wallet.archive, credit_id, leaf.leaf_value().unwrap())
         .unwrap();
     let sequence = wallet.manifest().unwrap().1.folded.unwrap();
-    snapshot_test_replace_fold(&mut wallet, sequence, |fold| {
+    snapshot_test_replace_fold(wallet, sequence, |fold| {
         fold.record.lineage.public.pending_outgoing_root = pending.root();
     });
     let (selected, mut manifest) = wallet.manifest().unwrap();
@@ -2865,6 +2864,13 @@ fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
         )
         .unwrap();
     wallet.publish_manifest(selected, &manifest).unwrap();
+}
+
+#[test]
+fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
+    let mut wallet = prepared_wallet();
+    let (send, credited, _) = deferred_archive(&mut wallet);
+    retain_historical_send_pending(&mut wallet);
     assert!(matches!(
         fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
         Completion::Complete(_)
@@ -2902,7 +2908,6 @@ fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
 // A fresh committed Send (production commit and indexing; explicit mock step proofs) with no
 // Archive intent. The receiver's fixture receipt is rebound to this Send's own Payment and
 // signed again with the receiver's fixture payment key, so binding and signatures are real.
-<<<<<<< HEAD
 pub(super) fn fresh_delivery_receipt() -> (
     Wallet,
     FrozenTransition,
@@ -2912,36 +2917,6 @@ pub(super) fn fresh_delivery_receipt() -> (
     Vec<u8>,
 ) {
     let (wallet, send, request) = historical_send();
-=======
-#[test]
-fn verified_delivery_checks_a_fresh_send_receipt_without_any_archive_intent() {
-    check_fresh_send_receipt(false);
-}
-
-#[test]
-fn verified_delivery_checks_open_request_receipt_without_any_archive_intent() {
-    check_fresh_send_receipt(true);
-}
-
-fn check_fresh_send_receipt(open: bool) {
-    let (mut wallet, send, mut request) = historical_send();
-    if open {
-        let OperationActionV1::Send { request: original } = &mut request.action else {
-            panic!("Send request")
-        };
-        let mut issued: KagemushaWalletRequestV1 = archive::decode(original).unwrap();
-        issued.body = issued.body.open();
-        *original = archive::encode(&issued).unwrap();
-        wallet
-            .retain_delivery_test_mapping(
-                NativeIntentV1::user(request.clone()),
-                send.capsule.custody_digest(),
-                send.capsule.receipt_commitment(),
-                send.capsule.body().operation_id,
-            )
-            .unwrap();
-    }
->>>>>>> origin/optimizations
     let OperationActionV1::Send { request: original } = &request.action else {
         panic!("Send request")
     };
@@ -2992,7 +2967,32 @@ fn check_fresh_send_receipt(open: bool) {
 
 #[test]
 fn verified_delivery_checks_a_fresh_send_receipt_without_any_archive_intent() {
-    let (mut wallet, _send, request, credited, foreign, forged) = fresh_delivery_receipt();
+    check_fresh_send_receipt(false);
+}
+
+#[test]
+fn verified_delivery_checks_open_request_receipt_without_any_archive_intent() {
+    check_fresh_send_receipt(true);
+}
+
+fn check_fresh_send_receipt(open: bool) {
+    let (mut wallet, send, mut request, credited, foreign, forged) = fresh_delivery_receipt();
+    if open {
+        let OperationActionV1::Send { request: original } = &mut request.action else {
+            panic!("Send request")
+        };
+        let mut issued: KagemushaWalletRequestV1 = archive::decode(original).unwrap();
+        issued.body = issued.body.open();
+        *original = archive::encode(&issued).unwrap();
+        wallet
+            .retain_delivery_test_mapping(
+                NativeIntentV1::user(request.clone()),
+                send.capsule.custody_digest(),
+                send.capsule.receipt_commitment(),
+                send.capsule.body().operation_id,
+            )
+            .unwrap();
+    }
     let OperationActionV1::Send { request: original } = &request.action else {
         panic!("Send request");
     };
@@ -3121,6 +3121,7 @@ fn archive_age_is_sampled_after_final_source_reads_and_rechecked_at_threshold() 
 fn guarded_archive_waits_for_due_and_exchange_gates_then_blocks_fresh_head_until_fold() {
     let mut w = prepared_wallet();
     let (send, original, _) = deferred_archive(&mut w);
+    retain_historical_send_pending(&mut w);
     let retained = w
         .retain_deferred_credited_with_clock(&send, &original, || None)
         .unwrap();
@@ -3327,6 +3328,7 @@ fn dropped_dispatched_permit_requires_exact_retained_outcome_and_covering_fold()
     use super::super::scheduling::ArchiveTargetV1;
     let mut w = prepared_wallet();
     let (send, original, target_id) = deferred_archive(&mut w);
+    retain_historical_send_pending(&mut w);
     w.observe_credited_for_send(&send, &original).unwrap();
     w.scheduler().set_activity(true, true);
     let turn = w.scheduler().prepare_archive_turn().unwrap();

@@ -134,7 +134,14 @@ final class KagemushaWalletReviewV1Tests: XCTestCase {
 
   func testBoundEnvelopeRefusesLengthTokenAndNestedMetadataConfusion() throws {
     let valid = try bound(1, payload: Data([7]))
-    for body in [Data(valid.bytes.dropLast()), valid.bytes + Data([0]), Data(repeating: 1, count: 10_029)] {
+    for kind: UInt32 in [1, 10] {
+      let maximum = Data(repeating: 7, count: 10_034)
+      if case .outcome(let result) = try KagemushaWalletBoundRequestV1(bound(kind, payload: maximum)) {
+        XCTAssertEqual(result.bytes, maximum)
+      } else { XCTFail("the maximum retained completion was not preserved") }
+      XCTAssertThrowsError(try bound(kind, payload: maximum + Data([7])))
+    }
+    for body in [Data(valid.bytes.dropLast()), valid.bytes + Data([0]), Data(repeating: 1, count: 10_063)] {
       XCTAssertThrowsError(try KagemushaWalletBoundRequestV1(.init(status: 66,
         sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: body)))
     }

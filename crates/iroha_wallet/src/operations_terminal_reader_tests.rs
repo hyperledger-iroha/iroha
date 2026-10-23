@@ -40,13 +40,17 @@ fn terminal_reader_reuses_actual_retired_records_without_retaining_a_lock_or_ver
         .retain_stream_token_custody_configure_request(&configure, &configured)
         .unwrap();
     service
-        .retire_stream_token_custody_configure_unprepared(&configured, &configure)
+        .retire_stream_token_custody_configure_unprepared(
+            &parent,
+            OsStr::new("configure"),
+            &configure,
+        )
         .unwrap();
     service
         .retain_stream_token_custody_enroll_request(&enroll, &enrolled)
         .unwrap();
     service
-        .retire_stream_token_custody_enroll_unprepared(&enrolled, &enroll)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("enroll"), &enroll)
         .unwrap();
     let before = [retained_bytes(&configured), retained_bytes(&enrolled)];
     let mut reader = CustodyPreparationReader::new(&service);
@@ -153,7 +157,7 @@ fn terminal_reader_reads_mutations_lazily_and_preserves_original_error_authority
         .retain_stream_token_custody_configure_request(&request, &path)
         .unwrap();
     service
-        .retire_stream_token_custody_configure_unprepared(&path, &request)
+        .retire_stream_token_custody_configure_unprepared(&parent, OsStr::new("original"), &request)
         .unwrap();
     let original = retained_bytes(&path);
     let directory = iroha_fs::PrivateDirectory::open(&path).unwrap();
@@ -266,7 +270,7 @@ fn terminal_reader_preserves_inherited_decoder_recipe_and_does_not_cache_partial
         assert_eq!(count, 1);
     }
     service
-        .retire_stream_token_custody_enroll_unprepared(&path, &request)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("original"), &request)
         .unwrap();
     let expected =
         result(reader.inspect_enroll_in_parent(&parent, OsStr::new("original"), &request));
@@ -328,13 +332,17 @@ fn terminal_plan_timestamp_reuse_keeps_fresh_locks_and_expected_plan_comparisons
         .retain_stream_token_custody_configure_request(&configure, &configured)
         .unwrap();
     service
-        .retire_stream_token_custody_configure_unprepared(&configured, &configure)
+        .retire_stream_token_custody_configure_unprepared(
+            &parent,
+            OsStr::new("configure"),
+            &configure,
+        )
         .unwrap();
     service
         .retain_stream_token_custody_enroll_request(&enroll, &enrolled)
         .unwrap();
     service
-        .retire_stream_token_custody_enroll_unprepared(&enrolled, &enroll)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("enroll"), &enroll)
         .unwrap();
     let before = [retained_bytes(&configured), retained_bytes(&enrolled)];
     let mut reader = CustodyPreparationReader::new(&service);
@@ -417,7 +425,11 @@ fn terminal_plan_timestamp_is_replaced_with_changed_request_bytes() {
             .retain_stream_token_custody_configure_request(expected, path)
             .unwrap();
         service
-            .retire_stream_token_custody_configure_unprepared(path, expected)
+            .retire_stream_token_custody_configure_unprepared(
+                &parent,
+                path.file_name().unwrap(),
+                expected,
+            )
             .unwrap();
     }
     let original = retained_bytes(&original_path);
@@ -599,7 +611,7 @@ fn terminal_plan_timestamp_preserves_inherited_and_late_decoder_work() {
         .retain_stream_token_custody_enroll_request(&request, &path)
         .unwrap();
     service
-        .retire_stream_token_custody_enroll_unprepared(&path, &request)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("original"), &request)
         .unwrap();
     let original = retained_bytes(&path);
     let mut reader = CustodyPreparationReader::new(&service);
@@ -693,7 +705,7 @@ fn terminal_commitment_reuse_keeps_fresh_retirement_inventory_and_dispatch_check
         .retain_stream_token_custody_configure_request(&request, &path)
         .unwrap();
     service
-        .retire_stream_token_custody_configure_unprepared(&path, &request)
+        .retire_stream_token_custody_configure_unprepared(&parent, OsStr::new("original"), &request)
         .unwrap();
     let original = retained_bytes(&path);
     let directory = iroha_fs::PrivateDirectory::open(&path).unwrap();
@@ -795,7 +807,7 @@ fn terminal_commitment_preserves_inherited_and_late_decoder_recipe() {
         .retain_stream_token_custody_enroll_request(&request, &path)
         .unwrap();
     service
-        .retire_stream_token_custody_enroll_unprepared(&path, &request)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("original"), &request)
         .unwrap();
     let original = retained_bytes(&path);
     for late in [false, true] {
@@ -895,13 +907,17 @@ fn terminal_inventory_scope_reduces_actual_walks_and_preserves_late_decoder_work
             .retain_stream_token_custody_configure_request(&configure, &configured)
             .unwrap();
         service
-            .retire_stream_token_custody_configure_unprepared(&configured, &configure)
+            .retire_stream_token_custody_configure_unprepared(
+                &parent,
+                OsStr::new("configure"),
+                &configure,
+            )
             .unwrap();
         service
             .retain_stream_token_custody_enroll_request(&enroll, &enrolled)
             .unwrap();
         service
-            .retire_stream_token_custody_enroll_unprepared(&enrolled, &enroll)
+            .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("enroll"), &enroll)
             .unwrap();
         let before = [retained_bytes(&configured), retained_bytes(&enrolled)];
         for (name, is_enroll) in [("configure", false), ("enroll", true)] {
@@ -1027,13 +1043,17 @@ fn terminal_optional_child_scope_reduces_native_open_work_and_keeps_fresh_expect
         .retain_stream_token_custody_configure_request(&configure, &configured)
         .unwrap();
     service
-        .retire_stream_token_custody_configure_unprepared(&configured, &configure)
+        .retire_stream_token_custody_configure_unprepared(
+            &parent,
+            OsStr::new("configure"),
+            &configure,
+        )
         .unwrap();
     service
         .retain_stream_token_custody_enroll_request(&enroll, &enrolled)
         .unwrap();
     service
-        .retire_stream_token_custody_enroll_unprepared(&enrolled, &enroll)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("enroll"), &enroll)
         .unwrap();
     let before = [retained_bytes(&configured), retained_bytes(&enrolled)];
     for (name, is_enroll) in [("configure", false), ("enroll", true)] {

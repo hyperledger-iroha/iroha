@@ -22,7 +22,7 @@ public enum KagemushaWalletDeferredArchiveTurnV1: Sendable {
       self = .waiting(wait)
     case 64:
       let bytes = [UInt8](result.bytes)
-      guard (28...10_028).contains(bytes.count) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+      guard (28...10_062).contains(bytes.count) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
       func u32(_ offset: Int) -> UInt32 {
         (0..<4).reduce(UInt32(0)) { $0 | UInt32(bytes[offset + $1]) << (8 * $1) }
       }
@@ -30,7 +30,7 @@ public enum KagemushaWalletDeferredArchiveTurnV1: Sendable {
         (0..<8).reduce(UInt64(0)) { $0 | UInt64(bytes[offset + $1]) << (8 * $1) }
       }
       let kind = u32(0), count = u32(24)
-      guard [1, 2, 3, 4, 5, 10].contains(kind), count <= 10_000,
+      guard [1, 2, 3, 4, 5, 10].contains(kind), count <= 10_034,
         bytes.count == 28 + Int(count) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
       let completion = try KagemushaWalletCallV1(status: Int32(kind), sequenceLow: u64(8),
         sequenceHigh: u64(16), detail: u32(4), bytes: Data(bytes.dropFirst(28))).completion()

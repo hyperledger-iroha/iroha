@@ -4,6 +4,16 @@
 The ordinary Rust target emits `cdylib`, `staticlib`, and `rlib` outputs; Rust
 consumers and tests retain the `rlib` interface.
 
+Detached scaffold inspection exposes a single `SetAssetFiLinkV1` as
+`asset_fi_link_set`, retaining all twelve instruction fields. The reference
+digest is raw 32-byte lowercase hex, without typed-Hash parity or normalization;
+all four revisions retain the complete u64 range and controller remains an
+explicit canonical address or null. FI attestations, off-ramp instructions and
+mixed or Batch executables are not admitted as owner FI-link consent. Swift
+and Kotlin expose a distinct typed case. Applications must still compare the
+complete instruction and envelope with their independently admitted wallet,
+FI, UID/controller and fee context before permitting an owner signature.
+
 The Apple owner is `scripts/build_norito_xcframework.sh`. It builds five
 `staticlib` slices using the source-sealed `apple-release` Cargo profile and
 whole-graph ThinLTO. Its final bridge optimization level is O1 so the ThinLTO
@@ -176,7 +186,7 @@ Pending selection takes the existing payment priority, then Native rechecks cust
 resuming its frozen operation. Inspection errors remain errors; an absent selection retains
 the existing no-operation result. Core's deferred receipt queue retains exact originals
 before verification and separates receipt rejection from unfinished verification. Its
-bridge intake selects exact Send/receipt custody before verification. ABI32 requires a separate
+bridge intake selects exact Send/receipt custody before verification. ABI33 requires a separate
 exchange identity on mutation/review routes: synchronous begin precedes worker or UI queueing,
 end fences new calls, and already accepted calls retain the exact owner through response delivery.
 The Native scheduler owns exchange occupancy and Archive admission. Queue selector56 observes a

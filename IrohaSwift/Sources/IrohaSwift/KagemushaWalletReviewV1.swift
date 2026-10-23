@@ -119,13 +119,13 @@ public enum KagemushaWalletBoundRequestV1: Sendable {
   case outcome(KagemushaWalletCallV1)
   init(_ result: KagemushaWalletCallV1) throws {
     guard result.status == 66, result.sequenceLow == 0, result.sequenceHigh == 0,
-      result.detail == 0, (28...10_028).contains(result.bytes.count)
+      result.detail == 0, (28...10_062).contains(result.bytes.count)
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     let bytes = [UInt8](result.bytes)
     func u32(_ at: Int) -> UInt32 { (0..<4).reduce(0) { $0 | UInt32(bytes[at+$1]) << (8*$1) } }
     func u64(_ at: Int) -> UInt64 { (0..<8).reduce(0) { $0 | UInt64(bytes[at+$1]) << (8*$1) } }
     let kind = u32(0), detail = u32(4), low = u64(8), high = u64(16), count = u32(24)
-    guard [1,2,3,4,5,10,11].contains(kind), count <= 10_000, bytes.count == 28+Int(count),
+    guard [1,2,3,4,5,10,11].contains(kind), count <= 10_034, bytes.count == 28+Int(count),
       low == 0, high == 0 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     if kind == 11 {
       guard detail == 0, count == 0 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
@@ -214,7 +214,7 @@ struct KagemushaWalletReviewInputV1 {
     let nonzero = amount.low != 0 || amount.high != 0
     switch selector {
     case 1:
-      guard !nonzero, !first.isEmpty, first.count <= 10_000,
+      guard !nonzero, !first.isEmpty, first.count <= 10_034,
         !second.isEmpty, second.count <= 4_096
       else { throw KagemushaWalletErrorV1.invalidInput }
     case 8:

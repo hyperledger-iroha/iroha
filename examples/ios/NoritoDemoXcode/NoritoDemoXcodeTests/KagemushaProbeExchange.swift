@@ -89,10 +89,10 @@ extension KagemushaMonetaryProbeManifest {
   /// Only commands with fresh mutations need executable admission. Recovery and observations
   /// remain Native-selected; this table never decides idle eligibility.
   static let exchangeActions: Set<String> = [
-    "bootstrap", "activation", "retain-activation", "activation-finality", "confirm-activation",
+    "bootstrap", "activation", "retain-activation", "activation-finality",
     "prepare-load", "load", "ledger-finality", "epoch-boundary", "request", "review-send",
     "review-unload", "continue-review-send", "continue-review-unload", "retry-reviewed", "decide-review", "receive", "observe-credited", "unload-finality",
-    "confirm-unload", "refresh-time", "begin-time", "finish-time", "nearby-prepare", "nearby-send",
+    "refresh-time", "begin-time", "finish-time", "nearby-prepare", "nearby-send",
     "nearby-recover-send", "nearby-continue-send", "nearby-receive", "nearby-recover-receive", "qr-send", "qr-receive",
     "qr-recover-send", "qr-continue-send", "qr-recover-receive",
   ]

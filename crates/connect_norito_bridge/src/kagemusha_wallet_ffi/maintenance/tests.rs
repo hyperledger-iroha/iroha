@@ -115,10 +115,10 @@ fn no_work_and_all_policy_waits_have_no_completion_or_original() {
 #[test]
 fn nested_payload_bound_does_not_relax_original_or_storage_failures() {
     use state::{Completion as C, DeferredArchiveDrainV1 as D};
-    let value = drain_response(D::Executed(C::Complete(vec![7; 10_000]))).unwrap();
-    assert_eq!(value.bytes.len(), 10_028);
+    let value = drain_response(D::Executed(C::Complete(vec![7; 10_034]))).unwrap();
+    assert_eq!(value.bytes.len(), 10_062);
     assert_eq!(
-        drain_response(D::Executed(C::Complete(vec![7; 10_001])))
+        drain_response(D::Executed(C::Complete(vec![7; 10_035])))
             .unwrap_err()
             .status,
         INTERNAL

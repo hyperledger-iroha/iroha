@@ -21,7 +21,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         )
         XCTAssertEqual(
             nativeBridgeABIVersion(),
-            31,
+            33,
             "required transaction fixture decode must execute through ABI-33"
         )
         for name in loader.names {

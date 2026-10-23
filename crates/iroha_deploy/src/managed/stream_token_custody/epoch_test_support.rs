@@ -55,7 +55,7 @@ impl ManagedStreamTokenCustody {
             |attempt| {
                 original
                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                    .retire(&account, &attempt.wallet_path())
+                    .retire(&account, attempt.directory())
             },
             |attempt, observation, deadline| {
                 original

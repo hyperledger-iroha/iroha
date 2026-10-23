@@ -15,7 +15,7 @@ enum KagemushaMonetaryProbeManifest {
     "nearby-receive": [["request-id", "session-id", "request-hash", "peer-certificate", "setup-id"]], "nearby-recover-receive": [["request-id", "session-id", "request-hash", "peer-certificate", "setup-id"]],
     "open": [["result"]], "release-wallet": [[]], "bootstrap": [[]], "activation": [[]],
     "retain-activation": [["signed-wire"]], "activation-status": [["signed-wire"]],
-    "activation-finality": [["signed-wire", "finality"]], "confirm-activation": [["signed-wire"]],
+    "activation-finality": [["signed-wire", "finality"]],
     "prepare-load": [["request-id", "amount"]], "prepared-load": [["request-id"]],
     "load": [["request-id", "receipt", "finality"]], "ledger-finality": [["finality"]],
     "ledger-status": [[]], "epoch-boundary": [["epoch", "boundary"]], "epoch-status": [[]],
@@ -37,9 +37,8 @@ enum KagemushaMonetaryProbeManifest {
     "snapshot": [[]], "request-status": [["request-id"]], "retry": [["operation-id"]],
     "resume": [[]], "released-request": [["request-id"]], "released-operation": [["operation-id"]],
     "unload-claim": [["request-id"], ["request-id", "beneficiary"]],
-    "unload-status": [["transaction-hash", "claim"]],
-    "unload-finality": [["transaction-hash", "claim", "finality"]],
-    "confirm-unload": [["transaction-hash", "claim"]],
+    "unload-status": [["claim", "signed-wire"]],
+    "unload-finality": [["claim", "signed-wire", "finality"]],
     "decode-request": [["envelope"]],
     "decode-payment": [["envelope"]], "decode-credited": [["envelope"]],
     "refresh-time": [["request-id", "anchor", "certificates"]],
@@ -55,7 +54,7 @@ enum KagemushaMonetaryProbeManifest {
   }
   static func maximum(_ name: String) throws -> Int {
     switch name {
-    case "request-id", "setup-id", "operation-id", "transaction-hash", "request-hash", "peer-certificate": return 32
+    case "request-id", "setup-id", "operation-id", "request-hash", "peer-certificate": return 32
     case "session-id": return 16
     case "amount": return 16
     case "epoch": return 8
@@ -67,7 +66,7 @@ enum KagemushaMonetaryProbeManifest {
     case "fee-schedule", "quote": return 1024
     case "destination", "beneficiary": return 4096
     case "payer-companion": return KagemushaWalletWireV1.payerCompanionMaximumBytes
-    case "request", "payment", "credited", "certificates", "envelope": return 10_000
+    case "request", "payment", "credited", "certificates", "envelope": return 10_034
     case "decision": return 4096
     default: throw EnrollmentProbeFailure.input
     }
@@ -125,21 +124,20 @@ enum KagemushaMonetaryProbeManifest {
 /// Portable test-controller observation. This is DATA, never a protocol attestation or finality.
 enum KagemushaActivationRetentionProbe {
   static func receipt(
-    signedWire: Data, hasConfirmation: Bool, rejected: Bool, verifiedHeight: UInt64?,
-    blockHash: Data?, returned: UInt64, invocation: String, sequence: Int
+    signedWire: Data, outcome: KagemushaWalletLedgerOutcomeV1, returned: UInt64,
+    invocation: String, sequence: Int
   ) throws -> Data? {
     guard !signedWire.isEmpty, signedWire.count <= 65_536, returned > 0,
-      (0..<10_000).contains(sequence),
+      (0..<10_034).contains(sequence),
       UUID(uuidString: invocation)?.uuidString == invocation
     else { throw EnrollmentProbeFailure.input }
-    // An unconfirmed progress observation is not the initial retained/not-started result.
-    guard !hasConfirmation, !rejected, verifiedHeight == nil, blockHash == nil else {
-      return nil
-    }
+    // Only the initial Awaiting result, with Native's derived entrypoint, authorizes submission.
+    guard case .awaiting(let entrypoint) = outcome else { return nil }
     return try NoritoJSON([
       "schema": "iroha.kagemusha.wallet-activation-retained.v1",
       "action": "retain-activation", "signedWireSHA256": EnrollmentProbeFiles.digest(signedWire),
-      "signedWireBytes": String(signedWire.count), "nativeResult": "not_started",
+      "signedWireBytes": String(signedWire.count), "nativeResult": "awaiting",
+      "entrypointHex": entrypoint.map { String(format: "%02x", $0) }.joined(),
       "nativeReturnedTicks": String(returned), "invocation": invocation,
       "sequence": String(sequence),
     ]).data

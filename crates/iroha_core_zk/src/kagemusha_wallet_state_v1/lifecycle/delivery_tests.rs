@@ -245,7 +245,7 @@ fn bound_delivery_open_request_survives_collected_send_and_lost_app_ack() {
             RequestStatusV1::Outcome(Completion::Complete(original.clone()))
         );
         assert_eq!(
-            wallet.accept_credited_for_send(&send, &credited).unwrap(),
+            lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
             Completion::Complete(original.clone())
         );
     }
@@ -260,7 +260,7 @@ fn bound_delivery_rejects_changed_request_terms_signature_originals_or_completio
         let (mut wallet, send, credited, _) =
             retained_delivery_with_open_request(mutation < 3, Some(mutation));
         assert!(wallet.credited_status_for_send(&send, &credited).is_err());
-        assert!(wallet.accept_credited_for_send(&send, &credited).is_err());
+        assert!(lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).is_err());
         assert!(
             wallet
                 .verified_delivery_projection(&send, &credited)

@@ -233,6 +233,7 @@ fn configure_and_enroll_retain_one_canonical_instruction_and_exact_original_wire
     let configure = configure(&service.config, now);
     let enroll = enroll(&service.config, now);
     let root = tempfile::tempdir().unwrap();
+    let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let configured = root.path().join("configure");
     let enrolled = root.path().join("enroll");
     service
@@ -242,10 +243,18 @@ fn configure_and_enroll_retain_one_canonical_instruction_and_exact_original_wire
         .prepare_stream_token_custody_enroll(&enroll, &enrolled)
         .unwrap();
     let configured_transaction = service
-        .verify_stream_token_custody_configure_journal(&configured, &configure)
+        .verify_stream_token_custody_configure_journal(
+            &parent,
+            std::ffi::OsStr::new("configure"),
+            &configure,
+        )
         .unwrap();
     let enrolled_transaction = service
-        .verify_stream_token_custody_enroll_journal(&enrolled, &enroll)
+        .verify_stream_token_custody_enroll_journal(
+            &parent,
+            std::ffi::OsStr::new("enroll"),
+            &enroll,
+        )
         .unwrap();
     for (path, returned) in [
         (&configured, configured_transaction),
@@ -341,6 +350,7 @@ fn recovery_keeps_original_request_and_dispatches_each_purpose_at_most_once() {
     let configure = configure(&service.config, now);
     let mut enroll = enroll(&service.config, now);
     let root = tempfile::tempdir().unwrap();
+    let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let configured = root.path().join("configure");
     let enrolled = root.path().join("enroll");
     service
@@ -364,7 +374,11 @@ fn recovery_keeps_original_request_and_dispatches_each_purpose_at_most_once() {
         .insert(XOR_ASSET_DEFINITION.parse().unwrap(), Quantity::from(1u32));
     assert!(
         service
-            .verify_stream_token_custody_enroll_journal(&enrolled, &changed)
+            .verify_stream_token_custody_enroll_journal(
+                &parent,
+                std::ffi::OsStr::new("enroll"),
+                &changed,
+            )
             .is_err()
     );
     assert!(
@@ -377,7 +391,11 @@ fn recovery_keeps_original_request_and_dispatches_each_purpose_at_most_once() {
         FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(99));
     assert!(
         service
-            .verify_stream_token_custody_configure_journal(&configured, &changed)
+            .verify_stream_token_custody_configure_journal(
+                &parent,
+                std::ffi::OsStr::new("configure"),
+                &changed,
+            )
             .is_err()
     );
     assert!(
@@ -419,7 +437,11 @@ fn recovery_keeps_original_request_and_dispatches_each_purpose_at_most_once() {
     assert_eq!(transport.submissions.load(Ordering::SeqCst), 2);
     enroll.options.deadline = Instant::now() + Duration::from_secs(60);
     service
-        .verify_stream_token_custody_enroll_journal(&enrolled, &enroll)
+        .verify_stream_token_custody_enroll_journal(
+            &parent,
+            std::ffi::OsStr::new("enroll"),
+            &enroll,
+        )
         .unwrap();
     assert_eq!(
         service
@@ -1541,3 +1563,9 @@ fn retained_parent_custody_inspection_keeps_native_rename_refusal_and_original_r
 
 #[path = "operations_terminal_reader_tests.rs"]
 mod terminal_reader_tests;
+
+#[path = "operations_stream_token_custody_parent_journal_tests.rs"]
+mod parent_journal_tests;
+
+#[path = "operations_stream_token_custody_parent_retirement_tests.rs"]
+mod parent_retirement_tests;

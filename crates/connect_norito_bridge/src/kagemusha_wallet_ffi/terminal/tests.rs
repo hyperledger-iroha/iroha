@@ -251,31 +251,37 @@ fn c_boundary_preserves_foreign_review_freezes_money_and_keeps_only_terminal_rec
     let codecs_refused = |expected| {
         for status in [false, true] {
             assert_eq!(
-                test_setup(
-                    &test_invocation(b).unwrap(),
-                    setup::Setup::CreditedOriginal {
-                        status,
-                        original: vec![1],
-                    }
-                )
-                .unwrap_err()
-                .status,
+                test_invocation(b)
+                    .and_then(|invocation| {
+                        test_setup(
+                            &invocation,
+                            setup::Setup::CreditedOriginal {
+                                status,
+                                original: vec![1],
+                            },
+                        )
+                    })
+                    .unwrap_err()
+                    .status,
                 expected
             );
         }
         for kind in 1..=4 {
             for wrap in [false, true] {
                 assert_eq!(
-                    test_setup(
-                        &test_invocation(b).unwrap(),
-                        setup::Setup::Transport {
-                            kind,
-                            wrap,
-                            original: vec![1],
-                        }
-                    )
-                    .unwrap_err()
-                    .status,
+                    test_invocation(b)
+                        .and_then(|invocation| {
+                            test_setup(
+                                &invocation,
+                                setup::Setup::Transport {
+                                    kind,
+                                    wrap,
+                                    original: vec![1],
+                                },
+                            )
+                        })
+                        .unwrap_err()
+                        .status,
                     expected
                 );
             }

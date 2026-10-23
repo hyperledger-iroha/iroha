@@ -48,11 +48,11 @@ class KagemushaWalletCallV1 internal constructor(
     bytes: ByteArray,
 ) {
     init {
-        val carriesBytes = status == REVIEW_EXISTING || status == DEFERRED_COMPLETION || status == EPOCH_PROGRESS || status == DELETION_REVIEW || status == DELETED || status == CREDIT_PROJECTION || status == UNLOAD_CLAIM || status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status == LEDGER_INSTRUCTION || status == ENROLLMENT_LEDGER_INSTRUCTION || status == UNLOAD_CONFIRMATION || status == ACTIVATION_CONFIRMATION || status == ACTIVATION_PROGRESS || status == ACTIVATION_REJECTED || status in listOf(18, 19, 23, 24, 25, 27, 28, 37, 38)
-        if (status in listOf(41, 43) || (status >= 0 && status !in UNKNOWN..REVIEW_WAITING) || bytes.size > when (status) { DEFERRED_COMPLETION, REVIEW_EXISTING -> 10_028; EPOCH_PROGRESS -> 16; DELETION_REVIEW -> 254; DELETED -> 32; DELETION_REVIEW_DISCARDED, NOT_DELETED -> 0; CREDIT_PROJECTION -> 10_092; ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36, UNLOAD_CLAIM -> 16_384; LEDGER_INSTRUCTION, ENROLLMENT_LEDGER_INSTRUCTION -> 65_536; 24 -> KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; 25 -> 262_144; 28 -> 1024; 37 -> 1028; 38 -> 73_740; 31 -> 21_024; 33, UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_PROGRESS, ACTIVATION_REJECTED -> 32; else -> 10_000 } ||
+        val carriesBytes = status == REVIEW_EXISTING || status == DEFERRED_COMPLETION || status == EPOCH_PROGRESS || status == DELETION_REVIEW || status == DELETED || status == CREDIT_PROJECTION || status == UNLOAD_CLAIM || status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status == LEDGER_INSTRUCTION || status == ENROLLMENT_LEDGER_INSTRUCTION || status == LEDGER_CONFIRMED || status == LEDGER_AWAITING || status == LEDGER_REJECTED || status in listOf(18, 19, 23, 24, 25, 27, 28, 37, 38)
+        if (status in listOf(41, 42, 43, 44, 45, 49) || (status >= 0 && status !in UNKNOWN..LEDGER_CONFIRMED) || bytes.size > when (status) { DEFERRED_COMPLETION, REVIEW_EXISTING -> 10_062; EPOCH_PROGRESS -> 16; DELETION_REVIEW -> 254; DELETED -> 32; DELETION_REVIEW_DISCARDED, NOT_DELETED -> 0; CREDIT_PROJECTION -> 10_126; ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36, UNLOAD_CLAIM -> 16_384; LEDGER_INSTRUCTION, ENROLLMENT_LEDGER_INSTRUCTION -> 65_536; 24 -> KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; 25 -> 262_144; 28 -> 1024; 37 -> 1028; 38 -> 73_740; 31 -> 21_092; 33, LEDGER_CONFIRMED, LEDGER_AWAITING, LEDGER_REJECTED -> 32; LEDGER_EPOCH_REQUIRED -> 0; else -> 10_034 } ||
             (if (carriesBytes) bytes.isEmpty() else bytes.isNotEmpty()) ||
             ((status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE) && (bytes.size != 32 || sequenceLow <= 0 || sequenceHigh != 0L)) ||
-            (status in listOf(ACTIVATION, CLOSE_LOADS, 31, 32, 34, 35, 36, ACTIVATION_NOT_STARTED, LEDGER_INSTRUCTION, UNLOAD_CLAIM, COLLECTION_IDLE, DELETED, DELETION_REVIEW_DISCARDED, NOT_DELETED) && (sequenceLow != 0L || sequenceHigh != 0L || detail != 0)) ||
+            (status in listOf(ACTIVATION, CLOSE_LOADS, 31, 32, 34, 35, 36, LEDGER_AWAITING, LEDGER_INSTRUCTION, UNLOAD_CLAIM, COLLECTION_IDLE, DELETED, DELETION_REVIEW_DISCARDED, NOT_DELETED) && (sequenceLow != 0L || sequenceHigh != 0L || detail != 0)) ||
             (status in EXCHANGE_BEGUN..REVIEW_WAITING && (reason != -1 || platformCode != 0)) ||
             (status == EXCHANGE_BEGUN && (sequenceLow <= 0 || sequenceHigh != 0L || detail != 0)) ||
             (status == EXCHANGE_ENDED && (sequenceLow != 0L || sequenceHigh != 0L || detail !in 0..2)) ||
@@ -68,9 +68,11 @@ class KagemushaWalletCallV1 internal constructor(
             (status == DELETED && (bytes.size != 32 || bytes.all { it == 0.toByte() })) ||
             (status == OPENED && (sequenceLow <= 0 || sequenceHigh != 0L)) ||
             ((status in 18..28 || status in 37..39 || status in ENROLLMENT_LOCAL_ABANDONED..ENROLLMENT_LEDGER_INSTRUCTION) && (sequenceLow <= 0 || sequenceHigh != 0L || detail != 0)) ||
-            (status in listOf(UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_REJECTED) && java.lang.Long.compareUnsigned(sequenceLow, 2L) < 0) ||
+            (status in listOf(LEDGER_CONFIRMED, LEDGER_REJECTED) && java.lang.Long.compareUnsigned(sequenceLow, 2L) < 0) ||
+            (status == LEDGER_AWAITING && (bytes.size != 32 || bytes.all { it == 0.toByte() })) ||
+            (status == LEDGER_EPOCH_REQUIRED && (sequenceLow == 0L || sequenceHigh != 0L || detail != 0)) ||
             (status in listOf(18, 23) && bytes.size != 32) || (status == 19 && bytes.size != 161) ||
-            (status in listOf(33, UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_PROGRESS, ACTIVATION_REJECTED) && (sequenceLow == 0L || sequenceHigh != 0L || detail != 0 || bytes.size != 32 || bytes.all { it == 0.toByte() }))) {
+            (status in listOf(33, LEDGER_CONFIRMED, LEDGER_REJECTED) && (sequenceLow == 0L || sequenceHigh != 0L || detail != 0 || bytes.size != 32 || bytes.all { it == 0.toByte() }))) {
             throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         }
     }
@@ -141,6 +143,15 @@ class KagemushaWalletCallV1 internal constructor(
         const val ENROLLMENT_LOCAL_ABANDONED = 58
         /** Exact ledger instruction for the enrollment owner's retained signed abandonment. */
         const val ENROLLMENT_LEDGER_INSTRUCTION = 59
+        /** DATA from ledger finality ingestion: the original names an unselected epoch; the
+         * sequence is the untrusted target height and there are no bytes. */
+        const val LEDGER_EPOCH_REQUIRED = 68
+        /** Certified rejected execution of one attempt only: height, commit hash. */
+        const val LEDGER_REJECTED = 69
+        /** Certified successful execution of an Activate or Unload attempt: height, commit hash.
+         * Never the walk's retired 44/49, which had this shape with the Iroha header hash: an SDK
+         * and a Native from opposite sides of direct finality refuse each other's outcome. */
+        const val LEDGER_CONFIRMED = 70
         const val UNKNOWN = 0
         const val COMPLETE = 1
         const val PENDING = 2
@@ -167,13 +178,10 @@ class KagemushaWalletCallV1 internal constructor(
         const val BACKGROUND_STATUS = 29
         const val CLOSE_LOADS = 30
         const val LEDGER_INSTRUCTION = 40
-        const val UNLOAD_CONFIRMATION = 42
-        const val ACTIVATION_CONFIRMATION = 44
-        const val ACTIVATION_PROGRESS = 45
-        const val ACTIVATION_NOT_STARTED = 46
+        /** No retained outcome: the 32-byte entrypoint hash Native derived from the retained wire. */
+        const val LEDGER_AWAITING = 46
         const val CREDIT_PROJECTION = 47
         const val UNLOAD_CLAIM = 48
-        const val ACTIVATION_REJECTED = 49
         const val COLLECTION_IDLE = 50
         const val COLLECTION_PROGRESS = 51
         const val COLLECTED = 52
@@ -265,7 +273,7 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
         val result = try { KagemushaWalletNativeWorkerV1.shared.run { KagemushaWalletObservationNativeV1.observe(owner, selector, input) } }
             catch (_: LinkageError) { throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE) }
             ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-        return result.original(intArrayOf(5268, 20_066, 20_066, 65_756,
+        return result.original(intArrayOf(5268, 20_134, 20_134, 65_756,
             KagemushaWalletFoldMetricsV1.MAX_ORIGINAL_BYTES)[selector])
     }
     private fun call(operation: Int, first: ByteArray = byteArrayOf(), second: ByteArray = byteArrayOf()): KagemushaWalletCallV1 {
@@ -297,14 +305,15 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
         if (result.status != KagemushaWalletCallV1.LEDGER_INSTRUCTION) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         return result.bytes()
     }
-    /** Native's exact retained confirmation or verified history for this transaction and claim.
-     * Absent inclusion is explicit; malformed or mismatched custody remains an error. */
-    fun unloadFinalityProgress(transactionHash: ByteArray, original: ByteArray): KagemushaWalletUnloadFinalityV1 =
-        KagemushaWalletUnloadFinalityV1(setup(KagemushaWalletSetupInputV1(33, identity = transactionHash, first = original)))
-    /** Exact retained attempt's independent progress, or genuine same-Activation family
-     * confirmation. Family confirmation does not assert this particular outer succeeded. */
-    fun activationFinalityProgress(signedWire: ByteArray): KagemushaWalletActivationFinalityV1 =
-        KagemushaWalletActivationFinalityV1(setup(KagemushaWalletSetupInputV1(37, first = signedWire)))
+    /** The outcome of this exact signed Unload envelope over this exact claim, or Awaiting with
+     * the entrypoint Native derived. Only Confirmed establishes the payout; Rejected closes this
+     * envelope only. Reads never verify or write. */
+    fun unloadAttemptOutcome(claim: ByteArray, signedWire: ByteArray): KagemushaWalletLedgerOutcomeV1 =
+        KagemushaWalletLedgerOutcomeV1.of(setup(KagemushaWalletSetupInputV1(33, first = claim, second = signedWire)))
+    /** This retained attempt's outcome: the wallet's activation, this attempt's authenticated
+     * rejection, or Awaiting with Native's route selector. Reads never verify or write. */
+    fun activationAttemptOutcome(signedWire: ByteArray): KagemushaWalletLedgerOutcomeV1 =
+        KagemushaWalletLedgerOutcomeV1.of(setup(KagemushaWalletSetupInputV1(37, first = signedWire)))
     /** Canonical ledger claim for a completed Unload request, never settlement confirmation.
      * Native selects the admitted account and exact retained package/quote. A charged Unload
      * requires the quote's canonical beneficiary; uncharged Unload requires absence. */
@@ -380,93 +389,6 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
     /** Extract an expected original kind under this native wallet's scheme, without accepting value. */
     fun original(kind: KagemushaWalletTransportKindV1, envelope: ByteArray): ByteArray =
         setup(KagemushaWalletSetupInputV1(10 + kind.tag, first = envelope)).original()
-<<<<<<< HEAD
-=======
-    /** Load the exact ordinary-ledger receipt and native BLS finality evidence. */
-    fun load(requestId: ByteArray, receipt: ByteArray, finality: ByteArray): KagemushaWalletCallV1 =
-        execute(KagemushaWalletOperationInputV1(requestId, 0, first = receipt, second = finality))
-    /** Authenticate Send and its fully folded source before fresh hardware UI confirmation. */
-    fun reviewSend(request: ByteArray, destinationAccountOriginal: ByteArray): KagemushaWalletReviewV1 {
-        require(request.isNotEmpty() && request.size <= 10_000)
-        require(destinationAccountOriginal.isNotEmpty() && destinationAccountOriginal.size <= 4_096)
-        return review(1, KagemushaWalletUInt128V1(0, 0), request, destinationAccountOriginal, KagemushaWalletReviewProjectionV1.Kind.SEND)
-    }
-    /** Receive selects the durably issued Request locally by the Payment's digest. */
-    fun receive(requestId: ByteArray, payment: ByteArray, payerCredential: ByteArray, certificates: ByteArray): KagemushaWalletCallV1 =
-        execute(KagemushaWalletOperationInputV1(requestId, 2, first = payment, second = payerCredential, third = certificates))
-    /** Receive the exact Payment and payer companion of one carrier (`IrohaPeerWalletPaymentV1`). Native
-     * checks the companion against the Payment, completes the durably issued open Request from it and
-     * performs ordinary Receive authentication; the companion is never payment authority.
-     */
-    fun receiveWithCompanion(requestId: ByteArray, payment: ByteArray, companion: ByteArray): KagemushaWalletCallV1 =
-        execute(KagemushaWalletOperationInputV1(requestId, 10, first = payment, second = companion))
-
-    /** Refresh from exact signed originals; Native derives maps and all effective values. */
-    fun refresh(requestId: ByteArray, kind: KagemushaWalletRefreshKindV1, update: ByteArray, certificates: ByteArray): KagemushaWalletCallV1 =
-        execute(KagemushaWalletOperationInputV1(requestId, kind.selector, first = update, second = certificates))
-    /** Install a signed blacklist locally; a replacement's list version must increase and
-     * reinstalling the held list is idempotent. The wallet then refuses to pay a listed receiver
-     * and to request or accept money from a listed payer ([KagemushaWalletExceptionV1.BLOCKED]).
-     * Nothing is sent to peers or proved; this is no wallet operation and has no retry identity.
-     * COMPLETE carries the held list's 32-byte object digest.
-     */
-    fun installBlacklist(list: ByteArray, certificates: ByteArray): KagemushaWalletCallV1 =
-        execute(KagemushaWalletOperationInputV1(ByteArray(32), 5, first = list, second = certificates))
-    /** Authenticate the exact payout, signed charge and canonical beneficiary before confirmation. */
-    fun reviewUnload(amount: KagemushaWalletUInt128V1, quote: ByteArray? = null, certificates: ByteArray? = null,
-        chargeBeneficiary: ByteArray? = null): KagemushaWalletReviewV1 {
-        require((quote == null) == (certificates == null) && (quote == null) == (chargeBeneficiary == null)) {
-            "quote, certificates and beneficiary must be supplied together"
-        }
-        if (quote != null) require(quote.isNotEmpty())
-        require(amount.low != 0L || amount.high != 0L)
-        require((quote?.size ?: 0) <= 1_024)
-        val companion = if (quote == null) byteArrayOf()
-            else KagemushaWalletUnloadChargeReviewV1.encode(checkNotNull(certificates), checkNotNull(chargeBeneficiary))
-        return review(8, amount, quote ?: byteArrayOf(), companion, KagemushaWalletReviewProjectionV1.Kind.UNLOAD)
-    }
-    private fun review(selector: Int, amount: KagemushaWalletUInt128V1, first: ByteArray, second: ByteArray, expected: KagemushaWalletReviewProjectionV1.Kind): KagemushaWalletReviewV1 {
-        val wallet = handle()
-        var reply: KagemushaWalletReviewReplyV1? = null
-        try {
-            reply = KagemushaWalletNativeCallsV1.review(wallet, selector, amount.low, amount.high, first.copyOf(), second.copyOf())
-            return (reply ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)).review(this, expected)
-        } catch (failure: KagemushaWalletExceptionV1) {
-            if (failure.status == KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT) {
-                val token = reply?.cleanupToken()
-                try {
-                    if (token == null) close()
-                    else checked(KagemushaWalletNativeCallsV1.discardReview(wallet, token))
-                } catch (cleanup: Throwable) {
-                    if(failure !== cleanup)failure.addSuppressed(cleanup)
-                    try { close() } catch (retirement: Throwable) { if(failure !== retirement)failure.addSuppressed(retirement) }
-                }
-            }
-            throw failure
-        }
-    }
-    /** Consume the exact reviewed Native operation after fresh hardware confirmation. Native rechecks its whole source. */
-    fun executeReviewed(review: KagemushaWalletReviewV1, requestId: ByteArray): KagemushaWalletCallV1 {
-        word(requestId); require(requestId.any { it != 0.toByte() })
-        val value = handle()
-        val token = review.consume(this)
-        return KagemushaWalletReviewedExecutionV1.run(execute = {
-            val reply = KagemushaWalletNativeCallsV1.executeReviewed(value, token, requestId.copyOf())
-                ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-            if (reply.status < 0) throw KagemushaWalletExceptionV1(reply.status, reply.reason, reply.platformCode)
-            reply.completion()
-        }, discard = { KagemushaWalletNativeCallsV1.discardReview(value, token) }, close = ::close)
-    }
-    /** Discard an unused review on a worker without creating intent, payment or monetary authority. */
-    fun discardReview(review: KagemushaWalletReviewV1) {
-        val value = handle(); val token = review.consume(this)
-        checked(KagemushaWalletNativeCallsV1.discardReview(value, token))
-    }
-    /** Same actual one-use discard operation, retained for the current managed integration. */
-    fun cancelReview(review:KagemushaWalletReviewV1)=discardReview(review)
-    /** Enter Retiring under native folded-state checks. */
-    fun retire(requestId: ByteArray): KagemushaWalletCallV1 = execute(KagemushaWalletOperationInputV1(requestId, 9))
->>>>>>> origin/optimizations
     /** Resolve the local request identity, including distinct Preparing and irreversible Pending. */
     fun requestStatus(requestId: ByteArray): KagemushaWalletCallV1 {
         word(requestId); require(requestId.any { it != 0.toByte() }); return call(5, requestId)
@@ -560,13 +482,13 @@ internal class KagemushaWalletOperationInputV1(
     init {
         val limits = when (selector) {
             0 -> intArrayOf(512, 256 * 1024, 0)
-            2 -> intArrayOf(10_000, 1_024, 10_000)
-            3, 4 -> intArrayOf(1_024, 10_000, 0)
-            5 -> intArrayOf(65_536 * 34 + 512, 10_000, 0)
-            6 -> intArrayOf(512, 10_000, 0)
-            7 -> intArrayOf(8_192, 10_000, 0)
+            2 -> intArrayOf(10_034, 1_024, 10_034)
+            3, 4 -> intArrayOf(1_024, 10_034, 0)
+            5 -> intArrayOf(65_536 * 34 + 512, 10_034, 0)
+            6 -> intArrayOf(512, 10_034, 0)
+            7 -> intArrayOf(8_192, 10_034, 0)
             9 -> intArrayOf(0, 0, 0)
-            10 -> intArrayOf(10_000, 2_048, 0)
+            10 -> intArrayOf(10_034, 2_048, 0)
             else -> throw IllegalArgumentException("unknown lifecycle operation")
         }
         require(requestId.size == 32 && requestId.any { it != 0.toByte() } != (selector == 5)) {

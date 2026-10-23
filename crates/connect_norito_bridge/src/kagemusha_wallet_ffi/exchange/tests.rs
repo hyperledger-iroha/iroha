@@ -526,6 +526,21 @@ fn mandatory_setup_exchange_and_zero_only_exemptions_are_a_closed_partition() {
 }
 
 #[test]
+fn ledger_attempt_mutations_require_an_exchange_and_outcome_reads_do_not() {
+    for selector in [34, 36, 46, 53] {
+        assert!(setup::bounds(selector).is_ok());
+        assert!(!setup_exempt(selector));
+    }
+    for selector in [33, 37, 52] {
+        assert!(setup::bounds(selector).is_ok());
+        assert!(setup_exempt(selector));
+    }
+    for selector in [3, 30, 35, 41, 54] {
+        assert!(setup::bounds(selector).is_err());
+    }
+}
+
+#[test]
 fn accepted_core_child_survives_until_foreign_response_allocation_finishes() {
     let (id, calls) = registered();
     let token = begin(id).unwrap().delivered();

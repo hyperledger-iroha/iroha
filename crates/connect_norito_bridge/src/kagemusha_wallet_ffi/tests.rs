@@ -942,10 +942,12 @@ fn c_selector_five_installs_the_local_list_through_the_owner_and_is_no_operation
     .unwrap();
     assert_eq!((response.kind, response.bytes), (1, vec![9, 10]));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let captured = test_invocation(id).unwrap();
     close(id).unwrap();
+    assert_eq!(test_invocation(id).err().unwrap().status, CLOSED);
     assert_eq!(
         execute(
-            &test_invocation(id).unwrap(),
+            &captured,
             requests::Call::InstallBlacklist {
                 list: vec![9],
                 certificates: vec![10],
@@ -955,6 +957,7 @@ fn c_selector_five_installs_the_local_list_through_the_owner_and_is_no_operation
         .status,
         CLOSED
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 #[test]

@@ -85,13 +85,13 @@ final class KagemushaWalletCurrentReviewIntegrationV1Tests: XCTestCase {
     XCTAssertThrowsError(try KagemushaWalletReviewProjectionV1(changed))
   }
   func testFixedInputBoundsAndForeignFieldRefusal() throws {
-    _ = try KagemushaWalletReviewInputV1(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: Data(repeating: 1, count: 10_000), second: Data(repeating: 2, count: 4_096))
+    _ = try KagemushaWalletReviewInputV1(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: Data(repeating: 1, count: 10_034), second: Data(repeating: 2, count: 4_096))
     _ = try KagemushaWalletReviewInputV1(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: UInt64.max, high: UInt64.max))
-    _ = try KagemushaWalletReviewInputV1(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), first: Data(repeating: 1, count: 1_024), second: KagemushaWalletUnloadChargeReviewV1.encode(certificates: Data(repeating: 1, count: 10_000), beneficiary: Data(repeating: 2, count: 4_096)))
+    _ = try KagemushaWalletReviewInputV1(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), first: Data(repeating: 1, count: 1_024), second: KagemushaWalletUnloadChargeReviewV1.encode(certificates: Data(repeating: 1, count: 10_034), beneficiary: Data(repeating: 2, count: 4_096)))
     let makers: [() throws -> KagemushaWalletReviewInputV1] = [
       { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 2, first: Data([1])) },
       { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1) },
-      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: Data(repeating: 1, count: 10_001), second: Data([1])) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: Data(repeating: 1, count: 10_035), second: Data([1])) },
       { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, amount: .init(low: 1, high: 0), first: Data([1]), second: Data([1])) },
       { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: Data([1])) },
       { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, second: Data([1])) },
@@ -100,20 +100,20 @@ final class KagemushaWalletCurrentReviewIntegrationV1Tests: XCTestCase {
       { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), first: Data([1])) },
       { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), second: Data([1])) },
       { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), first: Data(repeating: 1, count: 1_025), second: Data([1])) },
-      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), first: Data([1]), second: Data(repeating: 1, count: 10_001)) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), first: Data([1]), second: Data(repeating: 1, count: 10_035)) },
     ]
     for make in makers { XCTAssertThrowsError(try make()) }
   }
   func testReviewIntakeKeepsExactCOriginals() throws {
-    var request = Data(repeating: 7, count: 10_000)
+    var request = Data(repeating: 7, count: 10_034)
     var account = Data(repeating: 9, count: 4_096)
     let input = try KagemushaWalletReviewInputV1(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: request, second: account)
     request[0] = 0; account[0] = 0
     input.withRequest { value in
       XCTAssertEqual(value.pointee.selector, 1)
       XCTAssertEqual(value.pointee.amount.low, 0); XCTAssertEqual(value.pointee.amount.high, 0)
-      XCTAssertEqual(value.pointee.first_length, 10_000); XCTAssertEqual(value.pointee.second_length, 4_096)
-      XCTAssertEqual(Data(bytes: value.pointee.first!, count: 10_000), Data(repeating: 7, count: 10_000))
+      XCTAssertEqual(value.pointee.first_length, 10_034); XCTAssertEqual(value.pointee.second_length, 4_096)
+      XCTAssertEqual(Data(bytes: value.pointee.first!, count: 10_034), Data(repeating: 7, count: 10_034))
       XCTAssertEqual(Data(bytes: value.pointee.second!, count: 4_096), Data(repeating: 9, count: 4_096))
     }
   }

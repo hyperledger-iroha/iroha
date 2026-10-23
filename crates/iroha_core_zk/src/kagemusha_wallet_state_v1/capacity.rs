@@ -8,7 +8,8 @@ use crate::kagemusha_wallet_advance_v1::{
     KAGEMUSHA_WALLET_CAPACITY_HEADROOM_BYTES_V1, KAGEMUSHA_WALLET_FROZEN_FILE_OVERHEAD_BYTES_V1,
 };
 use crate::kagemusha_wallet_capacity_v1::{
-    KagemushaWalletCapacityShortfallV1, KagemushaWalletRuntimeCapacityV1,
+    KAGEMUSHA_WALLET_CORE_BASELINE_BYTES_V1, KagemushaWalletCapacityShortfallV1,
+    KagemushaWalletRuntimeCapacityV1,
 };
 
 /// Bound of one archived frozen transition (capsule and credential).
@@ -109,6 +110,18 @@ pub(super) fn deferred_archive_capacity(
     })
 }
 
+/// Memory intake itself holds: its allowance plus the wallet-core baseline, which the
+/// relation bound already carries.
+pub(super) const INTAKE_PEAK_MEMORY_BYTES: u64 =
+    INTAKE_MEMORY_RESERVATION_BYTES + KAGEMUSHA_WALLET_CORE_BASELINE_BYTES_V1;
+
+/// Memory an operation needs at intake: the larger of intake's own peak and the installed
+/// relations' peak proving memory, never their sum. Intake derives and stages but never
+/// proves, and its staging batch is removed before the step proves.
+fn intake_memory_bytes(relations: KagemushaWalletRuntimeCapacityV1) -> u64 {
+    relations.memory_bytes.max(INTAKE_PEAK_MEMORY_BYTES)
+}
+
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     /// Admit only a fresh deferred-receipt metadata publication. Exact retained reads,
     /// duplicate intake and already-completed reconciliation must not depend on this check.
@@ -122,8 +135,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     }
 
     /// Admit the bounded intake workspace and its redundant recovery batch before allocating
-    /// variable draft data. The batch is gone before proving; this conservative bound still
-    /// covers native source validation and all guarded envelope copies simultaneously.
+    /// variable draft data, and refuse a phone that could not prove the step afterwards.
     pub(super) fn require_intake_capacity(&mut self) -> Result<(), Error> {
         let relations = self.proofs.runtime_capacity()?;
         let required = KagemushaWalletRuntimeCapacityV1 {
@@ -131,10 +143,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 .storage_bytes
                 .checked_add(INTAKE_STORAGE_RESERVATION_BYTES)
                 .ok_or(Error::Invalid("intake storage bound"))?,
-            memory_bytes: relations
-                .memory_bytes
-                .checked_add(INTAKE_MEMORY_RESERVATION_BYTES)
-                .ok_or(Error::Invalid("intake memory bound"))?,
+            memory_bytes: intake_memory_bytes(relations),
         };
         self.check_capacity_observed(NativeAdmissionPhaseV1::Intake, required)
     }
@@ -145,10 +154,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         let relations = self.proofs.runtime_capacity()?;
         let required = KagemushaWalletRuntimeCapacityV1 {
             storage_bytes: 0,
-            memory_bytes: relations
-                .memory_bytes
-                .checked_add(INTAKE_MEMORY_RESERVATION_BYTES)
-                .ok_or(Error::Invalid("intake memory bound"))?,
+            memory_bytes: intake_memory_bytes(relations),
         };
         self.check_capacity_observed(NativeAdmissionPhaseV1::IntakeMemory, required)
     }

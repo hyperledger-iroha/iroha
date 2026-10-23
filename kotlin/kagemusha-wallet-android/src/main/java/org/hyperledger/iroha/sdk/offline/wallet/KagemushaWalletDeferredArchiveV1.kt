@@ -24,7 +24,7 @@ sealed class KagemushaWalletDeferredArchiveDrainV1 {
             KagemushaWalletCallV1.DEFERRED_BLOCKED -> Blocked(KagemushaWalletMaintenanceWaitV1.from(result.detail))
             KagemushaWalletCallV1.DEFERRED_COMPLETION -> {
                 val bytes = result.bytes()
-                if (bytes.size !in 28..10_028) invalidDeferredOutput()
+                if (bytes.size !in 28..10_062) invalidDeferredOutput()
                 fun u32(offset: Int): Long = (0..3).fold(0L) { value, index ->
                     value or ((bytes[offset + index].toLong() and 255) shl (8 * index))
                 }
@@ -33,7 +33,7 @@ sealed class KagemushaWalletDeferredArchiveDrainV1 {
                 }
                 val kind = u32(0)
                 val length = u32(24)
-                if (kind !in listOf(1L, 2L, 3L, 4L, 5L, 10L) || length > 10_000 ||
+                if (kind !in listOf(1L, 2L, 3L, 4L, 5L, 10L) || length > 10_034 ||
                     bytes.size.toLong() != 28 + length) invalidDeferredOutput()
                 val completion = KagemushaWalletCallV1(kind.toInt(), -1, 0, u64(8), u64(16),
                     u32(4).toInt(), bytes.copyOfRange(28, bytes.size)).completion()

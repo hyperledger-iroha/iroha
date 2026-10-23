@@ -160,7 +160,7 @@ public final class KagemushaWalletExchangeCallV1: @unchecked Sendable {
   public func reviewSend(requestId: Data, request: Data, destinationAccountOriginal: Data,
     expectation: KagemushaWalletReviewExpectationV1) throws -> KagemushaWalletReviewDecisionV1 {
     return try task.withUse {
-      guard !request.isEmpty, request.count <= 10_000,
+      guard !request.isEmpty, request.count <= 10_034,
         !destinationAccountOriginal.isEmpty, destinationAccountOriginal.count <= 4_096
       else { throw KagemushaWalletErrorV1.invalidInput }
       return try review(requestId: requestId, expectation: expectation, selector: 1, amount: .init(low: 0, high: 0), first: request,
@@ -204,7 +204,7 @@ public final class KagemushaWalletExchangeCallV1: @unchecked Sendable {
       guard amount.low != 0 || amount.high != 0, (quote == nil) == (certificates == nil),
         (quote == nil) == (chargeBeneficiary == nil),
         quote.map({ !$0.isEmpty && $0.count <= 1_024 }) ?? true,
-        certificates.map({ !$0.isEmpty && $0.count <= 10_000 }) ?? true,
+        certificates.map({ !$0.isEmpty && $0.count <= 10_034 }) ?? true,
         chargeBeneficiary.map({ !$0.isEmpty && $0.count <= 4_096 }) ?? true else { throw KagemushaWalletErrorV1.invalidInput }
       let companion: Data
       if let certificates, let chargeBeneficiary {

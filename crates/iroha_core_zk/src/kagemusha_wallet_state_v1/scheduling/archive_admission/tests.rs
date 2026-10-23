@@ -255,7 +255,7 @@ fn late_exchange_retains_occupancy_while_archive_and_covering_fold_finish() {
     fold.token.check().unwrap();
     drop(fold);
     let observation = scheduler.reconciling_archive().unwrap();
-    assert_eq!(observation.selected_head(), Some(successor()));
+    assert_eq!(observation.head, Some(successor()));
     scheduler
         .reconcile_archive(
             &observation,
@@ -292,7 +292,7 @@ fn dropped_dispatched_permit_keeps_uncertainty_until_exact_nonselection() {
     ));
     let observed = scheduler.reconciling_archive().unwrap();
     assert_eq!(observed.target(), target());
-    assert_eq!(observed.selected_capsule(), None);
+    assert_eq!(observed.attempt.selected, None);
     assert_eq!(
         scheduler.reconcile_archive(
             &observed,
@@ -347,7 +347,7 @@ fn selected_pending_requires_its_exact_capsule_then_exact_covering_head() {
         .unwrap();
     drop(turn);
     let observed = scheduler.reconciling_archive().unwrap();
-    assert_eq!(observed.selected_capsule(), Some(successor().capsule));
+    assert_eq!(observed.attempt.selected, Some(successor().capsule));
     assert_eq!(
         scheduler.reconcile_archive(
             &observed,

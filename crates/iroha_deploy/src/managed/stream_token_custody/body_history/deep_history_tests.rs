@@ -150,7 +150,14 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
         fixture.options.deadline = (Instant::now() + Duration::from_secs(120)).min(complete_before);
         assert!(Fees::from_options(&fixture.options).unwrap() == original_fees);
         refresh_old_anchor(fixture);
+        // Observe the deepest startup and successor's original errors before fixed mapping.
+        // Keep the guard through finish/unwind; successful output follows all timed work.
+        let body_diagnostic = (ordinal == 64)
+            .then(crate::managed::native_operation::deadline_diagnostics::Observer::begin);
         let mut turn = fixture.renewal_turn();
+        if let Some(diagnostic) = &body_diagnostic {
+            diagnostic.successor();
+        }
         let (checkpoint, current) = fixture.current();
         assert_eq!(current.current().unwrap().record(), &original_native);
         assert_eq!(current.current().unwrap().control().next_sequence, 2);
@@ -356,6 +363,9 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
         );
         // Report only after finite request retention and this body's existing assertions.
         eprintln!("body {ordinal} inclusive_finish_phases={finish_phases:?}");
+        // Successful diagnostic output follows measured selection, finish and retention work.
+        // On any earlier panic, RAII still emits the original observed failure while unwinding.
+        drop(body_diagnostic);
     }
 
     let history = retained.unwrap();

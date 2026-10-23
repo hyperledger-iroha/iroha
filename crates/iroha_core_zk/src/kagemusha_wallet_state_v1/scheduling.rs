@@ -32,8 +32,7 @@ pub use exchanges::{ExchangeCallV1, ExchangeEndV1, ExchangeErrorV1, ExchangeLeas
 mod archive_admission;
 pub use archive_admission::{ArchiveAdmissionErrorV1, ArchiveTurnV1};
 pub(super) use archive_admission::{
-    ArchiveCoverageV1, ArchiveDispatchPermit, ArchiveHeadV1, ArchiveReconciliationV1,
-    ArchiveResolutionV1, ArchiveTargetV1,
+    ArchiveCoverageV1, ArchiveDispatchPermit, ArchiveHeadV1, ArchiveResolutionV1, ArchiveTargetV1,
 };
 
 /// Cloneable cancellation token checked at proving task boundaries.

@@ -66,14 +66,14 @@ class KagemushaWalletDeferredArchiveV1Test {
             refuses { KagemushaWalletDeferredArchiveDrainV1.from(reply(64, detail = 1, bytes = nested(kind))) }
         }
         refuses { reply(64, detail = 1, bytes = ByteArray(27)) }
-        refuses { reply(64, detail = 1, bytes = ByteArray(10_029)) }
+        refuses { reply(64, detail = 1, bytes = ByteArray(10_063)) }
         for (bytes in listOf(nested(1, byteArrayOf(7)).copyOf(28), nested(2) + byteArrayOf(0),
             nested(2).also { it[24] = 0xff.toByte(); it[27] = 0xff.toByte() })) {
             refuses { KagemushaWalletDeferredArchiveDrainV1.from(reply(64, detail = 1, bytes = bytes)) }
         }
         val maximum = KagemushaWalletDeferredArchiveDrainV1.from(reply(64, detail = 2,
-            bytes = nested(1, ByteArray(10_000) { 3 }))) as KagemushaWalletDeferredArchiveDrainV1.Executed
-        assertEquals(10_000, maximum.completion.bytes().size)
+            bytes = nested(1, ByteArray(10_034) { 3 }))) as KagemushaWalletDeferredArchiveDrainV1.Executed
+        assertEquals(10_034, maximum.completion.bytes().size)
         refuses { reply(64, detail = 0, bytes = nested(2)) }
         refuses { reply(64, detail = 3, bytes = nested(2)) }
         refuses { reply(64, low = 1, detail = 1, bytes = nested(2)) }
@@ -92,13 +92,13 @@ class KagemushaWalletDeferredArchiveV1Test {
         for (selector in listOf(3, 41, 54)) assertThrows(IllegalArgumentException::class.java) {
             KagemushaWalletSetupInputV1(selector, identity = ByteArray(32) { 1 }, first = byteArrayOf(2))
         }
-        val identity = ByteArray(32) { 1 }; val original = ByteArray(10_000) { 2 }
+        val identity = ByteArray(32) { 1 }; val original = ByteArray(10_034) { 2 }
         val input = KagemushaWalletSetupInputV1(56, identity = identity, first = original)
         identity.fill(0); original.fill(0)
         assertEquals(1.toByte(), input.identity()[0]); assertEquals(2.toByte(), input.first()[0])
         assertThrows(IllegalArgumentException::class.java) { KagemushaWalletSetupInputV1(56, first = byteArrayOf(2)) }
         assertThrows(IllegalArgumentException::class.java) { KagemushaWalletSetupInputV1(56, identity = ByteArray(32) { 1 }) }
-        assertThrows(IllegalArgumentException::class.java) { KagemushaWalletSetupInputV1(56, identity = ByteArray(32) { 1 }, first = ByteArray(10_001)) }
+        assertThrows(IllegalArgumentException::class.java) { KagemushaWalletSetupInputV1(56, identity = ByteArray(32) { 1 }, first = ByteArray(10_035)) }
         for (selector in listOf(57, 58)) {
             KagemushaWalletSetupInputV1(selector)
             assertThrows(IllegalArgumentException::class.java) { KagemushaWalletSetupInputV1(selector, first = byteArrayOf(1)) }

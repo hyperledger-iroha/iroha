@@ -666,9 +666,31 @@ impl AccountService {
         kind: NativeOperationKind,
         expected: OperationExpectation<'_>,
     ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation_with(kind, expected, || Journal::open(path))
+    }
+
+    pub(super) fn retire_preparation_in_parent(
+        &self,
+        parent: &iroha_fs::PrivateDirectory,
+        name: &std::ffi::OsStr,
+        kind: NativeOperationKind,
+        expected: OperationExpectation<'_>,
+    ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation_with(kind, expected, || {
+            Journal::open_optional_child(parent, name)?
+                .ok_or_else(|| eyre!("required native preparation journal is absent"))
+        })
+    }
+
+    fn retire_preparation_with(
+        &self,
+        kind: NativeOperationKind,
+        expected: OperationExpectation<'_>,
+        open: impl FnOnce() -> Result<Journal>,
+    ) -> Result<RetiredNativeRequest> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         norito::core::with_decode_limits_scope(LIMITS, || {
-            let journal = Journal::open(path)?;
+            let journal = open()?;
             let retained = Retained::read(&journal, &self.config)?;
             retained.verify_selection(kind, Some(&expected))?;
             eyre::ensure!(

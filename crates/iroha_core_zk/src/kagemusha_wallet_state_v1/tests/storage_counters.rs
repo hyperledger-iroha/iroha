@@ -441,24 +441,27 @@ fn coordinator_storage_counts_are_deterministic_and_filesystem_independent() {
     // Committed operations also publish their permanent operation-to-step locator.
     // Its additional index objects are durable before the shared manifest is selected;
     // retained Send retry still performs no archive writes or fsync-class calls.
+    // Fresh commits authenticate maintenance state before taking Payment priority: Bootstrap
+    // reads Enrollment, and other operations read the selected snapshot and Archive fold
+    // obligation. These source fences add protected-storage probes, never writes or syncs.
     const BASELINE: [(&str, u64, u64, u64); 21] = [
         ("coordinator_open", 0, 0, 31),
-        ("bootstrap_commit", 38, 8, 147),
+        ("bootstrap_commit", 38, 8, 157),
         ("bootstrap_fold_turn_0", 10, 1, 75),
         ("bootstrap_fold_turn_1", 26, 5, 84),
-        ("receive_commit", 30, 6, 204),
+        ("receive_commit", 30, 6, 344),
         ("receive_fold_turn_0", 10, 1, 110),
         ("receive_fold_turn_1", 1_406, 350, 811),
-        ("refresh_policy_commit", 30, 6, 209),
+        ("refresh_policy_commit", 30, 6, 351),
         ("refresh_policy_fold_turn_0", 10, 1, 112),
         ("refresh_policy_fold_turn_1", 26, 5, 123),
-        ("send_commit", 46, 10, 217),
+        ("send_commit", 46, 10, 359),
         ("send_fold_turn_0", 10, 1, 113),
         ("send_fold_turn_1", 34, 7, 130),
-        ("load_commit", 30, 6, 212),
+        ("load_commit", 30, 6, 356),
         ("load_fold_turn_0", 10, 1, 114),
         ("load_fold_turn_1", 26, 5, 125),
-        ("unload_commit", 38, 8, 215),
+        ("unload_commit", 38, 8, 357),
         ("unload_fold_turn_0", 10, 1, 113),
         ("unload_fold_turn_1", 34, 7, 130),
         ("snapshot", 0, 0, 134),

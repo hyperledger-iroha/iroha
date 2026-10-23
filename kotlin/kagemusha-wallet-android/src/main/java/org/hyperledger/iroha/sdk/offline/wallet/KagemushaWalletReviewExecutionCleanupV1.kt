@@ -4,7 +4,7 @@ package org.hyperledger.iroha.sdk.offline.wallet
 
 /** Cleanup of the exact owner/token handed to executeReviewed. This never classifies the
  * monetary outcome or makes the consumed managed review reusable. */
-internal object KagemushaWalletReviewedExecutionV1 {
+internal object KagemushaWalletReviewExecutionCleanupV1 {
     fun <T> run(execute: () -> T, discard: () -> Int, close: () -> Unit): T {
         try {
             return execute()

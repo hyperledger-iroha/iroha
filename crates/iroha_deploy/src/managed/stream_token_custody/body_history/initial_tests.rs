@@ -417,7 +417,7 @@ fn finish_initial_replacement(
         |attempt| {
             original
                 .request(attempt.terms(), attempt.observation()?, options.deadline)?
-                .retire(&account, &attempt.wallet_path())
+                .retire(&account, attempt.directory())
         },
         |attempt, observation, deadline| {
             original

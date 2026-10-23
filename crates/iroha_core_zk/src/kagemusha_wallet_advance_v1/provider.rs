@@ -256,7 +256,10 @@ where
         self.pending_reasons.get(slot).copied()
     }
 
-    /// Scheme of every slot under this root.
+    /// The only scheme this provider may adopt, reconcile or operate.
+    /// Retained slots of another scheme may share the protected root. Enrollment inventory
+    /// can identify them read-only from their exact phase, intent and signed permit originals;
+    /// that classification never admits their custody as this provider's scheme.
     pub fn scheme_id(&self) -> &[u8; 32] {
         &self.scheme_id
     }
@@ -433,6 +436,13 @@ where
             Ok(Some(capsule.into_value()))
         })();
         self.require_storage().and(answer)
+    }
+
+    /// Memory currently available to the app, or `None` without an OS answer. Unlike
+    /// [`Self::runtime_resources`] it needs no unlocked storage: a fold reads it to choose a
+    /// quotient plan, never to admit or refuse anything.
+    pub(crate) fn available_memory(&self) -> Option<u64> {
+        self.platform.available_memory()
     }
 
     /// Read a native sleep-inclusive clock under the same protected custody lifetime.

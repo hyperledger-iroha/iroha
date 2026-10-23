@@ -107,7 +107,7 @@ class KagemushaWalletEnrollmentV1Test {
             bytes.fill(0);if(size>0)assertEquals(5,reply.bytes()[0].toInt())
             assertFailsWith<KagemushaWalletExceptionV1>{KagemushaWalletCallV1(status,-1,0,0,0,0,reply.bytes())}
         }
-        assertFailsWith<KagemushaWalletExceptionV1>{KagemushaWalletCallV1(1,-1,0,0,0,0,ByteArray(10001))}
+        assertFailsWith<KagemushaWalletExceptionV1>{KagemushaWalletCallV1(1,-1,0,0,0,0,ByteArray(10035))}
         assertFailsWith<KagemushaWalletExceptionV1>{KagemushaWalletCallV1(25,-1,0,7,0,0,ByteArray(262145))}
     }
     @Test fun `wrapper copies inputs requires exact projection and closes once`() {
@@ -205,7 +205,7 @@ class KagemushaWalletEnrollmentV1Test {
         assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(58, -1, 0, 7, 0, 0, byteArrayOf(1)) }
         assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(28, -1, 0, 7, 0, 0, byteArrayOf()) }
         assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(58, -1, 0, 7, 0, 1, byteArrayOf()) }
-        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(60, -1, 0, 7, 0, 0, byteArrayOf()) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(61, -1, 0, 7, 0, 0, byteArrayOf()) }
         for (reply in listOf(KagemushaWalletCallV1(20, -1, 0, 7, 0, 0, byteArrayOf()), KagemushaWalletCallV1(58, -1, 0, 8, 0, 0, byteArrayOf()),
             KagemushaWalletCallV1(24, -1, 0, 7, 0, 0, byteArrayOf(1)))) {
             driver.reply = reply

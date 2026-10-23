@@ -135,7 +135,7 @@ fn current_maximum_queue_records_and_populated_manifest_fit_provider_bounds() {
     manifest.ledger_checkpoint = Some([255; 32]);
     manifest.finality_epoch = Some(u64::MAX);
     manifest.ledger_retired = Some([255; 32]);
-    manifest.ledger_unload_retired = Some(([255; 32], [255; 32]));
+    manifest.ledger_unload_outcomes = IndexRoot([255; 32]);
     manifest.checkpoint_count = u32::MAX;
     manifest.checkpoint_digest = [255; 32];
     manifest.collection = Some(collection::CollectionIntent {

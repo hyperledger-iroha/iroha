@@ -53,8 +53,10 @@ final class KagemushaEnrollmentProbeStageTests: XCTestCase {
       "native-activation-exported-not-submitted", "native-activation-rejected",
       "native-load-plan-retained", "native-review-awaiting-explicit-decision",
       "native-peer-envelope-decoded-not-admitted", "native-unload-claim-exported-not-settled",
-      "native-unload-prefix-retained-not-confirmed", "native-current-head-not-folded",
-    ] + (0...67).map { "native-call-status-\($0)" }
+      "native-activation-unconfirmed", "native-activation-epoch-required",
+      "native-unload-unconfirmed", "native-unload-rejected", "native-unload-epoch-required",
+      "native-current-head-not-folded",
+    ] + (0...70).map { "native-call-status-\($0)" }
     for outcome in outcomes {
       XCTAssertNil(KagemushaEnrollmentProbeStage.observed(outcome), outcome)
     }

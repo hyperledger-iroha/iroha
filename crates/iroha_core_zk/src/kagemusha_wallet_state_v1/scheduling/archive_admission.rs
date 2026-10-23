@@ -431,14 +431,6 @@ impl ArchiveReconciliationV1 {
     pub(in crate::kagemusha_wallet_state_v1) const fn target(&self) -> ArchiveTargetV1 {
         self.attempt.target
     }
-    pub(in crate::kagemusha_wallet_state_v1) const fn selected_capsule(&self) -> Option<[u8; 32]> {
-        self.attempt.selected
-    }
-    pub(in crate::kagemusha_wallet_state_v1) const fn selected_head(
-        &self,
-    ) -> Option<ArchiveHeadV1> {
-        self.head
-    }
 }
 
 impl Drop for ArchiveDispatchPermit {

@@ -596,7 +596,7 @@ fn close_joins_recovery_proof_publication_and_archive_preparation_without_priori
                             .unwrap()
                             .recv_timeout(Duration::from_secs(5))
                             .unwrap();
-                        Ok(Box::new(move |_| {
+                        Ok(Box::new(move |_: &mut dyn Wallet| {
                             published.fetch_add(1, Ordering::SeqCst);
                             Ok(Response {
                                 kind: 7,

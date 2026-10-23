@@ -19,8 +19,12 @@ final class KagemushaWalletExchangeLifetimeV1Tests: XCTestCase {
     let ended = expectation(description: "end joined queued task")
     DispatchQueue.global().async {
       ending.fulfill()
-      XCTAssertEqual(try lifetime.end(), .ended)
-      ended.fulfill()
+      defer { ended.fulfill() }
+      do {
+        let result = try lifetime.end()
+        XCTAssertEqual(result, .ended)
+      }
+      catch { XCTFail("exchange cleanup failed: \(error)") }
     }
     wait(for: [ending], timeout: 2)
     // The task was accepted before enqueue. It may start while end is waiting.
@@ -42,17 +46,26 @@ final class KagemushaWalletExchangeLifetimeV1Tests: XCTestCase {
     let accepted = try lifetime.admit()
     let workReturned = expectation(description: "work returned")
     DispatchQueue.global().async {
-      XCTAssertNoThrow(try accepted.withUse {
-        entered.signal()
-        XCTAssertEqual(release.wait(timeout: .now() + 2), .success)
-      })
-      workReturned.fulfill()
+      defer { workReturned.fulfill() }
+      do {
+        try accepted.withUse {
+          entered.signal()
+          XCTAssertEqual(release.wait(timeout: .now() + 2), .success)
+        }
+      } catch { XCTFail("admitted work failed: \(error)") }
     }
     XCTAssertEqual(entered.wait(timeout: .now() + 2), .success)
     accepted.finish()
     XCTAssertThrowsError(try accepted.withUse { XCTFail("new use after finish") })
     let ended = expectation(description: "native end after running task")
-    DispatchQueue.global().async { XCTAssertEqual(try lifetime.end(), .ended); ended.fulfill() }
+    DispatchQueue.global().async {
+      defer { ended.fulfill() }
+      do {
+        let result = try lifetime.end()
+        XCTAssertEqual(result, .ended)
+      }
+      catch { XCTFail("exchange cleanup failed: \(error)") }
+    }
     XCTAssertEqual(native.value, 0)
     release.signal()
     wait(for: [workReturned, ended], timeout: 2)

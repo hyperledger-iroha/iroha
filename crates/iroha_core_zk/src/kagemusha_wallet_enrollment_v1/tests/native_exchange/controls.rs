@@ -673,8 +673,8 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
     drop(a);
     let mut a = sources.open(&device_a, &f, &frames_a);
     assert_eq!(
-        a.confirm_ledger_activation(&signed_activation).unwrap(),
-        activation_confirmation
+        a.activation_attempt_outcome(&signed_activation).unwrap(),
+        state::LedgerAttemptOutcomeV1::Confirmed(activation_confirmation)
     );
     assert_eq!(a.snapshot().unwrap(), before_activation);
     assert_eq!(device_a.platform.with(|state| state.sign_calls), signatures);

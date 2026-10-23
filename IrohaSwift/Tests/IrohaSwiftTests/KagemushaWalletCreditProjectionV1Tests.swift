@@ -45,10 +45,10 @@ final class KagemushaWalletCreditProjectionV1Tests: XCTestCase {
         }
         for bytes in [Data(valid.dropLast()), valid + Data([1]), original(pending: 1),
             original(payload: Data()), original(archive: 1), original(archive: 5, payload: Data()),
-            original(payload: Data(repeating: 1, count: 10_001))] {
+            original(payload: Data(repeating: 1, count: 10_035))] {
             XCTAssertThrowsError(try decode(bytes))
         }
-        XCTAssertNoThrow(try decode(original(payload: Data(repeating: 1, count: 10_000))))
+        XCTAssertNoThrow(try decode(original(payload: Data(repeating: 1, count: 10_034))))
         let other = try KagemushaWalletCallV1(status: 48, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: valid)
         XCTAssertThrowsError(try KagemushaWalletCreditProjectionV1(other))
         let result = try KagemushaWalletCallV1(status: 47, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: valid)
@@ -61,7 +61,7 @@ final class KagemushaWalletCreditProjectionV1Tests: XCTestCase {
         XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 43, identity: id, first: anchor))
         let anchored = try KagemushaWalletSetupInputV1(selector: 44, identity: id, first: anchor)
         XCTAssertEqual(anchored.identity, id); XCTAssertEqual(anchored.first, anchor); XCTAssertEqual(anchored.second, Data())
-        for candidate in [newer, Data(repeating: 1, count: 10_000)] {
+        for candidate in [newer, Data(repeating: 1, count: 10_034)] {
             XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 44, identity: id, first: anchor, second: candidate))
             let input = try KagemushaWalletSetupInputV1(selector: 56, identity: id, first: candidate)
             XCTAssertEqual(input.identity, id); XCTAssertEqual(input.first, candidate); XCTAssertEqual(input.second, Data())
@@ -69,13 +69,13 @@ final class KagemushaWalletCreditProjectionV1Tests: XCTestCase {
         XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 44, first: anchor))
         XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 44, identity: id))
         XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 44, identity: id, first: anchor, third: newer))
-        XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 44, identity: id, first: anchor, second: Data(repeating: 1, count: 10_001)))
+        XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 44, identity: id, first: anchor, second: Data(repeating: 1, count: 10_035)))
         let verified = try KagemushaWalletSetupInputV1(selector: 56, identity: id, first: newer)
         XCTAssertEqual(verified.identity, id); XCTAssertEqual(verified.first, newer); XCTAssertEqual(verified.second, Data())
         XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 56, first: newer))
         XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 56, identity: id))
         XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 56, identity: id, first: newer, second: anchor))
-        XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 56, identity: id, first: Data(repeating: 1, count: 10_001)))
+        XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 56, identity: id, first: Data(repeating: 1, count: 10_035)))
         for selector in [UInt32(43), 44, 56] {
             let first = selector == 43 ? Data() : anchor
             XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: selector, identity: id, amount: .init(low: 1, high: 0), first: first))

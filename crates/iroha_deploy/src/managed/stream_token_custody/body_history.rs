@@ -2732,7 +2732,7 @@ impl BodyHistory {
                                     finish_timing::phase(finish_timing::Phase::WalletRetire);
                                 original
                                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                                    .retire(&account, &attempt.wallet_path())
+                                    .retire(&account, attempt.directory())
                             },
                         )?;
                         #[cfg(test)]
@@ -2751,7 +2751,7 @@ impl BodyHistory {
                                     finish_timing::phase(finish_timing::Phase::WalletRetire);
                                 original
                                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                                    .retire(&account, &attempt.wallet_path())
+                                    .retire(&account, attempt.directory())
                             },
                         )?;
                         #[cfg(test)]

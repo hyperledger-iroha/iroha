@@ -162,6 +162,21 @@ class OfflinePackageSurfaceV1Test {
             "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletNativeWorkerV1Test.kt",
             "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletWorkerMetricsV1Test.kt",
             "kagemusha-wallet-android/src/testSupport/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaNearbyAttemptGate.kt",
+            "kagemusha-wallet-android/src/androidTest/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaProbeActivityBinding.kt",
+            "kagemusha-wallet-android/src/androidTest/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaProbeActivityObservationTest.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletDeferredArchiveV1.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletExchangeCallV1.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletExchangeLifetimeV1.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletExchangeV1.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletReviewExecutionCleanupV1.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaProbeActivityControlTest.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaProbeReviewPhaseTest.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletDeferredArchiveV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletExchangeLifetimeV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletRequestBoundReviewV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletReviewExecutionCleanupV1Test.kt",
+            "kagemusha-wallet-android/src/testSupport/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaProbeActivityControl.kt",
+            "kagemusha-wallet-android/src/testSupport/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaProbeReviewPhase.kt",
         )
 
         /** The Gradle root holding the three SDK modules, found above the test working directory. */

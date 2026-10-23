@@ -153,17 +153,29 @@ impl Request {
     pub(super) fn retire(
         &self,
         account: &AccountService,
-        path: &std::path::Path,
+        parent: &PrivateDirectory,
     ) -> Result<iroha_wallet::operations::RetiredNativeRequest> {
         match self {
-            Self::Configure(request) => {
-                account.retire_stream_token_custody_configure_unprepared(path, request)
-            }
-            Self::Enroll(request) => {
-                account.retire_stream_token_custody_enroll_unprepared(path, request)
-            }
+            Self::Configure(request) => account.retire_stream_token_custody_configure_unprepared(
+                parent,
+                std::ffi::OsStr::new("transaction"),
+                request,
+            ),
+            Self::Enroll(request) => account.retire_stream_token_custody_enroll_unprepared(
+                parent,
+                std::ffi::OsStr::new("transaction"),
+                request,
+            ),
         }
-        .map_err(|_| invalid("custody unsigned request could not retire"))
+        .map_err(|error| {
+            #[cfg(test)]
+            crate::managed::native_operation::deadline_diagnostics::wallet_error(
+                "wallet unsigned request retirement",
+                &error,
+            );
+            drop(error);
+            invalid("custody unsigned request could not retire")
+        })
     }
 }
 impl Original {

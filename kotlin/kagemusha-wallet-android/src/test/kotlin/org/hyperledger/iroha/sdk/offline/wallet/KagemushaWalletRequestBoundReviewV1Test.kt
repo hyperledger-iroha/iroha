@@ -66,8 +66,8 @@ class KagemushaWalletRequestBoundReviewV1Test {
             assertEquals(kind, value.status); assertEquals(-1L, value.sequenceLow); assertEquals(Long.MIN_VALUE, value.sequenceHigh)
             assertArrayEquals(payload, value.bytes()); value.bytes().fill(0); assertArrayEquals(payload, value.bytes())
         }
-        val result = decision(66, nested(1, ByteArray(10_000) { 8 })) as KagemushaWalletReviewDecisionV1.Existing
-        assertEquals(10_000, (result.status as KagemushaWalletBoundRequestStatusV1.Outcome).completion.bytes().size)
+        val result = decision(66, nested(1, ByteArray(10_034) { 8 })) as KagemushaWalletReviewDecisionV1.Existing
+        assertEquals(10_034, (result.status as KagemushaWalletBoundRequestStatusV1.Outcome).completion.bytes().size)
         assertSame(KagemushaWalletBoundRequestStatusV1.Preparing,
             (decision(66, nested(11)) as KagemushaWalletReviewDecisionV1.Existing).status)
     }

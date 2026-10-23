@@ -1012,7 +1012,7 @@ mod tests {
             assert_ne!(admitted.background.status().unwrap().detail & 3, 0);
         }
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-        close(id).unwrap();
+        crate::kagemusha_wallet_ffi::close(id).unwrap();
         assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
     #[test]
