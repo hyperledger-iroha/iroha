@@ -65,7 +65,7 @@ def test_actual_candidate_lock_preserves_both_hashes_locations_and_exact_version
     assert parsed.sdk_version == _lock_value()["version"]
     assert [(row.location, row.version) for row in parsed.dependencies] == list(dependencies.VERSIONS.items())
     hashes = [row for row in parsed.dependencies if row.name == "@noble/hashes"]
-    assert [row.version for row in hashes] == ["1.8.0", "2.2.0"]
+    assert [row.version for row in hashes] == ["1.8.0", "2.4.0"]
     assert hashes[1].location == "node_modules/@scure/bip39/node_modules/@noble/hashes"
     assert hashes[1].engines == (("node", ">= 20.19.0"),)
 
@@ -126,8 +126,8 @@ def test_original_archive_content_and_location_are_joined_without_io(monkeypatch
         patch.setattr(subprocess, "run", forbidden)
         patch.setattr(subprocess, "Popen", forbidden)
         parsed = dependencies.parse_dependency_archives(lock, originals)
-    assert len(parsed) == 9
-    assert sum(row.archive.tar_size for row in parsed) == 9 * 10240
+    assert len(parsed) == 8
+    assert sum(row.archive.tar_size for row in parsed) == 8 * 10240
     for row in parsed:
         assert row.archive.raw is originals[row.dependency.location]
         assert row.archive.files()["index.js"] == row.dependency.location.encode()
@@ -216,9 +216,9 @@ def test_aggregate_compressed_and_inflated_capacity_exact_then_one_under(monkeyp
     lock, originals = _originals()
     compressed = sum(map(len, originals.values()))
     monkeypatch.setattr(dependencies, "MAX_ARCHIVES_BYTES", compressed)
-    monkeypatch.setattr(dependencies, "MAX_TARS_BYTES", 9 * 10240)
-    assert len(dependencies.parse_dependency_archives(lock, originals)) == 9
-    monkeypatch.setattr(dependencies, "MAX_TARS_BYTES", 9 * 10240 - 1)
+    monkeypatch.setattr(dependencies, "MAX_TARS_BYTES", 8 * 10240)
+    assert len(dependencies.parse_dependency_archives(lock, originals)) == 8
+    monkeypatch.setattr(dependencies, "MAX_TARS_BYTES", 8 * 10240 - 1)
     with pytest.raises(dependencies.ArchiveError, match="tar byte bound"):
         dependencies.parse_dependency_archives(lock, originals)
     monkeypatch.setattr(dependencies, "MAX_ARCHIVES_BYTES", compressed - 1)
@@ -252,7 +252,7 @@ def test_metadata_admission_exact_then_over(monkeypatch):
     largest = max(len(row.archive.files()["package.json"])
                   for row in dependencies.parse_dependency_archives(lock, originals))
     monkeypatch.setattr(dependencies, "MAX_PACKAGE_JSON_BYTES", largest)
-    assert len(dependencies.parse_dependency_archives(lock, originals)) == 9
+    assert len(dependencies.parse_dependency_archives(lock, originals)) == 8
     monkeypatch.setattr(dependencies, "MAX_PACKAGE_JSON_BYTES", largest - 1)
     with pytest.raises(dependencies.ArchiveError, match="JSON byte bound"):
         dependencies.parse_dependency_archives(lock, originals)

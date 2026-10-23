@@ -19,7 +19,7 @@ CHECKSUM = b'{"component_control":"opaque original manifest; not native qualific
 SOURCE_FILES = 234
 PROJECTED_MEMBERS = 231
 PROJECTED_DIST_MEMBERS = 193
-INSTALLED_MEMBERS = 250
+INSTALLED_MEMBERS = 248
 REQUIRED_OUTPUTS = (
     "address.js", "atomicPrivateSettlement.js", "browser.js", "curveRegistry.js",
     "ivmArtifact.js", "native.js", "nativeArtifactHash.js", "numericV1.js",

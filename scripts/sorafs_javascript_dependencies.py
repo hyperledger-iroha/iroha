@@ -2,7 +2,7 @@
 
 Dependency-free library: no downloads, install scripts, imports or filesystem
 access. The caller supplies the independently selected candidate lock digest and
-nine original tarballs. This binds content and placement, not npm execution,
+eight original tarballs. This binds content and placement, not npm execution,
 loaded modules, platform support or release approval. Updating the production
 closure requires reviewing this profile alongside the canonical package lock.
 """
@@ -24,9 +24,8 @@ VERSIONS = {
     "node_modules/@noble/ciphers": "1.3.0",
     "node_modules/@noble/curves": "1.9.7",
     "node_modules/@noble/hashes": "1.8.0",
-    "node_modules/@scure/base": "2.2.0",
-    "node_modules/@scure/bip39": "2.2.0",
-    "node_modules/@scure/bip39/node_modules/@noble/hashes": "2.2.0",
+    "node_modules/@scure/bip39": "2.4.0",
+    "node_modules/@scure/bip39/node_modules/@noble/hashes": "2.4.0",
     "node_modules/base64-js": "1.5.1",
     "node_modules/buffer": "6.0.3",
     "node_modules/ieee754": "1.2.1",
@@ -35,7 +34,7 @@ ROOT_DEPENDENCIES = {"@noble/ciphers": "^1.2.0", "@noble/curves": "^1.4.0",
                      "@noble/hashes": "^1.5.0", "@scure/bip39": "^2.2.0", "buffer": "^6.0.3"}
 DEPENDENCIES = {
     "node_modules/@noble/curves": {"@noble/hashes": "1.8.0"},
-    "node_modules/@scure/bip39": {"@noble/hashes": "2.2.0", "@scure/base": "2.2.0"},
+    "node_modules/@scure/bip39": {"@noble/hashes": "2.4.0"},
     "node_modules/buffer": {"base64-js": "^1.3.1", "ieee754": "^1.2.1"},
 }
 _LOCK_FIELDS = {"version", "resolved", "integrity", "license", "engines", "funding", "dependencies"}
@@ -86,7 +85,7 @@ class DependencyContent:
 
 
 def parse_dependency_lock(raw: bytes, *, expected_sha256: str) -> DependencyLock:
-    """Read the current nine-location graph with an independently selected pin."""
+    """Read the current eight-location graph with an independently selected pin."""
     _require(type(raw) is bytes and 0 < len(raw) <= MAX_LOCK_BYTES,
              "npm lock byte bound")
     _require(type(expected_sha256) is str and re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is not None
@@ -158,7 +157,7 @@ def _package(archive: NpmArchive, dependency: Dependency) -> None:
 
 
 def parse_dependency_archives(lock: DependencyLock, originals: dict[str, bytes]) -> tuple[DependencyContent, ...]:
-    """Join nine original gzip files, fixed placement and all package members.
+    """Join eight original gzip files, fixed placement and all package members.
 
     Aggregate compressed and inflated budgets are admitted before allocations.
     The two @noble/hashes versions remain distinct owners; a name-keyed map or

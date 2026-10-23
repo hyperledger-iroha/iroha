@@ -1926,7 +1926,7 @@ require(!deviceDemoAllowSourceHeadDrift.get() || deviceDemoSelected) {
 
 android {
     namespace = "org.hyperledger.iroha.sdk.android"
-    compileSdk = 35
+    compileSdk = 37
     ndkVersion = NativeBridgeBuildContract.pinnedAndroidNdkBaseRevision
 
     defaultConfig {
@@ -2615,9 +2615,11 @@ val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
 // This library's instrumentation APK targets itself. Its compiled Kotlin classes are
 // supplied above, but AGP does not copy the library variant's JNI payload into that
 // self-targeted APK. Physical native probes must carry the same generated bridge.
-android.sourceSets.getByName("androidTest").jniLibs.srcDir(
-    layout.buildDirectory.get().asFile.resolve("generated/jniLibs/$nativeBuildMode"),
-)
+extensions.getByType<com.android.build.api.dsl.LibraryExtension>().sourceSets.named("androidTest") {
+    jniLibs.directories.add(
+        layout.buildDirectory.get().asFile.resolve("generated/jniLibs/$nativeBuildMode").path,
+    )
+}
 tasks.matching { it.name == "mergeDebugAndroidTestJniLibFolders" }.configureEach {
     dependsOn(stripNativeLibs)
 }

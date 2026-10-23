@@ -212,9 +212,9 @@ public sealed class SoraFsFixtureBundlePayloadInput
 public static class SoraFsReferenceValidators
 {
     /// <summary>
-    /// First bridge ABI that contains the required V1 SoraFS reference entrypoints.
+    /// Exact bridge ABI required for the V1 SoraFS reference entrypoints.
     /// </summary>
-    public const uint RequiredBridgeAbiVersion = 32;
+    public const uint RequiredBridgeAbiVersion = 33;
 
     /// <summary>
     /// Bridge error code reserved for SoraFS reference operations.
@@ -296,7 +296,7 @@ public static class SoraFsReferenceValidators
     };
 
     /// <summary>
-    /// Reports whether the current native bridge exposes the complete ABI-32
+    /// Reports whether the current native bridge exposes the complete ABI-33
     /// governance and appeal-finance reference surface.
     /// </summary>
     public static bool IsAvailable()

@@ -2,7 +2,7 @@ import org.cyclonedx.gradle.CyclonedxDirectTask
 
 // Resolve the shared Kotlin plugins once for every SDK and tooling module.
 plugins {
-    id("org.cyclonedx.bom") version "3.1.0" apply false
+    id("org.cyclonedx.bom") version "3.5.1" apply false
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.kotlin.android) apply false

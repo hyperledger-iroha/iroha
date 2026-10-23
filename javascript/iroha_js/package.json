@@ -227,7 +227,7 @@
     }
   },
   "scripts": {
-    "lint": "eslint --max-warnings=0 src scripts recipes test --ext .js,.mjs",
+    "lint": "eslint --max-warnings=0 src scripts recipes test",
     "lint:test": "npm run lint && npm test",
     "build:native": "node ./scripts/build-native.mjs && node ./scripts/copy-native.mjs",
     "build:dist": "node ./scripts/build-dist.mjs",
@@ -334,7 +334,8 @@
   "devDependencies": {
     "@types/node": "^22.15.30",
     "esbuild": "0.28.2",
-    "eslint": "^8.57.0",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
     "typescript": "^5.8.3"
   },
   "allowScripts": {

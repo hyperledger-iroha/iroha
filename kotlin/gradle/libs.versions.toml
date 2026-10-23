@@ -1,7 +1,7 @@
 [versions]
 kotlin = "2.4.21"
 coroutines = "1.11.0"
-agp = "9.0.1"
+agp = "9.4.1"
 junit = "5.14.4"
 junitPlatform = "1.14.4"
 zstd = "1.5.7-24"

@@ -53,7 +53,7 @@ tonic = { version = "0.14.6", default-features = false, features = ["server", "r
 tonic-prost = { version = "0.14.6", optional = true }
 reqwest = { workspace = true, features = ["rustls-tls", "blocking"] }
 quinn = { version = "0.11.12", default-features = false, features = ["rustls", "runtime-tokio"], optional = true }
-rcgen = { version = "=0.14.5", optional = true }
+rcgen = { version = "=0.14.10", optional = true }
 futures = { workspace = true }
 tempfile = "3.23.0"
 sha2 = { version = "0.10.9", default-features = false, features = ["std"], optional = true }

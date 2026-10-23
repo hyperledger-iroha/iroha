@@ -24,7 +24,7 @@ val mobileSdkRepoDir = providers.gradleProperty("irohaSdkRepoDir")
 
 android {
     namespace = "org.hyperledger.iroha.sdk.offline.wallet"
-    compileSdk = 35
+    compileSdk = 37
     ndkVersion = "28.0.12674087"
 
     defaultConfig {
@@ -129,8 +129,8 @@ dependencies {
     testRuntimeOnly(libs.junit.jupiter.engine)
     testRuntimeOnly(libs.junit.platform.launcher)
     androidTestImplementation(libs.bcprov) // Dedicated raw IPN1 diagnostic identity, never payment-key signing.
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
 }
 
 tasks.withType<Test>().configureEach {

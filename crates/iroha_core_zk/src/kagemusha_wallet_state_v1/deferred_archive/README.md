@@ -23,7 +23,7 @@ Each exact intake records its first optional Native-observed OS wall-clock times
 Duplicate or uncertain-publication retry never resets or backfills it. A fresh age view
 reports due, not due, unavailable or regression, using a checked 24-hour difference. This
 clock is local housekeeping data and is never a monetary-time input. Charging and the
-sixteen-Send trigger are independent alternatives for the later admission owner.
+sixteen-Send trigger are independent alternatives in the shared admission owner.
 
 `deferred_archive_summary` is advisory data. `reconcile_deferred_archive` reopens the
 exact source-selected anchor and removes ready membership only for its exact Archive
@@ -33,13 +33,21 @@ and publication failures still propagate. A generic resume result must be follow
 this exact query. Selected Pending recovery precedes Released-only metadata publication;
 retention itself never acquires payment priority.
 
-TODO: connect these custody APIs to one shared Native/bridge admission owner and migrate
-all SDK/carrier entry points. Fresh dispatch must atomically enforce exchange inactivity,
-no fold backlog, charging/count/age eligibility and one Archive at a time, then recheck
-before another turn. This module exposes no fresh queue dispatch and does not establish
-that scheduling policy or device qualification.
+`drain_deferred_archive` consumes a scheduler turn, rereads current custody and reserves a
+private permit bound to the selected source and exact Archive request. The shared scheduler
+atomically checks exchange inactivity, no fold backlog, charging/count/age eligibility and
+one Archive at a time. Native dispatch validates that permit before fresh execution; the
+next turn must repeat admission. ABI33 bridge routes retain Core exchange leases and
+accepted children, and the maintenance worker discovers, verifies and drains eligible
+receipts. Swift and Kotlin expose the same exchange lifetime.
+
+TODO: qualify automatic maintenance through the complete current signed catalog, rebuilt
+SDKs and physical-device failure/recovery schedules. Source integration and component
+tests do not establish genuine proof progress, platform durability or phone performance.
 
 The authored mock tests cover durable selection/restart, malformed and foreign evidence,
 operational failure retry, first-anchor custody, open Request completion, publication cuts,
 exact completion reconciliation, fold metadata rebasing, FIFO and schema bounds. They use
-explicit mock proof/custody fixtures. Compilation and execution remain outstanding.
+explicit mock proof/custody fixtures. Their component execution is recorded in the
+[evidence gate](../../../../../specs/kagemusha_evidence_gate.md#captured-component-checks-2026-10-1823);
+matching genuine maintenance execution remains outstanding.

@@ -70,7 +70,7 @@ internal sealed class ConfidentialWalletNative : IConfidentialWalletDriver
         "connect_norito_confidential_diversifier_derive_v3", "connect_norito_confidential_owner_tag_derive_v3",
         "connect_norito_confidential_note_commitment_derive_v3", "connect_norito_confidential_merkle_path_derive_v3",
     ];
-    // ABI 31 owns the V3 note relation with first-release native contract revision 1.
+    // ABI 33 owns the V3 note relation with first-release native contract revision 1.
     private static bool DetectAvailable()
     {
         IntPtr handle = IntPtr.Zero;

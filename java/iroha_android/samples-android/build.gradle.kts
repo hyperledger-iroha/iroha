@@ -27,7 +27,7 @@ val resolvedRepoDir = repoDirProp ?: sampleRepoDir.get()
 
 android {
     namespace = "org.hyperledger.iroha.android.samples"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "org.hyperledger.iroha.android.samples"

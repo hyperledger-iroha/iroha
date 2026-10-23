@@ -3,7 +3,8 @@
 //! A lease is registered before caller-side queues or UI work. Ending it fences new calls
 //! immediately; already admitted children retain occupancy until they finish. These
 //! process-local capabilities grant neither monetary authority nor Archive dispatch permission.
-//! TODO: connect this lifetime to the final Native Archive gate and mandatory bridge routes.
+//! The Native Archive gate rechecks this occupancy when reserving its source-bound permit.
+//! ABI33 bridge exchanges retain these leases and accepted children through caller-side waits.
 
 use std::collections::BTreeMap;
 

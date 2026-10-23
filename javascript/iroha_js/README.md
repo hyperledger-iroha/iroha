@@ -4508,6 +4508,7 @@ console.log(`Connect enabled: ${features.connect?.enabled ?? false}`);
 - See `specs/sdk/js/quickstart.md` for an expanded walkthrough covering key management, transaction assembly, Torii configuration, and CI tips.
 
 - Cache both `npm` and `cargo` directories so native bindings rebuild quickly across matrix runs.
+- ESLint 10 uses `eslint.config.mjs`; development tooling requires Node 20.19+, 22.13+, or 24+. The published SDK runtime floor remains Node 20.19.0.
 - Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the zero-skip hermetic profile. Release CI separately provisions and runs the 1 GiB and live qualification profiles.
 - Test the declared minimum Node 20.19.0 and the existing Node 20, 22 and 24 CI lines alongside the `rust-toolchain.toml` version. These selectors do not establish release qualification; retain the exact runtime version and matching-candidate results.
 - Use `node scripts/run-test-profile.mjs unit` for quick hermetic runs when native artifacts are already built. The profile refreshes `dist` from the current source before testing packaged browser exports. Raw `node --test` intentionally selects the fail-closed live and 1 GiB lanes as well.

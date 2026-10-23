@@ -243,7 +243,7 @@ kotodama_lang = { workspace = true }
 iroha_core_zk = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["bfv-test-fixtures"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "test-fixtures", "privacy-exact12-conformance"] }
-crossbeam-epoch = "=0.9.20"
+crossbeam-epoch = "=0.9.21"
 futures = { workspace = true, features = ["std", "async-await"] }
 x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }
 tokio = { workspace = true, features = ["test-util"] }

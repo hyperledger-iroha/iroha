@@ -1040,7 +1040,7 @@ export IROHA_KOTLIN_FIXTURE_GEN_BIN=/absolute/path/to/kotlin-fixture-gen
 | Tool | Version | Required For |
 |------|---------|-------------|
 | JDK | 21 | All modules |
-| Android SDK | compileSdk 35 | `client-android` |
+| Android SDK | compileSdk 37 | `client-android` |
 | Rust | exactly 1.93.1 | Native `.so` build |
 | Android NDK | exactly 28.0.12674087-beta2 (r28-beta2) | Native `.so` build |
 | `cargo-ndk` | exactly 4.1.2 | Native `.so` build |
@@ -1122,7 +1122,7 @@ This Gradle task (and every `client-android` release assembly):
 The isolated Python helpers use `-B` to prevent bytecode cache writes from
 changing the authenticated source inventory during configuration and validation.
 
-AGP 9.0.1 registers both generated directories through
+AGP 9.4.1 registers both generated directories through
 `addGeneratedSourceDirectory`, so the release AAR preserves those exact bytes
 and embeds the provenance at
 `assets/iroha/native-build-provenance-v1.json`. `src/main/jniLibs` is excluded;
