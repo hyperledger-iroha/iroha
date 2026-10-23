@@ -2401,13 +2401,15 @@ pub mod torii {
     pub const QUERY_FANOUT_MAX_WORKING_SET_BYTES: Bytes = Bytes(48_000_000);
     /// Persistent SCCP history-node backing, independent of transient query leases.
     pub const SCCP_HISTORY_CACHE_MAX_BYTES: Bytes = Bytes(8_000_000);
-    /// Minimum aggregate V1 query-memory pool for four ingress slots plus one fanout.
-    pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_000_000;
+    /// Minimum aggregate V1 query-memory pool for ingress, retained bodies and one fanout.
+    // Includes one retained maximum body while all four ingress slots still
+    // admit the fixed 8 KiB transport chunk.
+    pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_100_000;
     /// Source-derived route/catalogue/key/candidate bytes in one V1 fanout.
     pub const QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1: u64 = 9_561_666;
     /// Variable-size units retained by the conservative V1 pre-body envelope.
     pub const QUERY_FANOUT_PREBODY_UNITS_V1: u64 = 15;
-    /// Divisor reserving one quarter of aggregate query memory for ingress.
+    /// Divisor reserving one quarter of aggregate query memory for ingress and retry bodies.
     pub const QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1: u64 = 4;
     /// Independently admitted signed-query ingress bodies.
     pub const QUERY_MEMORY_INGRESS_SLOTS_V1: u64 = 4;
@@ -2421,9 +2423,9 @@ pub mod torii {
     pub const TORII_PROXY_HTTP_FIXED_MEMORY_HEADROOM_V1: u64 = 64 * 1024 * 1024;
     /// Variable-size representations in the internal proxy HTTP memory envelope.
     pub const TORII_PROXY_HTTP_MEMORY_PHASE_UNITS_V1: u64 = 4;
-    /// Maximum time a query waits for execution capacity before Torii rejects it.
-    /// A solo proof burst can occupy all heavy-query permits for more than one
-    /// second; keep a finite queue deadline below the outer HTTP route timeout.
+    /// Capacity wait allowance; App routed reads share one absolute deadline across
+    /// body admission, authentication, execution and all larger-owner retries.
+    /// Zero retains fail-fast admission without a zero-length execution deadline.
     pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 30_000;
     /// Absolute deadline for one admitted App routed-read body.
     pub const APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS: u64 = 10_000;
@@ -2471,8 +2473,11 @@ pub mod torii {
             max_working_set_bytes,
             max_content_bytes,
         )?;
-        let ingress_slot_bytes =
-            aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1 / QUERY_MEMORY_INGRESS_SLOTS_V1;
+        // A maximum routed-read body remains charged independently while its
+        // execution owner is replaced. Match Torii's partition of the ingress quarter.
+        let ingress_slot_bytes = (aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1)
+            .checked_sub(fanout_phase)?
+            / QUERY_MEMORY_INGRESS_SLOTS_V1;
         ingress_slot_bytes
             .checked_sub(QUERY_INGRESS_FIXED_OVERHEAD_BYTES_V1)
             .map(|remaining| {

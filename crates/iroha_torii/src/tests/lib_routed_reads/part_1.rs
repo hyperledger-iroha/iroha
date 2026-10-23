@@ -1884,6 +1884,7 @@ async fn torii_visibility_account_from_headers_rejects_unsigned_account_header()
         &[],
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )
+    .await
     .expect_err("bare account headers must not create caller identity");
     let Error::AppUnauthorized { code, message } = err else {
         panic!("bare identity must be reported as authentication failure")
@@ -1892,8 +1893,8 @@ async fn torii_visibility_account_from_headers_rejects_unsigned_account_header()
     assert!(message.contains("complete canonical request signature"));
 }
 #[cfg(feature = "app_api")]
-#[test]
-fn torii_visibility_account_from_headers_rejects_partial_signature_as_unauthorized() {
+#[tokio::test]
+async fn torii_visibility_account_from_headers_rejects_partial_signature_as_unauthorized() {
     let authority = routed_read_test_account(0x8f);
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     let method = Method::GET;
@@ -1908,6 +1909,7 @@ fn torii_visibility_account_from_headers_rejects_partial_signature_as_unauthoriz
         &[],
         routing::ENDPOINT_EXPLORER_TRANSACTIONS,
     )
+    .await
     .expect_err("partial canonical auth must not degrade to anonymous access");
     let Error::AppUnauthorized { code, .. } = &err else {
         panic!("partial canonical auth must be reported as authentication failure")
@@ -1940,6 +1942,7 @@ async fn torii_visibility_account_from_headers_accepts_signed_caller() {
         &[],
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )
+    .await
     .expect("signed account headers should verify");
     match visibility {
         ToriiAccountReadVisibility::Signed(account) => assert_eq!(account, authority),
@@ -3120,34 +3123,514 @@ fn contract_target_read_route_refuses_present_but_inactive_lane() {
 }
 
 #[cfg(feature = "app_api")]
+const CANONICAL_ACCOUNTS_PORTAL_URI: &str = "/v1/accounts?filter=alias_scopes+%3D+%22mibank.universal%22&select=id%2Cuaid%2Caliases&limit=500";
+
+#[cfg(feature = "app_api")]
+fn canonical_accounts_portal_app_for_test(authority: &AccountId) -> SharedAppState {
+    use iroha_data_model::{Registrable, account::Account, domain::Domain};
+    let domain = Domain::new(
+        iroha_model_base::domain::DomainId::try_new("mibank", "universal")
+            .expect("portal fixture domain"),
+    )
+    .build(authority);
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(
+        iroha_core::state::World::with(
+            [domain],
+            [Account::new(authority.clone()).build(authority)],
+            [],
+        ),
+    );
+    bind_account_alias_for_test(&app, authority, "customer@mibank.universal");
+    app
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_accounts_get_router_for_test(
+    app: SharedAppState,
+    owners: Arc<std::sync::Mutex<Vec<usize>>>,
+) -> axum::Router {
+    use axum::middleware::{from_fn, from_fn_with_state};
+    let mut builder = RouterBuilder::new(
+        app.clone(),
+        RouteCatalog::new(&[route_catalog::application_api::ACCOUNTS_GET]),
+        compiled_route_features(),
+    )
+    .expect("accounts route catalog");
+    builder.route(
+        &route_catalog::application_api::ACCOUNTS_GET,
+        catalog_get(handler_accounts_list)
+            .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature),
+    );
+    let (router, _) = builder.finish().expect("actual accounts GET route");
+    let observed_app = app.clone();
+    router
+        .with_state(app.clone())
+        .layer(from_fn(move |request: Request<Body>, next: Next| {
+            let owners = owners.clone();
+            let app = observed_app.clone();
+            async move {
+                owners.lock().unwrap().push(
+                    current_routed_read_memory_envelope(&app)
+                        .expect("HTTP accounts read owns its admission")
+                        .working_set_bytes,
+                );
+                next.run(request).await
+            }
+        }))
+        .layer(from_fn_with_state(
+            app,
+            enforce_app_routed_read_http_admission,
+        ))
+        .layer(from_fn(|request, next: Next| async move {
+            utils::with_current_response_format(ResponseFormat::Json, next.run(request)).await
+        }))
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_accounts_get_request_for_test(headers: HeaderMap) -> Request<Body> {
+    canonical_accounts_get_request_with_uri_for_test(CANONICAL_ACCOUNTS_PORTAL_URI, headers)
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_accounts_get_request_with_uri_for_test(
+    uri: &str,
+    headers: HeaderMap,
+) -> Request<Body> {
+    let mut request = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .extension(crate::loopback_connect_info())
+        .extension(MatchedRouteMetadata::from_descriptor(
+            route_catalog::application_api::ACCOUNTS_GET,
+        ))
+        .body(Body::empty())
+        .expect("accounts GET request");
+    *request.headers_mut() = headers;
+    request
+}
+
+#[cfg(feature = "app_api")]
+fn hold_canonical_auth_publication_for_test(
+    state: Arc<iroha_core::state::State>,
+) -> (std::sync::mpsc::SyncSender<()>, std::thread::JoinHandle<()>) {
+    let (held_tx, held_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let holder = std::thread::spawn(move || {
+        state.with_held_header_for_reader_test(|_| {
+            held_tx.send(()).expect("notify held publication");
+            let _ = release_rx.recv();
+        });
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("hold original State header");
+    (release_tx, holder)
+}
+
+#[cfg(feature = "app_api")]
 #[tokio::test]
 async fn canonical_visibility_busy_source_is_capacity_and_preserves_request_nonce() {
     let key_pair = routed_read_ed25519_test_keypair(0x97);
     let authority = AccountId::new(key_pair.public_key().clone());
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-    let method = Method::POST;
-    let uri: Uri = "/v1/accounts/query".parse().expect("query URI");
-    let body = b"{}";
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::ZERO;
+    let method = Method::GET;
+    let uri: Uri = "/v1/accounts?limit=500".parse().expect("accounts URI");
     let headers = crate::tests_runtime_handlers::signed_app_headers(
-        &authority, &key_pair, &method, &uri, body,
+        &authority,
+        &key_pair,
+        &method,
+        &uri,
+        &[],
     );
-    let authenticate = || torii_visibility_account_from_headers(
-        &app, &headers, &method, &uri, body, "v1/accounts/query",
-    );
-    let refused = app.state.with_held_header_for_reader_test(|_| {
-        authenticate().expect_err("held original State source cannot authenticate")
-    });
+    let authenticate =
+        || torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/accounts");
+    let (release, holder) = hold_canonical_auth_publication_for_test(app.state.clone());
+    let refused = authenticate().await.expect_err("zero timeout tries once");
+    drop(release);
+    holder.join().expect("release original writer");
     assert!(matches!(
         &refused,
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
         ))
-    ), "physical reader contention is not invalid credentials: {refused:?}");
-    assert_eq!(refused.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
-    assert!(matches!(authenticate().expect("same original request succeeds after release"),
-        ToriiAccountReadVisibility::Signed(account) if account == authority));
-    let replay = authenticate().expect_err("a consumed request remains replay-protected");
+    ));
+    assert_eq!(
+        refused.into_response().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert!(
+        matches!(authenticate().await.expect("same request after release"),
+        ToriiAccountReadVisibility::Signed(account) if account == authority)
+    );
+    let replay = authenticate()
+        .await
+        .expect_err("consumed request is replay-protected");
     assert!(matches!(&replay, Error::AppUnauthorized { code, message }
         if *code == "canonical_authentication_invalid" && message == "request nonce already used"));
     assert_eq!(replay.into_response().status(), StatusCode::UNAUTHORIZED);
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn signed_accounts_get_waits_for_publication_and_preserves_replay_boundary() {
+    use tower::ServiceExt as _;
+    let key_pair = routed_read_ed25519_test_keypair(0x98);
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let mut app = canonical_accounts_portal_app_for_test(&authority);
+    Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
+    let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let router = canonical_accounts_get_router_for_test(app.clone(), owners.clone());
+    let uri: Uri = CANONICAL_ACCOUNTS_PORTAL_URI.parse().unwrap();
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &key_pair,
+        &Method::GET,
+        &uri,
+        &[],
+    );
+    let (release, holder) = hold_canonical_auth_publication_for_test(app.state.clone());
+    let mut waiting = Box::pin(
+        router
+            .clone()
+            .oneshot(canonical_accounts_get_request_for_test(headers.clone())),
+    );
+    assert!(
+        futures::poll!(waiting.as_mut()).is_pending(),
+        "a brief publication must wait instead of returning 429"
+    );
+    drop(release);
+    let response = waiting.await.expect("accounts response after publication");
+    holder.join().expect("release original writer");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert!(
+        body["items"]
+            .as_array()
+            .expect("accounts items")
+            .iter()
+            .any(
+                |row| row["id"].as_str() == Some(authority.to_string().as_str())
+                    && row["aliases"].as_array().is_some_and(|aliases| aliases
+                        .iter()
+                        .any(|alias| alias["alias"].as_str() == Some("customer@mibank.universal")))
+            ),
+        "the real handler must return the requested ledger contents: {body:?}"
+    );
+    assert!(!owners.lock().unwrap().is_empty());
+    let replay = router
+        .oneshot(canonical_accounts_get_request_for_test(headers))
+        .await
+        .expect("external replay response");
+    assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+    let error = response_json(replay).await;
+    assert!(format!("{error:?}").contains("request nonce already used"));
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn signed_accounts_get_grows_owner_for_valid_large_multisig_witness() {
+    use base64::Engine as _;
+    use iroha_data_model::{
+        account::{MultisigMember, MultisigPolicy},
+        soracloud::{
+            CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestSignatureWitnessV1,
+            CanonicalRequestWitnessV1,
+        },
+    };
+    use tower::ServiceExt as _;
+    let signers: Vec<_> = (1_u8..=48)
+        .map(|index| {
+            KeyPair::try_from_seed(vec![index; 32], iroha_crypto::Algorithm::MlDsa)
+                .expect("deterministic ML-DSA witness signer")
+        })
+        .collect();
+    let policy = MultisigPolicy::new(
+        48,
+        signers
+            .iter()
+            .map(|key| MultisigMember::new(key.public_key().clone(), 1).expect("multisig member"))
+            .collect(),
+    )
+    .expect("48-member policy");
+    let authority = AccountId::new_multisig(policy);
+    let app = canonical_accounts_portal_app_for_test(&authority);
+    let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let router = canonical_accounts_get_router_for_test(app.clone(), owners.clone());
+    let uri: Uri = CANONICAL_ACCOUNTS_PORTAL_URI.parse().unwrap();
+    let mut witness = CanonicalRequestWitnessV1 {
+        schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+        subject_account: authority.clone(),
+        timestamp_ms: crate::utils::unix_now_ms(),
+        nonce: "accounts-large-witness-owner-retry".to_owned(),
+        canonical_request_hash: crate::app_auth::canonical_network_request_hash(
+            app.state.network_id_ref(),
+            &Method::GET,
+            &uri,
+            &[],
+        )
+        .expect("exact request hash"),
+        signatures: Vec::new(),
+    };
+    let message = crate::app_auth::canonical_request_witness_message(&witness)
+        .expect("witness signing message");
+    witness.signatures = signers
+        .iter()
+        .map(|key| CanonicalRequestSignatureWitnessV1 {
+            signer: key.public_key().clone(),
+            signature: iroha_crypto::Signature::try_new(key.private_key(), &message)
+                .expect("sign exact canonical witness"),
+        })
+        .collect();
+    let encoded = crate::app_auth::witness_header_value(&witness).expect("valid bounded witness");
+    let decoded_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&encoded)
+        .expect("canonical witness header base64")
+        .len();
+    assert!(
+        decoded_bytes > 256 * 1024,
+        "decoded witness must exceed the first owner's field limit: {decoded_bytes}"
+    );
+    assert!(
+        decoded_bytes <= crate::app_auth::CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
+        "large witness must remain within its canonical protocol cap: {decoded_bytes}"
+    );
+    assert!(
+        encoded.len() < 1024 * 1024 - 1024,
+        "witness plus HTTP framing must fit the listener head envelope"
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(HEADER_WITNESS, HeaderValue::from_str(&encoded).unwrap());
+    let response = router
+        .clone()
+        .oneshot(canonical_accounts_get_request_for_test(headers.clone()))
+        .await
+        .expect("large witness response");
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "valid large witness must grow its owner: {body:?}"
+    );
+    assert!(
+        body["items"]
+            .as_array()
+            .expect("accounts items")
+            .iter()
+            .any(
+                |row| row["id"].as_str() == Some(authority.to_string().as_str())
+                    && row["aliases"].as_array().is_some_and(|aliases| aliases
+                        .iter()
+                        .any(|alias| alias["alias"].as_str() == Some("customer@mibank.universal")))
+            )
+    );
+    let observed = owners.lock().unwrap().clone();
+    assert!(
+        observed.len() >= 2,
+        "pre-authentication refusal must retry: {observed:?}"
+    );
+    assert!(observed.windows(2).all(|pair| pair[0] < pair[1]));
+    let replay = router
+        .oneshot(canonical_accounts_get_request_for_test(headers))
+        .await
+        .expect("large witness replay");
+    assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_accounts_volume_app_for_test(
+    authority: &AccountId,
+    total_accounts: usize,
+    matching_accounts: usize,
+) -> (SharedAppState, std::collections::BTreeMap<String, String>) {
+    use iroha_data_model::{Registrable, account::Account, domain::Domain};
+    use mv::storage::StorageReadOnly as _;
+
+    // The executed fixture genesis contributes its own authority and clock account.
+    let authored_count = total_accounts.checked_sub(2).expect("genesis accounts fit");
+    assert!(matching_accounts < authored_count);
+    let mut accounts = vec![authority.clone()];
+    for index in 1..authored_count {
+        let mut seed = vec![0xd9; 32];
+        seed[..8].copy_from_slice(&u64::try_from(index).unwrap().to_le_bytes());
+        let key = KeyPair::try_from_seed(seed, iroha_crypto::Algorithm::Ed25519)
+            .expect("volume fixture account key");
+        accounts.push(AccountId::new(key.public_key().clone()));
+    }
+    accounts.sort();
+    accounts.dedup();
+    assert_eq!(accounts.len(), authored_count);
+    let domains = ["mibank", "otherbank"].map(|name| {
+        Domain::new(iroha_model_base::domain::DomainId::try_new(name, "universal").unwrap())
+            .build(authority)
+    });
+    let world = iroha_core::state::World::with(
+        domains,
+        accounts
+            .iter()
+            .map(|account| Account::new(account.clone()).build(authority)),
+        [],
+    );
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(world);
+    assert_eq!(
+        app.state.world_view().accounts().iter().count(),
+        total_accounts
+    );
+    let mut expected = std::collections::BTreeMap::new();
+    // Put matches last in canonical account order, forcing the sparse query to examine
+    // nonmembers with real SNS leases instead of skipping empty alias indexes cheaply.
+    for (index, account) in accounts.iter().enumerate() {
+        let matches = index >= authored_count - matching_accounts;
+        let bank = if matches { "mibank" } else { "otherbank" };
+        let alias = format!("customer-{index}@{bank}.universal");
+        bind_account_alias_for_test(&app, account, &alias);
+        if matches {
+            expected.insert(account.to_string(), alias);
+        }
+    }
+    // A static-only dataspace catalog does not reproduce the live decoder cost: each
+    // reverse resolution must also validate these original, active SNS lease records.
+    let header = BlockHeader::new(std::num::NonZeroU64::new(2).unwrap(), None, None, 0, 0);
+    let mut block = app.state.block(header);
+    let mut tx = block.transaction();
+    let account_address = AccountAddress::from_account_id(authority).unwrap();
+    for index in 0_u64..7 {
+        let name = if index == 0 {
+            "universal".to_owned()
+        } else {
+            format!("fixture-dataspace-{index}")
+        };
+        let selector = iroha_core::sns::selector_for_dataspace_alias(&name).unwrap();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
+        metadata.insert(
+            iroha_core::sns::SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .unwrap(),
+            iroha_primitives::json::Json::new(index),
+        );
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            authority.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(
+                &account_address,
+            )],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            metadata,
+        );
+        tx.world_mut_for_testing()
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                iroha_core::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&record),
+            );
+    }
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("publish original SNS dataspace leases");
+    (app, expected)
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn signed_accounts_get_returns_complete_portal_inventory_at_live_and_sparse_volumes() {
+    use tower::ServiceExt as _;
+    for (total_accounts, matching_accounts) in [(227, 43), (227, 3)] {
+        let key_pair = routed_read_ed25519_test_keypair(0x9a);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let (app, expected) =
+            canonical_accounts_volume_app_for_test(&authority, total_accounts, matching_accounts);
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let router = canonical_accounts_get_router_for_test(app.clone(), owners.clone());
+        // Both live failing shapes must complete: dropping aliases from the projection
+        // must not hide decoder exhaustion in the alias_scopes predicate itself.
+        for (uri_text, projects_aliases) in [
+            (CANONICAL_ACCOUNTS_PORTAL_URI, true),
+            (
+                "/v1/accounts?filter=alias_scopes+%3D+%22mibank.universal%22&select=id&limit=500",
+                false,
+            ),
+        ] {
+            owners.lock().unwrap().clear();
+            let uri: Uri = uri_text.parse().unwrap();
+            let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+                app.state.network_id_ref(),
+                &authority,
+                &key_pair,
+                &Method::GET,
+                &uri,
+                &[],
+            );
+            let response = router
+                .clone()
+                .oneshot(canonical_accounts_get_request_with_uri_for_test(
+                    uri_text,
+                    headers.clone(),
+                ))
+                .await
+                .expect("signed portal inventory response");
+            let status = response.status();
+            let body = response_json(response).await;
+            let trace = owners.lock().unwrap().clone();
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "{matching_accounts}/{total_accounts} scope read must complete under default memory; owners={trace:?}, body={body:?}"
+            );
+            let items = body["items"].as_array().expect("portal account items");
+            let actual: std::collections::BTreeSet<_> = items
+                .iter()
+                .map(|row| row["id"].as_str().expect("account id").to_owned())
+                .collect();
+            assert_eq!(items.len(), matching_accounts);
+            assert_eq!(actual, expected.keys().cloned().collect());
+            assert!(
+                body["next_cursor"].is_null(),
+                "complete inventory must not truncate: {body:?}"
+            );
+            if projects_aliases {
+                for row in items {
+                    let id = row["id"].as_str().unwrap();
+                    let aliases = row["aliases"].as_array().expect("projected aliases");
+                    assert_eq!(aliases.len(), 1);
+                    assert_eq!(aliases[0]["alias"].as_str(), Some(expected[id].as_str()));
+                    assert!(row["uaid"].is_null());
+                }
+            }
+            assert!(!trace.is_empty());
+            if matching_accounts == 43 {
+                assert!(
+                    trace.len() >= 2,
+                    "live inventory must cross owner refusal: {trace:?}"
+                );
+            }
+            assert!(
+                trace.windows(2).all(|pair| pair[0] < pair[1]),
+                "owners={trace:?}"
+            );
+            assert!(
+                trace
+                    .iter()
+                    .all(|size| *size <= app.query_fanout_working_set_bytes),
+                "owners={trace:?}"
+            );
+            let replay = router
+                .clone()
+                .oneshot(canonical_accounts_get_request_with_uri_for_test(
+                    uri_text, headers,
+                ))
+                .await
+                .expect("external portal replay response");
+            assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+            assert!(
+                format!("{:?}", response_json(replay).await).contains("request nonce already used")
+            );
+        }
+    }
 }

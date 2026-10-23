@@ -96,8 +96,11 @@ entries before the cursor, with a limit of 1,048,576 storage entries per request
 Rows with equal sort values are ordered by their identity.
 
 **Memory admission.** `torii.query_fanout_max_retained_bytes` bounds aggregate
-query memory (default 512,000,000 bytes); one quarter belongs to independent
-signed-query ingress and the rest backs query owners.
+query memory (default 512,000,000 bytes); one quarter funds independent
+signed-query ingress and a retained routed-body pool, and the rest backs query
+owners. The retained-body pool is one maximum owner source phase; each exact
+POST body leases its actual reserved capacity there until its last byte clone
+is dropped, including while an execution owner is released for growth.
 `torii.query_fanout_max_working_set_bytes` (default 48,000,000 bytes) is the
 largest owner one read can hold. A collection read starts with the smallest
 owner whose limits admit its request target and declared body: complete
@@ -117,7 +120,12 @@ the scratch phase with runtime ordering and projection; cursor JSON, its frame
 and base64 output are charged for their actual overlap. Every read, with or
 without a body, waits within the finite query admission queue
 (`torii.query_queue_timeout_ms`) when every complete owner is occupied; a body
-stays unread until its read owns a working set. A read is refused with
+stays unread until its read owns a working set. For routed reads this is one
+absolute deadline across body admission, authentication, publication waits,
+execution and every owner tier. Zero selects fail-fast capacity admission.
+Each retry verifies canonical credentials again, retaining only a fixed-size
+capability bound to this exact request so its nonce is admitted once; a separate
+HTTP replay remains forbidden. A read is refused with
 `query_capacity_exceeded` only after that deadline or when the queue's waiter
 count (`torii.query_max_inflight`) is full. A signed read that arrives while a
 block is being published waits for that publication instead of being refused.
@@ -327,7 +335,11 @@ dataspace and a `bpng` alias in another domain. It is computed from the disclose
 a filter cannot reveal an alias the caller may not read; an account without disclosed aliases has
 `alias_scopes = []`, so `alias_scopes != "x"` keeps it. Rows keep the visibility and the
 page/scan limits of every accounts read (see Order and scan cost): a selective filter can return a
-short page with a `next_cursor`.
+short page with a `next_cursor`. The join visits a bounded number of index entries under
+one query-wide allowance, including hidden and inactive entries; it refuses with
+`query_capacity_exceeded` if that allowance is spent. Scope filtering precedes alias-output
+projection: a nonmatching account with more than 64 aliases does not fail a scoped inventory.
+Alias containers and strings are bounded by the admitted scratch bytes before retention.
 
 ```text
 GET /v1/accounts?filter=alias_scopes = "mibank.bpng"&select=id,uaid,aliases&limit=500

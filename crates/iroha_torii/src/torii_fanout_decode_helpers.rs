@@ -706,6 +706,7 @@ mod query_ingress_json_decode_limit_tests {
 struct QueryMemoryGeometry {
     ingress: QueryIngressMemoryEnvelope,
     ingress_slots: NonZeroUsize,
+    routed_read_body_pool_bytes: usize,
     fanout_pool_bytes: usize,
     fanout_working_set_bytes: usize,
     fanout_slots: NonZeroUsize,
@@ -740,7 +741,12 @@ fn query_memory_geometry(
     let provisional_fanout =
         QueryFanoutMemoryEnvelope::for_body_admission(fanout_working_set_bytes).ok()?;
     let ingress_slots = NonZeroUsize::new(QUERY_INGRESS_SLOT_COUNT)?;
-    let ingress_slot_bytes = ingress_pool_bytes / ingress_slots.get();
+    // Retry bodies outlive individual execution owners. Give them independent
+    // credit from the ingress quarter, sufficient for one maximum-sized body or
+    // many small portal requests, without reducing the fanout pool.
+    let routed_read_body_pool_bytes = provisional_fanout.route_body_bytes;
+    let ingress_slot_bytes =
+        ingress_pool_bytes.checked_sub(routed_read_body_pool_bytes)? / ingress_slots.get();
     let ingress_unit_cap = max_content_bytes.min(provisional_fanout.route_body_bytes);
     let ingress =
         QueryIngressMemoryEnvelope::from_slot_bytes(ingress_slot_bytes, ingress_unit_cap)?;
@@ -753,10 +759,12 @@ fn query_memory_geometry(
     let fanout_reserved = fanout_working_set_bytes.checked_mul(fanout_slots.get())?;
     ingress_reserved
         .checked_add(fanout_reserved)
+        .and_then(|reserved| reserved.checked_add(routed_read_body_pool_bytes))
         .filter(|reserved| *reserved <= aggregate_bytes)?;
     Some(QueryMemoryGeometry {
         ingress,
         ingress_slots,
+        routed_read_body_pool_bytes,
         fanout_pool_bytes,
         fanout_working_set_bytes,
         fanout_slots,
@@ -1068,7 +1076,7 @@ async fn acquire_query_ingress_memory(
             .map_err(|_| capacity_response());
     }
     tokio::time::timeout(
-        app.query_queue_timeout,
+        query_admission_remaining(app),
         app.query_ingress_inflight.clone().acquire_owned(),
     )
     .await
@@ -1266,10 +1274,17 @@ async fn acquire_query_pool_credit(
     app: &AppState,
     bytes: usize,
 ) -> Option<tokio::sync::OwnedSemaphorePermit> {
-    let permits = app
-        .query_fanout_inflight
-        .permits_for_parts([u64::try_from(bytes).ok()?])?;
-    let semaphore = app.query_fanout_inflight.semaphore.clone();
+    acquire_query_pool_credit_from(app, &app.query_fanout_inflight, bytes).await
+}
+
+/// Acquire from one independently bounded query pool using the request's deadline.
+async fn acquire_query_pool_credit_from(
+    app: &AppState,
+    pool: &ByteWeightedMemoryPool,
+    bytes: usize,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    let permits = pool.permits_for_parts([u64::try_from(bytes).ok()?])?;
+    let semaphore = pool.semaphore.clone();
     if app.query_queue_timeout.is_zero() {
         return semaphore.try_acquire_many_owned(permits.get()).ok();
     }
@@ -1279,7 +1294,7 @@ async fn acquire_query_pool_credit(
         .try_acquire_owned()
         .ok()?;
     tokio::time::timeout(
-        app.query_queue_timeout,
+        query_admission_remaining(app),
         semaphore.acquire_many_owned(permits.get()),
     )
     .await
@@ -1357,7 +1372,7 @@ async fn acquire_app_routed_read_http_memory(
         .permits_for_parts([bytes])
         .ok_or_else(unavailable)?;
     let acquired = tokio::time::timeout(
-        app.query_queue_timeout,
+        query_admission_remaining(app),
         app.query_fanout_inflight
             .semaphore
             .clone()

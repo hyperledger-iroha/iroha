@@ -23,7 +23,11 @@ import { signEd25519 } from "./crypto.js";
 import { NetworkId, networkIdBytes } from "./networkId.js";
 
 export { NetworkId };
-export { withCanonicalReadRetry } from "./canonicalReadRetry.js";
+export {
+  withCanonicalReadRetry,
+  CANONICAL_READ_ATTEMPT_TIMEOUT_MS,
+  CANONICAL_READ_TOTAL_TIMEOUT_MS,
+} from "./canonicalReadRetry.js";
 export {
   canonicalRequestMessage,
   CANONICAL_REQUEST_MAX_METHOD_BYTES_V1,

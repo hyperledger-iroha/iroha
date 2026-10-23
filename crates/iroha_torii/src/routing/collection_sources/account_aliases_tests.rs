@@ -132,7 +132,10 @@ async fn ordinary_account_reads_do_not_join_aliases() {
         ListQuery::new().filter(FilterExpr::IsNull(FieldPath::new("uaid"))),
     ] {
         assert!(!query_reads_alias_fields(&query));
-        assert!(AccountAliasJoin::for_query(&fixture.state, &query, &all).is_none());
+        assert!(
+            AccountAliasJoin::for_query(&fixture.state, &query, &all, &collection_limits())
+                .is_none()
+        );
         let page = read(&fixture, &query, &all);
         assert_eq!(page.items.len(), 4);
         assert!(
@@ -162,7 +165,7 @@ async fn any_use_of_a_joined_field_asks_for_the_join() {
         ListQuery::new().select(["alias_scopes"]),
     ] {
         assert!(query_reads_alias_fields(&query), "{query:?}");
-        assert!(AccountAliasJoin::for_query(&state, &query, &all).is_some());
+        assert!(AccountAliasJoin::for_query(&state, &query, &all, &collection_limits()).is_some());
     }
     assert!(!query_reads_alias_fields(&ListQuery::new().filter(
         FilterExpr::Eq(FieldPath::new("metadata.aliases"), Value::from("x"))
@@ -317,13 +320,19 @@ async fn aliases_of_other_dataspaces_need_the_callers_resolve_permission() {
         now_ms: 0,
         public_dataspaces: BTreeSet::new(),
         resolver,
+        remaining_visits: std::cell::Cell::new(10_000),
     };
     let bindings = |join: &AccountAliasJoin| {
-        join.bindings(&world, &fixture.alice, alice_details.as_ref())
-            .expect("bindings")
-            .into_iter()
-            .map(|item| item.alias)
-            .collect::<Vec<_>>()
+        join.bindings(
+            &world,
+            &fixture.alice,
+            alice_details.as_ref(),
+            collection_limits().bytes,
+        )
+        .expect("bindings")
+        .into_iter()
+        .map(|item| item.alias)
+        .collect::<Vec<_>>()
     };
     assert!(bindings(&private(None)).is_empty());
     assert!(
@@ -336,7 +345,12 @@ async fn aliases_of_other_dataspaces_need_the_callers_resolve_permission() {
     let granted = private(Some(fixture.bob.clone()));
     assert_eq!(
         granted
-            .bindings(&world, &fixture.alice, alice_details.as_ref())
+            .bindings(
+                &world,
+                &fixture.alice,
+                alice_details.as_ref(),
+                collection_limits().bytes
+            )
             .expect("bindings")
             .into_iter()
             .map(|item| item.alias)
@@ -380,6 +394,7 @@ async fn a_binding_the_caller_may_not_read_adds_no_scope_either() {
         now_ms: 0,
         public_dataspaces: BTreeSet::new(),
         resolver: None,
+        remaining_visits: std::cell::Cell::new(10_000),
     };
     let row = hidden
         .fields(
@@ -520,4 +535,274 @@ async fn an_account_the_alias_filter_rejects_never_serializes_its_metadata() {
         matches!(error, Error::CollectionQuery(ref error) if error.code == "query_capacity_exceeded"),
         "an unfiltered read does serialize it: {error:?}"
     );
+}
+
+#[tokio::test]
+async fn unrelated_overfull_alias_output_does_not_break_a_scope_filtered_inventory() {
+    let fixture = fixture();
+    for index in 0..crate::EXACT_ALIAS_LOOKUP_MAX_ITEMS {
+        bind_account_alias_for_test(
+            &fixture.state,
+            &fixture.bob,
+            &format!("extra{index:03}@otherbank.universal"),
+        );
+    }
+    let all = DataspaceReadVisibility::all_for_tests();
+    let query = ListQuery::new()
+        .filter(scope_filter(MIBANK))
+        .select(["id", "uaid", "aliases"])
+        .limit(500);
+    let page = read(&fixture, &query, &all);
+    assert_eq!(
+        sorted(ids(&page)),
+        sorted([fixture.alice.to_string(), fixture.dave.to_string()])
+    );
+    // Partial filters must retain ordinary OR/NOT semantics: an account whose
+    // other predicate matches still needs its complete, bounded output.
+    let query = ListQuery::new()
+        .filter(FilterExpr::Or(vec![
+            scope_filter(MIBANK),
+            FilterExpr::Eq(FieldPath::new("id"), Value::from(fixture.bob.to_string())),
+        ]))
+        .select(["id", "aliases"]);
+    let target = CollectionTarget::Accounts;
+    let limits = collection_limits();
+    let prepared = collections::prepare(target.spec(), target.scope(), &query, &limits).unwrap();
+    let error = execute_prepared_collection_local(
+        None,
+        &fixture.state,
+        (&target, &query),
+        &MaybeTelemetry::for_tests(),
+        &all,
+        &prepared,
+        &limits,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, Error::CollectionQuery(ref error) if error.code == "query_capacity_exceeded")
+    );
+    let page = read(
+        &fixture,
+        &ListQuery::new().filter(FilterExpr::Not(Box::new(scope_filter(OTHER)))),
+        &all,
+    );
+    assert_eq!(
+        sorted(ids(&page)),
+        sorted([fixture.carol.to_string(), fixture.dave.to_string()])
+    );
+}
+
+#[tokio::test]
+async fn inactive_alias_index_consumes_one_bounded_query_scan_allowance() {
+    let fixture = fixture();
+    let labels = (0..2048)
+        .map(|index| {
+            iroha_data_model::account::rekey::AccountAlias::new(
+                format!("inactive{index:04}").parse().unwrap(),
+                Some(iroha_data_model::account::rekey::AccountAliasDomain(
+                    "otherbank".parse().unwrap(),
+                )),
+                DataSpaceId::new(0),
+            )
+        })
+        .collect();
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let mut block = fixture.state.block(header);
+    let mut tx = block.transaction();
+    tx.world_mut_for_testing()
+        .account_aliases_by_account_mut_for_testing()
+        .insert(fixture.bob.clone(), labels);
+    tx.apply();
+    block.commit_world_overlay_for_testing().unwrap();
+    let world = fixture.state.world_view();
+    let query = ListQuery::new().filter(scope_filter(MIBANK));
+    let mut limits = collection_limits();
+    limits.max_scanned_rows = 8;
+    let join = AccountAliasJoin::for_query(
+        &fixture.state,
+        &query,
+        &DataspaceReadVisibility::all_for_tests(),
+        &limits,
+    )
+    .unwrap();
+    let error = join
+        .scope_fields(&world, &fixture.bob, limits.bytes)
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::CollectionQuery(ref error) if error.code == "query_capacity_exceeded")
+    );
+    assert_eq!(
+        join.remaining_visits.get(),
+        0,
+        "hidden or inactive entries are work too"
+    );
+    let error = join
+        .scope_fields(&world, &fixture.alice, limits.bytes)
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::CollectionQuery(ref error) if error.code == "query_capacity_exceeded"),
+        "the allowance must not restart for another account"
+    );
+}
+
+#[tokio::test]
+async fn hidden_active_aliases_are_bounded_and_scratch_is_checked_before_visiting() {
+    let fixture = fixture();
+    let world = fixture.state.world_view();
+    let join = AccountAliasJoin {
+        now_ms: 0,
+        public_dataspaces: BTreeSet::new(),
+        resolver: None,
+        remaining_visits: std::cell::Cell::new(1),
+    };
+    let mut bytes = collection_limits().bytes;
+    bytes.scratch_bytes = 1;
+    assert!(join.scope_fields(&world, &fixture.alice, bytes).is_err());
+    assert_eq!(
+        join.remaining_visits.get(),
+        1,
+        "scratch admission precedes any index work"
+    );
+    let error = join
+        .scope_fields(&world, &fixture.alice, collection_limits().bytes)
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::CollectionQuery(ref error) if error.code == "query_capacity_exceeded")
+    );
+    assert_eq!(
+        join.remaining_visits.get(),
+        0,
+        "even undisclosed active aliases consume scan work"
+    );
+}
+
+fn admitted_alias_owner() -> (
+    crate::QueryFanoutMemoryReservation,
+    crate::history_producer::HistoryProducerOwner,
+) {
+    const WORKING: usize = 48 * 1024 * 1024;
+    let pool = crate::ByteWeightedMemoryPool::new(WORKING).unwrap();
+    let reservation = crate::QueryFanoutMemoryReservation::from_admitted_fanout(
+        pool.try_acquire_parts([WORKING as u64]).unwrap(),
+        crate::QueryFanoutMemoryEnvelope::for_body_admission(WORKING).unwrap(),
+        pool.generation(),
+    )
+    .unwrap();
+    let owner =
+        crate::history_producer::HistoryProducerOwner::from_reservation(&reservation).unwrap();
+    (reservation, owner)
+}
+
+#[tokio::test]
+async fn sns_alias_decode_exhaustion_marks_the_original_collection_owner() {
+    let fixture = fixture();
+    let (reservation, owner) = admitted_alias_owner();
+    let all = DataspaceReadVisibility::all_for_tests();
+    let query = ListQuery::new().filter(scope_filter(MIBANK));
+    let limits = collection_limits();
+    let join = AccountAliasJoin::for_query(&fixture.state, &query, &all, &limits).unwrap();
+    let world = fixture.state.world_view();
+    let error = owner.scope(|| {
+        // Spend the original cumulative decode grant as earlier scanned rows do.
+        // Refused increments do not spend credit; stop at the exact remaining byte.
+        for quantum in [1024 * 1024, 1024, 1] {
+            while norito::core::reserve_decode_allocation(quantum).is_ok() {}
+        }
+        assert!(
+            !reservation.owner_limit_refused(),
+            "raw decode accounting does not signal HTTP owner growth"
+        );
+        join.scope_fields(&world, &fixture.alice, limits.bytes)
+            .unwrap_err()
+    });
+    assert!(
+        matches!(
+            error,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            ))
+        ),
+        "{error:?}"
+    );
+    assert!(
+        reservation.owner_limit_refused(),
+        "the HTTP admission must retry this same read with a larger owner"
+    );
+}
+
+#[tokio::test]
+async fn malformed_sns_alias_record_does_not_request_a_larger_owner() {
+    let fixture = fixture();
+    let catalog = fixture.state.nexus_snapshot().dataspace_catalog;
+    let label = iroha_data_model::account::rekey::AccountAlias::from_literal(
+        "alice@mibank.universal",
+        &catalog,
+    )
+    .unwrap();
+    let selector = iroha_core::sns::selector_for_account_alias(&label, &catalog).unwrap();
+    let storage_key = iroha_core::sns::record_storage_key(&selector);
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let mut block = fixture.state.block(header);
+    let mut tx = block.transaction();
+    let world = tx.world_mut_for_testing();
+    let mut record = world
+        .smart_contract_state()
+        .get(&storage_key)
+        .unwrap()
+        .clone();
+    record.push(0); // A canonical SNS record must consume its complete stored frame.
+    world
+        .smart_contract_state_mut_for_testing()
+        .insert(storage_key, record);
+    tx.apply();
+    block.commit_world_overlay_for_testing().unwrap();
+    let (reservation, owner) = admitted_alias_owner();
+    let all = DataspaceReadVisibility::all_for_tests();
+    let query = ListQuery::new().filter(scope_filter(MIBANK));
+    let limits = collection_limits();
+    let join = AccountAliasJoin::for_query(&fixture.state, &query, &all, &limits).unwrap();
+    let world = fixture.state.world_view();
+    let error = owner
+        .scope(|| join.scope_fields(&world, &fixture.alice, limits.bytes))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::Query(iroha_data_model::ValidationFail::InternalError(_))
+        ),
+        "{error:?}"
+    );
+    assert!(
+        !reservation.owner_limit_refused(),
+        "invalid authoritative state is not an owner-size refusal"
+    );
+}
+
+#[test]
+fn sns_allocator_and_semantic_errors_do_not_request_a_larger_owner() {
+    use super::account_aliases::alias_producer_sns_error;
+    let (reservation, owner) = admitted_alias_owner();
+    owner.scope(|| {
+        let allocator = norito::core::classify_decode_attempt::<()>(|| {
+            Err(norito::Error::AllocationFailed { bytes: 1024 })
+        })
+        .unwrap_err()
+        .into_local_refusal()
+        .unwrap();
+        let error = alias_producer_sns_error(iroha_core::sns::SnsError::Deferred(allocator.into()));
+        assert!(matches!(
+            error,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            ))
+        ));
+        assert!(!reservation.owner_limit_refused());
+        let error = alias_producer_sns_error(iroha_core::sns::SnsError::Conflict(
+            "conflicting dataspace mapping".into(),
+        ));
+        assert!(matches!(error, Error::AppConflict { .. }));
+        assert!(!reservation.owner_limit_refused());
+    });
 }

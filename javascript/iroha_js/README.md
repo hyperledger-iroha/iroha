@@ -2526,11 +2526,17 @@ TypeScript consumers do not need ambient Node types.
 
 `withCanonicalReadRetry({ method, path, signal, operation })` retries known
 read-only Torii routes after typed HTTP 429 capacity or rate refusals. Build and
-sign the request inside `operation(attempt)` so every attempt has fresh nonce
-and timestamp headers, and pass `signal` to the transport. The helper permits
-three retries within ten seconds, honors `retryAfter` HTTP header text or
-`retryAfterSeconds` on the thrown error, and preserves the final error. Writes,
-unknown routes, authentication errors and transport failures execute once.
+sign the request inside `operation(attempt, { signal, timeoutMs })` so every attempt
+has fresh nonce and timestamp headers, and forward that attempt's signal and timeout
+to the transport. Each attempt has 45 seconds (the server's 30-second routed-read
+deadline plus transport and response margin), within one 100-second total deadline.
+At most three retries are allowed; a new attempt starts only when its complete
+45-second allowance fits. The exported `CANONICAL_READ_ATTEMPT_TIMEOUT_MS` and
+`CANONICAL_READ_TOTAL_TIMEOUT_MS` define these bounds. The helper honors `retryAfter`
+HTTP header text or `retryAfterSeconds` without shortening it, and preserves the
+last explicit refusal when no retry fits. Writes and unknown routes execute once
+with the caller's signal and no read-specific timeout. Authentication errors and
+ambiguous transport failures are never retried.
 
 > **Recipe:** run `node javascript/iroha_js/recipes/iso_alias.mjs` to exercise
 > the lookup endpoints from the CLI. The script accepts `ISO_ALIAS_LABEL` and

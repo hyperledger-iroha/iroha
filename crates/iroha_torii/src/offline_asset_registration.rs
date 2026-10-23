@@ -85,7 +85,8 @@ pub async fn handler(
     AxPath(asset_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let context = "v1/assets/definitions/{asset}/registration";
-    let visibility = torii_dataspace_context_from_headers(&app, &headers, &method, &uri, context)?;
+    let visibility =
+        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, context).await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         check_access(&app, &headers, Some(remote.ip()), context).await?;
     }

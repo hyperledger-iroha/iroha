@@ -17,6 +17,18 @@ mod app_routed_read_http_admission_tests {
         },
         task::Poll,
     };
+    async fn collect_test_body(
+        body: Body,
+        limit: usize,
+        declared: Option<usize>,
+    ) -> Result<AdmittedAppRoutedReadBody, Response> {
+        let app = mk_app_state_for_tests();
+        let memory = acquire_app_routed_read_body_memory(&app, declared.unwrap_or(limit))
+            .await
+            .expect("test body retention credit");
+        collect_app_routed_read_body(body, limit, declared, memory).await
+    }
+
     fn pending_body(polls: &Arc<AtomicUsize>) -> Body {
         let polls = Arc::clone(polls);
         Body::from_stream(futures::stream::poll_fn(move |_| {
@@ -650,7 +662,7 @@ mod app_routed_read_http_admission_tests {
     }
     #[tokio::test]
     async fn missing_content_length_keeps_exact_owner_and_body_extraction_is_zero_copy() {
-        let admitted = collect_app_routed_read_body(Body::from("abc"), 8, None)
+        let admitted = collect_test_body(Body::from("abc"), 8, None)
             .await
             .expect("small unknown-length body");
         assert_eq!(admitted.bytes.as_ref(), b"abc");
@@ -691,7 +703,7 @@ mod app_routed_read_http_admission_tests {
                 _ => None,
             })
         }));
-        let admitted = collect_app_routed_read_body(body, 8, None)
+        let admitted = collect_test_body(body, 8, None)
             .await
             .expect("zero-byte body should drain successfully");
         assert_eq!(polls.load(Ordering::SeqCst), 2);
@@ -701,15 +713,15 @@ mod app_routed_read_http_admission_tests {
     }
     #[tokio::test]
     async fn unknown_and_lying_lengths_reject_exact_plus_one() {
-        let unknown = collect_app_routed_read_body(Body::from("123456789"), 8, None)
+        let unknown = collect_test_body(Body::from("123456789"), 8, None)
             .await
             .expect_err("unknown body over cap must fail");
         assert_eq!(unknown.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        let short = collect_app_routed_read_body(Body::from("123"), 8, Some(4))
+        let short = collect_test_body(Body::from("123"), 8, Some(4))
             .await
             .expect_err("short declared body must fail");
         assert_eq!(short.status(), StatusCode::BAD_REQUEST);
-        let long = collect_app_routed_read_body(Body::from("12345"), 8, Some(4))
+        let long = collect_test_body(Body::from("12345"), 8, Some(4))
             .await
             .expect_err("long declared body must fail");
         assert_eq!(long.status(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -787,7 +799,7 @@ mod app_routed_read_http_admission_tests {
             Ok::<_, Infallible>(hyper::body::Frame::data(data))
         }));
         let body = Body::new(http_body_util::StreamBody::new(frames));
-        let admitted = collect_app_routed_read_body(body, BYTES, Some(BYTES))
+        let admitted = collect_test_body(body, BYTES, Some(BYTES))
             .await
             .expect("more than 4096 one-byte frames remain compatible");
         assert_eq!(admitted.bytes.len(), BYTES);
@@ -1064,6 +1076,237 @@ mod app_routed_read_http_admission_tests {
         drop(response);
         assert_eq!(app.query_fanout_inflight.available_permits(), before);
         assert_eq!(app.app_routed_read_waiters.available_permits(), waiters);
+    }
+
+    #[tokio::test]
+    async fn retained_body_credit_follows_the_last_exact_byte_clone() {
+        let app = mk_app_state_for_tests();
+        let before = app.app_routed_read_body_inflight.available_bytes();
+        let memory = acquire_app_routed_read_body_memory(&app, 8).await.unwrap();
+        let body = collect_app_routed_read_body(Body::from("abc"), 8, None, memory)
+            .await
+            .unwrap();
+        let last = body.bytes.clone();
+        drop(body);
+        assert_eq!(last.as_ref(), b"abc");
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            before - 8
+        );
+        drop(last);
+        assert_eq!(app.app_routed_read_body_inflight.available_bytes(), before);
+    }
+
+    #[tokio::test]
+    async fn pending_owner_upgrade_keeps_body_credit_and_cancellation_releases_it() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        let first_weight = routed_read_owner_weight(&app, tiers[0]).unwrap().0 as u64;
+        let capacity = app.query_fanout_inflight.capacity_bytes();
+        let blocker = app
+            .query_fanout_inflight
+            .try_acquire_parts([capacity - first_weight])
+            .unwrap();
+        let body_before = app.app_routed_read_body_inflight.available_bytes();
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let descriptor = route_catalog::application_api::TRANSACTIONS_QUERY_POST;
+        let router = admission_router_with(
+            Arc::clone(&app),
+            descriptor,
+            owner_recording_route(&app, &owners, tiers[1]),
+        );
+        let body = "{\"limit\":200}";
+        let mut response =
+            Box::pin(router.oneshot(json_request_with_length(descriptor.path(), body)));
+        assert!(futures::poll!(response.as_mut()).is_pending());
+        assert_eq!(*owners.lock().unwrap(), vec![tiers[0]]);
+        assert_eq!(
+            app.query_fanout_inflight.available_bytes(),
+            0,
+            "the semaphore earmarks returned credit for the pending larger acquisition"
+        );
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            body_before - body.len() as u64,
+            "the retained exact POST body remains charged independently"
+        );
+        drop(response);
+        assert_eq!(
+            app.query_fanout_inflight.available_bytes(),
+            first_weight,
+            "cancelling the wait returns all execution credit without retaining an old owner"
+        );
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            body_before
+        );
+        drop(blocker);
+        assert_eq!(app.query_fanout_inflight.available_bytes(), capacity);
+    }
+
+    #[tokio::test]
+    async fn three_concurrent_owner_upgrades_make_progress_without_holding_execution_credit() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        let first_weight = routed_read_owner_weight(&app, tiers[0]).unwrap().0 as u64;
+        let capacity = app.query_fanout_inflight.capacity_bytes();
+        let blocker = app
+            .query_fanout_inflight
+            .try_acquire_parts([capacity - 3 * first_weight])
+            .unwrap();
+        let body_before = app.app_routed_read_body_inflight.available_bytes();
+        let descriptor = route_catalog::application_api::TRANSACTIONS_QUERY_POST;
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let owners = Arc::new(std::sync::Mutex::new([Vec::new(), Vec::new(), Vec::new()]));
+        let requests = (0..3).map(|index| {
+            let handler_app = Arc::clone(&app);
+            let owners = Arc::clone(&owners);
+            let barrier = Arc::clone(&barrier);
+            let refuse_below = tiers[1];
+            let route = any(move || {
+                let app = Arc::clone(&handler_app);
+                let owners = Arc::clone(&owners);
+                let barrier = Arc::clone(&barrier);
+                async move {
+                    let bytes = current_routed_read_memory_envelope(&app)
+                        .unwrap()
+                        .working_set_bytes;
+                    owners.lock().unwrap()[index].push(bytes);
+                    if bytes < refuse_below {
+                        // All three handlers must own their initial reservation before
+                        // any asks for a larger one; semaphore FIFO cannot serialize this setup.
+                        barrier.wait().await;
+                        torii_proxy_error_response(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "query_capacity_exceeded",
+                            "test read exceeds its owner",
+                        )
+                    } else {
+                        StatusCode::NO_CONTENT.into_response()
+                    }
+                }
+            });
+            let router = admission_router_with(Arc::clone(&app), descriptor, route);
+            router.oneshot(json_request_with_length(descriptor.path(), "{}"))
+        });
+        let mut responses = Box::pin(futures::future::join_all(requests));
+        assert!(futures::poll!(responses.as_mut()).is_pending());
+        assert!(futures::poll!(responses.as_mut()).is_pending());
+        assert!(
+            owners
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|attempts| attempts == &[tiers[0]])
+        );
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            body_before - 6
+        );
+        drop(blocker);
+        for response in responses.await {
+            let response = response.unwrap();
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            drop(response);
+        }
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            body_before
+        );
+        assert_eq!(app.query_fanout_inflight.available_bytes(), capacity);
+        assert!(
+            owners
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|attempts| attempts == &[tiers[0], tiers[1]])
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn owner_escalation_does_not_restart_the_http_deadline() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_millis(100);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&attempts);
+        let route = any(move || {
+            let counted = Arc::clone(&counted);
+            async move {
+                let attempt = counted.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(60)).await;
+                if attempt == 0 {
+                    torii_proxy_error_response(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "query_capacity_exceeded",
+                        "first owner is too small",
+                    )
+                } else {
+                    StatusCode::OK.into_response()
+                }
+            }
+        });
+        let descriptor = route_catalog::application_api::TRANSACTIONS_QUERY_POST;
+        let body_before = app.app_routed_read_body_inflight.available_bytes();
+        let started = tokio::time::Instant::now();
+        let response = admission_router_with(Arc::clone(&app), descriptor, route)
+            .oneshot(json_request_with_length(descriptor.path(), "{}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(started.elapsed(), Duration::from_millis(100));
+        drop(response);
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            body_before
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queued_read_then_owner_growth_succeeds_within_one_deadline() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_millis(100);
+        let occupied = occupy_fanout_pool(&app);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&attempts);
+        let route = any(move || {
+            let counted = Arc::clone(&counted);
+            async move {
+                let attempt = counted.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                if attempt == 0 {
+                    torii_proxy_error_response(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "query_capacity_exceeded",
+                        "first owner is too small",
+                    )
+                } else {
+                    Response::new(Body::from("completed"))
+                }
+            }
+        });
+        let descriptor = route_catalog::application_api::TRANSACTIONS_QUERY_POST;
+        let started = tokio::time::Instant::now();
+        let mut response = Box::pin(
+            admission_router_with(Arc::clone(&app), descriptor, route)
+                .oneshot(json_request_with_length(descriptor.path(), "{}")),
+        );
+        assert!(futures::poll!(response.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(30)).await;
+        drop(occupied);
+        let response = response.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 64)
+                .await
+                .unwrap()
+                .as_ref(),
+            b"completed"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(started.elapsed(), Duration::from_millis(70));
     }
 
     fn admission_router_with(
@@ -1625,7 +1868,9 @@ mod app_routed_read_http_admission_tests {
                         body.as_ref(),
                         "test_auth_required",
                         "signed account headers are required",
-                    ) {
+                    )
+                    .await
+                    {
                         Ok(caller) => caller,
                         Err(error) => return error.into_response(),
                     };

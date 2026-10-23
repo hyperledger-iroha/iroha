@@ -2435,6 +2435,8 @@ struct AppState {
     query_ingress_inflight: Arc<tokio::sync::Semaphore>,
     /// Byte-weighted capacity shared by complete fanout and ordinary-query work.
     query_fanout_inflight: ByteWeightedMemoryPool,
+    /// Independent credit for exact routed-read bodies retained while execution owners grow.
+    app_routed_read_body_inflight: ByteWeightedMemoryPool,
     /// App-local authenticated history nodes, retained independently of request leases.
     sccp_history:
         std::sync::Mutex<iroha_core::smartcontracts::isi::sccp::read::SccpHistoryNodeCache>,
@@ -7656,9 +7658,10 @@ fn canonical_authentication_unit_bytes(headers: &axum::http::HeaderMap) -> Optio
 /// evidence is published only after a successful verification, so no nonce is reused.
 async fn authenticate_canonical_account_request(
     app: &SharedAppState,
-    parts: &axum::http::request::Parts,
-    body: &[u8],
+    headers: &HeaderMap,
+    request: crate::app_auth::CanonicalRequestParts<'_>,
     (mut owner, borrowed): (crate::history_producer::HistoryProducerOwner, bool),
+    deadline: tokio::time::Instant,
 ) -> Result<
     (
         core::result::Result<Option<crate::app_auth::VerifiedCanonicalRequest>, Error>,
@@ -7667,27 +7670,28 @@ async fn authenticate_canonical_account_request(
     Response,
 > {
     let network_id = app.signed_query_admission.network_id();
+    let mut replay_admission = routed_read_canonical_auth().flatten();
     loop {
         let (result, refused_by_publication) =
             crate::app_auth::authorize_after_publication_outcome(
                 &app.auth_publication_waiters,
-                app.query_queue_timeout,
+                query_admission_remaining(app)
+                    .min(deadline.saturating_duration_since(tokio::time::Instant::now())),
                 || {
-                    crate::app_auth::verify_canonical_network_request(
+                    crate::app_auth::verify_canonical_network_request_with_replay_admission(
                         &app.state,
                         &network_id,
-                        &parts.headers,
-                        crate::app_auth::CanonicalRequestParts {
-                            method: &parts.method,
-                            uri: &parts.uri,
-                            body,
-                        },
-                        None,
+                        headers,
+                        request,
                         owner.allocation_context(),
+                        &mut replay_admission,
                     )
                 },
             )
             .await;
+        if result.is_ok() {
+            remember_routed_read_canonical_auth(replay_admission.as_ref());
+        }
         let capacity = matches!(
             result,
             Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -7705,17 +7709,46 @@ async fn authenticate_canonical_account_request(
         }
         // Release the smaller owner before waiting for the configured one.
         drop(owner);
-        owner =
-            crate::history_producer::HistoryProducerOwner::authentication_read_waiting(app, None)
-                .await?
-                .0;
+        owner = tokio::time::timeout_at(
+            deadline,
+            crate::history_producer::HistoryProducerOwner::authentication_read_waiting(app, None),
+        )
+        .await
+        .map_err(|_| crate::app_auth::canonical_request_capacity_error().into_response())??
+        .0;
     }
 }
+/// Authenticate handler-owned headers through the same publication and capacity corridor as
+/// body middleware. Only the original HTTP admission may reuse the resulting replay evidence.
+#[cfg(feature = "app_api")]
+async fn authenticate_canonical_account_headers(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    request: crate::app_auth::CanonicalRequestParts<'_>,
+) -> Result<Option<crate::app_auth::VerifiedCanonicalRequest>, Error> {
+    // Start before owner acquisition so standalone calls share one deadline across the
+    // initial queue, publication wait, and any escalation to the configured owner.
+    let deadline = tokio::time::Instant::now() + query_admission_remaining(app);
+    let owner = crate::history_producer::HistoryProducerOwner::authentication_read_waiting(
+        app,
+        canonical_authentication_unit_bytes(headers),
+    )
+    .await
+    .map_err(|_| crate::app_auth::canonical_request_capacity_error())?;
+    let (verified, _owner) =
+        authenticate_canonical_account_request(app, headers, request, owner, deadline)
+            .await
+            .map_err(|_| crate::app_auth::canonical_request_capacity_error())?;
+    verified
+}
+
 async fn enforce_canonical_account_body_authentication(
     State(state): State<CanonicalAccountBodyAuthState>,
     request: axum::http::Request<Body>,
     next: Next,
 ) -> Response {
+    let authentication_deadline =
+        tokio::time::Instant::now() + query_admission_remaining(&state.app);
     let authentication_owner =
         match crate::history_producer::HistoryProducerOwner::authentication_read_waiting(
             &state.app,
@@ -7746,38 +7779,35 @@ async fn enforce_canonical_account_body_authentication(
             }
         }
     };
-    // A routed read retried with a larger owner keeps the authentication its first
-    // attempt verified; verifying again would find its own nonce already published.
-    let (verified, _authentication_owner) =
-        if let Some(Some(verified)) = routed_read_canonical_auth() {
-            (verified, authentication_owner.0)
-        } else {
-            let (result, owner) = match authenticate_canonical_account_request(
-                &state.app,
-                &parts,
-                body.as_ref(),
-                authentication_owner,
-            )
-            .await
-            {
-                Ok(authenticated) => authenticated,
-                Err(response) => return response,
-            };
-            match result {
-                Ok(Some(verified)) => {
-                    remember_routed_read_canonical_auth(Some(&verified));
-                    (verified, owner)
-                }
-                Ok(None) => {
-                    return Error::AppUnauthorized {
-                        code: state.missing_auth_code,
-                        message: state.missing_auth_message.to_owned(),
-                    }
-                    .into_response();
-                }
-                Err(error) => return error.into_response(),
+    // Reverify credentials under this attempt's owner. Only the compact, exact-request
+    // replay admission survives a tier retry; decoded identities never cross owner lifetimes.
+    let (result, _authentication_owner) = match authenticate_canonical_account_request(
+        &state.app,
+        &parts.headers,
+        crate::app_auth::CanonicalRequestParts {
+            method: &parts.method,
+            uri: &parts.uri,
+            body: body.as_ref(),
+        },
+        authentication_owner,
+        authentication_deadline,
+    )
+    .await
+    {
+        Ok(authenticated) => authenticated,
+        Err(response) => return response,
+    };
+    let verified = match result {
+        Ok(Some(verified)) => verified,
+        Ok(None) => {
+            return Error::AppUnauthorized {
+                code: state.missing_auth_code,
+                message: state.missing_auth_message.to_owned(),
             }
-        };
+            .into_response();
+        }
+        Err(error) => return error.into_response(),
+    };
     parts.extensions.insert(verified);
     let mut response = next
         .run(axum::http::Request::from_parts(parts, Body::from(body)))
@@ -7790,6 +7820,8 @@ async fn enforce_optional_canonical_account_body_authentication(
     request: axum::http::Request<Body>,
     next: Next,
 ) -> Response {
+    let authentication_deadline =
+        tokio::time::Instant::now() + query_admission_remaining(&state.app);
     let authentication_owner =
         match crate::history_producer::HistoryProducerOwner::authentication_read_waiting(
             &state.app,
@@ -7817,31 +7849,26 @@ async fn enforce_optional_canonical_account_body_authentication(
             }
         }
     };
-    // A routed read retried with a larger owner keeps the visibility its first
-    // attempt verified; verifying again would find its own nonce already published.
-    let (verified, _authentication_owner) = match routed_read_canonical_auth() {
-        Some(verified) => (verified, authentication_owner.0),
-        None => {
-            let (result, owner) = match authenticate_canonical_account_request(
-                &state.app,
-                &parts,
-                body.as_ref(),
-                authentication_owner,
-            )
-            .await
-            {
-                Ok(authenticated) => authenticated,
-                Err(response) => return response,
-            };
-            match result {
-                Ok(verified) => {
-                    remember_routed_read_canonical_auth(verified.as_ref());
-                    (verified, owner)
-                }
-                Err(error) => {
-                    return crate::app_auth::canonical_authentication_error(error).into_response();
-                }
-            }
+    let (result, _authentication_owner) = match authenticate_canonical_account_request(
+        &state.app,
+        &parts.headers,
+        crate::app_auth::CanonicalRequestParts {
+            method: &parts.method,
+            uri: &parts.uri,
+            body: body.as_ref(),
+        },
+        authentication_owner,
+        authentication_deadline,
+    )
+    .await
+    {
+        Ok(authenticated) => authenticated,
+        Err(response) => return response,
+    };
+    let verified = match result {
+        Ok(verified) => verified,
+        Err(error) => {
+            return crate::app_auth::canonical_authentication_error(error).into_response();
         }
     };
     let visibility = match verified {
@@ -8625,7 +8652,8 @@ async fn handler_account_get(
         &uri,
         &[],
         routing::ENDPOINT_ACCOUNTS_GET,
-    )?;
+    )
+    .await?;
     let use_target_account_routes = torii_should_use_target_account_routes(
         app.as_ref(),
         &parsed_account_id,
@@ -8849,7 +8877,8 @@ async fn handler_account_assets(
         &uri,
         &[],
         routing::ENDPOINT_ACCOUNTS_ASSETS,
-    )?;
+    )
+    .await?;
     let route_scope =
         torii_account_read_route_scope(&parsed_account_id, caller.caller(), caller.is_signed());
     let routes =
@@ -8901,7 +8930,8 @@ async fn handler_account_permissions(
         &uri,
         &[],
         routing::ENDPOINT_ACCOUNTS_PERMISSIONS,
-    )?;
+    )
+    .await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -9073,7 +9103,8 @@ async fn handler_account_transactions_get(
         &uri,
         &[],
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
-    )?;
+    )
+    .await?;
     account_history_collection_read(
         &app,
         &headers,
@@ -9100,7 +9131,8 @@ async fn handler_account_history_get(
         &uri,
         &[],
         routing::ENDPOINT_ACCOUNTS_HISTORY,
-    )?;
+    )
+    .await?;
     account_history_collection_read(
         &app,
         &headers,
@@ -9140,7 +9172,8 @@ async fn handler_contracts_activity_get(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     let visibility =
-        torii_one_shot_caller_from_headers(&app, &headers, &method, &uri, "v1/contracts/activity")?;
+        torii_one_shot_caller_from_headers(&app, &headers, &method, &uri, "v1/contracts/activity")
+            .await?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -9172,7 +9205,8 @@ async fn handler_contracts_events_get(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     let visibility =
-        torii_one_shot_caller_from_headers(&app, &headers, &method, &uri, "v1/contracts/events")?;
+        torii_one_shot_caller_from_headers(&app, &headers, &method, &uri, "v1/contracts/events")
+            .await?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -9210,7 +9244,8 @@ async fn handler_contracts_activity_query(
         &uri,
         body.as_ref(),
         "v1/contracts/activity/query",
-    )?;
+    )
+    .await?;
     let plan = match torii_routed_read_request_decode_plan(&app) {
         Ok(plan) => plan,
         Err(response) => return Ok(response),
@@ -9263,7 +9298,8 @@ async fn handler_contracts_events_query(
         &uri,
         body.as_ref(),
         "v1/contracts/events/query",
-    )?;
+    )
+    .await?;
     let plan = match torii_routed_read_request_decode_plan(&app) {
         Ok(plan) => plan,
         Err(response) => return Ok(response),
@@ -9316,7 +9352,8 @@ async fn handler_contracts_rollups_swaps_fills_get(
         &method,
         &uri,
         "v1/contracts/rollups/swaps/fills",
-    )?;
+    )
+    .await?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -9360,7 +9397,8 @@ async fn handler_contracts_rollups_swaps_candles_get(
         &method,
         &uri,
         "v1/contracts/rollups/swaps/candles",
-    )?;
+    )
+    .await?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -9404,7 +9442,8 @@ async fn handler_contracts_rollups_uranai_markets_history_get(
         &method,
         &uri,
         "v1/contracts/rollups/uranai/markets/history",
-    )?;
+    )
+    .await?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -9448,7 +9487,8 @@ async fn handler_contracts_rollups_trader_activity_get(
         &method,
         &uri,
         "v1/contracts/rollups/trader/activity",
-    )?;
+    )
+    .await?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -9493,7 +9533,8 @@ async fn handler_contracts_rollups_trader_account_get(
         &method,
         &uri,
         "v1/contracts/rollups/trader/account",
-    )?;
+    )
+    .await?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -9677,7 +9718,8 @@ async fn handler_accounts_list(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
-        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/accounts")?;
+        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/accounts")
+            .await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -9933,7 +9975,7 @@ async fn handler_account_aliases(
     path: AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let caller = require_signed_alias_request(&app, &headers, &method, &uri, &[])?;
+    let caller = require_signed_alias_request(&app, &headers, &method, &uri, &[]).await?;
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -9971,7 +10013,8 @@ async fn handler_accounts_portfolio(
         &uri,
         &[],
         "v1/accounts/{uaid}/portfolio",
-    )?;
+    )
+    .await?;
     let _ = query
         .asset_id
         .as_deref()
@@ -10130,7 +10173,8 @@ async fn handler_nexus_dataspaces_account_summary(
         &uri,
         &[],
         routing::ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
-    )?;
+    )
+    .await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -10171,7 +10215,8 @@ async fn handler_space_directory_bindings(
         &uri,
         &[],
         routing::ENDPOINT_SPACE_DIRECTORY_BINDINGS,
-    )?;
+    )
+    .await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -10210,7 +10255,8 @@ async fn handler_space_directory_manifests(
         &uri,
         &[],
         routing::ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
-    )?;
+    )
+    .await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -10482,7 +10528,7 @@ fn identifier_owner_unauthorized() -> Error {
     }
 }
 #[cfg(feature = "app_api")]
-fn authenticate_identifier_owner_request(
+async fn authenticate_identifier_owner_request(
     app: &SharedAppState,
     headers: &axum::http::HeaderMap,
     method: &axum::http::Method,
@@ -10507,6 +10553,7 @@ fn authenticate_identifier_owner_request(
         "identifier_owner_required",
         "The current ledger identifier policy owner must authenticate this exact request.",
     )
+    .await
 }
 #[cfg(feature = "app_api")]
 fn require_identifier_program_owner(
@@ -10968,7 +11015,7 @@ async fn handler_explorer_metrics(
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
-        require_torii_global_reader(&app, &headers, &method, &uri, "v1/explorer/metrics")?;
+        require_torii_global_reader(&app, &headers, &method, &uri, "v1/explorer/metrics").await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11149,7 +11196,8 @@ async fn handler_explorer_account_detail(
         &uri,
         &[],
         CONTEXT_EXPLORER_ACCOUNT_DETAIL,
-    )?;
+    )
+    .await?;
     let current_visibility = torii_dataspace_read_visibility(app.as_ref(), visibility.caller());
     if !current_visibility.allows_account(&app.state.world_view(), &parsed_account_id) {
         return Err(routing::explorer_not_found());
@@ -11201,7 +11249,8 @@ async fn handler_explorer_account_qr(
         &method,
         &uri,
         CONTEXT_EXPLORER_ACCOUNT_QR,
-    )?;
+    )
+    .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11240,7 +11289,8 @@ async fn handler_explorer_domain_detail(
         &method,
         &uri,
         "v1/explorer/domains/{id}",
-    )?;
+    )
+    .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11271,7 +11321,8 @@ async fn handler_explorer_asset_definition_detail(
         &method,
         &uri,
         "v1/explorer/asset-definitions/{id}",
-    )?;
+    )
+    .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11318,7 +11369,8 @@ async fn handler_explorer_asset_definition_econometrics(
         &method,
         &uri,
         "v1/explorer/asset-definitions/{id}/econometrics",
-    )?;
+    )
+    .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11365,7 +11417,8 @@ async fn handler_explorer_asset_definition_snapshot(
         &method,
         &uri,
         "v1/explorer/asset-definitions/{id}/snapshot",
-    )?;
+    )
+    .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11412,7 +11465,8 @@ async fn handler_explorer_asset_detail(
         &method,
         &uri,
         "v1/explorer/assets/{id}",
-    )?;
+    )
+    .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11438,7 +11492,8 @@ async fn handler_explorer_nft_detail(
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
-        torii_one_shot_caller_from_headers(&app, &headers, &method, &uri, "v1/explorer/nfts/{id}")?;
+        torii_one_shot_caller_from_headers(&app, &headers, &method, &uri, "v1/explorer/nfts/{id}")
+            .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11464,7 +11519,8 @@ async fn handler_explorer_rwa_detail(
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
-        torii_one_shot_caller_from_headers(&app, &headers, &method, &uri, "v1/explorer/rwas/{id}")?;
+        torii_one_shot_caller_from_headers(&app, &headers, &method, &uri, "v1/explorer/rwas/{id}")
+            .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11495,7 +11551,8 @@ async fn handler_explorer_block_detail(
         &method,
         &uri,
         "v1/explorer/blocks/{id}",
-    )?;
+    )
+    .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11527,7 +11584,8 @@ async fn handler_explorer_transaction_detail(
         &method,
         &uri,
         "v1/explorer/transactions/{hash}",
-    )?;
+    )
+    .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11563,7 +11621,8 @@ async fn handler_explorer_transaction_proof(
     AxPath(hash): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     const ENDPOINT: &str = "v1/explorer/transactions/{hash}/proof";
-    let visibility = torii_dataspace_context_from_headers(&app, &headers, &method, &uri, ENDPOINT)?;
+    let visibility =
+        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, ENDPOINT).await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         check_access(&app, &headers, Some(remote.ip()), ENDPOINT).await?;
     }
@@ -11602,7 +11661,8 @@ async fn handler_explorer_instruction_detail(
         &method,
         &uri,
         "v1/explorer/instructions/{hash}/{index}",
-    )?;
+    )
+    .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11645,7 +11705,8 @@ async fn handler_explorer_instruction_contract_view(
         &method,
         &uri,
         "v1/explorer/instructions/{hash}/{index}/contract-view",
-    )?;
+    )
+    .await?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -11705,7 +11766,8 @@ async fn handler_assets_definitions_list(
         &uri,
         &[],
         "v1/assets/definitions",
-    )?;
+    )
+    .await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -11776,7 +11838,8 @@ async fn handler_asset_definition_get(
         &uri,
         &[],
         "v1/assets/definitions/{asset}",
-    )?;
+    )
+    .await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -11816,7 +11879,8 @@ async fn handler_asset_holders(
         &uri,
         &[],
         "v1/assets/{definition_id}/holders",
-    )?;
+    )
+    .await?;
     let limits = crate::routing::app_query_limits();
     let query = list_query_from_query_string(uri.query())?;
     let page_limit = collection_page_limit(&query);
@@ -11893,7 +11957,8 @@ async fn handler_domains_list(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
-        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/domains")?;
+        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/domains")
+            .await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -11943,7 +12008,8 @@ async fn handler_nfts_list(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
-        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/nfts")?;
+        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/nfts")
+            .await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -11994,7 +12060,8 @@ async fn handler_rwas_list(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
-        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/rwas")?;
+        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/rwas")
+            .await?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -15249,7 +15316,7 @@ fn torii_signed_visibility_headers_present(headers: &HeaderMap) -> bool {
         || headers.get(HEADER_WITNESS).is_some()
 }
 #[cfg(feature = "app_api")]
-fn torii_visibility_account_from_headers(
+async fn torii_visibility_account_from_headers(
     app: &SharedAppState,
     headers: &HeaderMap,
     method: &Method,
@@ -15257,34 +15324,14 @@ fn torii_visibility_account_from_headers(
     body: &[u8],
     _endpoint: &'static str,
 ) -> Result<ToriiAccountReadVisibility, Error> {
-    let authentication_owner =
-        match crate::history_producer::HistoryProducerOwner::authentication_read(app) {
-            Ok(owner) => owner,
-            Err(error) => {
-                return Err(error);
-            }
-        };
-
-    // A larger-owner retry reruns this handler with the original HTTP request.
-    // Its first successful authentication already published the nonce, just as
-    // in the canonical body-auth middlewares. Reuse only that request's proof;
-    // every separate HTTP request receives its own admission scope.
-    if let Some(verified) = routed_read_canonical_auth() {
-        return Ok(verified.map_or(ToriiAccountReadVisibility::None, |request| {
-            ToriiAccountReadVisibility::Signed(request.account)
-        }));
-    }
     if torii_signed_visibility_headers_present(headers) {
-        let verified = crate::app_auth::verify_canonical_network_request(
-            &app.state,
-            app.state.network_id_ref(),
+        let verified = authenticate_canonical_account_headers(
+            app,
             headers,
             crate::app_auth::CanonicalRequestParts { method, uri, body },
-            None,
-            authentication_owner.allocation_context(),
         )
+        .await
         .map_err(crate::app_auth::canonical_authentication_error)?;
-        remember_routed_read_canonical_auth(verified.as_ref());
         return Ok(
             verified.map_or(ToriiAccountReadVisibility::None, |request| {
                 ToriiAccountReadVisibility::Signed(request.account)
@@ -15303,18 +15350,18 @@ fn torii_visibility_account_from_headers(
 }
 
 #[cfg(feature = "app_api")]
-fn torii_one_shot_caller_from_headers(
+async fn torii_one_shot_caller_from_headers(
     app: &SharedAppState,
     headers: &HeaderMap,
     method: &Method,
     uri: &Uri,
     endpoint: &'static str,
 ) -> Result<ToriiAccountReadVisibility, Error> {
-    torii_visibility_account_from_headers(app, headers, method, uri, &[], endpoint)
+    torii_visibility_account_from_headers(app, headers, method, uri, &[], endpoint).await
 }
 
 #[cfg(feature = "app_api")]
-fn torii_dataspace_context_from_headers(
+async fn torii_dataspace_context_from_headers(
     app: &SharedAppState,
     headers: &HeaderMap,
     method: &Method,
@@ -15322,18 +15369,19 @@ fn torii_dataspace_context_from_headers(
     endpoint: &'static str,
 ) -> Result<ToriiDataspaceReadContext, Error> {
     torii_visibility_account_from_headers(app, headers, method, uri, &[], endpoint)
+        .await
         .map(|visibility| visibility.into_dataspace_context(Arc::clone(app)))
 }
 
 #[cfg(feature = "app_api")]
-fn require_torii_global_reader(
+async fn require_torii_global_reader(
     app: &SharedAppState,
     headers: &HeaderMap,
     method: &Method,
     uri: &Uri,
     endpoint: &'static str,
 ) -> Result<ToriiDataspaceReadContext, Error> {
-    let context = torii_dataspace_context_from_headers(app, headers, method, uri, endpoint)?;
+    let context = torii_dataspace_context_from_headers(app, headers, method, uri, endpoint).await?;
     let Some(caller) = context.caller() else {
         return Err(Error::AppUnauthorized {
             code: "canonical_authentication_required",
@@ -24157,7 +24205,8 @@ async fn handler_events_sse(
         return Ok(response);
     }
     let visibility =
-        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/events/sse")?;
+        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/events/sse")
+            .await?;
     Ok(routing::handle_v1_events_sse(
         app.events.clone(),
         app.kura.clone(),
@@ -24183,7 +24232,8 @@ async fn handler_contracts_events_sse(
         &method,
         &uri,
         "v1/contracts/events/sse",
-    )?;
+    )
+    .await?;
     Ok(routing::handle_v1_contracts_events_sse(
         app.events.clone(),
         app.state.clone(),
@@ -24206,7 +24256,8 @@ async fn handler_account_history_sse(
         &method,
         &uri,
         "v1/accounts/{account_id}/history/sse",
-    )?;
+    )
+    .await?;
     let telemetry = app.telemetry_handle();
     let request = routing::AccountHistorySseRequest::new(
         app.state.as_ref(),
@@ -24414,7 +24465,7 @@ async fn handler_subscription_ws(
 ) -> Result<impl IntoResponse, Error> {
     validate_norito_websocket_handshake(&headers, raw_query.as_deref())?;
     let visibility =
-        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/events/ws")?;
+        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/events/ws").await?;
     // Subscribe before upgrade to buffer events emitted during the WS handshake.
     let events_rx = app.events.subscribe();
     let ws = ws
@@ -24460,7 +24511,7 @@ async fn handler_blocks_stream_ws(
 ) -> Result<impl IntoResponse, Error> {
     validate_norito_websocket_handshake(&headers, raw_query.as_deref())?;
     let visibility =
-        require_torii_global_reader(&app, &headers, &method, &uri, "v1/blocks/stream")?;
+        require_torii_global_reader(&app, &headers, &method, &uri, "v1/blocks/stream").await?;
     let kura = app.kura.clone();
     let ws = ws
         .protocols([NORITO_V1_WEBSOCKET_SUBPROTOCOL])
@@ -24612,7 +24663,8 @@ async fn handler_get_contract_code_bytes(
         &[],
         "contract_code_auth_required",
         "signed account headers are required to read contract artifacts",
-    )?;
+    )
+    .await?;
     let artifact_id = routing::parse_contract_artifact_path(&dataspace_id, &code_hash)?;
     admit_contract_artifact_read(&app, &headers, remote, &caller, artifact_id).await?;
     routing::handle_get_contract_code_bytes(app.state.clone(), artifact_id).await
@@ -26234,7 +26286,8 @@ async fn handler_post_multisig_spec(
         &uri,
         request.raw.as_ref(),
         &request.value.selector,
-    )?;
+    )
+    .await?;
     let response = if let Some(authority) = resolve_authority {
         crate::routing::handle_post_multisig_spec_for_authority(
             app.state.clone(),
@@ -26412,7 +26465,8 @@ async fn handler_post_multisig_proposals_query(
         &uri,
         request.raw.as_ref(),
         &request.value.selector,
-    )?;
+    )
+    .await?;
     let response = if let Some(authority) = resolve_authority {
         crate::routing::handle_post_multisig_proposals_query_for_authority(
             app.state.clone(),
@@ -26467,7 +26521,8 @@ async fn handler_post_multisig_proposals_resolve(
         &uri,
         request.raw.as_ref(),
         &request.value.selector,
-    )?;
+    )
+    .await?;
     let response = if let Some(authority) = resolve_authority {
         crate::routing::handle_post_multisig_proposals_resolve_for_authority(
             app.state.clone(),
@@ -30265,7 +30320,7 @@ async fn handler_connect_status(State(app): State<SharedAppState>) -> axum::resp
     JsonBody(redacted_status).into_response()
 }
 #[cfg(feature = "app_api")]
-fn require_signed_alias_request(
+async fn require_signed_alias_request(
     app: &SharedAppState,
     headers: &axum::http::HeaderMap,
     method: &axum::http::Method,
@@ -30281,10 +30336,11 @@ fn require_signed_alias_request(
         "alias_auth_required",
         "signed account headers are required",
     )
+    .await
 }
 #[cfg(feature = "app_api")]
 #[allow(clippy::too_many_arguments)]
-fn require_signed_account_request(
+async fn require_signed_account_request(
     app: &SharedAppState,
     headers: &axum::http::HeaderMap,
     method: &axum::http::Method,
@@ -30293,32 +30349,15 @@ fn require_signed_account_request(
     error_code: &'static str,
     error_message: &'static str,
 ) -> Result<AccountId, Error> {
-    let authentication_owner =
-        match crate::history_producer::HistoryProducerOwner::authentication_read(app) {
-            Ok(owner) => owner,
-            Err(error) => {
-                return Err(error);
-            }
-        };
-
     // Required header-auth reads participate in the same owner retries as
     // optional visibility reads. A cached unsigned request remains unsigned;
     // the required-auth check below still refuses it.
-    let verified = match routed_read_canonical_auth() {
-        Some(verified) => verified,
-        None => {
-            let verified = crate::app_auth::verify_canonical_network_request(
-                &app.state,
-                app.state.network_id_ref(),
-                headers,
-                crate::app_auth::CanonicalRequestParts { method, uri, body },
-                None,
-                authentication_owner.allocation_context(),
-            )?;
-            remember_routed_read_canonical_auth(verified.as_ref());
-            verified
-        }
-    };
+    let verified = authenticate_canonical_account_headers(
+        app,
+        headers,
+        crate::app_auth::CanonicalRequestParts { method, uri, body },
+    )
+    .await?;
     match verified {
         Some(verified) => Ok(verified.account),
         None => Err(Error::AppUnauthorized {
@@ -30328,7 +30367,7 @@ fn require_signed_account_request(
     }
 }
 #[cfg(feature = "app_api")]
-fn multisig_alias_resolve_authority(
+async fn multisig_alias_resolve_authority(
     app: &SharedAppState,
     headers: &axum::http::HeaderMap,
     method: &axum::http::Method,
@@ -30348,6 +30387,7 @@ fn multisig_alias_resolve_authority(
         "multisig_read_auth_required",
         "signed account headers are required to read multisig authority state",
     )
+    .await
     .map(Some)
 }
 #[cfg(feature = "app_api")]
@@ -30538,7 +30578,8 @@ async fn handler_alias_setup_plan(
         None,
     )
     .await?;
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref()).await?;
     let mut request: AliasSetupPlanRequestV1 =
         norito::json::from_slice(body.as_ref()).map_err(|error| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -30938,7 +30979,8 @@ async fn handler_alias_lease_renew_plan(
         None,
     )
     .await?;
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref()).await?;
     let request: AliasLeaseRenewPlanRequestV1 =
         norito::json::from_slice(body.as_ref()).map_err(|error| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -31079,7 +31121,8 @@ async fn handler_alias_auto_renew_plan(
         None,
     )
     .await?;
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref()).await?;
     let request: AliasAutoRenewPlanRequestV1 =
         norito::json::from_slice(body.as_ref()).map_err(|error| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -31224,7 +31267,8 @@ async fn handler_alias_resolve(
         &uri,
         body.as_ref(),
         "alias_resolve",
-    )?;
+    )
+    .await?;
     let public_dataspace =
         torii_public_dataspace_ids(app.as_ref()).contains(&alias.label.dataspace);
     if !public_dataspace {
@@ -31291,7 +31335,7 @@ async fn handler_alias_resolve_index(
 ) -> Result<AxResponse, Error> {
     // An index enumerates bindings rather than naming one public mapping.
     // Authenticate before decoding it or selecting the caller's visible routes.
-    let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref()).await?;
     let request: routing::AliasResolveIndexRequestDto = decode_admitted_app_routed_read_json!(
         body.as_ref(),
         norito::json::from_slice(body.as_ref()).map_err(|err| {
@@ -31418,7 +31462,8 @@ async fn handler_alias_lookup_by_account(
         &uri,
         body.as_ref(),
         "alias_lookup_by_account",
-    )?;
+    )
+    .await?;
     if let Some(dataspace_id) = filtered_dataspace_id
         && !torii_public_dataspace_ids(app.as_ref()).contains(&dataspace_id)
     {
@@ -31608,7 +31653,7 @@ async fn recipient_lookup_access_gate(
     endpoint: &'static str,
 ) -> Result<Result<RecipientLookupAccess, AxResponse>, Error> {
     let visibility =
-        torii_visibility_account_from_headers(app, headers, method, uri, body, endpoint)?;
+        torii_visibility_account_from_headers(app, headers, method, uri, body, endpoint).await?;
     let Some(caller) = visibility.caller().cloned() else {
         return Ok(Err(torii_canonical_auth_required_response(
             "recipient_lookup_signature_required",
@@ -31892,7 +31937,8 @@ async fn handler_fee_sponsor_program_by_id(
         &uri,
         body.as_ref(),
         "v1/fee-sponsor-programs/by-id",
-    )?;
+    )
+    .await?;
     if !visibility.is_signed() {
         return Ok(torii_canonical_auth_required_response(
             "fee_sponsor_program_signature_required",
@@ -31962,7 +32008,8 @@ async fn handler_fee_sponsor_enrollment_by_id(
         &uri,
         body.as_ref(),
         "v1/fee-sponsor-enrollments/by-id",
-    )?;
+    )
+    .await?;
     let Some(caller) = visibility.caller() else {
         return Ok(torii_canonical_auth_required_response(
             "fee_sponsor_enrollment_signature_required",
@@ -32752,7 +32799,7 @@ async fn handler_contract_alias_resolve(
         None,
     )
     .await?;
-    require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
+    require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref()).await?;
     let request: routing::ContractAliasResolveRequestDto = decode_admitted_app_routed_read_json!(
         body.as_ref(),
         norito::json::from_slice(body.as_ref()).map_err(|err| {
@@ -32823,7 +32870,7 @@ async fn handler_ram_lfe_execute(
     )
     .await?;
     let caller =
-        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref())?;
+        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref()).await?;
     let request: routing::RamLfeExecuteRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|error| identifier_conversion_error(error.to_string()))?;
 
@@ -32987,7 +33034,7 @@ async fn handler_identifier_resolve(
 ) -> Result<AxResponse, Error> {
     check_access(&app, &headers, Some(remote.ip()), "v1/identifiers/resolve").await?;
     let caller =
-        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref())?;
+        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref()).await?;
     let request: routing::IdentifierResolveRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|error| identifier_conversion_error(error.to_string()))?;
 
@@ -33081,7 +33128,7 @@ async fn handler_identifier_claim_receipt(
     )
     .await?;
     let caller =
-        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref())?;
+        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref()).await?;
     let request: routing::IdentifierResolveRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|error| identifier_conversion_error(error.to_string()))?;
 
@@ -41178,6 +41225,15 @@ ingress,
             torii_proxy_receiver_memory_inflight,
             query_ingress_inflight,
             query_fanout_inflight,
+            app_routed_read_body_inflight: ByteWeightedMemoryPool::new(
+                query_memory.routed_read_body_pool_bytes,
+            )
+            .ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "query_fanout_max_retained_bytes",
+                    "routed-read body pool does not fit weighted semaphore geometry",
+                )
+            })?,
             sccp_history: std::sync::Mutex::new(
                 iroha_core::smartcontracts::isi::sccp::read::SccpHistoryNodeCache::new(),
             ),

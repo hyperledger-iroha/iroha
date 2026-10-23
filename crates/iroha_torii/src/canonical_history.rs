@@ -52,19 +52,20 @@ pub fn query_attempt_error(error: ExecutionAttemptError<QueryExecutionFail>) -> 
     crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(query_error))
 }
 
-/// Project a committed-history page walk's refusal (Core's transaction and movement pages).
+/// Project an off-chain page refusal without discarding its original source/decoder owner.
 ///
-/// Those walks report a source or decoder capacity deferral as `GasBudgetExceeded`, and
-/// their decoded graphs are charged to the current query owner, so capacity outcomes mark
-/// the owner exactly as [`query_attempt_error`] does.
-pub fn history_page_error(error: QueryExecutionFail) -> crate::Error {
-    if matches!(
-        error,
-        QueryExecutionFail::CapacityLimit | QueryExecutionFail::GasBudgetExceeded
-    ) {
-        note_owner_capacity_refusal();
+/// The page's physical source pool and cumulative decoder context both belong to its
+/// admitted query. Semantic page-work exhaustion is handled as a continuation in Core;
+/// original local resource refusals reach this boundary intact.
+pub fn history_page_error(error: ExecutionAttemptError<QueryExecutionFail>) -> crate::Error {
+    match error {
+        ExecutionAttemptError::Deferred(original) => {
+            query_attempt_error(ExecutionAttemptError::Deferred(original))
+        }
+        ExecutionAttemptError::Rejected(error) => {
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(error))
+        }
     }
-    crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(error))
 }
 
 fn note_owner_capacity_refusal() {

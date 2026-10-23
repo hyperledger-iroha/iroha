@@ -431,7 +431,14 @@ fn query_memory_geometry_splits_one_aggregate_pool_without_overcommit() {
     );
     let ingress_reserved = geometry.ingress.slot_bytes * geometry.ingress_slots.get();
     let fanout_reserved = geometry.fanout_working_set_bytes * geometry.fanout_slots.get();
-    assert!(ingress_reserved + fanout_reserved <= aggregate);
+    assert!(ingress_reserved + fanout_reserved + geometry.routed_read_body_pool_bytes <= aggregate);
+    assert_eq!(
+        geometry.routed_read_body_pool_bytes,
+        QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes)
+            .unwrap()
+            .route_body_bytes,
+        "the independent retained-body pool admits the maximum routed request"
+    );
     assert!(geometry.fanout_working_set_bytes < aggregate);
     assert!(
         query_memory_geometry(
@@ -464,7 +471,8 @@ fn query_memory_geometry_separates_complete_request_ceiling_from_concurrency() {
     assert_eq!(default.fanout_pool_bytes, 384_000_000);
     assert_eq!(
         default.ingress.slot_bytes * default.ingress_slots.get(),
-        128_000_000
+        (128_000_000 - default.routed_read_body_pool_bytes) / default.ingress_slots.get()
+            * default.ingress_slots.get()
     );
     assert!(default.ingress.phases_fit());
     let envelope = QueryFanoutMemoryEnvelope::for_body_admission(cap).unwrap();
@@ -558,7 +566,11 @@ fn query_memory_parser_geometry_matches_runtime_complete_phases() {
         config::QUERY_INGRESS_PHASE_UNITS_V1
     );
     for (aggregate, ceiling, content) in [
-        (20_000_000, 48_000_000, 64_000_000),
+        (
+            config::QUERY_FANOUT_MIN_POOL_BYTES_V1 as usize,
+            48_000_000,
+            64_000_000,
+        ),
         (64_000_000, 48_000_000, 64_000_000),
         (512_000_000, 48_000_000, 64_000_000),
         (512_000_000, 36_000_000, 64_000_000),

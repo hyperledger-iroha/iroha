@@ -31,7 +31,7 @@ fn query_fanout_pool_may_be_smaller_than_the_general_body_cap() {
         root.torii.max_content_len.get(),
     )
     .expect("the smaller aggregate still admits a complete working set");
-    assert_eq!(working_set, 15_000_000);
+    assert_eq!(working_set, 15_075_000);
     assert!(working_set < ceiling);
     assert_eq!(
         defaults::torii::query_ingress_body_phase_bytes(
@@ -39,13 +39,13 @@ fn query_fanout_pool_may_be_smaller_than_the_general_body_cap() {
             ceiling,
             root.torii.max_content_len.get(),
         ),
-        Some(25_526),
+        Some(8_398),
         "all four independent ingress slots remain larger than the native read chunk"
     );
     assert_eq!(
         aggregate / defaults::torii::QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1 + working_set,
         aggregate,
-        "one complete fanout and all ingress slots fit the smaller configured aggregate"
+        "one complete fanout, retained-body pool and all ingress slots fit the aggregate"
     );
 }
 #[test]

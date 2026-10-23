@@ -4,24 +4,41 @@ use http_body_util::BodyExt as _;
 struct AppRoutedReadHttpAdmission {
     reservation: QueryFanoutMemoryReservation,
     decode_plan: ToriiRoutedReadRequestDecodePlan,
-    /// Canonical-account authentication already verified for this HTTP request. A retry
-    /// with a larger owner reuses it, so the request's nonce is published only once.
-    canonical_auth: Arc<std::sync::OnceLock<Option<crate::app_auth::VerifiedCanonicalRequest>>>,
+    /// Fixed-size replay admission for this exact HTTP request. Each larger-owner
+    /// attempt verifies credentials again without publishing the same nonce twice.
+    canonical_auth:
+        Arc<std::sync::OnceLock<Option<crate::app_auth::CanonicalRequestReplayAdmission>>>,
 }
 tokio::task_local! {
     static APP_ROUTED_READ_HTTP_ADMISSION: AppRoutedReadHttpAdmission;
+    static APP_ROUTED_READ_DEADLINE: tokio::time::Instant;
 }
-/// Canonical-account authentication an earlier attempt of this routed read verified:
+/// Every wait in an HTTP read spends the same absolute request budget.
+fn query_admission_remaining(app: &AppState) -> Duration {
+    APP_ROUTED_READ_DEADLINE
+        .try_with(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()))
+        .unwrap_or(app.query_queue_timeout)
+}
+
+fn app_routed_read_deadline_response() -> Response {
+    torii_proxy_error_response(
+        StatusCode::TOO_MANY_REQUESTS,
+        "query_capacity_exceeded",
+        "The routed read did not complete within its admission deadline.",
+    )
+}
+/// Replay admission minted by an earlier authenticated attempt of this routed read:
 /// `Some(Some(_))` signed, `Some(None)` verified as unsigned, `None` not yet verified.
-fn routed_read_canonical_auth() -> Option<Option<crate::app_auth::VerifiedCanonicalRequest>> {
+fn routed_read_canonical_auth() -> Option<Option<crate::app_auth::CanonicalRequestReplayAdmission>>
+{
     APP_ROUTED_READ_HTTP_ADMISSION
         .try_with(|admission| admission.canonical_auth.get().cloned())
         .ok()
         .flatten()
 }
-/// Keep this routed read's verified authentication for any retry with a larger owner.
+/// Retain only a compact replay capability across owner changes, never decoded credentials.
 fn remember_routed_read_canonical_auth(
-    verified: Option<&crate::app_auth::VerifiedCanonicalRequest>,
+    verified: Option<&crate::app_auth::CanonicalRequestReplayAdmission>,
 ) {
     let _ = APP_ROUTED_READ_HTTP_ADMISSION.try_with(|admission| {
         let _ = admission.canonical_auth.set(verified.cloned());
@@ -559,6 +576,28 @@ async fn enforce_app_routed_read_http_admission(
     else {
         return next.run(request).await;
     };
+    let read = serve_app_routed_read_with_admission(app.clone(), request, next, endpoint);
+    // Zero retains the configured fail-fast admission contract; it is not a
+    // zero-duration execution deadline for otherwise immediately admitted reads.
+    if app.query_queue_timeout.is_zero() {
+        return read.await;
+    }
+    let deadline = tokio::time::Instant::now() + app.query_queue_timeout;
+    APP_ROUTED_READ_DEADLINE
+        .scope(deadline, async {
+            tokio::time::timeout_at(deadline, read)
+                .await
+                .unwrap_or_else(|_| app_routed_read_deadline_response())
+        })
+        .await
+}
+
+async fn serve_app_routed_read_with_admission(
+    app: SharedAppState,
+    request: Request<Body>,
+    next: Next,
+    endpoint: AppReadHttpRoute,
+) -> Response {
     if let Err(response) = endpoint.decoder.preflight_media(request.headers()) {
         return response;
     }
@@ -613,6 +652,18 @@ async fn enforce_app_routed_read_http_admission(
             )
         })
         .peekable();
+    // Acquire retention credit before execution credit, and keep it through
+    // every retry. Neither pool waits while holding credit needed by a request
+    // acquiring the pools in the opposite order.
+    let destination_bytes = if accepts_body {
+        preflight_declared_body_bytes.unwrap_or(body_limit)
+    } else {
+        0
+    };
+    let mut body_memory = match acquire_app_routed_read_body_memory(&app, destination_bytes).await {
+        Ok(memory) => Some(memory),
+        Err(response) => return response,
+    };
     let canonical_auth = Arc::new(std::sync::OnceLock::new());
     let (parts, unread_body) = request.into_parts();
     let mut unread_body = Some(unread_body);
@@ -691,7 +742,14 @@ async fn enforce_app_routed_read_http_admission(
             };
             match tokio::time::timeout(
                 endpoint.body_read_timeout(app.app_api_routed_read_body_read_timeout),
-                collect_app_routed_read_body(unread, body_limit, declared_body_bytes),
+                collect_app_routed_read_body(
+                    unread,
+                    body_limit,
+                    declared_body_bytes,
+                    body_memory
+                        .take()
+                        .expect("the unread body owns its retention credit"),
+                ),
             )
             .await
             {
@@ -725,9 +783,8 @@ async fn enforce_app_routed_read_http_admission(
             .scope(admission, next.clone().run(request))
             .await;
         if working_sets.peek().is_some() && app_routed_read_owner_refused(&response, &reservation) {
-            // Release this owner (and the refused response that may hold it) before
-            // waiting for the larger one: an attempt never holds one owner while it
-            // waits for another.
+            // Retained exact bytes keep their independent body-pool lease. Release
+            // execution credit before waiting for a larger execution owner.
             drop(response);
             drop(reservation);
             continue;
@@ -889,12 +946,20 @@ async fn collect_app_routed_read_body(
     body: Body,
     limit: usize,
     declared_bytes: Option<usize>,
+    memory: AppRoutedReadBodyMemory,
 ) -> Result<AdmittedAppRoutedReadBody, Response> {
     // A missing Content-Length owns the entire P-sized destination while the
     // stream is collected. A non-empty exact owner moves into the request
     // extension and replacement body; a zero-length owner is dropped only
     // after EOF and replaced by the canonical static empty `Bytes` value.
     let destination_bytes = declared_bytes.unwrap_or(limit);
+    if destination_bytes != memory.capacity_bytes {
+        return Err(torii_proxy_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_server_error",
+            "The routed-read body destination differs from its reserved memory.",
+        ));
+    }
     let storage = torii_allocate_exact_bytes(destination_bytes).map_err(|error| match error {
         norito::json::BoundedJsonError::AllocationFailed => torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -907,7 +972,11 @@ async fn collect_app_routed_read_body(
             destination_bytes,
         ),
     })?;
-    let mut owner = ExactAppRoutedReadBody { storage, len: 0 };
+    let mut owner = ExactAppRoutedReadBody {
+        storage,
+        len: 0,
+        _memory: memory,
+    };
     let mut body = body;
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|_| app_routed_read_body_error_response())?;
@@ -973,6 +1042,32 @@ fn app_routed_read_body_error_response() -> Response {
 struct ExactAppRoutedReadBody {
     storage: Box<[std::mem::MaybeUninit<u8>]>,
     len: usize,
+    // Declared last: storage is freed before its original pool credit returns.
+    _memory: AppRoutedReadBodyMemory,
+}
+
+struct AppRoutedReadBodyMemory {
+    capacity_bytes: usize,
+    _permit: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+async fn acquire_app_routed_read_body_memory(
+    app: &SharedAppState,
+    capacity_bytes: usize,
+) -> Result<AppRoutedReadBodyMemory, Response> {
+    let permit = if capacity_bytes == 0 {
+        None
+    } else {
+        Some(
+            acquire_query_pool_credit_from(app, &app.app_routed_read_body_inflight, capacity_bytes)
+                .await
+                .ok_or_else(app_routed_read_deadline_response)?,
+        )
+    };
+    Ok(AppRoutedReadBodyMemory {
+        capacity_bytes,
+        _permit: permit,
+    })
 }
 impl AsRef<[u8]> for ExactAppRoutedReadBody {
     #[allow(unsafe_code)]

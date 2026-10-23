@@ -2451,6 +2451,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
             query_memory.ingress_slots.get(),
         )),
         query_fanout_inflight,
+        app_routed_read_body_inflight: ByteWeightedMemoryPool::new(
+            query_memory.routed_read_body_pool_bytes,
+        )
+        .expect("default query memory geometry admits retained routed-read bodies"),
         sccp_history: std::sync::Mutex::new(
             iroha_core::smartcontracts::isi::sccp::read::SccpHistoryNodeCache::new(),
         ),

@@ -2947,8 +2947,8 @@ async fn can_read_all_ledger_data_expands_every_dataspace_read_route() {
 }
 
 #[cfg(feature = "app_api")]
-#[test]
-fn long_lived_dataspace_context_rechecks_permission_revocation() {
+#[tokio::test]
+async fn long_lived_dataspace_context_rechecks_permission_revocation() {
     let caller = checked_torii_test_account_id(0xdb, "derive revocable stream reader fixture key");
     let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
         world_with_account(&caller),
@@ -2967,6 +2967,7 @@ fn long_lived_dataspace_context_rechecks_permission_revocation() {
         &"/v1/contracts/activity".parse().unwrap(),
         "v1/contracts/activity",
     )
+    .await
     .expect("unsigned one-shot admission");
     assert!(
         !one_shot

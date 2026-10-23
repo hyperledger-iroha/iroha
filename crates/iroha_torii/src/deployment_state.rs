@@ -335,7 +335,8 @@ pub async fn handler_contract_deployment_state(
         body.as_ref(),
         "contract_deployment_state_auth_required",
         "canonical signed account headers are required to read contract deployment state",
-    )?;
+    )
+    .await?;
     let request: ContractDeploymentStateRequestDto =
         match super::decode_current_app_routed_read_json(body.as_ref()) {
             Some(Ok(request)) => request,

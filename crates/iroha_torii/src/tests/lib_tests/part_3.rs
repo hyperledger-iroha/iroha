@@ -387,6 +387,7 @@ async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_
         &body,
         "alias_lookup_by_account",
     )
+    .await
     .expect("original signed caller");
     let routes = torii_target_account_routes(app.as_ref(), &authority).unwrap();
     let (allowed, denied) =
@@ -1325,6 +1326,7 @@ async fn identifier_owner_nonce_is_exact_lowerhex_nonzero_and_bounded() {
                 &uri.parse().unwrap(),
                 &body
             )
+            .await
             .is_err()
         );
     }

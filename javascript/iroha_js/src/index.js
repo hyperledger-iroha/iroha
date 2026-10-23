@@ -246,6 +246,8 @@ export {
   buildCanonicalRequestHeaders,
   buildCanonicalJsonRequest,
   withCanonicalReadRetry,
+  CANONICAL_READ_ATTEMPT_TIMEOUT_MS,
+  CANONICAL_READ_TOTAL_TIMEOUT_MS,
 } from "./canonicalRequest.js";
 export {
   BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1,

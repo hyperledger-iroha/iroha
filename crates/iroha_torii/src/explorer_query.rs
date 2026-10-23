@@ -445,7 +445,8 @@ pub async fn get(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let caller =
-        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/explorer")?;
+        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/explorer")
+            .await?;
     let query = list_query_from_query_string(uri.query())?;
     execute(&app, &headers, remote.ip(), &uri, caller, query).await
 }
@@ -465,7 +466,8 @@ pub async fn post(
         &uri,
         body.as_ref(),
         "v1/explorer/query",
-    )?;
+    )
+    .await?;
     let plan = match torii_routed_read_request_decode_plan(&app) {
         Ok(plan) => plan,
         Err(response) => return Ok(response),

@@ -1943,6 +1943,13 @@ fn native_ingress_app_with_config_for_test(
     let validator = prepared.validator_keys[0].clone();
     let chain =
         CertifiedTestChain::from_prepared(prepared).expect("execute signed native ingress genesis");
+    native_ingress_app_from_chain_for_test(&chain, validator)
+}
+
+fn native_ingress_app_from_chain_for_test(
+    chain: &iroha_core::sumeragi::test_chain::CertifiedTestChain,
+    validator: KeyPair,
+) -> SharedAppState {
     let mut app = mk_app_state_for_tests();
     let unique = Arc::get_mut(&mut app).unwrap();
     unique.chain_id = Arc::new(chain.state().view().chain_id().clone());
@@ -4391,82 +4398,9 @@ async fn ledger_state_endpoints_reject_zero_and_uncommitted_heights() {
 }
 include!("committed_network_proof_support.rs");
 
-// A routed read starts with an owner sized from its request, and a committed-history page
-// decodes its carriers under that owner's grant. Core's page walks report the decoder's refusal
-// as GasBudgetExceeded, so the page must mark the owner for the routed-read layer to serve it
-// again with a larger one (on Taira, POST /v1/transactions/query with limit 20 answered 429).
-// This runs the validator-local collection read under the configured owner, which admits every
-// page; the refused reads find no frame credit for the walk's first carrier, the same capacity
-// outcome (GasBudgetExceeded) a spent decoder grant gives mid-walk.
 #[cfg(feature = "app_api")]
-#[test]
-fn history_page_capacity_refusals_mark_their_routed_owner() {
-    run_executed_block_wire_handler_test("history-page-owner", || async {
-        use crate::routing::collection_sources::{CollectionTarget, execute_collection_response};
-        let (app, _, _) = committed_network_proof_app_for_test();
-        let account = AccountId::new(
-            checked_torii_test_ed25519_keypair(0x39, "proof fixture input signer")
-                .public_key()
-                .clone(),
-        );
-        let visibility =
-            crate::routing::DataspaceReadVisibility::new(std::collections::BTreeSet::new(), true);
-        let telemetry = app.telemetry_handle();
-        for (history, target) in [
-            ("transactions", CollectionTarget::Transactions),
-            (
-                "account history",
-                CollectionTarget::AccountHistory(account.to_string()),
-            ),
-        ] {
-            for exhausted in [false, true] {
-                let owner = super::acquire_app_routed_read_http_memory(
-                    &app,
-                    app.query_fanout_working_set_bytes,
-                )
-                .await
-                .unwrap();
-                let frames = iroha_core::state::StateReadOnly::execution_budget(&app.state.view());
-                let frame_limit = frames.limit_bytes();
-                if exhausted {
-                    frames.set_limit_bytes(0);
-                }
-                let response = super::COLLECTION_READ_MEMORY_RESERVATION
-                    .scope(owner.clone(), async {
-                        let query =
-                            super::list_query_from_json(norito::json!({ "limit": 20 })).unwrap();
-                        execute_collection_response(
-                            Some(&app),
-                            &app.state,
-                            &target,
-                            query,
-                            &telemetry,
-                            &visibility,
-                        )
-                        .await
-                        .unwrap_or_else(IntoResponse::into_response)
-                    })
-                    .await;
-                frames.set_limit_bytes(frame_limit);
-                let expected = if exhausted {
-                    StatusCode::TOO_MANY_REQUESTS
-                } else {
-                    StatusCode::OK
-                };
-                assert_eq!(
-                    response.status(),
-                    expected,
-                    "{history}, exhausted: {exhausted}"
-                );
-                assert_eq!(
-                    owner.owner_limit_refused(),
-                    exhausted,
-                    "{history}, exhausted: {exhausted}"
-                );
-            }
-        }
-    });
-}
+#[path = "portal_history_http.rs"]
+mod portal_history_http;
 
 #[test]
 fn block_proof_handler_emits_norito() {
