@@ -14580,8 +14580,8 @@ pub struct StateView<'state> {
     pub chain_id: iroha_model_base::chain::ChainId,
     /// Exact transaction security domain for this view.
     pub network_id: iroha_data_model::NetworkId,
-    /// Creation timestamp to catch long-lived view guards.
-    created_at: Instant,
+    /// Lifetime diagnostic owner; keep last so snapshot fields release first.
+    created_at: StateViewLifetimeDiagnostic,
 }
 /// Lightweight state snapshot intended for query-heavy paths.
 ///
@@ -14776,9 +14776,24 @@ impl<'state> StateQueryView<'state> {
         &self.world
     }
 }
+/// Runs lifetime diagnostics only after all snapshot fields have been released.
+struct StateViewLifetimeDiagnostic(Instant);
+
+impl From<Instant> for StateViewLifetimeDiagnostic {
+    fn from(created_at: Instant) -> Self {
+        Self(created_at)
+    }
+}
+
+// Keep the outer destructor so public snapshot fields cannot be moved out and
+// outlive the private tail diagnostic owner. Rust drops fields in declaration order.
 impl Drop for StateView<'_> {
+    fn drop(&mut self) {}
+}
+
+impl Drop for StateViewLifetimeDiagnostic {
     fn drop(&mut self) {
-        let held = self.created_at.elapsed();
+        let held = self.0.elapsed();
         if held > Duration::from_secs(1) {
             iroha_logger::warn!(
                 held_ms = held.as_millis(),
@@ -14788,6 +14803,9 @@ impl Drop for StateView<'_> {
         }
     }
 }
+#[cfg(test)]
+#[path = "state/state_view_diagnostic_tests.rs"]
+mod state_view_diagnostic_tests;
 fn derive_peer_consensus_key_id(
     public_key: &PublicKey,
     role: ConsensusKeyRole,
@@ -31527,7 +31545,7 @@ impl State {
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
-                created_at: Instant::now(),
+                created_at: Instant::now().into(),
             });
         }
     }
