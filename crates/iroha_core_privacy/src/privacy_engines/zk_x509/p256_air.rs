@@ -489,7 +489,7 @@ pub fn build_zk_x509_p256_arithmetic_trace_v1(
         for coefficient in 0..P256_ARITHMETIC_ROWS_PER_OPERATION_V1 {
             let fixed = ZkX509P256ArithmeticFixedRowV1 {
                 operation: operation_number,
-                coefficient: coefficient as u8,
+                coefficient: u8::try_from(coefficient).expect("arithmetic coefficient fits u8"),
                 kind: operation.kind,
                 modulus: operation.modulus,
             };
@@ -813,15 +813,15 @@ fn push_stark_range_residues_v1<A: PolynomialAirFieldV1>(
 pub fn evaluate_p256_arithmetic_stark_residues_v1(
     current: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
     next: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
-    current_aux: &[F; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
-    next_aux: &[F; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
+    current_aux: [F; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
+    next_aux: [F; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
     fixed: &[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
 ) -> Result<Vec<F>, ZkX509P256AirErrorV1> {
     evaluate_p256_arithmetic_stark_residues_over_field_v1(
         current,
         next,
-        current_aux,
-        next_aux,
+        &current_aux,
+        &next_aux,
         fixed,
     )
 }
@@ -1086,10 +1086,12 @@ fn less_than_witness_v1(
     for index in 0..LIMBS {
         let raw = i32::from(value[index]) - i32::from(modulus[index]) - i32::from(borrow[index]);
         if raw < 0 {
-            difference[index] = (raw + RADIX as i32) as u16;
+            difference[index] =
+                u16::try_from(raw + i32::try_from(RADIX).expect("16-bit radix fits i32"))
+                    .expect("borrow-adjusted difference is a limb");
             borrow[index + 1] = 1;
         } else {
-            difference[index] = raw as u16;
+            difference[index] = u16::try_from(raw).expect("nonnegative difference is a limb");
         }
     }
     if borrow[LIMBS] != 1 {
@@ -1172,10 +1174,10 @@ fn add_be_v1(left: [u8; 32], right: [u8; 32]) -> [u8; 33] {
     let mut carry = 0_u16;
     for index in (0..32).rev() {
         let value = u16::from(left[index]) + u16::from(right[index]) + carry;
-        result[index + 1] = value as u8;
+        result[index + 1] = u8::try_from(value & 0xff).expect("masked byte");
         carry = value >> 8;
     }
-    result[0] = carry as u8;
+    result[0] = u8::try_from(carry).expect("byte addition carry is at most one");
     result
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1184,7 +1186,7 @@ fn add_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX509P25
     let mut carry = 0_u16;
     for index in (0..33).rev() {
         let value = u16::from(left[index]) + u16::from(right[index]) + carry;
-        result[index] = value as u8;
+        result[index] = u8::try_from(value & 0xff).expect("masked byte");
         carry = value >> 8;
     }
     if carry != 0 {
@@ -1202,10 +1204,11 @@ fn subtract_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX5
     for index in (0..33).rev() {
         let value = i16::from(left[index]) - i16::from(right[index]) - borrow;
         if value < 0 {
-            result[index] = (value + 256) as u8;
+            result[index] =
+                u8::try_from(value + 256).expect("borrow-adjusted difference is a byte");
             borrow = 1;
         } else {
-            result[index] = value as u8;
+            result[index] = u8::try_from(value & 0xff).expect("masked byte");
             borrow = 0;
         }
     }
@@ -1341,10 +1344,11 @@ mod tests {
             for index in (0..33).rev() {
                 let value = i16::from(sum[index]) - i16::from(modulus[index]) - borrow;
                 if value < 0 {
-                    result[index] = (value + 256) as u8;
+                    result[index] =
+                        u8::try_from(value + 256).expect("borrow-adjusted difference is a byte");
                     borrow = 1;
                 } else {
-                    result[index] = value as u8;
+                    result[index] = u8::try_from(value & 0xff).expect("masked byte");
                     borrow = 0;
                 }
             }
@@ -1524,16 +1528,12 @@ mod tests {
     fn arithmetic_is_differential_against_rustcrypto_p256() {
         let mut operations = Vec::new();
         for index in 1_u64..=48 {
-            let first_small = small(
-                index
-                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
-                    .rotate_left(index as u32 % 63),
-            );
-            let second_small = small(
-                index
-                    .wrapping_mul(0xd1b5_4a32_d192_ed03)
-                    .rotate_right(index as u32 % 61),
-            );
+            let first_small = small(index.wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(
+                u32::try_from(index & u64::from(u32::MAX)).expect("masked word") % 63,
+            ));
+            let second_small = small(index.wrapping_mul(0xd1b5_4a32_d192_ed03).rotate_right(
+                u32::try_from(index & u64::from(u32::MAX)).expect("masked word") % 61,
+            ));
             let first_base = if index % 3 == 0 {
                 subtract_small(P256_BASE_MODULUS_BE_V1, index)
             } else {
@@ -1743,7 +1743,7 @@ mod tests {
         let mut quotient = trace.clone();
         for row in &mut quotient.base {
             row[Q_START] = row[Q_START].add(F::ONE);
-            let value = row[Q_START].value() as u16;
+            let value = u16::try_from(row[Q_START].value() & 0xffff).expect("masked limb");
             write_bits_v1(&mut row[Q_BITS..Q_BITS + LIMB_BITS], value);
         }
         assert!(quotient.validate().is_err());
@@ -1775,8 +1775,8 @@ mod tests {
             let residues = evaluate_p256_arithmetic_stark_residues_v1(
                 &base[row],
                 &base[next],
-                &aux[row],
-                &aux[next],
+                aux[row],
+                aux[next],
                 &fixed[row],
             )?;
             if residues.len() != P256_ARITHMETIC_STARK_CONSTRAINT_COUNT_V1
@@ -1846,9 +1846,9 @@ mod tests {
         let topology = arithmetic_topology(&operations);
         let mut different_private_values = operations.clone();
         for (index, operation) in different_private_values.iter_mut().enumerate() {
-            operation.a = [index as u8; 32];
-            operation.b = [index.wrapping_mul(17) as u8; 32];
-            operation.c = [index.wrapping_mul(31) as u8; 32];
+            operation.a = [u8::try_from(index & 0xff).expect("masked byte"); 32];
+            operation.b = [u8::try_from(index.wrapping_mul(17) & 0xff).expect("masked byte"); 32];
+            operation.c = [u8::try_from(index.wrapping_mul(31) & 0xff).expect("masked byte"); 32];
         }
         let changed_topology = arithmetic_topology(&different_private_values);
         assert_eq!(topology, changed_topology);
@@ -1873,16 +1873,16 @@ mod tests {
         let rejects = |base: &[[F; P256_ARITHMETIC_BASE_WIDTH_V1]]| {
             (0..trace_size).any(|row| {
                 let next = (row + 1) % trace_size;
-                match evaluate_p256_arithmetic_stark_residues_v1(
+                evaluate_p256_arithmetic_stark_residues_v1(
                     &base[row],
                     &base[next],
-                    &aux[row],
-                    &aux[next],
+                    aux[row],
+                    aux[next],
                     &fixed[row],
-                ) {
-                    Ok(residues) => residues.iter().any(|residue| *residue != F::ZERO),
-                    Err(_) => true,
-                }
+                )
+                .map_or(true, |residues| {
+                    residues.iter().any(|residue| *residue != F::ZERO)
+                })
             })
         };
         for column in 0..P256_ARITHMETIC_BASE_WIDTH_V1 {
@@ -1908,7 +1908,7 @@ mod tests {
         let mut bad_aux = zero_aux;
         bad_aux[0] = F::ONE;
         let residues = evaluate_p256_arithmetic_stark_residues_v1(
-            &base[0], &base[1], &bad_aux, &zero_aux, &fixed[0],
+            &base[0], &base[1], bad_aux, zero_aux, &fixed[0],
         )
         .expect("canonical nonzero auxiliary field");
         assert!(residues.iter().any(|residue| *residue != F::ZERO));
@@ -1918,8 +1918,8 @@ mod tests {
             evaluate_p256_arithmetic_stark_residues_v1(
                 &noncanonical,
                 &base[1],
-                &zero_aux,
-                &zero_aux,
+                zero_aux,
+                zero_aux,
                 &fixed[0],
             ),
             Err(ZkX509P256AirErrorV1::Constraint)

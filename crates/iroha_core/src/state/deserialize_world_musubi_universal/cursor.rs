@@ -13,6 +13,8 @@ use iroha_data_model::musubi::{
 };
 use std::cmp::Ordering;
 
+type IdentifiedRow<'a, Identity, K, V, E> = Result<(Identity, &'a K, &'a V), E>;
+
 /// Access to original row identities without imposing a borrow on retained scratch.
 pub(in crate::state) trait UniversalSource {
     /// Original physical source refusal.
@@ -30,7 +32,13 @@ pub(in crate::state) trait UniversalSource {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<(Self::Package, &MusubiPackageIdV1, &MusubiPackageRecordV1), Self::Error>,
+            Item = IdentifiedRow<
+                '_,
+                Self::Package,
+                MusubiPackageIdV1,
+                MusubiPackageRecordV1,
+                Self::Error,
+            >,
         >,
         Self::Error,
     >;
@@ -39,12 +47,11 @@ pub(in crate::state) trait UniversalSource {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<
-                (
-                    Self::Version,
-                    &MusubiReleaseIdV1,
-                    &MusubiResolverReleaseRowV1,
-                ),
+            Item = IdentifiedRow<
+                '_,
+                Self::Version,
+                MusubiReleaseIdV1,
+                MusubiResolverReleaseRowV1,
                 Self::Error,
             >,
         >,
@@ -98,7 +105,13 @@ impl<'cut, W: MusubiRead> UniversalSource for BorrowedUniversalSource<'cut, W> {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<(Self::Package, &MusubiPackageIdV1, &MusubiPackageRecordV1), Self::Error>,
+            Item = IdentifiedRow<
+                '_,
+                Self::Package,
+                MusubiPackageIdV1,
+                MusubiPackageRecordV1,
+                Self::Error,
+            >,
         >,
         Self::Error,
     > {
@@ -111,12 +124,11 @@ impl<'cut, W: MusubiRead> UniversalSource for BorrowedUniversalSource<'cut, W> {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<
-                (
-                    Self::Version,
-                    &MusubiReleaseIdV1,
-                    &MusubiResolverReleaseRowV1,
-                ),
+            Item = IdentifiedRow<
+                '_,
+                Self::Version,
+                MusubiReleaseIdV1,
+                MusubiResolverReleaseRowV1,
                 Self::Error,
             >,
         >,
@@ -554,15 +566,15 @@ impl<P: Copy, V: Copy> UniversalValidation<P, V> {
                     )
                     .into());
                 }
-                if let Some(maximum_row_revision) = revision.maximum {
-                    if entry.index_revision < maximum_row_revision {
-                        return Err(invalid(
-                            cut,
-                            DIRECTORY,
-                            "directory entry predates its package resolver rows",
-                        )
-                        .into());
-                    }
+                if let Some(maximum_row_revision) = revision.maximum
+                    && entry.index_revision < maximum_row_revision
+                {
+                    return Err(invalid(
+                        cut,
+                        DIRECTORY,
+                        "directory entry predates its package resolver rows",
+                    )
+                    .into());
                 }
                 // A validated row has exactly this package's canonical selector. Marking
                 // its borrowed accumulator avoids allocating a selector for the final

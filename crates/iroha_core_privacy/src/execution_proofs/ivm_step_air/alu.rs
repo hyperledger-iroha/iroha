@@ -57,9 +57,9 @@ pub(super) fn append_residues(
     arithmetic_owner: F,
 ) {
     let start = out.len();
-    let [is_sub, is_and, is_or, is_xor] = selectors;
-    let is_bitwise = is_and.add(is_or).add(is_xor);
-    let is_add = arithmetic_owner.sub(is_sub).sub(is_bitwise);
+    let [is_sub, is_and, inclusive_or, exclusive_or] = selectors;
+    let is_bitwise = is_and.add(inclusive_or).add(exclusive_or);
+    let addition = arithmetic_owner.sub(is_sub).sub(is_bitwise);
     for limb in 0..4 {
         out.push(bit(bank[TRANSFER + limb]));
         out.push(is_bitwise.mul(bank[TRANSFER + limb]));
@@ -81,13 +81,13 @@ pub(super) fn append_residues(
         let outgoing = bank[TRANSFER + limb].mul(F(1 << 16));
         let add = left.add(right).add(incoming).sub(result).sub(outgoing);
         let sub = left.sub(right).sub(incoming).sub(result).add(outgoing);
-        out.push(is_add.mul(add).add(is_sub.mul(sub)));
+        out.push(addition.mul(add).add(is_sub.mul(sub)));
     }
     bitwise::append_residues(
         out,
         &bank[DIGITS..TRANSFER],
         sources,
-        [is_and, is_or, is_xor],
+        [is_and, inclusive_or, exclusive_or],
     );
     debug_assert_eq!(out.len() - start, CONSTRAINTS);
 }

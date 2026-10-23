@@ -476,15 +476,14 @@ impl<'kura> TotalDiskUsageMutation<'kura> {
             && self
                 .physical_children_remaining
                 .is_none_or(|remaining| remaining == 0)
+            && let Some(resources) = self.physical_resources.take()
         {
-            if let Some(resources) = self.physical_resources.take() {
-                match resources.finish() {
-                    Ok(()) => return true,
-                    Err(reason) => self
-                        .kura
-                        .resource_inventory
-                        .invalidate(physical_resource_mask(), reason),
-                }
+            match resources.finish() {
+                Ok(()) => return true,
+                Err(reason) => self
+                    .kura
+                    .resource_inventory
+                    .invalidate(physical_resource_mask(), reason),
             }
         }
         false
@@ -541,11 +540,11 @@ impl ResourceBatchChild<'_, '_> {
             && self.nested.publish_physical_resources()
         {
             self.nested.published = true;
-            if let Some(remaining) = self.owner.physical_children_remaining.as_mut() {
-                if let Some(next) = remaining.checked_sub(1) {
-                    *remaining = next;
-                    return;
-                }
+            if let Some(remaining) = self.owner.physical_children_remaining.as_mut()
+                && let Some(next) = remaining.checked_sub(1)
+            {
+                *remaining = next;
+                return;
             }
             self.owner.kura.resource_inventory.invalidate(
                 physical_resource_mask(),
@@ -568,11 +567,11 @@ impl ResourceChild<'_, '_> {
         if let Some(resources) = self.resources.take() {
             match resources.finish() {
                 Ok(()) => {
-                    if let Some(remaining) = self.owner.physical_children_remaining.as_mut() {
-                        if let Some(next) = remaining.checked_sub(1) {
-                            *remaining = next;
-                            return;
-                        }
+                    if let Some(remaining) = self.owner.physical_children_remaining.as_mut()
+                        && let Some(next) = remaining.checked_sub(1)
+                    {
+                        *remaining = next;
+                        return;
                     }
                     self.owner.kura.resource_inventory.invalidate(
                         physical_resource_mask(),

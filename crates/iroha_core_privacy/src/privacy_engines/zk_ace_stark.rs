@@ -155,12 +155,7 @@ fn air_public_transcript_parts_v1(
         destination,
         public_inputs.asset.aid_bytes().to_vec(),
         public_inputs.amount.to_be_bytes().to_vec(),
-        public_inputs
-            .verifier_key_id
-            .backend
-            .as_str()
-            .as_bytes()
-            .to_vec(),
+        public_inputs.verifier_key_id.backend.as_bytes().to_vec(),
         public_inputs.verifier_key_id.name.as_bytes().to_vec(),
     ])
 }
@@ -254,7 +249,7 @@ pub(crate) const CANONICAL_PROOF_BYTES_V1: usize = PROOF_WIRE_MAGIC_V1.len()
     + DEEP_OPENING_BYTES
     + SECURITY_LANES * ((FRI_ROUNDS + 1) * HASH_BYTES + TERMINAL_SIZE * EXTENSION_FIELD_BYTES)
     + QUERY_COUNT * QUERY_PROOF_BYTES;
-const _: () = assert!(QUERY_COUNT >= 64 && QUERY_COUNT % 8 == 0);
+const _: () = assert!(QUERY_COUNT >= 64 && QUERY_COUNT.is_multiple_of(8));
 const _: () = assert!(CANONICAL_PROOF_BYTES_V1 == 2_131_222);
 /// Hard ceiling enforced before the fixed-shape parser allocates proof vectors.
 pub(crate) const MAX_PROOF_BYTES: usize = CANONICAL_PROOF_BYTES_V1;
@@ -289,7 +284,7 @@ const TRACE_NEXT_STRIDE: usize = 1 << BLOWUP_LOG2;
 /// required classical soundness margin.
 #[doc(hidden)]
 pub const FRI_ROUNDS: usize = TRACE_LOG2 as usize - 1;
-const TERMINAL_LOG2: u8 = LDE_LOG2 - FRI_ROUNDS as u8;
+const TERMINAL_LOG2: u8 = LDE_LOG2 - (TRACE_LOG2 - 1);
 const TERMINAL_SIZE: usize = 1 << TERMINAL_LOG2;
 const TERMINAL_DEGREE_BOUND: usize = 2;
 const FRI_AFFINE_ORACLE_COUNT: usize = TRACE_WIDTH + 2 * SECURITY_LANES;
@@ -560,7 +555,7 @@ impl U576V1 {
             let product = u128::from(*limb)
                 .checked_mul(u128::from(multiplier))?
                 .checked_add(carry)?;
-            *limb = product as u64;
+            *limb = u64::try_from(product & u128::from(u64::MAX)).expect("low limb fits u64");
             carry = product >> 64;
         }
         (carry == 0).then_some(self)
@@ -609,7 +604,7 @@ impl U576V1 {
 fn compiled_fri_theorem_profile_v1() -> Result<FriTheoremProfileV1, ZkAceStarkError> {
     let lde_root = primitive_root(LDE_LOG2)?;
     let trace_root = primitive_root(TRACE_LOG2)?;
-    let domains_are_smooth_and_disjoint = LDE_SIZE % TRACE_SIZE == 0
+    let domains_are_smooth_and_disjoint = LDE_SIZE.is_multiple_of(TRACE_SIZE)
         && lde_root.pow((LDE_SIZE / TRACE_SIZE) as u128) == trace_root
         && F(FIELD_GENERATOR).pow(LDE_SIZE as u128) != F::ONE;
     Ok(FriTheoremProfileV1 {
@@ -675,8 +670,8 @@ fn validate_fri_theorem_profile_v1(profile: FriTheoremProfileV1) -> Result<(), Z
         .ok_or(ZkAceStarkError::ProfileMismatch)?;
     let query_denominator =
         U576V1::checked_pow_small(192, half_queries).ok_or(ZkAceStarkError::ProfileMismatch)?;
-    let query_error_is_below_2_pow_minus_133 =
-        profile.query_count % 2 == 0 && query_numerator.strictly_less_than(query_denominator);
+    let query_error_is_below_2_pow_minus_133 = profile.query_count.is_multiple_of(2)
+        && query_numerator.strictly_less_than(query_denominator);
     let rate_is_three_sixteenths = profile
         .code_degree_bound_exclusive
         .checked_mul(16)
@@ -1178,7 +1173,7 @@ fn replay_message_words() -> Vec<MessageWord> {
 
 fn append_poseidon_permutation(schedule: &mut Vec<ScheduleRow>, lane: usize) {
     for round in 0..POSEIDON_ROUNDS {
-        let full = round < POSEIDON_FULL_ROUNDS_HALF || round >= POSEIDON_FULL_ROUNDS_HALF + 57;
+        let full = !(POSEIDON_FULL_ROUNDS_HALF..POSEIDON_FULL_ROUNDS_HALF + 57).contains(&round);
         schedule.push(ScheduleRow {
             op: if full {
                 ScheduleOp::FullRound { lane, round }
@@ -1512,10 +1507,10 @@ fn build_trace_material(
         }
         let observed_output = row[STATE_OFFSET];
         trace_rows.push(row);
-        if let ScheduleOp::Output { output_index } = schedule_row.op {
-            if observed_output != public_outputs[output_index] {
-                return Err(ZkAceStarkError::WitnessRelation);
-            }
+        if let ScheduleOp::Output { output_index } = schedule_row.op
+            && observed_output != public_outputs[output_index]
+        {
+            return Err(ZkAceStarkError::WitnessRelation);
         }
         fixed_rows.push(fixed);
     }
@@ -2354,18 +2349,28 @@ fn deep_trace_interpolant(
         .mul(inverse_point_delta)
         .add(next.mul(x.sub(deep_point)).mul(inverse_point_delta.neg()))
 }
+#[derive(Clone, Copy)]
+struct DeepFriValuesV1<'a> {
+    point: E,
+    current: &'a [E],
+    next: &'a [E],
+    composition: E,
+}
 fn mix_deep_fri_opening(
     x: F,
     trace_row: &[F],
     composition: E,
     fri_mask: E,
-    deep_point: E,
-    deep_trace_current: &[E],
-    deep_trace_next: &[E],
-    deep_composition: E,
+    deep: DeepFriValuesV1<'_>,
     trace_mix: &[E],
     composition_mix: E,
 ) -> Result<E, ZkAceStarkError> {
+    let DeepFriValuesV1 {
+        point: deep_point,
+        current: deep_trace_current,
+        next: deep_trace_next,
+        composition: deep_composition,
+    } = deep;
     if trace_row.len() != TRACE_WIDTH
         || deep_trace_current.len() != TRACE_WIDTH
         || deep_trace_next.len() != TRACE_WIDTH
@@ -2429,13 +2434,16 @@ fn mix_fri_base(
     fri_mask: &[E],
     trace_lde: &[Vec<F>],
     composition: &[E],
-    deep_point: E,
-    deep_trace_current: &[E],
-    deep_trace_next: &[E],
-    deep_composition: E,
+    deep: DeepFriValuesV1<'_>,
     trace_mix: &[E],
     composition_mix: E,
 ) -> Result<Vec<E>, ZkAceStarkError> {
+    let DeepFriValuesV1 {
+        point: deep_point,
+        current: deep_trace_current,
+        next: deep_trace_next,
+        composition: deep_composition,
+    } = deep;
     if fri_mask.len() != LDE_SIZE
         || trace_lde.len() != TRACE_WIDTH
         || trace_lde.iter().any(|column| column.len() != LDE_SIZE)
@@ -2858,10 +2866,12 @@ pub(super) fn prove_zk_ace_stark_v1_with_rng<R: TryCryptoRng + ?Sized>(
             &fri_masks[lane].values,
             trace_lde,
             &compositions[lane],
-            deep_point,
-            &deep_trace_current,
-            &deep_trace_next,
-            deep_composition_values[lane],
+            DeepFriValuesV1 {
+                point: deep_point,
+                current: &deep_trace_current,
+                next: &deep_trace_next,
+                composition: deep_composition_values[lane],
+            },
             &trace_mix,
             composition_mix,
         )?;
@@ -2991,7 +3001,7 @@ fn verify_fri_query(
     let mut domain_shift = F(FIELD_GENERATOR);
     let mut domain_root = primitive_root(LDE_LOG2)?;
     let mut expected = expected_base_value;
-    for round in 0..FRI_ROUNDS {
+    for (round, beta) in lane_betas.iter().copied().enumerate() {
         let opening = &lane_query.rounds[round];
         let low = opening.low;
         let high = opening.high;
@@ -3025,7 +3035,6 @@ fn verify_fri_query(
             return Err(ZkAceStarkError::FriOpening);
         }
         let x = domain_shift.mul(domain_root.pow(low_index as u128));
-        let beta = lane_betas[round];
         expected = fri_fold_pair(low, high, beta, x)?;
         layer_index = low_index;
         layer_size = half;
@@ -3117,14 +3126,14 @@ pub(super) fn verify_zk_ace_stark_v1(
     }
     let deep_fixed = fixed_row_at_extension_point(&fixed_schedule, deep_point)?;
     let extension_public_outputs = public_outputs.map(E::from_base);
-    for lane in 0..SECURITY_LANES {
+    for (lane, lane_alphas) in alphas.iter().enumerate().take(SECURITY_LANES) {
         let expected_deep_composition = constraint_quotient_value(
             deep_point,
             &proof.deep_trace_current,
             &proof.deep_trace_next,
             &deep_fixed,
             &extension_public_outputs,
-            &alphas[lane],
+            lane_alphas,
         )?;
         if proof.deep_composition_values[lane] != expected_deep_composition {
             return Err(ZkAceStarkError::ConstraintOpening);
@@ -3212,10 +3221,12 @@ pub(super) fn verify_zk_ace_stark_v1(
                 &current,
                 composition_values[lane],
                 fri_mask_values[lane],
-                deep_point,
-                &proof.deep_trace_current,
-                &proof.deep_trace_next,
-                proof.deep_composition_values[lane],
+                DeepFriValuesV1 {
+                    point: deep_point,
+                    current: &proof.deep_trace_current,
+                    next: &proof.deep_trace_next,
+                    composition: proof.deep_composition_values[lane],
+                },
                 &trace_mix[lane],
                 composition_mix[lane],
             )?;
@@ -3510,10 +3521,7 @@ mod tests {
         );
         assert_eq!(parts[12], public_inputs.asset.aid_bytes());
         assert_eq!(parts[13], public_inputs.amount.to_be_bytes());
-        assert_eq!(
-            parts[14],
-            public_inputs.verifier_key_id.backend.as_str().as_bytes()
-        );
+        assert_eq!(parts[14], public_inputs.verifier_key_id.backend.as_bytes());
         assert_eq!(parts[15], public_inputs.verifier_key_id.name.as_bytes());
     }
     #[test]
@@ -4073,8 +4081,9 @@ mod tests {
     }
     #[test]
     fn every_public_relation_binding_rejects_replay() {
+        type WitnessMutation = (&'static str, fn(&mut ZkAceAirRelationInputsV1));
         let (public_inputs, proof) = fixture();
-        let mutations: [(&str, fn(&mut ZkAceAirRelationInputsV1)); 14] = [
+        let mutations: [WitnessMutation; 14] = [
             ("version", |value| value.version ^= 1),
             ("identity", |value| value.identity_commitment[0] ^= 1),
             ("transfer", |value| value.tx_digest[0] ^= 1),

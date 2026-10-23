@@ -350,10 +350,10 @@ pub fn map_vm_error_with_context_to_validation(
                 message,
             });
         }
-        match fault {
-            Some(fault) => ValidationFail::IvmFault(fault),
-            None => program_admission_error(error.into_unmetered()),
-        }
+        fault.map_or_else(
+            || program_admission_error(error.into_unmetered()),
+            |fault| ValidationFail::IvmFault(fault),
+        )
     })
 }
 #[cfg(test)]

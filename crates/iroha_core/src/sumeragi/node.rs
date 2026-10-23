@@ -372,17 +372,20 @@ impl NodeHandle {
         deadline: Option<Instant>,
     ) -> Option<(iroha_data_model::sumeragi::BeaconHorizonStatusV1, bool)> {
         let generation = self.state.state_view_generation();
-        let observed = match deadline {
-            Some(deadline) => self.beacon_readiness.read_until(
-                generation,
-                status.height,
-                status.applied_height,
-                deadline,
-            ),
-            None => self
-                .beacon_readiness
-                .read(generation, status.height, status.applied_height),
-        }?;
+        let observed = deadline.map_or_else(
+            || {
+                self.beacon_readiness
+                    .read(generation, status.height, status.applied_height)
+            },
+            |deadline| {
+                self.beacon_readiness.read_until(
+                    generation,
+                    status.height,
+                    status.applied_height,
+                    deadline,
+                )
+            },
+        )?;
         (self.state.state_view_generation() == generation).then_some(observed)
     }
 
@@ -527,6 +530,10 @@ fn node_policy_error(error: crate::execution_attempt::ExecutionAttemptError<Stri
 ///
 /// # Errors
 /// See [`NodeError`].
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, NodeError> {
     let NodeInputs {
         state,
@@ -591,6 +598,10 @@ impl core::fmt::Debug for Prepared {
 ///
 /// # Errors
 /// See [`NodeError`].
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     let mut prepared = prepare_genesis(inputs, None)?;
     let state = &prepared.state;
@@ -625,12 +636,16 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             height: stored.max(GENESIS_HEIGHT),
             reason: ReplayError::StateRoot(reason),
         })?;
-    admit_window(&state, &crypto, stored.max(GENESIS_HEIGHT)).map_err(NodeError::Input)?;
+    admit_window(state, crypto, stored.max(GENESIS_HEIGHT)).map_err(NodeError::Input)?;
     Ok(prepared)
 }
 
 // One original signed-genesis/bootstrap and executor owner. Isolated replay changes
 // only physical destinations and local observations; all execution checks are shared.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn prepare_genesis(
     inputs: PrepareInputs,
     read_only_lane_root: Option<(PathBuf, u64)>,
@@ -664,53 +679,48 @@ fn prepare_genesis(
         iroha_crypto::Hash,
         Hash32,
         iroha_data_model::block::consensus::SumeragiRootScope,
-    ) = match startup::stored_genesis(&state)? {
-        Some((block, certificate, stored)) => {
-            if let Some(supplied) = &genesis
-                && startup::core_hash_of(supplied) != stored.block_hash
-            {
-                return Err(NodeError::Input(
-                    "the supplied genesis differs from the one Kura holds".into(),
-                ));
-            }
-            let fingerprint =
-                consensus_configuration_fingerprint(&block).map_err(node_policy_error)?;
-            let (instance, root_scope) =
-                root_identity(&block, &chain_id).map_err(node_policy_error)?;
-            (
-                startup::apply_genesis_with_fastpq_target(
-                    &state,
-                    block,
-                    &genesis_account,
-                    consensus_mode,
-                    Some(&certificate),
-                    read_only_lane_root.as_ref().map(|(_, height)| *height),
-                )?,
-                fingerprint,
-                instance,
-                root_scope,
-            )
+    ) = if let Some((block, certificate, stored)) = startup::stored_genesis(&state)? {
+        if let Some(supplied) = &genesis
+            && startup::core_hash_of(supplied) != stored.block_hash
+        {
+            return Err(NodeError::Input(
+                "the supplied genesis differs from the one Kura holds".into(),
+            ));
         }
-        None => {
-            let genesis = genesis.ok_or(NodeError::NoGenesis)?;
-            let fingerprint =
-                consensus_configuration_fingerprint(&genesis).map_err(node_policy_error)?;
-            let (instance, root_scope) =
-                root_identity(&genesis, &chain_id).map_err(node_policy_error)?;
-            (
-                startup::apply_genesis_with_fastpq_target(
-                    &state,
-                    genesis,
-                    &genesis_account,
-                    consensus_mode,
-                    None,
-                    read_only_lane_root.as_ref().map(|(_, height)| *height),
-                )?,
-                fingerprint,
-                instance,
-                root_scope,
-            )
-        }
+        let fingerprint = consensus_configuration_fingerprint(&block).map_err(node_policy_error)?;
+        let (instance, root_scope) = root_identity(&block, &chain_id).map_err(node_policy_error)?;
+        (
+            startup::apply_genesis_with_fastpq_target(
+                &state,
+                block,
+                &genesis_account,
+                consensus_mode,
+                Some(&certificate),
+                read_only_lane_root.as_ref().map(|(_, height)| *height),
+            )?,
+            fingerprint,
+            instance,
+            root_scope,
+        )
+    } else {
+        let genesis = genesis.ok_or(NodeError::NoGenesis)?;
+        let fingerprint =
+            consensus_configuration_fingerprint(&genesis).map_err(node_policy_error)?;
+        let (instance, root_scope) =
+            root_identity(&genesis, &chain_id).map_err(node_policy_error)?;
+        (
+            startup::apply_genesis_with_fastpq_target(
+                &state,
+                genesis,
+                &genesis_account,
+                consensus_mode,
+                None,
+                read_only_lane_root.as_ref().map(|(_, height)| *height),
+            )?,
+            fingerprint,
+            instance,
+            root_scope,
+        )
     };
     let genesis_epoch = {
         let view = state.view();
@@ -847,10 +857,14 @@ fn prepare_genesis(
 }
 
 impl Prepared {
-    /// Bind SoraFS capture after startup reconciliation and before consensus can advance.
+    /// Bind `SoraFS` capture after startup reconciliation and before consensus can advance.
     ///
     /// # Errors
     /// The exact committed tip cannot be captured or this executor is already bound.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub fn attach_finalized_archives(
         &self,
         archives: super::executor::FinalizedArchives,
@@ -877,6 +891,10 @@ impl Prepared {
     ///
     /// # Errors
     /// See [`NodeError`].
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub fn start<N: Net + 'static>(self, inputs: StartInputs<N>) -> Result<RunningNode, NodeError> {
         let Self {
             state,
@@ -1016,7 +1034,7 @@ impl Prepared {
                 global_instance: instance,
                 bodies_dir: config.bodies_dir.clone(),
                 key_pair: key_pair.clone(),
-                local: config.local.clone(),
+                local: config.local,
                 driver,
                 network: *state.network_id_ref(),
                 chain_id,
@@ -1083,6 +1101,10 @@ impl Prepared {
     /// # Errors
     /// See [`NodeError`]; subscription and ingress-thread errors retain their
     /// concrete owners as [`NodeError::Subscription`] and [`NodeError::IngressThread`].
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub fn start_on_network(
         self,
         inputs: StartInputs<P2pNet<IrohaNetwork>>,
@@ -1580,7 +1602,7 @@ mod tests {
         }
     }
 
-    struct Chain {
+    struct NodeTestChain {
         genesis: SignedBlock,
         keys: Vec<KeyPair>,
         chain_id: ChainId,
@@ -1599,7 +1621,7 @@ mod tests {
     }
 
     /// A chain of `validators` with a 100 ms block time and the given idle interval.
-    fn chain(validators: u8, payload_retry_interval_ms: u64) -> Chain {
+    fn chain(validators: u8, payload_retry_interval_ms: u64) -> NodeTestChain {
         chain_with(validators, payload_retry_interval_ms, |_| Vec::new())
     }
 
@@ -1609,7 +1631,7 @@ mod tests {
         validators: u8,
         payload_retry_interval_ms: u64,
         extra: impl FnOnce(&[KeyPair]) -> Vec<Parameter>,
-    ) -> Chain {
+    ) -> NodeTestChain {
         // The global logger's actor must outlive each synchronous node fixture.
         // Keep its actual reactor alive even when this is the first selected test.
         static LOGGER_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> =
@@ -1715,7 +1737,7 @@ mod tests {
             None,
         )
         .expect("original signed genesis policies derived from node execution configuration");
-        Chain {
+        NodeTestChain {
             genesis,
             keys,
             chain_id,
@@ -1756,7 +1778,7 @@ mod tests {
         dir: tempfile::TempDir,
     }
 
-    fn disks(chain: &Chain) -> Vec<Disk> {
+    fn disks(chain: &NodeTestChain) -> Vec<Disk> {
         (0..chain.keys.len())
             .map(|_| Disk {
                 kura: Kura::blank_kura_for_testing(),
@@ -1772,7 +1794,7 @@ mod tests {
         queue: Arc<Queue>,
     }
 
-    fn start_all(chain: &Chain, disks: &[Disk], fresh: bool) -> Vec<Validator> {
+    fn start_all(chain: &NodeTestChain, disks: &[Disk], fresh: bool) -> Vec<Validator> {
         let registry = Arc::new(Registry::default());
         let validators = disks
             .iter()
@@ -2030,7 +2052,7 @@ mod tests {
     /// Submit a transaction to every validator's queue (the transaction gossip's job in the
     /// node) and tell the drivers.
     fn submit(
-        chain: &Chain,
+        chain: &NodeTestChain,
         validators: &[Validator],
         message: &str,
     ) -> HashOf<TransactionEntrypoint> {
@@ -2039,7 +2061,7 @@ mod tests {
 
     /// [`submit`] signed by `key`'s account.
     fn submit_as(
-        chain: &Chain,
+        chain: &NodeTestChain,
         validators: &[Validator],
         key: &KeyPair,
         message: &str,

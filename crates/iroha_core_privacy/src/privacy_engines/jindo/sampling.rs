@@ -207,7 +207,7 @@ where
         *coefficient = i128::from(sample_discrete_gaussian_v1(SignedQ128V1::ZERO, width, rng)?);
     }
     Ok(JindoRnsPolynomialV1::from_balanced_coefficients(
-        *coefficients,
+        &coefficients,
         moduli,
     ))
 }
@@ -223,7 +223,7 @@ where
         *coefficient = i128::from(sample_bounded_u64_v1(JINDO_ENCODING_BASE_V1, rng)?);
     }
     Ok(JindoRnsPolynomialV1::from_balanced_coefficients(
-        *coefficients,
+        &coefficients,
         JINDO_INNER_MODULI_V1,
     ))
 }
@@ -243,7 +243,7 @@ where
             i128::from(sample_bounded_u64_v1(range, rng)?) - i128::from(JINDO_ENCODING_BASE_V1);
     }
     Ok(JindoRnsPolynomialV1::from_balanced_coefficients(
-        *coefficients,
+        &coefficients,
         JINDO_INNER_MODULI_V1,
     ))
 }

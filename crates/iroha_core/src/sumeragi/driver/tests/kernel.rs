@@ -275,7 +275,7 @@ fn barrier_and_ordered_persistence() {
         1,
         Hash32([0xa0; 32]),
         Hash32([0xa1; 32]),
-        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+        &iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
     );
     let send = |h: u64| Action::Broadcast {
         to: vec![vals.key(0), vals.key(1)],
@@ -381,7 +381,7 @@ fn served_bodies_become_local_events() {
         1,
         Hash32([0xa0; 32]),
         Hash32([0xa1; 32]),
-        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+        &iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
     );
     kernel.complete(
         0,
@@ -428,7 +428,7 @@ fn serving_is_bounded_and_the_nodes_fetch_goes_first() {
     );
     assert!(backlog.serve_dropped >= 700, "{backlog:?}");
     // A CommitQC of height 1 whose body the node lacks.
-    let b1 = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), vec![1, 2, 3]);
+    let b1 = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), &vec![1, 2, 3]);
     let qc = vals.qc(
         VoteKind::Commit,
         &INSTANCE,
@@ -606,7 +606,7 @@ fn publication_recovery_halts_before_poll_and_preserves_safety_persistence() {
         1,
         Hash32([0xa0; 32]),
         Hash32([0xa1; 32]),
-        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+        &iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
     );
     let result = Hash32([0x31; 32]);
     kernel.route(vec![Action::CommitBlock {

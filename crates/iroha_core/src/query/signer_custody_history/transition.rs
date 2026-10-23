@@ -12,12 +12,13 @@ use sorafs_manifest::signer::{
 };
 
 #[derive(Clone, Copy)]
-pub(crate) enum ControlAction<'a> {
+pub enum ControlAction<'a> {
     Configure(&'a [u8]),
     Enroll(&'a [u8]),
     Revoke { signer: bool, attester: bool },
 }
-pub(crate) struct ControlTransition<'a> {
+#[derive(Clone, Copy)]
+pub struct ControlTransition<'a> {
     pub(crate) deployment: &'a str,
     pub(crate) expected_revision: u64,
     pub(crate) expected_digest: [u8; 32],
@@ -67,7 +68,7 @@ fn prepare_keys<P: CustodyPurpose>(
     Ok(paths)
 }
 /// Check finite revision capacity before additional purpose-owned admission work.
-pub(crate) fn control_revision<P: CustodyPurpose>(
+pub fn control_revision<P: CustodyPurpose>(
     transition: &ControlTransition<'_>,
 ) -> Result<u64, HistoryError> {
     let revision = transition
@@ -84,7 +85,7 @@ pub(crate) fn control_revision<P: CustodyPurpose>(
 }
 
 /// Prepare an entire control transition without publishing any native state.
-pub(crate) fn prepare_control<P: CustodyPurpose>(
+pub fn prepare_control<P: CustodyPurpose>(
     tx: &StateTransaction<'_, '_>,
     authority: &AccountId,
     current: Option<&NativeControl<P>>,

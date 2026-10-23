@@ -683,7 +683,7 @@ pub(crate) fn credit_collected_fee(
         .map_err(|error| {
             error_attempt_transaction_error(
                 stx,
-                error.map_rejection(crate::validation_fee::admission_rejection),
+                error.map_rejection(|error| crate::validation_fee::admission_rejection(&error)),
             )
         })?
         .ok_or_else(|| {

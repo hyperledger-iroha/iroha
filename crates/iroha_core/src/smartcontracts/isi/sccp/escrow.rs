@@ -173,14 +173,34 @@ pub fn precheck_release(
     to: &AccountId,
     amount: u128,
 ) -> Result<(), Error> {
-    let escrow = escrow_asset(&*state_transaction.world, network)?;
-    let destination = AssetId::of(escrow.definition().clone(), to.clone());
-    asset_isi::precheck_sccp_escrow_release(
-        state_transaction,
-        &escrow,
-        &destination,
-        &xor_quantity(amount)?,
-    )
+    precheck_releases(state_transaction, network, &[Some((to, amount)), None])
+        .map_err(|(_, error)| error)
+}
+
+/// Check the ordered nonzero credits of one settlement before either moves money.
+/// Inbound settlement supplies at most two credits after coalescing a self fee sink;
+/// refunds use one. The fixed slots borrow accounts and cannot contain more than two
+/// credits. A refusal retains its occupied-credit index for the caller's pending reason.
+pub(super) fn precheck_releases(
+    state_transaction: &StateTransaction<'_, '_>,
+    network: SccpNetworkV1,
+    credits: &[Option<(&AccountId, u128)>; 2],
+) -> Result<(), (usize, Error)> {
+    if credits.iter().all(Option::is_none) {
+        return Ok(());
+    }
+    let escrow = escrow_asset(&*state_transaction.world, network).map_err(|error| (0, error))?;
+    // The type bounds the batch to two credits; compact occupied slots in their
+    // original order and finish every conversion before running any movement guard.
+    let mut converted = [None, None];
+    for (index, (to, amount)) in credits.iter().flatten().enumerate() {
+        let amount = xor_quantity(*amount).map_err(|error| (index, error))?;
+        converted[index] = Some((
+            AssetId::of(escrow.definition().clone(), (*to).clone()),
+            amount,
+        ));
+    }
+    asset_isi::precheck_sccp_escrow_releases(state_transaction, &escrow, &converted)
 }
 
 /// Book `amount` Taira units that stay in `network`'s escrow as `stranded(route)` (§4.16).
@@ -264,8 +284,7 @@ mod tests {
                 sccp_taira_xor_asset_definition_id(),
                 account.clone(),
             ))
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone())
     }
 
     #[test]
@@ -373,6 +392,52 @@ mod tests {
             .expect_err("another route's escrow is empty");
         release(&mut stx, SccpNetworkV1::BscMainnet, &holder, 1, [5; 32])
             .expect_err("another route's escrow is empty");
+    }
+
+    #[test]
+    fn bounded_precheck_preserves_empty_and_ordered_refusals() {
+        let holder = authority(1);
+        let state = funded_state(&holder, 5_000_000_000);
+        let mut block = state.block(header(1));
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::new(
+            b"sccp-bounded-release-precheck-component",
+        ));
+        let network = SccpNetworkV1::EthereumMainnet;
+        // Empty input succeeds before route lookup, including before escrow creation.
+        precheck_releases(&stx, network, &[None, None]).expect("empty release");
+        create_route_escrows(&mut stx).expect("escrows");
+        lock(&mut stx, network, &holder, 2_000_000_000, [1; 32]).expect("lock");
+        let escrow = escrow_account(stx.network_id(), network).expect("route");
+        let first_unknown = authority(9);
+        let second_unknown = authority(10);
+        let first_error = precheck_release(&stx, network, &first_unknown, 1)
+            .expect_err("first absent recipient")
+            .to_string();
+        let second_error = precheck_release(&stx, network, &second_unknown, 1)
+            .expect_err("second absent recipient")
+            .to_string();
+        for (credits, expected_index, expected_error) in [
+            (
+                [Some((&first_unknown, 1)), Some((&second_unknown, 1))],
+                0,
+                first_error.as_str(),
+            ),
+            (
+                [Some((&holder, 1)), Some((&second_unknown, 1))],
+                1,
+                second_error.as_str(),
+            ),
+            ([None, Some((&first_unknown, 1))], 0, first_error.as_str()),
+        ] {
+            let (index, error) =
+                precheck_releases(&stx, network, &credits).expect_err("ordered refusal");
+            assert_eq!(index, expected_index);
+            assert_eq!(error.to_string(), expected_error);
+        }
+        precheck_releases(&stx, network, &[None, Some((&holder, 1))])
+            .expect("one occupied credit after an empty slot");
+        assert_eq!(balance(&stx, &escrow), xor_quantity(2_000_000_000).unwrap());
+        assert_eq!(balance(&stx, &holder), xor_quantity(3_000_000_000).unwrap());
     }
 
     #[test]

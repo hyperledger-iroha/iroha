@@ -22,7 +22,7 @@ use iroha_parliament_ballot::{
 /// Fixed metadata crosses the worker boundary; no decoded value or error owner escapes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Outcome {
-    pub outcome: &'static str,
+    pub label: &'static str,
     pub stage: &'static str,
     pub exit: i32,
 }
@@ -30,7 +30,7 @@ pub struct Outcome {
 impl Outcome {
     pub const fn new(outcome: &'static str, stage: &'static str, exit: i32) -> Self {
         Self {
-            outcome,
+            label: outcome,
             stage,
             exit,
         }
@@ -83,12 +83,12 @@ pub fn cold(envelope: &[u8], context: &[u8], network: NetworkId, body: BodyInsta
     let state = Scope { network, context };
     match check_block_ballot_v1(&state, envelope) {
         Ok(BlockBallotValidityV1::Valid(_)) => Outcome::new("accepted", "complete", 0),
-        Ok(BlockBallotValidityV1::Invalid(reason)) => rejected(reason),
+        Ok(BlockBallotValidityV1::Invalid(reason)) => rejected(&reason),
         Err(_) => Outcome::unavailable("verification_unavailable"),
     }
 }
 
-fn rejected(reason: BlockInvalidReasonV1) -> Outcome {
+fn rejected(reason: &BlockInvalidReasonV1) -> Outcome {
     let stage = match reason {
         BlockInvalidReasonV1::Oversize { .. } => "envelope_size",
         BlockInvalidReasonV1::Malformed { .. } => "envelope_decode",
@@ -135,7 +135,7 @@ mod tests {
             "proof",
         ];
         for (reason, label) in reasons.into_iter().zip(labels) {
-            assert_eq!(rejected(reason), Outcome::new("rejected", label, 1));
+            assert_eq!(rejected(&reason), Outcome::new("rejected", label, 1));
         }
         for stage in [
             "context_decode",

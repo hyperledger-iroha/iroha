@@ -53,7 +53,7 @@ pub(super) struct InstanceColumns<F> {
 /// retain the caller's dense IFFT. The constructor supplies the same original
 /// input that produced its padded column; this is not a public coefficient API.
 ///
-/// c_i = n^-1 sum_j a_j omega^(-ij). A one-element prefix is constant;
+/// `c_i = n^-1 sum_j a_j omega^(-ij)`. A one-element prefix is constant;
 /// a two-element prefix adds one geometric sequence. Shape, never values,
 /// selects the path. All Rayon work joins before cancellation is returned.
 fn interpolate_short_instance<F: iroha_pasta::PastaField>(

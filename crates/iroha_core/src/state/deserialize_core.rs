@@ -13,7 +13,7 @@ std::thread_local! {
 
 /// Snapshot syntax is distinct from a local refusal by the original State pool.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum StateRestoreError {
+pub enum StateRestoreError {
     /// World authority must come from original signed-genesis and certified-history replay.
     #[error(
         "native World restoration requires fresh-State signed-genesis and certified-history replay"
@@ -654,7 +654,7 @@ impl<'a> SnapshotJsonMap<'a> {
         }
         #[cfg(test)]
         return self.fields.get(key).map(|field| match field {
-            SnapshotJsonField::Borrowed { raw } => SnapshotJsonField::Borrowed { raw: *raw },
+            SnapshotJsonField::Borrowed { raw } => SnapshotJsonField::Borrowed { raw },
             SnapshotJsonField::Owned(value) => SnapshotJsonField::Owned(value.clone()),
         });
         #[cfg(not(test))]
@@ -823,7 +823,7 @@ impl From<crate::execution_attempt::ExecutionAttemptError<json::Error>> for Stat
 }
 
 #[cfg(test)]
-pub(crate) fn snapshot_format_error_for_test(error: StateRestoreError) -> json::Error {
+pub fn snapshot_format_error_for_test(error: StateRestoreError) -> json::Error {
     match error {
         StateRestoreError::Serialization(error) => error,
         local => panic!("snapshot format fixture hit a local resource failure: {local}"),
@@ -1645,7 +1645,7 @@ impl KuraSeed {
 }
 /// Exercise exact durable Fast boundary admission without constructing native State.
 #[cfg(test)]
-pub(crate) fn emergency_fast_block_hashes_for_testing(
+pub fn emergency_fast_block_hashes_for_testing(
     kura: &Kura,
     snapshot_height: usize,
     snapshot_tip: Option<HashOf<BlockHeader>>,
@@ -1689,20 +1689,19 @@ fn emergency_fast_block_hashes(
         },
     )
 }
+type RestoredNexusRuntime = (
+    iroha_config::parameters::actual::Nexus,
+    BTreeMap<LaneId, Hash>,
+    BTreeMap<LaneId, u64>,
+    BTreeMap<LaneId, LaneIncarnationLineage>,
+    VecDeque<AutoscaleSampleRecord>,
+);
+
 fn nexus_from_snapshot_runtime(
     runtime: SnapshotNexusRuntime,
     committed_block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
     replay_nexus: Option<&iroha_config::parameters::actual::Nexus>,
-) -> Result<
-    (
-        iroha_config::parameters::actual::Nexus,
-        BTreeMap<LaneId, Hash>,
-        BTreeMap<LaneId, u64>,
-        BTreeMap<LaneId, LaneIncarnationLineage>,
-        VecDeque<AutoscaleSampleRecord>,
-    ),
-    json::Error,
-> {
+) -> Result<RestoredNexusRuntime, json::Error> {
     if runtime.version != SnapshotNexusRuntime::VERSION {
         return Err(json::Error::InvalidField {
             field: "nexus_runtime.version".to_owned(),
@@ -2835,7 +2834,7 @@ fn is_legacy_musubi_state_path(path: &str) -> bool {
         || path.starts_with("musubi:")
 }
 #[allow(clippy::too_many_lines)]
-pub(crate) fn validate_musubi_location_reverse_indices(
+pub fn validate_musubi_location_reverse_indices(
     archives: &Storage<ArchiveId, MusubiArchiveRecordV1>,
     locations: &Storage<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
     pin_manifests: &Storage<ManifestDigest, PinManifestRecord>,
@@ -2876,18 +2875,17 @@ pub(crate) fn validate_musubi_location_reverse_indices(
                 "replication order {order_label} predates its target pin approval epoch {approved_epoch}"
             )));
         }
-        if let PinStatus::Retired(retired_epoch) = pin.status {
-            if record.issued_epoch > retired_epoch
+        if let PinStatus::Retired(retired_epoch) = pin.status
+            && (record.issued_epoch > retired_epoch
                 || matches!(record.status, ReplicationOrderStatus::Pending)
                 || matches!(record.status, ReplicationOrderStatus::Completed(epoch) | ReplicationOrderStatus::Expired(epoch) if epoch > retired_epoch)
                 || order.is_auto()
                     && matches!(record.status, ReplicationOrderStatus::Completed(_))
-                    && retired_epoch < pin.policy.retention_epoch
-            {
-                return Err(invalid(format!(
-                    "replication order {order_label} lifecycle falls outside its target pin retirement epoch {retired_epoch}"
-                )));
-            }
+                    && retired_epoch < pin.policy.retention_epoch)
+        {
+            return Err(invalid(format!(
+                "replication order {order_label} lifecycle falls outside its target pin retirement epoch {retired_epoch}"
+            )));
         }
         let canonical_order = if order.is_auto() {
             crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
@@ -2957,14 +2955,13 @@ pub(crate) fn validate_musubi_location_reverse_indices(
         let target = locations
             .get(&reference.location)
             .ok_or_else(|| invalid("pin reverse reference targets a missing location".into()))?;
-        if reference.active {
-            if target.state == MusubiArchiveLocationStateV1::Retired
-                || target.pin_manifest != *digest
-            {
-                return Err(invalid(
-                    "active pin reverse reference does not match its current location".into(),
-                ));
-            }
+        if reference.active
+            && (target.state == MusubiArchiveLocationStateV1::Retired
+                || target.pin_manifest != *digest)
+        {
+            return Err(invalid(
+                "active pin reverse reference does not match its current location".into(),
+            ));
         }
     }
     for (order, reference) in by_order.iter() {

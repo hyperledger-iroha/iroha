@@ -32,8 +32,8 @@ use mv::{
 use retained::{Candidate, EscrowInput, GraphError, RegistrationSource, RetainedGlobalSource};
 mod retry;
 #[cfg(test)]
-pub(crate) use retry::LegExecutionError as NativeLegExecutionError;
-pub(crate) use retry::{NativeAmxLegExecution, NativeAmxLegPreparations};
+pub use retry::LegExecutionError as NativeLegExecutionError;
+pub use retry::{NativeAmxLegExecution, NativeAmxLegPreparations};
 
 fn cell_admission_error(
     error: mv::cell::CellInitializationError,
@@ -48,7 +48,7 @@ fn cell_admission_error(
     }
 }
 
-pub(crate) fn empty_participant_cell(
+pub fn empty_participant_cell(
     budget: &AllocationBudget,
 ) -> Result<Cell<RetainedNativeAmx, AllocationCharge>, mv::storage::AdmittedStorageError> {
     CellInitialization::try_reserve(budget)
@@ -61,7 +61,7 @@ fn invalid(message: impl Into<String>) -> Error {
 }
 
 /// Keep the original custody account permanently and both parties until every Yes is closed.
-pub(crate) fn retained_account(world: &impl WorldReadOnly, account: &AccountId) -> bool {
+pub fn retained_account(world: &impl WorldReadOnly, account: &AccountId) -> bool {
     world
         .sumeragi_amx_participant()
         .canonical()
@@ -76,7 +76,7 @@ pub(crate) fn retained_account(world: &impl WorldReadOnly, account: &AccountId) 
 }
 
 /// Preserve monetary definitions referenced by immutable original AMX records.
-pub(crate) fn ensure_retained_definitions(
+pub fn ensure_retained_definitions(
     world: &impl WorldReadOnly,
     definitions: &std::collections::BTreeSet<iroha_data_model::asset::AssetDefinitionId>,
 ) -> Result<(), Error> {
@@ -97,7 +97,7 @@ pub(crate) fn ensure_retained_definitions(
     Ok(())
 }
 
-fn graph_error(error: GraphError, state: &mut StateTransaction<'_, '_>) -> Error {
+fn graph_error(error: &GraphError, state: &mut StateTransaction<'_, '_>) -> Error {
     if matches!(
         error,
         GraphError::Admission(_) | GraphError::Allocator { .. } | GraphError::Codec(_)
@@ -110,7 +110,7 @@ fn graph_error(error: GraphError, state: &mut StateTransaction<'_, '_>) -> Error
 /// Install both initial Cell generations and every immutable graph in the new State's own pool.
 /// Construction admits memory only. Even a live owner's capability belongs to its original
 /// certified execution history and cannot cross a new-State boundary without replay.
-pub(crate) fn admit_world_state(
+pub fn admit_world_state(
     world: &mut crate::state::World,
     budget: &AllocationBudget,
 ) -> Result<(), StateStorageAdmissionError> {
@@ -137,9 +137,9 @@ fn participant_error(
     state: &mut StateTransaction<'_, '_>,
 ) -> Error {
     match error {
-        AmxParticipantError::Protocol(error) => super::amx_error(error, state),
+        AmxParticipantError::Protocol(error) => super::amx_error(&error, state),
         AmxParticipantError::Resource(resource) => {
-            super::amx_error(AmxError::Resource(resource), state)
+            super::amx_error(&AmxError::Resource(resource), state)
         }
         AmxParticipantError::Escrow(error) => error,
     }
@@ -386,7 +386,7 @@ impl Execute for RegisterAmxParticipantV1 {
         .map_err(|error| state.attempt_error_to_instruction_error(error))?;
         let mut label =
             iroha_allocation::ChargedBuffer::new(self.global_chain_id.as_str().len(), &budget)
-                .map_err(|error| graph_error(error.into(), state))?;
+                .map_err(|error| graph_error(&error.into(), state))?;
         label
             .append(self.global_chain_id.as_str().as_bytes())
             .map_err(|error| invalid(error.to_string()))?;
@@ -404,7 +404,7 @@ impl Execute for RegisterAmxParticipantV1 {
             },
             &budget,
         )
-        .map_err(|error| graph_error(error, state))?
+        .map_err(|error| graph_error(&error, state))?
         .authenticate();
         crate::smartcontracts::isi::helpers::ensure_custody_account(&custody, state)?;
         *state.world.sumeragi_amx_participant.get_mut() = owner;
@@ -414,7 +414,7 @@ impl Execute for RegisterAmxParticipantV1 {
 
 /// One exact native movement selected only after the original proof/authority checks.
 /// Its private construction prevents ordinary escrow or user code from selecting retained custody.
-pub(crate) struct VerifiedAmxMovement {
+pub struct VerifiedAmxMovement {
     owner: RetainedNativeAmx,
     slot: usize,
     outcome: Option<AmxOutcomeV1>,
@@ -533,7 +533,7 @@ fn leg_decode_bookkeeping_error(state: &mut StateTransaction<'_, '_>) -> Error {
 
 fn leg_decode_error(error: AmxLegDecodeErrorV1, state: &mut StateTransaction<'_, '_>) -> Error {
     match error {
-        AmxLegDecodeErrorV1::Allocation(error) => graph_error(error.into(), state),
+        AmxLegDecodeErrorV1::Allocation(error) => graph_error(&error.into(), state),
         AmxLegDecodeErrorV1::Decode(error) => {
             let original =
                 crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
@@ -552,23 +552,21 @@ fn leg_decode_error(error: AmxLegDecodeErrorV1, state: &mut StateTransaction<'_,
             norito::core::PreparedDecodeScopeError::Allocation(
                 iroha_allocation::PrepaidSharedError::Allocator { requested_bytes },
             ) => graph_error(
-                GraphError::Allocator {
+                &GraphError::Allocator {
                     bytes: requested_bytes,
                 },
                 state,
             ),
-            norito::core::PreparedDecodeScopeError::ForeignPool => {
+            norito::core::PreparedDecodeScopeError::ForeignPool
+            | norito::core::PreparedDecodeScopeError::AttemptExhausted => {
                 leg_decode_bookkeeping_error(state)
             }
             norito::core::PreparedDecodeScopeError::Reservation(_)
             | norito::core::PreparedDecodeScopeError::Allocation(
                 iroha_allocation::PrepaidSharedError::Reservation(_),
             ) => leg_decode_bookkeeping_error(state),
-            norito::core::PreparedDecodeScopeError::AttemptExhausted => {
-                leg_decode_bookkeeping_error(state)
-            }
         },
-        AmxLegDecodeErrorV1::Record(message) => super::amx_error(AmxError::Record(message), state),
+        AmxLegDecodeErrorV1::Record(message) => super::amx_error(&AmxError::Record(message), state),
         AmxLegDecodeErrorV1::Invariant(_) => leg_decode_bookkeeping_error(state),
     }
 }
@@ -584,7 +582,7 @@ impl Execute for PrepareAmxV1 {
 }
 
 /// Execute the actual registered AMX fields without cloning their retained proof graph.
-pub(crate) fn execute_prepare_original(
+pub fn execute_prepare_original(
     instruction: &PrepareAmxV1,
     authority: &AccountId,
     state: &mut StateTransaction<'_, '_>,
@@ -614,7 +612,7 @@ pub(crate) fn execute_prepare_original(
             })
             .map_err(|error| match error {
                 retry::LegExecutionError::Decode(error) => leg_decode_error(error, state),
-                retry::LegExecutionError::Metadata(error) => graph_error(error.into(), state),
+                retry::LegExecutionError::Metadata(error) => graph_error(&error.into(), state),
                 retry::LegExecutionError::Invariant => leg_decode_bookkeeping_error(state),
                 retry::LegExecutionError::Execution(error) => error,
             })
@@ -717,10 +715,10 @@ fn execute_prepare_with_transfer(
     let tx = instruction
         .transaction
         .id()
-        .map_err(|error| super::amx_error(error, state))?;
+        .map_err(|error| super::amx_error(&error, state))?;
     if !cfg!(all(test, sumeragi_core_mutation = "HC95"))
         && !has_exact_debit_approval(state, authority, source, transfer, tx)
-            .map_err(|error| super::amx_error(error, state))?
+            .map_err(|error| super::amx_error(&error, state))?
     {
         return Err(invalid(
             "native AMX Prepare requires the debit owner's exact current direct approval",
@@ -745,7 +743,7 @@ fn execute_prepare_with_transfer(
     )
     .map_err(|error| state.attempt_error_to_instruction_error(error.map_rejection(invalid)))?;
     let effects = iroha_data_model::sumeragi_amx::native_transfer_effects_hash(transfer)
-        .map_err(|error| super::amx_error(error, state))?;
+        .map_err(|error| super::amx_error(&error, state))?;
     let record = (!held && available && supported).then_some(EscrowInput {
         tx,
         effects_hash: effects,
@@ -756,7 +754,7 @@ fn execute_prepare_with_transfer(
     let mut candidate = Candidate::copy(source, budget, 1, 0, record, None).map_err(|error| {
         #[cfg(test)]
         retry_probe::candidate_refused(&error);
-        graph_error(error, state)
+        graph_error(&error, state)
     })?;
     let mut intent = Intent {
         tx,
@@ -775,10 +773,10 @@ fn execute_prepare_with_transfer(
     value.escrows.sort_unstable_by_key(|record| record.tx);
     let next = candidate
         .finish()
-        .map_err(|error| graph_error(error, state))?
+        .map_err(|error| graph_error(&error, state))?
         .authenticate();
     // Witness encoding precedes monetary movement, so a resource refusal never follows a debit.
-    super::write(&prepared).map_err(|error| super::amx_error(error, state))?;
+    super::write(&prepared).map_err(|error| super::amx_error(&error, state))?;
     if record.is_some() {
         if !intent.invoked {
             return Err(invalid(
@@ -820,7 +818,7 @@ impl Execute for SettleAmxV1 {
 }
 
 /// Execute the actual registered AMX fields without cloning their retained proof graph.
-pub(crate) fn execute_settle_original(
+pub fn execute_settle_original(
     instruction: &SettleAmxV1,
     _authority: &AccountId,
     state: &mut StateTransaction<'_, '_>,
@@ -846,7 +844,7 @@ pub(crate) fn execute_settle_original(
         None,
         None,
     )
-    .map_err(|error| graph_error(error, state))?;
+    .map_err(|error| graph_error(&error, state))?;
     let mut intent = Intent {
         tx: decision.tx,
         effects: None,
@@ -870,7 +868,7 @@ pub(crate) fn execute_settle_original(
     }
     let next = candidate
         .finish()
-        .map_err(|error| graph_error(error, state))?
+        .map_err(|error| graph_error(&error, state))?
         .authenticate();
     if intent.invoked {
         let slot = record_slot.ok_or_else(|| {
@@ -903,7 +901,7 @@ impl Execute for RelayGlobalAmxHandoffV1 {
         let global = &source.participant.global;
         let verified = global
             .verify_block(&self.proof.block)
-            .map_err(|error| super::amx_error(error, state))?;
+            .map_err(|error| super::amx_error(&error, state))?;
         if verified.epoch != global.epoch() {
             return Ok(());
         }
@@ -923,7 +921,7 @@ impl Execute for RelayGlobalAmxHandoffV1 {
             .map_err(invalid)?;
         let budget = state.pipeline_ivm_prepared_cache.execution_budget().clone();
         let mut candidate = Candidate::copy(source, &budget, 0, 0, None, Some(&boundary.next))
-            .map_err(|error| graph_error(error, state))?;
+            .map_err(|error| graph_error(&error, state))?;
         let participant = &mut candidate
             .value
             .as_mut()
@@ -944,7 +942,7 @@ impl Execute for RelayGlobalAmxHandoffV1 {
         participant.prune_decision_contexts();
         let next = candidate
             .finish()
-            .map_err(|error| graph_error(error, state))?
+            .map_err(|error| graph_error(&error, state))?
             .authenticate();
         *state.world.sumeragi_amx_participant.get_mut() = next;
         Ok(())
@@ -953,7 +951,7 @@ impl Execute for RelayGlobalAmxHandoffV1 {
 
 /// Reuse the existing genuine paid roots and signed Begin in the Worker retry control.
 #[cfg(test)]
-pub(crate) fn with_paid_prepare_retry_fixture(
+pub fn with_paid_prepare_retry_fixture(
     test: impl FnOnce(
         &crate::sumeragi::test_chain::CertifiedTestChain,
         iroha_data_model::isi::InstructionBox,
@@ -965,7 +963,7 @@ pub(crate) fn with_paid_prepare_retry_fixture(
 
 /// Reuse a genuine signed Begin whose original receiver is canonically multisig.
 #[cfg(test)]
-pub(crate) fn with_paid_multisig_prepare_retry_fixture(
+pub fn with_paid_multisig_prepare_retry_fixture(
     test: impl FnOnce(
         &crate::sumeragi::test_chain::CertifiedTestChain,
         iroha_data_model::isi::InstructionBox,
@@ -976,11 +974,11 @@ pub(crate) fn with_paid_multisig_prepare_retry_fixture(
 }
 
 #[cfg(test)]
-pub(crate) use retry_probe::Observation as NativeLegRetryObservation;
+pub use retry_probe::Observation as NativeLegRetryObservation;
 
 /// Reuse genuine paid parent proofs to settle/prune a No vote in the same private block.
 #[cfg(test)]
-pub(crate) fn with_paid_prepare_pruning_fixture(
+pub fn with_paid_prepare_pruning_fixture(
     test: impl FnOnce(
         &crate::sumeragi::test_chain::CertifiedTestChain,
         [iroha_data_model::isi::InstructionBox; 3],
@@ -993,7 +991,7 @@ pub(crate) fn with_paid_prepare_pruning_fixture(
 
 /// Run a Worker control on an actual signed and funded Global Begin source.
 #[cfg(test)]
-pub(crate) fn with_paid_global_begin_fixture(
+pub fn with_paid_global_begin_fixture(
     test: impl FnOnce(
         &crate::sumeragi::test_chain::CertifiedTestChain,
         iroha_data_model::transaction::SignedTransaction,

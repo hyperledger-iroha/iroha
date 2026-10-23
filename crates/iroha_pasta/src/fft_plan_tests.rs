@@ -224,10 +224,11 @@ fn direct_input_schedule<F: PastaField>(
 fn batch_parallelism_diagnostic() {
     use std::{hint::black_box, time::Instant};
 
-    assert!(
-        !cfg!(debug_assertions),
-        "run this diagnostic with --release"
-    );
+    fn require_release() {
+        #[cfg(debug_assertions)]
+        panic!("run this diagnostic with --release");
+    }
+
     fn run<F: PastaField>(curve: &str) {
         let read = |name: &str| std::env::var(name).expect("explicit diagnostic selection");
         let k: u32 = read("FFT_BATCH_K").parse().unwrap();
@@ -299,6 +300,7 @@ fn batch_parallelism_diagnostic() {
             }
         });
     }
+    require_release();
     match std::env::var("FFT_BATCH_CURVE").unwrap().as_str() {
         "fp" => run::<Fp>("fp"),
         "fq" => run::<Fq>("fq"),
@@ -373,7 +375,7 @@ fn narrow_batch_direct_input_schedules_preserve_outputs_and_storage() {
     check::<Fq>();
 }
 
-/// A changing AsRef and cancellation during freezing test the exact preflight
+/// A changing `AsRef` and cancellation during freezing test the exact preflight
 /// ordering without timing-dependent sleeps or production observation hooks.
 #[test]
 fn narrow_batch_direct_input_schedules_preserve_preflight_and_retry() {

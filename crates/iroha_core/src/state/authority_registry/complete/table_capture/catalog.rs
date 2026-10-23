@@ -93,6 +93,10 @@ fn exact_membership_owner(fields: &'static [Field]) -> bool {
 }
 
 /// Validate all flattened table identities and required group companions first.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(super) fn require_exact_table_materializers(
     fields: &'static [Field],
     materializers: &[TableMaterializer],

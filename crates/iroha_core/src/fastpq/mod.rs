@@ -407,12 +407,11 @@ impl PoseidonDigestBatch {
         {
             return None;
         }
-        match submit(&self.words, &self.slices) {
-            Some(output) => Some(output),
-            None => {
-                set_poseidon_digest_acceleration_enabled(false);
-                None
-            }
+        if let Some(output) = submit(&self.words, &self.slices) {
+            Some(output)
+        } else {
+            set_poseidon_digest_acceleration_enabled(false);
+            None
         }
     }
     // Never install a prefix or ignore trailing accelerator output. A cardinality

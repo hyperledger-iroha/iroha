@@ -6,7 +6,7 @@
 /// A physical storage fence which notifies only after its actual guard releases.
 /// Parking-lot mutexes do not poison; unwind remains an ordinary release.
 #[derive(Default)]
-pub(crate) struct PublicationMutex<T = ()> {
+pub struct PublicationMutex<T = ()> {
     inner: parking_lot::Mutex<T>,
     released: iroha_allocation::release::ReleaseNotification,
     /// Successful ordinary acquisitions invalidate earlier readonly observations.
@@ -19,16 +19,16 @@ pub(crate) struct PublicationMutex<T = ()> {
 /// allocation identifies the exact original mutex even if its value moves.
 /// No caller-supplied path, pointer, or generation can manufacture the binding.
 #[derive(Debug)]
-pub(crate) struct PublicationReadPermit {
+pub struct PublicationReadPermit {
     original_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// A read permit belongs to a different original physical fence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PublicationReadPermitMismatch;
+pub struct PublicationReadPermitMismatch;
 
 /// An original storage mutex guard, retaining the established lock-order boundary.
-pub(crate) struct PublicationGuard<'state, T = ()> {
+pub struct PublicationGuard<'state, T = ()> {
     inner: iroha_allocation::release::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,
     mutation_epoch: Option<u64>,
 }
@@ -275,13 +275,13 @@ impl<T> std::fmt::Debug for PublicationMutex<T> {
 /// Same-source release custody, retained outside the complete State owner.
 /// Each short physical lock borrows this owner and records its release on Drop.
 /// The batch never accepts a caller-selected notification source.
-pub(crate) struct DeferredPublicationFence<'state, T> {
+pub struct DeferredPublicationFence<'state, T> {
     mutex: &'state PublicationMutex<T>,
     releases: iroha_allocation::release::DeferredReleaseBatch,
 }
 
 /// Physical guard whose original notification stays with its enclosing fence.
-pub(crate) struct DeferredPublicationGuard<'fence, 'state, T> {
+pub struct DeferredPublicationGuard<'fence, 'state, T> {
     guard: Option<PublicationGuard<'state, T>>,
     releases: &'fence mut iroha_allocation::release::DeferredReleaseBatch,
 }

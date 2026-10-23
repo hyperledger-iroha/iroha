@@ -868,7 +868,7 @@ fn native_lane_admission_and_restore_keep_original_carrier_clock_through_penalty
             proposal.set_npos_consensus_effects(Some(NposConsensusEffects {
                 parent_service_commit_qc,
                 evidence_admissions: vec![proof.clone()],
-                penalty_actions: Default::default(),
+                penalty_actions: iroha_data_model::consensus::NposPenaltyActions::default(),
             }));
         },
     );
@@ -1206,13 +1206,13 @@ fn reported_original_lane_equivocation(context: &LaneEvidenceContext) -> Evidenc
     };
     let first = signed_vote(71);
     let second = signed_vote(72);
-    assert!(deliver(&mut kernel, &from, first.clone()).is_empty());
-    let mut bad_signature = second.clone();
+    assert!(deliver(&mut kernel, &from, first).is_empty());
+    let mut bad_signature = second;
     bad_signature.sig.0[0] ^= 1;
-    let mut foreign_epoch = second.clone();
+    let mut foreign_epoch = second;
     foreign_epoch.epoch.epoch += 1;
     foreign_epoch.sig = signer.sign(&foreign_epoch.preimage()).unwrap();
-    let mut foreign_instance = second.clone();
+    let mut foreign_instance = second;
     foreign_instance.instance.0[0] ^= 1;
     foreign_instance.sig = signer.sign(&foreign_instance.preimage()).unwrap();
     for invalid in [bad_signature, foreign_epoch, foreign_instance] {
@@ -1221,17 +1221,14 @@ fn reported_original_lane_equivocation(context: &LaneEvidenceContext) -> Evidenc
             "unauthenticated or foreign votes cannot become slash evidence"
         );
     }
-    let mut reports = deliver(&mut kernel, &from, second.clone());
+    let mut reports = deliver(&mut kernel, &from, second);
     assert_eq!(
         reports.len(),
         1,
         "the actual detector reports the conflicting slot"
     );
     let report = reports.pop().unwrap();
-    assert_eq!(
-        report,
-        Evidence::VoteEquivocation(first.clone(), second.clone())
-    );
+    assert_eq!(report, Evidence::VoteEquivocation(first, second));
     for replay in [first, second] {
         assert!(
             deliver(&mut kernel, &from, replay).is_empty(),

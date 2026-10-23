@@ -254,7 +254,7 @@ fn world_with_three_ordered_musubi_archive_groups() -> (World, [ArchiveId; 3]) {
                 let binding = &record.attestation.payload.binding;
                 let mut pin = PinManifestRecord::new(
                     current.pin_manifest,
-                    archive.commitment.root_cid.clone(),
+                    archive.commitment.root_cid,
                     archive.commitment.chunker.clone(),
                     *archive.commitment.chunk_plan_digest.as_bytes(),
                     *archive.commitment.por_root.as_bytes(),
@@ -277,7 +277,7 @@ fn world_with_three_ordered_musubi_archive_groups() -> (World, [ArchiveId; 3]) {
                     ReplicationOrderRecord {
                         order_id,
                         manifest_digest: current.pin_manifest,
-                        manifest_root_cid: archive.commitment.root_cid.clone(),
+                        manifest_root_cid: archive.commitment.root_cid,
                         musubi_archive: Some(archive.archive_id),
                         issued_by: archive.registered_by.clone(),
                         issued_epoch: 1,

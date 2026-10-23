@@ -332,15 +332,15 @@ fn supplied_proved_replay_cannot_derive_a_record() {
                 authority,
                 &signed,
                 instructions,
-                Some(replay),
-                None,
-                None,
-                0,
-                Some(GAS),
-                true,
-                None,
-                None,
-                true,
+                (Some(replay), None, None),
+                crate::executor::InstructionFeeContext {
+                    tx_bytes_len: 0,
+                    gas_limit_md: Some(GAS),
+                    require_gas_limit: true,
+                    gas_asset_opt: None,
+                    fee_sponsor: None,
+                    skip_nexus_fee: true,
+                },
             )
             .expect_err("a supplied replay must not manufacture a signed record");
         assert_signed_only_rejection(&error);

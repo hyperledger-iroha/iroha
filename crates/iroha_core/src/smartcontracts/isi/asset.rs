@@ -107,8 +107,7 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "FX corridor escrow can only be debited by the sealed native FX settlement or owner-refund path"
                         .into(),
-                )
-                .into());
+                ));
             }
             if crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_asset(
                 self,
@@ -117,8 +116,7 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "SoraFS reserve custody can only be debited by a verified native reserve withdrawal"
                         .into(),
-                )
-                    .into());
+                ));
             }
             ensure_not_kagemusha_reserve_source(self, &resolved_id)?;
             let quantity = self
@@ -219,14 +217,14 @@ pub mod isi {
                 if enforce_debit_controls {
                     self.ensure_numeric_asset_transfer_availability(
                         source_id,
-                        amount.clone(),
+                        &(amount.clone()),
                         AssetTransferDirection::Outgoing,
                     )?;
                 }
                 if enforce_credit_controls {
                     self.ensure_numeric_asset_transfer_availability(
                         destination_id,
-                        amount.clone(),
+                        &(amount.clone()),
                         AssetTransferDirection::Incoming,
                     )?;
                 }
@@ -249,8 +247,7 @@ pub mod isi {
             } else {
                 self.assets
                     .get(destination_id)
-                    .map(|value| value.as_ref().clone())
-                    .unwrap_or_else(Quantity::zero)
+                    .map_or_else(Quantity::zero, |value| value.as_ref().clone())
             };
             assert_numeric_spec_with(to_balance_before.as_numeric(), source_spec)?;
             let to_balance_after = to_balance_before
@@ -304,8 +301,7 @@ pub mod isi {
             if &delta.amount != expected_amount {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "prepared transfer delta amount differs from its authorized amount".into(),
-                )
-                .into());
+                ));
             }
             if reserve_owner.is_some()
                 || matches!(
@@ -320,10 +316,10 @@ pub mod isi {
                     .assets
                     .get(source_id)
                     .ok_or_else(|| FindError::Asset(source_id.clone().into()))?;
-                let destination_balance_matches = match self.assets.get(destination_id) {
-                    Some(asset) => asset.as_ref() == &delta.to_balance_before,
-                    None => delta.to_balance_before.is_zero(),
-                };
+                let destination_balance_matches = self.assets.get(destination_id).map_or_else(
+                    || delta.to_balance_before.is_zero(),
+                    |asset| asset.as_ref() == &delta.to_balance_before,
+                );
                 if source_id == destination_id
                     || source_id.definition() != destination_id.definition()
                     || source_id.scope() != destination_id.scope()
@@ -342,8 +338,7 @@ pub mod isi {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "governed privacy public reserve delta must conserve exact live balances"
                             .into(),
-                    )
-                    .into());
+                    ));
                 }
             }
             let allowance_update = self.prepare_privacy_reserve_allowance_update(
@@ -471,10 +466,10 @@ pub mod isi {
                 .get(&key)
                 .and_then(PrivacyStateItemRecordV1::public_reserve_funded_allowance)
                 .ok_or_else(|| invalid("privacy public reserve has no funded allowance"))?;
-            let backed = match self.assets.get(id) {
-                Some(balance) => original <= balance.as_ref(),
-                None => original.is_zero(),
-            };
+            let backed = self.assets.get(id).map_or_else(
+                || original.is_zero(),
+                |balance| original <= balance.as_ref(),
+            );
             if !backed {
                 return Err(invalid(
                     "privacy public reserve funded allowance exceeds its exact balance",
@@ -536,8 +531,7 @@ pub mod isi {
                 .unwrap_or_else(|| {
                     self.assets
                         .get(id)
-                        .map(|value| value.as_ref().clone())
-                        .unwrap_or_else(Quantity::zero)
+                        .map_or_else(Quantity::zero, |value| value.as_ref().clone())
                 });
             assert_numeric_spec_with(current.as_numeric(), spec)?;
             let candidate = current
@@ -620,7 +614,7 @@ pub mod isi {
         pub(crate) fn ensure_numeric_asset_transfer_availability(
             &self,
             asset_id: &AssetId,
-            amount: Quantity,
+            amount: &Quantity,
             direction: AssetTransferDirection,
         ) -> Result<(), Error> {
             if amount.is_zero() {
@@ -654,7 +648,7 @@ pub mod isi {
                     AssetTransferAdmissionError::OutgoingDisabled(detail)
                 }
             };
-            Err(InstructionExecutionError::AssetTransferAdmission(admission).into())
+            Err(InstructionExecutionError::AssetTransferAdmission(admission))
         }
     }
     /// Credit a balance directly for focused state-fixture construction.
@@ -873,16 +867,15 @@ pub mod isi {
                     "invalid account metadata `{ASSET_TRANSFER_CONTROL_METADATA_KEY}` on {account_id}: persisted transfer-control stores must not be empty"
                 )
                 .into(),
-            )
-            .into());
+            ));
         }
         store.validate_canonical().map_err(|err| {
-            Error::from(InstructionExecutionError::InvariantViolation(
+            InstructionExecutionError::InvariantViolation(
                 format!(
                     "invalid account metadata `{ASSET_TRANSFER_CONTROL_METADATA_KEY}` on {account_id}: {err}"
                 )
                 .into(),
-            ))
+            )
         })?;
         Ok(store)
     }
@@ -901,11 +894,27 @@ pub mod isi {
         }
         for definition in asset_definition_ids {
             if asset_uid::retained(state_transaction.world(), Some(definition), None)?
-                || crate::state::asset_fi::retained(state_transaction.world(), Some(definition), None)?
-                || crate::state::asset_uid_enrollment::retained(state_transaction.world(), Some(definition), None)?
-                || crate::state::asset_uid_reader::retained(state_transaction.world(), Some(definition), None)? {
+                || crate::state::asset_fi::retained(
+                    state_transaction.world(),
+                    Some(definition),
+                    None,
+                )?
+                || crate::state::asset_uid_enrollment::retained(
+                    state_transaction.world(),
+                    Some(definition),
+                    None,
+                )?
+                || crate::state::asset_uid_reader::retained(
+                    state_transaction.world(),
+                    Some(definition),
+                    None,
+                )?
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    format!("cannot {removal_target}: asset definition {definition} retains UID policy").into(),
+                    format!(
+                        "cannot {removal_target}: asset definition {definition} retains UID policy"
+                    )
+                    .into(),
                 ));
             }
         }
@@ -930,8 +939,7 @@ pub mod isi {
                         record.asset_definition_id
                     )
                     .into(),
-                )
-                .into());
+                ));
             }
         }
         Ok(())
@@ -953,7 +961,7 @@ pub mod isi {
         if let Some(definition) = retained_definition {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("cannot {removal_target}: asset definition {definition} retains retail DAY policy, identity or usage state").into(),
-            ).into());
+            ));
         }
         Ok(())
     }
@@ -965,8 +973,17 @@ pub mod isi {
     ) -> Result<(), Error> {
         if asset_uid::retained(state_transaction.world(), None, Some(account_id))?
             || crate::state::asset_fi::retained(state_transaction.world(), None, Some(account_id))?
-            || crate::state::asset_uid_enrollment::retained(state_transaction.world(), None, Some(account_id))?
-            || crate::state::asset_uid_reader::retained(state_transaction.world(), None, Some(account_id))? {
+            || crate::state::asset_uid_enrollment::retained(
+                state_transaction.world(),
+                None,
+                Some(account_id),
+            )?
+            || crate::state::asset_uid_reader::retained(
+                state_transaction.world(),
+                None,
+                Some(account_id),
+            )?
+        {
             return Err(InstructionExecutionError::InvariantViolation(
                 "cannot unregister an account retained by UID membership".into(),
             ));
@@ -988,7 +1005,7 @@ pub mod isi {
         if has_binding_or_issuer || holds_governed_asset {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("cannot unregister account {account_id}: retail DAY identity, issuer or governed balance is retained").into(),
-            ).into());
+            ));
         }
         Ok(())
     }
@@ -1098,8 +1115,7 @@ pub mod isi {
                             "transfer-control target account {account_id} has no strictly active alias binding"
                         )
                         .into(),
-                    )
-                    .into());
+                    ));
                 }
                 let account_domain = account_label.domain.clone().ok_or_else(|| {
                     InstructionExecutionError::InvariantViolation(
@@ -1471,8 +1487,7 @@ pub mod isi {
             let spent_before = current_usages
                 .remove(&window)
                 .filter(|usage| usage.bucket_start_ms == bucket_start)
-                .map(|usage| usage.spent_amount)
-                .unwrap_or_else(Quantity::zero);
+                .map_or_else(Quantity::zero, |usage| usage.spent_amount);
             let spent_after = spent_before
                 .checked_add(amount)
                 .map_err(|_| MathError::Overflow)?;
@@ -1903,7 +1918,9 @@ pub mod isi {
     impl NumericAssetTransferSourcePolicy {
         const fn uid_activity(self) -> asset_uid::MovementActivity {
             match self {
-                Self::NativeEscrowCustody | Self::NativeEscrowPartition | Self::NativeEscrowReturn => asset_uid::MovementActivity::RetainedCustody,
+                Self::NativeEscrowCustody
+                | Self::NativeEscrowPartition
+                | Self::NativeEscrowReturn => asset_uid::MovementActivity::RetainedCustody,
                 Self::LinkedFi => asset_uid::MovementActivity::LinkedFi,
                 _ => asset_uid::MovementActivity::Payment,
             }
@@ -1999,8 +2016,7 @@ pub mod isi {
                 "account {authority} lacks authority to transfer source asset {source_id}; require source ownership or an exact CanTransferAsset/CanTransferAssetWithDefinition permission"
             )
             .into(),
-        )
-        .into())
+        ))
     }
     fn fx_registry_references_escrow_asset(
         parameters: &Parameters,
@@ -2117,8 +2133,7 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "FX corridor escrow can only be debited by the sealed native FX settlement or owner-refund path"
                     .into(),
-            )
-            .into());
+            ));
         }
         Ok(())
     }
@@ -2130,8 +2145,7 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "FX corridor escrow can only be credited by its exact owner-funded instruction"
                     .into(),
-            )
-            .into());
+            ));
         }
         Ok(())
     }
@@ -2165,8 +2179,7 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "SoraFS reserve custody can only be debited by a verified native reserve withdrawal"
                     .into(),
-            )
-                .into());
+            ));
         }
         Ok(())
     }
@@ -2321,7 +2334,7 @@ pub mod isi {
         GameSession(Vec<u8>),
         /// Move value according to an exact VPN lease record.
         VpnLease(Vec<u8>),
-        /// Release one exact approved SoraFS reserve withdrawal.
+        /// Release one exact approved `SoraFS` reserve withdrawal.
         SorafsReserve(Vec<u8>),
         /// Move value from verified fee-sponsor custody.
         FeeSponsor(Vec<u8>),
@@ -2807,9 +2820,15 @@ pub mod isi {
             let (source, detail) = match self.source_policy {
                 NumericAssetTransferSourcePolicy::User => ("User", SourceDetail::Empty),
                 NumericAssetTransferSourcePolicy::LinkedFi => ("LinkedFi", SourceDetail::Empty),
-                NumericAssetTransferSourcePolicy::NativeEscrowFunding => ("NativeEscrowFunding", SourceDetail::Empty),
-                NumericAssetTransferSourcePolicy::NativeEscrowPartition => ("NativeEscrowPartition", SourceDetail::Empty),
-                NumericAssetTransferSourcePolicy::NativeEscrowReturn => ("NativeEscrowReturn", SourceDetail::Empty),
+                NumericAssetTransferSourcePolicy::NativeEscrowFunding => {
+                    ("NativeEscrowFunding", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::NativeEscrowPartition => {
+                    ("NativeEscrowPartition", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::NativeEscrowReturn => {
+                    ("NativeEscrowReturn", SourceDetail::Empty)
+                }
 
                 NumericAssetTransferSourcePolicy::GameSessionFunding => {
                     ("GameSessionFunding", SourceDetail::Empty)
@@ -2972,9 +2991,15 @@ pub mod isi {
             let (source, detail) = match self.source_policy {
                 NumericAssetTransferSourcePolicy::User => ("User", Vec::new()),
                 NumericAssetTransferSourcePolicy::LinkedFi => ("LinkedFi", Vec::new()),
-                NumericAssetTransferSourcePolicy::NativeEscrowFunding => ("NativeEscrowFunding", Vec::new()),
-                NumericAssetTransferSourcePolicy::NativeEscrowPartition => ("NativeEscrowPartition", Vec::new()),
-                NumericAssetTransferSourcePolicy::NativeEscrowReturn => ("NativeEscrowReturn", Vec::new()),
+                NumericAssetTransferSourcePolicy::NativeEscrowFunding => {
+                    ("NativeEscrowFunding", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::NativeEscrowPartition => {
+                    ("NativeEscrowPartition", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::NativeEscrowReturn => {
+                    ("NativeEscrowReturn", Vec::new())
+                }
 
                 NumericAssetTransferSourcePolicy::GameSessionFunding => {
                     ("GameSessionFunding", Vec::new())
@@ -3142,17 +3167,7 @@ pub mod isi {
                     .into(),
                 ));
             };
-            let direct_identity =
-                state_transaction
-                    .direct_execution_identity()
-                    .map_err(|error| {
-                        InstructionExecutionError::InvariantViolation(
-                            format!(
-                                "failed to derive numeric movement execution identity: {error}"
-                            )
-                            .into(),
-                        )
-                    })?;
+            let direct_identity = state_transaction.direct_execution_identity();
             let authority =
                 norito::encode_canonical(&self.transcript_authority).map_err(|error| {
                     InstructionExecutionError::InvariantViolation(
@@ -3453,6 +3468,7 @@ pub mod isi {
         )?
         .apply(state_transaction)
     }
+    #[derive(Clone, Copy)]
     enum VerifiedPrivacyPublicBalancePurpose {
         General,
         PoolDeposit(PrivacyPublicReserveOwnerV1),
@@ -3466,8 +3482,7 @@ pub mod isi {
         statement_digest: PrivacyStatementDigestV1,
         definition_id: &AssetDefinitionId,
         public_balance_scope: AssetBalanceScope,
-        source_account: &AccountId,
-        destination_account: &AccountId,
+        (source_account, destination_account): (&AccountId, &AccountId),
         amount: Quantity,
     ) -> Result<(), Error> {
         execute_verified_privacy_public_balance_transfer_with_purpose(
@@ -3638,7 +3653,7 @@ pub mod isi {
     fn execute_checked_numeric_asset_burn(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: Option<&AccountId>,
-        source_id: AssetId,
+        source_id: &AssetId,
         amount: Quantity,
         source_policy: NumericAssetBurnSourcePolicy,
         sponsor_quantity_owner: Option<FeeSponsorBurnQuantityOwner>,
@@ -3768,7 +3783,7 @@ pub mod isi {
                         .world
                         .ensure_numeric_asset_transfer_availability(
                             &source_id,
-                            amount.clone(),
+                            &(amount.clone()),
                             AssetTransferDirection::Outgoing,
                         )?;
                 }
@@ -3960,7 +3975,7 @@ pub mod isi {
         execute_checked_numeric_asset_burn(
             state_transaction,
             Some(authority),
-            source_id,
+            &(source_id),
             amount,
             NumericAssetBurnSourcePolicy::AccountAdmissionFee,
             None,
@@ -4047,8 +4062,7 @@ pub mod isi {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "moderation challenge bond funding does not match its case-pinned governance custody"
                             .into(),
-                    )
-                    .into());
+                    ));
                 }
                 let binding = canonical_numeric_movement_binding(&(
                     case_id,
@@ -4085,8 +4099,7 @@ pub mod isi {
                 if record.decision.is_some() || record.bond.settled_at_unix_ms.is_some() {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "moderation challenge bond is already settled".into(),
-                    )
-                    .into());
+                    ));
                 }
                 let numeric_spec = state_transaction
                     .numeric_spec_for(&record.bond.asset_definition_id)
@@ -4152,8 +4165,7 @@ pub mod isi {
                         return Err(InstructionExecutionError::InvariantViolation(
                             "moderation challenge bond settlement leg does not match its decision"
                                 .into(),
-                        )
-                        .into());
+                        ));
                     }
                 };
                 if source_id != expected_source
@@ -4163,8 +4175,7 @@ pub mod isi {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "moderation challenge bond settlement does not match retained custody"
                             .into(),
-                    )
-                    .into());
+                    ));
                 }
                 let binding = canonical_numeric_movement_binding(&(
                     case_id,
@@ -4199,13 +4210,11 @@ pub mod isi {
                 .world
                 .assets
                 .get(&source_id)
-                .map(|value| value.as_ref().clone())
-                .unwrap_or_else(Quantity::zero);
+                .map_or_else(Quantity::zero, |value| value.as_ref().clone());
             if retained_balance < amount {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "moderation challenge slash custody is undercollateralized".into(),
-                )
-                .into());
+                ));
             }
             return Ok(());
         }
@@ -4750,8 +4759,8 @@ pub mod isi {
             canonical_numeric_movement_binding(&original).unwrap(),
             "HC904 borrowed slash binding must preserve the exact original canonical frame"
         );
-        assert!(std::ptr::eq(borrowed.validator, &validator));
-        assert!(std::ptr::eq(borrowed.amount, &amount));
+        assert!(std::ptr::eq(borrowed.validator, &raw const validator));
+        assert!(std::ptr::eq(borrowed.amount, &raw const amount));
     }
 
     fn execute_verified_staking_slash_transfer_inner(
@@ -5058,7 +5067,7 @@ pub mod isi {
             ),
         )
     }
-    /// Consume one exact approved SoraFS reserve withdrawal capability.
+    /// Consume one exact approved `SoraFS` reserve withdrawal capability.
     pub(in crate::smartcontracts::isi) fn execute_verified_sorafs_reserve_withdrawal(
         state_transaction: &mut StateTransaction<'_, '_>,
         authorization: crate::smartcontracts::isi::sorafs_reserve::VerifiedSorafsReserveWithdrawal,
@@ -5172,100 +5181,158 @@ pub mod isi {
             ),
         )
     }
-    /// Check, without mutating state, that [`execute_sccp_escrow_release`] of `amount` from the
-    /// SCCP route escrow `escrow_id` to the existing account of `destination_id` passes every
-    /// guard of the release movement (`specs/sccp.md` §4.12.3, §4.16).
+    /// Check every ordered SCCP release credit before any money moves.
     ///
-    /// It mirrors `PreparedNumericTransferPlan::prepare` for the retained
-    /// `SccpEscrowRelease` authorization (ambient scope, enforced transfer control, existing
-    /// destination) and shares its policy gate
-    /// ([`ensure_resolved_numeric_asset_transfer_policies`]), so SCCP settlement holds a
-    /// message whose credit the movement would refuse instead of failing the proof or void
-    /// that triggered it.
+    /// Each leg retains the release movement's scope, custody, enrollment, transfer,
+    /// holding and retail-usage checks. UID policy is evaluated over each complete
+    /// ordered prefix, so separate recipient and fee accounts sharing one UID and
+    /// a retail-classified source escrow consume aggregate headroom only once.
+    /// Returns the first refused credit's index and error, without applying UID writes.
     ///
-    /// TODO(ws41): the movement settles retail-fee balances before its balance precheck; this
-    /// read-only precheck evaluates the stored balances.
-    pub(in crate::smartcontracts::isi) fn precheck_sccp_escrow_release(
+    /// TODO(ws41): the movement settles retail-fee balances before its balance precheck;
+    /// this read-only precheck still evaluates the stored balances.
+    pub(in crate::smartcontracts::isi) fn precheck_sccp_escrow_releases(
         state_transaction: &StateTransaction<'_, '_>,
         escrow_id: &AssetId,
-        destination_id: &AssetId,
-        amount: &Quantity,
-    ) -> Result<(), Error> {
-        if escrow_id.definition() != destination_id.definition() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP escrow release must credit the escrowed asset".into(),
-            ));
+        credits: &[Option<(AssetId, Quantity)>; 2],
+    ) -> Result<(), (usize, Error)> {
+        let mut resolved: [Option<(AssetId, AssetId, &Quantity)>; 2] = [None, None];
+        let mut cumulative_amount = Quantity::zero();
+        for (index, (destination_id, amount)) in credits.iter().flatten().enumerate() {
+            let (source_id, destination_id) = (|| -> Result<(AssetId, AssetId), Error> {
+                if escrow_id.definition() != destination_id.definition() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "SCCP escrow release must credit the escrowed asset".into(),
+                    ));
+                }
+                if amount.is_zero() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "asset transfer amount must be non-zero".into(),
+                    ));
+                }
+                // Every leg debits this same route escrow. Source calendar caps
+                // consume the full prefix; recipient guards below still see only
+                // their own leg. The read-only check never installs usage.
+                cumulative_amount = cumulative_amount
+                    .checked_add(amount)
+                    .map_err(|_| MathError::Overflow)?;
+                let source_policy = NumericAssetTransferSourcePolicy::SccpEscrowRelease;
+                ensure_global_asset_write_on_authoritative_route(
+                    state_transaction,
+                    escrow_id.definition(),
+                    "transfer",
+                )?;
+                let source_dataspace = transfer_source_dataspace_hint(state_transaction, escrow_id)?;
+                let resolved_source = state_transaction
+                    .world
+                    .resolve_asset_id_for_scope_hint(escrow_id, source_dataspace)?;
+                ensure_privacy_public_reserve_source_policy(
+                    state_transaction,
+                    &resolved_source,
+                    source_policy,
+                )?;
+                active_control_record(
+                    state_transaction,
+                    escrow_id.account(),
+                    escrow_id.definition(),
+                )?;
+                // SPEC: §13.4 HC971 forgets earlier source usage only in preflight.
+                let source_control_amount = if cfg!(all(test, sumeragi_core_mutation = "HC971")) {
+                    amount
+                } else {
+                    &cumulative_amount
+                };
+                prepare_outbound_asset_transfer_control_update(
+                    state_transaction,
+                    escrow_id,
+                    source_control_amount,
+                )?;
+                state_transaction.world.account(destination_id.account())?;
+                let (source_id, destination_id) = resolve_numeric_asset_transfer_scope(
+                    state_transaction,
+                    escrow_id,
+                    destination_id,
+                    NumericAssetTransferScopePolicy::Ambient,
+                )?;
+                let spec = state_transaction
+                    .world
+                    .asset_definition(source_id.definition())?
+                    .spec();
+                ensure_resolved_numeric_asset_transfer_policies(
+                    state_transaction,
+                    &source_id,
+                    &destination_id,
+                    amount,
+                    spec,
+                    source_policy,
+                )?;
+                prepare_retail_daily_usage_update(
+                    state_transaction,
+                    &source_id,
+                    &destination_id,
+                    amount,
+                    source_policy,
+                )?;
+                let delta = state_transaction
+                    .world
+                    .precheck_numeric_asset_transfer_delta_exact_with_control_policy(
+                        &source_id,
+                        &destination_id,
+                        amount,
+                        NumericAssetTransferControlPolicy::Enforce,
+                    )?;
+                let source_after = if source_id == destination_id {
+                    &delta.to_balance_after
+                } else {
+                    &delta.from_balance_after
+                };
+                crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+                    state_transaction.world(),
+                    &source_id,
+                    source_after,
+                )?;
+                Ok((source_id, destination_id))
+            })()
+            .map_err(|error| (index, error))?;
+            resolved[index] = Some((source_id, destination_id, amount));
+            // Both slots are inline. Only the completed prefix is passed onward;
+            // the unused second reference for a one-credit prefix is never checked.
+            let (first_source, first_destination, first_amount) = resolved[0]
+                .as_ref()
+                .expect("the first occupied credit was resolved");
+            let (source, destination, amount) = resolved[index]
+                .as_ref()
+                .expect("the current occupied credit was resolved");
+            let movements = [
+                asset_uid::Movement {
+                    source: first_source,
+                    destination: first_destination,
+                    amount: first_amount,
+                    activity: NumericAssetTransferSourcePolicy::SccpEscrowRelease.uid_activity(),
+                },
+                asset_uid::Movement {
+                    source,
+                    destination,
+                    amount,
+                    activity: NumericAssetTransferSourcePolicy::SccpEscrowRelease.uid_activity(),
+                },
+            ];
+            // SPEC: §13.4 HC970 deliberately forgets earlier credits in this occurrence.
+            let checked_movements = if cfg!(all(test, sumeragi_core_mutation = "HC970")) {
+                &movements[index..=index]
+            } else {
+                &movements[..=index]
+            };
+            // SPEC: §13.4 HC969 omits only the UID preflight, never movement enforcement.
+            if !cfg!(all(test, sumeragi_core_mutation = "HC969")) {
+                asset_uid::prepare_movements(
+                    state_transaction.world(),
+                    checked_movements,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .map_err(|error| (index, error))?;
+            }
         }
-        if amount.is_zero() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "asset transfer amount must be non-zero".into(),
-            ));
-        }
-        let source_policy = NumericAssetTransferSourcePolicy::SccpEscrowRelease;
-        ensure_global_asset_write_on_authoritative_route(
-            state_transaction,
-            escrow_id.definition(),
-            "transfer",
-        )?;
-        let source_dataspace = transfer_source_dataspace_hint(state_transaction, escrow_id)?;
-        let resolved_source = state_transaction
-            .world
-            .resolve_asset_id_for_scope_hint(escrow_id, source_dataspace)?;
-        ensure_privacy_public_reserve_source_policy(
-            state_transaction,
-            &resolved_source,
-            source_policy,
-        )?;
-        active_control_record(
-            state_transaction,
-            escrow_id.account(),
-            escrow_id.definition(),
-        )?;
-        prepare_outbound_asset_transfer_control_update(state_transaction, escrow_id, amount)?;
-        state_transaction.world.account(destination_id.account())?;
-        let (source_id, destination_id) = resolve_numeric_asset_transfer_scope(
-            state_transaction,
-            escrow_id,
-            destination_id,
-            NumericAssetTransferScopePolicy::Ambient,
-        )?;
-        let spec = state_transaction
-            .world
-            .asset_definition(source_id.definition())?
-            .spec();
-        ensure_resolved_numeric_asset_transfer_policies(
-            state_transaction,
-            &source_id,
-            &destination_id,
-            amount,
-            spec,
-            source_policy,
-        )?;
-        prepare_retail_daily_usage_update(
-            state_transaction,
-            &source_id,
-            &destination_id,
-            amount,
-            source_policy,
-        )?;
-        let delta = state_transaction
-            .world
-            .precheck_numeric_asset_transfer_delta_exact_with_control_policy(
-                &source_id,
-                &destination_id,
-                amount,
-                NumericAssetTransferControlPolicy::Enforce,
-            )?;
-        let source_after = if source_id == destination_id {
-            &delta.to_balance_after
-        } else {
-            &delta.from_balance_after
-        };
-        crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
-            state_transaction.world(),
-            &source_id,
-            source_after,
-        )?;
         Ok(())
     }
     /// Consume one native AMX movement after independently rejoining exact canonical custody.
@@ -5483,7 +5550,8 @@ pub mod isi {
                 );
                 if destination_id.account() == &record.seller {
                     selected.source_policy = NumericAssetTransferSourcePolicy::NativeEscrowReturn;
-                    selected.control_policy = NumericAssetTransferControlPolicy::RetainedPayerReturn;
+                    selected.control_policy =
+                        NumericAssetTransferControlPolicy::RetainedPayerReturn;
                 }
                 selected
             }
@@ -5749,7 +5817,7 @@ pub mod isi {
         execute_checked_numeric_asset_burn(
             state_transaction,
             Some(&authority),
-            AssetId::new(bond, holder),
+            &(AssetId::new(bond, holder)),
             units,
             NumericAssetBurnSourcePolicy::BondRedemption,
             None,
@@ -5777,7 +5845,7 @@ pub mod isi {
         execute_checked_numeric_asset_burn(
             state_transaction,
             Some(&authority),
-            AssetId::new(bond, authority.clone()),
+            &(AssetId::new(bond, authority.clone())),
             units,
             NumericAssetBurnSourcePolicy::BondTreasuryRetirement,
             None,
@@ -5821,8 +5889,7 @@ pub mod isi {
                 .world
                 .assets
                 .get(&resolved)
-                .map(|value| value.as_ref().clone())
-                .unwrap_or_else(Quantity::zero);
+                .map_or_else(Quantity::zero, |value| value.as_ref().clone());
             if balance != session.liability {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "session claims differ from exact retained custody".into(),
@@ -5857,8 +5924,7 @@ pub mod isi {
                         session.asset_definition.clone(),
                         session.custody.clone(),
                     ))
-                    .map(|value| value.as_ref().clone())
-                    .unwrap_or_else(Quantity::zero);
+                    .map_or_else(Quantity::zero, |value| value.as_ref().clone());
                 if current != session.liability {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "session funding reserve differs from its exact admitted liability".into(),
@@ -6332,8 +6398,7 @@ pub mod isi {
             if amount.is_zero() {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "asset transfer amount must be non-zero".into(),
-                )
-                .into());
+                ));
             }
             // Every numeric movement path prepares here, so the book closing and
             // the redemption freeze of a registered bond cover all of them.
@@ -6341,7 +6406,12 @@ pub mod isi {
                 state_transaction,
                 &event_source_id,
                 &event_destination_id,
-                matches!(source_policy, NumericAssetTransferSourcePolicy::NativeEscrowCustody | NumericAssetTransferSourcePolicy::NativeEscrowPartition | NumericAssetTransferSourcePolicy::NativeEscrowReturn),
+                matches!(
+                    source_policy,
+                    NumericAssetTransferSourcePolicy::NativeEscrowCustody
+                        | NumericAssetTransferSourcePolicy::NativeEscrowPartition
+                        | NumericAssetTransferSourcePolicy::NativeEscrowReturn
+                ),
             )?;
             if scope_policy == NumericAssetTransferScopePolicy::Ambient {
                 ensure_global_asset_write_on_authoritative_route(
@@ -6383,7 +6453,8 @@ pub mod isi {
                 source_policy,
             )?;
             let (control_before, control_update) = match control_policy {
-                NumericAssetTransferControlPolicy::Enforce | NumericAssetTransferControlPolicy::RetainedPayerReturn => (
+                NumericAssetTransferControlPolicy::Enforce
+                | NumericAssetTransferControlPolicy::RetainedPayerReturn => (
                     PreparedTransferControl::Required(active_control_record(
                         state_transaction,
                         event_source_id.account(),
@@ -6625,8 +6696,7 @@ pub mod isi {
                     .world
                     .assets
                     .get(&self.destination_id)
-                    .map(|value| value.as_ref().clone())
-                    .unwrap_or_else(Quantity::zero);
+                    .map_or_else(Quantity::zero, |value| value.as_ref().clone());
                 if destination_balance != self.prechecked_delta.to_balance_before {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -6744,12 +6814,15 @@ pub mod isi {
             }
             asset_uid::prepare_movements(
                 state_transaction.world(),
-                &plans.iter().map(|plan| asset_uid::Movement {
-                    source: &plan.source_id,
-                    destination: &plan.destination_id,
-                    amount: &plan.amount,
-                    activity: plan.source_policy.uid_activity(),
-                }).collect::<Vec<_>>(),
+                &plans
+                    .iter()
+                    .map(|plan| asset_uid::Movement {
+                        source: &plan.source_id,
+                        destination: &plan.destination_id,
+                        amount: &plan.amount,
+                        activity: plan.source_policy.uid_activity(),
+                    })
+                    .collect::<Vec<_>>(),
                 state_transaction.block_unix_timestamp_ms(),
             )?;
             let mut initial_balances = BTreeMap::<AssetId, Quantity>::new();
@@ -6760,8 +6833,7 @@ pub mod isi {
                             .world
                             .assets
                             .get(id)
-                            .map(|value| value.as_ref().clone())
-                            .unwrap_or_else(Quantity::zero)
+                            .map_or_else(Quantity::zero, |value| value.as_ref().clone())
                     });
                 }
             }
@@ -6955,8 +7027,7 @@ pub mod isi {
                     .world
                     .assets
                     .get(id)
-                    .map(|value| value.as_ref().clone())
-                    .unwrap_or_else(Quantity::zero);
+                    .map_or_else(Quantity::zero, |value| value.as_ref().clone());
                 if &actual != expected {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!("atomic numeric movement balance changed before apply: {id}")
@@ -7000,12 +7071,16 @@ pub mod isi {
             }
             asset_uid::prepare_movements(
                 state_transaction.world(),
-                &self.plans.iter().map(|plan| asset_uid::Movement {
-                    source: &plan.source_id,
-                    destination: &plan.destination_id,
-                    amount: &plan.amount,
-                    activity: plan.source_policy.uid_activity(),
-                }).collect::<Vec<_>>(),
+                &self
+                    .plans
+                    .iter()
+                    .map(|plan| asset_uid::Movement {
+                        source: &plan.source_id,
+                        destination: &plan.destination_id,
+                        amount: &plan.amount,
+                        activity: plan.source_policy.uid_activity(),
+                    })
+                    .collect::<Vec<_>>(),
                 state_transaction.block_unix_timestamp_ms(),
             )?;
             // Aggregation has replaced every delta with its exact ordered virtual balance
@@ -7285,18 +7360,17 @@ pub mod isi {
                         let destination = self.destination.apply(state_transaction)?;
                         Ok((source, destination))
                     };
-                    match self.quantity_authorization_context {
-                        Some(context) => state_transaction.apply_with_quantity_transfer_candidate(
+                    if let Some(context) = self.quantity_authorization_context {
+                        state_transaction.apply_with_quantity_transfer_candidate(
                             authority,
                             transcript_identity,
                             context,
                             &legs,
                             apply,
-                        ),
-                        None => {
-                            state_transaction.poison_quantity_candidate_owner();
-                            apply(state_transaction)
-                        }
+                        )
+                    } else {
+                        state_transaction.poison_quantity_candidate_owner();
+                        apply(state_transaction)
                     }
                 },
             )
@@ -7845,7 +7919,7 @@ pub mod isi {
     /// Check every definition, custody, usage and privacy policy of a numeric movement between
     /// the resolved balances `source_id` and `destination_id` under `source_policy`, given the
     /// definition's numeric `spec`, without mutating state. Every movement path and the SCCP
-    /// release precheck ([`precheck_sccp_escrow_release`]) share this gate.
+    /// release precheck ([`precheck_sccp_escrow_releases`]) share this gate.
     fn ensure_resolved_numeric_asset_transfer_policies(
         state_transaction: &StateTransaction<'_, '_>,
         source_id: &AssetId,
@@ -7864,7 +7938,12 @@ pub mod isi {
                 .into(),
             ));
         }
-        ensure_uid_enrollment_movement(state_transaction.world(), source_id, destination_id, source_policy)?;
+        ensure_uid_enrollment_movement(
+            state_transaction.world(),
+            source_id,
+            destination_id,
+            source_policy,
+        )?;
         ensure_privacy_public_reserve_source_policy(state_transaction, source_id, source_policy)?;
         if state_transaction
             .world
@@ -7956,23 +8035,13 @@ pub mod isi {
             ensure_not_bond_vault_destination(state_transaction, destination_id)?;
         }
         match source_policy {
-            NumericAssetTransferSourcePolicy::User
-            | NumericAssetTransferSourcePolicy::LinkedFi
-            | NumericAssetTransferSourcePolicy::NativeEscrowFunding
-            | NumericAssetTransferSourcePolicy::RetailMonetary(_)
-            | NumericAssetTransferSourcePolicy::PrivacyPoolDeposit(_)
-            | NumericAssetTransferSourcePolicy::PrivacyPoolBridge(_)
-            | NumericAssetTransferSourcePolicy::GameSessionFunding => {
-                ensure_not_native_escrow_source(state_transaction, source_id)?;
-            }
             NumericAssetTransferSourcePolicy::FxEscrowDeposit => {
                 ensure_not_native_escrow_source(state_transaction, source_id)?;
                 if !is_fx_corridor_escrow_asset(state_transaction, destination_id)? {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "FX corridor escrow deposit destination is not governed protocol custody"
                             .into(),
-                    )
-                    .into());
+                    ));
                 }
             }
             NumericAssetTransferSourcePolicy::BondVaultFunding => {
@@ -7984,7 +8053,7 @@ pub mod isi {
                         "bond funding destination is not a registered bond vault".into(),
                     ));
                 }
-                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, source_id)?;
             }
             NumericAssetTransferSourcePolicy::BondVaultCustody => {
                 if !crate::smartcontracts::isi::bond::is_bond_vault_asset(
@@ -8045,8 +8114,7 @@ pub mod isi {
                 if !is_fx_corridor_escrow_asset(state_transaction, source_id)? {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "FX corridor escrow release source is not governed protocol custody".into(),
-                    )
-                    .into());
+                    ));
                 }
                 ensure_not_native_escrow_source(state_transaction, source_id)?;
             }
@@ -8057,12 +8125,18 @@ pub mod isi {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "fee sponsor custody transfer source does not match configured custody"
                             .into(),
-                    )
-                    .into());
+                    ));
                 }
                 ensure_not_native_escrow_source(state_transaction, source_id)?;
             }
-            NumericAssetTransferSourcePolicy::OracleReward
+            NumericAssetTransferSourcePolicy::User
+            | NumericAssetTransferSourcePolicy::LinkedFi
+            | NumericAssetTransferSourcePolicy::NativeEscrowFunding
+            | NumericAssetTransferSourcePolicy::RetailMonetary(_)
+            | NumericAssetTransferSourcePolicy::PrivacyPoolDeposit(_)
+            | NumericAssetTransferSourcePolicy::PrivacyPoolBridge(_)
+            | NumericAssetTransferSourcePolicy::GameSessionFunding
+            | NumericAssetTransferSourcePolicy::OracleReward
             | NumericAssetTransferSourcePolicy::OraclePenalty
             | NumericAssetTransferSourcePolicy::OracleDisputeResolution
             | NumericAssetTransferSourcePolicy::SocialReward
@@ -8129,7 +8203,7 @@ pub mod isi {
                 let destination_id = AssetId::with_scope(
                     source_id.definition().clone(),
                     destination,
-                    source_id.scope().clone(),
+                    *source_id.scope(),
                 );
                 execute_numeric_asset_movement(
                     state_transaction,
@@ -8146,7 +8220,7 @@ pub mod isi {
                 execute_checked_numeric_asset_burn(
                     state_transaction,
                     None,
-                    source_id,
+                    &(source_id),
                     amount,
                     NumericAssetBurnSourcePolicy::FeeSponsorCustody,
                     quantity_source.map(|(execution_entry, _, _)| FeeSponsorBurnQuantityOwner {
@@ -8191,7 +8265,7 @@ pub mod isi {
         let destination_id = AssetId::with_scope(
             source_id.definition().clone(),
             destination,
-            source_id.scope().clone(),
+            *source_id.scope(),
         );
         let binding = canonical_numeric_movement_binding(&(
             program_id,
@@ -8529,19 +8603,23 @@ pub mod isi {
         });
         let original = PreparedNumericSupplyChange::prepare(state, id, amount, mint);
         let prepared = match (state.tx_call_hash, context, &original) {
-            (Some(entry_hash), Some(context), Ok(original)) => match &original.supply_after {
-                Ok(supply_after) => state.prepare_quantity_supply_candidate(
-                    authority,
-                    entry_hash,
-                    context,
-                    &original.id,
-                    amount,
-                    mint,
-                    &original.balance_after,
-                    supply_after,
-                ),
-                Err(_) => Err(crate::state::QuantityCaptureIssue::InvalidFacts),
-            },
+            (Some(entry_hash), Some(context), Ok(original)) => {
+                original.supply_after.as_ref().map_or_else(
+                    |_| Err(crate::state::QuantityCaptureIssue::InvalidFacts),
+                    |supply_after| {
+                        state.prepare_quantity_supply_candidate(
+                            authority,
+                            entry_hash,
+                            context,
+                            &original.id,
+                            amount,
+                            mint,
+                            &original.balance_after,
+                            supply_after,
+                        )
+                    },
+                )
+            }
             (_, _, Err(_)) => Err(crate::state::QuantityCaptureIssue::InvalidFacts),
             _ => Err(crate::state::QuantityCaptureIssue::UnsupportedOwner),
         };
@@ -8557,8 +8635,7 @@ pub mod isi {
             if quantity.is_zero() {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "asset mint amount must be non-zero".into(),
-                )
-                .into());
+                ));
             }
             let asset_id = self.destination().clone();
             ensure_global_asset_write_on_authoritative_route(
@@ -8774,7 +8851,7 @@ pub mod isi {
     pub(crate) fn execute_retail_reserve_mint(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        asset_id: AssetId,
+        asset_id: &AssetId,
         quantity: Quantity,
     ) -> Result<(), Error> {
         if quantity.is_zero() {
@@ -9267,8 +9344,7 @@ pub mod isi {
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     error.to_string().into(),
-                )
-                .into());
+                ));
             }
             let now_ms = state_transaction.block_unix_timestamp_ms();
             let mut record = active_control_record(
@@ -9289,16 +9365,14 @@ pub mod isi {
                         )
                         .into(),
                     ),
-                )
-                .into());
+                ));
             }
             if record.incoming_availability == self.incoming
                 && record.outgoing_availability == self.outgoing
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "asset-transfer availability update must change at least one direction".into(),
-                )
-                .into());
+                ));
             }
             record.availability_revision =
                 record.availability_revision.checked_add(1).ok_or_else(|| {
@@ -9645,14 +9719,12 @@ pub mod isi {
                 AssetTransferAdmissionError::OutgoingDisabled(_) => {
                     AssetBatchTransferRejectionCode::OutgoingDisabled
                 }
-                AssetTransferAdmissionError::AvailabilityRevisionMismatch(_) => {
+                AssetTransferAdmissionError::AvailabilityRevisionMismatch(_)
+                | AssetTransferAdmissionError::PolicyRejected(_) => {
                     AssetBatchTransferRejectionCode::PolicyRejected
                 }
                 AssetTransferAdmissionError::Blacklisted(_) => {
                     AssetBatchTransferRejectionCode::Blacklisted
-                }
-                AssetTransferAdmissionError::PolicyRejected(_) => {
-                    AssetBatchTransferRejectionCode::PolicyRejected
                 }
             },
             _ => AssetBatchTransferRejectionCode::PolicyRejected,
@@ -10316,7 +10388,6 @@ pub mod query {
     }
     fn parse_asset_simple_values(field: &str, values: &[Value]) -> Option<AssetSimplePath> {
         match field {
-            "account" | "account_id" | "owner" | "id.account" => None,
             "definition"
             | "asset_definition"
             | "asset_definition_id"
@@ -10693,27 +10764,26 @@ pub mod query {
                     definitions,
                 } => {
                     let domains: BTreeSet<_> = domains.into_iter().collect();
-                    let definitions: BTreeSet<_> = match definitions {
-                        Some(definitions) => definitions
+                    let definitions: BTreeSet<_> = if let Some(definitions) = definitions {
+                        definitions
                             .into_iter()
                             .filter(|definition| {
                                 asset_definition_domain(world, definition)
                                     .is_some_and(|domain| domains.contains(&domain))
                             })
-                            .collect(),
-                        None => {
-                            let mut definitions = BTreeSet::<AssetDefinitionId>::new();
-                            for domain in &domains {
-                                definitions.extend(
-                                    crate::state::range_bounds::index_members(
-                                        world.domain_asset_definitions(),
-                                        domain,
-                                    )
-                                    .cloned(),
-                                );
-                            }
-                            definitions
+                            .collect()
+                    } else {
+                        let mut definitions = BTreeSet::<AssetDefinitionId>::new();
+                        for domain in &domains {
+                            definitions.extend(
+                                crate::state::range_bounds::index_members(
+                                    world.domain_asset_definitions(),
+                                    domain,
+                                )
+                                .cloned(),
+                            );
                         }
+                        definitions
                     };
                     Box::new(
                         world
@@ -10907,11 +10977,12 @@ pub mod query {
                 ),
             };
             Ok(iter.filter(move |asset_definition| {
-                if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_asset_definition(world, predicate, asset_definition)
-                } else {
-                    filter.applies(asset_definition)
-                }
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(asset_definition),
+                    |predicate| {
+                        predicate_matches_asset_definition(world, predicate, asset_definition)
+                    },
+                )
             }))
         }
     }

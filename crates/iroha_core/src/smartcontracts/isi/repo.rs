@@ -113,7 +113,7 @@ fn ensure_explicit_governance(governance: RepoGovernance) -> Result<(), Error> {
     Ok(())
 }
 fn asset_in_account_with_same_scope(source: &AssetId, account: AccountId) -> AssetId {
-    AssetId::with_scope(source.definition().clone(), account, source.scope().clone())
+    AssetId::with_scope(source.definition().clone(), account, *source.scope())
 }
 fn compute_accrued_interest(
     principal: &Quantity,
@@ -169,7 +169,6 @@ fn compute_accrued_interest(
         InstructionExecutionError::InvariantViolation(
             format!("repo interest produced an invalid quantity: {err}").into(),
         )
-        .into()
     })
 }
 fn expected_cash_settlement(
@@ -190,7 +189,6 @@ fn expected_cash_settlement(
         InstructionExecutionError::InvariantViolation(
             "repo cash leg overflowed while adding accrued interest".into(),
         )
-        .into()
     })
 }
 #[allow(clippy::too_many_lines)]
@@ -339,7 +337,7 @@ impl Execute for RepoIsi {
         );
         state_transaction
             .world
-            .insert_repo_agreement_entry(agreement.clone());
+            .insert_repo_agreement_entry(&(agreement.clone()));
         iroha_logger::info!(
             %agreement_id,
             initiator=%initiator,
@@ -508,7 +506,7 @@ impl Execute for ReverseRepoIsi {
         }
         state_transaction
             .world
-            .insert_repo_agreement_entry(stored_agreement.clone());
+            .insert_repo_agreement_entry(&(stored_agreement.clone()));
         iroha_logger::info!(
             %agreement_id,
             initiator=%initiator,
@@ -620,7 +618,7 @@ impl Execute for RepoMarginCallIsi {
         agreement.record_margin_check(current_timestamp_ms);
         state_transaction
             .world
-            .insert_repo_agreement_entry(agreement.clone());
+            .insert_repo_agreement_entry(&(agreement.clone()));
         iroha_logger::info!(
             %agreement_id,
             initiator=%agreement.initiator(),
@@ -1658,7 +1656,7 @@ mod tests {
             make_agreement(same_initiator_id, ALICE_ID.clone(), custodian_id.clone()),
             make_agreement(same_counterparty_id, custodian_id, BOB_ID.clone()),
         ] {
-            stx.world.insert_repo_agreement_entry(agreement);
+            stx.world.insert_repo_agreement_entry(&(agreement));
         }
         let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
             predicate

@@ -1,6 +1,6 @@
 //! Original worker custody between admission, readiness and joiner attachment.
 //!
-//! Preparation never exposes a delivery handle or a partially owned RunningDriver.
+//! Preparation never exposes a delivery handle or a partially owned `RunningDriver`.
 //! Its private worker owner joins every acquired prefix on error or unwind. Only
 //! successful readiness transfers those workers and the original prestarted joiner
 //! together. Ordinary and deferred activation share this one worker constructor.
@@ -93,7 +93,7 @@ impl Drop for OriginalJoiner {
 /// An unexposed acquired worker prefix, still owned by its preparing caller.
 ///
 /// The caller is never one of these workers: no callback receives this owner or
-/// its handle before attach. After attach, RunningDriver owns the established
+/// its handle before attach. After attach, `RunningDriver` owns the established
 /// self-worker handoff semantics. The original joiner guard outlives this owner.
 struct PreparedWorkers {
     handle: DriverHandle,
@@ -167,7 +167,7 @@ impl Drop for PreparedWorkers {
     }
 }
 
-/// Only the existing ordinary entry exposes a RunningDriver, after both owners attach.
+/// Only the existing ordinary entry exposes a `RunningDriver`, after both owners attach.
 ///
 /// # Errors
 /// Preserves the original configuration, resource admission, physical allocation,
@@ -405,7 +405,7 @@ where
             },
             retirement,
         );
-        prepared.origin = origin.clone();
+        prepared.origin.clone_from(&origin);
         let result = (|| -> Result<(), DriverError> {
             let (persist_tx, persist_rx) = mpsc::channel::<(u64, Write)>();
             {
@@ -567,7 +567,7 @@ where
                                         .bind_release_waker(shared.wake.clone().into_waker());
                                     kernel
                                         .exec
-                                        .bind_release_thread(shared.wake.original_thread());
+                                        .bind_release_thread(&shared.wake.original_thread());
                                     shared
                                         .pending_admission
                                         .lock()

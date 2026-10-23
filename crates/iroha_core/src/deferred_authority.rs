@@ -98,7 +98,7 @@ impl fmt::Display for OpaqueDeferredAuthorityError {
 /// # Errors
 /// Any nested committee, monetary staking or `RecordSccpMessage` instruction, an unresolved
 /// approval, or an excessively deep proposal graph.
-pub(crate) fn reject_opaque_deferred_authority(
+pub fn reject_opaque_deferred_authority(
     instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Attempt<TransactionRejectionReason>> {
@@ -123,7 +123,7 @@ pub(crate) fn reject_opaque_deferred_authority(
     single_use_lifetimes,
     reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
 )]
-pub(crate) fn reject_opaque_instruction_authority<'a>(
+pub fn reject_opaque_instruction_authority<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Attempt<ValidationFail>> {
@@ -212,7 +212,7 @@ fn is_sccp_outbound_record(instruction: &InstructionBox) -> bool {
 /// multisig approval needs ledger state to resolve; the execution-time check
 /// ([`reject_opaque_instruction_authority`]) covers it. Graphs deeper than the traversal bound
 /// return `false` here and are refused by that check.
-pub(crate) fn trigger_executable_derives_sccp_outbound_record(executable: &Executable) -> bool {
+pub fn trigger_executable_derives_sccp_outbound_record(executable: &Executable) -> bool {
     executable_derives_sccp_outbound_record(executable, 0)
 }
 

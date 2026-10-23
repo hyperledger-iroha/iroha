@@ -77,7 +77,7 @@ impl PrivateSettlementCommitteeValidationInputsV1 {
 /// # Errors
 ///
 /// Returns a uniformly redacted rejection without returning restricted bytes.
-pub(crate) fn prepare_private_settlement_leg_v1(
+pub fn prepare_private_settlement_leg_v1(
     state: &StateView<'_>,
     store: &PrivateSettlementFileSidecarStoreV1,
     payload_digest: Hash,
@@ -183,7 +183,7 @@ where
 /// Uniform public-safe committee preparation failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 #[error("private-settlement committee preparation failed")]
-pub(crate) struct PrivateSettlementCommitteeErrorV1;
+pub struct PrivateSettlementCommitteeErrorV1;
 
 #[cfg(test)]
 mod tests {

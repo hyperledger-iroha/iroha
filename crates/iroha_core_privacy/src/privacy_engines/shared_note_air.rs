@@ -154,14 +154,27 @@ macro_rules! define_note_air_trace_core_v1 {
                             + u64::from(choose)
                             + u64::from(SHA256_ROUND_CONSTANTS_V1[round])
                             + u64::from(schedule[round]);
-                        let t1 = t1_wide as u32;
+                        let t1 =
+                            u32::try_from(t1_wide & u64::from(u32::MAX)).expect("SHA-256 low word");
                         let big_0 = sigma_big_0(a);
                         let majority = sha_majority(a, b, c);
                         let t2_wide = u64::from(big_0) + u64::from(majority);
-                        let t2 = t2_wide as u32;
+                        let t2 =
+                            u32::try_from(t2_wide & u64::from(u32::MAX)).expect("SHA-256 low word");
                         let new_a_wide = u64::from(t1) + u64::from(t2);
                         let new_e_wide = u64::from(d) + u64::from(t1);
-                        let next = [new_a_wide as u32, a, b, c, new_e_wide as u32, e, f, g];
+                        let next = [
+                            u32::try_from(new_a_wide & u64::from(u32::MAX))
+                                .expect("SHA-256 low word"),
+                            a,
+                            b,
+                            c,
+                            u32::try_from(new_e_wide & u64::from(u32::MAX))
+                                .expect("SHA-256 low word"),
+                            e,
+                            f,
+                            g,
+                        ];
                         let mut row = Self::empty_row();
                         for (index, value) in schedule.iter().copied().enumerate() {
                             row[SHA_SCHEDULE_OFFSET + index] = F(u64::from(value));
@@ -559,7 +572,7 @@ macro_rules! define_note_air_trace_core_v1 {
         }
         fn signed_small_field(value: i16) -> F {
             if value >= 0 {
-                F(value as u64)
+                F(u64::from(value.unsigned_abs()))
             } else {
                 F::ZERO.sub(F(u64::from(value.unsigned_abs())))
             }

@@ -505,11 +505,7 @@ pub(crate) fn validate_contract_lifecycle_call(
     let pending = pending_contract_lifecycle(world, contract_address)?;
     match (kind, pending) {
         (EntryPointKind::Hajimari, Some(pending @ PendingContractLifecycle::Hajimari { .. }))
-            if pending.code_hash() == executing_code_hash =>
-        {
-            Ok(Some(pending))
-        }
-        (EntryPointKind::Kaizen, Some(pending @ PendingContractLifecycle::Kaizen { .. }))
+        | (EntryPointKind::Kaizen, Some(pending @ PendingContractLifecycle::Kaizen { .. }))
             if pending.code_hash() == executing_code_hash =>
         {
             Ok(Some(pending))
@@ -646,16 +642,18 @@ pub(crate) fn validate_contract_lifecycle_state_completion(
             .map_err(|error| {
                 ValidationFail::InternalError(format!("invalid upgraded state path: {error}"))
             })?;
-        let value = match overlay.get(&path) {
-            Some(value) => value.as_deref(),
-            None => world.smart_contract_state().get(&path).map(Vec::as_slice),
-        }
-        .ok_or_else(|| {
-            ValidationFail::NotPermitted(format!(
-                "kaizen/改善 did not initialize new scalar state `{}`",
-                state.name
-            ))
-        })?;
+        let value = overlay
+            .get(&path)
+            .map_or_else(
+                || world.smart_contract_state().get(&path).map(Vec::as_slice),
+                |value| value.as_deref(),
+            )
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "kaizen/改善 did not initialize new scalar state `{}`",
+                    state.name
+                ))
+            })?;
         ivm::host::validate_persisted_state_value_payload(&state.ty, value).map_err(|error| {
             ValidationFail::NotPermitted(format!(
                 "kaizen/改善 initialized new scalar state `{}` with an invalid value: {error}",
@@ -1964,7 +1962,7 @@ seiyaku LifecycleTwo { permission CanRunLifecycleTwo;
             let (bytes, manifest) = lifecycle_contract(source);
             let hash = manifest.code_hash.unwrap();
             let id = ContractArtifactId::for_address(&address, hash).unwrap();
-            transaction.world.contract_code.insert(id.clone(), bytes);
+            transaction.world.contract_code.insert(id, bytes);
             transaction.world.contract_manifests.insert(id, manifest);
             hash
         };

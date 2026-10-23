@@ -46,7 +46,7 @@ fn absolute_matches_interpreter_full_width_aliases_r0_and_unused_source() {
                 } else {
                     input
                         .checked_abs()
-                        .map(|v| i64::cast_unsigned(v))
+                        .map(i64::cast_unsigned)
                         .ok_or(SegmentOutcome::AssertionFailed)
                 };
                 assert_eq!(
@@ -54,10 +54,10 @@ fn absolute_matches_interpreter_full_width_aliases_r0_and_unused_source() {
                     expected.err().unwrap_or(SegmentOutcome::Continue)
                 );
                 let mut wanted = segment.before.registers;
-                if let Ok(result) = expected {
-                    if rd != 0 {
-                        wanted[usize::from(rd)] = result;
-                    }
+                if let Ok(result) = expected
+                    && rd != 0
+                {
+                    wanted[usize::from(rd)] = result;
                 }
                 assert_eq!(segment.after.registers, wanted);
                 assert_eq!(segment.after.tags, segment.before.tags);
@@ -192,7 +192,11 @@ fn absolute_maximum_segments_fit_existing_security_caps_and_keep_degree_four() {
         assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
         assert_eq!(
             measured_maximum_affine_degree_v1(
-                [0xac + gas as u8; 32],
+                [0xac + u8::from_le_bytes(
+                    u64::to_le_bytes(gas)[..1]
+                        .try_into()
+                        .expect("low-byte width")
+                ); 32],
                 [ROW_WIDTH, ROW_WIDTH, 0, 0, FIXED_WIDTH],
                 3,
                 4,
@@ -225,8 +229,8 @@ fn native_stark_proves_maximum_absolute_segment_and_binds_trap_state_code() {
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 segment.steps,
-                segment.before,
-                after,
+                &segment.before,
+                &after,
                 segment.outcome,
             )
             .unwrap();
@@ -241,8 +245,8 @@ fn native_stark_proves_maximum_absolute_segment_and_binds_trap_state_code() {
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 segment.steps,
-                segment.before,
-                segment.after,
+                &segment.before,
+                &segment.after,
                 other,
             )
             .unwrap();
@@ -256,8 +260,8 @@ fn native_stark_proves_maximum_absolute_segment_and_binds_trap_state_code() {
         let changed = ScalarSegment::new(
             ivm::prepare_contract(Arc::from(artifact)).unwrap(),
             segment.steps,
-            segment.before,
-            segment.after,
+            &segment.before,
+            &segment.after,
             segment.outcome,
         )
         .unwrap();

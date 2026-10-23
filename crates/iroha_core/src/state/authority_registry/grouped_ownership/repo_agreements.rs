@@ -7,7 +7,7 @@ use crate::state::authority_registry::{
 };
 use iroha_data_model::repo::{RepoAgreement, RepoAgreementId};
 
-/// Retained canonical repo_agreements and all three original derived index readers.
+/// Retained canonical `repo_agreements` and all three original derived index readers.
 pub(in super::super) struct CheckedRepoAgreements<'world> {
     world: &'world World,
     rows: CommittedStorageView<'world, RepoAgreementId, RepoAgreement>,
@@ -186,12 +186,20 @@ fn contains<K: RepoKey>(
     }
     Ok(found)
 }
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "This projection implements the fallible grouped ownership callback signature"
+)]
 fn initiator<'a>(
     agreement: &'a RepoAgreement,
     _: &mut RepoWork,
 ) -> Result<Option<&'a AccountId>, GroupedOwnershipError> {
     Ok(Some(agreement.initiator()))
 }
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "This projection implements the fallible grouped ownership callback signature"
+)]
 fn counterparty<'a>(
     agreement: &'a RepoAgreement,
     _: &mut RepoWork,

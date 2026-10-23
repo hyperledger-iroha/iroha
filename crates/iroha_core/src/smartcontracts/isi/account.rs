@@ -250,8 +250,7 @@ pub mod isi {
                 if value.try_into_any_norito::<bool>().ok() != Some(true) {
                     return Err(Error::InvariantViolation("retail enrollment accepts only true; account classification cannot be removed".into()));
                 }
-                return crate::retail_fee::enroll(state_transaction, authority, &account_id)
-                    .map_err(Into::into);
+                return crate::retail_fee::enroll(state_transaction, authority, &account_id);
             }
             if key.as_ref() == iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
             {
@@ -1762,11 +1761,8 @@ pub mod query {
             if let Some(candidates) = candidate_ids {
                 let iter: Box<dyn Iterator<Item = Account> + '_> =
                     Box::new(candidates.into_iter().filter_map(move |account_id| {
-                        let Some((account_id, account_value)) =
-                            world.accounts().get_key_value(&account_id)
-                        else {
-                            return None;
-                        };
+                        let (account_id, account_value) =
+                            world.accounts().get_key_value(&account_id)?;
                         if id_only_predicate {
                             return Some(account_from_entry(world, account_id, account_value));
                         }
@@ -1834,10 +1830,7 @@ pub mod query {
             if let Some(candidates) = candidate_ids {
                 let iter: Box<dyn Iterator<Item = AccountId> + '_> =
                     Box::new(candidates.into_iter().filter_map(move |account_id| {
-                        let Some((account_id, _)) = world.accounts().get_key_value(&account_id)
-                        else {
-                            return None;
-                        };
+                        let (account_id, _) = world.accounts().get_key_value(&account_id)?;
                         if id_only_predicate || filter.applies(account_id) {
                             Some(account_id.clone())
                         } else {
@@ -1930,11 +1923,7 @@ pub mod query {
             };
             let iter: Box<dyn Iterator<Item = Account> + '_> =
                 Box::new(subjects.into_iter().filter_map(move |subject| {
-                    let Some((account_id, account_value)) =
-                        world.accounts().get_key_value(&subject)
-                    else {
-                        return None;
-                    };
+                    let (account_id, account_value) = world.accounts().get_key_value(&subject)?;
                     if id_only_predicate {
                         return Some(account_from_entry(world, account_id, account_value));
                     }
@@ -2280,7 +2269,7 @@ pub mod query {
                 .set_label(Some(alias.clone()));
             state_transaction
                 .world
-                .insert_account_alias_binding(alias.clone(), account_id.clone());
+                .insert_account_alias_binding(&(alias.clone()), &(account_id.clone()));
             state_transaction.world.replace_account_rekey_record(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     alias.clone(),
@@ -3837,7 +3826,7 @@ pub mod query {
                 iroha_data_model::IntoKeyValue::into_key_value(account);
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
-                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+                .insert_account_alias_binding(&(primary_label.clone()), &(account_id.clone()));
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(
                     primary_label.clone(),
@@ -3874,7 +3863,7 @@ pub mod query {
             let alias = AccountAlias::domainless("merchant".parse().expect("label"), dataspace);
             seed_account_alias_lease(&mut stx, &ALICE_ID, &alias);
             stx.world
-                .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
+                .insert_account_alias_binding(&(alias.clone()), &(ALICE_ID.clone()));
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(alias, ALICE_ID.clone()));
             stx.apply();
@@ -3904,7 +3893,7 @@ pub mod query {
             let alias = AccountAlias::domainless("merchant".parse().expect("label"), dataspace);
             seed_account_alias_lease(&mut stx, &ALICE_ID, &alias);
             stx.world
-                .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
+                .insert_account_alias_binding(&(alias.clone()), &(ALICE_ID.clone()));
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(alias, ALICE_ID.clone()));
             stx.apply();
@@ -3997,7 +3986,7 @@ pub mod query {
                 iroha_data_model::IntoKeyValue::into_key_value(account);
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
-                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+                .insert_account_alias_binding(&(primary_label.clone()), &(account_id.clone()));
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(
                     primary_label.clone(),
@@ -4062,7 +4051,7 @@ pub mod query {
                 iroha_data_model::IntoKeyValue::into_key_value(account);
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
-                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+                .insert_account_alias_binding(&(primary_label.clone()), &(account_id.clone()));
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(
                     primary_label.clone(),

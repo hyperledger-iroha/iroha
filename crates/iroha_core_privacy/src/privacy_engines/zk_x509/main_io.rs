@@ -596,7 +596,10 @@ pub mod tests {
                         endpoint_v1(ZkX509IoSegmentRoleV1::PublicInput),
                     ]
                 );
-                assert_eq!(digest.byte_len, SHA256_DIGEST_BYTES_V1 as u32);
+                assert_eq!(
+                    digest.byte_len,
+                    u32::try_from(SHA256_DIGEST_BYTES_V1).expect("digest width fits u32")
+                );
                 assert_eq!(digest.public_value.as_deref(), Some(expected_digest));
                 cursor += 3;
             }
@@ -624,7 +627,10 @@ pub mod tests {
                     endpoint_v1(ZkX509IoSegmentRoleV1::Projection),
                 ]
             );
-            assert_eq!(ownership_digest.byte_len, SHA256_DIGEST_BYTES_V1 as u32);
+            assert_eq!(
+                ownership_digest.byte_len,
+                u32::try_from(SHA256_DIGEST_BYTES_V1).expect("digest width fits u32")
+            );
             assert_eq!(ownership_digest.public_value, None);
             cursor += 3;
             assert_eq!(cursor, plan.declarations.len());
@@ -658,7 +664,9 @@ pub mod tests {
         let projection_start = 31 + 2 * ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1;
         for public_digest in 0..2 + ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
             let mut changed = statement.clone();
-            let replacement = [0xD0_u8.wrapping_add(public_digest as u8); SHA256_DIGEST_BYTES_V1];
+            let replacement = [0xD0_u8
+                .wrapping_add(u8::try_from(public_digest).expect("public digest index fits u8"));
+                SHA256_DIGEST_BYTES_V1];
             match public_digest {
                 0 => {
                     changed.subject_public_key_digest =

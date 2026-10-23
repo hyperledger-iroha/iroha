@@ -574,14 +574,14 @@ pub fn p256_scalar_bit_bus_stark_fixed_row_v1(
                 bit,
             } = expected_stark_fixed_access_v1(factor)?
             {
-                let start = slot * STARK_FIXED_SLOT_WIDTH;
-                fixed[start + STARK_FIXED_SLOT_ACTIVE] = F::ONE;
-                fixed[start + STARK_FIXED_SLOT_SCALAR] = F(match scalar {
+                let slot_offset = slot * STARK_FIXED_SLOT_WIDTH;
+                fixed[slot_offset + STARK_FIXED_SLOT_ACTIVE] = F::ONE;
+                fixed[slot_offset + STARK_FIXED_SLOT_SCALAR] = F(match scalar {
                     P256WindowScalarV1::U1 => 1,
                     P256WindowScalarV1::U2 => 2,
                 });
-                fixed[start + STARK_FIXED_SLOT_WINDOW] = F(u64::from(window) + 1);
-                fixed[start + STARK_FIXED_SLOT_BIT] = F(u64::from(bit) + 1);
+                fixed[slot_offset + STARK_FIXED_SLOT_WINDOW] = F(u64::from(window) + 1);
+                fixed[slot_offset + STARK_FIXED_SLOT_BIT] = F(u64::from(bit) + 1);
             }
         }
         fixed[STARK_FIXED_FIRST_ROW] = F(u64::from(row_index == 0));
@@ -979,7 +979,7 @@ impl core::fmt::Debug for P256ScalarBitBusBaseSourceV1 {
             .debug_struct("P256ScalarBitBusBaseSourceV1")
             .field("bind_attempted", &self.bind_attempted)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1050,7 +1050,7 @@ impl P256ScalarBitBusBaseSourceV1 {
     /// Consume the sole phase transition using the opaque MAIN X5B1 token.
     pub(crate) fn bind_v1(
         &mut self,
-        post_base: ZkX509CredentialMainPostBaseChallengesV1,
+        post_base: &ZkX509CredentialMainPostBaseChallengesV1,
     ) -> Result<P256ScalarBitBusBoundSourceV1, P256ScalarBitBusErrorV1> {
         self.ensure_base_phase_v1()?;
         self.bind_attempted = true;
@@ -1067,7 +1067,7 @@ impl P256ScalarBitBusBaseSourceV1 {
         }
         Ok(P256ScalarBitBusBoundSourceV1 {
             material: self.material.take(),
-            post_base: Some(post_base),
+            post_base: Some(*post_base),
             terminals,
         })
     }
@@ -1115,7 +1115,7 @@ impl core::fmt::Debug for P256ScalarBitBusBoundSourceV1 {
         formatter
             .debug_struct("P256ScalarBitBusBoundSourceV1")
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1802,8 +1802,8 @@ mod tests {
                     windows.push(
                         build_p256_window_trace_v1(
                             scalar,
-                            window as u8,
-                            table_v1(),
+                            u8::try_from(window).expect("protocol-bounded index fits u8"),
+                            &table_v1(),
                             bits_for_window_v1(values[scalar_index], window),
                         )
                         .expect("canonical window trace"),
@@ -1831,16 +1831,27 @@ mod tests {
     }
     fn table_v1() -> [P256WindowPointV1; P256_WINDOW_CANDIDATES_V1] {
         core::array::from_fn(|candidate| P256WindowPointV1 {
-            x_be: coordinate_v1(candidate as u8, 0x11),
-            y_be: coordinate_v1(candidate as u8, 0x53),
-            z_be: coordinate_v1(candidate as u8, 0x97),
+            x_be: coordinate_v1(
+                u8::try_from(candidate).expect("protocol-bounded index fits u8"),
+                0x11,
+            ),
+            y_be: coordinate_v1(
+                u8::try_from(candidate).expect("protocol-bounded index fits u8"),
+                0x53,
+            ),
+            z_be: coordinate_v1(
+                u8::try_from(candidate).expect("protocol-bounded index fits u8"),
+                0x97,
+            ),
         })
     }
     fn coordinate_v1(candidate: u8, domain: u8) -> [u8; 32] {
         core::array::from_fn(|index| {
             domain
                 .wrapping_add(candidate.wrapping_mul(17))
-                .wrapping_add((index as u8).wrapping_mul(29))
+                .wrapping_add(
+                    (u8::try_from(index & 0xff).expect("masked fixture byte")).wrapping_mul(29),
+                )
         })
     }
     fn bits_for_window_v1(value: [u8; 32], window: usize) -> [u8; 4] {
@@ -1866,7 +1877,10 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
-                zk_x509_test_digest384_v1(seed.wrapping_add(index as u8).wrapping_add(2))
+                zk_x509_test_digest384_v1(
+                    seed.wrapping_add(u8::try_from(index & 0xff).expect("masked fixture byte"))
+                        .wrapping_add(2),
+                )
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
@@ -1946,7 +1960,12 @@ mod tests {
             transcript
                 .absorb(
                     b"zk-x509-p256-window-base-commitment-v1",
-                    &[&(index as u32).to_be_bytes(), &commitment],
+                    &[
+                        &u32::try_from(index)
+                            .expect("signature index fits u32")
+                            .to_be_bytes(),
+                        &commitment,
+                    ],
                 )
                 .expect("window commitment");
         }
@@ -1966,20 +1985,18 @@ mod tests {
         }
         (0..P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1).any(|row| {
             let next = (row + 1) % P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1;
-            match evaluate_p256_scalar_bit_bus_stark_residues_v1(
+            evaluate_p256_scalar_bit_bus_stark_residues_v1(
                 &base[row],
                 &base[next],
                 &aux[row],
                 &aux[next],
                 &fixed[row],
                 challenges,
-            ) {
-                Ok(residues) => {
-                    residues.len() != P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1
-                        || residues.iter().any(|residue| *residue != F::ZERO)
-                }
-                Err(_) => true,
-            }
+            )
+            .map_or(true, |residues| {
+                residues.len() != P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1
+                    || residues.iter().any(|residue| *residue != F::ZERO)
+            })
         })
     }
     #[test]
@@ -2032,7 +2049,7 @@ mod tests {
                 );
             }
         }
-        let bound = source.bind_v1(post_base).expect("one-shot X5B1 bind");
+        let bound = source.bind_v1(&post_base).expect("one-shot X5B1 bind");
         let aux = bound.aux_source_v1().expect("post-X5B1 auxiliary replay");
         for column in 0..P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1 {
             let mut output = vec![F(99); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
@@ -2090,8 +2107,8 @@ mod tests {
                 .expect("second fixed column");
             assert_eq!(first_column, second_column, "fixed column {column}");
         }
-        let first = first.bind_v1(first_token).expect("first opaque bind");
-        let second = second.bind_v1(second_token).expect("second opaque bind");
+        let first = first.bind_v1(&first_token).expect("first opaque bind");
+        let second = second.bind_v1(&second_token).expect("second opaque bind");
         let mut changed = false;
         for column in 0..P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1 {
             let mut first_column = vec![F::ZERO; P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
@@ -2195,7 +2212,7 @@ mod tests {
             Err(P256ScalarBitBusErrorV1::Topology),
         );
         assert_eq!(bad_width, before);
-        let bound = source.bind_v1(post_base_v1(0x42)).expect("opaque bind");
+        let bound = source.bind_v1(&post_base_v1(0x42)).expect("opaque bind");
         let aux = bound.aux_source_v1().expect("auxiliary source");
         let mut bad_width = vec![F(80); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
         let before = bad_width.clone();
@@ -2224,18 +2241,18 @@ mod tests {
             .expect("active row");
         row[STARK_ARITHMETIC_BITS] = F::ONE.sub(row[STARK_ARITHMETIC_BITS]);
         assert!(matches!(
-            malformed.bind_v1(first_token),
+            malformed.bind_v1(&first_token),
             Err(P256ScalarBitBusErrorV1::Equality),
         ));
         assert!(malformed.bind_attempted_for_test_v1());
         assert!(matches!(
-            malformed.bind_v1(second_token),
+            malformed.bind_v1(&second_token),
             Err(P256ScalarBitBusErrorV1::Phase),
         ));
         let mut valid = base_source_v1();
-        let bound = valid.bind_v1(first_token).expect("first bind succeeds");
+        let bound = valid.bind_v1(&first_token).expect("first bind succeeds");
         assert!(matches!(
-            valid.bind_v1(second_token),
+            valid.bind_v1(&second_token),
             Err(P256ScalarBitBusErrorV1::Phase),
         ));
         assert!(bound.aux_source_v1().is_ok());
@@ -2279,7 +2296,7 @@ mod tests {
         assert!(source.private_is_zeroized_v1());
         let mut source = base_source_v1();
         let mut bound = source
-            .bind_v1(post_base_v1(0x61))
+            .bind_v1(&post_base_v1(0x61))
             .expect("bound scalar-bit source");
         let mut aux = bound.aux_source_v1().expect("auxiliary source");
         aux.next_aux_row_v1()
@@ -2315,11 +2332,11 @@ mod tests {
         for factor in 0..P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1 {
             let row = factor / P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1;
             let slot = factor % P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1;
-            let start = slot * STARK_FIXED_SLOT_WIDTH;
+            let slot_offset = slot * STARK_FIXED_SLOT_WIDTH;
             match expected_stark_fixed_access_v1(factor).expect("in-range factor") {
                 P256ScalarBitBusFixedAccessV1::Inactive => {
                     assert_eq!(
-                        fixed[row][start..start + STARK_FIXED_SLOT_WIDTH],
+                        fixed[row][slot_offset..slot_offset + STARK_FIXED_SLOT_WIDTH],
                         [F::ZERO; STARK_FIXED_SLOT_WIDTH],
                     );
                 }
@@ -2328,20 +2345,20 @@ mod tests {
                     window,
                     bit,
                 } => {
-                    assert_eq!(fixed[row][start + STARK_FIXED_SLOT_ACTIVE], F::ONE);
+                    assert_eq!(fixed[row][slot_offset + STARK_FIXED_SLOT_ACTIVE], F::ONE);
                     assert_eq!(
-                        fixed[row][start + STARK_FIXED_SLOT_SCALAR],
+                        fixed[row][slot_offset + STARK_FIXED_SLOT_SCALAR],
                         F(match scalar {
                             P256WindowScalarV1::U1 => 1,
                             P256WindowScalarV1::U2 => 2,
                         }),
                     );
                     assert_eq!(
-                        fixed[row][start + STARK_FIXED_SLOT_WINDOW],
+                        fixed[row][slot_offset + STARK_FIXED_SLOT_WINDOW],
                         F(u64::from(window) + 1),
                     );
                     assert_eq!(
-                        fixed[row][start + STARK_FIXED_SLOT_BIT],
+                        fixed[row][slot_offset + STARK_FIXED_SLOT_BIT],
                         F(u64::from(bit) + 1),
                     );
                 }
@@ -2713,7 +2730,7 @@ mod tests {
         let mut windows = fixture.windows.clone();
         let mut bits = bits_for_window_v1(fixture.values[0], 0);
         bits[0] ^= 1;
-        windows[0] = build_p256_window_trace_v1(P256WindowScalarV1::U1, 0, table_v1(), bits)
+        windows[0] = build_p256_window_trace_v1(P256WindowScalarV1::U1, 0, &table_v1(), bits)
             .expect("internally valid but inconsistent window");
         assert!(matches!(
             build_zk_x509_p256_scalar_bit_bus_trace_v1(
@@ -3028,7 +3045,9 @@ mod tests {
         );
         let arithmetic_commitment = PrivacyOuterDigestV1::from_bytes([0x81; 48]);
         let window_commitments: [PrivacyOuterDigestV1; 128] = core::array::from_fn(|index| {
-            PrivacyOuterDigestV1::from_bytes(core::array::from_fn(|byte| (index + byte + 1) as u8))
+            PrivacyOuterDigestV1::from_bytes(core::array::from_fn(|byte| {
+                u8::try_from(index + byte + 1).expect("protocol-bounded index fits u8")
+            }))
         });
         let mut first = post_commitment_transcript_v1(arithmetic_commitment, &window_commitments);
         let first_challenges = derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut first)

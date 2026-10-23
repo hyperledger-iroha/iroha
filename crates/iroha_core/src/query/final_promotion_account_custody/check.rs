@@ -16,7 +16,7 @@ use iroha_executor_data_model::permission::sorafs::{
 };
 use sorafs_manifest::signer::custody::{SignerCustodyUseContextV1, verify_signer_custody_use_v1};
 
-pub(crate) fn authorized(
+pub fn authorized(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     deployment: &str,
@@ -42,7 +42,7 @@ pub(crate) fn authorized(
     has_permission(world, authority, permission)
 }
 
-pub(crate) fn check_floor(
+pub fn check_floor(
     state: &impl StateReadOnly,
     check: &FinalPromotionAccountCustodyCheckV1,
     execution_height: u64,
@@ -68,7 +68,7 @@ pub(crate) fn check_floor(
     Ok(())
 }
 
-pub(crate) fn accounts_eligible(
+pub fn accounts_eligible(
     world: &impl WorldReadOnly,
     instruction: &MutateSorafsFinalPromotionAccountCustody,
     binding: &SignerCustodyBindingV1,
@@ -101,7 +101,7 @@ pub(crate) fn accounts_eligible(
 }
 
 /// Recheck both registered accounts and exact live permissions from one captured applied State.
-pub(crate) fn check_applied_snapshot_v1(
+pub fn check_applied_snapshot_v1(
     view: &impl StateReadOnly,
     instruction: &MutateSorafsFinalPromotionAccountCustody,
     binding: &SignerCustodyBindingV1,
@@ -125,7 +125,7 @@ pub(crate) fn check_applied_snapshot_v1(
 /// Evaluate current time against the same previously authenticated native snapshot and accounts.
 /// This does not qualify an arbitrary snapshot, its permissions, clock or finality.
 /// Preserve the independently observed earliest time when reusing a captured snapshot.
-pub(crate) fn check_snapshot_eligibility_v1(
+pub fn check_snapshot_eligibility_v1(
     snapshot: &FinalPromotionAccountCustodySnapshotV1,
     instruction: &MutateSorafsFinalPromotionAccountCustody,
     binding: &SignerCustodyBindingV1,

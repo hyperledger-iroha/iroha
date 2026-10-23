@@ -1,4 +1,4 @@
-//! Authoritative SoraCloud agent-apartment ledger transition tests.
+//! Authoritative `SoraCloud` agent-apartment ledger transition tests.
 use super::*;
 
 #[test]

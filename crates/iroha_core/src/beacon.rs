@@ -870,7 +870,7 @@ pub trait GlobalThresholdBeaconDkgCryptoV1 {
         session: &GlobalThresholdBeaconDkgSessionV1,
     ) -> Result<([u8; 96], [u8; 96]), ThresholdBlsError>;
 
-    /// Validate one complete dealer coefficient vector and constant-term PoK.
+    /// Validate one complete dealer coefficient vector and constant-term `PoK`.
     ///
     /// # Errors
     /// Rejects invalid session geometry, generators, coefficients, participant index or proof.
@@ -1190,10 +1190,8 @@ impl GlobalThresholdBeaconDkgStateV1 {
         }
         let snapshot = RetainedGlobalThresholdBeaconDkgSnapshotV1::from_rows(
             self.session,
-            self.generator_h,
-            self.generator_v,
-            &self.recipient_keys,
-            &self.dealer_commitments,
+            (self.generator_h, self.generator_v),
+            (&self.recipient_keys, &self.dealer_commitments),
             &self.encrypted_shares,
             &self.share_acceptances,
             self.last_updated_height,
@@ -1776,7 +1774,7 @@ fn reconstruct_adaptive_beacon_transcript(
                     || actual.as_bytes() != &persisted.public_key_share
             })
     {
-        return Err(GlobalThresholdBeaconError::TranscriptMismatch.into());
+        return Err(GlobalThresholdBeaconError::TranscriptMismatch);
     }
     Ok(transcript)
 }
@@ -1979,6 +1977,10 @@ impl InMemoryGlobalThresholdBeaconPartialSignerV1 {
     ///
     /// Returns a threshold-beacon validation error if the public session or
     /// secret share does not match the frozen transcript and participant seat.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Import consumes and erases the original zeroizing component buffer before returning."
+    )]
     pub fn from_components(
         session: ValidatedGlobalThresholdBeaconSessionV1,
         signer_index: u16,

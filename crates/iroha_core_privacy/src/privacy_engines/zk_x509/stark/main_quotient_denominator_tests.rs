@@ -46,10 +46,12 @@ fn every_profile_stripe_matches_direct_boundary_and_random_denominators() {
                 stripe.rows - 2,
                 stripe.rows - 1,
             ];
-            for row in indices
-                .into_iter()
-                .chain((0..64).map(|_| rng.next_u64() as usize % stripe.rows))
-            {
+            for row in indices.into_iter().chain((0..64).map(|_| {
+                usize::try_from(
+                    rng.next_u64() % u64::try_from(stripe.rows).expect("stripe rows fit u64"),
+                )
+                .expect("sampled row fits usize")
+            })) {
                 let x = stripe.shift.mul(stripe.root.pow(row as u128));
                 let direct = x
                     .pow(segment.trace_size() as u128)
@@ -152,7 +154,9 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
     let pre_aux = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
         [0x81; 32],
         assembly.verifier_profile.compiled_profile_digest,
-        core::array::from_fn(|index| digest(index as u8 + 1)),
+        core::array::from_fn(|index| {
+            digest(u8::try_from(index).expect("fixture value fits u8") + 1)
+        }),
     );
     let binding = derive_zk_x509_credential_pre_aux_binding_v1(
         pre_aux,
@@ -171,7 +175,7 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
     });
     let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
     let source = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-        &layout, &assembly, sha, p256, binding,
+        &layout, &assembly, sha, p256, &binding,
     )
     .unwrap();
 
@@ -187,7 +191,7 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
             MainProjectionProverConstraintSourceV1::for_main_v1(
                 &layout,
                 &fixture.statement,
-                post_base,
+                &post_base,
             )
             .unwrap(),
         ),
@@ -199,7 +203,7 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                 &layout,
                 &fixture.statement,
                 &assembly.io,
-                post_base,
+                &post_base,
             )
             .unwrap(),
         ),

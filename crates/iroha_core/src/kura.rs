@@ -1439,16 +1439,16 @@ impl Kura {
                 block_store.create_files_if_they_do_not_exist()?;
             }
         }
-        if let Some(expected_height) = fast_preflight_height {
-            if block_store.read_exact_durable_index_count()? != expected_height {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "Kura fast init recovery changed the committed block boundary",
-                    ),
-                    blocks_root.clone(),
-                ));
-            }
+        if let Some(expected_height) = fast_preflight_height
+            && block_store.read_exact_durable_index_count()? != expected_height
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura fast init recovery changed the committed block boundary",
+                ),
+                blocks_root.clone(),
+            ));
         }
         if let Some(preflight) = canonical_preflight.as_mut() {
             Self::reverify_canonical_blocks_open(preflight, &blocks_root, true)?;
@@ -1906,7 +1906,7 @@ impl Kura {
         if self.emergency_fast_startup_enabled()
             && !self.disk_usage_total_initialized.load(Ordering::Acquire)
         {
-            return Err(self.emergency_fast_disk_usage_unavailable());
+            return Err(Self::emergency_fast_disk_usage_unavailable());
         }
         loop {
             let generation = {
@@ -1933,7 +1933,7 @@ impl Kura {
     /// Recompute enforced and total on-disk bytes in one scan and refresh both caches.
     pub(crate) fn refresh_disk_usage_bytes(&self) -> Result<u64> {
         if self.emergency_fast_startup_enabled() {
-            return Err(self.emergency_fast_disk_usage_unavailable());
+            return Err(Self::emergency_fast_disk_usage_unavailable());
         }
         loop {
             let generation = {
@@ -1985,7 +1985,7 @@ impl Kura {
     /// Recompute total on-disk bytes and refresh the cached value.
     pub(crate) fn refresh_total_disk_usage_bytes(&self) -> Result<u64> {
         if self.emergency_fast_startup_enabled() {
-            return Err(self.emergency_fast_disk_usage_unavailable());
+            return Err(Self::emergency_fast_disk_usage_unavailable());
         }
         loop {
             let generation = {
@@ -2069,7 +2069,7 @@ impl Kura {
     }
     fn maybe_refresh_total_disk_usage_bytes(&self) -> Result<()> {
         if self.emergency_fast_startup_enabled() {
-            return Err(self.emergency_fast_disk_usage_unavailable());
+            return Err(Self::emergency_fast_disk_usage_unavailable());
         }
         if !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             let _ = self.refresh_total_disk_usage_bytes()?;
@@ -2084,7 +2084,7 @@ impl Kura {
     }
     fn ensure_disk_usage_initialized(&self) -> Result<()> {
         if self.emergency_fast_startup_enabled() {
-            return Err(self.emergency_fast_disk_usage_unavailable());
+            return Err(Self::emergency_fast_disk_usage_unavailable());
         }
         if self.disk_usage_initialized.load(Ordering::Relaxed) {
             return Ok(());
@@ -2092,7 +2092,7 @@ impl Kura {
         let _ = self.refresh_disk_usage_bytes()?;
         Ok(())
     }
-    fn emergency_fast_disk_usage_unavailable(&self) -> Error {
+    fn emergency_fast_disk_usage_unavailable() -> Error {
         Error::EmergencyFastAuxiliaryUnavailable {
             subsystem: "disk-usage inventory",
         }
@@ -2978,7 +2978,7 @@ impl Kura {
                     "sidecar path identity changed while opening",
                 ));
             }
-            return Ok(file);
+            Ok(file)
         }
         #[cfg(not(unix))]
         {
@@ -3053,7 +3053,7 @@ impl Kura {
             }
             rustix::fs::unlinkat(&immediate.file, entry_name, rustix::fs::AtFlags::empty())
                 .map_err(std::io::Error::from)?;
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(unix))]
         {
@@ -3126,7 +3126,7 @@ impl Kura {
             }
             rustix::fs::unlinkat(&immediate.file, entry_name, rustix::fs::AtFlags::empty())
                 .map_err(std::io::Error::from)?;
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(unix))]
         {
@@ -3198,7 +3198,7 @@ impl Kura {
                     "progress temp identity changed during exclusive creation",
                 ));
             }
-            return Ok(file);
+            Ok(file)
         }
         #[cfg(not(unix))]
         {
@@ -3313,7 +3313,7 @@ impl Kura {
                     "promoted progress index has the wrong identity",
                 )));
             }
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(unix))]
         {
@@ -3345,9 +3345,7 @@ impl Kura {
     ) -> std::io::Result<()> {
         #[cfg(test)]
         let fail_at = FAIL_BOUND_PROGRESS_INTENT_DIRECTORY_SYNC.with(|slot| {
-            let Some(mut fault) = slot.get() else {
-                return None;
-            };
+            let mut fault = slot.get()?;
             if fault.calls_before_failure > 0 {
                 fault.calls_before_failure -= 1;
                 slot.set(Some(fault));
@@ -3462,7 +3460,7 @@ impl Kura {
                     "published progress append intent has the wrong identity",
                 )));
             }
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
         {
@@ -3526,8 +3524,8 @@ impl Kura {
         };
         if let Err(error) = build
             .write_all(&bytes)
-            .and_then(|_| build.flush())
-            .and_then(|_| sync_bound_progress_intent_file(&build))
+            .and_then(|()| build.flush())
+            .and_then(|()| sync_bound_progress_intent_file(&build))
         {
             warn!(
                 ?error,
@@ -3789,13 +3787,13 @@ impl Kura {
                     expected_path.to_path_buf(),
                 ));
             }
-            return Ok(BoundProgressDirectory {
+            Ok(BoundProgressDirectory {
                 expected_path: expected_path.to_path_buf(),
                 canonical_path,
                 entry_name: Some(name.to_os_string()),
                 file,
                 metadata,
-            });
+            })
         }
         #[cfg(not(unix))]
         {
@@ -4618,7 +4616,7 @@ impl Kura {
             || u64::try_from(bytes.as_ref().len())? != metadata.file.len()
             || !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened_after)
             || !path_after.as_ref().is_some_and(|after| {
-                Self::stable_sidecar_file_binding_unchanged(&metadata, after)
+                Self::stable_sidecar_file_binding_unchanged(metadata, after)
                     && Self::sidecar_metadata_same_object(&directory_before, &after.directory)
             })
         {
@@ -5396,7 +5394,8 @@ impl Kura {
                 let outcome = if is_evicted { "miss" } else { "hit" };
                 telemetry.inc_storage_da_cache("kura", outcome);
             }
-            let loaded = if is_evicted {
+
+            if is_evicted {
                 let height = block_index.saturating_add(1) as u64;
                 let bytes = match block_store.read_optional_da_cache(height) {
                     Ok(Some(bytes)) => bytes,
@@ -5466,8 +5465,7 @@ impl Kura {
                         return Err(canonical_decode_attempt_error(error, Error::CodecAttempt));
                     }
                 }
-            };
-            loaded
+            }
         };
         if self.prune_recovery_is_required() {
             return Err(Error::CanonicalStoragePoisoned.into());
@@ -6114,8 +6112,7 @@ impl Kura {
         if self.emergency_fast_startup_enabled() {
             return Err(Error::EmergencyFastAuxiliaryUnavailable {
                 subsystem: "pending canonical block cache",
-            }
-            .into());
+            });
         }
         #[cfg(test)]
         self.pending_budget_raw_scans
@@ -6240,7 +6237,10 @@ impl Kura {
     /// conflict with the durable chain, append capacity is unavailable, or canonical
     /// encoding, storage accounting, or durable I/O fails.
     pub fn store_block(&self, block: iroha_data_model::block::SharedSignedBlock) -> Result<()> {
-        self.store_block_durable(&block)
+        let result = self.store_block_durable(&block);
+        // This consuming entry point retires its shared handle after the persistence attempt.
+        drop(block);
+        result
     }
     /// Read the exact canonical framed block bytes persisted at `height`.
     #[cfg(test)]
@@ -6485,7 +6485,7 @@ impl Kura {
             .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
         #[cfg(test)]
         if let Some(prefix_len) =
-            FAIL_AFTER_NEXT_BOUND_EVIDENCE_TEMP_PREFIX.with(|flag| flag.take())
+            FAIL_AFTER_NEXT_BOUND_EVIDENCE_TEMP_PREFIX.with(std::cell::Cell::take)
         {
             assert!(
                 prefix_len < bytes.len(),
@@ -6505,8 +6505,8 @@ impl Kura {
         }
         if let Err(error) = temporary
             .write_all(bytes)
-            .and_then(|_| temporary.flush())
-            .and_then(|_| temporary.sync_all())
+            .and_then(|()| temporary.flush())
+            .and_then(|()| temporary.sync_all())
         {
             drop(temporary);
             let _ = Self::remove_bound_progress_temp_if_present(namespace, temp_path);
@@ -6534,7 +6534,7 @@ impl Kura {
             }
             return Err(Error::IO(error.source, path.to_path_buf()));
         }
-        self.sync_bound_evidence_namespace(namespace, kind)?;
+        Self::sync_bound_evidence_namespace(namespace, kind)?;
         let persisted = self
             .read_bound_regular_file_bytes_locked(namespace, path, bytes.len().max(1), kind)?
             .ok_or_else(|| {
@@ -7567,7 +7567,7 @@ impl BlockStore {
                     norito::Error::NonCanonicalEncoding => self.invalid_eviction_compaction_stage(
                         "eviction compaction stage is not canonically encoded",
                     ),
-                    other => Error::NoritoFrame(other.into()),
+                    other => Error::NoritoFrame(other),
                 }
             })?;
         self.validate_eviction_compaction_stage(&stage)?;
@@ -7681,7 +7681,7 @@ impl BlockStore {
         drop(persisted);
         self.sync_eviction_compaction_stage(stage)
     }
-    fn remove_eviction_compaction_path(&self, path: &Path) -> Result<bool> {
+    fn remove_eviction_compaction_path(path: &Path) -> Result<bool> {
         match std::fs::remove_file(path) {
             Ok(()) => Ok(true),
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
@@ -7691,8 +7691,8 @@ impl BlockStore {
     fn cleanup_unpublished_eviction_compaction_files(&self) -> Result<()> {
         let data = self.eviction_compaction_data_path();
         let index = self.eviction_compaction_index_path();
-        let removed = self.remove_eviction_compaction_path(&data)?
-            | self.remove_eviction_compaction_path(&index)?;
+        let removed = Self::remove_eviction_compaction_path(&data)?
+            | Self::remove_eviction_compaction_path(&index)?;
         if removed {
             sync_dir(&self.path_to_blockchain)
                 .map_err(|error| Error::IO(error, self.path_to_blockchain.clone()))?;
@@ -7832,7 +7832,7 @@ impl BlockStore {
         expected_digest: Hash,
     ) -> Result<()> {
         if Self::eviction_file_matches(live_path, expected_len, expected_digest)? {
-            let _ = self.remove_eviction_compaction_path(temp_path)?;
+            let _ = Self::remove_eviction_compaction_path(temp_path)?;
             return Ok(());
         }
         if !Self::eviction_file_matches(temp_path, expected_len, expected_digest)? {
@@ -7935,9 +7935,9 @@ impl BlockStore {
             .map_err(|error| Error::IO(error, self.path_to_blockchain.clone()))?;
         self.validate_eviction_compaction_result(&stage)?;
         let stage_path = self.eviction_compaction_stage_path();
-        let removed = self.remove_eviction_compaction_path(&data_temp)?
-            | self.remove_eviction_compaction_path(&index_temp)?
-            | self.remove_eviction_compaction_path(&stage_path)?;
+        let removed = Self::remove_eviction_compaction_path(&data_temp)?
+            | Self::remove_eviction_compaction_path(&index_temp)?
+            | Self::remove_eviction_compaction_path(&stage_path)?;
         if removed {
             sync_dir(&self.path_to_blockchain)
                 .map_err(|error| Error::IO(error, self.path_to_blockchain.clone()))?;
@@ -8162,7 +8162,7 @@ impl BlockStore {
     fn take_deferred_da_recovery_fault(&mut self) -> Option<String> {
         self.deferred_da_recovery_fault.take()
     }
-    fn unknown_da_rewrite_state(&self, context: &str, error: &Error) -> Error {
+    fn unknown_da_rewrite_state(context: &str, error: &Error) -> Error {
         Error::DaBlockRewriteCommitStateUnknown {
             detail: format!("{context}: {error}"),
         }
@@ -8175,7 +8175,7 @@ impl BlockStore {
         match self.recover_da_block_rewrite_stage() {
             Ok(()) => original_error,
             Err(recovery_error) => {
-                self.unknown_da_rewrite_state("pre-marker rollback failed", &recovery_error)
+                Self::unknown_da_rewrite_state("pre-marker rollback failed", &recovery_error)
             }
         }
     }
@@ -8196,14 +8196,14 @@ impl BlockStore {
         else {
             return Ok(None);
         };
-        self.decode_da_block_rewrite_stage_bytes(bytes).map(Some)
+        self.decode_da_block_rewrite_stage_bytes(&(bytes)).map(Some)
     }
     /// Decode and authenticate one bounded canonical rewrite image without filesystem I/O.
-    fn decode_da_block_rewrite_stage_bytes(&self, bytes: Vec<u8>) -> Result<DaBlockRewriteStageV1> {
+    fn decode_da_block_rewrite_stage_bytes(&self, bytes: &[u8]) -> Result<DaBlockRewriteStageV1> {
         let decode_limits = recovery_control_decode_limits_v1(MAX_DA_BLOCK_REWRITE_STAGE_BYTES)?;
         let stage =
             norito::decode_canonical_with_limits::<DaBlockRewriteStageV1>(&bytes, decode_limits)
-                .map_err(|error| Error::NoritoFrame(error.into()))?;
+                .map_err(|error| Error::NoritoFrame(error))?;
         self.validate_da_block_rewrite_stage(&stage)?;
         Ok(stage)
     }
@@ -9376,7 +9376,7 @@ impl BlockStore {
             Err(read_error) => {
                 self.commit_marker_pending = None;
                 self.fsync.clear();
-                return Err(self.unknown_da_rewrite_state(
+                return Err(Self::unknown_da_rewrite_state(
                     "failed to read the pre-publication commit marker",
                     &read_error,
                 ));
@@ -9392,7 +9392,7 @@ impl BlockStore {
                     .is_some_and(|marker| marker.count < count)
                     && let Err(rollback_error) = self.init_commit_marker()
                 {
-                    return Err(self.unknown_da_rewrite_state(
+                    return Err(Self::unknown_da_rewrite_state(
                         "failed to roll back after deriving the pending marker failed",
                         &rollback_error,
                     ));
@@ -9412,7 +9412,7 @@ impl BlockStore {
                     Err(readback_error) => {
                         self.commit_marker_pending = None;
                         self.fsync.clear();
-                        return Err(self.unknown_da_rewrite_state(
+                        return Err(Self::unknown_da_rewrite_state(
                             "commit-marker publication and readback both failed",
                             &readback_error,
                         ));
@@ -9430,7 +9430,7 @@ impl BlockStore {
                     self.commit_marker_pending = None;
                     self.fsync.clear();
                     if let Err(rollback_error) = self.init_commit_marker() {
-                        return Err(self.unknown_da_rewrite_state(
+                        return Err(Self::unknown_da_rewrite_state(
                             "failed to roll back an unpublished append journal",
                             &rollback_error,
                         ));
@@ -9439,7 +9439,7 @@ impl BlockStore {
                 }
                 self.commit_marker_pending = None;
                 self.fsync.clear();
-                Err(self.unknown_da_rewrite_state(
+                Err(Self::unknown_da_rewrite_state(
                     "commit marker matches neither the pre-write nor published append state",
                     &publication_error,
                 ))
@@ -10480,7 +10480,7 @@ impl BlockStore {
                     Err(marker_error) => {
                         self.commit_marker_pending = None;
                         self.fsync.clear();
-                        return Err(self.unknown_da_rewrite_state(
+                        return Err(Self::unknown_da_rewrite_state(
                             "commit-marker acknowledgement and readback both failed",
                             &marker_error,
                         ));
@@ -10502,7 +10502,7 @@ impl BlockStore {
                 }
                 self.commit_marker_pending = None;
                 self.fsync.clear();
-                return Err(self.unknown_da_rewrite_state(
+                return Err(Self::unknown_da_rewrite_state(
                     "commit marker matches neither staged state after publication failure",
                     &publication_error,
                 ));

@@ -784,7 +784,7 @@ fn verified_fee_sponsor_registration_fixture(
         batch_hash: source_tx_commitment,
         deltas: vec![delta],
         authority_digest: Hash::new(
-            &norito::encode_canonical(&*ALICE_ID).expect("canonical funding authority"),
+            norito::encode_canonical(&*ALICE_ID).expect("canonical funding authority"),
         ),
         poseidon_preimage_digest: Some(digest),
     }];
@@ -2497,7 +2497,7 @@ fn install_retained_validation_fee_unregister_fixture(
             effective_from_ms: 1_793_451_600_000,
             notice_published_at_ms: 1_790_859_600_000,
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            network_id: network_id.clone(),
+            network_id,
             policy_version: 1,
             previous_policy_hash: None,
             ds_asset_id: policy_ds_asset_id,
@@ -3154,7 +3154,7 @@ fn signed_payout_scope_refusal_cannot_publish_a_parliament_terminal_outcome() {
             prefix_bytes,
             32,
         );
-        norito::with_decode_limits_scope(limits, &prefix);
+        norito::with_decode_limits_scope(limits, prefix);
         let producer_refusal = norito::with_decode_limits_scope(limits, || {
             prefix();
             crate::smartcontracts::code::fetch_bound_contract_record(

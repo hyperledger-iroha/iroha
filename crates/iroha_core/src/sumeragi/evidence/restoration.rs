@@ -206,12 +206,12 @@ impl RestorationRead {
         Ok(())
     }
     pub(super) fn validate_sccp(&self) -> Result<(), EvidenceAdmissionError> {
-        if let Some(job) = &self.sccp {
-            if !job.read.is_complete() || !job.reducer.is_complete() {
-                return Err(invalid(
-                    "SCCP original interval and both cuts are not sealed",
-                ));
-            }
+        if let Some(job) = &self.sccp
+            && (!job.read.is_complete() || !job.reducer.is_complete())
+        {
+            return Err(invalid(
+                "SCCP original interval and both cuts are not sealed",
+            ));
         }
         Ok(())
     }
@@ -272,16 +272,20 @@ pub(super) fn validate(state: &State) -> Result<(), EvidenceAdmissionError> {
         cache.restore = None;
         return Err(EvidencePreparationError::OriginalHistoryPending.into());
     }
-    let mut result = super::validate_persisted_records_inner(
+    let result = super::validate_persisted_records_inner(
         &view,
         cache
             .restore
             .as_ref()
             .expect("same verified original lane proofs"),
     );
-    if !crate::state::is_stable_state_view_generation(generation, state.state_view_generation()) {
-        result = Err(EvidencePreparationError::OriginalHistoryPending.into());
-    }
+    let result =
+        if crate::state::is_stable_state_view_generation(generation, state.state_view_generation())
+        {
+            result
+        } else {
+            Err(EvidencePreparationError::OriginalHistoryPending.into())
+        };
     if result.is_ok()
         || result
             .as_ref()

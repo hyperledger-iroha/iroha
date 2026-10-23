@@ -26,7 +26,7 @@ use crate::fastpq::source_prefix_lengths::entry::measure_fastpq_source_entry_fra
 
 /// Failure before complete-entry replacement; every variant leaves usage intact.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum EntryBundleReservationError {
+pub enum EntryBundleReservationError {
     /// Canonical framing, input shape, or its explicit local bound failed.
     /// This must not be interpreted as ordinary transaction rejection or deferral.
     Preparation(String),
@@ -60,14 +60,14 @@ impl std::error::Error for EntryBundleReservationError {}
 
 /// Opaque capability binding one logical execution identity to this block ledger.
 #[derive(Clone, Debug)]
-pub(crate) struct EntryBundleOwner {
+pub struct EntryBundleOwner {
     entry_hash: Hash,
     inner: EntryOwner,
 }
 
 /// Block accounting with one public-statement contribution per logical entry.
 /// Explicit construction bounds limit preparation and do not select runtime policy.
-pub(crate) struct EntryBundleReservationLedger {
+pub struct EntryBundleReservationLedger {
     inner: ReservationLedger,
     entries: BTreeMap<Hash, EntryOwner>,
     construction_limits: FastpqSourceStatementBuildLimits,
@@ -149,7 +149,7 @@ impl Drop for PendingBindings<'_> {
 }
 
 /// Exclusive physical fragment using the journaled reservation ledger.
-pub(crate) struct EntryBundleReservationTransaction<'a> {
+pub struct EntryBundleReservationTransaction<'a> {
     inner: ReservationTransaction<'a>,
     bindings: PendingBindings<'a>,
     construction_limits: FastpqSourceStatementBuildLimits,
@@ -157,7 +157,7 @@ pub(crate) struct EntryBundleReservationTransaction<'a> {
 
 #[cfg(test)]
 /// Journal checkpoint covering both usage and newly owned entry identities.
-pub(crate) struct EntryBundleReservationCheckpoint {
+pub struct EntryBundleReservationCheckpoint {
     inner: ReservationCheckpoint,
     created_entries: usize,
 }

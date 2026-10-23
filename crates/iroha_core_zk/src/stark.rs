@@ -203,6 +203,10 @@ fn validate_stark_domain_tag(domain_tag: &str, max_len: usize) -> Result<(), &'s
 /// These values can tighten the built-in protocol caps for a caller, but they cannot relax
 /// canonical verifier structure limits. Values above the native caps are clamped internally.
 #[derive(Clone, Copy, Debug)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "max_ identifies each independent verifier cap rather than an accepted input value"
+)]
 pub struct StarkVerifierLimits {
     /// Caller cap for domain log2, clamped to the native protocol maximum.
     pub max_domain_log2: u8,
@@ -953,7 +957,7 @@ fn derive_query_index(
     roots: &[GoldilocksDigest384V1],
     query_idx: usize,
 ) -> Option<usize> {
-    if params.n_log2 as u32 >= usize::BITS {
+    if u32::from(params.n_log2) >= usize::BITS {
         return None;
     }
     let domain = 1usize << params.n_log2;
@@ -2170,7 +2174,7 @@ impl StarkAirVerificationContext<'_> {
             Self::BfvFullBootstrapPublicPadding { .. } => {
                 usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1)
             }
-            Self::Explicit(explicit) => explicit.rows.first().map(Vec::len).unwrap_or(usize::MAX),
+            Self::Explicit(explicit) => explicit.rows.first().map_or(usize::MAX, Vec::len),
         }
     }
 }
@@ -3125,26 +3129,29 @@ fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
         max_envelope_bytes: usize::MAX,
         ..StarkVerifierLimits::default()
     };
-    let self_verified = if let Some(base_indices) = base_indices {
-        verify_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_with_limits(
-            &bytes,
-            &limits,
-            &circuit_id,
-            &public_digest,
-            &rows,
-            &composition_values_u64,
-            base_indices,
-        )
-    } else {
-        verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
-            &bytes,
-            &limits,
-            &circuit_id,
-            &public_digest,
-            &rows,
-            &composition_values_u64,
-        )
-    };
+    let self_verified = base_indices.map_or_else(
+        || {
+            verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
+                &bytes,
+                &limits,
+                &circuit_id,
+                &public_digest,
+                &rows,
+                &composition_values_u64,
+            )
+        },
+        |base_indices| {
+            verify_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_with_limits(
+                &bytes,
+                &limits,
+                &circuit_id,
+                &public_digest,
+                &rows,
+                &composition_values_u64,
+                base_indices,
+            )
+        },
+    );
     if !self_verified? {
         return Err(("STARK AIR envelope self-verification failed".to_owned()).into());
     }
@@ -3240,6 +3247,12 @@ fn prove_stark_fri_air_envelope_bytes_for_validated_circuit(
 /// constraints; this function records the already-zero composition vector used by those constraints.
 /// Generic Binding proofs are capped by [`MAX_BINDING_AIR_DOMAIN_LOG2`] because verification
 /// reconstructs their complete deterministic trace commitment.
+///
+/// # Errors
+///
+/// Returns an input error for an unsupported circuit, invalid parameters or
+/// transcript, or inconsistent AIR rows or self-verification. Canonical encoding
+/// failures and unfinished verification retain their original typed causes.
 pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
     params: StarkFriParamsV1,
     transcript_label: String,
@@ -3341,7 +3354,11 @@ pub fn prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(
 /// full material is self-contained; callers with governed artifacts should use
 /// [`verify_stark_fri_bfv_full_bootstrap_air_envelope_for_artifacts_with_limits`]
 /// to replay its arithmetic source.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns the original local verification refusal if canonical decoding cannot
+/// complete. Malformed envelopes and completed proof rejection return `Ok(false)`.
 pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope(
     bytes: &[u8],
     material: &iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1,
@@ -3748,16 +3765,26 @@ pub fn prove_stark_fri_composition_envelope_bytes(
     norito::core::classify_decode_attempt(|| norito::encode_canonical(&envelope))
         .map_err(Into::into)
 }
+/// One sampled AIR opening and the FRI query to which it must bind.
+#[derive(Clone, Copy)]
+struct StarkAirOpeningQuery<'a> {
+    opening: &'a StarkAirOpeningV1,
+    base_index: usize,
+    first_decommit: &'a FoldDecommitV1,
+}
 fn verify_stark_air_opening(
     params: &StarkFriParamsV1,
     air: &StarkAirProofV1,
-    opening: &StarkAirOpeningV1,
-    base_index: usize,
+    query: StarkAirOpeningQuery<'_>,
     total_domain: usize,
-    first_decommit: &FoldDecommitV1,
     limits: &StarkVerifierLimits,
     context: StarkAirVerificationContext<'_>,
 ) -> bool {
+    let StarkAirOpeningQuery {
+        opening,
+        base_index,
+        first_decommit,
+    } = query;
     if usize::try_from(opening.index).ok() != Some(base_index)
         || opening.row.len() != air.trace_width as usize
         || opening.next_row.len() != air.trace_width as usize
@@ -3987,10 +4014,10 @@ fn verify_decoded_stark_fri_envelope_with_context(
     {
         return false;
     }
-    if let Some(values) = env.proof.comp_values.as_ref() {
-        if values.len() != query_count {
-            return false;
-        }
+    if let Some(values) = env.proof.comp_values.as_ref()
+        && values.len() != query_count
+    {
+        return false;
     }
     let Some(air) = env.proof.air.as_ref() else {
         return false;
@@ -4084,10 +4111,12 @@ fn verify_decoded_stark_fri_envelope_with_context(
         if !verify_stark_air_opening(
             &env.params,
             air,
-            opening,
-            base_index,
+            StarkAirOpeningQuery {
+                opening,
+                base_index,
+                first_decommit,
+            },
             total_domain,
-            first_decommit,
             limits,
             context,
         ) {
@@ -4262,10 +4291,10 @@ fn verify_decoded_stark_fri_envelope_with_context(
             }
             let mut last_wire: Option<u32> = None;
             for term in &comp_entry.aux_terms {
-                if let Some(prev) = last_wire {
-                    if term.wire_index <= prev {
-                        return false;
-                    }
+                if let Some(prev) = last_wire
+                    && term.wire_index <= prev
+                {
+                    return false;
                 }
                 last_wire = Some(term.wire_index);
                 let coeff = match Fq::from_canonical_u64(term.coeff) {

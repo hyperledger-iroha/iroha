@@ -186,7 +186,7 @@ fn atomic_instruction(
     movements: Vec<AtomicSettlementMovement>,
 ) -> SettleAtomic {
     SettleAtomic::new(
-        stx.network_id.clone(),
+        stx.network_id,
         SettlementId::new(
             movements[0].source.account().clone(),
             "atomic_business".parse().expect("reference"),
@@ -470,7 +470,7 @@ fn atomic_settlement_metadata_or_amount_substitution_requires_fresh_whole_intent
             metadata.insert("reference".parse().expect("key"), Json::new("substituted"));
         }
         let changed = SettleAtomic::new(
-            stx.network_id.clone(),
+            stx.network_id,
             original.settlement_id().clone(),
             AtomicSettlementMovements::try_from(changed_movements).expect("canonical"),
             AtomicSettlementEscrows::empty(),
@@ -496,7 +496,7 @@ fn atomic_settlement_wrong_network_or_expired_height_changes_nothing() {
     for expired in [false, true] {
         let mut stx = block.transaction();
         let network = if expired {
-            stx.network_id.clone()
+            stx.network_id
         } else {
             iroha_data_model::NetworkId::from_genesis_hash(
                 HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"other-network")),
@@ -1116,7 +1116,7 @@ impl BondEscrowFixture {
         let mut escrows = escrows;
         escrows.sort_by_key(|escrow| escrow.escrow_id);
         SettleAtomic::new(
-            stx.network_id.clone(),
+            stx.network_id,
             SettlementId::new(payer.clone(), "bond_issue_1".parse().expect("reference")),
             AtomicSettlementMovements::try_from(movements).expect("canonical movements"),
             AtomicSettlementEscrows::try_from(escrows).expect("canonical escrows"),
@@ -1412,7 +1412,7 @@ fn atomic_settlement_movement_cannot_credit_same_intent_escrow_custody() {
     ];
     movements.sort_by(|a, b| (&a.source, &a.recipient).cmp(&(&b.source, &b.recipient)));
     let instruction = SettleAtomic::new(
-        stx.network_id.clone(),
+        stx.network_id,
         SettlementId::new(
             fixture.investor.clone(),
             "custody_credit".parse().expect("reference"),
@@ -1595,7 +1595,7 @@ fn atomic_subscription_with_one_fee_movement_and_four_escrow_legs() {
         ];
         legs.sort_by_key(|leg| leg.escrow_id);
         let instruction = SettleAtomic::new(
-            stx.network_id.clone(),
+            stx.network_id,
             SettlementId::new(
                 fixture.investor.clone(),
                 "subscription".parse().expect("reference"),
@@ -1724,7 +1724,7 @@ fn atomic_settlement_with_only_two_escrow_legs_and_no_movement() {
     ];
     legs.sort_by_key(|leg| leg.escrow_id);
     let instruction = SettleAtomic::new(
-        stx.network_id.clone(),
+        stx.network_id,
         SettlementId::new(
             fixture.investor.clone(),
             "escrow_exchange".parse().expect("reference"),

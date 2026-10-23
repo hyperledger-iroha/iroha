@@ -587,12 +587,23 @@ fn seed_public_pin_fee_accounts(state: &mut State) {
     let alice_asset = AssetId::new(fee_asset_id.clone(), alice());
     let bob_asset = AssetId::new(fee_asset_id.clone(), bob());
     for asset in [alice_asset, bob_asset] {
-        state.world.asset_definition_holders.insert((fee_asset_id.clone(), asset.account().clone()), ());
-        state.world.asset_definition_nonzero_holders.insert((fee_asset_id.clone(), asset.account().clone()), ());
-        state.world.asset_definition_assets.insert((fee_asset_id.clone(), asset), ());
+        state
+            .world
+            .asset_definition_holders
+            .insert((fee_asset_id.clone(), asset.account().clone()), ());
+        state
+            .world
+            .asset_definition_nonzero_holders
+            .insert((fee_asset_id.clone(), asset.account().clone()), ());
+        state
+            .world
+            .asset_definition_assets
+            .insert((fee_asset_id.clone(), asset), ());
     }
-    state.world.asset_definition_asset_counts.insert(fee_asset_id, 2);
-
+    state
+        .world
+        .asset_definition_asset_counts
+        .insert(fee_asset_id, 2);
 }
 fn seed_pin_fee_balance(state: &mut State, account: &AccountId, amount: u128) {
     let fee_asset_id = state.gov.sorafs_pin_fee_asset_id.clone();
@@ -605,8 +616,7 @@ fn pin_fee_balance(stx: &crate::state::StateTransaction<'_, '_>, account: &Accou
     stx.world
         .assets
         .get(&asset_id)
-        .map(|value| value.as_ref().clone())
-        .unwrap_or_else(Quantity::zero)
+        .map_or_else(Quantity::zero, |value| value.as_ref().clone())
 }
 fn assert_pin_fee_balances_unchanged(
     stx: &crate::state::StateTransaction<'_, '_>,
@@ -852,7 +862,7 @@ pub(super) fn default_policy() -> PinPolicy {
 }
 fn musubi_archive_for_pin(pin: &PinManifestRecord, seed: u8) -> MusubiArchiveRecordV1 {
     let commitment = MusubiArchiveCommitmentV1 {
-        root_cid: pin.root_cid.clone(),
+        root_cid: pin.root_cid,
         chunker: pin.chunker.clone(),
         chunk_plan_digest: MusubiContentDigestV1::new(pin.chunk_digest_sha3_256),
         por_root: MusubiContentDigestV1::new(pin.por_root),
@@ -1283,7 +1293,7 @@ fn pin_expiry_uses_consensus_time_and_releases_live_content_atomically() {
     {
         let header = iroha_data_model::block::BlockHeader::new(
             nonzero!(2_u64),
-            previous.clone(),
+            previous,
             None,
             default_policy().retention_epoch * 1_000 - 1,
             0,
@@ -1667,8 +1677,10 @@ fn seed_automatic_replication_capacity(
         replicas,
         StorageClass::Hot,
         &default_chunker(),
-        consensus_epoch,
-        u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+        (
+            consensus_epoch,
+            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+        ),
         1_024,
     )
     .expect("seed canonical automatic replication providers");

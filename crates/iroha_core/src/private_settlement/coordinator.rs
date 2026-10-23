@@ -28,7 +28,7 @@ use thiserror::Error;
     name = "iroha_core::private_settlement::coordinator::PrivateSettlementBundleLifecycleV1"
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-pub(crate) enum PrivateSettlementBundleLifecycleV1 {
+pub enum PrivateSettlementBundleLifecycleV1 {
     /// Per-leg auditor evidence is still being collected.
     Collecting,
     /// Every leg has durable auditor evidence; Prepare QCs are being collected.
@@ -47,7 +47,7 @@ pub(crate) enum PrivateSettlementBundleLifecycleV1 {
 
 /// Result of inserting phase evidence into the coordinator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PrivateSettlementCoordinatorOutcomeV1 {
+pub enum PrivateSettlementCoordinatorOutcomeV1 {
     /// New evidence was stored without completing the current global barrier.
     Stored,
     /// The supplied evidence was identical or quorum-equivalent to existing evidence.
@@ -58,7 +58,7 @@ pub(crate) enum PrivateSettlementCoordinatorOutcomeV1 {
 
 /// Deterministic in-memory projection of the durable private-settlement journal.
 #[derive(Clone, Debug)]
-pub(crate) struct PrivateSettlementBundleCoordinatorV1 {
+pub struct PrivateSettlementBundleCoordinatorV1 {
     manifest: AtomicPrivateSettlementV1,
     authority_catalog: PrivateSettlementAuthorityCatalogV1,
     audited_evidence: Vec<Option<Hash>>,
@@ -489,7 +489,7 @@ impl PrivateSettlementBundleCoordinatorV1 {
 
 /// Redacted bundle-coordination failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub(crate) enum PrivateSettlementCoordinatorErrorV1 {
+pub enum PrivateSettlementCoordinatorErrorV1 {
     /// The manifest is not the canonical V1 bundle.
     #[error("private-settlement manifest is invalid")]
     Manifest,
@@ -540,7 +540,7 @@ impl PrivateSettlementCoordinatorErrorV1 {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     use crate::private_settlement::{
         protocol::{
@@ -625,7 +625,7 @@ pub(crate) mod tests {
             .expect("phase certificate")
     }
 
-    pub(crate) fn certified_commit_bundle_fixture() -> (PrivateSettlementCommitBundleV1, KeyPair) {
+    pub fn certified_commit_bundle_fixture() -> (PrivateSettlementCommitBundleV1, KeyPair) {
         let (fixture, deltas, authorities) = fixture_parts();
         let manifest = fixture.sidecar.manifest.clone();
         let mut coordinator =

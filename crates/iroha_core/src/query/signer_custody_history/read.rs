@@ -1,9 +1,7 @@
 //! Constant-row custody history reconstruction and generation-index validation.
 use super::*;
 
-pub(crate) fn control_digest<P: CustodyPurpose>(
-    record: &P::Record,
-) -> Result<[u8; 32], HistoryError> {
+pub fn control_digest<P: CustodyPurpose>(record: &P::Record) -> Result<[u8; 32], HistoryError> {
     digest(P::RECORD_DOMAIN, record)
 }
 fn validate_keys<P: CustodyPurpose>(
@@ -60,7 +58,7 @@ fn validate_keys<P: CustodyPurpose>(
     }
     Ok(())
 }
-pub(crate) fn read_control_record<P: CustodyPurpose>(
+pub fn read_control_record<P: CustodyPurpose>(
     world: &impl WorldReadOnly,
     deployment: &str,
     revision: u64,
@@ -202,7 +200,7 @@ fn adjacent<P: CustodyPurpose>(
     }
     Ok(())
 }
-pub(crate) fn read_control<P: CustodyPurpose>(
+pub fn read_control<P: CustodyPurpose>(
     world: &impl WorldReadOnly,
     deployment: &str,
 ) -> Result<Option<NativeControl<P>>, HistoryError> {
@@ -259,7 +257,7 @@ pub(crate) fn read_control<P: CustodyPurpose>(
     }
     Ok(Some(active))
 }
-pub(crate) fn read_control_at<P: CustodyPurpose>(
+pub fn read_control_at<P: CustodyPurpose>(
     world: &impl WorldReadOnly,
     deployment: &str,
     height: u64,

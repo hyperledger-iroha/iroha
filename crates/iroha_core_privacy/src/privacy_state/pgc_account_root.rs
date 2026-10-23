@@ -47,6 +47,10 @@ pub enum PrivacyPgcAccountStateRootErrorV1 {
 /// by an Anonymous-PGC payment. `accounts` must be the complete table selected by `namespace`, in
 /// strict public-key order. The closed first-release cardinalities bound the operation to at most
 /// 64 entries; no partial-table or caller-selected root form exists.
+///
+/// # Errors
+/// Rejects an invalid namespace, epoch, supply, account count, ordering, or curve point;
+/// also reports namespace encoding failures and the reserved all-zero derived root.
 pub fn derive_privacy_pgc_account_state_root_v1(
     namespace: PrivacyNamespaceV1,
     epoch: u64,

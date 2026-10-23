@@ -235,27 +235,26 @@ fn under_caller(
                 SumeragiCheckpointAdvanceError::Verify(FinalityReadError::DecodeResource(cause))
                 | SumeragiCheckpointAdvanceError::Export(FinalityReadError::DecodeResource(cause)),
             ) = &result
+                && cause.kind() == norito::core::DecodeAttemptErrorKind::EnclosingLimit
             {
-                if cause.kind() == norito::core::DecodeAttemptErrorKind::EnclosingLimit {
-                    // The decoder observer has retired, while this cumulative budget
-                    // remains installed. Retention must preserve its original identity;
-                    // it must not mint authority in a new or absent observer.
-                    assert!(!norito::core::decode_error_matches_active_limits(
-                        cause.error()
-                    ));
-                    let retained = cause.local_refusal().expect("retain original refusal");
-                    assert_eq!(
-                        retained.kind(),
-                        norito::core::DecodeLocalRefusalKind::EnclosingLimit
-                    );
-                    let norito::Error::ScopedDecodeResource(actual) = retained.into_error() else {
-                        panic!("retained refusal must preserve opaque scope provenance");
-                    };
-                    let norito::Error::ScopedDecodeResource(expected) = cause.error() else {
-                        panic!("enclosing refusal must contain opaque scope provenance");
-                    };
-                    assert_eq!(&actual, expected);
-                }
+                // The decoder observer has retired, while this cumulative budget
+                // remains installed. Retention must preserve its original identity;
+                // it must not mint authority in a new or absent observer.
+                assert!(!norito::core::decode_error_matches_active_limits(
+                    cause.error()
+                ));
+                let retained = cause.local_refusal().expect("retain original refusal");
+                assert_eq!(
+                    retained.kind(),
+                    norito::core::DecodeLocalRefusalKind::EnclosingLimit
+                );
+                let norito::Error::ScopedDecodeResource(actual) = retained.into_error() else {
+                    panic!("retained refusal must preserve opaque scope provenance");
+                };
+                let norito::Error::ScopedDecodeResource(expected) = cause.error() else {
+                    panic!("enclosing refusal must contain opaque scope provenance");
+                };
+                assert_eq!(&actual, expected);
             }
             result
         })

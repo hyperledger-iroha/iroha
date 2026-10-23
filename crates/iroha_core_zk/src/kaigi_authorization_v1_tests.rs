@@ -98,7 +98,7 @@ fn mutate_outer(proof: &ProofBox, mutate: impl FnOnce(&mut OpenVerifyEnvelope)) 
 }
 
 /// Canonical real proof shared by the exact-registry positive regression.
-pub(super) fn valid_envelope(backend: &str) -> (ProofBox, VerifyingKeyBox) {
+pub fn valid_envelope(backend: &str) -> (ProofBox, VerifyingKeyBox) {
     let fixture = fixture();
     envelope(backend, fixture.vk_bytes.clone(), &[&fixture.instance])
 }

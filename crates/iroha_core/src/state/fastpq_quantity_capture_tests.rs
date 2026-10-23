@@ -728,7 +728,7 @@ fn body_and_real_pipeline_fee_replace_one_complete_entry_counter() {
     use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
     use iroha_data_model::transaction::{FeeChargeKind, FeeChargeLimit};
     use iroha_primitives::numeric::Numeric;
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let (state, alice, bob) = fixture();
     {
         let mut setup = state.block(quantity_successor_header(&state));
@@ -1025,7 +1025,7 @@ fn actual_signed_sponsor_debit_captures_exact_custody_balance_and_supply() {
         nexus::FeeSponsorVaultKey,
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let (state, custody, program_id, instruction) = sponsored_burn_fixture();
     let (source, call) = source_with_fee(
         &state,
@@ -1442,7 +1442,7 @@ fn prepare_owned_test_mint(
             &ALICE_ID,
             call,
             Hash::new(b"quantity-write-owner-regression"),
-            vec![FastpqExecutionEffectKindV1::Mint(change)],
+            &(vec![FastpqExecutionEffectKindV1::Mint(change)]),
         )
         .expect("retained original source admits exact next mint")
 }
@@ -4852,8 +4852,7 @@ fn mandatory_journal_runtime_error_without_writes_preserves_empty_scope_and_roll
                 transaction.apply_with_quantity_candidate(Ok(prepared), |_| {
                     Err(InstructionExecutionError::InvariantViolation(
                         "original business refusal before writes".into(),
-                    )
-                    .into())
+                    ))
                 });
             assert!(result.is_err());
             assert_eq!(
@@ -4916,8 +4915,7 @@ fn mandatory_journal_caught_partial_write_marks_typed_gap_only_when_original_ove
                         .unwrap();
                     Err(InstructionExecutionError::InvariantViolation(
                         "original failure after one actual port".into(),
-                    )
-                    .into())
+                    ))
                 });
             assert!(result.is_err());
             assert_eq!(
@@ -4971,8 +4969,7 @@ fn mandatory_journal_complete_effect_survives_caught_late_error_and_rolls_back_w
                     apply_owned_test_mint(state, alice);
                     Err(InstructionExecutionError::InvariantViolation(
                         "original later nonquantity refusal".into(),
-                    )
-                    .into())
+                    ))
                 });
             assert!(result.is_err());
             let applied = *transaction

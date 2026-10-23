@@ -65,13 +65,16 @@ pub(in crate::state) fn change(world: &World, replacement: bool) {
     };
     let mut tx = block.transaction_without_telemetry(LaneConfig::default(), 0);
     let owner = if replacement { &*ALICE_ID } else { &*BOB_ID };
-    tx.insert_domain_entry(id("moving"), Domain::new(id("moving")).build(owner));
-    tx.insert_domain_entry(id("added"), Domain::new(id("added")).build(&ALICE_ID));
+    tx.insert_domain_entry(&(id("moving")), Domain::new(id("moving")).build(owner));
+    tx.insert_domain_entry(&(id("added")), Domain::new(id("added")).build(&ALICE_ID));
     tx.remove_domain_entry(&id("removed")).unwrap();
     // No-op remove/reinsert and unchanged-owner writes must retain both images.
     let shared = tx.remove_domain_entry(&id("shared")).unwrap();
-    tx.insert_domain_entry(id("shared"), shared);
-    tx.insert_domain_entry(id("untouched"), Domain::new(id("untouched")).build(&BOB_ID));
+    tx.insert_domain_entry(&(id("shared")), shared);
+    tx.insert_domain_entry(
+        &(id("untouched")),
+        Domain::new(id("untouched")).build(&BOB_ID),
+    );
     tx.domains.remove(id("absent"));
     tx.apply();
     block.commit();

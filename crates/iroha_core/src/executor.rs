@@ -205,17 +205,7 @@ impl VerifiedFeeSponsorCharge {
             None,
         )
     }
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        AccountId,
-        FeeSponsorProgramId,
-        FeeChargeKind,
-        AssetId,
-        Option<AccountId>,
-        Quantity,
-        Option<(Hash, Hash, u64)>,
-    ) {
+    pub(crate) fn into_parts(self) -> FeeSponsorPaymentParts {
         (
             self.submitting_authority,
             self.program_id,
@@ -247,7 +237,10 @@ enum NativeQueryAccess {
     /// Private UID membership and aggregate activity for an exact asset's owner.
     AssetUidOwner(AssetDefinitionId),
     /// Exact current native owner and incarnation; general read grants never substitute.
-    AssetEscrowOwner(AssetDefinitionId, iroha_data_model::nexus::AxtAssetIncarnationV1),
+    AssetEscrowOwner(
+        AssetDefinitionId,
+        iroha_data_model::nexus::AxtAssetIncarnationV1,
+    ),
     /// Exact asset owner or wallet owner; never global/public ledger read.
     AssetFiOwner(AssetDefinitionId, AccountId),
     /// Ledger-wide state requiring the genesis-issued read root.
@@ -388,34 +381,70 @@ fn native_iterable_query_access(
     query: &QueryWithParams,
 ) -> Result<NativeQueryAccess, ValidationFail> {
     if query.item == QueryItemKind::AssetEscrowScopeOriginalV1 {
-        let query = decode_native_iterable_payload_exact::<data_model_query::asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1>(&query.query_payload).ok_or_else(invalid_native_iterable_query)?;
-        return Ok(NativeQueryAccess::AssetEscrowOwner(query.asset_definition_id, query.expected_incarnation));
+        let query = decode_native_iterable_payload_exact::<
+            data_model_query::asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1,
+        >(&query.query_payload)
+        .ok_or_else(invalid_native_iterable_query)?;
+        return Ok(NativeQueryAccess::AssetEscrowOwner(
+            query.asset_definition_id,
+            query.expected_incarnation,
+        ));
     }
     if query.item == QueryItemKind::AssetUidPolicyViewV1 {
         let query = decode_native_iterable_payload_exact::<
             data_model_query::asset_uid::FindAssetUidPoliciesV1,
-        >(&query.query_payload).ok_or_else(invalid_native_iterable_query)?;
+        >(&query.query_payload)
+        .ok_or_else(invalid_native_iterable_query)?;
         return Ok(NativeQueryAccess::AssetUidOwner(query.asset_definition_id));
     }
     if query.item == QueryItemKind::AssetFiContextSnapshotV1 {
-        let query = decode_native_iterable_payload_exact::<data_model_query::asset_fi_context::FindAssetFiContextV1>(&query.query_payload).ok_or_else(invalid_native_iterable_query)?;
-        query.expected_incarnation.validate().map_err(|_| invalid_native_iterable_query())?;
-        if query.expected_uid == [0; 32] { return Err(invalid_native_iterable_query()); }
-        let selected = crate::smartcontracts::isi::asset_fi_context::target_selection(&query.target)
+        let query = decode_native_iterable_payload_exact::<
+            data_model_query::asset_fi_context::FindAssetFiContextV1,
+        >(&query.query_payload)
+        .ok_or_else(invalid_native_iterable_query)?;
+        query
+            .expected_incarnation
+            .validate()
             .map_err(|_| invalid_native_iterable_query())?;
-        return Ok(NativeQueryAccess::AssetUidOwner(selected.asset_definition_id.clone()));
+        if query.expected_uid == [0; 32] {
+            return Err(invalid_native_iterable_query());
+        }
+        let selected =
+            crate::smartcontracts::isi::asset_fi_context::target_selection(&query.target)
+                .map_err(|_| invalid_native_iterable_query())?;
+        return Ok(NativeQueryAccess::AssetUidOwner(
+            selected.asset_definition_id.clone(),
+        ));
     }
     if query.item == QueryItemKind::AssetFiTransferReceiptV1 {
-        let query = decode_native_iterable_payload_exact::<data_model_query::asset_fi::FindAssetFiTransferReceiptV1>(&query.query_payload).ok_or_else(invalid_native_iterable_query)?;
-        query.expected_incarnation.validate().map_err(|_| invalid_native_iterable_query())?;
-        return Ok(NativeQueryAccess::AssetFiOwner(query.asset_definition_id, query.account_id));
+        let query = decode_native_iterable_payload_exact::<
+            data_model_query::asset_fi::FindAssetFiTransferReceiptV1,
+        >(&query.query_payload)
+        .ok_or_else(invalid_native_iterable_query)?;
+        query
+            .expected_incarnation
+            .validate()
+            .map_err(|_| invalid_native_iterable_query())?;
+        return Ok(NativeQueryAccess::AssetFiOwner(
+            query.asset_definition_id,
+            query.account_id,
+        ));
     }
     if query.item == QueryItemKind::AssetFiRelationshipViewV1 {
-        let query = decode_native_iterable_payload_exact::<data_model_query::asset_fi::FindAssetFiLinkV1>(&query.query_payload).ok_or_else(invalid_native_iterable_query)?;
-        return Ok(NativeQueryAccess::AssetFiOwner(query.asset_definition_id, query.account_id));
+        let query = decode_native_iterable_payload_exact::<
+            data_model_query::asset_fi::FindAssetFiLinkV1,
+        >(&query.query_payload)
+        .ok_or_else(invalid_native_iterable_query)?;
+        return Ok(NativeQueryAccess::AssetFiOwner(
+            query.asset_definition_id,
+            query.account_id,
+        ));
     }
     if query.item == QueryItemKind::AssetUidEnrollmentViewV1 {
-        let query = decode_native_iterable_payload_exact::<data_model_query::asset_uid_enrollment::FindAssetUidEnrollmentV1>(&query.query_payload).ok_or_else(invalid_native_iterable_query)?;
+        let query = decode_native_iterable_payload_exact::<
+            data_model_query::asset_uid_enrollment::FindAssetUidEnrollmentV1,
+        >(&query.query_payload)
+        .ok_or_else(invalid_native_iterable_query)?;
         return Ok(NativeQueryAccess::AssetUidOwner(query.asset_definition_id));
     }
     macro_rules! payload_for {
@@ -779,24 +808,44 @@ fn validate_builtin_native_query_permission(
             let asset = world.asset_definition(&definition).map_err(|_| {
                 ValidationFail::NotPermitted("FI relationship asset is unavailable".into())
             })?;
-            if authority == &account || asset.owned_by() == authority { Ok(()) }
-            else { Err(ValidationFail::NotPermitted("only the exact wallet or asset owner may query FI relationships".into()).into()) }
+            if authority == &account || asset.owned_by() == authority {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "only the exact wallet or asset owner may query FI relationships".into(),
+                )
+                .into())
+            }
         }
         NativeQueryAccess::AssetEscrowOwner(definition, incarnation) => {
-            let asset = world.asset_definition(&definition).map_err(|_| ValidationFail::NotPermitted("escrow scope asset is unavailable".into()))?;
-            if asset.owned_by() == authority && world.axt_asset_incarnations().get(&definition) == Some(&incarnation) { Ok(()) }
-            else { Err(ValidationFail::NotPermitted("escrow scope requires the exact current asset owner and live incarnation".into()).into()) }
+            let asset = world.asset_definition(&definition).map_err(|_| {
+                ValidationFail::NotPermitted("escrow scope asset is unavailable".into())
+            })?;
+            if asset.owned_by() == authority
+                && world.axt_asset_incarnations().get(&definition) == Some(&incarnation)
+            {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "escrow scope requires the exact current asset owner and live incarnation"
+                        .into(),
+                )
+                .into())
+            }
         }
         NativeQueryAccess::AssetUidOwner(definition) => {
             let asset = world.asset_definitions().get(&definition).ok_or_else(|| {
-                ValidationFail::NotPermitted("UID policy asset is not available to the requester".into())
+                ValidationFail::NotPermitted(
+                    "UID policy asset is not available to the requester".into(),
+                )
             })?;
             if asset.owned_by() == authority {
                 Ok(())
             } else {
                 Err(ValidationFail::NotPermitted(
                     "only the exact asset-definition owner may query UID policies".into(),
-                ).into())
+                )
+                .into())
             }
         }
         NativeQueryAccess::AllLedger => has_global()?
@@ -847,7 +896,7 @@ fn authority_has_native_global_read_permission(
 }
 
 /// Read the existing exact grant. `Json` has canonical lexical form; the strict
-/// one-field adapter and AccountId's canonical-I105 decoder preserve exact token semantics.
+/// one-field adapter and `AccountId`'s canonical-I105 decoder preserve exact token semantics.
 /// Unlike constructing a fresh token, inherited decoder refusal remains fallible here.
 fn authority_has_native_account_read_permission(
     world: &impl WorldReadOnly,
@@ -956,15 +1005,9 @@ fn validate_builtin_account_alias_query_permission(
         return Ok(());
     };
     match query {
-        SingularQueryBox::FindAccountByAlias(query) => {
-            require_alias(query.alias()).map_err(Into::into)
-        }
-        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => {
-            require_alias(query.alias()).map_err(Into::into)
-        }
-        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => {
-            require_alias(query.alias()).map_err(Into::into)
-        }
+        SingularQueryBox::FindAccountByAlias(query) => require_alias(query.alias()),
+        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => require_alias(query.alias()),
+        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => require_alias(query.alias()),
         SingularQueryBox::FindAliasesByAccountId(query) => {
             let catalog = world.dataspace_catalog();
             let dataspace_filter = query
@@ -1321,8 +1364,8 @@ pub(crate) fn execute_instruction_detached(
     }
     if let Some(rb) = any.downcast_ref::<RegisterBox>() {
         match rb {
-            RegisterBox::Peer(_) => {}
-            RegisterBox::Domain(_)
+            RegisterBox::Peer(_)
+            | RegisterBox::Domain(_)
             | RegisterBox::Account(_)
             | RegisterBox::AssetDefinition(_)
             | RegisterBox::Nft(_)
@@ -1335,8 +1378,8 @@ pub(crate) fn execute_instruction_detached(
     }
     if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
         match ub {
-            UnregisterBox::Peer(_) => {}
-            UnregisterBox::Domain(_)
+            UnregisterBox::Peer(_)
+            | UnregisterBox::Domain(_)
             | UnregisterBox::Account(_)
             | UnregisterBox::AssetDefinition(_)
             | UnregisterBox::Nft(_)
@@ -1718,7 +1761,7 @@ fn transaction_fee_exemption(
         return Ok((ExecutionFeeExemption::Exempt, None));
     }
     Ok(
-        match crate::smartcontracts::isi::sccp::fees::exempt_class_in_block(
+        crate::smartcontracts::isi::sccp::fees::exempt_class_in_block(
             state_transaction,
             transaction.payload(),
         )
@@ -1726,10 +1769,10 @@ fn transaction_fee_exemption(
             crate::execution_attempt::ExecutionAttemptError::Rejected(
                 ValidationFail::InternalError(error.to_string()),
             )
-        })? {
-            Some(class) => (ExecutionFeeExemption::ExemptOnSuccess, Some(class)),
-            None => (ExecutionFeeExemption::Charged, None),
-        },
+        })?
+        .map_or((ExecutionFeeExemption::Charged, None), |class| {
+            (ExecutionFeeExemption::ExemptOnSuccess, Some(class))
+        }),
     )
 }
 #[derive(Clone, Copy)]
@@ -2075,7 +2118,7 @@ impl NexusFeeAdmissionError {
 }
 #[cfg(test)]
 fn smart_contract_state_name(
-    raw: String,
+    raw: &str,
     context: &'static str,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
     StatePath::from_str(&raw).map_err(|_| {
@@ -2104,7 +2147,7 @@ fn fee_sponsor_vault_allocation_usage_state_key(
     lease_id: &iroha_crypto::Hash,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
     smart_contract_state_name(
-        VerifiedFeeSponsorVaultAllocation::usage_state_key_for(lease_id),
+        &(VerifiedFeeSponsorVaultAllocation::usage_state_key_for(lease_id)),
         "verified fee sponsor vault allocation usage",
     )
 }
@@ -2113,7 +2156,7 @@ fn fee_sponsor_vault_allocation_settled_usage_state_key(
     lease_id: &iroha_crypto::Hash,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
     smart_contract_state_name(
-        VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(lease_id),
+        &(VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(lease_id)),
         "settled verified fee sponsor vault allocation usage",
     )
 }
@@ -2584,12 +2627,10 @@ fn validate_fee_sponsor_rules(
 fn resolve_fee_sponsor_program(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
-    program_id: &FeeSponsorProgramId,
-    signed_revision: u64,
+    (program_id, signed_revision): (&FeeSponsorProgramId, u64),
     beneficiary: &AccountId,
     payload: &TransactionPayload,
-    route_dataspace_id: Option<DataSpaceId>,
-    block_height: u64,
+    (route_dataspace_id, block_height): (Option<DataSpaceId>, u64),
     context: fee_sponsor_multisig::RuleContext,
 ) -> Result<
     ResolvedSponsorProgram,
@@ -2998,8 +3039,30 @@ fn validate_governed_ivm_proved_execution_policy<R: StateReadOnly>(
         PreparedIvmZkAvailability::GovernedProof,
     )
 }
+/// Fee inputs fixed before metered instruction execution starts.
+struct InstructionFeeContext {
+    tx_bytes_len: usize,
+    gas_limit_md: Option<u64>,
+    require_gas_limit: bool,
+    gas_asset_opt: Option<String>,
+    fee_sponsor: Option<FeeSponsorProgramId>,
+    skip_nexus_fee: bool,
+}
+
+type FeeSponsorPaymentParts = (
+    AccountId,
+    FeeSponsorProgramId,
+    FeeChargeKind,
+    AssetId,
+    Option<AccountId>,
+    Quantity,
+    Option<(Hash, Hash, u64)>,
+);
+
+/// Canonical contract provenance passed through the public query adapter interface.
+/// Core constructs this opaque context only after resolving the invocation against ledger state.
 #[derive(Clone, Debug)]
-pub(crate) struct ContractRuntimeExecutionContext {
+pub struct ContractRuntimeExecutionContext {
     pub(crate) contract_address: iroha_data_model::smart_contract::ContractAddress,
     pub(crate) contract_subject: AccountId,
     // Retained as canonical provenance for queued/nested calls. Authorization must never branch
@@ -3231,7 +3294,6 @@ impl ContractEntrypointAuthorizationSnapshot {
             &self.entrypoint,
             &self.authorization,
         )
-        .map_err(Into::into)
     }
     /// Validate the snapshot and require the apply-time caller to be the captured caller.
     pub(crate) fn validate_for_authority(
@@ -3663,6 +3725,7 @@ fn is_self_describing_contract(bytecode: &[u8]) -> bool {
         .and_then(|parsed| parsed.contract_interface)
         .is_some()
 }
+#[derive(Clone, Copy)]
 enum ContractDispatchSource<'a> {
     Bytecode(&'a [u8]),
     Prepared(&'a ivm::PreparedContract),
@@ -4532,9 +4595,11 @@ fn authority_fee_asset_id(
 }
 fn evaluate_nexus_fee_admission_payload(
     world: &impl WorldReadOnly,
-    nexus: &iroha_config::parameters::actual::Nexus,
-    pipeline: &Pipeline,
-    zk_gas: &ConfidentialGas,
+    (nexus, pipeline, zk_gas): (
+        &iroha_config::parameters::actual::Nexus,
+        &Pipeline,
+        &ConfidentialGas,
+    ),
     payload: &TransactionPayload,
     observation_time_ms: u64,
     next_block_height: u64,
@@ -4633,12 +4698,10 @@ fn evaluate_nexus_fee_admission_payload(
             let resolved = resolve_fee_sponsor_program(
                 world,
                 nexus,
-                program_id,
-                program_revision,
+                (program_id, program_revision),
                 &payload.authority,
                 payload,
-                route_dataspace_id,
-                next_block_height,
+                (route_dataspace_id, next_block_height),
                 fee_sponsor_multisig::RuleContext::admission(observation_time_ms),
             )?;
             let capacities = evaluate_fee_sponsor_capacity(
@@ -4705,9 +4768,7 @@ pub fn quote_nexus_fee_admission_payload(
     }
     evaluate_nexus_fee_admission_payload(
         world,
-        nexus,
-        pipeline,
-        zk_gas,
+        (nexus, pipeline, zk_gas),
         payload,
         observation_time_ms,
         next_block_height,
@@ -4815,9 +4876,7 @@ pub fn quote_nexus_fee_admission_draft(
     for _ in 0..32 {
         let quote = evaluate_nexus_fee_admission_payload(
             world,
-            nexus,
-            pipeline,
-            zk_gas,
+            (nexus, pipeline, zk_gas),
             &candidate,
             observation_time_ms,
             next_block_height,
@@ -4829,9 +4888,7 @@ pub fn quote_nexus_fee_admission_draft(
         if candidate.fee_payment == recommended_intent {
             let quote = evaluate_nexus_fee_admission_payload(
                 world,
-                nexus,
-                pipeline,
-                zk_gas,
+                (nexus, pipeline, zk_gas),
                 &candidate,
                 observation_time_ms,
                 next_block_height,
@@ -4895,7 +4952,7 @@ pub(crate) mod sorafs_admission_hash_probe {
     }
 
     /// Observe the next original outer hash only while this thread has an active probe.
-    pub(crate) fn note_outer_hash() {
+    pub fn note_outer_hash() {
         HASHES.with(|hashes| {
             if let Some(count) = hashes.get() {
                 hashes.set(Some(count + 1));
@@ -4904,7 +4961,7 @@ pub(crate) mod sorafs_admission_hash_probe {
     }
 
     /// Count actual helper hashes in one lexical call, restoring prior state even on unwind.
-    pub(crate) fn count<R>(body: impl FnOnce() -> R) -> (R, usize) {
+    pub fn count<R>(body: impl FnOnce() -> R) -> (R, usize) {
         struct Restore(Option<usize>);
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -4990,9 +5047,11 @@ pub(crate) fn validate_transaction_fee_admission(
     }
     evaluate_nexus_fee_admission_payload(
         &state_transaction.world,
-        &state_transaction.nexus,
-        &state_transaction.pipeline,
-        &state_transaction.zk.gas,
+        (
+            &state_transaction.nexus,
+            &state_transaction.pipeline,
+            &state_transaction.zk.gas,
+        ),
         transaction.payload(),
         state_transaction.block_unix_timestamp_ms(),
         state_transaction.block_height(),
@@ -5161,7 +5220,7 @@ fn charge_fees_for_applied_overlay(
             state_transaction,
             authority,
             transaction,
-            fee_sponsor,
+            &(fee_sponsor),
             tx_bytes_len,
             instruction_count,
             gas_used,
@@ -5372,12 +5431,13 @@ impl Executor {
         let resolved = resolve_fee_sponsor_program(
             &state_transaction.world,
             &state_transaction.nexus,
-            program_id,
-            program_revision,
+            (program_id, program_revision),
             authority,
             transaction.payload(),
-            state_transaction.current_dataspace_id,
-            state_transaction.block_height(),
+            (
+                state_transaction.current_dataspace_id,
+                state_transaction.block_height(),
+            ),
             fee_sponsor_multisig::RuleContext::settlement(
                 observation_time_ms,
                 authenticated_entrypoint,
@@ -5587,7 +5647,7 @@ impl Executor {
         #[cfg(feature = "telemetry")]
         {
             let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
-            state_transaction.stage_block_fee_amount(Quantity::from(delta));
+            state_transaction.stage_block_fee_amount(&(Quantity::from(delta)));
         }
         // This actual scoped transfer is the fee settlement. No synthetic XOR
         // conversion quote or lane-relay receipt can stand in for a balance effect.
@@ -5598,7 +5658,7 @@ impl Executor {
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         transaction: &SignedTransaction,
-        sponsor: Option<FeeSponsorProgramId>,
+        sponsor: &Option<FeeSponsorProgramId>,
         tx_bytes_len: usize,
         instruction_count: usize,
         gas_used: u64,
@@ -5779,15 +5839,15 @@ impl Executor {
         Ok(())
     }
     /// Validate the predecessor's complete monetary policy before any fee exemption.
-    /// Neither SetParameter nor other transaction-local changes refresh this snapshot.
+    /// Neither `SetParameter` nor other transaction-local changes refresh this snapshot.
     fn validate_root_fee_policy(
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), ValidationFail> {
         if !is_initial_genesis_context(state_transaction) {
-            if cfg!(all(test, sumeragi_core_mutation = "HC397")) {
-                if let Some(policy) = state_transaction.world.parameters().root_fees() {
-                    state_transaction.nexus.fees = policy.clone();
-                }
+            if cfg!(all(test, sumeragi_core_mutation = "HC397"))
+                && let Some(policy) = state_transaction.world.parameters().root_fees()
+            {
+                state_transaction.nexus.fees = policy.clone();
             }
             root_fees::effective(&state_transaction.world, &state_transaction.nexus.fees).map_err(
                 |error| match error {
@@ -5909,7 +5969,7 @@ impl Executor {
             )
         })
     }
-    /// Capture the exact original signed SetPolicy; genesis requires its opaque source owner.
+    /// Capture the exact original signed `SetPolicy`; genesis requires its opaque source owner.
     pub(crate) fn direct_reputation_policy_origin(
         state: &StateTransaction<'_, '_>,
         transaction: &SignedTransaction,
@@ -6127,15 +6187,19 @@ impl Executor {
         authority: &AccountId,
         transaction: &SignedTransaction,
         instructions: Vec<InstructionBox>,
-        ivm_proved_replay: Option<crate::pipeline::overlay::IvmProvedReplay>,
-        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-        entrypoint_authorization: Option<&ContractEntrypointAuthorizationSnapshot>,
-        tx_bytes_len: usize,
-        gas_limit_md: Option<u64>,
-        require_gas_limit: bool,
-        gas_asset_opt: Option<String>,
-        fee_sponsor: Option<FeeSponsorProgramId>,
-        skip_nexus_fee: bool,
+        (ivm_proved_replay, contract_runtime_context, entrypoint_authorization): (
+            Option<crate::pipeline::overlay::IvmProvedReplay>,
+            Option<&ContractRuntimeExecutionContext>,
+            Option<&ContractEntrypointAuthorizationSnapshot>,
+        ),
+        InstructionFeeContext {
+            tx_bytes_len,
+            gas_limit_md,
+            require_gas_limit,
+            gas_asset_opt,
+            fee_sponsor,
+            skip_nexus_fee,
+        }: InstructionFeeContext,
     ) -> Result<(), ValidationFail> {
         state_transaction.current_direct_privacy_instruction_index = None;
         state_transaction.clear_direct_parliament_candidate_testing();
@@ -6591,7 +6655,7 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction,
-                fee_sponsor,
+                &(fee_sponsor),
                 tx_bytes_len,
                 instruction_count,
                 used,
@@ -6683,8 +6747,7 @@ impl Executor {
         authority: &AccountId,
         call: &ContractInvocation,
         ivm_cache: &mut IvmCache,
-        effective_limit: u64,
-        logical_time_ms: u64,
+        (effective_limit, logical_time_ms): (u64, u64),
         trigger_context: Option<(&TriggerId, u64)>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
         // A contract frame cannot inherit a native instruction's signed ordinal.
@@ -6704,8 +6767,7 @@ impl Executor {
             authority,
             call,
             resolved,
-            effective_limit,
-            logical_time_ms,
+            (effective_limit, logical_time_ms),
             trigger_context,
         )
     }
@@ -6717,8 +6779,7 @@ impl Executor {
         authority: &AccountId,
         call: &ContractInvocation,
         resolved: ResolvedContractInvocation,
-        effective_limit: u64,
-        logical_time_ms: u64,
+        (effective_limit, logical_time_ms): (u64, u64),
         trigger_context: Option<(&TriggerId, u64)>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
         // A contract frame cannot inherit a native instruction's signed ordinal.
@@ -7005,7 +7066,7 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction,
-                fee_sponsor,
+                &(fee_sponsor),
                 tx_bytes_len,
                 instruction_count,
                 direct_gas_used,
@@ -7127,12 +7188,13 @@ impl Executor {
                 let block_height = state_transaction.block_height();
                 let (expected_commitment, vk_active) =
                     if let Some(rec) = state_transaction.world.verifying_keys.get(&vk_ref) {
-                        if let Some(ns_hint) = namespace_hint.as_deref() {
-                            if !rec.namespace.is_empty() && rec.namespace != ns_hint {
-                                return Err(ValidationFail::NotPermitted(
-                                    "verifying key namespace/manifest mismatch".to_owned(),
-                                ));
-                            }
+                        if let Some(ns_hint) = namespace_hint.as_deref()
+                            && !rec.namespace.is_empty()
+                            && rec.namespace != ns_hint
+                        {
+                            return Err(ValidationFail::NotPermitted(
+                                "verifying key namespace/manifest mismatch".to_owned(),
+                            ));
                         }
                         (Some(rec.commitment), rec.is_active_at(block_height))
                     } else {
@@ -7271,7 +7333,7 @@ impl Executor {
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
         let tx_hash = transaction.hash();
-        state_transaction.current_tx_hash = Some(tx_hash.clone());
+        state_transaction.current_tx_hash = Some(tx_hash);
         let tx_bytes_len = norito::canonical_frame_len(transaction.payload()).map_err(|err| {
             ValidationFail::InternalError(format!(
                 "failed to encode transaction for fee metering: {err}"
@@ -7294,13 +7356,17 @@ impl Executor {
             == Some(crate::smartcontracts::isi::sccp::admission::SccpExemptClassV1::SelfClaim))
         .then(|| authority.clone());
         // Quote the predecessor-frozen pipeline fee snapshot shared with block execution.
-        let fee_quote = if !skip_nexus_fee {
+        let fee_quote = if skip_nexus_fee {
+            None
+        } else {
             Some(
                 evaluate_nexus_fee_admission_payload(
                     &state_transaction.world,
-                    &state_transaction.nexus,
-                    &state_transaction.pipeline,
-                    &state_transaction.zk.gas,
+                    (
+                        &state_transaction.nexus,
+                        &state_transaction.pipeline,
+                        &state_transaction.zk.gas,
+                    ),
                     transaction.payload(),
                     state_transaction.block_unix_timestamp_ms(),
                     state_transaction.block_height(),
@@ -7313,8 +7379,6 @@ impl Executor {
                     )
                 })?,
             )
-        } else {
-            None
         };
         fastpq_rejection_tail::preflight(
             state_transaction,
@@ -7330,18 +7394,18 @@ impl Executor {
         // Multisig participation is signed by individual signatories. Approved
         // inner instructions execute separately under the multisig account.
         {
-            if let Ok(account) = state_transaction.world.account(authority) {
-                if account.id().controller().multisig_policy().is_some() {
-                    #[cfg(feature = "telemetry")]
-                    crate::telemetry::record_social_rejection(
-                        state_transaction.telemetry,
-                        "multisig_direct_sign",
-                    );
-                    return Err(ValidationFail::NotPermitted(
+            if let Ok(account) = state_transaction.world.account(authority)
+                && account.id().controller().multisig_policy().is_some()
+            {
+                #[cfg(feature = "telemetry")]
+                crate::telemetry::record_social_rejection(
+                    state_transaction.telemetry,
+                    "multisig_direct_sign",
+                );
+                return Err(ValidationFail::NotPermitted(
                         "direct signing with multisig accounts is forbidden; use multisig propose/approve"
                             .to_owned(),
                     ));
-                }
             }
         }
         // Gas asset and limit are explicit signature-bound fee intent fields.
@@ -7524,15 +7588,15 @@ impl Executor {
                     authority,
                     &transaction_for_fee,
                     instructions.into_vec(),
-                    None,
-                    None,
-                    None,
-                    tx_bytes_len,
-                    gas_limit_md,
-                    false,
-                    gas_asset_opt,
-                    fee_sponsor,
-                    skip_nexus_fee,
+                    (None, None, None),
+                    InstructionFeeContext {
+                        tx_bytes_len,
+                        gas_limit_md,
+                        require_gas_limit: false,
+                        gas_asset_opt,
+                        fee_sponsor,
+                        skip_nexus_fee,
+                    },
                 ),
             (Self::Initial | Self::UserProvided(_), Executable::IvmProved(_)) => {
                 let replay = ivm_proved_replay
@@ -7547,15 +7611,19 @@ impl Executor {
                     authority,
                     &transaction_for_fee,
                     instructions,
-                    Some(replay),
-                    proved_contract_runtime_context.as_ref(),
-                    proved_entrypoint_authorization.as_ref(),
-                    tx_bytes_len,
-                    gas_limit_md,
-                    true,
-                    gas_asset_opt,
-                    fee_sponsor,
-                    false,
+                    (
+                        Some(replay),
+                        proved_contract_runtime_context.as_ref(),
+                        proved_entrypoint_authorization.as_ref(),
+                    ),
+                    InstructionFeeContext {
+                        tx_bytes_len,
+                        gas_limit_md,
+                        require_gas_limit: true,
+                        gas_asset_opt,
+                        fee_sponsor,
+                        skip_nexus_fee: false,
+                    },
                 )
             }
             (Self::Initial | Self::UserProvided(_), Executable::ContractCall(call)) => {
@@ -7577,8 +7645,7 @@ impl Executor {
                     authority,
                     &call,
                     ivm_cache,
-                    effective_limit,
-                    tx_creation_time_ms,
+                    (effective_limit, tx_creation_time_ms),
                     None,
                 )?;
                 Self::settle_live_transaction_fees(
@@ -7741,8 +7808,7 @@ impl Executor {
                                 authority,
                                 &call,
                                 ivm_cache,
-                                remaining,
-                                tx_creation_time_ms,
+                                (remaining, tx_creation_time_ms),
                                 None,
                             )?;
                             gas_used = gas_used.saturating_add(outcome.gas_used);
@@ -7767,7 +7833,7 @@ impl Executor {
                     authority,
                     &transaction_for_fee,
                     ivm_cache,
-                    bytes,
+                    &(bytes),
                     RawIvmTransactionInputs {
                         metadata: md,
                         gas_limit_md,
@@ -7788,7 +7854,7 @@ impl Executor {
         authority: &AccountId,
         transaction_for_fee: &SignedTransaction,
         ivm_cache: &mut IvmCache,
-        bytes: iroha_data_model::transaction::executable::IvmBytecode,
+        bytes: &iroha_data_model::transaction::executable::IvmBytecode,
         inputs: RawIvmTransactionInputs,
     ) -> Result<(), ValidationFail> {
         use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
@@ -7964,7 +8030,7 @@ impl Executor {
                         state_transaction,
                         authority,
                         transaction_for_fee,
-                        fee_sponsor,
+                        &(fee_sponsor),
                         tx_bytes_len,
                         0,
                         gas_used,
@@ -8058,17 +8124,17 @@ impl Executor {
             })?;
         runtime.set_max_cycles(effective_cycles.get());
         runtime.set_gas_limit(effective_limit);
-        if let Some(context) = contract_call_context.as_ref() {
-            if let Some(entrypoint_pc) = context.entrypoint_pc {
-                let code_len = runtime.memory.code_len();
-                runtime.set_register(1, code_len);
-                runtime.set_program_counter(entrypoint_pc).map_err(|err| {
-                    let selector = context.entrypoint.as_deref().unwrap_or("main");
-                    ValidationFail::NotPermitted(format!(
-                        "contract entrypoint `{selector}` resolved to invalid pc: {err}"
-                    ))
-                })?;
-            }
+        if let Some(context) = contract_call_context.as_ref()
+            && let Some(entrypoint_pc) = context.entrypoint_pc
+        {
+            let code_len = runtime.memory.code_len();
+            runtime.set_register(1, code_len);
+            runtime.set_program_counter(entrypoint_pc).map_err(|err| {
+                let selector = context.entrypoint.as_deref().unwrap_or("main");
+                ValidationFail::NotPermitted(format!(
+                    "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                ))
+            })?;
         }
         let precharge_result = contract_call_context
             .as_ref()
@@ -8182,7 +8248,7 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction_for_fee,
-                fee_sponsor,
+                &(fee_sponsor),
                 tx_bytes_len,
                 0,
                 gas_used,
@@ -8325,12 +8391,18 @@ impl Executor {
             contract_runtime_context,
         )?;
         if let Some(result) = crate::smartcontracts::isi::escrow::controlled::execute_instruction(
-            &instruction, authority, state_transaction, contract_runtime_context,
+            &instruction,
+            authority,
+            state_transaction,
+            contract_runtime_context,
         ) {
             return result.map_err(ValidationFail::InstructionFailed);
         }
         if let Some(result) = crate::smartcontracts::isi::asset_fi::execute_instruction(
-            &instruction, authority, state_transaction, contract_runtime_context,
+            &instruction,
+            authority,
+            state_transaction,
+            contract_runtime_context,
         ) {
             return result.map_err(ValidationFail::InstructionFailed);
         }
@@ -8392,12 +8464,18 @@ impl Executor {
             contract_runtime_context,
         )?;
         if let Some(result) = crate::smartcontracts::isi::escrow::controlled::execute_instruction(
-            instruction, authority, state_transaction, contract_runtime_context,
+            instruction,
+            authority,
+            state_transaction,
+            contract_runtime_context,
         ) {
             return result.map_err(ValidationFail::InstructionFailed);
         }
         if let Some(result) = crate::smartcontracts::isi::asset_fi::execute_instruction(
-            instruction, authority, state_transaction, contract_runtime_context,
+            instruction,
+            authority,
+            state_transaction,
+            contract_runtime_context,
         ) {
             return result.map_err(ValidationFail::InstructionFailed);
         }
@@ -8461,10 +8539,10 @@ impl Executor {
                 }
             }
             for role_id in state_transaction.world.account_roles_iter(authority) {
-                if let Some(role) = state_transaction.world.roles.get(role_id) {
-                    if role.permissions.iter().any(is_target_permission) {
-                        return Ok(true);
-                    }
+                if let Some(role) = state_transaction.world.roles.get(role_id)
+                    && role.permissions.iter().any(is_target_permission)
+                {
+                    return Ok(true);
                 }
             }
             Ok(false)
@@ -8661,14 +8739,13 @@ impl Executor {
                     .to_owned(),
             ));
         }
-        if let Some(account_id) = extract_account_metadata_target(instruction) {
-            if !is_genesis
-                && !can_modify_account_metadata(&state_transaction.world, authority, &account_id)?
-            {
-                return Err(ValidationFail::NotPermitted(
-                    "Can't set value to the metadata of another account".to_owned(),
-                ));
-            }
+        if let Some(account_id) = extract_account_metadata_target(instruction)
+            && !is_genesis
+            && !can_modify_account_metadata(&state_transaction.world, authority, &account_id)?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't set value to the metadata of another account".to_owned(),
+            ));
         }
         if let Some(nft_id) = instruction
             .as_any()
@@ -8698,8 +8775,7 @@ impl Executor {
                     .downcast_ref::<iroha_data_model::isi::RemoveKeyValue<iroha_data_model::nft::Nft>>()
                     .map(|rm| rm.object.clone())
             })
-        {
-            if !is_initial_genesis_context(state_transaction) {
+            && !is_initial_genesis_context(state_transaction) {
                 let domain_owner = state_transaction
                     .world
                     .domain(nft_id.domain())
@@ -8715,7 +8791,6 @@ impl Executor {
                     ));
                 }
             }
-        }
         if let Some(transfer_domain) = extract_transfer_domain(instruction)
             && !can_transfer_domain(
                 &state_transaction.world,
@@ -9780,6 +9855,13 @@ impl ExecutorRuntimePool {
             self.clear_storage();
         }
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "Test builds record pool events in this instance; production retains the same call sites"
+        )
+    )]
     fn record(&mut self, event: ExecutorRuntimePoolEvent) {
         #[cfg(test)]
         match event {
@@ -9868,7 +9950,9 @@ fn with_executor_runtime_pool<R>(
     pool: &Mutex<ExecutorRuntimePool>,
     operation: impl FnOnce(&mut ExecutorRuntimePool) -> R,
 ) -> R {
-    let mut guard = pool.lock().unwrap_or_else(|error| error.into_inner());
+    let mut guard = pool
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let budget = guard.execution_budget.clone();
     let run = move || operation(&mut guard);
     match budget {
@@ -10083,14 +10167,14 @@ impl LoadedExecutor {
         let pool = self
             .runtime_pool
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         (pool.stats, pool.variants.len())
     }
     #[cfg(test)]
     fn runtime_variant_capacity(&self) -> usize {
         self.runtime_pool
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .capacity
     }
 }
@@ -10894,10 +10978,10 @@ mod tests {
         }
     }
     fn initial_batch_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
-        world
-            .asset(asset_id)
-            .map(|asset| asset.value().clone().into_inner())
-            .unwrap_or_else(|_| Quantity::zero())
+        world.asset(asset_id).map_or_else(
+            |_| Quantity::zero(),
+            |asset| asset.value().clone().into_inner(),
+        )
     }
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
@@ -10908,33 +10992,74 @@ mod tests {
     }
     #[test]
     fn native_escrow_scope_binds_current_owner_incarnation_and_archived_request() {
-        use iroha_data_model::{nexus::AxtAssetIncarnationV1, query::{asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1, parameters::QueryParams}};
+        use iroha_data_model::{
+            nexus::AxtAssetIncarnationV1,
+            query::{
+                asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1, parameters::QueryParams,
+            },
+        };
         let fixture = initial_batch_fixture();
         let owner = fixture.source.clone();
         let outsider = fixture.delegate.clone();
         let definition = fixture.asset_definition.clone();
-        let incarnation = AxtAssetIncarnationV1::try_from_bytes(*iroha_crypto::Hash::new("scope-owner-test").as_ref()).unwrap();
+        let incarnation = AxtAssetIncarnationV1::try_from_bytes(
+            *iroha_crypto::Hash::new("scope-owner-test").as_ref(),
+        )
+        .unwrap();
         let state = state_for_testing(fixture.world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut tx = block.transaction();
-        tx.world.axt_asset_incarnations.insert(definition.clone(), incarnation);
-        tx.world.account_permissions.insert(outsider.clone(), BTreeSet::from([
-            executor_permission::query::CanReadAllLedgerData.into(),
-            executor_permission::query::CanReadAccountData { account: owner.clone() }.into(),
-        ]));
+        tx.world
+            .axt_asset_incarnations
+            .insert(definition.clone(), incarnation);
+        tx.world.account_permissions.insert(
+            outsider.clone(),
+            BTreeSet::from([
+                executor_permission::query::CanReadAllLedgerData.into(),
+                executor_permission::query::CanReadAccountData {
+                    account: owner.clone(),
+                }
+                .into(),
+            ]),
+        );
         let request = QueryRequest::Start(QueryWithParams {
-            query: (), query_payload: FindAssetEscrowsByAssetDefinitionV1 {
-                asset_definition_id: definition.clone(), expected_incarnation: incarnation,
-            }.encode(), item: QueryItemKind::AssetEscrowScopeOriginalV1,
-            predicate_bytes: Vec::new(), selector_bytes: Vec::new(), params: QueryParams::default(),
+            query: (),
+            query_payload: FindAssetEscrowsByAssetDefinitionV1 {
+                asset_definition_id: definition.clone(),
+                expected_incarnation: incarnation,
+            }
+            .encode(),
+            item: QueryItemKind::AssetEscrowScopeOriginalV1,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
         });
         validate_builtin_native_query_permission(tx.world(), &owner, &request, 0).unwrap();
-        assert!(validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0).is_err(), "global read cannot substitute for exact ownership");
-        tx.world.asset_definitions.get_mut(&definition).unwrap().set_owned_by(outsider.clone());
-        assert!(validate_builtin_native_query_permission(tx.world(), &owner, &request, 0).is_err(), "an archived request loses authorization when ownership changes");
+        assert!(
+            validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0).is_err(),
+            "global read cannot substitute for exact ownership"
+        );
+        tx.world
+            .asset_definitions
+            .get_mut(&definition)
+            .unwrap()
+            .set_owned_by(outsider.clone());
+        assert!(
+            validate_builtin_native_query_permission(tx.world(), &owner, &request, 0).is_err(),
+            "an archived request loses authorization when ownership changes"
+        );
         validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0).unwrap();
-        tx.world.axt_asset_incarnations.insert(definition, AxtAssetIncarnationV1::try_from_bytes(*iroha_crypto::Hash::new("new-incarnation").as_ref()).unwrap());
-        assert!(validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0).is_err(), "re-registration cannot revive an old selected scope");
+        tx.world.axt_asset_incarnations.insert(
+            definition,
+            AxtAssetIncarnationV1::try_from_bytes(
+                *iroha_crypto::Hash::new("new-incarnation").as_ref(),
+            )
+            .unwrap(),
+        );
+        assert!(
+            validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0).is_err(),
+            "re-registration cannot revive an old selected scope"
+        );
     }
 
     #[test]
@@ -10947,10 +11072,19 @@ mod tests {
         let state = state_for_testing(fixture.world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut tx = block.transaction();
-        for (uid, wallet_account_id) in [(None, None), (Some([7; 32]), None), (Some([7; 32]), Some(participant.clone()))] {
+        for (uid, wallet_account_id) in [
+            (None, None),
+            (Some([7; 32]), None),
+            (Some([7; 32]), Some(participant.clone())),
+        ] {
             let envelope = QueryWithParams {
                 query: (),
-                query_payload: FindAssetUidPoliciesV1 { asset_definition_id: definition.clone(), uid, wallet_account_id }.encode(),
+                query_payload: FindAssetUidPoliciesV1 {
+                    asset_definition_id: definition.clone(),
+                    uid,
+                    wallet_account_id,
+                }
+                .encode(),
                 item: QueryItemKind::AssetUidPolicyViewV1,
                 predicate_bytes: Vec::new(),
                 selector_bytes: Vec::new(),
@@ -10959,101 +11093,35 @@ mod tests {
             let request = QueryRequest::Start(envelope);
             validate_builtin_native_query_permission(tx.world(), &owner, &request, 0)
                 .expect("exact asset owner may read UID policy");
-            assert!(validate_builtin_native_query_permission(tx.world(), &participant, &request, 0).is_err());
-            tx.world.account_permissions.insert(participant.clone(), BTreeSet::from([
-                executor_permission::query::CanReadAllLedgerData.into(),
-                executor_permission::query::CanReadAccountData { account: owner.clone() }.into(),
-            ]));
-            assert!(validate_builtin_native_query_permission(tx.world(), &participant, &request, 0).is_err(),
-                "general read grants must not reveal cross-participant UID linkage");
+            assert!(
+                validate_builtin_native_query_permission(tx.world(), &participant, &request, 0)
+                    .is_err()
+            );
+            tx.world.account_permissions.insert(
+                participant.clone(),
+                BTreeSet::from([
+                    executor_permission::query::CanReadAllLedgerData.into(),
+                    executor_permission::query::CanReadAccountData {
+                        account: owner.clone(),
+                    }
+                    .into(),
+                ]),
+            );
+            assert!(
+                validate_builtin_native_query_permission(tx.world(), &participant, &request, 0)
+                    .is_err(),
+                "general read grants must not reveal cross-participant UID linkage"
+            );
             tx.world.account_permissions.remove(participant.clone());
         }
     }
-#[test]
-fn native_fi_context_query_is_exact_current_asset_owner_only() {
-    use iroha_data_model::{
-        asset::fi_context::AssetFiContextTargetV1,
-        isi::asset_fi::TransferToLinkedFiV1,
-        query::{asset_fi_context::FindAssetFiContextV1, parameters::QueryParams},
-    };
-    let fixture = initial_batch_fixture();
-    let owner = fixture.source.clone();
-    let wallet = fixture.first_destination.clone();
-    let outsider = fixture.delegate.clone();
-    let definition = fixture.asset_definition.clone();
-    let state = state_for_testing(fixture.world);
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-    let mut tx = block.transaction();
-    tx.world.account_permissions.insert(
-        outsider.clone(),
-        BTreeSet::from([
-            executor_permission::query::CanReadAllLedgerData.into(),
-            executor_permission::query::CanReadAccountData {
-                account: wallet.clone(),
-            }
-            .into(),
-        ]),
-    );
-    let query = FindAssetFiContextV1 {
-        target: AssetFiContextTargetV1::Transfer {
-            instruction: TransferToLinkedFiV1 {
-                asset_definition_id: definition.clone(),
-                account_id: wallet.clone(),
-                amount: 5_u32.into(),
-                expected_link_revision: 1,
-                expected_policy_revision: 1,
-            },
-            fi_account_id: outsider.clone(),
-            reference_digest: [9; 32],
-            expected_fi_revision: 1,
-            expected_attestation_revision: 1,
-        },
-        expected_incarnation: iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
-            *Hash::new("context-incarnation").as_ref(),
-        )
-        .unwrap(),
-        expected_uid: [7; 32],
-    };
-    let request = QueryRequest::Start(QueryWithParams {
-        query: (),
-        query_payload: query.encode(),
-        item: QueryItemKind::AssetFiContextSnapshotV1,
-        predicate_bytes: Vec::new(),
-        selector_bytes: Vec::new(),
-        params: QueryParams::default(),
-    });
-    validate_builtin_native_query_permission(tx.world(), &owner, &request, 0).unwrap();
-    for denied in [&wallet, &outsider] {
-        assert!(
-            validate_builtin_native_query_permission(tx.world(), denied, &request, 0).is_err(),
-            "wallet/FI/general grants do not confer current-context authority"
-        );
-    }
-    tx.world
-        .asset_definitions
-        .get_mut(&definition)
-        .unwrap()
-        .set_owned_by(outsider.clone());
-    assert!(validate_builtin_native_query_permission(tx.world(), &owner, &request, 0).is_err());
-    validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0).unwrap();
-    let QueryRequest::Start(mut malformed) = request else {
-        unreachable!()
-    };
-    malformed.query_payload.push(0);
-    assert!(
-        validate_builtin_native_query_permission(
-            tx.world(),
-            &outsider,
-            &QueryRequest::Start(malformed),
-            0
-        )
-        .is_err()
-    );
-}
-
     #[test]
-    fn native_fi_receipt_query_is_exact_wallet_or_current_global_asset_owner_only() {
-        use iroha_data_model::query::{asset_fi::FindAssetFiTransferReceiptV1, parameters::QueryParams};
+    fn native_fi_context_query_is_exact_current_asset_owner_only() {
+        use iroha_data_model::{
+            asset::fi_context::AssetFiContextTargetV1,
+            isi::asset_fi::TransferToLinkedFiV1,
+            query::{asset_fi_context::FindAssetFiContextV1, parameters::QueryParams},
+        };
         let fixture = initial_batch_fixture();
         let owner = fixture.source.clone();
         let wallet = fixture.first_destination.clone();
@@ -11062,35 +11130,173 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
         let state = state_for_testing(fixture.world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut tx = block.transaction();
-        tx.world.account_permissions.insert(outsider.clone(), BTreeSet::from([
-            executor_permission::query::CanReadAllLedgerData.into(),
-            executor_permission::query::CanReadAccountData { account: wallet.clone() }.into(),
-        ]));
-        let mut query = FindAssetFiTransferReceiptV1 { asset_definition_id: definition.clone(),
-            account_id: wallet.clone(), expected_incarnation: iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(*Hash::new("receipt-incarnation").as_ref()).unwrap(), execution_call_hash: Hash::new("private-FI-occurrence"), transcript_index: 0 };
-        let request = |query: &FindAssetFiTransferReceiptV1| QueryRequest::Start(QueryWithParams {
-            query: (), query_payload: query.encode(), item: QueryItemKind::AssetFiTransferReceiptV1,
-            predicate_bytes: Vec::new(), selector_bytes: Vec::new(), params: QueryParams::default(),
+        tx.world.account_permissions.insert(
+            outsider.clone(),
+            BTreeSet::from([
+                executor_permission::query::CanReadAllLedgerData.into(),
+                executor_permission::query::CanReadAccountData {
+                    account: wallet.clone(),
+                }
+                .into(),
+            ]),
+        );
+        let query = FindAssetFiContextV1 {
+            target: AssetFiContextTargetV1::Transfer {
+                instruction: TransferToLinkedFiV1 {
+                    asset_definition_id: definition.clone(),
+                    account_id: wallet.clone(),
+                    amount: 5_u32.into(),
+                    expected_link_revision: 1,
+                    expected_policy_revision: 1,
+                },
+                fi_account_id: outsider.clone(),
+                reference_digest: [9; 32],
+                expected_fi_revision: 1,
+                expected_attestation_revision: 1,
+            },
+            expected_incarnation: iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+                *Hash::new("context-incarnation").as_ref(),
+            )
+            .unwrap(),
+            expected_uid: [7; 32],
+        };
+        let request = QueryRequest::Start(QueryWithParams {
+            query: (),
+            query_payload: query.encode(),
+            item: QueryItemKind::AssetFiContextSnapshotV1,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
         });
+        validate_builtin_native_query_permission(tx.world(), &owner, &request, 0).unwrap();
+        for denied in [&wallet, &outsider] {
+            assert!(
+                validate_builtin_native_query_permission(tx.world(), denied, &request, 0).is_err(),
+                "wallet/FI/general grants do not confer current-context authority"
+            );
+        }
+        tx.world
+            .asset_definitions
+            .get_mut(&definition)
+            .unwrap()
+            .set_owned_by(outsider.clone());
+        assert!(validate_builtin_native_query_permission(tx.world(), &owner, &request, 0).is_err());
+        validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0).unwrap();
+        let QueryRequest::Start(mut malformed) = request else {
+            unreachable!()
+        };
+        malformed.query_payload.push(0);
+        assert!(
+            validate_builtin_native_query_permission(
+                tx.world(),
+                &outsider,
+                &QueryRequest::Start(malformed),
+                0
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn native_fi_receipt_query_is_exact_wallet_or_current_global_asset_owner_only() {
+        use iroha_data_model::query::{
+            asset_fi::FindAssetFiTransferReceiptV1, parameters::QueryParams,
+        };
+        let fixture = initial_batch_fixture();
+        let owner = fixture.source.clone();
+        let wallet = fixture.first_destination.clone();
+        let outsider = fixture.delegate.clone();
+        let definition = fixture.asset_definition.clone();
+        let state = state_for_testing(fixture.world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let mut tx = block.transaction();
+        tx.world.account_permissions.insert(
+            outsider.clone(),
+            BTreeSet::from([
+                executor_permission::query::CanReadAllLedgerData.into(),
+                executor_permission::query::CanReadAccountData {
+                    account: wallet.clone(),
+                }
+                .into(),
+            ]),
+        );
+        let mut query = FindAssetFiTransferReceiptV1 {
+            asset_definition_id: definition.clone(),
+            account_id: wallet.clone(),
+            expected_incarnation: iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+                *Hash::new("receipt-incarnation").as_ref(),
+            )
+            .unwrap(),
+            execution_call_hash: Hash::new("private-FI-occurrence"),
+            transcript_index: 0,
+        };
+        let request = |query: &FindAssetFiTransferReceiptV1| {
+            QueryRequest::Start(QueryWithParams {
+                query: (),
+                query_payload: query.encode(),
+                item: QueryItemKind::AssetFiTransferReceiptV1,
+                predicate_bytes: Vec::new(),
+                selector_bytes: Vec::new(),
+                params: QueryParams::default(),
+            })
+        };
         validate_builtin_native_query_permission(tx.world(), &owner, &request(&query), 0).unwrap();
         validate_builtin_native_query_permission(tx.world(), &wallet, &request(&query), 0).unwrap();
-        assert!(validate_builtin_native_query_permission(tx.world(), &outsider, &request(&query), 0).is_err(), "global/account grants do not reveal receipts");
-        tx.world.asset_definitions.get_mut(&definition).unwrap().set_owned_by(outsider.clone());
-        assert!(validate_builtin_native_query_permission(tx.world(), &owner, &request(&query), 0).is_err(), "archived requests lose former-owner authorization");
-        validate_builtin_native_query_permission(tx.world(), &outsider, &request(&query), 0).unwrap();
-        tx.world.axt_asset_incarnations.insert(definition.clone(), iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(*Hash::new("later-live-incarnation").as_ref()).unwrap());
+        assert!(
+            validate_builtin_native_query_permission(tx.world(), &outsider, &request(&query), 0)
+                .is_err(),
+            "global/account grants do not reveal receipts"
+        );
+        tx.world
+            .asset_definitions
+            .get_mut(&definition)
+            .unwrap()
+            .set_owned_by(outsider.clone());
+        assert!(
+            validate_builtin_native_query_permission(tx.world(), &owner, &request(&query), 0)
+                .is_err(),
+            "archived requests lose former-owner authorization"
+        );
+        validate_builtin_native_query_permission(tx.world(), &outsider, &request(&query), 0)
+            .unwrap();
+        tx.world.axt_asset_incarnations.insert(
+            definition.clone(),
+            iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+                *Hash::new("later-live-incarnation").as_ref(),
+            )
+            .unwrap(),
+        );
         validate_builtin_native_query_permission(tx.world(), &wallet, &request(&query), 0).unwrap();
-        validate_builtin_native_query_permission(tx.world(), &outsider, &request(&query), 0).unwrap();
+        validate_builtin_native_query_permission(tx.world(), &outsider, &request(&query), 0)
+            .unwrap();
         query.account_id = owner.clone();
-        assert!(validate_builtin_native_query_permission(tx.world(), &wallet, &request(&query), 0).is_err(), "wallet cannot select another source wallet");
-        let QueryRequest::Start(mut malformed) = request(&query) else { unreachable!() };
+        assert!(
+            validate_builtin_native_query_permission(tx.world(), &wallet, &request(&query), 0)
+                .is_err(),
+            "wallet cannot select another source wallet"
+        );
+        let QueryRequest::Start(mut malformed) = request(&query) else {
+            unreachable!()
+        };
         malformed.query_payload.push(0);
-        assert!(validate_builtin_native_query_permission(tx.world(), &outsider, &QueryRequest::Start(malformed), 0).is_err(), "authorization requires the exact complete payload");
+        assert!(
+            validate_builtin_native_query_permission(
+                tx.world(),
+                &outsider,
+                &QueryRequest::Start(malformed),
+                0
+            )
+            .is_err(),
+            "authorization requires the exact complete payload"
+        );
     }
 
     #[test]
     fn native_fi_relationship_and_enrollment_queries_keep_exact_owner_boundaries() {
-        use iroha_data_model::query::{asset_fi::FindAssetFiLinkV1, asset_uid_enrollment::FindAssetUidEnrollmentV1, parameters::QueryParams};
+        use iroha_data_model::query::{
+            asset_fi::FindAssetFiLinkV1, asset_uid_enrollment::FindAssetUidEnrollmentV1,
+            parameters::QueryParams,
+        };
         let fixture = initial_batch_fixture();
         let owner = fixture.source.clone();
         let wallet = fixture.first_destination.clone();
@@ -11099,23 +11305,52 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
         let state = state_for_testing(fixture.world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut tx = block.transaction();
-        tx.world.account_permissions.insert(outsider.clone(), BTreeSet::from([
-            executor_permission::query::CanReadAllLedgerData.into(),
-            executor_permission::query::CanReadAccountData { account: wallet.clone() }.into(),
-        ]));
-        let start = |item, query_payload| QueryRequest::Start(QueryWithParams {
-            query: (), query_payload, item, predicate_bytes: Vec::new(), selector_bytes: Vec::new(), params: QueryParams::default(),
-        });
-        let request = start(QueryItemKind::AssetFiRelationshipViewV1, FindAssetFiLinkV1 {
-            asset_definition_id: definition.clone(), account_id: wallet.clone(), fi_account_id: owner.clone(), reference_digest: [19;32],
-        }.encode());
+        tx.world.account_permissions.insert(
+            outsider.clone(),
+            BTreeSet::from([
+                executor_permission::query::CanReadAllLedgerData.into(),
+                executor_permission::query::CanReadAccountData {
+                    account: wallet.clone(),
+                }
+                .into(),
+            ]),
+        );
+        let start = |item, query_payload| {
+            QueryRequest::Start(QueryWithParams {
+                query: (),
+                query_payload,
+                item,
+                predicate_bytes: Vec::new(),
+                selector_bytes: Vec::new(),
+                params: QueryParams::default(),
+            })
+        };
+        let request = start(
+            QueryItemKind::AssetFiRelationshipViewV1,
+            FindAssetFiLinkV1 {
+                asset_definition_id: definition.clone(),
+                account_id: wallet.clone(),
+                fi_account_id: owner.clone(),
+                reference_digest: [19; 32],
+            }
+            .encode(),
+        );
         validate_builtin_native_query_permission(tx.world(), &owner, &request, 0).unwrap();
         validate_builtin_native_query_permission(tx.world(), &wallet, &request, 0).unwrap();
-        validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0).expect_err("public/global/account read must not reveal private FI relationships");
-        let request = start(QueryItemKind::AssetUidEnrollmentViewV1, FindAssetUidEnrollmentV1 {asset_definition_id:definition}.encode());
+        validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0)
+            .expect_err("public/global/account read must not reveal private FI relationships");
+        let request = start(
+            QueryItemKind::AssetUidEnrollmentViewV1,
+            FindAssetUidEnrollmentV1 {
+                asset_definition_id: definition,
+            }
+            .encode(),
+        );
         validate_builtin_native_query_permission(tx.world(), &owner, &request, 0).unwrap();
-        validate_builtin_native_query_permission(tx.world(), &wallet, &request, 0).expect_err("activation is an owner observation");
-        validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0).expect_err("global read does not grant enrollment administration");
+        validate_builtin_native_query_permission(tx.world(), &wallet, &request, 0)
+            .expect_err("activation is an owner observation");
+        validate_builtin_native_query_permission(tx.world(), &outsider, &request, 0)
+            .expect_err("global read does not grant enrollment administration");
     }
     #[test]
     fn native_settlement_receipt_query_uses_exact_payer_read_access() {
@@ -11408,7 +11643,7 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
             InstructionBox::from(MultisigApprove::new(
                 target.clone(),
                 proposal_id,
-                instructions_hash.clone(),
+                instructions_hash,
             )),
             InstructionBox::from(MultisigCancel::new(
                 target.clone(),
@@ -15735,15 +15970,15 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
                 &authority,
                 &tx,
                 Vec::new(),
-                Some(replay),
-                None,
-                None,
-                0,
-                Some(50_000),
-                true,
-                None,
-                None,
-                true,
+                (Some(replay), None, None),
+                InstructionFeeContext {
+                    tx_bytes_len: 0,
+                    gas_limit_md: Some(50_000),
+                    require_gas_limit: true,
+                    gas_asset_opt: None,
+                    fee_sponsor: None,
+                    skip_nexus_fee: true,
+                },
             )
             .expect("empty proved overlay should retain replay gas");
         state_tx
@@ -15852,15 +16087,15 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
                 &authority,
                 &tx,
                 Vec::new(),
-                Some(replay),
-                Some(&runtime_context),
-                Some(&authorization),
-                0,
-                Some(50_000),
-                true,
-                None,
-                None,
-                true,
+                (Some(replay), Some(&runtime_context), Some(&authorization)),
+                InstructionFeeContext {
+                    tx_bytes_len: 0,
+                    gas_limit_md: Some(50_000),
+                    require_gas_limit: true,
+                    gas_asset_opt: None,
+                    fee_sponsor: None,
+                    skip_nexus_fee: true,
+                },
             )
             .expect("proved replay applies its authorized durable write");
         state_tx
@@ -15901,15 +16136,19 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
                 &authority,
                 &tx,
                 Vec::new(),
-                Some(malformed_replay),
-                Some(&runtime_context),
-                Some(&authorization),
-                0,
-                Some(50_000),
-                true,
-                None,
-                None,
-                true,
+                (
+                    Some(malformed_replay),
+                    Some(&runtime_context),
+                    Some(&authorization),
+                ),
+                InstructionFeeContext {
+                    tx_bytes_len: 0,
+                    gas_limit_md: Some(50_000),
+                    require_gas_limit: true,
+                    gas_asset_opt: None,
+                    fee_sponsor: None,
+                    skip_nexus_fee: true,
+                },
             )
             .expect_err("post-verification replay metadata must retain an exact authorization map");
         malformed_tx
@@ -15966,15 +16205,19 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
                 &authority,
                 &tx,
                 Vec::new(),
-                Some(foreign_replay),
-                Some(&runtime_context),
-                Some(&authorization),
-                0,
-                Some(50_000),
-                true,
-                None,
-                None,
-                true,
+                (
+                    Some(foreign_replay),
+                    Some(&runtime_context),
+                    Some(&authorization),
+                ),
+                InstructionFeeContext {
+                    tx_bytes_len: 0,
+                    gas_limit_md: Some(50_000),
+                    require_gas_limit: true,
+                    gas_asset_opt: None,
+                    fee_sponsor: None,
+                    skip_nexus_fee: true,
+                },
             )
             .expect_err("one contract's snapshot must not authorize another state namespace");
         foreign_tx
@@ -16023,15 +16266,15 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
                 &authority,
                 &tx,
                 Vec::new(),
-                Some(replay),
-                None,
-                None,
-                0,
-                Some(50_000),
-                true,
-                None,
-                None,
-                true,
+                (Some(replay), None, None),
+                InstructionFeeContext {
+                    tx_bytes_len: 0,
+                    gas_limit_md: Some(50_000),
+                    require_gas_limit: true,
+                    gas_asset_opt: None,
+                    fee_sponsor: None,
+                    skip_nexus_fee: true,
+                },
             )
             .expect_err("proved replay durable state writes require root authorization");
         state_tx
@@ -16132,15 +16375,15 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
                 &ALICE_ID,
                 &signed,
                 instructions.clone(),
-                Some(replay),
-                None,
-                None,
-                0,
-                Some(50_000),
-                true,
-                None,
-                None,
-                true,
+                (Some(replay), None, None),
+                InstructionFeeContext {
+                    tx_bytes_len: 0,
+                    gas_limit_md: Some(50_000),
+                    require_gas_limit: true,
+                    gas_asset_opt: None,
+                    fee_sponsor: None,
+                    skip_nexus_fee: true,
+                },
             );
             let finished = transaction.finish_execution_effect_budget();
             assert_eq!(
@@ -16540,8 +16783,7 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
             .world
             .assets()
             .get(asset_id)
-            .map(|asset| asset.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |asset| asset.as_ref().clone())
     }
     fn configure_direct_ivm_fee_fixture(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -17589,12 +17831,10 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
         let current = resolve_fee_sponsor_program(
             &state_transaction.world,
             &state_transaction.nexus,
-            &program_id,
-            1,
+            (&program_id, 1),
             &beneficiary,
             transaction.payload(),
-            Some(DataSpaceId::UNIVERSAL),
-            10,
+            (Some(DataSpaceId::UNIVERSAL), 10),
             fee_sponsor_multisig::RuleContext::admission(1),
         )
         .expect("old revision stays effective while its lease is live");
@@ -17602,12 +17842,10 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
         let early_error = resolve_fee_sponsor_program(
             &state_transaction.world,
             &state_transaction.nexus,
-            &program_id,
-            2,
+            (&program_id, 2),
             &beneficiary,
             transaction.payload(),
-            Some(DataSpaceId::UNIVERSAL),
-            10,
+            (Some(DataSpaceId::UNIVERSAL), 10),
             fee_sponsor_multisig::RuleContext::admission(1),
         )
         .expect_err("scheduled revision must not be predicted before old leases drain");
@@ -17619,12 +17857,10 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
         let drained = resolve_fee_sponsor_program(
             &state_transaction.world,
             &state_transaction.nexus,
-            &program_id,
-            2,
+            (&program_id, 2),
             &beneficiary,
             transaction.payload(),
-            Some(DataSpaceId::UNIVERSAL),
-            21,
+            (Some(DataSpaceId::UNIVERSAL), 21),
             fee_sponsor_multisig::RuleContext::admission(1),
         )
         .expect("scheduled revision becomes effective after the old lease expiry");
@@ -17986,7 +18222,7 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
         parameters.commit();
     }
     fn assert_direct_fee_exempt_draft(
-        world: World,
+        world: &World,
         nexus: &iroha_config::parameters::actual::Nexus,
         pipeline: &Pipeline,
         mut payload: TransactionPayload,
@@ -18066,7 +18302,7 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
             },
         )]
         .into();
-        assert_direct_fee_exempt_draft(world, &nexus, &pipeline, payload);
+        assert_direct_fee_exempt_draft(&(world), &nexus, &pipeline, payload);
     }
     include!("executor_fee_quote_tests.rs");
     #[test]
@@ -18154,7 +18390,7 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
             &mut state_tx,
             &authority,
             &transaction,
-            None,
+            &(None),
             1,
             1,
             0,
@@ -18229,7 +18465,7 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
             &mut state_transaction,
             &authority,
             &transaction,
-            None,
+            &(None),
             1,
             1,
             0,
@@ -23491,8 +23727,7 @@ seiyaku MeteredFailure { permission CanInvokeContractEntrypoint;
                 &authority,
                 &invocation,
                 resolved,
-                10,
-                0,
+                (10, 0),
                 None,
             )
             .expect_err("ten units of gas cannot complete the contract");

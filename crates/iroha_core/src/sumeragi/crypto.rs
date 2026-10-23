@@ -133,7 +133,7 @@ pub fn iroha_key(key: &PublicKey) -> Result<IrohaPublicKey, KeyError> {
 /// The production [`Crypto`]: `H = iroha_crypto::Hash` and BLS-normal signatures, with the
 /// `PoP`-verified keys admitted by the height schedule. Shared by every thread and instance of
 /// the node (`Send + Sync`). Admission retains credentials only in this explicit owner,
-/// never in the process-wide PoP or positive-signature caches. The admitted set holds
+/// never in the process-wide `PoP` or positive-signature caches. The admitted set holds
 /// one parsed key per key ever admitted (a few
 /// hundred bytes each); a key stays admitted, since certificates of old heights still name it.
 #[derive(Debug, Default)]
@@ -371,11 +371,13 @@ impl Crypto for BlsCrypto {
         // subgroup); reuse it instead of decompressing and re-checking the same
         // 48 bytes for every vote. Unadmitted keys keep the parsing relation.
         let admitted = self.admitted.read().get(pk).map(Arc::clone);
-        match admitted {
-            Some(key) => ConsensusDigest::from_preimage(msg)
-                .is_some_and(|digest| consensus::verify(&key, &digest, &sig.0)),
-            None => verify_individual(pk, msg, sig),
-        }
+        admitted.map_or_else(
+            || verify_individual(pk, msg, sig),
+            |key| {
+                ConsensusDigest::from_preimage(msg)
+                    .is_some_and(|digest| consensus::verify(&key, &digest, &sig.0))
+            },
+        )
     }
 
     fn aggregate(&self, sigs: &[Signature]) -> Result<AggregateSignature, AggregationError> {
@@ -391,17 +393,16 @@ impl Crypto for BlsCrypto {
         let Some(input) = AggregateInput::prepare(pks, digest, lookup) else {
             return false;
         };
-        if let Some(scratch) = &self.aggregate_scratch {
-            input.verify(&mut scratch.lock(), lookup, agg)
-        } else {
-            // Dynamic node verification uses the shared bounded stack context, so
-            // this boolean protocol trait cannot hide a physical allocator refusal.
-            consensus::verify_fast_aggregate_iter(
-                input.keys.iter().filter_map(|key| lookup(key)),
-                &input.digest,
-                &agg.0,
-            )
-        }
+        self.aggregate_scratch.as_ref().map_or_else(
+            || {
+                consensus::verify_fast_aggregate_iter(
+                    input.keys.iter().filter_map(|key| lookup(key)),
+                    &input.digest,
+                    &agg.0,
+                )
+            },
+            |scratch| input.verify(&mut scratch.lock(), lookup, agg),
+        )
     }
 
     fn verify_aggregate_multi(
@@ -414,19 +415,18 @@ impl Crypto for BlsCrypto {
         let Some(input) = AggregateGroups::prepare(groups, lookup) else {
             return false;
         };
-        if let Some(scratch) = &self.aggregate_scratch {
-            input.verify(&mut scratch.lock(), lookup, agg)
-        } else {
-            // `prepare` admitted only canonical preimages, so this drops no group; the
-            // same form as the scratch relation has no panic on the verification path.
-            consensus::verify_aggregate_multi_iter(
-                input.groups.iter().filter_map(|(keys, message)| {
-                    ConsensusDigest::from_preimage(message)
-                        .map(|digest| (keys.iter().filter_map(move |key| lookup(key)), digest))
-                }),
-                &agg.0,
-            )
-        }
+        self.aggregate_scratch.as_ref().map_or_else(
+            || {
+                consensus::verify_aggregate_multi_iter(
+                    input.groups.iter().filter_map(|(keys, message)| {
+                        ConsensusDigest::from_preimage(message)
+                            .map(|digest| (keys.iter().filter_map(move |key| lookup(key)), digest))
+                    }),
+                    &agg.0,
+                )
+            },
+            |scratch| input.verify(&mut scratch.lock(), lookup, agg),
+        )
     }
 }
 
@@ -623,7 +623,7 @@ mod tests {
             .collect();
         let aggregate = BlsCrypto::new().aggregate(&signatures).unwrap();
         let keys: Vec<_> = signers.iter().map(Signer::public_key).collect();
-        let (_, usage) = norito::core::with_decode_limits_measured(query_limits(0), || {
+        let ((), usage) = norito::core::with_decode_limits_measured(query_limits(0), || {
             let preimage = message(1);
             assert!(crypto.verify_aggregate(&keys, &preimage, &aggregate));
             assert!(!crypto.verify_aggregate(&keys, b"changed", &aggregate));
@@ -1208,7 +1208,7 @@ mod tests {
         }
     }
 
-    /// A TC whose signers carried PrepareQCs of different views (distinct messages, one group
+    /// A TC whose signers carried `PrepareQCs` of different views (distinct messages, one group
     /// per view) verifies through `verify_aggregate_multi`.
     #[test]
     fn core_formed_tc_verifies() {

@@ -611,7 +611,7 @@ impl SnapshotMerkleMetadata {
         let value = Self::expect_field(map, field)?;
         value
             .as_str()
-            .map(|raw| raw.to_owned())
+            .map(std::borrow::ToOwned::to_owned)
             .ok_or_else(|| Self::parse_error(format!("`{field}` must be a string")))
     }
     fn parse_string_vec_field(
@@ -624,11 +624,13 @@ impl SnapshotMerkleMetadata {
                 .iter()
                 .enumerate()
                 .map(|(index, item)| {
-                    item.as_str().map(|raw| raw.to_owned()).ok_or_else(|| {
-                        Self::parse_error(format!(
-                            "`{field}[{index}]` must be a string (hex digest)"
-                        ))
-                    })
+                    item.as_str()
+                        .map(std::borrow::ToOwned::to_owned)
+                        .ok_or_else(|| {
+                            Self::parse_error(format!(
+                                "`{field}[{index}]` must be a string (hex digest)"
+                            ))
+                        })
                 })
                 .collect();
         }
@@ -2927,7 +2929,7 @@ where
     let merkle_value = json::from_slice::<json::Value>(&generation.bytes.merkle)
         .map_err(TryReadError::MerkleMetadata)?;
     let merkle = SnapshotMerkleMetadata::from_json_value(merkle_value)
-        .map_err(|error| merkle_err_to_try_read(error, merkle_path.clone()))?;
+        .map_err(|error| merkle_err_to_try_read(error, &merkle_path))?;
     let canonical_merkle = json::to_json(&merkle).map_err(TryReadError::MerkleMetadata)?;
     if canonical_merkle.as_bytes() != generation.bytes.merkle {
         return Err(TryReadError::SnapshotGenerationInvalid {
@@ -2937,7 +2939,7 @@ where
     }
     merkle
         .verify_against_bytes(bytes, merkle_chunk_size)
-        .map_err(|error| merkle_err_to_try_read(error, generation.snapshot_directory.clone()))?;
+        .map_err(|error| merkle_err_to_try_read(error, &generation.snapshot_directory))?;
     let summary = match validate_snapshot_json_resources(bytes, resource_policy) {
         Ok(summary) => summary,
         Err(err) => {
@@ -3399,7 +3401,7 @@ fn snapshot_generation_is_canonical_for_gc(
         let payload_digest = payload
             .bytes_sha256
             .expect("ordinary snapshot generation binding hashes its payload");
-        if hex::encode(&payload_digest) != generation_name
+        if hex::encode(payload_digest) != generation_name
             || digest_bytes != format!("{generation_name}\n").as_bytes()
         {
             return Err(TryReadError::SnapshotGenerationInvalid {
@@ -3415,7 +3417,7 @@ fn snapshot_generation_is_canonical_for_gc(
         let merkle_value =
             json::from_slice::<json::Value>(&merkle_bytes).map_err(TryReadError::MerkleMetadata)?;
         let metadata = SnapshotMerkleMetadata::from_json_value(merkle_value)
-            .map_err(|error| merkle_err_to_try_read(error, merkle_file.path.clone()))?;
+            .map_err(|error| merkle_err_to_try_read(error, &merkle_file.path))?;
         let canonical_merkle = json::to_json(&metadata).map_err(TryReadError::MerkleMetadata)?;
         if canonical_merkle.as_bytes() != merkle_bytes {
             return Err(TryReadError::SnapshotGenerationInvalid {
@@ -3426,7 +3428,7 @@ fn snapshot_generation_is_canonical_for_gc(
         let payload_bytes = read_bound_snapshot_payload(&payload, read_buffer_budget)?.0;
         metadata
             .verify_against_bytes(payload_bytes.as_slice(), merkle_chunk_size)
-            .map_err(|error| merkle_err_to_try_read(error, merkle_file.path.clone()))?;
+            .map_err(|error| merkle_err_to_try_read(error, &merkle_file.path))?;
         if direct_snapshot_directory_identity(path)? != directory_identity
             || !snapshot_generation_has_exact_artifact_inventory(path)?
         {
@@ -3781,21 +3783,21 @@ fn execute_snapshot_generation_gc(
         ));
     }
     #[cfg(test)]
-    if failure_stage == 3 {
-        if let Some(removal) = plan.removals.first() {
-            let displaced = removal.path.with_extension("gc-displaced");
-            std::fs::rename(&removal.path, &displaced)
-                .map_err(|error| TryWriteError::IO(error, removal.path.clone()))?;
-            std::fs::create_dir(&removal.path)
-                .map_err(|error| TryWriteError::IO(error, removal.path.clone()))?;
-            for file in &removal.files {
-                let name = file
-                    .path
-                    .file_name()
-                    .expect("bound snapshot deletion artifact has a name");
-                std::fs::copy(displaced.join(name), removal.path.join(name))
-                    .map_err(|error| TryWriteError::IO(error, removal.path.join(name)))?;
-            }
+    if failure_stage == 3
+        && let Some(removal) = plan.removals.first()
+    {
+        let displaced = removal.path.with_extension("gc-displaced");
+        std::fs::rename(&removal.path, &displaced)
+            .map_err(|error| TryWriteError::IO(error, removal.path.clone()))?;
+        std::fs::create_dir(&removal.path)
+            .map_err(|error| TryWriteError::IO(error, removal.path.clone()))?;
+        for file in &removal.files {
+            let name = file
+                .path
+                .file_name()
+                .expect("bound snapshot deletion artifact has a name");
+            std::fs::copy(displaced.join(name), removal.path.join(name))
+                .map_err(|error| TryWriteError::IO(error, removal.path.join(name)))?;
         }
     }
     generation.verify_unchanged()?;
@@ -4056,12 +4058,14 @@ fn bind_existing_snapshot_generation_for_write(
 fn publish_immutable_snapshot_generation(
     store_dir: &Path,
     store_dir_identity: StableSnapshotFileIdentity,
-    digest_hex: &str,
-    payload: &[u8],
-    digest: &[u8],
-    signature: &[u8],
-    fast_manifest: &[u8],
-    merkle: &[u8],
+    (digest_hex, payload, digest, signature, fast_manifest, merkle): (
+        &str,
+        &[u8],
+        &[u8],
+        &[u8],
+        &[u8],
+        &[u8],
+    ),
     merkle_limit: u64,
     verification_key: &PublicKey,
 ) -> Result<PublishedSnapshotGeneration, TryWriteError> {
@@ -4450,10 +4454,8 @@ fn try_write_snapshot_with_limit_and_policy(
                     state,
                     store_dir,
                     signing_key,
-                    merkle_chunk_size,
-                    max_payload_bytes,
-                    resource_policy,
-                    captured.json.into_bytes(),
+                    (merkle_chunk_size, max_payload_bytes, resource_policy),
+                    &(captured.json.into_bytes()),
                     captured.identity,
                     read_buffer_budget,
                 )
@@ -4485,10 +4487,12 @@ fn try_write_snapshot_payload_with_limit(
             state,
             store_dir,
             signing_key,
-            merkle_chunk_size,
-            max_payload_bytes,
-            SnapshotResourcePolicy::default(),
-            snapshot_bytes,
+            (
+                merkle_chunk_size,
+                max_payload_bytes,
+                SnapshotResourcePolicy::default(),
+            ),
+            &(snapshot_bytes),
             captured.identity,
             read_buffer_budget,
         )
@@ -4499,10 +4503,12 @@ fn try_write_snapshot_payload_with_limit_locked(
     state: &State,
     store_dir: impl AsRef<Path>,
     signing_key: &KeyPair,
-    merkle_chunk_size: NonZeroUsize,
-    max_payload_bytes: NonZeroUsize,
-    resource_policy: SnapshotResourcePolicy,
-    snapshot_bytes: Vec<u8>,
+    (merkle_chunk_size, max_payload_bytes, resource_policy): (
+        NonZeroUsize,
+        NonZeroUsize,
+        SnapshotResourcePolicy,
+    ),
+    snapshot_bytes: &[u8],
     identity: CapturedSnapshotIdentity,
     read_buffer_budget: &AllocationBudget,
 ) -> Result<CapturedSnapshotIdentity, TryWriteError> {
@@ -4595,12 +4601,14 @@ fn try_write_snapshot_payload_with_limit_locked(
     let generation = publish_immutable_snapshot_generation(
         store_dir,
         directory_identity,
-        &digest_hex,
-        &snapshot_bytes,
-        &digest_line,
-        &signature_hex,
-        &fast_manifest_bytes,
-        &merkle_bytes,
+        (
+            &digest_hex,
+            &snapshot_bytes,
+            &digest_line,
+            &signature_hex,
+            &fast_manifest_bytes,
+            &merkle_bytes,
+        ),
         merkle_limit,
         signing_key.public_key(),
     )?;
@@ -5117,14 +5125,14 @@ fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
 pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
     canonical_state_snapshot_bytes(state)
 }
-fn merkle_err_to_try_read(err: SnapshotMerkleError, path: PathBuf) -> TryReadError {
+fn merkle_err_to_try_read(err: SnapshotMerkleError, path: &Path) -> TryReadError {
     #[cfg(not(test))]
     let _ = &path;
     match err {
         #[cfg(test)]
-        SnapshotMerkleError::Missing => TryReadError::MerkleMissing(path),
+        SnapshotMerkleError::Missing => TryReadError::MerkleMissing(path.to_path_buf()),
         #[cfg(test)]
-        SnapshotMerkleError::Io(io) => TryReadError::IO(io, path),
+        SnapshotMerkleError::Io(io) => TryReadError::IO(io, path.to_path_buf()),
         SnapshotMerkleError::Parse(err) => TryReadError::MerkleMetadata(err),
         SnapshotMerkleError::ChunkSizeMismatch { expected, actual } => {
             TryReadError::MerkleChunkSizeMismatch { expected, actual }

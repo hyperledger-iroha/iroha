@@ -40,7 +40,7 @@ impl State {
         }
         let privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(manifests));
         let publication = publication_notice.begin();
-        self.install_prepared_lane_manifests_in_publication(
+        Self::install_prepared_lane_manifests_in_publication(
             Arc::clone(manifests),
             privacy,
             &publication,

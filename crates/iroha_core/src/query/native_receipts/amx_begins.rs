@@ -5,6 +5,10 @@
 //! Global registration binds the destination lineage. Signing, customer debit authority and
 //! fees remain separate from this source-bound, physically admitted instruction.
 
+/// Test observer of the original instruction delivery.
+#[cfg(test)]
+type InstructionProbe<'a> = Box<dyn FnOnce(&InstructionBox) + 'a>;
+
 use iroha_allocation::AllocationBudget;
 use iroha_data_model::{
     block::consensus::SumeragiRootScope,
@@ -45,6 +49,10 @@ pub enum NativeAmxBeginRelayErrorV1 {
 
 /// Bounded acquisition progress or the sole move-only Prepare delivery.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The completed variant transfers the original funded relay or proof graph without an additional uncharged allocation"
+)]
 pub enum NativeAmxBeginRelayPollV1 {
     /// The same original job advanced without delivering an instruction.
     Pending,
@@ -72,7 +80,7 @@ pub struct NativeAmxBeginRelayReadV1<'v, V: StateReadOnly> {
     absent: bool,
     complete: bool,
     #[cfg(test)]
-    instruction_probe: Option<Box<dyn FnOnce(&InstructionBox) + 'v>>,
+    instruction_probe: Option<InstructionProbe<'v>>,
 }
 
 /// Select one original successful Begin for a registered participant's Prepare.
@@ -97,7 +105,11 @@ pub fn begin_amx_relay<V: StateReadOnly>(
             "Begin requires certified non-genesis history",
         ));
     }
-    if view.native_execution_tip().map(|tip| tip.root_scope()) != Some(SumeragiRootScope::Global) {
+    if view
+        .native_execution_tip()
+        .map(crate::state::native_execution_tip::NativeExecutionTip::root_scope)
+        != Some(SumeragiRootScope::Global)
+    {
         return Err(Error::Source(
             "Begin delivery requires the authenticated Global root",
         ));
@@ -186,10 +198,10 @@ impl<V: StateReadOnly> NativeAmxBeginRelayReadV1<'_, V> {
                 let Some(begin) = instruction.as_any().downcast_ref::<BeginAmxV1>() else {
                     continue;
                 };
-                if begin.transaction.id()? == self.transaction {
-                    if selected.replace((input_index, instruction_index)).is_some() {
-                        return Err(Error::Source("multiple successful original Begin inputs"));
-                    }
+                if begin.transaction.id()? == self.transaction
+                    && selected.replace((input_index, instruction_index)).is_some()
+                {
+                    return Err(Error::Source("multiple successful original Begin inputs"));
                 }
             }
         }

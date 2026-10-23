@@ -114,6 +114,8 @@ fn read<F: KagemushaWalletFsV1>(
     ))
 }
 
+type ArchiveCheckpointOriginal = ([u8; 32], Vec<u8>);
+
 impl<F, P, C, R> KagemushaWalletProviderV1<F, P, C, R>
 where
     F: KagemushaWalletFsV1,
@@ -129,7 +131,7 @@ where
     pub fn archive_checkpoint(
         &mut self,
         slot: &Slot,
-    ) -> Result<Option<([u8; 32], Vec<u8>)>, Error> {
+    ) -> Result<Option<ArchiveCheckpointOriginal>, Error> {
         let status = self.reconcile_slot(slot, None)?;
         let record = status.marker().ok_or(Error::Invalid {
             field: "archive.slot",
@@ -353,7 +355,7 @@ pub(super) const KAGEMUSHA_WALLET_ARCHIVE_PHASE_OBJECT_BYTES_V1: usize = 4 * 102
 pub(super) const KAGEMUSHA_WALLET_ARCHIVE_PHASE_OBJECT_MAX_V1: usize = 64 * 1024;
 
 /// Identity of one authenticated archive object: scheme, wallet and archive record key.
-pub(crate) type KagemushaWalletArchiveObjectKeyV1 = [[u8; 32]; 3];
+pub type KagemushaWalletArchiveObjectKeyV1 = [[u8; 32]; 3];
 
 /// One archive phase of a slot (see the module documentation).
 ///
@@ -386,7 +388,8 @@ impl ArchivePhaseV1 {
             return Ok(());
         }
         // Each retained payload has its own clearing allocation. The owner is never cloned.
-        let owned = PrivateArchiveBytes::copy_from(content).map_err(private_copy_error)?;
+        let owned =
+            PrivateArchiveBytes::copy_from(content).map_err(|error| private_copy_error(&error))?;
         self.objects.insert(key, owned);
         self.order.push_back(key);
         self.bytes = self.bytes.saturating_add(content.len());
@@ -578,7 +581,8 @@ where
         };
         // A hit returns a separate clearing owner; neither caller nor phase can expose
         // an owning Vec or extend the other's private allocation lifetime.
-        let content = PrivateArchiveBytes::copy_from(content).map_err(private_copy_error);
+        let content =
+            PrivateArchiveBytes::copy_from(content).map_err(|error| private_copy_error(&error));
         match content {
             Ok(content) => {
                 super::counters::count(super::counters::EventV1::ArchiveObjectCacheHit);
@@ -741,7 +745,7 @@ where
                 PrivateArchiveBytes::copy_from(content).map(|content| (object, content))
             })
             .transpose()
-            .map_err(private_copy_error)?;
+            .map_err(|error| private_copy_error(&error))?;
         let size = framed.len().saturating_add(
             object
                 .as_ref()
@@ -876,7 +880,7 @@ where
             self.fail_archive_call(slot, error);
             return Err(error);
         }
-        for record in batch.records.values() {
+        for record in batch.records.into_values() {
             if let Some((key, content)) = &record.object {
                 self.keep_archive_phase_object(slot, *key, content.as_slice())?;
             }
@@ -1144,10 +1148,10 @@ fn retire_archive_record<F: KagemushaWalletFsV1>(
         complete: false,
     };
     let encoded = pending.encode()?;
-    let outcome = match previous {
-        Some(previous) => store.replace_exact(&directory, &retirement_name(), &previous, &encoded),
-        None => store.write_new(&directory, &retirement_name(), &encoded),
-    };
+    let outcome = previous.map_or_else(
+        || store.write_new(&directory, &retirement_name(), &encoded),
+        |previous| store.replace_exact(&directory, &retirement_name(), &previous, &encoded),
+    );
     kagemusha_wallet_require_published_v1(outcome)?;
     complete_archive_retirement(store, &directory, &pending, &encoded)?;
     let graves = pending.graves();
@@ -1210,7 +1214,7 @@ impl<F: KagemushaWalletFsV1> KagemushaWalletArchiveAccessV1<'_, F> {
                         Some(payload) => {
                             return PrivateArchiveBytes::copy_from(payload)
                                 .map(Some)
-                                .map_err(private_copy_error);
+                                .map_err(|error| private_copy_error(&error));
                         }
                         None => corrupt = true,
                     }
@@ -1241,8 +1245,8 @@ impl<F: KagemushaWalletFsV1> KagemushaWalletArchiveAccessV1<'_, F> {
                         corrupt = true;
                         continue;
                     };
-                    let bytes =
-                        PrivateArchiveBytes::copy_from(payload).map_err(private_copy_error)?;
+                    let bytes = PrivateArchiveBytes::copy_from(payload)
+                        .map_err(|error| private_copy_error(&error))?;
                     if valid
                         .as_ref()
                         .is_some_and(|old| old.as_slice() != bytes.as_slice())
@@ -1469,7 +1473,7 @@ impl<F: KagemushaWalletFsV1> KagemushaWalletArchiveAccessV1<'_, F> {
             .iter()
             .map(|(name, bytes, action)| BatchEntry {
                 name,
-                bytes: *bytes,
+                bytes,
                 action: *action,
             })
             .collect();
@@ -1588,11 +1592,11 @@ fn staged_payload(record: &StagedRecordV1, max_bytes: usize) -> Result<PrivateAr
     let payload = payload.ok_or(Error::UnavailableCustodyData {
         object: "archive record",
     })?;
-    PrivateArchiveBytes::copy_from(payload).map_err(private_copy_error)
+    PrivateArchiveBytes::copy_from(payload).map_err(|error| private_copy_error(&error))
 }
 
-fn private_copy_error(error: std::io::Error) -> Error {
-    Error::Unavailable(Unavailable::from_io(&error))
+fn private_copy_error(error: &std::io::Error) -> Error {
+    Error::Unavailable(Unavailable::from_io(error))
 }
 
 fn record_limit(max_bytes: usize) -> Result<usize, Error> {

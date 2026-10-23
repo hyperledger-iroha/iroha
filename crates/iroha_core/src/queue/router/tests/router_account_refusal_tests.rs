@@ -448,7 +448,7 @@ fn original_native_policy_account_matcher_retains_refusal_before_route_selection
         .expect("completed signed routing snapshot before matcher refusal");
     assert_eq!(snapshot.policy(), Some(&policy));
     let mut builder = TransactionBuilder::new(
-        chain.state().network_id_ref().clone(),
+        *chain.state().network_id_ref(),
         owner,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

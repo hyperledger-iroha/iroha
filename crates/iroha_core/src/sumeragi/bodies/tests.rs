@@ -20,11 +20,11 @@ fn open(root: &Path, source: &AvailabilitySource, budget: &AllocationBudget) -> 
 
 fn restored(
     store: &FileBodyStore,
-    source: AvailabilitySource,
+    source: &AvailabilitySource,
     budget: &AllocationBudget,
 ) -> AvailableBody {
     let mut read = store.begin_read(source.clone()).unwrap();
-    assert_eq!(read.source(), &source);
+    assert_eq!(read.source(), source);
     let BodyReadPoll::Ready(job) = read.poll(budget).unwrap() else {
         panic!("complete record")
     };
@@ -40,7 +40,7 @@ fn durable_record_restores_through_actual_signature_and_rs16_verification() {
     let store = open(root.path(), &source, &budget);
     store.put(&source.block_hash(), &body).unwrap();
     let original_bytes = fs::read(store.body_path(source.height(), &source.block_hash())).unwrap();
-    assert_eq!(restored(&store, source.clone(), &budget), body);
+    assert_eq!(restored(&store, &source, &budget), body);
     store.put(&source.block_hash(), &body).unwrap();
     assert_eq!(
         fs::read(store.body_path(source.height(), &source.block_hash())).unwrap(),
@@ -48,7 +48,7 @@ fn durable_record_restores_through_actual_signature_and_rs16_verification() {
     );
     assert_eq!(store.bytes().unwrap(), original_bytes.len() as u64);
     let reopened = open(root.path(), &source, &budget);
-    assert_eq!(restored(&reopened, source.clone(), &budget), body);
+    assert_eq!(restored(&reopened, &source, &budget), body);
     reopened.prune_through(source.height()).unwrap();
     assert_eq!(reopened.bytes().unwrap(), 0);
     assert!(matches!(
@@ -90,7 +90,7 @@ fn read_refusal_keeps_source_and_foreign_pool_is_rejected_before_allocation() {
         read.poll(&budget).unwrap(),
         BodyReadPoll::Pending(_)
     ));
-    assert_eq!(read.source(), &source);
+    assert_eq!(read.source(), source);
     assert_eq!(budget.reserved_bytes(), reserved);
     budget.set_limit_bytes(1 << 25);
     let BodyReadPoll::Ready(job) = read.poll(&budget).unwrap() else {
@@ -170,7 +170,7 @@ fn publication_refusal_keeps_the_actual_original_owners_and_encoded_pointer() {
     faults.0.store(false, Ordering::SeqCst);
     store.put(&source.block_hash(), &body).unwrap();
     assert!(store.pending_write.lock().is_none());
-    assert_eq!(restored(&store, source, &budget), body);
+    assert_eq!(restored(&store, &source, &budget), body);
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn opened_body_store_refuses_replaced_instance_directory_and_retries_original() 
     fs::rename(&original_path, &foreign).unwrap();
     fs::rename(&retained_path, &original_path).unwrap();
     store.put(&source.block_hash(), &body).unwrap();
-    assert_eq!(restored(&store, source.clone(), &budget), body);
+    assert_eq!(restored(&store, &source, &budget), body);
     assert_eq!(body.payload().as_slice().as_ptr(), pointer);
     assert!(store.bytes().unwrap() > 0);
     assert_eq!(store.heights().unwrap(), [source.height()]);
@@ -279,7 +279,7 @@ fn body_store_lock_replacement_and_hardlinks_refuse_original_operations() {
     assert!(store.pending_write.lock().is_none());
     fs::remove_file(&original).unwrap();
     store.put(&source.block_hash(), &body).unwrap();
-    assert_eq!(restored(&store, source, &budget), body);
+    assert_eq!(restored(&store, &source, &budget), body);
 }
 
 #[cfg(unix)]
@@ -387,7 +387,7 @@ fn body_publication_retains_original_bytes_across_root_and_height_substitution()
         );
         store.put(&source.block_hash(), &body).unwrap();
         assert!(store.pending_write.lock().is_none());
-        assert_eq!(restored(&store, source, &budget), body);
+        assert_eq!(restored(&store, &source, &budget), body);
     }
 }
 
@@ -433,7 +433,7 @@ fn retained_body_reader_refuses_replaced_root_and_same_byte_foreign_file_then_re
     let BodyReadPoll::Ready(restoration) = read.poll(&budget).unwrap() else {
         panic!("original read must resume")
     };
-    assert_eq!(read.source(), &source);
+    assert_eq!(read.source(), source);
     assert_eq!(
         restoration
             .complete(&budget, &BlsCrypto::new())
@@ -464,7 +464,7 @@ fn original_body_read_can_be_pruned_and_reports_only_actual_missing_source() {
     assert!(
         matches!(read.poll(&budget), Err(BodyReadError::Io(error)) if error.kind()==io::ErrorKind::NotFound)
     );
-    assert_eq!(read.source(), &source);
+    assert_eq!(read.source(), source);
     drop(read);
     assert_eq!(budget.reserved_bytes(), charged);
 }
@@ -523,7 +523,7 @@ fn body_read_open_serializes_child_validation_with_cooperative_prune() {
         });
     let mut read = result.unwrap_or_else(|error| panic!("original open failed: {error}"));
     assert!(prune_waited, "retirement crossed original file admission");
-    assert_eq!(read.source(), &source);
+    assert_eq!(read.source(), source);
     assert!(store.retirement_authorized(source.height()));
     assert_eq!(store.bytes().unwrap(), 0);
     assert!(
@@ -548,7 +548,7 @@ fn body_read_poll_serializes_child_validation_with_cooperative_prune() {
         panic!("the original body must finish before cooperating retirement")
     };
     assert!(prune_waited, "retirement crossed held-file validation");
-    assert_eq!(read.source(), &source);
+    assert_eq!(read.source(), source);
     assert!(store.retirement_authorized(source.height()));
     assert_eq!(store.bytes().unwrap(), 0);
     assert_eq!(
@@ -765,7 +765,7 @@ fn distinct_body_handles_share_one_capacity_lock_and_retained_loser_retries_afte
     assert_eq!(budget.reserved_bytes(), charged);
     loser.put(&source.block_hash(), body).unwrap();
     assert!(loser.pending_write.lock().is_none());
-    assert_eq!(&restored(loser, source, budget), body);
+    assert_eq!(&restored(loser, &source, budget), body);
 }
 
 #[test]
@@ -830,7 +830,7 @@ fn explicit_retirement_releases_only_pending_height_and_preserves_original_publi
     assert_eq!(budget.reserved_bytes(), charged);
     assert_eq!(store.bytes().unwrap(), 0);
     store.put(&source.block_hash(), &body).unwrap();
-    assert_eq!(restored(&store, source, &budget), body);
+    assert_eq!(restored(&store, &source, &budget), body);
 }
 
 #[test]
@@ -954,7 +954,7 @@ fn body_publication_refund_callbacks_reenter_only_after_both_original_locks_rele
             bytes
         );
         budget.set_limit_bytes(original_limit);
-        assert_eq!(restored(&store, source, &budget), body);
+        assert_eq!(restored(&store, &source, &budget), body);
         drop(registration);
         assert_eq!(budget.reserved_bytes(), original_reserved);
     }

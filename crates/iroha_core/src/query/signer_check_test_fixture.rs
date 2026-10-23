@@ -38,9 +38,9 @@ impl NativeCheckTestFixtureV1 {
     #[must_use]
     pub fn with_final_promotion_accounts(
         deployment: &str,
-        manager: iroha_data_model::account::AccountId,
-        operator: iroha_data_model::account::AccountId,
-        observer: iroha_data_model::account::AccountId,
+        manager: &iroha_data_model::account::AccountId,
+        operator: &iroha_data_model::account::AccountId,
+        observer: &iroha_data_model::account::AccountId,
     ) -> Self {
         use iroha_data_model::{
             IntoKeyValue, Registrable,

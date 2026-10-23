@@ -130,7 +130,7 @@ impl AdmittedReceive {
             let view = self
                 .owner
                 .bind_a(stage, seal, None)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage)))?;
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage)))?;
             if view.binding().n() > config.maximum_rows {
                 return Err(OperationQualificationErrorV1::A(stage));
             }
@@ -141,7 +141,7 @@ impl AdmittedReceive {
             let view = self
                 .owner
                 .bind_w(stage, seal, None)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage)))?;
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage)))?;
             if view.binding().n() > config.maximum_rows {
                 return Err(OperationQualificationErrorV1::W(stage));
             }
@@ -168,7 +168,7 @@ impl AdmittedReceive {
                     let bytes = inventory.read_original(member, originals, config.maximum_bytes)?;
                     let seal = self.a_seals[stage].seal(member)?;
                     let view = self.owner.bind_a(stage, seal, None).map_err(|error| {
-                        import_error(error, OperationQualificationErrorV1::A(stage))
+                        import_error(&error, OperationQualificationErrorV1::A(stage))
                     })?;
                     super::super::builtin::require_member_source(
                         compiled,
@@ -198,7 +198,7 @@ impl AdmittedReceive {
                             inventory.read_original(member, originals, config.maximum_bytes)?;
                         let seal = self.w_seals[stage].seal(member)?;
                         let view = self.owner.bind_w(stage, seal, None).map_err(|error| {
-                            import_error(error, OperationQualificationErrorV1::W(stage))
+                            import_error(&error, OperationQualificationErrorV1::W(stage))
                         })?;
                         super::super::builtin::require_member_source(
                             compiled,
@@ -787,4 +787,4 @@ impl AuthenticatedProducerInventoryV1 {
 mod tests;
 
 #[cfg(test)]
-pub(crate) use tests::{assert_builtin_receive_alias_controls, assert_receive_alias_controls};
+pub use tests::{assert_builtin_receive_alias_controls, assert_receive_alias_controls};

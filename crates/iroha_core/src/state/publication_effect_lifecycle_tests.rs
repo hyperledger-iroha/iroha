@@ -96,44 +96,40 @@ fn signed_lifecycle_index_refusal_precedes_geometry_and_replays_final_cursor_jou
             if commands.send(()).is_err() {
                 break;
             }
-            match response_rx.recv_timeout(Duration::from_secs(5)) {
-                Ok(attempt) => {
-                    attempts.push(attempt);
-                    let fences_free = state.state_write_lock.try_lock().is_some()
-                        && state.state_commit_lock.try_lock().is_some()
-                        && state.lane_lifecycle_lock.try_lock().is_some();
-                    let original_fields_free = state.world.try_block(&budget).is_ok()
+            if let Ok(attempt) = response_rx.recv_timeout(Duration::from_secs(5)) {
+                attempts.push(attempt);
+                let fences_free = state.state_write_lock.try_lock().is_some()
+                    && state.state_commit_lock.try_lock().is_some()
+                    && state.lane_lifecycle_lock.try_lock().is_some();
+                let original_fields_free = state.world.try_block(&budget).is_ok()
+                    && state
+                        .canonical_runtime
+                        .probe_original_writers_for_testing()
+                        .iter()
+                        .all(|probe| probe.acquired && !probe.poisoned);
+                let indexes_free = state.da_shard_cursors.try_write().is_some()
+                    && state.lane_manifests.try_write().is_some()
+                    && state.lane_privacy_registry.try_write().is_some();
+                unchanged.push(
+                    fences_free
+                        && original_fields_free
+                        && indexes_free
+                        && state.state_view_generation() == generation
+                        && state.transactions.latest_height()
+                            == usize::try_from(original_height).expect("fixture height fits usize")
+                        && state.nexus_snapshot().lane_catalog == original_catalog
+                        && state.geometry_publication.lock().is_none()
                         && state
-                            .canonical_runtime
-                            .probe_original_writers_for_testing()
-                            .iter()
-                            .all(|probe| probe.acquired && !probe.poisoned);
-                    let indexes_free = state.da_shard_cursors.try_write().is_some()
-                        && state.lane_manifests.try_write().is_some()
-                        && state.lane_privacy_registry.try_write().is_some();
-                    unchanged.push(
-                        fences_free
-                            && original_fields_free
-                            && indexes_free
-                            && state.state_view_generation() == generation
-                            && state.transactions.latest_height()
-                                == usize::try_from(original_height)
-                                    .expect("fixture height fits usize")
-                            && state.nexus_snapshot().lane_catalog == original_catalog
-                            && state.geometry_publication.lock().is_none()
-                            && state
-                                .kura
-                                .lane_geometry_journal_state_for_test()
-                                .ok()
-                                .as_ref()
-                                == Some(&original_geometry)
-                            && budget.same_pool(&state.ivm_execution_budget()),
-                    );
-                }
-                Err(_) => {
-                    returned_before_release = false;
-                    break;
-                }
+                            .kura
+                            .lane_geometry_journal_state_for_test()
+                            .ok()
+                            .as_ref()
+                            == Some(&original_geometry)
+                        && budget.same_pool(&state.ivm_execution_budget()),
+                );
+            } else {
+                returned_before_release = false;
+                break;
             }
         }
         // Release before any assertion, including when the old publisher blocks.

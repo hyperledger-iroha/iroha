@@ -1,5 +1,9 @@
 // The sole native genesis execution must reproduce every signed deterministic policy.
 impl ValidBlock {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     fn validate_native_genesis_policy(
         block: &SignedBlock,
         state: &StateBlock<'_>,
@@ -109,6 +113,10 @@ impl ValidBlock {
         Ok(())
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     fn require_native_genesis_policy(
         expected_execution: Hash,
         actual_execution: Hash,
@@ -297,7 +305,7 @@ mod native_genesis_policy_tests {
         let (mut staged, _recording) =
             ValidBlock::state_block_for_execution(genesis, &prepared.state, source, &profile)
                 .expect("the original pristine genesis execution owner");
-        staged.request_sumeragi_lanes(profile.take_sumeragi_lanes().unwrap());
+        staged.request_sumeragi_lanes(profile.take_sumeragi_lanes());
         let authenticated = authenticate_genesis_block_intents(genesis, &authority)
             .expect("the same original signed genesis inputs");
         staged.reserve_ordinary_execution_outputs(genesis).unwrap();

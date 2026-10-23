@@ -25,6 +25,8 @@
 //! no named anchor and no journal; a committed marker is never reconstructed. Restoration grants
 //! no generation authority and never recreates a fresh-generation grant.
 
+type PhaseOriginals = (KagemushaWalletEnrollmentPhaseStateV1, [Vec<u8>; 3]);
+
 use iroha_data_model::kagemusha::{
     KagemushaDevicePublicKeyV1, KagemushaWalletEnrollmentChallengeV1,
 };
@@ -712,10 +714,7 @@ where
     fn read_phase_originals_for_slot(
         &self,
         slot: &KagemushaWalletSlotIdV1,
-    ) -> Result<
-        Option<(KagemushaWalletEnrollmentPhaseStateV1, [Vec<u8>; 3])>,
-        KagemushaWalletProviderErrorV1,
-    > {
+    ) -> Result<Option<PhaseOriginals>, KagemushaWalletProviderErrorV1> {
         let entries =
             kagemusha_wallet_list_dir_v1(&self.store, &KagemushaWalletCustodyDirV1::root())?
                 .unwrap_or_default();

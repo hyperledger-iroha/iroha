@@ -1,5 +1,5 @@
 //! Native committee evidence with exact BLS quorums, neutral generations and real DKG.
-//! The constructed transcript tests offline proof admission; it does not execute NPoS custody
+//! The constructed transcript tests offline proof admission; it does not execute `NPoS` custody
 //! transitions or qualify a network. Genesis is actually signed; no height-one QC is fabricated.
 //! Every successor binds its real resultless payload and original proposer-signed RS16 availability.
 

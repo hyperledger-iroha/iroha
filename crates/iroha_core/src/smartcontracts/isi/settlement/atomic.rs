@@ -174,7 +174,7 @@ fn remove_escrow_custody_accounts(stx: &mut StateTransaction<'_, '_>, created: &
 /// This path prepares the same whole batch as execution, including escrow
 /// custody funding, and never applies it. Custody accounts created only for the
 /// preparation are removed before returning.
-pub(crate) fn admission_validate_atomic(
+pub fn admission_validate_atomic(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
     instruction: &SettleAtomic,

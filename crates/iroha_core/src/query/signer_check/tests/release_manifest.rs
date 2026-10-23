@@ -83,8 +83,10 @@ fn bind(
         state,
         round,
         NativeCustodyCheckRefV1::ReleaseManifest(instruction),
-        state.view().chain_id().as_ref(),
-        *state.network_id_ref().as_bytes(),
+        (
+            state.view().chain_id().as_ref(),
+            *state.network_id_ref().as_bytes(),
+        ),
         &AccountId::new(key(2).public_key().clone()),
         floor,
         sign(state, instruction.clone().into(), 2, 3_000),

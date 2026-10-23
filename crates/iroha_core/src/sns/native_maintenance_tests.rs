@@ -153,8 +153,10 @@ fn source(state: &State, now: u64) -> SignedBlock {
 fn balance(world: &impl WorldReadOnly, fixture: &Fixture, account: &AccountId) -> Quantity {
     world
         .asset(&AssetId::of(fixture.asset.clone(), account.clone()))
-        .map(|asset| asset.value().clone().into_inner())
-        .unwrap_or_else(|_| Quantity::zero())
+        .map_or_else(
+            |_| Quantity::zero(),
+            |asset| asset.value().clone().into_inner(),
+        )
 }
 
 #[test]
@@ -366,7 +368,7 @@ fn native_record_binding_rejects_scope_revision_config_and_key_substitution() {
     let permit = || SnsNativeMaintenancePermit {
         network: transaction.network_id,
         proposal: transaction._curr_block.hash(),
-        direct_slot: transaction.direct_execution_identity().unwrap(),
+        direct_slot: transaction.direct_execution_identity(),
         storage_key: alias_auto_renew_storage_key(&fixture.target).unwrap(),
         revision: record.revision,
         record_digest: SnsNativeMaintenancePermit::record_digest(

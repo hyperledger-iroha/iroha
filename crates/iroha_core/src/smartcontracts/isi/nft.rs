@@ -53,14 +53,15 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-            let remove_entry = if let Some(permissions) =
-                state_transaction.world.account_permissions.get_mut(&holder)
-            {
-                permissions.retain(|permission| !is_permission_nft_associated(permission, nft_id));
-                permissions.is_empty()
-            } else {
-                false
-            };
+            let remove_entry = state_transaction
+                .world
+                .account_permissions
+                .get_mut(&holder)
+                .map_or(false, |permissions| {
+                    permissions
+                        .retain(|permission| !is_permission_nft_associated(permission, nft_id));
+                    permissions.is_empty()
+                });
             if remove_entry {
                 state_transaction
                     .world
@@ -125,7 +126,9 @@ pub mod isi {
                 .into());
             }
             let _ = state_transaction.world.domain(nft_id.domain())?;
-            state_transaction.world.insert_nft_entry(nft_id, nft_value);
+            state_transaction
+                .world
+                .insert_nft_entry(&(nft_id), nft_value);
             state_transaction
                 .world
                 .emit_events(Some(DomainEvent::Nft(NftEvent::Created(nft))));
@@ -691,11 +694,10 @@ pub mod query {
                 NftQueryPlan::Full => Box::new(world.nfts_iter().map(nft_from_entry)),
             };
             Ok(iter.filter(move |nft| {
-                if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_nft(predicate, nft)
-                } else {
-                    filter.applies(nft)
-                }
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(nft),
+                    |predicate| predicate_matches_nft(predicate, nft),
+                )
             }))
         }
     }

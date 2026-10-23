@@ -27,12 +27,12 @@ use iroha_data_model::validation_fee_rewards::{
 };
 
 /// Validate optional staking and reward recovery before creating historical obligations.
-pub(crate) fn ensure_reward_identity(account: &AccountId) -> Result<(), Error> {
+pub fn ensure_reward_identity(account: &AccountId) -> Result<(), Error> {
     validate_reward_identity(account).map_err(fail)
 }
 
 /// Admission audit before enabling funded reward service on existing stake.
-pub(crate) fn ensure_existing_reward_identities(world: &impl WorldReadOnly) -> Result<(), Error> {
+pub fn ensure_existing_reward_identities(world: &impl WorldReadOnly) -> Result<(), Error> {
     for ((_, validator), row) in world.public_lane_validators().iter() {
         ensure_reward_identity(validator)?;
         ensure_reward_identity(&row.validator)?;
@@ -47,7 +47,7 @@ pub(crate) fn ensure_existing_reward_identities(world: &impl WorldReadOnly) -> R
 }
 
 /// Parent-block bonded stake keyed by its canonical staking owner and validator.
-pub(crate) type HistoricalStake = BTreeMap<(LaneId, AccountId), BTreeMap<AccountId, Quantity>>;
+pub type HistoricalStake = BTreeMap<(LaneId, AccountId), BTreeMap<AccountId, Quantity>>;
 
 /// Reconstruct the exact parent post-state, including positions removed or
 /// recovered by the block currently being executed. Pending unbonds are excluded:
@@ -57,7 +57,7 @@ pub(crate) type HistoricalStake = BTreeMap<(LaneId, AccountId), BTreeMap<Account
 /// `(lane, validator)` prefix. Unrelated retained lanes, validators and block
 /// touches are never traversed. Undo entries from within-block creation churn
 /// are read but not retained: only the first preimage can have earned service.
-pub(crate) fn before_block(
+pub fn before_block(
     block: &StateBlock<'_>,
     validators: &BTreeMap<LaneId, BTreeSet<AccountId>>,
 ) -> Result<HistoricalStake, Error> {
@@ -280,7 +280,7 @@ fn service_count(page: &ValidationFeeExposurePage) -> Result<u64, Error> {
 fn persist_tail(
     stx: &mut StateTransaction<'_, '_>,
     binding: &ValidationFeeTreasuryPayoutBindingV1,
-    archive: ValidationFeeExposureArchive,
+    archive: &ValidationFeeExposureArchive,
     service_start: u64,
 ) -> Result<(), Error> {
     iroha_data_model::validation_fee_rewards::validate_exposure_archive(&archive).map_err(fail)?;
@@ -396,7 +396,7 @@ pub(super) fn capture_archive(
 /// Bound the original-month service roster at optional validator admission.
 /// Include scheduled validators and block-start registrations removed by earlier
 /// sibling transactions, so later mandatory finality never discovers overflow.
-pub(crate) fn ensure_validator_capacity(
+pub fn ensure_validator_capacity(
     stx: &StateTransaction<'_, '_>,
     lane: LaneId,
     candidate: &AccountId,
@@ -539,7 +539,7 @@ pub(super) fn record_service(
             return Err(fail("reward exposure head differs from its current tail"));
         }
         if append(&mut archive.page, &stakes)? {
-            return persist_tail(stx, binding, archive, head.latest.service_start);
+            return persist_tail(stx, binding, &(archive), head.latest.service_start);
         }
         // The previous block already archived the exact sealed predecessor. There
         // is never a resident array of page locations or an archive work backlog.
@@ -562,10 +562,10 @@ pub(super) fn record_service(
         persist_tail(
             stx,
             binding,
-            ValidationFeeExposureArchive {
+            &(ValidationFeeExposureArchive {
                 page,
                 previous: Some(head.latest),
-            },
+            }),
             head.service_total,
         )?;
         stx.world.smart_contract_state.remove(old_page);
@@ -584,10 +584,10 @@ pub(super) fn record_service(
     persist_tail(
         stx,
         binding,
-        ValidationFeeExposureArchive {
+        &(ValidationFeeExposureArchive {
             page,
             previous: None,
-        },
+        }),
         0,
     )
 }
@@ -615,10 +615,10 @@ pub(super) fn seed_page_for_testing(
     persist_tail(
         stx,
         binding,
-        ValidationFeeExposureArchive {
+        &(ValidationFeeExposureArchive {
             page,
             previous: None,
-        },
+        }),
         0,
     )
     .unwrap();
@@ -746,7 +746,7 @@ mod tests {
                         stakes: BTreeMap::from([(ALICE_ID.clone(), Quantity::one())]),
                     }],
                 },
-                previous: Some(original.latest.clone()),
+                previous: Some(original.latest),
             };
             assert!(persist_tail(stx, &binding, archive, original.service_total).is_err());
             assert_eq!(

@@ -693,7 +693,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         let orchard_asset_for_builder = orchard_asset.clone();
         let build_actions = tokio::task::spawn_blocking(move || {
             let pre_orchard = build_privacy_release_orchard_network_action_v1(
-                pre_orchard_context,
+                &(pre_orchard_context),
                 orchard_pool,
                 orchard_asset_for_builder.clone(),
                 reserve_for_builder.clone(),
@@ -703,7 +703,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             )
             .map_err(|error| eyre!("build pre-activation Orchard action: {error:?}"))?;
             let final_orchard = build_privacy_release_orchard_network_action_v1(
-                final_orchard_context,
+                &(final_orchard_context),
                 orchard_pool,
                 orchard_asset_for_builder,
                 reserve_for_builder,
@@ -713,10 +713,10 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             )
             .map_err(|error| eyre!("build final Orchard action: {error:?}"))?;
             let pq_actions = build_privacy_release_pq_masp_network_actions_v1(
-                pre_pq_context,
-                final_pq_context,
-                replay_pq_context,
-                post_restart_replay_pq_context,
+                &(pre_pq_context),
+                &(final_pq_context),
+                &(replay_pq_context),
+                &(post_restart_replay_pq_context),
                 [0x50; 32],
                 &signing_key,
             )

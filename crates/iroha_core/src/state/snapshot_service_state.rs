@@ -52,13 +52,13 @@ macro_rules! serialize_fields {
 }
 
 /// Append the required committed envelopes under the outer State capture fence.
-pub(crate) fn serialize(world: &World, out: &mut String) {
+pub fn serialize(world: &World, out: &mut String) {
     serialize_fields!(world, out, serialize);
 }
 
 /// Append the exact maps/cells that consuming this World overlay would publish.
 #[cfg(test)]
-pub(crate) fn serialize_block(world: &WorldBlock<'_>, out: &mut String) {
+pub fn serialize_block(world: &WorldBlock<'_>, out: &mut String) {
     serialize_fields!(world, out, serialize_block);
 }
 
@@ -182,7 +182,7 @@ impl SnapshotServiceState {
             )?;
         let signers = self
             .soradns_release_signers
-            .decode::<PublicKey, ()>("soradns_release_signers", |_, _| true)?;
+            .decode::<PublicKey, ()>("soradns_release_signers", |_, ()| true)?;
         self.sorafs_pricing
             .view()
             .get()
@@ -235,4 +235,4 @@ impl SnapshotServiceState {
 
 #[cfg(test)]
 #[path = "snapshot_service_state_tests.rs"]
-pub(crate) mod tests;
+pub mod tests;

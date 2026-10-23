@@ -5,10 +5,10 @@
 //! create this owner; the selected carrier is an opaque original committed execution receipt.
 
 mod authority;
-pub(crate) use authority::{LaneAuthority, LaneAuthorityRead};
+pub use authority::{LaneAuthority, LaneAuthorityRead};
 mod custody;
 mod select;
-pub(crate) use custody::LaneCustodyView;
+pub use custody::LaneCustodyView;
 
 use std::ops::Range;
 
@@ -25,7 +25,7 @@ use crate::sumeragi::certified_chain::CommittedBlock;
 
 /// Source corruption is distinct from retryable refusal of the original read pool.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum LanePayloadError {
+pub enum LanePayloadError {
     #[error("lane context source differs from its original carrier or pool")]
     Source,
     #[error("lane context differs from the original certified execution")]
@@ -76,7 +76,7 @@ impl From<WriteDecodeError> for LanePayloadError {
 }
 
 /// One immutable original source and carrier selection retained through authentication refusal.
-pub(crate) struct LanePayloadRead {
+pub struct LanePayloadRead {
     bytes: ChargedBuffer<u8>,
     budget: AllocationBudget,
     network: NetworkId,
@@ -179,7 +179,7 @@ impl LanePayloadRead {
 /// Authenticated complete lane payload borrowing no World guard and owning its original bytes.
 /// This supplies historical values only. The enclosing offence reader must retain/recheck the
 /// original State cut and exact staking provenance before publishing monetary attribution.
-pub(crate) struct LanePayload {
+pub struct LanePayload {
     bytes: ChargedBuffer<u8>,
     range: Range<usize>,
     delta_range: Range<usize>,

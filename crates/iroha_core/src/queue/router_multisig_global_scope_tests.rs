@@ -27,7 +27,7 @@ fn multisig_global_balance_route_does_not_inherit_account_scope() {
         spaces.clone(),
         lanes.clone(),
     );
-    bind_asset_definition_alias(&mut state, &definition, "pkr#paynet");
+    bind_asset_definition_alias(&mut state, &(&definition), "pkr#paynet");
     scope_account_to_dataspace(&mut state, &multisig, dataspace);
     scope_account_to_dataspace(&mut state, &recipient, dataspace);
     let instructions = vec![InstructionBox::from(

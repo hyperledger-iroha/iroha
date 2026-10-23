@@ -395,7 +395,7 @@ async fn snapshot_publication_rejects_body_without_original_execution() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let block = signed_block_with_transaction(accepted_log_transaction("unexecuted body"));
-    store_block_and_mark_state_height(&mut state, &kura, block);
+    store_block_and_mark_state_height(&mut state, &kura, &(block));
     let root = tempdir().unwrap();
     let store = root.path().join("snapshot");
     let error = try_write_snapshot(
@@ -465,7 +465,7 @@ async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_pub
         source.append(&wire).unwrap();
         let mut decoder =
             iroha_data_model::block::PreparedSignedBlockSignaturesDecode::new(&census).unwrap();
-        let decoded = decoder
+        let restored = decoder
             .decode(
                 &source,
                 norito::core::SequenceSpan {
@@ -475,7 +475,7 @@ async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_pub
                 norito::canonical_decode_limits(wire.len()),
             )
             .unwrap();
-        assert_eq!(decoded.encode_wire().unwrap(), wire);
+        assert_eq!(restored.encode_wire().unwrap(), wire);
         let peak = census.peak_reserved_bytes() - wire.len();
         drop(decoder);
         let retained = census.reserved_bytes() - wire.len();
@@ -659,7 +659,7 @@ async fn snapshot_fixture_key_generation_preserves_algorithm() {
         Algorithm::BlsNormal
     );
 }
-fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> State {
+fn state_factory_with_kura_and_chain(kura: &Arc<Kura>, chain_id: ChainId) -> State {
     let query_handle = LiveQueryStore::start_test();
     let world = crate::queue::tests::world_with_test_domains();
     // Retain the same original pool as every admitted World field. A fresh
@@ -697,7 +697,7 @@ fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> Stat
     state
 }
 fn state_factory_with_kura(kura: Arc<Kura>) -> State {
-    state_factory_with_kura_and_chain(kura, ChainId::from(TEST_CHAIN_ID))
+    state_factory_with_kura_and_chain(&(kura), ChainId::from(TEST_CHAIN_ID))
 }
 fn state_factory() -> State {
     state_factory_with_kura(Kura::blank_kura_for_testing())
@@ -1328,9 +1328,11 @@ fn snapshot_json_with_mutation(original: &str, mutated: &json::Value) -> String 
             let items: Vec<_> = changes
                 .iter()
                 .enumerate()
-                .map(|(index, value)| match items.get(index) {
-                    Some(original) => snapshot_json_with_mutation(original, value),
-                    None => json::to_json(value).expect("new JSON fixture item"),
+                .map(|(index, value)| {
+                    items.get(index).map_or_else(
+                        || json::to_json(value).expect("new JSON fixture item"),
+                        |original| snapshot_json_with_mutation(original, value),
+                    )
                 })
                 .collect();
             format!("[{}]", items.join(","))
@@ -1422,12 +1424,14 @@ fn publish_test_snapshot_generation(
     let generation = publish_immutable_snapshot_generation(
         store_dir,
         store_identity,
-        &digest_hex,
-        bytes,
-        &digest_line,
-        &signature_hex,
-        &fast_manifest_bytes,
-        &merkle_bytes,
+        (
+            &digest_hex,
+            bytes,
+            &digest_line,
+            &signature_hex,
+            &fast_manifest_bytes,
+            &merkle_bytes,
+        ),
         merkle_limit,
         key_pair.public_key(),
     )
@@ -1454,7 +1458,7 @@ pub(super) fn write_snapshot_bundle_from_bytes(
 fn store_block_and_mark_state_height(
     state: &mut State,
     kura: &Arc<Kura>,
-    block: iroha_data_model::block::SharedSignedBlock,
+    block: &iroha_data_model::block::SharedSignedBlock,
 ) {
     kura.store_block(block.clone()).expect("store block");
     state.push_block_hash_for_testing(block.hash());

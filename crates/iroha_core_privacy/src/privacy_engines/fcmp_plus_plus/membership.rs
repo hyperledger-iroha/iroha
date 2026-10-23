@@ -270,7 +270,7 @@ pub(super) fn constrain_input<'c1, 'c2, T: CircuitTranscript>(
         Item = (HeliosPoint, Option<&'c2 HelioseleneField>, PointWithDlog),
     >,
     public_input: &FcmpProofInputPublicV1,
-    opening: TranscriptedInput,
+    opening: &TranscriptedInput,
 ) -> Result<(), FcmpNativeErrorV1> {
     let output_key_tilde = edwards_to_wei25519(public_input.output_key_tilde)?;
     let linking_generator_tilde = edwards_to_wei25519(public_input.linking_tag_generator_tilde)?;
@@ -300,16 +300,16 @@ pub(super) fn constrain_input<'c1, 'c2, T: CircuitTranscript>(
         &parameters.v,
         &parameters.g,
         output_key_tilde,
-        opening.output_blind,
+        &opening.output_blind,
         opening.output_key,
         linking_generator_tilde,
-        opening.input_blind_u,
+        &opening.input_blind_u,
         opening.linking_generator,
         rerandomization_commitment,
-        opening.input_blind_v,
-        opening.input_blind_blind,
+        &opening.input_blind_v,
+        &opening.input_blind_blind,
         pseudo_out,
-        opening.commitment_blind,
+        &opening.commitment_blind,
         opening.amount_commitment,
         branch,
     )?;
@@ -380,7 +380,7 @@ pub(super) fn constrain_input<'c1, 'c2, T: CircuitTranscript>(
             prior_commitment
                 .coordinates()
                 .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?,
-            blind,
+            &blind,
             (hash_x, hash_y),
             branch,
         )?;
@@ -410,7 +410,7 @@ pub(super) fn constrain_input<'c1, 'c2, T: CircuitTranscript>(
             prior_commitment
                 .coordinates()
                 .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?,
-            blind,
+            &blind,
             (hash_x, hash_y),
             branch,
         )?;
@@ -553,7 +553,7 @@ fn verify_membership(
             &mut c1_commitments,
             &mut c2_commitments,
             public_input,
-            opening,
+            &opening,
         )?;
     }
     if c1_branches.next().is_some()

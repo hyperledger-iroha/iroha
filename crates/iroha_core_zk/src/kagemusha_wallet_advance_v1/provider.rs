@@ -17,6 +17,8 @@
 //! The durable store and the platform services are private to the provider: custody files
 //! and the payment key are reached only through its operations.
 
+type SlotPhaseOriginals = BTreeMap<KagemushaWalletSlotIdV1, ([u8; 32], [Vec<u8>; 4])>;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
@@ -132,8 +134,7 @@ pub struct KagemushaWalletProviderV1<
     /// Request identity and exact phase version this process last verified for each phased
     /// slot; cached returns re-read the phase and compare.
     /// Bytes are the phase, Client, Accepted permit and Slot selection, in that order.
-    pub(super) slot_phases:
-        std::cell::RefCell<BTreeMap<KagemushaWalletSlotIdV1, ([u8; 32], [Vec<u8>; 4])>>,
+    pub(super) slot_phases: std::cell::RefCell<SlotPhaseOriginals>,
     /// Exact archive records this process published durably (`archive.rs`): bounded, in memory
     /// only, forgotten before removal and on full reconciliation.
     pub(super) archive_writes: std::cell::RefCell<super::archive::ArchiveWritesV1>,

@@ -12,7 +12,7 @@ use norito::{Decode, Encode, NoritoSchema};
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema)]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha:state:lane_compliance:v1")]
-pub(crate) struct LaneComplianceAuthorityV1 {
+pub struct LaneComplianceAuthorityV1 {
     active: bool,
     audit_only: bool,
     policies: Vec<LaneCompliancePolicy>,
@@ -41,7 +41,7 @@ impl LaneComplianceAuthorityV1 {
 }
 
 /// Borrow the original optional enforcement policy and every ordered rule.
-pub(crate) struct BorrowedCompliance<'a>(pub(crate) Option<&'a LaneComplianceEngine>);
+pub struct BorrowedCompliance<'a>(pub(crate) Option<&'a LaneComplianceEngine>);
 impl norito::SerializePayload for BorrowedCompliance<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         use crate::state::authority_registry::policy_borrowed::record;
@@ -66,7 +66,7 @@ impl norito::SerializePayload for Policies<'_> {
     }
 }
 /// Recompute the loaded policy identity from the same original without copying rules.
-pub(crate) fn borrowed_digest(engine: &LaneComplianceEngine) -> Result<[u8; 32], norito::Error> {
+pub fn borrowed_digest(engine: &LaneComplianceEngine) -> Result<[u8; 32], norito::Error> {
     use crate::state::authority_registry::policy_borrowed::{hash_payload, record};
     hash_payload(
         b"iroha:nexus:lane-compliance-policy-set:v1\0",

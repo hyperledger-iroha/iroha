@@ -12,6 +12,8 @@ use iroha_kagemusha_proof::a_relation::schedule::compiled::{
 };
 use iroha_plonk_recursion::obligation::ledger::Variant;
 
+use crate::kagemusha_wallet_capacity_v1::KagemushaWalletProvingMemoryV1;
+
 use super::*;
 
 // Keep the existing original-read and zstd-write geometry when moving I/O scratch off stack.
@@ -110,13 +112,14 @@ fn peak_proving_memory<'a, C: PastaCurve + 'a>(
         Item = &'a iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact<C>,
     >,
 ) -> Result<crate::kagemusha_wallet_capacity_v1::KagemushaWalletProvingMemoryV1, Error> {
-    keys.into_iter().try_fold(Default::default(), |peak, key| {
-        crate::kagemusha_wallet_capacity_v1::kagemusha_wallet_relation_proving_memory_v1(
-            key.binding().descriptor(),
-        )
-        .map(|memory| memory.max(peak))
-        .ok_or(Error::Inventory)
-    })
+    keys.into_iter()
+        .try_fold(KagemushaWalletProvingMemoryV1::default(), |peak, key| {
+            crate::kagemusha_wallet_capacity_v1::kagemusha_wallet_relation_proving_memory_v1(
+                key.binding().descriptor(),
+            )
+            .map(|memory| memory.max(peak))
+            .ok_or(Error::Inventory)
+        })
 }
 
 /// Canonical inventory metadata cap; original proving tables are stored separately.
@@ -578,7 +581,7 @@ fn read_cancellable(
         cap,
         cancellation,
         Vec::with_capacity,
-        |bytes, chunk| bytes.extend_from_slice(chunk),
+        std::vec::Vec::extend_from_slice,
     )
 }
 
@@ -619,9 +622,11 @@ fn scan_cancellable<T>(
         check()?;
         let count = match result {
             Err(error)
-                if error
-                    .get_ref()
-                    .is_some_and(|cause| cause.is::<OriginalCustodyFailure>()) =>
+                if error.get_ref().is_some_and(
+                    <dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static>::is::<
+                        OriginalCustodyFailure,
+                    >,
+                ) =>
             {
                 return Err(Error::Inventory);
             }

@@ -2,7 +2,7 @@
 
 use super::*;
 
-struct Fields<'target, Admission> {
+struct PreparedOriginal<'target, Admission> {
     mode: BlockMode,
     fields: PreparedWorldFields<'target>,
     retry: Vec<Box<dyn RetainedWorldField>>,
@@ -15,12 +15,16 @@ struct Fields<'target, Admission> {
 
 enum Phase<'target, Admission> {
     Original(DetachedWorld<Admission>),
-    Fields(Fields<'target, Admission>),
+    Fields(PreparedOriginal<'target, Admission>),
 }
 
 /// An inert World owner installed with every enclosing State participant.
 /// Preparation and terminal physical release borrow this same owner; neither
 /// a partial field acquisition nor its notification escapes through a callee.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Attempt, retry eligibility, publication completion and physical release are independent owner facts"
+)]
 pub(in crate::state) struct WorldPublicationSlot<'target, Admission, Installation> {
     target: &'target World,
     phase: Option<Phase<'target, Admission>>,
@@ -109,7 +113,7 @@ impl<'target, Admission, Installation> WorldPublicationSlot<'target, Admission, 
             admission,
             refund_control,
         } = original;
-        self.phase = Some(Phase::Fields(Fields {
+        self.phase = Some(Phase::Fields(PreparedOriginal {
             mode,
             fields,
             retry,

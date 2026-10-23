@@ -96,7 +96,7 @@ impl RaceProver {
         }
     }
 
-    fn prove(self, request: RaceProverRequestV1) -> Result<ExecutionProofEnvelopeV1> {
+    fn prove(self, request: &RaceProverRequestV1) -> Result<ExecutionProofEnvelopeV1> {
         match self {
             Self::V1 => prove_race_v1(request),
         }
@@ -134,7 +134,7 @@ impl Command {
                 let request = read_canonical::<RaceProverRequestV1>(&args.request)?;
                 let prover = RaceProver::for_profile(&request.manifest.profile_id)?;
                 let started = Instant::now();
-                let proof = prover.prove(request)?;
+                let proof = prover.prove(&request)?;
                 let bytes = proof.encode();
                 if bytes.len() > RACE_MAX_PROOF_BYTES_V1 {
                     return Err(eyre!("encoded envelope exceeds the compiled wire cap"));

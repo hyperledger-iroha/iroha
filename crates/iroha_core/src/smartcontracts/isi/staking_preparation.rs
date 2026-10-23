@@ -47,9 +47,9 @@ fn check_deposit(
     let destination_after = if context.staker_asset == context.escrow_asset {
         source_balance
     } else {
-        let remaining = quantity_sub(source_balance, amount.clone())?;
+        let remaining = quantity_sub(source_balance, &(amount.clone()))?;
         ensure_public_lane_reserves_after_debit(world, &context.staker_asset, &remaining)?;
-        quantity_add(balance(world, &context.escrow_asset), amount.clone())?
+        quantity_add(balance(world, &context.escrow_asset), &(amount.clone()))?
     };
     prepare_stake_custody_credit(
         world,
@@ -110,7 +110,7 @@ pub fn prepare_public_lane_plan(
     let lane = request.lane_id;
     let monetary = |source_asset, destination_asset, amount, precondition| {
         PublicLanePreparedPlanV1::Monetary(PublicLaneMonetaryPlanV1 {
-            network_scope: scope.clone(),
+            network_scope: scope,
             valid_until_height: expiry,
             source_asset,
             destination_asset,
@@ -207,7 +207,7 @@ pub fn prepare_public_lane_plan(
             )?
             .ok_or_else(|| invalid("no funded reward entitlement is available to claim"))?;
             let plan = PublicLaneRewardClaimPlanV1 {
-                network_scope: scope.clone(),
+                network_scope: scope,
                 valid_until_height: expiry,
                 fee_claim,
             };

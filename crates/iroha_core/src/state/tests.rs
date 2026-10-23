@@ -523,10 +523,7 @@ fn fixture_manual_lifecycle_storage_identity(
 ) -> crate::kura::LaneStorageIdentity {
     let height = state.block_hashes.view().len() as u64;
     let update = prepare_lane_lifecycle_update(
-        &state.nexus_snapshot(),
-        &state.lane_incarnations_snapshot(),
-        &state.lane_incarnation_lineage_snapshot(),
-        &state.lane_incarnation_activation_heights_snapshot(),
+        &state.nexus_snapshot(),(&state.lane_incarnations_snapshot(), &state.lane_incarnation_lineage_snapshot(), &state.lane_incarnation_activation_heights_snapshot()),
         state.network_id_ref(),
         synthetic_lane_lifecycle_header_hash(state.network_id_ref(), height, plan),
         plan,
@@ -1734,7 +1731,7 @@ state_test! { sync merge_write_set_distinguishes_equal_values_written_to_differe
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut first = state.merge_preexecution_block(header.clone());
+    let mut first = state.merge_preexecution_block(header);
     first
         .world
         .smart_contract_state
@@ -1842,7 +1839,7 @@ fn install_test_nexus_lane_catalog(
     nexus.lane_catalog = lane_catalog;
 }
 /// Configure real physical lanes, then seed the cache and ratchet inputs of an AXT test.
-fn configure_axt_fixture_lane_catalog(state: &mut State, lane_catalog: LaneCatalog) {
+fn configure_axt_fixture_lane_catalog(state: &mut State, lane_catalog: &LaneCatalog) {
     let policies = state
         .world
         .axt_policies
@@ -1855,7 +1852,7 @@ fn configure_axt_fixture_lane_catalog(state: &mut State, lane_catalog: LaneCatal
         .axt_handle_counters
         .view()
         .iter()
-        .map(|(id, counter)| (*id, counter.clone()))
+        .map(|(id, counter)| (*id, *counter))
         .collect::<Vec<_>>();
     let mut lanes = lane_catalog.lanes().to_vec();
     if !lanes.iter().any(|lane| lane.id == LaneId::SINGLE) {
@@ -2778,10 +2775,12 @@ state_test! { sync axt_handle_counters_reject_zero_or_cross_store_rollback
     );
 }
 state_test! { sync axt_handle_counters_are_required_by_replay_and_budget_records
-    for (label, state) in [
-        ("replay", state_with_axt_replay_record().0),
-        ("budget", state_with_axt_handle_budget_record(5).0),
-    ] {
+    let fixtures: [(&str, fn() -> State); 2] = [
+        ("replay", || state_with_axt_replay_record().0),
+        ("budget", || state_with_axt_handle_budget_record(5).0),
+    ];
+    for (label, make_state) in fixtures {
+        let state = make_state();
         let mut snapshot = norito::json::to_value(&state).expect("serialize AXT ledger state");
         let_row! { norito::json::Value::Object(root) = &mut snapshot else { panic!("state snapshot must be an object"); } };
         let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
@@ -2914,7 +2913,7 @@ state_test! { sync explicit_asset_ownership_survives_alias_changes_and_snapshot_
             .world
             .bind_asset_definition_alias(
                 &definition_id,
-                "coin#renamed.universal".parse().expect("replacement alias"),
+                &("coin#renamed.universal".parse().expect("replacement alias")),
                 None,
                 None,
                 0,
@@ -5080,17 +5079,7 @@ fn install_existing_nexus_geometry_for_test(
         })
         .collect();
     state
-        .apply_lane_geometry_updates(
-            &previous_lane_config,
-            &nexus.lane_config,
-            &previous_incarnations,
-            &incarnations,
-            &previous_activations,
-            &activation_heights,
-            &previous_lineage,
-            &lineage,
-            &replaced,
-            u64::try_from(state.block_hashes.view().len()).expect("fixture height"),
+        .apply_lane_geometry_updates((&previous_lane_config, &nexus.lane_config),(&previous_incarnations, &incarnations),(&previous_activations, &activation_heights),(&previous_lineage, &lineage),(&replaced, u64::try_from(state.block_hashes.view().len()).expect("fixture height")),
             &mut LaneLifecycleReleases::new(state),
         )
         .expect("journal the exact structural fixture reference transition");
@@ -5167,9 +5156,9 @@ state_test! { sync account_scope_hierarchy_tracks_dataspaces_and_domains
         .expect("account exists")
         .set_label(Some(universal_alias.clone()));
     stx.world
-        .insert_account_alias_binding(universal_alias.clone(), account_id.clone());
+        .insert_account_alias_binding(&(universal_alias.clone()), &(account_id.clone()));
     stx.world
-        .insert_account_alias_binding(retail_alias, account_id.clone());
+        .insert_account_alias_binding(&(retail_alias), &(account_id.clone()));
     let_row! { hierarchy = stx .world .account_scope_hierarchy(&account_id) .expect("account hierarchy") };
     assert_eq!(
         hierarchy.get(&DataSpaceId::UNIVERSAL),
@@ -5230,8 +5219,8 @@ state_test! { sync account_scope_directory_tracks_alias_bind_and_unbind
         "reverse account-scope index should start empty for the retail domain",
     );
     stx.world
-        .insert_account_alias_binding(retail_alias.clone(), account_id.clone());
-    stx.world.insert_account_alias_binding(retail_alias.clone(), account_id.clone());
+        .insert_account_alias_binding(&(retail_alias.clone()), &(account_id.clone()));
+    stx.world.insert_account_alias_binding(&(retail_alias.clone()), &(account_id.clone()));
     assert_eq!(stx.world.account_scope_account_counts.get(&scope_key), Some(&1),
         "replacing the same alias must not count the account twice");
     let_row! { bound_scopes = stx .world .account_scope_entry(&account_id) .expect("bound account scope entry") .iter() .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone())) .collect::<BTreeMap<_, _>>() };
@@ -5440,7 +5429,7 @@ state_test! { sync explorer_count_indexes_rollback_apply_and_commit_with_primary
         transaction.world.track_asset_holder(&asset_id);
         transaction.world.assets.insert(asset_id.clone(), value);
         let_row! { (_, value) = Nft::new(nft_id.clone(), Metadata::default()) .build(&ALICE_ID) .into_key_value() };
-        transaction.world.insert_nft_entry(nft_id.clone(), value);
+        transaction.world.insert_nft_entry(&(nft_id.clone()), value);
         // Drop without applying: the primary rows and every derived bucket must roll back.
     }
     assert!(block.world.assets.get(&asset_id).is_none());
@@ -5455,7 +5444,7 @@ state_test! { sync explorer_count_indexes_rollback_apply_and_commit_with_primary
         transaction.world.track_asset_holder(&asset_id);
         transaction.world.assets.insert(asset_id.clone(), value);
         let_row! { (_, value) = Nft::new(nft_id.clone(), Metadata::default()) .build(&ALICE_ID) .into_key_value() };
-        transaction.world.insert_nft_entry(nft_id.clone(), value);
+        transaction.world.insert_nft_entry(&(nft_id.clone()), value);
         transaction.apply();
     }
     assert_eq!(block.world.asset_definition_asset_counts.get(asset_id.definition()), Some(&1));
@@ -5546,13 +5535,13 @@ state_test! { sync find_proof_records_by_status_uses_status_index_updates
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
     stx.world
-        .insert_proof_record(record(&verified_id, ProofStatus::Verified));
+        .insert_proof_record(&(record(&verified_id, ProofStatus::Verified)));
     stx.world
-        .insert_proof_record(record(&rejected_id, ProofStatus::Rejected));
+        .insert_proof_record(&(record(&rejected_id, ProofStatus::Rejected)));
     stx.world
-        .insert_proof_record(record(&updated_id, ProofStatus::Submitted));
+        .insert_proof_record(&(record(&updated_id, ProofStatus::Submitted)));
     stx.world
-        .insert_proof_record(record(&updated_id, ProofStatus::Verified));
+        .insert_proof_record(&(record(&updated_id, ProofStatus::Verified)));
     let_row! { verified_ids = FindProofRecordsByStatus { status: ProofStatus::Verified, } .execute(CompoundPredicate::PASS, &stx) .expect("query verified proof records") .map(|record| record.id) .collect::<Vec<_>>() };
     assert_eq!(verified_ids, vec![verified_id.clone(), updated_id.clone()]);
     let_row! { submitted_count = FindProofRecordsByStatus { status: ProofStatus::Submitted, } .execute(CompoundPredicate::PASS, &stx) .expect("query submitted proof records") .count() };
@@ -6016,7 +6005,7 @@ state_test! { sync pipeline_snapshot_reflects_latest_pipeline_config
     policy.query_stored_min_gas_units = updated.query_stored_min_gas_units;
     {
         let mut parameters = state.world.parameters.block();
-        parameters.get_mut().set_parameter(Parameter::Custom(policy.clone().into_custom_parameter())).unwrap();
+        parameters.get_mut().set_parameter(Parameter::Custom(policy.into_custom_parameter())).unwrap();
         parameters.commit();
     }
     assert_eq!(state.pipeline_snapshot().query_stored_min_gas_units, updated.query_stored_min_gas_units);
@@ -6479,10 +6468,10 @@ state_test! { sync autoscale_thresholds_permille_rejects_runtime_invalid_ratios
     assert_eq!(
         autoscale_thresholds_permille(&autoscale),
         Some(AutoscaleThresholds {
-            scale_out_latency_permille: 1_200,
-            scale_in_latency_permille: 800,
-            scale_out_utilization_permille: 700,
-            scale_in_utilization_permille: 300,
+            out_latency_permille: 1_200,
+            in_latency_permille: 800,
+            out_utilization_permille: 700,
+            in_utilization_permille: 300,
         })
     );
     autoscale.scale_out_latency_ratio = f64::NAN;
@@ -6520,8 +6509,8 @@ state_test! { sync autoscale_thresholds_permille_rejects_sub_permille_runtime_ra
     assert_eq!(
         autoscale_thresholds_permille(&autoscale).map(|thresholds| {
             (
-                thresholds.scale_in_latency_permille,
-                thresholds.scale_out_latency_permille,
+                thresholds.in_latency_permille,
+                thresholds.out_latency_permille,
             )
         }),
         Some((1, 1_200)),
@@ -8754,17 +8743,7 @@ state_test! { sync apply_lane_geometry_updates_preserve_instance_across_alias_ch
     let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
     let lineage = state.lane_incarnation_lineage_snapshot();
     state
-        .apply_lane_geometry_updates(
-            &initial_config,
-            &updated_config,
-            &incarnations,
-            &incarnations,
-            &activation_heights,
-            &activation_heights,
-            &lineage,
-            &lineage,
-            &BTreeSet::new(),
-            0,
+        .apply_lane_geometry_updates((&initial_config, &updated_config),(&incarnations, &incarnations),(&activation_heights, &activation_heights),(&lineage, &lineage),(&BTreeSet::new(), 0),
             &mut LaneLifecycleReleases::new(&state),
         )
         .expect("lane geometry update");
@@ -9133,7 +9112,7 @@ state_test! { sync apply_lane_lifecycle_rejects_public_validator_with_embedded_r
     );
 }
 state_test! { sync apply_lane_lifecycle_rejects_public_lane_economic_custody
-    let_row! { _status_guard = crate::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
+    let_row! { _status_guard = crate::status::operator_status_test_guard() };
     crate::status::reset_nexus_economics_for_tests();
     let state = blank_test_state();
 
@@ -9195,7 +9174,7 @@ state_test! { sync apply_lane_lifecycle_rejects_public_lane_economic_custody
     crate::status::reset_nexus_economics_for_tests();
 }
 state_test! { sync apply_lane_lifecycle_rejects_economic_custody_with_embedded_reset_lane
-    let_row! { _status_guard = crate::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
+    let_row! { _status_guard = crate::status::operator_status_test_guard() };
     crate::status::reset_nexus_economics_for_tests();
     let state = blank_test_state();
 
@@ -9242,7 +9221,7 @@ state_test! { sync apply_lane_lifecycle_rejects_economic_custody_with_embedded_r
     crate::status::reset_nexus_economics_for_tests();
 }
 state_test! { sync set_nexus_rejects_removed_lane_with_public_validator_custody
-    let_row! { _status_guard = crate::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
+    let_row! { _status_guard = crate::status::operator_status_test_guard() };
     crate::status::reset_nexus_economics_for_tests();
     let mut state = blank_test_state();
 
@@ -11290,7 +11269,7 @@ state_test! { sync restored_runtime_geometry_is_recovered_before_later_catalog_r
         network_id: *state.network_id_ref(), lane_id: LaneId::new(2), dataspace_id: DataSpaceId::UNIVERSAL,
         incarnation: later_incarnation, activation_height: 1,
     };
-    let later_blocks = later_identity.blocks_dir(&kura.store_root());
+    let later_blocks = later_identity.blocks_dir(kura.store_root());
     assert!(later_blocks.is_dir());
     state.nexus_runtime_restored_from_snapshot = true;
     state
@@ -12473,7 +12452,7 @@ state_test! { sync set_nexus_preserves_axt_family_budget_for_removed_dataspaces
     );
 }
 state_test! { sync configured_lane_lifecycle_rejects_reset_lane_with_public_economic_custody
-    let_row! { _status_guard = crate::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
+    let_row! { _status_guard = crate::status::operator_status_test_guard() };
     crate::status::reset_nexus_economics_for_tests();
     let query_handle = LiveQueryStore::start_test();
     let rebound = DataSpaceId::new(8);
@@ -12519,7 +12498,7 @@ state_test! { sync configured_lane_lifecycle_rejects_reset_lane_with_public_econ
     crate::status::reset_nexus_economics_for_tests();
 }
 state_test! { sync configured_lane_lifecycle_rejects_economic_custody_with_embedded_reset_lane
-    let_row! { _status_guard = crate::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
+    let_row! { _status_guard = crate::status::operator_status_test_guard() };
     crate::status::reset_nexus_economics_for_tests();
     let query_handle = LiveQueryStore::start_test();
     let rebound = DataSpaceId::new(18);
@@ -12663,7 +12642,7 @@ enum LaneDataspaceChangeRoute {
     Lifecycle,
 }
 fn assert_lane_state_retained_on_rejected_dataspace_change(route: LaneDataspaceChangeRoute) {
-    let_row! { _status_guard = crate::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
+    let_row! { _status_guard = crate::status::operator_status_test_guard() };
     crate::status::reset_nexus_economics_for_tests();
     let retained = DataSpaceId::UNIVERSAL;
     let migrated = match route {
@@ -12911,9 +12890,7 @@ struct LaneRetirementPreflightCase {
     bonded: u32,
 }
 fn assert_lane_retirement_preflight_is_atomic(case: LaneRetirementPreflightCase) {
-    let _status_guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus status test lock");
+    let _status_guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
     let mut state = autoscale_storage_state_for_testing(kura, query_handle);
@@ -13168,7 +13145,7 @@ fn install_lane_manifest_registry_with_bindings(
     state: &State,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
-    validators: Vec<AccountId>,
+    validators: &[AccountId],
     validator_bindings: Vec<ManifestValidatorBinding>,
 ) {
     let nexus = state.nexus_snapshot();
@@ -13292,7 +13269,7 @@ state_test! { sync lane_manifest_fixtures_preserve_exact_catalog_identity_across
     }).collect::<Vec<_>>();
     for explicit_bindings in [false, true] {
         if explicit_bindings {
-            install_lane_manifest_registry_with_bindings(&state, lane.id, lane.dataspace_id, validators.clone(), bindings.clone());
+            install_lane_manifest_registry_with_bindings(&state, lane.id, lane.dataspace_id, &(validators.clone()), bindings.clone());
         } else {
             install_lane_manifest_registry(&state, &[(lane.id, lane.dataspace_id, validators.clone())]);
         }
@@ -16026,7 +16003,7 @@ state_test! { sync authoritative_lane_validator_accounts_use_explicit_manifest_p
         &state,
         lane_id,
         dataspace_id,
-        validators.clone(),
+        &(validators.clone()),
         validators
             .iter()
             .zip(&bound_peers)
@@ -18066,7 +18043,7 @@ state_test! { sync axt_policy_snapshot_uses_state_height_for_current_slot
     let mut state = State::new_for_testing(world, kura, query_handle);
     {
         let_row! { lane_catalog = LaneCatalog::new( nonzero!(4_u32), vec![LaneConfig { id: policy.target_lane, dataspace_id: dsid, alias: "cached-axt".into(), ..LaneConfig::default() }], ) .expect("cached AXT lane catalog") };
-        configure_axt_fixture_lane_catalog(&mut state, lane_catalog);
+        configure_axt_fixture_lane_catalog(&mut state, &(lane_catalog));
     }
     install_axt_counter_for_test(
         &state,
@@ -18667,7 +18644,7 @@ state_test! { sync asset_definition_reincarnation_rotates_only_its_incarnation
         .expect("fixture target definition exists");
     transaction
         .world
-        .insert_asset_definition_entry(target_id.clone(), removed);
+        .insert_asset_definition_entry(&(target_id.clone()), removed);
     let registration_header_hash = transaction._curr_block.hash();
     let (execution_identity, lifecycle_ordinal) = transaction
         .next_lifecycle_transition_seed()
@@ -18864,7 +18841,7 @@ state_test! { sync axt_policy_rebuild_preserves_minimum_nonce_and_era
         Some(expected_policy)
     );
     {
-        configure_axt_fixture_lane_catalog(&mut state, lane_catalog);
+        configure_axt_fixture_lane_catalog(&mut state, &(lane_catalog));
     }
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
@@ -19044,7 +19021,7 @@ state_test! { sync axt_policy_refresh_preserves_permanent_counter_on_lane_change
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
     {
-        configure_axt_fixture_lane_catalog(&mut state, lane_catalog);
+        configure_axt_fixture_lane_catalog(&mut state, &(lane_catalog));
     }
     let authenticated_tip = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     state.push_block_hash_for_testing(authenticated_tip.hash());
@@ -19099,7 +19076,7 @@ fn axt_envelope_with_unverified_spend(
     binding: AxtBinding,
     commit_height: u64,
 ) -> AxtEnvelopeRecord {
-    let network_id = handle.issuer_context.network_id.clone();
+    let network_id = handle.issuer_context.network_id;
     let anchor = AxtFinalizedSpendAnchorV1 {
         genesis_hash: *network_id.as_bytes(),
         network_id,
@@ -19297,15 +19274,14 @@ state_test! { sync space_directory_manifest_expiry_rebuilds_bindings_and_emits_e
     let events = stx.world.take_external_events();
     assert!(
         events.iter().any(|event| {
-            if let EventBox::Data(ev) = event {
-                if let data_pre::DataEvent::SpaceDirectory(space_event) = ev.as_ref() {
+            if let EventBox::Data(ev) = event
+                && let data_pre::DataEvent::SpaceDirectory(space_event) = ev.as_ref() {
                     return matches!(
                         space_event,
                         SpaceDirectoryEvent::ManifestExpired(payload)
                             if payload.uaid == uaid && payload.dataspace == dataspace
                     );
                 }
-            }
             false
         }),
         "expected manifest expiry event"
@@ -19336,7 +19312,7 @@ state_test! { sync space_directory_manifest_revocation_refreshes_bindings_and_po
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
     {
-        configure_axt_fixture_lane_catalog(&mut state, lane_catalog);
+        configure_axt_fixture_lane_catalog(&mut state, &(lane_catalog));
     }
     let creation_time_ms = 17;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, creation_time_ms, 0);
@@ -19386,7 +19362,7 @@ fn space_directory_manifest_rotation_updates_policy_cache() {
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
     {
-        configure_axt_fixture_lane_catalog(&mut state, lane_catalog);
+        configure_axt_fixture_lane_catalog(&mut state, &(lane_catalog));
     }
     let mut state = authenticate_trigger_fixture(state);
     assert_eq!(
@@ -19400,13 +19376,12 @@ fn space_directory_manifest_rotation_updates_policy_cache() {
     let mut expected_root_current = [0u8; 32];
     expected_root_current.copy_from_slice(record_current.manifest_hash.as_ref());
     assert_eq!(first_entry.manifest_root, expected_root_current);
-    let authenticated_counter = state
+    let authenticated_counter = *state
         .world
         .axt_handle_counters
         .view()
         .get(&dataspace)
-        .expect("the signed genesis retains this manifest's permanent ratchet")
-        .clone();
+        .expect("the signed genesis retains this manifest's permanent ratchet");
     assert!(authenticated_counter.authorization_generation() > 0);
     assert!(authenticated_counter.next() > 0);
     assert_eq!(
@@ -19514,7 +19489,7 @@ state_test! { sync axt_policy_map_rebuilds_from_space_directory_manifests
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
     {
-        configure_axt_fixture_lane_catalog(&mut state, lane_catalog);
+        configure_axt_fixture_lane_catalog(&mut state, &(lane_catalog));
     }
     let creation_time_ms = 42;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, creation_time_ms, 0);
@@ -19564,10 +19539,8 @@ state_test! { sync detached_can_modify_nft_metadata_allows_domain_owner
     let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
     let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
     let view = world.view();
-    let delta = DetachedStateTransactionDelta::default();
     assert!(
-        delta
-            .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+        DetachedStateTransactionDelta::can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
             .expect("permission check"),
         "domain owner must be allowed to modify NFT metadata"
     );
@@ -19581,10 +19554,8 @@ state_test! { sync detached_can_modify_account_metadata_allows_domain_owner
     let mut world = World::with([domain], [alice_account, bob_account], []);
     seed_active_account_alias_binding(&mut world, &BOB_ID, &bob_alias);
     let view = world.view();
-    let delta = DetachedStateTransactionDelta::default();
     assert!(
-        delta
-            .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID, 0)
+        DetachedStateTransactionDelta::can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID, 0)
             .expect("permission check"),
         "domain owner must be allowed to modify account metadata"
     );
@@ -20272,7 +20243,7 @@ state_test! { sync direct_execution_identity_is_unchanged_by_canonical_output_at
 state_test! { sync repeated_time_trigger_invocations_have_distinct_deterministic_identities
     let state = blank_test_state();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 42, 0);
-    let mut block = state.block(header.clone());
+    let mut block = state.block(header);
     let event = block.create_time_event(&header);
     let trigger_id: TriggerId = "periodic_asset_lifecycle".parse().expect("valid trigger id");
 
@@ -29808,8 +29779,7 @@ fn parliament_timed_ovn_casting_candidate_index_tracks_exact_phase_windows() {
         .freeze_ballot_survivors(
             governance_attempt_id,
             ballot_attempt_id,
-            [0x77; 32],
-            [0x78; 32],
+            ([0x77; 32], [0x78; 32]),
             3,
             [0x79; 32],
             34,

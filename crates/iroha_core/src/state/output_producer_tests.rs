@@ -65,13 +65,7 @@ fn authenticated_state(row_bytes: u64) -> State {
 }
 
 fn authenticate_output_state(component: State) -> State {
-    let policy = component
-        .world
-        .parameters
-        .view()
-        .get()
-        .pipeline_policy()
-        .clone();
+    let policy = *component.world.parameters.view().get().pipeline_policy();
     authenticate_output_state_with_policy(component, policy)
 }
 
@@ -858,7 +852,7 @@ fn real_independent_receipts_are_joined_before_exact_row_fit_and_rollback() {
                         let Executable::Instructions(instructions) = signed.instructions() else {
                             panic!("fixture contains actual native instructions");
                         };
-                        for instruction in instructions.iter() {
+                        for instruction in instructions {
                             instruction
                                 .clone()
                                 .execute(signed.authority(), transaction)
@@ -999,7 +993,7 @@ fn unowned_callbacks_or_receipts_refuse_before_real_batch_application() {
                         let Executable::Instructions(instructions) = signed.instructions() else {
                             unreachable!()
                         };
-                        for instruction in instructions.iter() {
+                        for instruction in instructions {
                             instruction
                                 .clone()
                                 .execute(signed.authority(), transaction)

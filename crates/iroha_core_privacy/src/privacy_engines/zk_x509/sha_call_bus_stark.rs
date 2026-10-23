@@ -500,7 +500,7 @@ impl core::fmt::Debug for ZkX509ShaCallWitnessV1 {
             .debug_struct("ZkX509ShaCallWitnessV1")
             .field("role", &self.role)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -735,6 +735,10 @@ impl Drop for ZkX509ShaSegmentAirTerminalsV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Each field names a distinct committed bus product carried between segments."
+)]
 struct ZkX509ShaSegmentProductStateV1 {
     source_products: [F; ZK_X509_SHA_BUS_LANES_V1],
     digest_products: [F; ZK_X509_SHA_BUS_LANES_V1],
@@ -878,7 +882,7 @@ impl core::fmt::Debug for ZkX509ShaBatchCallBaseSourceV1 {
             .debug_struct("ZkX509ShaBatchCallBaseSourceV1")
             .field("manifest", &self.manifest)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -910,7 +914,7 @@ impl ZkX509ShaBatchCallBaseSourceV1 {
     #[cfg(test)]
     pub(crate) fn bind_v1(
         self,
-        binding: ZkX509CredentialPreAuxBindingV1,
+        binding: &ZkX509CredentialPreAuxBindingV1,
     ) -> Result<ZkX509ShaBatchCallTraceV1, ZkX509ShaCallBusStarkErrorV1> {
         bind_zk_x509_sha_batch_call_base_with_initial_products_v1(
             self,
@@ -952,7 +956,7 @@ impl core::fmt::Debug for ZkX509ShaBatchCallTraceV1 {
             .debug_struct("ZkX509ShaBatchCallTraceV1")
             .field("manifest", &self.manifest)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2425,7 +2429,7 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
     /// from the opaque X5B1 binding.
     pub(crate) fn bind_v1(
         &mut self,
-        binding: ZkX509CredentialPreAuxBindingV1,
+        binding: &ZkX509CredentialPreAuxBindingV1,
     ) -> Result<ZkX509ShaBatchSegmentAuxSourceV1<'a>, ZkX509ShaCallBusStarkErrorV1> {
         if self.bound {
             return Err(ZkX509ShaCallBusStarkErrorV1::Phase);
@@ -2440,7 +2444,7 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
             schedule: self.schedule,
             witnesses: self.witnesses,
             replay: self.replay,
-            binding: Some(binding),
+            binding: Some(*binding),
             row_stream_emitted: false,
             retained_aux: None,
         })
@@ -2510,10 +2514,10 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
     /// alternate raw challenge family is accepted by this operation.
     pub(crate) fn rfc_union_air_terminals_v1(
         &self,
-        expected: ZkX509CredentialPreAuxBindingV1,
+        expected: &ZkX509CredentialPreAuxBindingV1,
         segment: usize,
     ) -> Result<ZkX509ShaSegmentAirTerminalsV1, ZkX509ShaCallBusStarkErrorV1> {
-        if self.binding != Some(expected) {
+        if self.binding != Some(*expected) {
             return Err(ZkX509ShaCallBusStarkErrorV1::Phase);
         }
         if self.replay.segment() != segment {
@@ -2620,7 +2624,7 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
                 self.schedule.shape().disclosed_attributes,
             )?;
             let call = bind_zk_x509_sha_batch_call_base_with_initial_products_v1(
-                base, binding, &products,
+                base, &binding, &products,
             )?;
             if usize::from(manifest.call) >= ZK_X509_SHA_CA_LEAF_CALL_V1 {
                 let boundary = zeroize::Zeroizing::new(ZkX509ShaCallBoundaryTerminalV1 {
@@ -3122,7 +3126,7 @@ pub fn build_zk_x509_sha_batch_call_base_source_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn bind_zk_x509_sha_batch_call_base_with_initial_products_v1(
     source: ZkX509ShaBatchCallBaseSourceV1,
-    binding: ZkX509CredentialPreAuxBindingV1,
+    binding: &ZkX509CredentialPreAuxBindingV1,
     initial_products: &ZkX509ShaSegmentProductStateV1,
 ) -> Result<ZkX509ShaBatchCallTraceV1, ZkX509ShaCallBusStarkErrorV1> {
     let call_challenges = binding.sha();
@@ -3666,9 +3670,8 @@ pub fn sha_call_terminals_v1(
                 ZkX509ShaCallWordKindV1::Input => &mut source_products,
                 ZkX509ShaCallWordKindV1::Digest => &mut digest_products,
             };
-            for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
-                products[lane] =
-                    products[lane].mul(compress_event_v1(event, challenges.lanes[lane]));
+            for (lane, product) in products.iter_mut().enumerate() {
+                *product = product.mul(compress_event_v1(event, challenges.lanes[lane]));
             }
         }
         terminals.push(ZkX509ShaCallTerminalV1 {
@@ -3711,13 +3714,22 @@ pub const ZK_X509_SHA_BASE_FOLD_COLLISION_LANES_V1: u8 = 3;
 /// multiplied exactly before the already-accounted RFC output equality.
 #[cfg(test)]
 fn algebraic_security_bits_v1() -> (f64, f64, f64) {
-    let denominator = (GOLDILOCKS_MODULUS_V1 - 1) as f64;
-    let memory =
-        (f64::from(ZK_X509_SHA_WORD_MEMORY_COLLISION_NUMERATOR_V1 as u32) / denominator).powi(4);
-    let call =
-        (f64::from(ZK_X509_SHA_CALL_BUS_COLLISION_NUMERATOR_V1 as u32) / denominator).powi(4);
-    let bus_union = 2.0 * memory + call;
-    let base_fold = (ZK_X509_SHA_BASE_FOLD_COLLISION_NUMERATOR_V1 as f64 / denominator)
+    let denominator = 2_f64.powi(64) - 2_f64.powi(32);
+    let memory = (f64::from(
+        u32::try_from(ZK_X509_SHA_WORD_MEMORY_COLLISION_NUMERATOR_V1)
+            .expect("word collision numerator fits u32"),
+    ) / denominator)
+        .powi(4);
+    let call = (f64::from(
+        u32::try_from(ZK_X509_SHA_CALL_BUS_COLLISION_NUMERATOR_V1)
+            .expect("call collision numerator fits u32"),
+    ) / denominator)
+        .powi(4);
+    let bus_union = 2.0f64.mul_add(memory, call);
+    let base_fold = (f64::from(
+        u32::try_from(ZK_X509_SHA_BASE_FOLD_COLLISION_NUMERATOR_V1)
+            .expect("fold collision numerator fits u32"),
+    ) / denominator)
         .powi(i32::from(ZK_X509_SHA_BASE_FOLD_COLLISION_LANES_V1));
     (
         -bus_union.log2(),
@@ -3799,7 +3811,8 @@ mod tests {
         use super::super::private_table::inspection;
         fn boundary() -> ZkX509ShaCallBoundaryTerminalV1 {
             ZkX509ShaCallBoundaryTerminalV1 {
-                call: ZK_X509_SHA_CA_LEAF_CALL_V1 as u8,
+                call: u8::try_from(ZK_X509_SHA_CA_LEAF_CALL_V1)
+                    .expect("protocol-bounded index fits u8"),
                 role: manifest_role_v1(ZK_X509_SHA_CA_LEAF_CALL_V1).unwrap(),
                 source_start_products: [F(19); 4],
                 digest_start_products: [F(23); 4],
@@ -3818,9 +3831,7 @@ mod tests {
                     if exit == 1 {
                         return Err(ZkX509ShaCallBusStarkErrorV1::Terminal);
                     }
-                    if exit == 2 {
-                        panic!("private boundary unwind control");
-                    }
+                    assert!(exit != 2, "private boundary unwind control");
                     let owner = ZkX509ShaSegmentAirTerminalsV1 {
                         segment: ZkX509ShaSegmentPrivateEndpointV1 {
                             segment: 3,
@@ -4100,10 +4111,10 @@ mod tests {
             "failed validation consumed the retry capability"
         );
         let binding = credential_binding(0x21);
-        let aux = source.bind_v1(binding).expect("retry with canonical X5B1");
+        let aux = source.bind_v1(&binding).expect("retry with canonical X5B1");
         assert!(source.is_bound_for_test_v1());
         assert!(matches!(
-            source.bind_v1(credential_binding(0x22)),
+            source.bind_v1(&credential_binding(0x22)),
             Err(ZkX509ShaCallBusStarkErrorV1::Phase)
         ));
         assert!(matches!(
@@ -4201,7 +4212,7 @@ mod tests {
                 assert!(replayed.iter().all(|value| F::canonical(value.0).is_some()));
             }
             let mut aux = source
-                .bind_v1(credential_binding(
+                .bind_v1(&credential_binding(
                     0x51_u8.wrapping_add(u8::try_from(segment).expect("four segments")),
                 ))
                 .expect("bound segment source");
@@ -4278,7 +4289,7 @@ mod tests {
                 assert_eq!(&field_column_digest_v1(&replayed), expected);
             }
             let mut aux = source
-                .bind_v1(credential_binding(
+                .bind_v1(&credential_binding(
                     0x61_u8.wrapping_add(u8::try_from(segment).expect("four segments")),
                 ))
                 .expect("bound segment source");
@@ -4332,10 +4343,10 @@ mod tests {
             .expect("second fixed column");
         assert_eq!(first_fixed, second_fixed);
         let first_aux = first
-            .bind_v1(credential_binding(0x71))
+            .bind_v1(&credential_binding(0x71))
             .expect("first binding");
         let second_aux = second
-            .bind_v1(credential_binding(0x72))
+            .bind_v1(&credential_binding(0x72))
             .expect("second binding");
         let mut replayed_base = native_column_v1(F::ZERO);
         first_aux
@@ -4400,7 +4411,7 @@ mod tests {
         assert!(short.iter().all(|value| *value == sentinel));
         assert!(!source.is_bound_for_test_v1());
         let mut aux = source
-            .bind_v1(credential_binding(0x79))
+            .bind_v1(&credential_binding(0x79))
             .expect("bound source");
         assert!(source.fill_base_column_v1(segment, 0, &mut target).is_err());
         assert!(target.iter().all(|value| *value == sentinel));
@@ -4526,10 +4537,10 @@ mod tests {
             );
         }
         let first = first
-            .bind_v1(credential_binding(0x31))
+            .bind_v1(&credential_binding(0x31))
             .expect("first bound trace");
         let second = second
-            .bind_v1(credential_binding(0x32))
+            .bind_v1(&credential_binding(0x32))
             .expect("second bound trace");
         assert!((0..first.logical_rows()).any(|row| {
             first.aux_row(row).expect("first aux") != second.aux_row(row).expect("second aux")
@@ -4601,7 +4612,7 @@ mod tests {
         let binding = credential_binding(0x41);
         let bound = build_zk_x509_sha_batch_call_base_source_v1(manifest, &witness, 2)
             .expect("production base")
-            .bind_v1(binding)
+            .bind_v1(&binding)
             .expect("production bind");
         let expected = build_zk_x509_sha_batch_call_trace_v1(
             manifest,
@@ -5247,10 +5258,16 @@ mod tests {
                 .expect("certificate consumer")
                 .expect("certificate mapping");
                 assert_eq!(consumer.role, ZkX509Rfc5280OutputRoleV1::CertificateTbsSha);
-                assert_eq!(consumer.message_channel, (prefix + 2 * call) as u32);
+                assert_eq!(
+                    consumer.message_channel,
+                    u32::try_from(prefix + 2 * call).expect("protocol-bounded index fits u32")
+                );
                 assert_eq!(
                     consumer.length_channel,
-                    Some((prefix + 2 * call + 1) as u32)
+                    Some(
+                        u32::try_from(prefix + 2 * call + 1)
+                            .expect("protocol-bounded index fits u32")
+                    )
                 );
                 assert_eq!(consumer.message_prefix_bytes, 0);
                 assert_eq!(consumer.message_capacity_bytes, 4_096);
@@ -5289,10 +5306,15 @@ mod tests {
                 .expect("consumer")
                 .expect("mapped consumer");
                 assert_eq!(consumer.role, role);
-                assert_eq!(consumer.message_channel, (prefix + message_offset) as u32);
+                assert_eq!(
+                    consumer.message_channel,
+                    u32::try_from(prefix + message_offset)
+                        .expect("protocol-bounded index fits u32")
+                );
                 assert_eq!(
                     consumer.length_channel,
-                    length_offset.map(|offset| (prefix + offset) as u32)
+                    length_offset.map(|offset| u32::try_from(prefix + offset)
+                        .expect("protocol-bounded index fits u32"))
                 );
                 assert_eq!(consumer.message_prefix_bytes, frame_prefix);
                 assert_eq!(consumer.message_capacity_bytes, capacity);
@@ -6257,7 +6279,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(actual, reference);
-        let mut bound = source.bind_v1(credential_binding(0x47)).unwrap();
+        let mut bound = source.bind_v1(&credential_binding(0x47)).unwrap();
         assert!(
             source
                 .fill_base_columns_v1(

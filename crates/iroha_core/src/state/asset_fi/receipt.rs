@@ -52,10 +52,15 @@ impl Capture {
         link: AssetFiLinkV1,
         policy: &AssetUidPolicyV1,
     ) -> Result<Self, Error> {
-        let asset_incarnation = tx.world().axt_asset_incarnations()
-            .get(&instruction.asset_definition_id).copied()
+        let asset_incarnation = tx
+            .world()
+            .axt_asset_incarnations()
+            .get(&instruction.asset_definition_id)
+            .copied()
             .ok_or_else(|| reject("admitted FI capture requires its exact asset incarnation"))?;
-        asset_incarnation.validate().map_err(|_| reject("admitted FI capture has an invalid asset incarnation"))?;
+        asset_incarnation
+            .validate()
+            .map_err(|_| reject("admitted FI capture has an invalid asset incarnation"))?;
         let fi = fi(
             tx.world(),
             &instruction.asset_definition_id,
@@ -167,54 +172,80 @@ pub(crate) fn key(
 ) -> StatePath {
     let text = key_text(definition, &account.to_string(), call, index)
         .expect("fixed native FI occurrence path fits its stack buffer");
-    let text = core::str::from_utf8(&text.get_ref()[..text.position() as usize])
-        .expect("fixed native FI occurrence path is ASCII");
+    let text = core::str::from_utf8(
+        &text.get_ref()
+            [..usize::try_from(text.position()).expect("fixed stack cursor position fits usize")],
+    )
+    .expect("fixed native FI occurrence path is ASCII");
     path(text.to_owned())
 }
 
 /// One shared spelling; every formatting buffer is fixed and stack-owned.
 fn key_text(
-    definition: &AssetDefinitionId, account_text: &str, call: &Hash, index: u64,
+    definition: &AssetDefinitionId,
+    account_text: &str,
+    call: &Hash,
+    index: u64,
 ) -> std::io::Result<std::io::Cursor<[u8; 256]>> {
     use std::io::Write as _;
     let mut definition_text = std::io::Cursor::new([0_u8; 64]);
     // AssetDefinitionId::Display also keeps its Base58 workspace on the stack.
     write!(&mut definition_text, "{definition}")?;
-    let definition_hash = Hash::new(&definition_text.get_ref()[..definition_text.position() as usize]);
+    let definition_hash = Hash::new(
+        &definition_text.get_ref()[..usize::try_from(definition_text.position())
+            .expect("fixed stack cursor position fits usize")],
+    );
     let account_hash = Hash::new(account_text.as_bytes());
     let mut definition_hex = [0_u8; 64];
     let mut account_hex = [0_u8; 64];
     let mut call_hex = [0_u8; 64];
-    hex::encode_to_slice(definition_hash.as_ref(), &mut definition_hex).expect("exact hash hex buffer");
+    hex::encode_to_slice(definition_hash.as_ref(), &mut definition_hex)
+        .expect("exact hash hex buffer");
     hex::encode_to_slice(account_hash.as_ref(), &mut account_hex).expect("exact hash hex buffer");
     hex::encode_to_slice(call.as_ref(), &mut call_hex).expect("exact hash hex buffer");
     let mut text = std::io::Cursor::new([0_u8; 256]);
-    write!(&mut text, "{RECEIPT_ROOT}{}/{}/{}/{index}",
+    write!(
+        &mut text,
+        "{RECEIPT_ROOT}{}/{}/{}/{index}",
         core::str::from_utf8(&definition_hex).expect("hex ASCII"),
         core::str::from_utf8(&account_hex).expect("hex ASCII"),
-        core::str::from_utf8(&call_hex).expect("hex ASCII"))?;
+        core::str::from_utf8(&call_hex).expect("hex ASCII")
+    )?;
     Ok(text)
 }
 
 /// Exact key using caller-admitted canonical I105 text and the existing
 /// fallible, resource-scoped StatePath owner. No external text enters this helper.
 pub(crate) fn key_for_admission(
-    definition: &AssetDefinitionId, account_text: &str, call: &Hash, index: u64,
+    definition: &AssetDefinitionId,
+    account_text: &str,
+    call: &Hash,
+    index: u64,
 ) -> Result<StatePath, norito::json::Error> {
     let text = key_text(definition, account_text, call, index)
         .map_err(|_| norito::json::Error::Message("invalid fixed FI receipt key".into()))?;
-    let text = core::str::from_utf8(&text.get_ref()[..text.position() as usize])
-        .expect("fixed native FI occurrence path is ASCII");
+    let text = core::str::from_utf8(
+        &text.get_ref()
+            [..usize::try_from(text.position()).expect("fixed stack cursor position fits usize")],
+    )
+    .expect("fixed native FI occurrence path is ASCII");
     <StatePath as norito::json::JsonObjectKeyOwned>::from_json_key_text(text)
 }
 
 /// Internal historical consistency only; no current relationship may replace a snapshot.
 pub(crate) fn validate(value: &AssetFiTransferReceiptV1) -> Result<(), Error> {
     validate_fields(value)?;
-    if Hash::new(super::super::asset_uid::encode(&InstructionBox::from(value.instruction.clone()))?) != value.instruction_hash
-        || value.controller.as_ref().is_some_and(|frame| frame.address.subject_id() != frame.subject)
+    if Hash::new(super::super::asset_uid::encode(&InstructionBox::from(
+        value.instruction.clone(),
+    ))?) != value.instruction_hash
+        || value
+            .controller
+            .as_ref()
+            .is_some_and(|frame| frame.address.subject_id() != frame.subject)
     {
-        return Err(reject("inconsistent linked FI instruction hash or controller subject"));
+        return Err(reject(
+            "inconsistent linked FI instruction hash or controller subject",
+        ));
     }
     Ok(())
 }
@@ -222,13 +253,17 @@ pub(crate) fn validate(value: &AssetFiTransferReceiptV1) -> Result<(), Error> {
 /// Allocation-free historical field relationships. Callers must separately check
 /// the exact instruction hash and derive any actual controller subject.
 pub(crate) fn validate_fields(value: &AssetFiTransferReceiptV1) -> Result<(), Error> {
-    value.asset_incarnation.validate().map_err(|_| reject("invalid captured FI asset incarnation"))?;
+    value
+        .asset_incarnation
+        .validate()
+        .map_err(|_| reject("invalid captured FI asset incarnation"))?;
     validate_link_shape(&value.link)?;
     let i = &value.instruction;
     let link = &value.link;
+    let policy_revision_matches = i.expected_policy_revision == value.uid_policy_revision;
     if i.amount.is_zero()
         || i.expected_link_revision != link.revision
-        || i.expected_policy_revision != value.uid_policy_revision
+        || !policy_revision_matches
         || value.uid_policy_revision == 0
         || value.uid == [0; 32]
         || value.execution_height == 0
@@ -310,20 +345,39 @@ mod tests {
     fn fi_receipt_key_preserves_stored_spelling_and_local_decode_refusal() {
         let definition: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().unwrap();
         let call = Hash::new("exact-FI-occurrence-key");
-        for account in [iroha_test_samples::ALICE_ID.clone(), iroha_test_samples::BOB_ID.clone()] {
+        for account in [
+            iroha_test_samples::ALICE_ID.clone(),
+            iroha_test_samples::BOB_ID.clone(),
+        ] {
             let account_text = account.to_string();
             for index in [0, u64::MAX] {
-                let expected = format!("{RECEIPT_ROOT}{}/{}/{}/{index}",
+                let expected = format!(
+                    "{RECEIPT_ROOT}{}/{}/{}/{index}",
                     hex::encode(Hash::new(definition.to_string()).as_ref()),
-                    hex::encode(Hash::new(&account_text).as_ref()), hex::encode(call.as_ref()));
+                    hex::encode(Hash::new(&account_text).as_ref()),
+                    hex::encode(call.as_ref())
+                );
                 assert_eq!(key(&definition, &account, &call, index).as_ref(), expected);
-                assert_eq!(key_for_admission(&definition, &account_text, &call, index).unwrap().as_ref(), expected);
+                assert_eq!(
+                    key_for_admission(&definition, &account_text, &call, index)
+                        .unwrap()
+                        .as_ref(),
+                    expected
+                );
             }
-            let refused = norito::core::with_decode_limits_scope(norito::DecodeLimits::new(0,0,0,0,0), || {
-                norito::core::classify_decode_attempt(|| key_for_admission(&definition, &account_text, &call, 0)
-                    .map_err(norito::json::Error::into_core_error))
-            });
-            assert!(refused.unwrap_err().into_local_refusal().is_ok(), "the bounded key keeps the original local capacity owner");
+            let refused = norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(0, 0, 0, 0, 0),
+                || {
+                    norito::core::classify_decode_attempt(|| {
+                        key_for_admission(&definition, &account_text, &call, 0)
+                            .map_err(norito::json::Error::into_core_error)
+                    })
+                },
+            );
+            assert!(
+                refused.unwrap_err().into_local_refusal().is_ok(),
+                "the bounded key keeps the original local capacity owner"
+            );
         }
     }
 

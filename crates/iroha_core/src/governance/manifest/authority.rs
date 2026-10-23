@@ -430,9 +430,9 @@ impl From<&GovernanceRules> for GovernanceRulesAuthorityV1 {
 }
 
 /// Exact original materialized registry bytes. This is an encoder, not an
-/// authorization capability: original-cut callers must retain StatePublication's
+/// authorization capability: original-cut callers must retain `StatePublication`'s
 /// validated and frozen runtime/catalog/manifest owner throughout both passes.
-pub(crate) struct BorrowedManifest<'a>(&'a LaneManifestRegistry);
+pub struct BorrowedManifest<'a>(&'a LaneManifestRegistry);
 impl LaneManifestRegistry {
     /// Check the original retained source bodies and exact catalog, then borrow
     /// their complete authority payload. The publication owner separately retains

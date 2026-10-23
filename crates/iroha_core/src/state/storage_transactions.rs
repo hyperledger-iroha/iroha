@@ -26,7 +26,7 @@ mod history;
 #[path = "storage_transactions/history_slot.rs"]
 mod history_slot;
 pub use history::MembershipAdmissionError;
-pub(crate) use history::Pending as PreparedMembershipStart;
+pub use history::Pending as PreparedMembershipStart;
 use history::{Identity, Reader as HistoryReader};
 
 /// Preserve snapshot syntax separately from an original local resource refusal.
@@ -45,7 +45,7 @@ pub enum MembershipRestoreError {
 /// and the latest block's immutable keys and shared shell. Old readers retain
 /// their exact historical generation and tip.
 ///
-/// TODO: prepay the upstream ordinary carrier Vec and merge-carrier BTreeSet
+/// TODO: prepay the upstream ordinary carrier Vec and merge-carrier `BTreeSet`
 /// before their construction, and admit snapshot decoding/comparison scratch
 /// through its original snapshot owner before claiming complete admission.
 pub struct TransactionsStorage {
@@ -142,7 +142,7 @@ impl TipStore {
 }
 
 /// Canonically sorted immutable keys in one exact charged backing allocation.
-pub(crate) struct TipKeys(ChargedBuffer<Key>);
+pub struct TipKeys(ChargedBuffer<Key>);
 
 impl TipKeys {
     fn len(&self) -> usize {
@@ -314,7 +314,7 @@ fn admit_tip(
 
 /// Staging refusal without converting local capacity into an invalid carrier.
 #[derive(Debug)]
-pub(crate) enum TipStageError {
+pub enum TipStageError {
     /// The original transaction-history pool or allocator refused this tip.
     Admission(MembershipAdmissionError),
     /// One ordinary input repeats a certified merge input.
@@ -836,7 +836,7 @@ mod block {
     /// Dropping this owner leaves storage unchanged. Publication consumes the
     /// exact admitted action without consulting a new frontier or admitting a
     /// different payload. Shared reads remain available for State snapshots.
-    pub(crate) struct PreparedTransactionsBlock<'storage> {
+    pub struct PreparedTransactionsBlock<'storage> {
         block: TransactionsBlock<'storage>,
         publication: MembershipPublication,
         next_identity: Identity,
@@ -853,7 +853,7 @@ mod block {
     /// This owner exposes no live-history reader. Publication preparation must
     /// reacquire its exact predecessor; the aggregate State publisher must
     /// retain every prepared component before publishing any of them.
-    pub(crate) struct DetachedTransactionsBlock {
+    pub struct DetachedTransactionsBlock {
         predecessor_identity: Identity,
         history: history::Pending,
         predecessor: Option<Tip>,
@@ -867,21 +867,21 @@ mod block {
     ///
     /// The installation admission outlives the writer even when this owner is
     /// abandoned. Publication returns that admission to the aggregate owner.
-    pub(crate) struct PreparedDetachedTransactionsBlock<'storage, Installation> {
+    pub struct PreparedDetachedTransactionsBlock<'storage, Installation> {
         prepared: PreparedTransactionsBlock<'storage>,
         installation: Installation,
         preflight_release: Option<iroha_allocation::release::DeferredRelease>,
     }
 
     /// All original history retirement and physical release observations.
-    pub(crate) struct MembershipRelease {
+    pub struct MembershipRelease {
         _history: Option<history_slot::Cleanup>,
         _writer: iroha_allocation::release::DeferredRelease,
     }
 
     /// Original membership payloads and notification after its physical unlock.
     /// The enclosing publisher retires this only after all its fences release.
-    pub(crate) struct TransactionsPublicationRetirement {
+    pub struct TransactionsPublicationRetirement {
         _tip: Option<Tip>,
         _staged: Option<Tip>,
         _identity: Identity,
@@ -890,14 +890,14 @@ mod block {
     }
 
     /// Original abort or refusal cleanup retained with installation admission.
-    pub(crate) struct AbortedTransactions<Installation> {
+    pub struct AbortedTransactions<Installation> {
         _installation: Option<Installation>,
         _preflight_release: Option<iroha_allocation::release::DeferredRelease>,
         _release: Option<MembershipRelease>,
     }
 
     /// Published membership cleanup retained with its installation admission.
-    pub(crate) struct PublishedTransactions<Installation> {
+    pub struct PublishedTransactions<Installation> {
         _retirement: TransactionsPublicationRetirement,
         _installation: Installation,
         _preflight_release: Option<iroha_allocation::release::DeferredRelease>,
@@ -905,7 +905,7 @@ mod block {
 
     /// A short observation, never authorization to publish a detached journal.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) enum MembershipPredecessorStatus {
+    pub enum MembershipPredecessorStatus {
         /// Another writer owns the observation boundary.
         Busy,
         /// Both membership representations still have the captured identity.
@@ -919,11 +919,11 @@ mod block {
     pub(super) use capture::MembershipWriter;
     pub use capture::TransactionsBlockField;
     #[cfg(test)]
-    pub(crate) use capture::TransactionsCaptureSlot;
+    pub use capture::TransactionsCaptureSlot;
 
     #[path = "detached_publication.rs"]
     mod detached_publication;
-    pub(crate) use detached_publication::DetachedTransactionsPublicationSlot;
+    pub use detached_publication::DetachedTransactionsPublicationSlot;
 
     #[cfg_attr(
         not(test),
@@ -947,6 +947,10 @@ mod block {
         },
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+    )]
     impl TransactionsBlock<'_> {
         /// Return whether a canonical block membership update was staged.
         #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
@@ -1106,6 +1110,10 @@ mod block {
         ///
         /// This performs all membership validation before publication. Failure
         /// drops the staging scope without modifying committed membership.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+        )]
         pub(crate) fn prepare_commit(
             self,
         ) -> Result<PreparedTransactionsBlock<'storage>, TransactionsBlockError> {
@@ -1237,6 +1245,10 @@ mod block {
 
         /// Retain the exact native writer/reader pair before the publication kernel.
         /// Refusal leaves this original prepared owner available for local retry.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+        )]
         pub(in crate::state) fn try_prepare_physical(
             &mut self,
         ) -> Result<(), TransactionsBlockError> {
@@ -1353,6 +1365,10 @@ mod block {
         /// account for history-map insertion and reader retention before the
         /// writer is acquired. A refusal returns the original journal intact.
         /// This component does not establish aggregate State/finality authority.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+        )]
         pub(crate) fn try_prepare_publication<Installation, E>(
             self,
             storage: &TransactionsStorage,
@@ -1492,10 +1508,10 @@ mod block {
     mod detached_publication_tests;
 }
 #[cfg(test)]
-pub(crate) use block::MembershipPredecessorStatus;
-pub(crate) use block::PreparedTransactionsBlock;
+pub use block::MembershipPredecessorStatus;
+pub use block::PreparedTransactionsBlock;
 #[cfg(test)]
-pub(crate) use block::{DetachedTransactionsBlock, PreparedDetachedTransactionsBlock};
+pub use block::{DetachedTransactionsBlock, PreparedDetachedTransactionsBlock};
 #[allow(unused_imports)]
 pub use block::{TransactionsBlock, TransactionsBlockError, TransactionsBlockField};
 
@@ -1645,6 +1661,10 @@ mod membership_projection {
         /// Missing staging or an invalid height fails before any consumer can
         /// observe staged rows. The borrow prevents staging or committing a
         /// different payload while the transition is in use.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+        )]
         pub(in crate::state) fn membership_transition(
             &self,
         ) -> Result<TransactionsMembershipTransition<'_>, TransactionsBlockError> {
@@ -1980,16 +2000,13 @@ mod serialization {
             if let Some(current) = current {
                 map.retain(|_, height| *height < current.height);
             }
-        } else {
-            if let Some(previous) = predecessor {
-                let repeated = current.is_some_and(|current| {
-                    current.height == previous.height
-                        && current.transactions == previous.transactions
-                });
-                if !repeated {
-                    for transaction in &previous.transactions {
-                        map.insert(*transaction, previous.height);
-                    }
+        } else if let Some(previous) = predecessor {
+            let repeated = current.is_some_and(|current| {
+                current.height == previous.height && current.transactions == previous.transactions
+            });
+            if !repeated {
+                for transaction in &previous.transactions {
+                    map.insert(*transaction, previous.height);
                 }
             }
         }

@@ -136,7 +136,7 @@ fn active_imports(
                         .is_err_and(|error| error.is_unavailable())
                 );
             }
-            drop(qualified.import_q(route, stage, originals, config).unwrap());
+            let _ = qualified.import_q(route, stage, originals, config).unwrap();
             q_imports += 1;
         }
     }
@@ -336,7 +336,7 @@ fn qualify_signed_wallet_catalog_from_pinned_originals() {
 }
 
 /// Exact owners returned only after genuine pinned engineering source admission.
-pub(crate) type EngineeringWalletSources = (
+pub type EngineeringWalletSources = (
     std::sync::Arc<InstalledVerifierPackV1>,
     std::sync::Arc<QualifiedWalletSourcesV1>,
     SumeragiFinalityVerifier,
@@ -433,7 +433,7 @@ fn pinned_engineering_inputs(output: &Path) -> PinnedEngineeringInputs {
 /// the complete capability through the ordinary production source constructor.
 /// This is an engineering fixture: it grants no deployment authority and cannot
 /// return a grant from marker files, a subset, or a caller-provided verdict.
-pub(crate) fn open_pinned_engineering_wallet_sources(output: &Path) -> EngineeringWalletSources {
+pub fn open_pinned_engineering_wallet_sources(output: &Path) -> EngineeringWalletSources {
     let PinnedEngineeringInputs {
         installed,
         authenticated,
@@ -494,7 +494,7 @@ pub(crate) fn open_pinned_engineering_wallet_sources(output: &Path) -> Engineeri
 /// opens strict read-only originals, repeats the complete ordinary qualification and all active
 /// import controls, and writes evidence only into this process's fresh admission directory.
 /// A refused original is never replaced, copied from another source or accepted from a cache.
-pub(crate) fn reopen_pinned_engineering_wallet_sources(
+pub fn reopen_pinned_engineering_wallet_sources(
     output: &Path,
     originals: &Path,
 ) -> EngineeringWalletSources {
@@ -601,7 +601,7 @@ fn requalify_signed_wallet_catalog_from_retained_originals() {
 }
 
 /// Native finality owner selected independently of any proving original.
-pub(crate) type EngineeringFinalitySources = (
+pub type EngineeringFinalitySources = (
     std::sync::Arc<InstalledVerifierPackV1>,
     QualifiedReceiptSourceV1,
     SumeragiFinalityVerifier,
@@ -609,9 +609,7 @@ pub(crate) type EngineeringFinalitySources = (
 );
 
 /// Bind a signed engineering wallet installation to authenticated native genesis.
-pub(crate) fn open_pinned_engineering_finality_sources(
-    output: &Path,
-) -> EngineeringFinalitySources {
+pub fn open_pinned_engineering_finality_sources(output: &Path) -> EngineeringFinalitySources {
     let PinnedEngineeringInputs {
         installed,
         authenticated,

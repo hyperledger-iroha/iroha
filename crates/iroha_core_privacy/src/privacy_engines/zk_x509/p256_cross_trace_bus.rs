@@ -642,11 +642,14 @@ impl P256CrossTraceSinkFixedV1 {
                 let tag = match p256_selected_input_writer_id_v1(byte / 32)? {
                     Some(id) => P256CrossTraceTagV1 {
                         endpoint: P256CrossTraceEndpointV1::Writer,
-                        address: writer_address_v1(id.0, limb as u8)?,
+                        address: writer_address_v1(
+                            id.0,
+                            u8::try_from(limb).expect("protocol-bounded index fits u8"),
+                        )?,
                     },
                     None => P256CrossTraceTagV1 {
                         endpoint: P256CrossTraceEndpointV1::DigestInput,
-                        address: limb as u32,
+                        address: u32::try_from(limb).expect("protocol-bounded index fits u32"),
                     },
                 };
                 events[0] = P256CrossTraceEventFixedV1::active(tag);
@@ -921,9 +924,9 @@ fn validate_binding_fixed_schedule_v1(
         || binding.rows.iter().zip(expected).any(|(row, expected)| {
             row.fixed
                 != core::array::from_fn(|slot| {
-                    expected[slot]
-                        .map(|source| source.fixed)
-                        .unwrap_or(P256ExternalBindingFixedAccessV1::Inactive)
+                    expected[slot].map_or(P256ExternalBindingFixedAccessV1::Inactive, |source| {
+                        source.fixed
+                    })
                 })
         })
     {
@@ -1052,7 +1055,10 @@ impl P256CrossTraceWriterSourceFixedV1 {
             let id = p256_selected_input_writer_id_v1(word)?
                 .ok_or(P256CrossTraceBusErrorV1::Topology)?;
             for limb in 0..P256_VALUE_BUS_LIMBS_V1 {
-                let address = writer_address_v1(id.0, limb as u8)? as usize;
+                let address = writer_address_v1(
+                    id.0,
+                    u8::try_from(limb).expect("protocol-bounded index fits u8"),
+                )? as usize;
                 let multiplicity = multiplicities
                     .get_mut(address)
                     .ok_or(P256CrossTraceBusErrorV1::Topology)?;
@@ -1213,7 +1219,7 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
     /// The capability has no public/raw constructor and fixes the endpoint,
     /// signature role, opaque token and derived terminal to the same owner.
     pub(super) fn from_bound_main_v1(
-        bound: super::p256_aggregate_adapter::P256MainBoundWriterReplayV1<'a>,
+        bound: &super::p256_aggregate_adapter::P256MainBoundWriterReplayV1<'a>,
     ) -> Result<Self, P256CrossTraceBusErrorV1> {
         let value_bus = bound.endpoint_v1();
         let challenges = bound.challenges_v1();
@@ -1288,10 +1294,8 @@ pub fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1<A: Polynomial
     challenges: P256CrossTraceChallengesV1,
 ) -> Vec<A> {
     let mut residues = Vec::with_capacity(P256_CROSS_TRACE_WRITER_CONSTRAINT_COUNT_V1);
-    for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
-        residues.push(
-            current.event_values[slot].sub(fixed.events[slot].active.mul(source_values[slot])),
-        );
+    for (slot, source) in source_values.into_iter().enumerate() {
+        residues.push(current.event_values[slot].sub(fixed.events[slot].active.mul(source)));
     }
     for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
         for lane in 0..P256_CROSS_TRACE_LANES_V1 {
@@ -1488,7 +1492,7 @@ fn projected_writer_source_values_v1(
     fixed: P256CrossTraceWriterFixedRowV1,
 ) -> Result<[F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1], P256CrossTraceBusErrorV1> {
     let mut values = [F::ZERO; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1];
-    for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
+    for (slot, output) in values.iter_mut().enumerate() {
         let ordinal = packed_ordinal
             .checked_mul(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1)
             .and_then(|ordinal| ordinal.checked_add(slot))
@@ -1501,8 +1505,14 @@ fn projected_writer_source_values_v1(
         if fixed.events[slot].active == F::ONE {
             let address = u32::try_from(fixed.events[slot].address.0)
                 .map_err(|_| P256CrossTraceBusErrorV1::Resource)?;
-            let expected_id = address / P256_VALUE_BUS_LIMBS_V1 as u32;
-            let expected_limb = (address % P256_VALUE_BUS_LIMBS_V1 as u32) as u8;
+            let expected_id = address
+                / u32::try_from(P256_VALUE_BUS_LIMBS_V1).expect("protocol-bounded index fits u32");
+            let expected_limb = u8::try_from(
+                address
+                    % u32::try_from(P256_VALUE_BUS_LIMBS_V1)
+                        .expect("protocol-bounded index fits u32"),
+            )
+            .expect("16-limb remainder fits u8");
             if !matches!(
                 actual_fixed,
                 P256ValueBusFixedAccessV1::Active {
@@ -1515,7 +1525,7 @@ fn projected_writer_source_values_v1(
                 return Err(P256CrossTraceBusErrorV1::Source);
             }
         }
-        values[slot] = value;
+        *output = value;
     }
     Ok(values)
 }
@@ -1523,7 +1533,7 @@ fn writer_address_v1(id: u32, limb: u8) -> Result<u32, P256CrossTraceBusErrorV1>
     if usize::from(limb) >= P256_VALUE_BUS_LIMBS_V1 {
         return Err(P256CrossTraceBusErrorV1::Topology);
     }
-    id.checked_mul(P256_VALUE_BUS_LIMBS_V1 as u32)
+    id.checked_mul(u32::try_from(P256_VALUE_BUS_LIMBS_V1).expect("protocol-bounded index fits u32"))
         .and_then(|address| address.checked_add(u32::from(limb)))
         .ok_or(P256CrossTraceBusErrorV1::Resource)
 }
@@ -1680,15 +1690,17 @@ mod tests {
         let selected_word = |id: u32| {
             let mut bytes = [0_u8; 32];
             for limb in 0..16 {
-                let address = writer_address_v1(id, limb as u8).unwrap();
-                let value = writer_values
-                    .get(&address)
-                    .copied()
-                    .unwrap_or(F(
-                        (u64::from(address).wrapping_mul(73).wrapping_add(19)) & 65535
-                    ));
-                bytes[30 - 2 * limb..32 - 2 * limb]
-                    .copy_from_slice(&(value.0 as u16).to_be_bytes());
+                let address = writer_address_v1(
+                    id,
+                    u8::try_from(limb).expect("protocol-bounded index fits u8"),
+                )
+                .unwrap();
+                let value = writer_values.get(&address).copied().unwrap_or_else(|| {
+                    F((u64::from(address).wrapping_mul(73).wrapping_add(19)) & 0xffff)
+                });
+                bytes[30 - 2 * limb..32 - 2 * limb].copy_from_slice(
+                    &(u16::try_from(value.0 & 0xffff).expect("masked limb")).to_be_bytes(),
+                );
             }
             bytes
         };
@@ -1697,7 +1709,9 @@ mod tests {
             public_key_y_be: selected_word(48),
             r_be: selected_word(52),
             s_be: selected_word(53),
-            digest_be: core::array::from_fn(|i| (i * 7 + 3) as u8),
+            digest_be: core::array::from_fn(|i| {
+                u8::try_from(i * 7 + 3).expect("protocol-bounded index fits u8")
+            }),
         };
         let rows = sources
             .into_iter()
@@ -1787,12 +1801,19 @@ mod tests {
                             .unwrap(),
                     ));
                 if let Some(id) = p256_selected_input_writer_id_v1(word).unwrap() {
-                    let address = writer_address_v1(id.0, limb as u8).unwrap();
+                    let address = writer_address_v1(
+                        id.0,
+                        u8::try_from(limb).expect("protocol-bounded index fits u8"),
+                    )
+                    .unwrap();
                     let entry = writers.entry(address).or_insert((value, 0));
                     assert_eq!(entry.0, value);
                     entry.1 += 1;
                 } else {
-                    digest.push((limb as u32, value));
+                    digest.push((
+                        u32::try_from(limb).expect("protocol-bounded index fits u32"),
+                        value,
+                    ));
                 }
             }
         }
@@ -1959,7 +1980,8 @@ mod tests {
                                 2 => P256CrossTraceEndpointV1::ScalarArithmetic,
                                 _ => P256CrossTraceEndpointV1::ScalarWindow,
                             },
-                            address: (row * P256_CROSS_TRACE_EVENT_SLOTS_V1 + slot) as u32,
+                            address: u32::try_from(row * P256_CROSS_TRACE_EVENT_SLOTS_V1 + slot)
+                                .expect("protocol-bounded index fits u32"),
                         })
                     } else {
                         P256CrossTraceEventFixedV1::inactive()
@@ -2018,8 +2040,10 @@ mod tests {
                         } else {
                             P256CrossTraceEventFixedV1::active(P256CrossTraceTagV1 {
                                 endpoint: P256CrossTraceEndpointV1::Writer,
-                                address: (row * P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 + slot)
-                                    as u32,
+                                address: u32::try_from(
+                                    row * P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 + slot,
+                                )
+                                .expect("protocol-bounded index fits u32"),
                             })
                         }
                     }),
@@ -2110,7 +2134,10 @@ mod tests {
             assert_eq!(dynamic.first().copied(), Some(0));
             assert_eq!(
                 dynamic.last().copied(),
-                Some((p256_external_binding_dynamic_sources_v1(role) - 1) as u32)
+                Some(
+                    u32::try_from(p256_external_binding_dynamic_sources_v1(role) - 1)
+                        .expect("protocol-bounded index fits u32")
+                )
             );
             let sink = compile_zk_x509_p256_cross_trace_sink_fixed_v1(role).expect("sink");
             assert_eq!(sink.logical_rows_v1(), p256_external_binding_rows_v1(role));
@@ -2146,13 +2173,7 @@ mod tests {
                 Err(P256CrossTraceBusErrorV1::Topology)
             );
             let writers = P256CrossTraceWriterSourceFixedV1::compile_v1(role).expect("writers");
-            assert_eq!(
-                writers.active_source_cells_v1(),
-                match role {
-                    P256EcdsaRoleV1::CertificateOrCrl => 14_240,
-                    P256EcdsaRoleV1::WalletOwnership => 14_240,
-                }
-            );
+            assert_eq!(writers.active_source_cells_v1(), 14_240);
             assert_eq!(
                 writers.total_uses_v1(),
                 p256_external_binding_active_equalities_v1(role) + 64
@@ -2168,7 +2189,7 @@ mod tests {
             assert_eq!(writers.multiplicities[47 * P256_VALUE_BUS_LIMBS_V1], 65);
             assert_eq!(
                 writers.multiplicities[53 * P256_VALUE_BUS_LIMBS_V1],
-                1 + usize::from(role == P256EcdsaRoleV1::WalletOwnership) as u16
+                1 + u16::from(role == P256EcdsaRoleV1::WalletOwnership)
             );
             assert_eq!(
                 p256_cross_trace_events_v1(role),
@@ -2700,8 +2721,10 @@ mod tests {
         );
         // Four independent lanes reduce the tagged-multiset collision bound
         // below 2^-176 for the exact maximum first-release event count.
-        let field = (u128::from(u64::MAX) - u128::from(u32::MAX) + 1) as f64;
-        let ratio = P256_CROSS_TRACE_WALLET_EVENTS_V1 as f64 / field;
+        let field = 2_f64.powi(64) - 2_f64.powi(32) + 1.0;
+        let ratio = f64::from(
+            u32::try_from(P256_CROSS_TRACE_WALLET_EVENTS_V1).expect("event bound fits u32"),
+        ) / field;
         assert!(ratio.powi(4) < 2_f64.powi(-176));
     }
 }

@@ -65,7 +65,13 @@ fn change_membership_capture_uses_only_delta_sets_and_recreates_complete_pair() 
     for replacement in [false, true] {
         let state = state();
         for height in 1..=128 {
-            commit_membership(&state, height, &[key(height as u8)]);
+            commit_membership(
+                &state,
+                height,
+                &[key(
+                    u8::try_from(height).expect("fixture height fits a byte")
+                )],
+            );
         }
         let mut before = committed_membership_bytes(&state);
         let mut block = if replacement {

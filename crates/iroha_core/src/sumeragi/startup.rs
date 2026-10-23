@@ -138,6 +138,10 @@ pub fn core_hash_of(block: &SignedBlock) -> Hash32 {
 /// # Errors
 /// Invalid genesis, an invalid genesis schedule, a divergent re-execution, or a local
 /// failure.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 pub fn apply_genesis(
     state: &State,
     genesis: SignedBlock,
@@ -157,6 +161,10 @@ pub fn apply_genesis(
 
 // Same signed-genesis validation and execution owner. Only an actual temporary
 // Kura may request strict target-tape retention; the archive verifies that origin.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 pub(super) fn apply_genesis_with_fastpq_target(
     state: &State,
     genesis: SignedBlock,
@@ -166,7 +174,7 @@ pub(super) fn apply_genesis_with_fastpq_target(
     fastpq_target: Option<u64>,
 ) -> Result<GenesisTip, StartupError> {
     let (signed_epoch, root_scope) = super::epoch::authenticated_genesis(&genesis)
-        .map(|genesis| genesis.into_parts())
+        .map(iroha_data_model::sumeragi_finality::AuthenticatedGenesis::into_parts)
         .map_err(|error| {
             match crate::execution_attempt::genesis_read_attempt_error(error, |error| {
                 StartupError::Schedule(error.to_string())
@@ -199,9 +207,7 @@ pub(super) fn apply_genesis_with_fastpq_target(
     .map_err(|(_, error)| StartupError::InvalidGenesis(error))?;
     finish_genesis(
         state,
-        committee,
-        valid,
-        overlay,
+        (committee, valid, overlay),
         &signed_epoch,
         root_scope,
         block_hash,
@@ -214,17 +220,20 @@ pub(super) fn apply_genesis_with_fastpq_target(
 /// The same existing boxed overlay and valid block move once; the caller retains its signed
 /// epoch and topology until this original publication finishes. No owner is recreated.
 #[inline(never)]
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn finish_genesis(
     state: &State,
-    committee: Vec<PeerId>,
-    valid: ValidBlock,
-    mut overlay: Box<StateBlock<'_>>,
+    executed: (Vec<PeerId>, ValidBlock, Box<StateBlock<'_>>),
     signed_epoch: &ValidatorEpochContextV1,
     root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
     block_hash: Hash32,
     stored: Option<&CommitCertificate>,
     fastpq_target: Option<u64>,
 ) -> Result<GenesisTip, StartupError> {
+    let (committee, valid, mut overlay) = executed;
     let inputs = overlay
         .take_sumeragi_execution_inputs()
         .map_err(|error| StartupError::Schedule(error.to_string()))?;
@@ -402,6 +411,10 @@ fn finish_genesis(
 ///
 /// # Errors
 /// The stored frame cannot project to a valid original proposal.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 pub fn stored_genesis(
     state: &State,
 ) -> Result<Option<(SignedBlock, CommitCertificate, GenesisTip)>, StartupError> {
@@ -440,6 +453,10 @@ pub fn stored_genesis(
 ///
 /// # Errors
 /// The genesis does not register a valid committee.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 pub fn genesis_committee_peers(genesis: &SignedBlock) -> Result<Vec<PeerId>, StartupError> {
     let genesis = iroha_genesis::GenesisBlock(genesis.clone());
     let validators = schedule::genesis_validators(&genesis)

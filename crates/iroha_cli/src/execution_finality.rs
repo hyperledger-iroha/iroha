@@ -1377,7 +1377,7 @@ mod tests {
             wagers: vec![],
             resources: vec![],
         };
-        let proof = prove_race_v1(RaceProverRequestV1 {
+        let proof = prove_race_v1(&RaceProverRequestV1 {
             statement: ExecutionPublicInputsV1 {
                 network_id,
                 session_id,

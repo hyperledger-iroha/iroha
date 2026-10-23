@@ -34,7 +34,7 @@ use super::{
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 
 /// Independently loaded current policy, head and actual native execution coordinates.
-pub(crate) struct TransitionInputs<'a> {
+pub struct TransitionInputs<'a> {
     /// Current governed policy; its identity does not authorize the signed caller by itself.
     pub policy: &'a StreamTokenGatewayPolicyV1,
     /// Exact same-State gateway head before this instruction.
@@ -83,10 +83,9 @@ impl<'a, R: GatewayRows> Prepared<'a, R> {
     }
 
     fn get(&self, key: &GatewayRowKey) -> Result<Option<GatewayRow>, TransitionError> {
-        match self.writes.get(key) {
-            Some(write) => Ok(write.after.clone()),
-            None => self.rows.read(key),
-        }
+        self.writes
+            .get(key)
+            .map_or_else(|| self.rows.read(key), |write| Ok(write.after.clone()))
     }
 
     fn put(
@@ -173,7 +172,7 @@ fn digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
 }
 
 /// Stable exact-request digest, independent of the later transaction envelope or policy rotation.
-pub(crate) fn request_digest(request: &Request) -> Result<[u8; 32], TransitionError> {
+pub fn request_digest(request: &Request) -> Result<[u8; 32], TransitionError> {
     request.validate().map_err(|_| TransitionError::Invalid)?;
     if norito::canonical_frame_len(request).map_err(|_| TransitionError::Invalid)?
         > MAX_REQUEST_BYTES
@@ -274,7 +273,7 @@ fn admission_result(row: Record, head: GatewayHeadV1) -> StreamTokenGatewayAdmis
 }
 
 /// Atomically prepare exact replay or a new quota/lease/ordered-callback admission.
-pub(crate) fn admit<R: GatewayRows>(
+pub fn admit<R: GatewayRows>(
     input: TransitionInputs<'_>,
     rows: &R,
     request: &Request,
@@ -552,7 +551,7 @@ fn retry_after(start: u64, duration: u64, now: u64) -> Result<u32, TransitionErr
 }
 
 /// Acknowledge only the exact next callback row, retaining all replay evidence.
-pub(crate) fn acknowledge<R: GatewayRows>(
+pub fn acknowledge<R: GatewayRows>(
     input: TransitionInputs<'_>,
     rows: &R,
     record: &Record,
@@ -657,7 +656,7 @@ fn terminate_lease<R: GatewayRows>(
 }
 
 /// Release exactly the original grant without refunding request or byte quota.
-pub(crate) fn release_lease<R: GatewayRows>(
+pub fn release_lease<R: GatewayRows>(
     input: TransitionInputs<'_>,
     rows: &R,
     record: &Record,
@@ -676,7 +675,7 @@ pub(crate) fn release_lease<R: GatewayRows>(
 }
 
 /// Retire an exact bounded due prefix; permanent grants, admissions and indexes survive.
-pub(crate) fn expire<R: GatewayRows>(
+pub fn expire<R: GatewayRows>(
     input: TransitionInputs<'_>,
     rows: &R,
     max_items: u32,

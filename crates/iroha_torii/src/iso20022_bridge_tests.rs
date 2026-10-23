@@ -3474,7 +3474,7 @@ fn sample_world(asset_alias: Option<&str>) -> World {
             iroha_config::parameters::actual::LaneConfig::default(),
             0,
         );
-        tx.bind_asset_definition_alias(&asset_definition_id, alias, None, None, 10_000)
+        tx.bind_asset_definition_alias(&asset_definition_id, &(alias), None, None, 10_000)
             .expect("bind alias");
         tx.apply();
         block.commit();

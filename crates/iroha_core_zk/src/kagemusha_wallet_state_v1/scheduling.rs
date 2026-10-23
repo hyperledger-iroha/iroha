@@ -262,7 +262,7 @@ impl Scheduler {
             && let Some(observer) = observer
         {
             record.ingests = ingests;
-            observer.sub_proof(record);
+            observer.sub_proof(&record);
         }
     }
 

@@ -1,4 +1,4 @@
-//! Actual four-owner repo_agreement histories, exact errors, encoding and retained custody.
+//! Actual four-owner `repo_agreement` histories, exact errors, encoding and retained custody.
 use super::*;
 use crate::{
     kura::Kura,

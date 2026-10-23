@@ -866,6 +866,10 @@ pub(super) fn kagemusha_wallet_require_current_marker_v1<F: KagemushaWalletFsV1>
 
 /// Result of publishing a new marker generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "return the original durable marker without allocating after publication"
+)]
 pub enum KagemushaWalletMarkerPublicationV1 {
     /// Published durably; the generation is now current.
     Durable(KagemushaWalletDurableMarkerV1),

@@ -56,11 +56,10 @@ pub(super) struct OtherDomains {
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
         usage: Use::Name,
-        reason: "Native FI relationship/occurrence receipts, asset UID policy/enrollment/reader and controlled-lock storage-key prefixes in world.smart_contract_state. They name canonical record paths; these literals compute no digest or independent State root",
+        reason: "Native FI relationship/occurrence receipts, escrow read scopes, asset UID policy/enrollment/reader and controlled-lock storage-key prefixes in world.smart_contract_state. They name canonical record paths; these literals compute no digest or independent State root",
         literals: &[
             r"asset_fi_link_attestation_v1/",
             r"asset_fi_link_v1/",
-            r"asset_fi_transfer_receipt_v1/",
             r"asset_fi_v1/",
             r"asset_lock_control_v1/",
             r"asset_uid_binding_v1/",
@@ -69,16 +68,21 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"asset_uid_reader_v1/",
             r"asset_uid_system_v1/",
             r"asset_uid_usage_v1/",
+            r"sc/native/asset_escrow_scope_v1/",
+            r"sc/native/asset_fi_transfer_receipt_v1/",
         ],
     },
     OtherDomains {
         usage: Use::Name,
-        reason: "Exact first-release instruction wire identities for native FI relationships, asset UID policy/enrollment/reader grants and controlled locks. They select instruction layouts in the model and dispatch registry and compute no digest",
+        reason: "Exact first-release instruction wire identities for native FI relationships and context/receipt assertions, escrow read scopes, asset UID policy/enrollment/reader grants and controlled locks. They select instruction layouts in the model and dispatch registry and compute no digest",
         literals: &[
+            r"iroha.asset.escrow.read_scope.initialize.v1",
+            r"iroha.asset.fi.context.assert.v1",
             r"iroha.asset.fi.link.attestation.set.v1",
             r"iroha.asset.fi.link.set.v1",
             r"iroha.asset.fi.link.transfer.v1",
             r"iroha.asset.fi.set.v1",
+            r"iroha.asset.fi.transfer_receipt.assert.v1",
             r"iroha.asset.lock.controlled.cancel.v1",
             r"iroha.asset.lock.controlled.drawdown.v1",
             r"iroha.asset.lock.controlled.expire.v1",

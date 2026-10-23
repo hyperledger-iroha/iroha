@@ -4,7 +4,7 @@ use super::*;
 use crate::state::WorldTransaction;
 
 /// A checked change to one validator's custody and its exact asset reserve.
-pub(crate) struct StakeCustodyChange {
+pub struct StakeCustodyChange {
     key: (LaneId, AccountId),
     asset: AssetId,
     previous_custody: Option<(AssetId, Quantity)>,
@@ -93,13 +93,13 @@ fn prepare_change(
     }
     let (custody_after, reserve_after) = if credit {
         (
-            quantity_add(held, amount.clone())?,
-            quantity_add(reserved, amount.clone())?,
+            quantity_add(held, &(amount.clone()))?,
+            quantity_add(reserved, &(amount.clone()))?,
         )
     } else {
         (
-            quantity_sub(held, amount.clone())?,
-            quantity_sub(reserved, amount.clone())?,
+            quantity_sub(held, &(amount.clone()))?,
+            quantity_sub(reserved, &(amount.clone()))?,
         )
     };
     Ok(StakeCustodyChange {
@@ -113,7 +113,7 @@ fn prepare_change(
 }
 
 /// Reserve a real deposit, including a same-account bond's available free funds.
-pub(crate) fn prepare_stake_custody_credit(
+pub fn prepare_stake_custody_credit(
     world: &impl WorldReadOnly,
     lane_id: LaneId,
     validator: &AccountId,
@@ -123,7 +123,7 @@ pub(crate) fn prepare_stake_custody_credit(
 ) -> Result<StakeCustodyChange, Attempt<Error>> {
     let change = prepare_change(world, lane_id, validator, asset, amount, true)?;
     let fees = crate::validation_fee_rewards::reserved_fee_custody(world, asset)?;
-    if balance_after < &quantity_add(change.reserve_after.clone(), fees)? {
+    if balance_after < &quantity_add(change.reserve_after.clone(), &(fees))? {
         return Err(Error::InvariantViolation(
             "staking deposit is not backed by unreserved custody funds".into(),
         )
@@ -133,7 +133,7 @@ pub(crate) fn prepare_stake_custody_credit(
 }
 
 /// Release only the liability authenticated by a matured unbond or slash owner.
-pub(crate) fn prepare_stake_custody_debit(
+pub fn prepare_stake_custody_debit(
     world: &impl WorldReadOnly,
     lane_id: LaneId,
     validator: &AccountId,
@@ -144,7 +144,7 @@ pub(crate) fn prepare_stake_custody_debit(
 }
 
 /// Resolve retained custody without trusting the current asset or account alias.
-pub(crate) fn retained_stake_custody_asset(
+pub fn retained_stake_custody_asset(
     world: &impl WorldReadOnly,
     lane_id: LaneId,
     validator: &AccountId,

@@ -436,9 +436,7 @@ mod tests {
                             Ok(())
                         } else {
                             retained.retain_batch_v1(5, 4..5, &mut batch[..1]).unwrap();
-                            if mode == 2 {
-                                panic!("injected retained owner unwind");
-                            }
+                            assert!(mode != 2, "injected retained owner unwind");
                             Err(())
                         }
                     })

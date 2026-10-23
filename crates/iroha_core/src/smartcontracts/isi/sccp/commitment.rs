@@ -21,6 +21,10 @@ fn invariant(message: String) -> BlockValidationError {
 }
 
 /// Resolve the §3.4 leaf hash that a leaf reference of block `height` names.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 fn leaf_hash(
     state_transaction: &StateTransaction<'_, '_>,
     height: u64,
@@ -60,6 +64,10 @@ fn leaf_hash(
 /// Fails the block on an execution invariant violation: a gap in the leaf indices, a leaf
 /// reference without its record, an accumulator that cannot grow, or a malformed stored
 /// accumulator.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 pub fn commit_block(
     state_transaction: &mut StateTransaction<'_, '_>,
     height: u64,

@@ -32,7 +32,7 @@ use storage_mode::WorldStorageMode;
 
 /// Refusal drops the entire original overlay without publishing any component.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CaptureError<E> {
+pub enum CaptureError<E> {
     /// One original journal has a different acquisition mode.
     #[error("World journal {field} mode {actual:?} differs from {expected:?}")]
     InconsistentMode {
@@ -545,13 +545,15 @@ fn fill_world_capture(fill: impl FnOnce()) {
     fill()
 }
 
+type PendingWorldCapture<Capture, Target> = (Capture, fn(&World) -> &Target);
+
 // Never materialize the complete WorldBlockFields on the stack. Debug builds
 // otherwise retain a temporary for every heterogeneous field simultaneously.
 // This frame moves only one exact original owner into its existing caller slot.
 #[inline(never)]
 fn take_world_capture_field<Field: TakeWorldCapture>(
     original: &mut Field,
-    pending: &mut Option<(Field::Capture, fn(&World) -> &Field::Target)>,
+    pending: &mut Option<PendingWorldCapture<Field::Capture, Field::Target>>,
     target: fn(&World) -> &Field::Target,
 ) {
     assert!(pending.is_none(), "original World capture slot is empty");
@@ -569,7 +571,7 @@ fn finish_world_capture<R>(finish: impl FnOnce() -> R) -> R {
 #[inline(never)]
 fn retain_world_capture_field<Slot: WorldCaptureSlot>(
     fields: &mut Vec<Box<dyn RetainedWorldField>>,
-    pending: &mut Option<(Slot, fn(&World) -> &Slot::Target)>,
+    pending: &mut Option<PendingWorldCapture<Slot, Slot::Target>>,
     name: &'static str,
 ) {
     let (slot, target) = pending.take().expect("original World capture slot");

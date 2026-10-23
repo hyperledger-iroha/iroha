@@ -268,7 +268,11 @@ fn beta_hoist_component_models_cancel_at_chunk_boundaries_and_retry() {
 #[ignore = "copied numerator component only; not production commit, full-proof or phone timing"]
 fn beta_hoist_copied_numerator_shape_timing_diagnostic() {
     use std::{hint::black_box, time::Instant};
-    assert!(!cfg!(debug_assertions), "run in release");
+    fn require_release() {
+        #[cfg(debug_assertions)]
+        panic!("run in release");
+    }
+
     fn check<F: PastaField>() {
         for (label, k, m, degree) in [("sigma_shape", 12, 7, 8), ("two_sigma_q_shape", 16, 22, 8)] {
             let domain = FftDomain::<F>::new(k).unwrap();
@@ -335,6 +339,7 @@ fn beta_hoist_copied_numerator_shape_timing_diagnostic() {
             }
         }
     }
+    require_release();
     check::<Fp>();
     check::<Fq>();
 }

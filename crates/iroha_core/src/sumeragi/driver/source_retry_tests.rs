@@ -19,7 +19,7 @@ fn committed_head_waits_for_original_release_across_prepare_append_and_commit() 
         let registration = ExecutionRegistrations::admit(&budget).unwrap();
         let held = budget.try_reserve_bytes(1).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
-        let body = block(1, Hash32::ZERO, Hash32::ZERO, vec![1]);
+        let body = block(1, Hash32::ZERO, Hash32::ZERO, &vec![1]);
         let result = Hash32([9; 32]);
         let qc = commit_qc(&body, result);
         let mut scheduler = ExecSched::new(0, Backoff::default(), registration);
@@ -77,10 +77,8 @@ fn committed_head_waits_for_original_release_across_prepare_append_and_commit() 
         // Original release permits progress even before the old ten-millisecond deadline.
         let retry = scheduler.next(0).expect("release drives immediate retry");
         match (phase, retry) {
-            (CommitWaitPhase::Append, ExecOp::Append(retry)) => {
-                assert!(Arc::ptr_eq(&original, &retry))
-            }
-            (CommitWaitPhase::Prepare | CommitWaitPhase::Commit, ExecOp::Prepare(retry)) => {
+            (CommitWaitPhase::Append, ExecOp::Append(retry))
+            | (CommitWaitPhase::Prepare | CommitWaitPhase::Commit, ExecOp::Prepare(retry)) => {
                 assert!(Arc::ptr_eq(&original, &retry))
             }
             other => panic!("wrong retained retry phase: {other:?}"),
@@ -120,7 +118,7 @@ fn replacing_a_refusal_cancels_old_source_and_recovery_cancels_current_source() 
     let original_b = b.observe();
     assert!(lock_a.try_lock().is_err());
     assert!(lock_b.try_lock().is_err());
-    let body = block(1, Hash32::ZERO, Hash32::ZERO, vec![1]);
+    let body = block(1, Hash32::ZERO, Hash32::ZERO, &vec![1]);
     let qc = commit_qc(&body, Hash32([9; 32]));
     let mut scheduler = ExecSched::new(0, Backoff::default(), registration);
     scheduler.commit(body, qc);

@@ -335,7 +335,7 @@ fn read_polynomials(
                 *coefficient = value;
             }
         }
-        out.push(JindoRnsPolynomialV1::from_residues(residues, moduli).expect("validated"));
+        out.push(JindoRnsPolynomialV1::from_residues(&residues, moduli).expect("validated"));
         *polynomial_index += 1;
     }
     Ok(out)

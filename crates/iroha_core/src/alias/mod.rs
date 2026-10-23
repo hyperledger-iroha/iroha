@@ -152,7 +152,7 @@ fn authority_has_permission(
         .unwrap_or_default();
     let roles: Vec<String> = world
         .account_roles_iter(authority)
-        .map(|role_id| role_id.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
     let account_present = world.accounts().get(authority).is_some();
     iroha_logger::warn!(
@@ -176,9 +176,9 @@ fn resolved_account_alias_from_numeric(
 }
 /// Construct only the exact typed token while retaining any local JSON refusal.
 fn permission_target<T: iroha_executor_data_model::permission::Permission>(
-    permission: T,
+    permission: &T,
 ) -> Result<Permission, crate::sns::SnsError> {
-    let value = norito::json::to_value(&permission).map_err(|error| match error {
+    let value = norito::json::to_value(permission).map_err(|error| match error {
         norito::json::Error::DecodeResourceLimit
         | norito::json::Error::DecodeResource(
             norito::core::DecodeResourceError::ArchiveLengthExceeded { .. }
@@ -222,9 +222,8 @@ fn authority_has_exact_alias_permission<T>(
 where
     T: iroha_executor_data_model::permission::Permission,
 {
-    let target = permission_target(permission(AccountAliasPermissionScope::Alias(
-        alias.clone(),
-    )))?;
+    let target =
+        permission_target(&(permission(AccountAliasPermissionScope::Alias(alias.clone()))))?;
     Ok(authority_has_permission(world, authority, &target))
 }
 /// Return `true` when the authority holds the exact permission required to resolve `alias`.
@@ -249,9 +248,11 @@ pub fn authority_can_resolve_account_alias(
     }
     match alias.domain_id(world.dataspace_catalog()) {
         Ok(Some(domain_id)) => {
-            let domain_permission = permission_target(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(domain_id),
-            })?;
+            let domain_permission = permission_target(
+                &(CanResolveAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(domain_id),
+                }),
+            )?;
             Ok(authority_has_permission(
                 world,
                 authority,
@@ -259,9 +260,11 @@ pub fn authority_can_resolve_account_alias(
             ))
         }
         Ok(None) => {
-            let dataspace_permission = permission_target(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
-            })?;
+            let dataspace_permission = permission_target(
+                &(CanResolveAccountAlias {
+                    scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
+                }),
+            )?;
             Ok(authority_has_permission(
                 world,
                 authority,
@@ -291,7 +294,7 @@ pub fn authority_can_resolve_resolved_account_alias(
         Some(domain_id) => AccountAliasPermissionScope::Domain(domain_id),
         None => AccountAliasPermissionScope::Dataspace(alias.dataspace_id),
     };
-    let target = permission_target(CanResolveAccountAlias { scope })?;
+    let target = permission_target(&(CanResolveAccountAlias { scope }))?;
     Ok(authority_has_permission(world, authority, &target))
 }
 /// Return `true` when the authority holds the exact permissions required to mutate `alias`.
@@ -310,15 +313,17 @@ pub fn authority_can_manage_account_alias(
     {
         return Ok(true);
     }
-    match alias.domain_id(world.dataspace_catalog()) {
-        Ok(domain_id) => authority_can_manage_account_alias_scope(
-            world,
-            authority,
-            alias.dataspace,
-            domain_id.as_ref(),
-        ),
-        Err(_) => Ok(false),
-    }
+    alias.domain_id(world.dataspace_catalog()).map_or_else(
+        |_| Ok(false),
+        |domain_id| {
+            authority_can_manage_account_alias_scope(
+                world,
+                authority,
+                alias.dataspace,
+                domain_id.as_ref(),
+            )
+        },
+    )
 }
 /// Return `true` when the authority may mutate an exact resolved account alias.
 ///
@@ -340,7 +345,7 @@ pub fn authority_can_manage_resolved_account_alias(
         Some(domain_id) => AccountAliasPermissionScope::Domain(domain_id),
         None => AccountAliasPermissionScope::Dataspace(alias.dataspace_id),
     };
-    let target = permission_target(CanManageAccountAlias { scope })?;
+    let target = permission_target(&(CanManageAccountAlias { scope }))?;
     Ok(authority_has_permission(world, authority, &target))
 }
 /// Return `true` when `authority` holds account-alias management permission for an explicit
@@ -361,12 +366,16 @@ pub fn authority_can_manage_account_alias_scope(
     domain: Option<&DomainId>,
 ) -> Result<bool, crate::sns::SnsError> {
     let permission = match domain {
-        Some(domain_id) => permission_target(CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
-        })?,
-        None => permission_target(CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Dataspace(dataspace),
-        })?,
+        Some(domain_id) => permission_target(
+            &(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
+            }),
+        )?,
+        None => permission_target(
+            &(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(dataspace),
+            }),
+        )?,
     };
     Ok(authority_has_permission(world, authority, &permission))
 }
@@ -386,23 +395,29 @@ pub fn authority_can_manage_asset_definition_alias(
     dataspace: DataSpaceId,
     domain: Option<&DomainId>,
 ) -> Result<bool, crate::sns::SnsError> {
-    let exact = permission_target(CanManageAssetDefinitionAlias {
-        scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
-            alias.clone(),
-            dataspace,
-            asset_definition_id.clone(),
-        )),
-    })?;
+    let exact = permission_target(
+        &(CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
+                alias.clone(),
+                dataspace,
+                asset_definition_id.clone(),
+            )),
+        }),
+    )?;
     if authority_has_permission(world, authority, &exact) {
         return Ok(true);
     }
     let scoped = match domain {
-        Some(domain) => permission_target(CanManageAssetDefinitionAlias {
-            scope: AssetDefinitionAliasPermissionScope::Domain(domain.clone()),
-        })?,
-        None => permission_target(CanManageAssetDefinitionAlias {
-            scope: AssetDefinitionAliasPermissionScope::Dataspace(dataspace),
-        })?,
+        Some(domain) => permission_target(
+            &(CanManageAssetDefinitionAlias {
+                scope: AssetDefinitionAliasPermissionScope::Domain(domain.clone()),
+            }),
+        )?,
+        None => permission_target(
+            &(CanManageAssetDefinitionAlias {
+                scope: AssetDefinitionAliasPermissionScope::Dataspace(dataspace),
+            }),
+        )?,
     };
     Ok(authority_has_permission(world, authority, &scoped))
 }

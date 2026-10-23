@@ -362,6 +362,10 @@ impl ObservationV1 {
         Self(core::marker::PhantomData)
     }
     /// Record the size of the encoded public proof. Only the length is taken.
+    #[expect(
+        clippy::unused_self,
+        reason = "the observation guard proves ownership of this thread-local measurement"
+    )]
     pub(super) fn record_proof_bytes_v1(&self, bytes: u64) {
         ACTIVE.with(|active| {
             if let Some(session) = active
@@ -375,6 +379,10 @@ impl ObservationV1 {
     }
     /// Retain a raw producer failure in the shared record. Both arguments are
     /// literals: an error payload cannot be recorded.
+    #[expect(
+        clippy::unused_self,
+        reason = "the observation guard proves ownership of this thread-local measurement"
+    )]
     pub(super) fn record_failure_v1(&self, stage: &'static str, code: &'static str) {
         ACTIVE.with(|active| {
             if let Some(session) = active
@@ -386,6 +394,10 @@ impl ObservationV1 {
             }
         });
     }
+    #[expect(
+        clippy::unused_self,
+        reason = "consuming the observation guard closes its thread-local measurement"
+    )]
     pub(super) fn finish_v1(self) -> ReceiptV1 {
         let mut receipt = ACTIVE.with(|active| {
             active

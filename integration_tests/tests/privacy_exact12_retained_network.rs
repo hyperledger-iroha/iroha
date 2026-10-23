@@ -988,7 +988,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 "disabled ZK-ACE release builder admitted a production action"
             );
             let pgc = build_privacy_release_anonymous_pgc_network_action_v1(
-                pgc_context,
+                &(pgc_context),
                 pgc_asset_for_builder.clone(),
                 pgc_pool,
                 0,
@@ -997,7 +997,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build canonical Anonymous-PGC action: {error:?}"))?;
             let pgc_replay = build_privacy_release_anonymous_pgc_network_action_v1(
-                pgc_replay_context,
+                &(pgc_replay_context),
                 pgc_asset_for_builder,
                 pgc_pool,
                 0,
@@ -1006,31 +1006,31 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build stale-head Anonymous-PGC action: {error:?}"))?;
             let pre_verange = build_privacy_release_verange_network_action_v1(
-                pre_verange_context,
+                &(pre_verange_context),
                 verange_asset_for_builder.clone(),
                 verange_policy,
-                vec![1, 2, 3, 5, 8, 13, 21, u64::from(u32::MAX)],
+                &(vec![1, 2, 3, 5, 8, 13, 21, u64::from(u32::MAX)]),
                 [0x51; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build pre-activation VeRange action: {error:?}"))?;
             let verange = build_privacy_release_verange_network_action_v1(
-                verange_context,
+                &(verange_context),
                 verange_asset_for_builder,
                 verange_policy,
-                vec![0, 1, 17, u64::from(u32::MAX)],
+                &(vec![0, 1, 17, u64::from(u32::MAX)]),
                 [0x52; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build canonical VeRange action: {error:?}"))?;
             let bootle = build_privacy_release_bootle_lantern_network_action_v1(
-                bootle_context,
+                &(bootle_context),
                 [0x61; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build canonical Bootle/Lantern action: {error:?}"))?;
             let stale_bootle = build_privacy_release_bootle_lantern_network_action_v1(
-                stale_bootle_context,
+                &(stale_bootle_context),
                 [0x61; 32],
                 &signing_key,
             )
@@ -1045,7 +1045,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 "Bootle/Lantern successor reused the initial issuer public key"
             );
             let fcmp = build_privacy_release_fcmp_network_action_v1(
-                fcmp_context,
+                &(fcmp_context),
                 fcmp_asset_for_builder.clone(),
                 fcmp_pool,
                 [0x71; 32],
@@ -1053,7 +1053,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build canonical FCMP++ action: {error:?}"))?;
             let fcmp_replay = build_privacy_release_fcmp_network_action_v1(
-                fcmp_replay_context,
+                &(fcmp_replay_context),
                 fcmp_asset_for_builder,
                 fcmp_pool,
                 [0x71; 32],
@@ -1061,7 +1061,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build key-image replay FCMP++ action: {error:?}"))?;
             let ivm = build_privacy_release_ivm_private_note_network_action_v1(
-                ivm_context,
+                &(ivm_context),
                 ivm_asset_for_builder.clone(),
                 ivm_pool,
                 reserve_for_builder.clone(),
@@ -1070,7 +1070,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build canonical private-IVM action: {error:?}"))?;
             let ivm_replay = build_privacy_release_ivm_private_note_network_action_v1(
-                ivm_replay_context,
+                &(ivm_replay_context),
                 ivm_asset_for_builder,
                 ivm_pool,
                 reserve_for_builder,

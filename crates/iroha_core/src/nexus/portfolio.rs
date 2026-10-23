@@ -434,8 +434,7 @@ mod tests {
                 .insert(account_id.clone(), Owned::new(details));
             world.uaid_accounts.insert(uaid, account_id.clone());
             for (def_id, _, scope, amount) in assets {
-                let asset_id =
-                    AssetId::with_scope(def_id.clone(), account_id.clone(), scope.clone());
+                let asset_id = AssetId::with_scope(def_id.clone(), account_id.clone(), *scope);
                 world
                     .assets
                     .insert(asset_id.clone(), Owned::new(Quantity::from(*amount)));

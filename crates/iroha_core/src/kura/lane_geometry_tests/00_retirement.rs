@@ -29,7 +29,7 @@ fn open_kura(root: &Path, lane_config: &RuntimeLaneConfig) -> Arc<Kura> {
         .expect("bind the fixture's explicit network");
     kura
 }
-/// Resolve one exact fixture instance without consulting the current LaneId map.
+/// Resolve one exact fixture instance without consulting the current `LaneId` map.
 fn geometry_fixture_blocks(
     kura: &Kura,
     entry: &LaneConfigEntry,
@@ -228,10 +228,8 @@ fn before_first_height_cursor_replays_same_height_transitions_in_sequence() {
     kura.apply_lane_geometry_transition_at_height(
         &initial,
         &added,
-        &initial_incarnations,
-        &added_incarnations,
-        &initial_activations,
-        &added_activations,
+        (&initial_incarnations, &added_incarnations),
+        (&initial_activations, &added_activations),
         &BTreeSet::new(),
         7,
     )
@@ -246,10 +244,8 @@ fn before_first_height_cursor_replays_same_height_transitions_in_sequence() {
     kura.apply_lane_geometry_transition_at_height(
         &added,
         &expanded,
-        &added_incarnations,
-        &expanded_incarnations,
-        &added_activations,
-        &expanded_activations,
+        (&added_incarnations, &expanded_incarnations),
+        (&added_activations, &expanded_activations),
         &BTreeSet::new(),
         7,
     )
@@ -287,10 +283,8 @@ fn before_first_height_cursor_replays_same_height_transitions_in_sequence() {
     kura.apply_lane_geometry_transition_at_height(
         &initial,
         &added,
-        &initial_incarnations,
-        &added_incarnations,
-        &initial_activations,
-        &added_activations,
+        (&initial_incarnations, &added_incarnations),
+        (&initial_activations, &added_activations),
         &BTreeSet::new(),
         7,
     )
@@ -305,10 +299,8 @@ fn before_first_height_cursor_replays_same_height_transitions_in_sequence() {
     kura.apply_lane_geometry_transition_at_height(
         &added,
         &expanded,
-        &added_incarnations,
-        &expanded_incarnations,
-        &added_activations,
-        &expanded_activations,
+        (&added_incarnations, &expanded_incarnations),
+        (&added_activations, &expanded_activations),
         &BTreeSet::new(),
         7,
     )
@@ -373,10 +365,8 @@ fn post_write_publication_failure_restores_anchored_description_only_journal() {
     kura.apply_lane_geometry_transition(
         &config,
         &config,
-        &incarnations,
-        &incarnations,
-        &activation_heights,
-        &activation_heights,
+        (&incarnations, &incarnations),
+        (&activation_heights, &activation_heights),
         &BTreeSet::new(),
     )
     .expect("description-only catalog has no physical geometry transition");
@@ -509,10 +499,8 @@ fn post_write_publication_failure_restores_exact_files_applied_journal() {
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
     )
     .expect("prepare files-applied geometry intent");
@@ -577,10 +565,8 @@ fn publication_restore_failure_is_distinct_and_leaves_published_journal_fail_clo
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
     )
     .expect("prepare files-applied geometry intent");

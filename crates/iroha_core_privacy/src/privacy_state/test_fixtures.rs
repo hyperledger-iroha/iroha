@@ -521,7 +521,8 @@ impl PgcPersistedFixture {
             .root_heads
             .view()
             .get(&self.head_key)
-            .expect("fixture current head").clone();
+            .expect("fixture current head")
+            .clone();
         let next_epoch = head.epoch().checked_add(1).expect("fixture epoch advance");
         let mut statement_bytes = [0xD0; 32];
         statement_bytes[..8].copy_from_slice(&next_epoch.to_be_bytes());
@@ -568,7 +569,7 @@ impl PgcPersistedFixture {
                 PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root())
                     .expect("pruned root anchor")
             })
-            .or(head.retention_anchor());
+            .or_else(|| head.retention_anchor());
         let retained_roots = self
             .roots
             .view()
@@ -593,8 +594,13 @@ impl PgcPersistedFixture {
         self.roots.insert(next_key, root_provenance.clone());
         self.root_heads.insert(
             self.head_key,
-            PrivacyRootHeadRecordV1::new(next_epoch, next_root, root_provenance.clone(), retention_anchor)
-                .expect("successor head"),
+            PrivacyRootHeadRecordV1::new(
+                next_epoch,
+                next_root,
+                root_provenance.clone(),
+                retention_anchor,
+            )
+            .expect("successor head"),
         );
         self.root_key = next_key;
         self.root = next_root;
@@ -605,7 +611,8 @@ impl PgcPersistedFixture {
             .root_heads
             .view()
             .get(&self.head_key)
-            .expect("fixture current head").clone();
+            .expect("fixture current head")
+            .clone();
         let plans = plan_privacy_root_retention_reduction_v1(
             &self.roots.view(),
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
@@ -840,7 +847,8 @@ impl OrchardPersistedFixture {
             .root_heads
             .view()
             .get(&self.head_key)
-            .expect("fixture predecessor head").retention_anchor();
+            .expect("fixture predecessor head")
+            .retention_anchor();
         let retention_anchor = removals
             .last()
             .map(|key| {
@@ -1409,7 +1417,8 @@ fn validate_proof_managed_fixture_maps(
         &activations.view(),
         PrivacyPgcStateReadV1 {
             accounts: &Storage::<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>::new().view(),
-            pool_invariants: &Storage::<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>::new().view(),
+            pool_invariants:
+                &Storage::<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>::new().view(),
         },
         &nullifiers.view(),
         &commitments.view(),

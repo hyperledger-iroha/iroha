@@ -8,7 +8,11 @@
 
 use super::*;
 
-fn accepted_log(chain: &Chain, state: &State, message: &str) -> AcceptedTransaction<'static> {
+fn accepted_log(
+    chain: &NodeTestChain,
+    state: &State,
+    message: &str,
+) -> AcceptedTransaction<'static> {
     let network = NetworkId::from_genesis_hash(chain.genesis.hash());
     let instruction = InstructionBox::from(Log::new(Level::INFO, message.to_owned()));
     let fees = state
@@ -52,7 +56,7 @@ fn accepted_log(chain: &Chain, state: &State, message: &str) -> AcceptedTransact
 }
 
 fn enqueue_only(
-    chain: &Chain,
+    chain: &NodeTestChain,
     validators: &[Validator],
     message: &str,
 ) -> HashOf<TransactionEntrypoint> {
@@ -162,7 +166,10 @@ fn native_queue_admission_wakes_original_live_lane_after_empty() {
 
 /// A separately prepared real State reaches the original startup seam without launching
 /// another signer. Its attempted files must remain absent on exclusive Queue refusal.
-fn duplicate_prepared_start(chain: &Chain, queue: &Arc<Queue>) -> (NodeError, tempfile::TempDir) {
+fn duplicate_prepared_start(
+    chain: &NodeTestChain,
+    queue: &Arc<Queue>,
+) -> (NodeError, tempfile::TempDir) {
     let disk = Disk {
         kura: Kura::blank_kura_for_testing(),
         dir: tempfile::tempdir().unwrap(),

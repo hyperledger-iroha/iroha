@@ -54,7 +54,7 @@ use iroha_primitives::numeric::Numeric;
 use std::num::NonZeroU64;
 
 /// Return a blank test [`State`].
-pub(crate) fn blank_state() -> State {
+pub fn blank_state() -> State {
     State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -65,19 +65,17 @@ pub(crate) fn blank_state() -> State {
 /// `nexus.staking.unbonding_delay` of the SCCP staking profile in milliseconds (21 d): the
 /// smallest delay that meets the staking floor L1 for the Taira default parameters
 /// (`specs/sccp.md` §4.8).
-pub(crate) const SCCP_UNBONDING_DELAY_MS: u64 = 1_814_400_000;
+pub const SCCP_UNBONDING_DELAY_MS: u64 = 1_814_400_000;
 
 /// Give the node staking policy of `state_transaction` the SCCP unbonding delay, as an
 /// SCCP-enabled staking profile does.
-pub(crate) fn set_sccp_staking_profile(
-    state_transaction: &mut crate::state::StateTransaction<'_, '_>,
-) {
+pub fn set_sccp_staking_profile(state_transaction: &mut crate::state::StateTransaction<'_, '_>) {
     state_transaction.nexus.staking.unbonding_delay =
         core::time::Duration::from_millis(SCCP_UNBONDING_DELAY_MS);
 }
 
 /// Return a header at `height` with creation time `height × 4 s`.
-pub(crate) fn header(height: u64) -> BlockHeader {
+pub fn header(height: u64) -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(height).expect("nonzero fixture height"),
         None,
@@ -92,12 +90,12 @@ fn ed25519(seed: u8) -> KeyPair {
 }
 
 /// Return a deterministic account.
-pub(crate) fn authority(seed: u8) -> AccountId {
+pub fn authority(seed: u8) -> AccountId {
     AccountId::new(ed25519(seed).public_key().clone())
 }
 
 /// Return a deterministic peer: a committee member of the consensus inputs of a height.
-pub(crate) fn peer(seed: u8) -> PeerId {
+pub fn peer(seed: u8) -> PeerId {
     PeerId::new(ed25519(seed.wrapping_add(0x80)).public_key().clone())
 }
 
@@ -116,7 +114,7 @@ fn address(seed: u8) -> [u8; 20] {
 }
 
 /// Populated values of the eight SCCP v1 instructions.
-pub(crate) struct SampleInstructions;
+pub struct SampleInstructions;
 
 impl SampleInstructions {
     /// Return `InitializeSccpV1`.
@@ -228,7 +226,7 @@ impl SampleInstructions {
 }
 
 /// Return an ordinary signed transaction that claims no SCCP exemption.
-pub(crate) fn sample_signed_transaction() -> SignedTransaction {
+pub fn sample_signed_transaction() -> SignedTransaction {
     let key_pair = ed25519(0x41);
     TransactionBuilder::new(
         network_id(9),
@@ -243,7 +241,7 @@ pub(crate) fn sample_signed_transaction() -> SignedTransaction {
 }
 
 /// Return an empty route of `network` with one staged revision `1`.
-pub(crate) fn sample_route(network: SccpNetworkV1) -> SccpRouteV1 {
+pub fn sample_route(network: SccpNetworkV1) -> SccpRouteV1 {
     let escrow = sccp_xor_route_escrow_account_id_v1(&network_id(7), network)
         .expect("an external network has a route");
     let mut route = SccpRouteV1::empty(network, escrow).expect("an external network has a route");
@@ -270,7 +268,7 @@ pub(crate) fn sample_route(network: SccpNetworkV1) -> SccpRouteV1 {
 }
 
 /// Return a statically valid SCCP governance proposal under `network_id`.
-pub(crate) fn sample_proposal(network_id: NetworkId) -> SccpGovernanceProposalV1 {
+pub fn sample_proposal(network_id: NetworkId) -> SccpGovernanceProposalV1 {
     SccpGovernanceProposalV1 {
         network_id,
         base_revisions: vec![(SccpGovernanceSubjectV1::Parameters, 0).into()],
@@ -283,7 +281,7 @@ pub(crate) fn sample_proposal(network_id: NetworkId) -> SccpGovernanceProposalV1
 }
 
 /// A structurally valid retained generation with real canonical BLS keys and an original binding.
-pub(crate) fn sample_generation(
+pub fn sample_generation(
     seed: u8,
 ) -> iroha_data_model::sccp::generation::SccpCommitteeGenerationV1 {
     use iroha_data_model::sccp::generation::{
@@ -344,7 +342,7 @@ pub(crate) fn sample_generation(
 
 /// Populate every SCCP world map and cell of `block` with `seed`-distinct values, so a
 /// snapshot or projection test exercises the complete SCCP field inventory.
-pub(crate) fn populate_every_sccp_map(
+pub fn populate_every_sccp_map(
     block: &mut WorldBlock<'_>,
     seed: u8,
     budget: &iroha_allocation::AllocationBudget,
@@ -538,11 +536,11 @@ pub(crate) fn populate_every_sccp_map(
 }
 
 /// EVM contract address of the outbound fixture's Ethereum revision 1.
-pub(crate) const OUTBOUND_FIXTURE_CONTRACT: [u8; 20] = [0xc0; 20];
+pub const OUTBOUND_FIXTURE_CONTRACT: [u8; 20] = [0xc0; 20];
 
 /// Install live SCCP for an outbound record (§4.4): Taira default parameters, the route
 /// escrows, and Ethereum revision 1 in `Bidirectional` with `max_wrapped_supply`.
-pub(crate) fn install_outbound_route(
+pub fn install_outbound_route(
     state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     max_wrapped_supply: u128,
 ) {
@@ -575,7 +573,7 @@ pub(crate) fn install_outbound_route(
 }
 
 /// Set `holder`'s XOR balance to `units` Taira units.
-pub(crate) fn set_xor_balance(
+pub fn set_xor_balance(
     state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     holder: &AccountId,
     units: u128,
@@ -593,7 +591,7 @@ pub(crate) fn set_xor_balance(
 }
 
 /// Return the fixture's record of `amount_xor` whole XOR to `recipient` on Ethereum revision 1.
-pub(crate) fn outbound_record(amount_xor: u32, recipient: [u8; 20]) -> RecordSccpMessage {
+pub fn outbound_record(amount_xor: u32, recipient: [u8; 20]) -> RecordSccpMessage {
     RecordSccpMessage {
         network: SccpNetworkV1::EthereumMainnet,
         expected_revision: 1,
@@ -603,7 +601,7 @@ pub(crate) fn outbound_record(amount_xor: u32, recipient: [u8; 20]) -> RecordScc
 }
 
 /// Return the sender of the Ethereum revision 1 outbound record with `nonce`, if recorded.
-pub(crate) fn outbound_sender(
+pub fn outbound_sender(
     world: &(impl crate::state::WorldReadOnly + ?Sized),
     nonce: u64,
 ) -> Option<AccountId> {
@@ -615,11 +613,11 @@ pub(crate) fn outbound_sender(
 }
 
 /// One XOR in Taira units (`specs/sccp.md` §0).
-pub(crate) const ONE_XOR: u128 = 1_000_000_000;
+pub const ONE_XOR: u128 = 1_000_000_000;
 
 /// Return a state in which `holder` owns the Taira XOR definition and holds `balance` Taira
 /// units of XOR.
-pub(crate) fn funded_xor_state(holder: &AccountId, balance: u128) -> State {
+pub fn funded_xor_state(holder: &AccountId, balance: u128) -> State {
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -654,7 +652,7 @@ pub(crate) fn funded_xor_state(holder: &AccountId, balance: u128) -> State {
 /// Initialize SCCP (Taira default parameters and the three route escrows) unless it already
 /// exists, and add revision `revision` of `network` with `activation` and the cap
 /// `max_wrapped_supply`. `RegisterRoute` enactment is fail-closed, so tests seed their routes.
-pub(crate) fn install_value_route(
+pub fn install_value_route(
     stx: &mut crate::state::StateTransaction<'_, '_>,
     network: SccpNetworkV1,
     revision: u32,
@@ -690,7 +688,7 @@ pub(crate) fn install_value_route(
 }
 
 /// Return the XOR balance of `account` in Taira units.
-pub(crate) fn xor_balance(
+pub fn xor_balance(
     world: &(impl crate::state::WorldReadOnly + ?Sized),
     account: &AccountId,
 ) -> u128 {
@@ -712,10 +710,7 @@ pub(crate) fn xor_balance(
 /// Assert the escrow invariants of every route (`specs/sccp.md` §4.15):
 /// `balance(escrow(route)) = Σ_r liability(r) + stranded(route)` and
 /// `liability(r) ≤ max_wrapped_supply(r)`; `context` names the failing step.
-pub(crate) fn assert_escrow_invariant(
-    world: &(impl crate::state::WorldReadOnly + ?Sized),
-    context: &str,
-) {
+pub fn assert_escrow_invariant(world: &(impl crate::state::WorldReadOnly + ?Sized), context: &str) {
     for (network, route) in super::store::routes::iter(world) {
         let liability: u128 = route
             .revisions
@@ -741,7 +736,7 @@ pub(crate) fn assert_escrow_invariant(
 }
 
 /// Structurally valid current fast-pause DTO; it does not establish panel authority.
-pub(crate) fn sample_fast_pause(seed: u8) -> iroha_data_model::sccp::fast_pause::SccpFastPauseV1 {
+pub fn sample_fast_pause(seed: u8) -> iroha_data_model::sccp::fast_pause::SccpFastPauseV1 {
     use iroha_data_model::sccp::fast_pause::{SccpFastPauseV1, SccpPassPositionV1};
     SccpFastPauseV1 {
         certificate_id: [seed; 32],
@@ -759,7 +754,7 @@ pub(crate) fn sample_fast_pause(seed: u8) -> iroha_data_model::sccp::fast_pause:
 }
 
 /// Structurally valid nine-seat panel DTO, solely for codec/custody State fixtures.
-pub(crate) fn sample_pause_panel(seed: u8) -> iroha_data_model::sccp::fast_pause::SccpPausePanelV1 {
+pub fn sample_pause_panel(seed: u8) -> iroha_data_model::sccp::fast_pause::SccpPausePanelV1 {
     use iroha_crypto::{Algorithm, KeyPair};
     let drawn: Vec<_> = (1..=27)
         .map(|member| {
@@ -787,7 +782,7 @@ pub(crate) fn sample_pause_panel(seed: u8) -> iroha_data_model::sccp::fast_pause
 }
 
 /// Structurally valid unready round with a real account graph, not an approved certificate.
-pub(crate) fn sample_fast_pause_round(
+pub fn sample_fast_pause_round(
     seed: u8,
 ) -> iroha_data_model::sccp::fast_pause::SccpFastPauseRoundV1 {
     let panel = sample_pause_panel(seed);
@@ -812,7 +807,7 @@ pub(crate) fn sample_fast_pause_round(
 
 /// Install an originally funded pause as an effect-consumer fixture precondition.
 /// This grants no panel/enactment authority and does not qualify the unfinished producer.
-pub(crate) fn install_consumer_fast_pause(
+pub fn install_consumer_fast_pause(
     stx: &mut crate::state::StateTransaction<'_, '_>,
     network: SccpNetworkV1,
     taira: bool,
@@ -831,10 +826,7 @@ pub(crate) fn install_consumer_fast_pause(
 }
 
 /// A canonical four-member generation with independently selected generation and height.
-pub(crate) fn sample_generation_at(
-    generation: u64,
-    start_height: u64,
-) -> SccpCommitteeGenerationV1 {
+pub fn sample_generation_at(generation: u64, start_height: u64) -> SccpCommitteeGenerationV1 {
     let mut keys = (1..=4)
         .map(|seed| {
             let pair =
@@ -879,7 +871,7 @@ pub(crate) fn sample_generation_at(
 }
 
 /// The immutable deployment pin corresponding to this exact generation.
-pub(crate) fn sample_pin(generation: &SccpCommitteeGenerationV1) -> SccpCommitteePinV1 {
+pub fn sample_pin(generation: &SccpCommitteeGenerationV1) -> SccpCommitteePinV1 {
     SccpCommitteePinV1 {
         generation: generation.generation,
         committee_root: generation.committee_root,
@@ -889,7 +881,7 @@ pub(crate) fn sample_pin(generation: &SccpCommitteeGenerationV1) -> SccpCommitte
 }
 
 /// One exact original anchor fixture.
-pub(crate) fn sample_anchor(seed: u8) -> SccpAnchorV1 {
+pub fn sample_anchor(seed: u8) -> SccpAnchorV1 {
     SccpAnchorV1 {
         core_hash: word(seed),
         result: word(seed.wrapping_add(1)),
@@ -897,7 +889,7 @@ pub(crate) fn sample_anchor(seed: u8) -> SccpAnchorV1 {
 }
 
 /// Admit a fixture generation through the executing original pool and typed map writer.
-pub(crate) fn install_generation(
+pub fn install_generation(
     stx: &mut crate::state::StateTransaction<'_, '_>,
     key: u64,
     source: SccpCommitteeGenerationV1,
@@ -910,7 +902,7 @@ pub(crate) fn install_generation(
 
 /// Decode predicate DATA with its own real retained custody, including malformed controls.
 /// This helper grants neither a State source nor finality authority.
-pub(crate) fn retained_generation_fixture(
+pub fn retained_generation_fixture(
     source: &SccpCommitteeGenerationV1,
 ) -> super::generation_record::RetainedSccpGeneration {
     use norito::codec::Encode as _;
@@ -922,7 +914,7 @@ pub(crate) fn retained_generation_fixture(
 }
 
 /// Copy an immutable retained record to mutable test DATA, preserving lifecycle scalars.
-pub(crate) fn generation_fixture_data(
+pub fn generation_fixture_data(
     source: &super::generation_record::RetainedSccpGeneration,
 ) -> SccpCommitteeGenerationV1 {
     let mut data = (**source).clone();

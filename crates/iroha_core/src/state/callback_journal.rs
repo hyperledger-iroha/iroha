@@ -35,7 +35,11 @@ pub(super) enum DrainedCallbacks {
     OutputLimit,
 }
 
-/// One journal per StateTransaction; no event or caller trace can populate it.
+/// One journal per `StateTransaction`; no event or caller trace can populate it.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Overflow, callback failure, local refusal and consumption are independent sticky observations"
+)]
 pub(super) struct CallbackJournal {
     maximum_bytes: Result<u64, String>,
     call: Option<Hash>,
@@ -115,6 +119,10 @@ impl CallbackJournal {
         })
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Completion consumes the unique callback ticket so it cannot be completed again"
+    )]
     pub(super) fn finish(
         &mut self,
         ticket: CallbackTicket,

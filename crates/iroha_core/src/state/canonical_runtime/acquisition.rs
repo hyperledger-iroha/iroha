@@ -18,6 +18,7 @@ macro_rules! runtime_cells {
             $($field: Option<CellBlock<'state, $value, $charge>>,)+
         }
 
+        #[expect(clippy::large_enum_variant, reason = "Pending and acquired cells retain original reader custody without allocating during acquisition")]
         enum CellPhase<'state> {
             Empty,
             Pending(PendingCells<'state>),

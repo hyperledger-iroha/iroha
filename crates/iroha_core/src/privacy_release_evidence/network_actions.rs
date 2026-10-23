@@ -208,7 +208,7 @@ fn orchard_statement_v1(
     asset_definition_id: AssetDefinitionId,
     pool_id: PrivacyPoolIdV1,
     expiry_height: u64,
-) -> Result<OrchardHalo2ActionsStatementV1, PrivacyReleaseEvidenceErrorClassV1> {
+) -> OrchardHalo2ActionsStatementV1 {
     let value_balance = match draft.value_balance.cmp(&0) {
         core::cmp::Ordering::Equal => PrivacyValueBalanceV1::balanced(),
         core::cmp::Ordering::Less => PrivacyValueBalanceV1 {
@@ -220,7 +220,7 @@ fn orchard_statement_v1(
             amount: u128::from(draft.value_balance.unsigned_abs()),
         },
     };
-    Ok(OrchardHalo2ActionsStatementV1 {
+    OrchardHalo2ActionsStatementV1 {
         context,
         asset_definition_id,
         public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
@@ -242,7 +242,7 @@ fn orchard_statement_v1(
             .collect(),
         value_balance,
         expiry_height,
-    })
+    }
 }
 fn jindo_field_v1(value: u64) -> PrivacyJindoFieldElementV1 {
     let mut encoding = [0_u8; 32];
@@ -321,7 +321,7 @@ pub fn build_privacy_release_jindo_network_action_v1(
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let mut rng = EvidenceRng06::new(network_seed_v1(fixture_seed, b"jindo-proof", 0));
     let signed = build_signed_privacy_action_with_rng_v1(
-        context,
+        &context,
         witness,
         transaction_context.genesis_hash,
         private_key,
@@ -376,7 +376,7 @@ pub fn build_privacy_release_vega_network_action_v1(
     };
     let mut rng = EvidenceRng06::new(network_seed_v1(fixture_seed, b"vega-proof", 0));
     let signed = build_signed_vega_privacy_action_with_rng_v1(
-        context,
+        &context,
         fixture.public_input,
         witness,
         &fixture.device_signing_key,
@@ -406,7 +406,7 @@ pub fn build_privacy_release_vega_network_action_v1(
 /// Returns an error if the compiled profile or pool fixture cannot be constructed, native bundle
 /// proving or authorization fails, or the envelope and transaction intent bindings disagree.
 pub fn build_privacy_release_orchard_network_action_v1(
-    transaction_context: PrivacyReleaseTransactionContextV1,
+    transaction_context: &PrivacyReleaseTransactionContextV1,
     pool_id: PrivacyPoolIdV1,
     asset_definition_id: AssetDefinitionId,
     reserve_account: AccountId,
@@ -425,7 +425,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
         Scope::External,
         u32::from(wallet_seed),
         change_value,
-        [wallet_seed; 512],
+        &[wallet_seed; 512],
     );
     let mut prover_rng = EvidenceRng09::new(network_seed_v1(fixture_seed, b"orchard-prepare", 0));
     let prepared = prepare_orchard_bundle_v1_with_rng(
@@ -442,7 +442,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
         asset_definition_id.clone(),
         pool_id,
         expiry_height,
-    )?;
+    );
     let draft_envelope = PrivacyProofEnvelopeV1::bind_v1(
         PrivacyStatementV1::OrchardHalo2ActionsV1(statement.clone()),
         PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(Vec::new())),
@@ -465,7 +465,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
         &limits,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let proved = authorize_orchard_bundle_v1(prepared, consensus_binding, &limits)
+    let proved = authorize_orchard_bundle_v1(prepared, &consensus_binding, &limits)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     if proved.public.anchor != *statement.anchor.as_bytes()
         || proved.public.actions.len() != statement.actions.len()
@@ -579,10 +579,10 @@ fn build_pq_masp_transaction_v1(
 /// Returns an error if the contexts disagree on network, authority, or genesis, fixture construction
 /// or proving fails, or the resulting transactions violate the required replay and epoch bindings.
 pub fn build_privacy_release_pq_masp_network_actions_v1(
-    preactivation_context: PrivacyReleaseTransactionContextV1,
-    canonical_context: PrivacyReleaseTransactionContextV1,
-    replay_context: PrivacyReleaseTransactionContextV1,
-    post_restart_replay_context: PrivacyReleaseTransactionContextV1,
+    preactivation_context: &PrivacyReleaseTransactionContextV1,
+    canonical_context: &PrivacyReleaseTransactionContextV1,
+    replay_context: &PrivacyReleaseTransactionContextV1,
+    post_restart_replay_context: &PrivacyReleaseTransactionContextV1,
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleasePqMaspNetworkActionsV1, PrivacyReleaseEvidenceErrorClassV1> {

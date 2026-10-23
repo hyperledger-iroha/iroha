@@ -17,7 +17,7 @@ use std::{collections::BTreeMap, sync::Arc};
 /// Only transfer diagnostic input context is retained: unrelated carrier-header fields, empty roles and
 /// account-role membership are outside this record. Finality must bind the final block hash.
 #[derive(Debug)]
-pub(crate) struct OwnedTransferDiagnosticContext {
+pub struct OwnedTransferDiagnosticContext {
     inventory: Arc<FastpqSourceInventoryV1>,
     creation_time_ms: u64,
     slot: u64,
@@ -28,7 +28,7 @@ pub(crate) struct OwnedTransferDiagnosticContext {
 
 /// Complete bounded statement output prepared from the execution-owned public seal.
 #[derive(Debug)]
-pub(crate) struct PreparedOwnedTransferDiagnostic {
+pub struct PreparedOwnedTransferDiagnostic {
     context: OwnedTransferDiagnosticContext,
     statements: Vec<TransferEntryDiagnostic>,
 }

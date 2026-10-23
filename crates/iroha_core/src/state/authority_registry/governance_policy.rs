@@ -1,6 +1,6 @@
 //! Exact first-release State governance policy, excluding diagnostic switches.
 //!
-//! Governance changes transaction admission, public reward and SoraFS policy,
+//! Governance changes transaction admission, public reward and `SoraFS` policy,
 //! and the Parliament schedule. Its actual-layer configuration has runtime-only
 //! representation; this typed projection gives each consensus field a stable
 //! Norito identity. Telemetry and debug tracing do not enter the State root.
@@ -273,7 +273,7 @@ impl GovernanceAuthorityV1 {
                 allowed_storage_classes: pin
                     .allowed_storage_classes
                     .as_ref()
-                    .map(|classes| classes.iter().cloned().collect()),
+                    .map(|classes| classes.iter().copied().collect()),
                 require_council_signatures: pin.require_council_signatures,
                 approval_quorum: pin.approval_quorum,
                 approval_signers: pin.approval_signers.iter().map(Into::into).collect(),

@@ -36,7 +36,7 @@ fn has_permission(
                 .any(|role| role.permissions().any(|token| token == &permission)))
 }
 
-pub(crate) fn authorized(
+pub fn authorized(
     tx: &impl StateReadOnly,
     authority: &AccountId,
     provider: ProviderId,
@@ -89,7 +89,7 @@ pub(crate) fn authorized(
     }
 }
 
-pub(crate) fn eligible_custody(
+pub fn eligible_custody(
     current: &crate::query::stream_token_custody::NativeControl,
     original_record_digest: [u8; 32],
     now: u64,
@@ -110,7 +110,7 @@ pub(crate) fn eligible_custody(
     Ok(())
 }
 
-pub(crate) fn checked_phase(
+pub fn checked_phase(
     tx: &impl StateReadOnly,
     provider: ProviderId,
     check: &StreamTokenCheckV1,
@@ -173,7 +173,7 @@ pub(crate) fn checked_phase(
     }
 }
 
-pub(crate) fn check_live_custody(
+pub fn check_live_custody(
     current: &NativeControl,
     check: &StreamTokenCheckV1,
     authority: &AccountId,

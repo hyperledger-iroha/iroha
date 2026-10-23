@@ -939,7 +939,8 @@ fn message_census_manifest_requires_exact_pinned_roles() {
     let input = directory.path().join("originals.json");
     let source_pins = norito::json!({"test_source": "structural inventory only"});
     let mut rows = Vec::new();
-    let originals: [Vec<u8>; 8] = std::array::from_fn(|index| vec![index as u8 + 1; index + 1]);
+    let originals: [Vec<u8>; 8] =
+        std::array::from_fn(|index| vec![u8::try_from(index).unwrap() + 1; index + 1]);
     for (name, bytes) in ORIGINAL_NAMES.into_iter().zip(&originals) {
         publish(&directory.path().join(name), bytes);
         rows.push(norito::json!({"name":name,"bytes":(bytes.len()),"sha256":(sha(bytes))}));

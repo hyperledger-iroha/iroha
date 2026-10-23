@@ -13,11 +13,11 @@ fn expected(kind: usize, left: u64, right: u64) -> Option<u64> {
     match kind {
         0 => u64::cast_signed(left)
             .checked_div(u64::cast_signed(right))
-            .map(|value| i64::cast_unsigned(value)),
+            .map(i64::cast_unsigned),
         1 => left.checked_div(right),
         2 => u64::cast_signed(left)
             .checked_rem(u64::cast_signed(right))
-            .map(|value| i64::cast_unsigned(value)),
+            .map(i64::cast_unsigned),
         3 => left.checked_rem(right),
         _ => panic!("division fixture opcode"),
     }

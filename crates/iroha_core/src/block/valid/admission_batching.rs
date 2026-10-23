@@ -92,6 +92,10 @@ fn checked_signature_of<T: norito::codec::Encode>(
 fn checked_signature_from_hash<T>(private_key: &PrivateKey, hash: HashOf<T>) -> SignatureOf<T> {
     SignatureOf::try_from_hash(private_key, hash).expect("test fixture hash signing should succeed")
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Exercise the production block-validation refusal type without allocating an error wrapper"
+)]
 fn validate_admission(
     block: &SignedBlock,
     state: &State,

@@ -298,6 +298,10 @@ pub struct P256UnresolvedByteIoManifestV1 {
 /// The only three input writers that are internal inverse witnesses.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Each field identifies a distinct inverse column, separate from the source column."
+)]
 pub struct P256InverseAuxiliaryManifestV1 {
     /// Inverse used to prove r is nonzero.
     pub(crate) r_inverse: P256ValueIdV1,
@@ -422,7 +426,7 @@ impl core::fmt::Debug for P256ExternalBindingTraceV1 {
             .debug_struct("P256ExternalBindingTraceV1")
             .field("role", &self.role)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1025,12 +1029,12 @@ impl P256ExternalBindingTraceV1 {
     /// The selected tuple must already be the exact input compiled into this P-256 instance.
     pub(crate) fn bind_optional_certificate_selection_v1(
         &mut self,
-        selection: P256OptionalCertificateSelectionV1,
+        selection: &P256OptionalCertificateSelectionV1,
         material: &P256EcdsaTraceMaterialV1,
         value_bus: &P256ValueBusBaseEndpointTraceV1,
     ) -> Result<(), P256ExternalBindingErrorV1> {
         let previous = self.input_selection;
-        self.input_selection = selection;
+        self.input_selection = *selection;
         if let Err(error) = self.validate_v1(material, value_bus) {
             self.input_selection = previous;
             return Err(error);
@@ -2174,7 +2178,10 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
-                zk_x509_test_digest384_v1(seed.wrapping_add(index as u8).wrapping_add(2))
+                zk_x509_test_digest384_v1(
+                    seed.wrapping_add(u8::try_from(index & 0xff).expect("masked fixture byte"))
+                        .wrapping_add(2),
+                )
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
@@ -2191,19 +2198,20 @@ mod tests {
         secret[31] = seed.max(1);
         let key = SigningKey::from_slice(&secret).expect("valid key");
         let digest = core::array::from_fn(|index| {
-            seed.wrapping_mul(31)
-                .wrapping_add((index as u8).wrapping_mul(17))
+            seed.wrapping_mul(31).wrapping_add(
+                (u8::try_from(index & 0xff).expect("masked fixture byte")).wrapping_mul(17),
+            )
         });
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
         let signature = signature.normalize_s().unwrap_or(signature);
         let encoded = key.verifying_key().to_encoded_point(false);
-        let mut public_key_x_be = [0_u8; 32];
-        let mut public_key_y_be = [0_u8; 32];
-        public_key_x_be.copy_from_slice(encoded.x().expect("x"));
-        public_key_y_be.copy_from_slice(encoded.y().expect("y"));
+        let mut horizontal = [0_u8; 32];
+        let mut vertical = [0_u8; 32];
+        horizontal.copy_from_slice(encoded.x().expect("x"));
+        vertical.copy_from_slice(encoded.y().expect("y"));
         P256EcdsaWitnessV1 {
-            public_key_x_be,
-            public_key_y_be,
+            public_key_x_be: horizontal,
+            public_key_y_be: vertical,
             r_be: signature.r().to_bytes().into(),
             s_be: signature.s().to_bytes().into(),
             digest_be: digest,
@@ -2234,7 +2242,7 @@ mod tests {
                 rows[row] = P256ValueBusBaseCellV1 {
                     fixed: P256ValueBusFixedAccessV1::Active {
                         id: initial.id,
-                        limb: limb as u8,
+                        limb: u8::try_from(limb).expect("protocol-bounded index fits u8"),
                         access: P256ValueAccessKindV1::Write,
                         modulus: initial.modulus,
                         value_kind: match initial.kind {
@@ -2256,7 +2264,7 @@ mod tests {
                 rows[row] = P256ValueBusBaseCellV1 {
                     fixed: P256ValueBusFixedAccessV1::Active {
                         id: linked.c,
-                        limb: limb as u8,
+                        limb: u8::try_from(limb).expect("protocol-bounded index fits u8"),
                         access: P256ValueAccessKindV1::Write,
                         modulus: linked.operation.modulus,
                         value_kind: P256ValueKindV1::Derived,
@@ -2641,7 +2649,7 @@ mod tests {
             Err(P256ExternalBindingErrorV1::Topology)
         );
         let bound = base
-            .bind_v1(post_base_v1(0x41))
+            .bind_v1(&post_base_v1(0x41))
             .expect("source remains bindable after external base construction");
         bound
             .execution_aux_source_v1()
@@ -2846,7 +2854,7 @@ mod tests {
         let inactive = select_zk_x509_optional_certificate_p256_witness_v1(0, inactive_real)
             .expect("canonical inactive selection");
         trace
-            .bind_optional_certificate_selection_v1(inactive, &material, &value_bus)
+            .bind_optional_certificate_selection_v1(&inactive, &material, &value_bus)
             .expect("bind inactive selection");
         trace
             .validate_v1(&material, &value_bus)
@@ -2855,7 +2863,7 @@ mod tests {
         let mut forged = retained;
         forged.selected.public_key_x_be[0] ^= 1;
         assert_eq!(
-            trace.bind_optional_certificate_selection_v1(forged, &material, &value_bus),
+            trace.bind_optional_certificate_selection_v1(&forged, &material, &value_bus),
             Err(P256ExternalBindingErrorV1::OptionalCertificateSelection)
         );
         assert_eq!(trace.input_selection, retained);

@@ -155,10 +155,10 @@ pub(crate) fn for_each_canonical_carrier_membership_hash(
     for entrypoint in entrypoints {
         let carrier_hash = entrypoint.hash();
         visit(carrier_hash);
-        if let Some(execution_hash) = authenticated_signed_replay_alias(state_block, entrypoint) {
-            if execution_hash != carrier_hash {
-                visit(execution_hash);
-            }
+        if let Some(execution_hash) = authenticated_signed_replay_alias(state_block, entrypoint)
+            && execution_hash != carrier_hash
+        {
+            visit(execution_hash);
         }
     }
 }
@@ -1693,7 +1693,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx.payload().validate_fee_payment_intent().map_err(|err| {
             AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
                 tx,
-                TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()),
+                &(TransactionSignatureError::InvalidFeePaymentIntent(err.to_string())),
             ))
         })?;
         Ok(())
@@ -1739,12 +1739,15 @@ impl<'tx> AcceptedTransaction<'tx> {
             .map_err(|err| {
                 AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
                     tx,
-                    TransactionSignatureError::CryptoError(err.to_string()),
+                    &(TransactionSignatureError::CryptoError(err.to_string())),
                 ))
             });
         }
         tx.verify_signature().map_err(|err| {
-            AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(tx, err))
+            AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
+                tx,
+                &(err),
+            ))
         })
     }
     fn ensure_signing_allowed(
@@ -1837,10 +1840,8 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionSignatureError::InvalidFeePaymentIntent(_)
             | TransactionSignatureError::MissingTimeToLive
             | TransactionSignatureError::GenesisDomainNotAllowed
-            | TransactionSignatureError::GenesisDomainRequired => {
-                SignatureRejectionCode::MalformedSignature
-            }
-            TransactionSignatureError::UnexpectedMultisigSignatures
+            | TransactionSignatureError::GenesisDomainRequired
+            | TransactionSignatureError::UnexpectedMultisigSignatures
             | TransactionSignatureError::NonCanonicalMultisigSignatures => {
                 SignatureRejectionCode::MalformedSignature
             }
@@ -1858,7 +1859,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     }
     fn signature_fail_from_error(
         tx: &SignedTransaction,
-        err: TransactionSignatureError,
+        err: &TransactionSignatureError,
     ) -> SignatureVerificationFail {
         SignatureVerificationFail::new(
             tx.signature().clone(),
@@ -1870,7 +1871,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx: &SignedTransaction,
     ) -> Result<(), SignatureVerificationFail> {
         tx.verify_signature()
-            .map_err(|err| Self::signature_fail_from_error(tx, err))
+            .map_err(|err| Self::signature_fail_from_error(tx, &(err)))
     }
     fn ensure_signature_limit(
         signature_count: usize,
@@ -1972,8 +1973,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         Self::validate_with_now_and_signature_check(
             tx,
             expected_network_id,
-            max_clock_drift,
-            limits,
+            (max_clock_drift, limits),
             crypto,
             now,
             SignatureCheck::Verify,
@@ -1998,8 +1998,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         Self::validate_with_now_and_signature_check(
             tx,
             expected_network_id,
-            max_clock_drift,
-            limits,
+            (max_clock_drift, limits),
             crypto,
             now,
             SignatureCheck::Verify,
@@ -2015,8 +2014,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     pub(crate) fn validate_with_now_with_signature_result_and_prepared_metadata(
         tx: &SignedTransaction,
         expected_network_id: &NetworkId,
-        max_clock_drift: Duration,
-        limits: TransactionParameters,
+        (max_clock_drift, limits): (Duration, TransactionParameters),
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
         prechecked_signature_result: Option<Result<(), SignatureVerificationFail>>,
@@ -2027,8 +2025,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         Self::validate_with_now_and_signature_check(
             tx,
             expected_network_id,
-            max_clock_drift,
-            limits,
+            (max_clock_drift, limits),
             crypto,
             now,
             signature_check,
@@ -2053,8 +2050,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         Self::validate_with_now_and_signature_check(
             tx,
             expected_network_id,
-            max_clock_drift,
-            limits,
+            (max_clock_drift, limits),
             crypto,
             now,
             SignatureCheck::PrecheckedSingleEd25519,
@@ -2065,8 +2061,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     fn validate_with_now_and_signature_check(
         tx: &SignedTransaction,
         expected_network_id: &NetworkId,
-        max_clock_drift: Duration,
-        limits: TransactionParameters,
+        (max_clock_drift, limits): (Duration, TransactionParameters),
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
         signature_check: SignatureCheck,
@@ -2120,9 +2115,10 @@ impl<'tx> AcceptedTransaction<'tx> {
             ));
         }
         validate_signed_attachments(tx)?;
-        let decompressed_len = tx
-            .attachments()
-            .map_or(0usize, |attachments| attachments.total_occurrence_bytes());
+        let decompressed_len = tx.attachments().map_or(
+            0usize,
+            iroha_data_model::transaction::SignedAttachmentsV1::total_occurrence_bytes,
+        );
         let decompressed_len = u64::try_from(decompressed_len).unwrap_or(u64::MAX);
         let max_decompressed_bytes = limits.max_decompressed_bytes().get();
         if decompressed_len > max_decompressed_bytes {
@@ -2628,8 +2624,7 @@ impl AcceptedTransaction<'static> {
                 Self::validate_with_now_and_signature_check(
                     signed,
                     expected_network_id,
-                    max_clock_drift,
-                    limits,
+                    (max_clock_drift, limits),
                     crypto,
                     now,
                     signature_check(),
@@ -2643,8 +2638,7 @@ impl AcceptedTransaction<'static> {
                 Self::validate_with_now_and_signature_check(
                     reveal.signed_transaction(),
                     expected_network_id,
-                    max_clock_drift,
-                    limits,
+                    (max_clock_drift, limits),
                     crypto,
                     now,
                     signature_check(),
@@ -3422,11 +3416,9 @@ impl StateBlock<'_> {
             &summary,
             crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(_)
         );
-        if !is_contract {
-            if let Some(metadata) = transaction_metadata {
-                crate::smartcontracts::ivm::validate_generic_execution_metadata(metadata)
-                    .map_err(TransactionRejectionReason::Validation)?;
-            }
+        if !is_contract && let Some(metadata) = transaction_metadata {
+            crate::smartcontracts::ivm::validate_generic_execution_metadata(metadata)
+                .map_err(TransactionRejectionReason::Validation)?;
         }
         let manifest_metadata = transaction_metadata
             .and_then(|metadata| metadata.get(&*CONTRACT_MANIFEST_METADATA_NAME))
@@ -3476,20 +3468,19 @@ impl StateBlock<'_> {
             )
             .map_err(|error| {
                 TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
-            })? {
-                if expected != abi_hash {
-                    return Err(TransactionRejectionReason::Validation(
-                        ValidationFail::IvmAdmission(
-                            iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(
-                                iroha_data_model::executor::ManifestAbiHashMismatchInfo {
-                                    expected,
-                                    actual: abi_hash,
-                                },
-                            ),
+            })? && expected != abi_hash
+            {
+                return Err(
+                    TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+                        iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(
+                            iroha_data_model::executor::ManifestAbiHashMismatchInfo {
+                                expected,
+                                actual: abi_hash,
+                            },
                         ),
-                    )
-                    .into());
-                }
+                    ))
+                    .into(),
+                );
             }
         }
         // Fuel (`max_cycles`) must be explicitly provided and bounded by both
@@ -4137,13 +4128,12 @@ fn enforce_manifest_protected_namespaces(
     if let (Some(hint), Some(meta)) = (
         metadata_contract_address_hint.as_ref(),
         metadata_governance_contract_address.as_ref(),
-    ) {
-        if hint != meta {
-            return Err(reject_lane_policy(
-                alias,
-                "`contract_address` metadata must match `gov_contract_address` for protected operations",
-            ));
-        }
+    ) && hint != meta
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "`contract_address` metadata must match `gov_contract_address` for protected operations",
+        ));
     }
     if let Some(meta_contract_address) = metadata_governance_contract_address.as_ref()
         && !contract_targets.is_empty()
@@ -4373,48 +4363,48 @@ fn enforce_lane_policies(
         .dataspace_authority_rules_for_lanes(lane_id, dataspace_id, &eligible_lanes)
         .map_err(|err| reject_not_permitted(err.message()))?;
     let mut runtime_upgrade_present = false;
-    if let Some(status) = manifest_status.as_ref() {
-        if let Some(rules) = status.rules() {
-            let governance_manifest = status.governance.is_some();
-            let governance_sensitive =
-                governance_manifest && tx_requires_manifest_validator_gating(rules, tx);
-            if governance_sensitive {
-                let manifest_validators = dataspace_authority_rules
-                    .map(|rules| canonical_manifest_validators(&lane_alias, rules))
-                    .transpose()?;
-                if let Some(validators) = manifest_validators.as_ref()
-                    && !allows_multisig_envelope_authority
-                {
-                    let authority = tx.authority();
-                    let authority_i105 = authority.canonical_i105().map_err(|err| {
-                        reject_lane_policy(
-                            &lane_alias,
-                            format!("failed to encode authority `{authority}` as i105: {err}"),
-                        )
-                    })?;
-                    if !validators.contains(&authority_i105) {
-                        return Err(reject_lane_policy(
-                            &lane_alias,
-                            "authority not part of lane validator set".to_string(),
-                        ));
-                    }
-                }
-                if !allows_multisig_envelope_authority
-                    && let Some(authority_rules) = dataspace_authority_rules
-                    && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
-                {
-                    enforce_manifest_quorum(&lane_alias, authority_rules, tx)?;
+    if let Some(status) = manifest_status.as_ref()
+        && let Some(rules) = status.rules()
+    {
+        let governance_manifest = status.governance.is_some();
+        let governance_sensitive =
+            governance_manifest && tx_requires_manifest_validator_gating(rules, tx);
+        if governance_sensitive {
+            let manifest_validators = dataspace_authority_rules
+                .map(|rules| canonical_manifest_validators(&lane_alias, rules))
+                .transpose()?;
+            if let Some(validators) = manifest_validators.as_ref()
+                && !allows_multisig_envelope_authority
+            {
+                let authority = tx.authority();
+                let authority_i105 = authority.canonical_i105().map_err(|err| {
+                    reject_lane_policy(
+                        &lane_alias,
+                        format!("failed to encode authority `{authority}` as i105: {err}"),
+                    )
+                })?;
+                if !validators.contains(&authority_i105) {
+                    return Err(reject_lane_policy(
+                        &lane_alias,
+                        "authority not part of lane validator set".to_string(),
+                    ));
                 }
             }
-            if governance_manifest {
-                enforce_manifest_protected_namespaces(
-                    &lane_alias,
-                    rules,
-                    tx,
-                    &state_transaction.world,
-                )?;
-                runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
+            if !allows_multisig_envelope_authority
+                && let Some(authority_rules) = dataspace_authority_rules
+                && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+            {
+                enforce_manifest_quorum(&lane_alias, authority_rules, tx)?;
             }
+        }
+        if governance_manifest {
+            enforce_manifest_protected_namespaces(
+                &lane_alias,
+                rules,
+                tx,
+                &state_transaction.world,
+            )?;
+            runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
         }
     }
     if !runtime_upgrade_present {
@@ -4777,10 +4767,10 @@ pub(crate) fn enforce_fraud_policy(
     let Some(value) = metadata.get(FRAUD_ASSESSMENT_BAND_NAME.as_ref()) else {
         #[cfg(feature = "telemetry")]
         if let Some(ctx) = fraud_ctx.as_ref() {
-            let cause = if !config.missing_assessment_permitted {
-                "missing"
-            } else {
+            let cause = if config.missing_assessment_permitted {
                 "permitted"
+            } else {
+                "missing"
             };
             ctx.record_missing(cause);
         }
@@ -5286,7 +5276,9 @@ pub fn execute_component_transaction_for_testing(
     let mut overlay = block.transaction_for_fastpq_testing(call_hash);
     overlay.current_entrypoint_index = Some(index);
     overlay.current_network_entrypoint_hash = Some(accepted.hash_as_entrypoint());
-    overlay.current_tx_hash = accepted.external().map(|signed| signed.hash());
+    overlay.current_tx_hash = accepted
+        .external()
+        .map(iroha_data_model::transaction::SignedTransaction::hash);
     overlay.current_lane_id = Some(route.lane_id);
     overlay.current_dataspace_id = Some(route.dataspace_id);
     overlay.world.current_dataspace_id = Some(route.dataspace_id);
@@ -8086,8 +8078,7 @@ pub mod tests {
             AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                 &signed,
                 &test_network_id(),
-                Duration::ZERO,
-                TransactionParameters::default(),
+                (Duration::ZERO, TransactionParameters::default()),
                 &crypto,
                 now,
                 Some(Ok(())),
@@ -9971,7 +9962,7 @@ pub mod tests {
             let chain = crate::block::tests::component_chain_with_genesis_parameters(
                 self.state,
                 vec![iroha_data_model::parameter::Parameter::Custom(
-                    policy.clone().into_custom_parameter(),
+                    policy.into_custom_parameter(),
                 )],
             );
             let state = chain.state();
@@ -12683,7 +12674,7 @@ pub mod tests {
         let collected_proofs = super::collect_lane_privacy_proofs(&tx);
         let ids: BTreeSet<_> = collected_proofs
             .iter()
-            .map(|proof| proof.commitment_id())
+            .map(iroha_data_model::nexus::LanePrivacyProof::commitment_id)
             .collect();
         assert_eq!(collected_proofs.len(), 2);
         assert!(ids.contains(&LaneCommitmentId::new(1)));

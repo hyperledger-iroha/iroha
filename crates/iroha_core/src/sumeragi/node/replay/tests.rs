@@ -202,6 +202,10 @@ fn signed_genesis_registration_and_mint_retain_complete_original_supply() {
 
 #[test]
 fn isolated_replay_recovers_nonempty_h1_and_h2_without_live_publication() {
+    use crate::query::native_context_archive::{
+        NativeContextArchiveError, fastpq_source::SourceReadError,
+    };
+
     run(|| {
         let _status = crate::status::operator_status_test_guard();
         let (chain, seed, _) = fixture();
@@ -236,9 +240,6 @@ fn isolated_replay_recovers_nonempty_h1_and_h2_without_live_publication() {
             let missing = (0..64)
                 .find_map(|_| read.poll().err())
                 .expect("nonempty missing original tape is not empty success");
-            use crate::query::native_context_archive::{
-                NativeContextArchiveError, fastpq_source::SourceReadError,
-            };
             match &missing {
                 SourceReadError::Archive(NativeContextArchiveError::Io(original)) => {
                     assert_eq!(original.kind(), io::ErrorKind::NotFound, "{missing:?}");
@@ -259,7 +260,10 @@ fn isolated_replay_recovers_nonempty_h1_and_h2_without_live_publication() {
                 .advance(read.native().unwrap(), deadline, 64)
                 .unwrap()
                 .unwrap();
-            assert_eq!(replay.prepared.state.committed_height(), height as usize);
+            assert_eq!(
+                replay.prepared.state.committed_height(),
+                usize::try_from(height).expect("fixture height fits usize")
+            );
             read.use_replayed_transport(completed).unwrap();
             let recovered = complete_read(&mut read);
             assert!(
@@ -397,11 +401,13 @@ fn isolated_state_configuration_preserves_live_pool_and_process_cache() {
             &nexus.configured_lane_catalog,
         )
         .unwrap();
-        let mut pipeline = config::Pipeline::default();
-        pipeline.cache_size = 3;
-        pipeline.ivm_cache_max_bytes = 123;
-        pipeline.ivm_cache_max_decoded_ops = 5;
-        pipeline.ivm_execution_max_bytes = 1;
+        let pipeline = config::Pipeline {
+            cache_size: 3,
+            ivm_cache_max_bytes: 123,
+            ivm_cache_max_decoded_ops: 5,
+            ivm_execution_max_bytes: 1,
+            ..config::Pipeline::default()
+        };
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::try_new_for_isolated_replay(
             pool.clone(),
@@ -496,16 +502,16 @@ fn assert_genesis_capacity(
                     ChargedBufferError::Admission(AllocationRefusal::Capacity { .. }),
                 ),
             ),
-        ) => {}
-        (
+        )
+        | (
             Phase::ResultPreimage,
             StartupError::ResultPreimage(
                 super::super::super::commitment::ResultPreimageError::Allocation(
                     ChargedBufferError::Admission(AllocationRefusal::Capacity { .. }),
                 ),
             ),
-        ) => {}
-        (
+        )
+        | (
             Phase::Certificate,
             StartupError::Certificate(
                 iroha_data_model::block::CertificateAdmissionError::ControlAdmission(

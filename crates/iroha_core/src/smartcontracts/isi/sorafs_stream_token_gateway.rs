@@ -31,7 +31,7 @@ use iroha_executor_data_model::permission::sorafs::{
 };
 use mv::storage::StorageReadOnly;
 
-pub(crate) mod direct_source;
+pub mod direct_source;
 
 fn rejected(error: TransitionError) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(format!(

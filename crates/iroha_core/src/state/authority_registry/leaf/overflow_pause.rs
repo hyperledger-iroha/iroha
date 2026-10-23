@@ -26,6 +26,10 @@ pub(in crate::state) struct OverflowPauseGuard {
 
 impl OverflowPauseGuard {
     /// Whether the real bounded writer consumed this thread's one-shot observer.
+    #[expect(
+        clippy::unused_self,
+        reason = "The thread-bound guard must remain borrowed while accessing its scoped test observer"
+    )]
     pub(in crate::state) fn observed(&self) -> bool {
         OBSERVED.with(Cell::get)
     }

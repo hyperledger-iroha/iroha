@@ -31,9 +31,8 @@ seiyaku CycleCallee { view fn value() authorize(anyone) -> int { return 42; } }
                 &caller,
                 &target_contract,
                 "value",
-                Json::new(()),
-                1_000_000,
-                Some(budget),
+                &(Json::new(())),
+                (1_000_000, Some(budget)),
             )
         };
         let measured = ivm::VmCycleBudget::new(NonZeroU64::new(1_000_000).unwrap());
@@ -117,9 +116,8 @@ seiyaku CycleFailure { permission AssetOps;
                     &caller,
                     &target_contract,
                     "fail_after_write",
-                    Json::new(()),
-                    1_000_000,
-                    Some(&allowance),
+                    &(Json::new(())),
+                    (1_000_000, Some(&allowance)),
                 );
             let error = result.unwrap_err();
             if limit == boundary_only_limit {

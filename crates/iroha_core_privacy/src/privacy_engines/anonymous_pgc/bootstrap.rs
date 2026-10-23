@@ -88,7 +88,7 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
         total_supply: u32,
         public_keys: &'a [TwistedElGamalPublicKeyV1],
         encrypted_balances: &'a [TwistedElGamalCiphertextV1],
-        transcript_binding: TranscriptBindingV1<'a>,
+        transcript_binding: &TranscriptBindingV1<'a>,
     ) -> Result<Self, AnonymousPgcError> {
         if initial_epoch != PGC_BOOTSTRAP_INITIAL_EPOCH_V1 {
             return Err(AnonymousPgcError::InvalidBootstrapEpoch {
@@ -96,7 +96,7 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
                 expected: PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
             });
         }
-        super::validate_binding(&transcript_binding)?;
+        super::validate_binding(transcript_binding)?;
         if namespace_encoding.is_empty()
             || namespace_encoding.len() > MAX_PGC_BOOTSTRAP_NAMESPACE_BYTES_V1
         {
@@ -145,7 +145,7 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
             total_supply,
             public_keys,
             encrypted_balances,
-            transcript_binding,
+            transcript_binding: *transcript_binding,
             bootstrap_table_digest,
         })
     }
@@ -1045,7 +1045,10 @@ mod tests {
         }
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             for (index, byte) in destination.iter_mut().enumerate() {
-                *byte = ((index % 16) as u8).wrapping_mul(19).wrapping_add(7);
+                *byte = u8::try_from(index % 16)
+                    .expect("sample nibble")
+                    .wrapping_mul(19)
+                    .wrapping_add(7);
             }
             Ok(())
         }
@@ -1141,7 +1144,7 @@ mod tests {
                 self.total_supply,
                 &self.public_keys,
                 &self.encrypted_balances,
-                binding(),
+                &binding(),
             )
             .expect("bootstrap statement")
         }
@@ -1301,7 +1304,7 @@ mod tests {
             fixture.total_supply + 1,
             &fixture.public_keys,
             &fixture.encrypted_balances,
-            binding(),
+            &binding(),
         )
         .expect("wrong-supply public statement is structurally valid");
         assert!(matches!(
@@ -1331,7 +1334,7 @@ mod tests {
             fixture.total_supply,
             &fixture.public_keys,
             &fixture.encrypted_balances,
-            binding(),
+            &binding(),
         )
         .expect("changed namespace");
         assert_ne!(changed_namespace.bootstrap_table_digest(), baseline);
@@ -1345,7 +1348,7 @@ mod tests {
             fixture.total_supply,
             &fixture.public_keys,
             &fixture.encrypted_balances,
-            binding(),
+            &binding(),
         )
         .expect("changed root");
         assert_ne!(changed_root_statement.bootstrap_table_digest(), baseline);
@@ -1357,7 +1360,7 @@ mod tests {
             fixture.total_supply + 1,
             &fixture.public_keys,
             &fixture.encrypted_balances,
-            binding(),
+            &binding(),
         )
         .expect("changed supply public field");
         assert_ne!(changed_supply.bootstrap_table_digest(), baseline);
@@ -1377,7 +1380,7 @@ mod tests {
             fixture.total_supply,
             &alternative_keys,
             &fixture.encrypted_balances,
-            binding(),
+            &binding(),
         )
         .expect("changed ordered keys");
         assert_ne!(changed_keys.bootstrap_table_digest(), baseline);
@@ -1396,7 +1399,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &encrypted,
-                binding(),
+                &binding(),
             )
             .expect("changed ciphertext");
             assert_ne!(changed.bootstrap_table_digest(), baseline);
@@ -1423,7 +1426,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                changed
+                &changed
             )
             .is_err(),
             "network/genesis disagreement must reject before proof evaluation"
@@ -1454,7 +1457,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                changed_binding,
+                &changed_binding,
             )
             .expect("changed valid binding");
             assert!(verify_bootstrap(&changed, &proof).is_err());
@@ -1469,7 +1472,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                changed_parameter,
+                &changed_parameter,
             ),
             Err(AnonymousPgcError::ParameterDigestMismatch)
         ));
@@ -1483,7 +1486,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                changed_generator,
+                &changed_generator,
             ),
             Err(AnonymousPgcError::GeneratorDigestMismatch)
         ));
@@ -1503,7 +1506,7 @@ mod tests {
                 fixture.total_supply,
                 &reordered_keys,
                 &reordered_ciphertexts,
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::BootstrapKeysNotStrictlyIncreasing)
         ));
@@ -1517,7 +1520,7 @@ mod tests {
                 fixture.total_supply,
                 &duplicate_keys,
                 &fixture.encrypted_balances,
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::BootstrapKeysNotStrictlyIncreasing)
         ));
@@ -1529,7 +1532,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys[..15],
                 &fixture.encrypted_balances[..15],
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::InvalidBootstrapAccountCount { count: 15 })
         ));
@@ -1541,7 +1544,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances[..15],
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::BootstrapLengthMismatch { .. })
         ));
@@ -1692,7 +1695,7 @@ mod tests {
                 0,
                 &[],
                 &[],
-                TranscriptBindingV1 {
+                &TranscriptBindingV1 {
                     network_id: &[0; 32],
                     genesis_hash: [0; 32],
                     action_index: 0,
@@ -1727,7 +1730,7 @@ mod tests {
                     fixture.total_supply,
                     &fixture.public_keys,
                     &fixture.encrypted_balances,
-                    binding(),
+                    &binding(),
                 ),
                 Err(AnonymousPgcError::InvalidBootstrapNamespaceLength { .. })
             ));
@@ -1740,7 +1743,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::ZeroBootstrapRoot)
         ));
@@ -1752,7 +1755,7 @@ mod tests {
                 0,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::ZeroPgcTotalSupply)
         ));

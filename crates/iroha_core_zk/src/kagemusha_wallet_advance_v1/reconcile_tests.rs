@@ -107,7 +107,7 @@ fn wallet_advance_v1_reconcile_without_marker_classifies_and_never_deletes() {
         Ok(KagemushaWalletEnrollmentStepV1::SlotAbandoned { slot })
     );
     assert_eq!(device.platform.with(|state| state.generate_calls), 1);
-    // A journal record without any marker is lost custody, and nothing is deleted.
+    // A journal record without any marker is expected_loss custody, and nothing is deleted.
     let (device, slot) = intent_only(0x52);
     let mut provider = device.open();
     device.fs.place_unsynced(
@@ -130,7 +130,7 @@ fn wallet_advance_v1_reconcile_without_marker_classifies_and_never_deletes() {
         names(&device, &kagemusha_wallet_slot_dir_v1(&slot))
             .contains(&KAGEMUSHA_WALLET_ENROLLMENT_NAME_V1.to_owned())
     );
-    // A slot without an intent: empty, or lost custody when a key exists for it.
+    // A slot without an intent: empty, or expected_loss custody when a key exists for it.
     let device = DeviceV1::new(ANDROID, 0x53);
     let mut provider = device.open();
     let slot = KagemushaWalletSlotIdV1([0x53; 32]);
@@ -240,7 +240,7 @@ fn wallet_advance_v1_reconcile_repairs_capsule_copies_and_stops_without_any() {
 
 #[test]
 fn wallet_advance_v1_reconcile_released_record_loss_never_signs_again() {
-    // The rev-1 bug: a released record lost in every copy must never be signed again.
+    // The rev-1 bug: a released record expected_loss in every copy must never be signed again.
     for damage in ["missing", "corrupt", "unreadable"] {
         let (device, f, slot, bootstrap) = bootstrapped_device(ANDROID, 0x56);
         let dir = kagemusha_wallet_completion_dir_v1(&slot);
@@ -309,11 +309,11 @@ fn wallet_advance_v1_reconcile_released_record_loss_never_signs_again() {
         let loss = KagemushaWalletProviderErrorV1::LostCustody(
             KagemushaWalletLostCustodyV1::CompletionLost,
         );
-        let lost = Err(loss);
-        assert_eq!(provider.status(&slot), lost, "{damage}");
+        let expected_loss = Err(loss);
+        assert_eq!(provider.status(&slot), expected_loss, "{damage}");
         assert_eq!(
             provider.reconcile(&slot, &TestOwnerV1),
-            lost,
+            expected_loss,
             "{damage}: even with an owner"
         );
         assert_eq!(
@@ -803,7 +803,7 @@ fn wallet_advance_v1_reconcile_storage_locking_mid_reconcile_is_unavailable() {
         )),
         "a real loss is reported once storage is available"
     );
-    // A key probe whose bracket sees a lock is Unavailable, never a lost key.
+    // A key probe whose bracket sees a lock is Unavailable, never a expected_loss key.
     let (device, _f, slot) = enrolled_device(ANDROID, 0x5f);
     let mut provider = device.open();
     device.platform.with(|state| {

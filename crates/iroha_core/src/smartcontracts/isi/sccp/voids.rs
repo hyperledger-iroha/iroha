@@ -111,7 +111,7 @@ pub fn execute_submit_void(
     let deployment = store::routes::get(world, &network)
         .and_then(|route| route.revisions.get(&revision))
         .filter(|record| record.activation != SccpRouteActivationV1::Staged)
-        .map(|record| record.deployment.clone())
+        .map(|record| record.deployment)
         .ok_or_else(|| refuse(format_args!("revision {revision} does not accept proofs")))?;
     let verified =
         light_clients::verify_source_proof(state_transaction, network, &instruction.proof)?;

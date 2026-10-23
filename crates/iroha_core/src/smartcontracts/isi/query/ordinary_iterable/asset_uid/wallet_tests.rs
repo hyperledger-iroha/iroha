@@ -103,7 +103,7 @@ fn fixture_with_cut(capture_cut: bool) -> (State, FindAssetUidPoliciesV1) {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1_000, 0);
     if capture_cut {
         state
-            .block(header.clone())
+            .block(header)
             .commit_empty_block_for_testing()
             .unwrap();
         state.update_latest_block_header_cache_for_tests(header);
@@ -133,7 +133,7 @@ fn actual_admitted_route_returns_requested_product_at_captured_time_and_height()
         0,
     ));
     let query_params = params();
-    let (mut rows, stats) = super::super::execute::<AssetUidPolicyViewV1, _, Error>(
+    let (mut rows, execution_stats) = super::super::execute::<AssetUidPolicyViewV1, _, Error>(
         query.clone(),
         CompoundPredicate::PASS,
         &query_params,
@@ -150,7 +150,7 @@ fn actual_admitted_route_returns_requested_product_at_captured_time_and_height()
     assert_eq!(wallet.pending_incoming, Quantity::zero());
     assert!(rows.next().is_none());
     assert!(
-        stats.processed_items() >= 12,
+        execution_stats.processed_items() >= 12,
         "both native ownership passes share metered lookups"
     );
 }

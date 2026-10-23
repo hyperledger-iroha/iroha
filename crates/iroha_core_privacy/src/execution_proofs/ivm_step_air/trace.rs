@@ -350,7 +350,7 @@ fn operands(word: u32, family: Family) -> [Operand; 2] {
             ],
             _ => [
                 Register(wide::rs1(word)),
-                immediate(word).map_or(Register(wide::rs2(word)), Constant),
+                immediate(word).map_or_else(|| Register(wide::rs2(word)), Constant),
             ],
         },
     }
@@ -410,8 +410,8 @@ impl ScalarSegment {
     fn new(
         contract: PreparedContract,
         steps: usize,
-        before: DiagnosticStepState,
-        after: DiagnosticStepState,
+        before: &DiagnosticStepState,
+        after: &DiagnosticStepState,
         outcome: SegmentOutcome,
     ) -> Result<Self, Error> {
         let first_pc = contract
@@ -435,8 +435,8 @@ impl ScalarSegment {
             words,
             first_pc,
             steps,
-            before,
-            after,
+            before: *before,
+            after: *after,
             outcome,
         };
         result.validate()?;
@@ -811,12 +811,14 @@ impl ScalarSegment {
             }
         }
         if let Some(Family::Compare(index)) = selected_family {
-            let result = if index < 4 {
-                row[BRANCH + branch::TAKEN_BANK_OFFSET].0
-            } else if index == 4 {
-                i64::cast_unsigned(u64::cast_signed(left).min(u64::cast_signed(right)))
-            } else {
-                i64::cast_unsigned(u64::cast_signed(left).max(u64::cast_signed(right)))
+            let result = match index.cmp(&4) {
+                core::cmp::Ordering::Less => row[BRANCH + branch::TAKEN_BANK_OFFSET].0,
+                core::cmp::Ordering::Equal => {
+                    i64::cast_unsigned(u64::cast_signed(left).min(u64::cast_signed(right)))
+                }
+                core::cmp::Ordering::Greater => {
+                    i64::cast_unsigned(u64::cast_signed(left).max(u64::cast_signed(right)))
+                }
             };
             row[RESULT..RESULT + 2].copy_from_slice(&halves(result));
         }
@@ -1351,9 +1353,11 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         &row[MULTIPLY..ABSOLUTE],
         sources,
         &row[GAS_DIGITS..GAS_DIGITS + 32],
-        square_selected,
-        fixed[OUT_OF_GAS].mul(square_selected),
-        fixed[ASSERTION_FAILED].mul(square_selected),
+        (
+            square_selected,
+            fixed[OUT_OF_GAS].mul(square_selected),
+            fixed[ASSERTION_FAILED].mul(square_selected),
+        ),
     );
     ceiling::append_residues(
         &mut out,
@@ -1377,17 +1381,21 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         &row[ALU..BRANCH],
         sources,
         &row[GAS_DIGITS..GAS_DIGITS + 32],
-        mean_selected,
-        fixed[OUT_OF_GAS].mul(mean_selected),
-        fixed[ASSERTION_FAILED].mul(mean_selected),
+        (
+            mean_selected,
+            fixed[OUT_OF_GAS].mul(mean_selected),
+            fixed[ASSERTION_FAILED].mul(mean_selected),
+        ),
     );
     gcd::append_residues(
         &mut out,
-        &row[GCD..],
-        &row[SHIFT..RESULT],
-        &row[MULTIPLY..ABSOLUTE],
-        &row[ABSOLUTE..MEAN_GAS],
-        &row[MEAN_GAS..GCD],
+        gcd::Banks {
+            modes: &row[GCD..],
+            digits: &row[SHIFT..RESULT],
+            product: &row[MULTIPLY..ABSOLUTE],
+            absolute: &row[ABSOLUTE..MEAN_GAS],
+            gas: &row[MEAN_GAS..GCD],
+        },
         sources,
         Sources::new(&next[SOURCES..ALU]),
         &row[GAS_DIGITS..GAS_DIGITS + 32],
@@ -1482,7 +1490,10 @@ impl ProofManagedNoteStarkAdapterV1 for ScalarSegment {
             policies: vec![[NoteCopyCellPolicyV1::Inactive; NOTE_COPY_WIDTH_V1]; TRACE_SIZE],
             sigma: (0..TRACE_SIZE)
                 .map(|row| {
-                    std::array::from_fn(|column| (row * NOTE_COPY_WIDTH_V1 + column + 1) as u32)
+                    std::array::from_fn(|column| {
+                        u32::try_from(row * NOTE_COPY_WIDTH_V1 + column + 1)
+                            .expect("bounded circuit index")
+                    })
                 })
                 .collect(),
         })
@@ -1516,8 +1527,7 @@ impl ProofManagedNoteStarkAdapterV1 for ScalarSegment {
     }
     fn profile_constraint_residues_v1(
         &self,
-        current: &[F],
-        next: &[F],
+        (current, next): (&[F], &[F]),
         _: &[F],
         _: &[F],
         fixed: &[F],

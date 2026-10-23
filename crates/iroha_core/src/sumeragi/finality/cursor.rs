@@ -92,7 +92,7 @@ impl NativeFinalityAtHeightV1 {
 
 /// Actual native genesis execution authenticated once by the original H2 prefix step.
 /// This owner exports no imported trust and cannot be constructed by a decoder.
-pub(crate) struct NativeGenesisExecutionV1 {
+pub struct NativeGenesisExecutionV1 {
     native: ChargedBuffer<GenesisExecutionAnchor>,
     _decode: NativeDecodeSnapshot,
 }
@@ -542,10 +542,10 @@ impl Original {
                     |step| {
                         let (current, genesis) = step.into_parts();
                         original.output.push_reserved(current);
-                        if let Some(genesis) = genesis {
-                            if let Some(slot) = original.genesis.as_mut() {
-                                slot.native.push_reserved(genesis);
-                            }
+                        if let Some(genesis) = genesis
+                            && let Some(slot) = original.genesis.as_mut()
+                        {
+                            slot.native.push_reserved(genesis);
                         }
                     },
                 )
@@ -764,15 +764,15 @@ fn proof_destination_error(error: super::ProofDestinationError) -> Error {
     tests::observe_pending_destination(&error);
     match error {
         super::ProofDestinationError::Deadline => Error::Deadline,
-        super::ProofDestinationError::Source => Error::Source,
-        super::ProofDestinationError::Admission(cause) => allocation_error(cause),
-        super::ProofDestinationError::Buffer(error) => buffer_error(error),
-        super::ProofDestinationError::Key(
+        super::ProofDestinationError::Source
+        | super::ProofDestinationError::Key(
             PublicKeyAllocationError::ForeignPool
             | PublicKeyAllocationError::Allocation(ChargedBufferFromChargeError::LayoutMismatch {
                 ..
             }),
         ) => Error::Source,
+        super::ProofDestinationError::Admission(cause) => allocation_error(cause),
+        super::ProofDestinationError::Buffer(error) => buffer_error(error),
         super::ProofDestinationError::Key(PublicKeyAllocationError::Allocation(
             ChargedBufferFromChargeError::DemandOverflow,
         )) => allocation_error(iroha_allocation::AllocationRefusal::DemandOverflow),
@@ -1081,6 +1081,10 @@ impl NativeDecodeEnvelope {
         }
         Ok(NativeDecodeSnapshot { _charges: charges })
     }
+    #[expect(
+        clippy::unused_self,
+        reason = "Borrowing the decode envelope retains its original charges throughout the scoped decoder call."
+    )]
     fn run<T>(&self, wire: usize, action: impl FnOnce() -> Result<T>) -> Result<T> {
         let derived = norito::canonical_decode_limits(wire);
         let total = derived
@@ -1181,6 +1185,10 @@ mod tests {
         let genesis = cursor
             .take_genesis_execution()
             .expect("actual H2 prefix anchor");
+        #[expect(
+            clippy::used_underscore_binding,
+            reason = "The custody test observes an otherwise drop-only charge owner."
+        )]
         let handle_count = genesis._decode._charges.as_slice().len();
         let original_body = genesis.committed().block().clone();
         assert!(original_body.belongs_to(&budget));
@@ -1190,7 +1198,7 @@ mod tests {
         let retained_genesis_bytes = SharedSignedBlock::allocation_layout().size()
             + genesis_child_bytes
             + size_of::<GenesisExecutionAnchor>()
-            + handle_count * size_of::<ChargedShared<AllocationCharge>>()
+            + std::mem::size_of_val(genesis._decode._charges.as_slice())
             + handle_count * ChargedShared::<AllocationCharge>::allocation_layout().size()
             + original_increment_bytes;
         assert!(
@@ -1627,8 +1635,9 @@ mod tests {
         );
         assert_eq!(foreign.reserved_bytes(), 0);
     }
+    type CarrierProbe = Box<dyn FnMut(&SharedSignedBlock)>;
     thread_local! {
-        static CARRIER_PROBE: std::cell::RefCell<Option<Box<dyn FnMut(&SharedSignedBlock)>>> = const { std::cell::RefCell::new(None) };
+        static CARRIER_PROBE: std::cell::RefCell<Option<CarrierProbe>> = const { std::cell::RefCell::new(None) };
     }
     pub(super) fn probe_original_carrier(block: &SharedSignedBlock) {
         CARRIER_PROBE.with_borrow_mut(|probe| {
@@ -1879,8 +1888,9 @@ mod tests {
         assert_eq!(ChainIdentity::new(&changed).as_str(), changed.as_str());
         assert_ne!(retained.as_str(), "A");
     }
+    type OutputProbe = Box<dyn FnMut(u64, bool)>;
     thread_local! {
-        static OUTPUT_PROBE: std::cell::RefCell<Option<Box<dyn FnMut(u64, bool)>>> = const { std::cell::RefCell::new(None) };
+        static OUTPUT_PROBE: std::cell::RefCell<Option<OutputProbe>> = const { std::cell::RefCell::new(None) };
     }
     pub(super) fn probe_output_slots(height: u64) {
         OUTPUT_PROBE.with_borrow_mut(|probe| {
@@ -2116,8 +2126,9 @@ mod tests {
         Envelope,
         Checkpoint,
     }
+    type PendingProbe = Box<dyn FnMut(PendingStage, u64, usize, usize, usize)>;
     thread_local! {
-        static PENDING_PROBE: std::cell::RefCell<Option<Box<dyn FnMut(PendingStage, u64, usize, usize, usize)>>> = const { std::cell::RefCell::new(None) };
+        static PENDING_PROBE: std::cell::RefCell<Option<PendingProbe>> = const { std::cell::RefCell::new(None) };
         static PENDING_REFUSAL: std::cell::RefCell<Option<iroha_allocation::AllocationRefusal>> = const { std::cell::RefCell::new(None) };
     }
     fn probe_pending_stage(

@@ -82,7 +82,7 @@ where
 /// Ordinary/IVM queries have no active guard and retain their existing clone
 /// behavior. A server-owned singular lane instead canonicalizes into one
 /// hard-capped frame and decodes under the admitted allocation ceiling.
-pub(crate) fn own_singular_query_value<T>(value: &T) -> Result<T, Error>
+pub fn own_singular_query_value<T>(value: &T) -> Result<T, Error>
 where
     T: Clone + NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
@@ -99,7 +99,7 @@ where
 /// The borrowed sequence writes each element directly. The output frame owns
 /// the exact `Vec<T>` identity. The only source-sized allocation is therefore the
 /// admitted canonical frame, followed by the limit-checked decoded result.
-pub(crate) fn own_singular_query_values<'a, T, I>(values: I) -> Result<Vec<T>, Error>
+pub fn own_singular_query_values<'a, T, I>(values: I) -> Result<Vec<T>, Error>
 where
     T: Clone + NoritoSerialize + 'a,
     for<'de> T: NoritoDeserialize<'de>,
@@ -118,7 +118,7 @@ where
 /// splits an entity into an identifier and a value. Outside the server-owned
 /// lane the existing constructor is used unchanged. Inside it, the fields are
 /// encoded under `T`'s schema without first constructing an owned clone.
-pub(crate) fn own_singular_query_struct<T, const N: usize>(
+pub fn own_singular_query_struct<T, const N: usize>(
     fields: [&dyn SerializePayload; N],
     fallback: impl FnOnce() -> T,
 ) -> Result<T, Error>
@@ -163,7 +163,7 @@ where
 /// This is used by paged singular producers whose source owns a bounded result builder but borrows
 /// request or world fields: neither those borrowed fields nor the complete destination are cloned
 /// while the source builder remains resident.
-pub(crate) fn own_singular_query_serialized_source<S, T>(source: S) -> Result<T, Error>
+pub fn own_singular_query_serialized_source<S, T>(source: S) -> Result<T, Error>
 where
     S: SerializePayload,
     T: NoritoSerialize,
@@ -237,7 +237,7 @@ impl<T> SerializePayload for SingularQueryFrame<'_, T> {
 }
 /// Encode a payload-only test producer through the actual owned-output frame boundary.
 #[cfg(test)]
-pub(crate) fn encode_singular_query_source_for_test<S: SerializePayload, T: NoritoSerialize>(
+pub fn encode_singular_query_source_for_test<S: SerializePayload, T: NoritoSerialize>(
     source: &S,
 ) -> Vec<u8> {
     use norito::NoritoSchema as _;
@@ -257,7 +257,7 @@ struct BorrowedSequence<I> {
     values: I,
 }
 /// Borrowed wire-equivalent of `Option<T>` for a singular projection field.
-pub(crate) struct BorrowedSingularOption<'a, T>(Option<&'a T>);
+pub struct BorrowedSingularOption<'a, T>(Option<&'a T>);
 impl<'a, T> BorrowedSingularOption<'a, T> {
     /// Construct a borrowed optional field.
     #[must_use]
@@ -267,15 +267,12 @@ impl<'a, T> BorrowedSingularOption<'a, T> {
 }
 impl<T: SerializePayload> SerializePayload for BorrowedSingularOption<'_, T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
-        match self.0 {
-            Some(value) => {
-                writer.write_all(&[1])?;
-                norito::core::write_len_prefixed(writer, value)
-            }
-            None => {
-                writer.write_all(&[0])?;
-                Ok(())
-            }
+        if let Some(value) = self.0 {
+            writer.write_all(&[1])?;
+            norito::core::write_len_prefixed(writer, value)
+        } else {
+            writer.write_all(&[0])?;
+            Ok(())
         }
     }
     fn encoded_len_exact(&self) -> Option<usize> {
@@ -291,7 +288,7 @@ impl<T: SerializePayload> SerializePayload for BorrowedSingularOption<'_, T> {
     }
 }
 /// Borrowed wire-equivalent of a derived struct in declaration order.
-pub(crate) struct BorrowedSingularStruct<'a, const N: usize> {
+pub struct BorrowedSingularStruct<'a, const N: usize> {
     fields: [&'a dyn SerializePayload; N],
 }
 impl<'a, const N: usize> BorrowedSingularStruct<'a, N> {
@@ -344,7 +341,7 @@ where
 }
 
 /// Return the currently admitted complete-frame ceiling, capped by a producer protocol maximum.
-pub(crate) fn singular_query_frame_limit(protocol_max: usize) -> usize {
+pub fn singular_query_frame_limit(protocol_max: usize) -> usize {
     ACTIVE_LIMITS.get().map_or(protocol_max, |limits| {
         usize::try_from(limits.max_frame_bytes)
             .unwrap_or(usize::MAX)
@@ -352,7 +349,7 @@ pub(crate) fn singular_query_frame_limit(protocol_max: usize) -> usize {
     })
 }
 /// Return whether server-owned singular limits are active on this worker.
-pub(crate) fn singular_query_limits_active() -> bool {
+pub fn singular_query_limits_active() -> bool {
     ACTIVE_LIMITS.get().is_some()
 }
 /// Fallibly build one retained singular-query sequence under the active resident-output allowance.
@@ -361,7 +358,7 @@ pub(crate) fn singular_query_limits_active() -> bool {
 /// must fit `E`, and the final vector capacity plus the conservative measured allocation charge for
 /// all retained elements must fit `D`. The source value and its bounded frame are dropped before
 /// insertion, so a producer retains only this builder between loop iterations.
-pub(crate) struct SingularQueryVecBuilder<T> {
+pub struct SingularQueryVecBuilder<T> {
     values: Vec<T>,
     item_allocation_bytes: Vec<usize>,
     admitted_capacity: usize,
@@ -554,7 +551,7 @@ impl<T> Drop for SingularQueryVecBuilder<T> {
     }
 }
 /// A producer vector whose aggregate resident charge follows its allocation.
-pub(crate) struct SingularQueryRetainedVec<T> {
+pub struct SingularQueryRetainedVec<T> {
     values: Vec<T>,
     item_allocation_bytes: Vec<usize>,
     retained_charge_bytes: usize,
@@ -622,7 +619,7 @@ impl<T> Drop for SingularQueryRetainedVec<T> {
         let _ = release_retained_builder_charge(self.retained_charge_bytes);
     }
 }
-pub(crate) struct SingularQueryRetainedVecIntoIter<T> {
+pub struct SingularQueryRetainedVecIntoIter<T> {
     values: std::vec::IntoIter<T>,
     item_allocation_bytes: std::vec::IntoIter<usize>,
     retained_charge_bytes: usize,
@@ -802,14 +799,14 @@ fn release_retained_builder_charge(charge: usize) -> bool {
 /// This counter is deliberately local to one loop iteration. It is not a
 /// cumulative decode quota: after the current value is dropped, the next
 /// source record receives the complete D allowance again.
-pub(crate) struct SingularQueryCurrentAllocation {
+pub struct SingularQueryCurrentAllocation {
     retained_bytes: usize,
 }
 /// A current-value vector with one immutable, logically admitted item count.
 ///
 /// The backing allocator may round its physical capacity up, but callers can only insert through
 /// [`Self::push`], which never admits more than the count charged to the current-value allowance.
-pub(crate) struct SingularQueryFixedVec<T> {
+pub struct SingularQueryFixedVec<T> {
     values: Vec<T>,
     admitted_capacity: usize,
 }
@@ -911,7 +908,7 @@ impl SingularQueryCurrentAllocation {
 /// The protocol's tighter dimensions are preserved. Persisted source records
 /// are not required to fit the eventual response frame, but no decoded field
 /// or collection may allocate beyond the response's admitted decode budget.
-pub(crate) fn singular_query_decode_limits(
+pub fn singular_query_decode_limits(
     encoded_len: usize,
     protocol: norito::DecodeLimits,
 ) -> Result<norito::DecodeLimits, Error> {

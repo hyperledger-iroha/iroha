@@ -167,7 +167,7 @@ impl RecordStore for FakeRecords {
     }
 }
 
-/// AvailableBody bodies by `(height, hash)`; the next writes can be made to fail.
+/// `AvailableBody` bodies by `(height, hash)`; the next writes can be made to fail.
 #[derive(Default)]
 pub struct FakeBodies {
     bodies: Mutex<BTreeMap<(u64, Hash32), AvailableBody>>,
@@ -191,7 +191,7 @@ impl BodyStore for FakeBodies {
         let mut fail = self.fail.lock();
         if *fail > 0 {
             *fail -= 1;
-            return Err(io::Error::other("injected EIO").into());
+            return Err(io::Error::other("injected EIO"));
         }
         self.bodies
             .lock()

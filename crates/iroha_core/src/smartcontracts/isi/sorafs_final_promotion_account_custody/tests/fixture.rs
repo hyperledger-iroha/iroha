@@ -142,7 +142,7 @@ pub(super) fn transact(
         now,
         0,
     );
-    let mut block = state.block(header.clone());
+    let mut block = state.block(header);
     let mut tx = block.transaction();
     call(&mut tx);
     tx.apply();
@@ -153,7 +153,7 @@ pub(super) fn transact(
         .try_build_with_signature(0, key(0xFE).private_key())
         .expect("executed fixture block");
     let hash = signed.hash();
-    let header = signed.header().clone();
+    let header = signed.header();
     state
         .kura()
         .store_block(

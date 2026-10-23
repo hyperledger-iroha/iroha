@@ -1,4 +1,7 @@
 //! Host execution for exact-consent atomic payments, bilateral settlements and native FX corridors.
+/// Source and destination assets for each of the two settlement legs.
+type SettlementAssetPairs = ((AssetId, AssetId), (AssetId, AssetId));
+
 use super::*;
 mod atomic;
 use crate::smartcontracts::isi::asset::isi::{
@@ -298,7 +301,7 @@ fn resolve_settlement_leg_asset_ids(
     let deposit = AssetId::with_scope(
         leg.asset_definition_id().clone(),
         leg.to().clone(),
-        withdraw.scope().clone(),
+        *withdraw.scope(),
     );
     Ok((withdraw, deposit))
 }
@@ -341,7 +344,7 @@ fn resolve_authorized_settlement_leg_asset_ids(
     let deposit = AssetId::with_scope(
         leg.asset_definition_id().clone(),
         leg.to().clone(),
-        withdraw.scope().clone(),
+        *withdraw.scope(),
     );
     Ok((withdraw, deposit))
 }
@@ -356,11 +359,7 @@ fn ensure_leg_quantity(leg: &SettlementLeg) -> Result<(), Error> {
 fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (AssetId, AssetId) {
     let scope = AssetBalanceScope::Dataspace(dataspace);
     (
-        AssetId::with_scope(
-            leg.asset_definition_id().clone(),
-            leg.from().clone(),
-            scope.clone(),
-        ),
+        AssetId::with_scope(leg.asset_definition_id().clone(), leg.from().clone(), scope),
         AssetId::with_scope(leg.asset_definition_id().clone(), leg.to().clone(), scope),
     )
 }
@@ -585,7 +584,7 @@ fn settlement_consent_sources(
                 .then(|| stx.world.roles.get(&role_key.id))
                 .flatten()
         })
-        .flat_map(|role| role.permissions());
+        .flat_map(iroha_data_model::Role::permissions);
     direct_permissions
         .chain(role_permissions)
         .filter_map(|permission| CanExecuteSettlement::try_from(permission).ok())
@@ -637,7 +636,7 @@ fn validate_dvp_preconditions(
     intent_hash: Hash,
     delivery_leg: &SettlementLeg,
     payment_leg: &SettlementLeg,
-) -> Result<((AssetId, AssetId), (AssetId, AssetId)), Error> {
+) -> Result<SettlementAssetPairs, Error> {
     ensure_settlement_namespace_owner(settlement_id, &[delivery_leg.from(), payment_leg.from()])?;
     ensure_settlement_id_unused(stx, settlement_id)?;
     if delivery_leg.from() != authority {
@@ -685,7 +684,7 @@ fn validate_pvp_preconditions(
     intent_hash: Hash,
     primary_leg: &SettlementLeg,
     counter_leg: &SettlementLeg,
-) -> Result<((AssetId, AssetId), (AssetId, AssetId)), Error> {
+) -> Result<SettlementAssetPairs, Error> {
     ensure_settlement_namespace_owner(settlement_id, &[primary_leg.from(), counter_leg.from()])?;
     ensure_settlement_id_unused(stx, settlement_id)?;
     if primary_leg.from() != authority {
@@ -906,29 +905,26 @@ impl Execute for SetFxCorridorPolicy {
         }
         validate_fx_policy_entities(stx, &self.policy)?;
         let mut registry = fx_policy_registry(stx)?;
-        let expected_revision = match registry.get(&self.policy.policy_id) {
-            Some(previous) => {
-                if previous.owner != self.policy.owner
-                    || previous.corridor_id() != self.policy.corridor_id()
-                {
-                    return Err(invalid_fx_parameter(
-                        "FX corridor owner and canonical corridor identity are immutable",
-                    ));
-                }
-                previous
-                    .revision
-                    .checked_add(1)
-                    .ok_or_else(|| invalid_fx_parameter("FX corridor policy revision overflow"))?
+        let expected_revision = if let Some(previous) = registry.get(&self.policy.policy_id) {
+            if previous.owner != self.policy.owner
+                || previous.corridor_id() != self.policy.corridor_id()
+            {
+                return Err(invalid_fx_parameter(
+                    "FX corridor owner and canonical corridor identity are immutable",
+                ));
             }
-            None => {
-                let escrow = fx_corridor_escrow_account(stx, &self.policy);
-                if stx.world.account(&escrow).is_ok() {
-                    return Err(invalid_fx_parameter(
-                        "FX corridor registration requires its deterministic protocol escrow account to be absent",
-                    ));
-                }
-                1
+            previous
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| invalid_fx_parameter("FX corridor policy revision overflow"))?
+        } else {
+            let escrow = fx_corridor_escrow_account(stx, &self.policy);
+            if stx.world.account(&escrow).is_ok() {
+                return Err(invalid_fx_parameter(
+                    "FX corridor registration requires its deterministic protocol escrow account to be absent",
+                ));
             }
+            1
         };
         if self.policy.revision != expected_revision {
             return Err(invalid_fx_parameter(format!(
@@ -1840,7 +1836,8 @@ mod tests {
                 alias.clone(),
                 account_id.clone(),
             ));
-        stx.world.insert_account_alias_binding(alias, account_id);
+        stx.world
+            .insert_account_alias_binding(&(alias), &(account_id));
     }
     fn fx_settlement(policy: &FxCorridorPolicy, id: &str, source_amount: u32) -> SettleFxCorridor {
         let event = FeedEvent {

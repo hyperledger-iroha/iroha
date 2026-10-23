@@ -688,7 +688,9 @@ fn alice_chain(
 }
 
 /// What consensus certifies for every committed height.
-fn certified_history(chain: &CertifiedTestChain) -> Vec<(Vec<u8>, Vec<u8>, String, Vec<u8>)> {
+type CertifiedHistoryRow = (Vec<u8>, Vec<u8>, String, Vec<u8>);
+
+fn certified_history(chain: &CertifiedTestChain) -> Vec<CertifiedHistoryRow> {
     (1..=chain.height())
         .map(|height| {
             let committed = chain.committed(height);

@@ -5885,10 +5885,10 @@ pub fn validate_privacy_public_reserve_dependencies_v1<
             .get(&key)
             .and_then(PrivacyStateItemRecordV1::public_reserve_funded_allowance)
             .ok_or_else(|| "privacy public reserve has no funded allowance".to_owned())?;
-        let backed = match assets.get(&asset_id) {
-            Some(balance) => allowance <= balance.as_ref(),
-            None => allowance.is_zero(),
-        };
+        let backed = assets.get(&asset_id).map_or_else(
+            || allowance.is_zero(),
+            |balance| allowance <= balance.as_ref(),
+        );
         if !backed {
             return Err(
                 "privacy public reserve funded allowance exceeds its exact balance".to_owned(),
@@ -15276,8 +15276,8 @@ mod tests {
             let _flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
             let owned_payload = {
-                let owner = Box::new(inner.clone());
-                norito::codec::Encode::encode(&owner)
+                let boxed_state = Box::new(inner.clone());
+                norito::codec::Encode::encode(&boxed_state)
             };
             let alignment = std::mem::align_of::<PrivacyProofManagedPoolAccumulatorStateV1>();
             let mut shifted = vec![0_u8; owned_payload.len() + alignment - 1];

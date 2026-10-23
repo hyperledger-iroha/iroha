@@ -8,7 +8,7 @@ use crate::sumeragi::{
 use iroha_primitives::time::TimeSource;
 
 /// Exercise the same original State guard for a caller's genuinely signed root.
-pub(crate) fn assert_clock_ahead_defers_original(
+pub fn assert_clock_ahead_defers_original(
     make_chain: impl FnOnce() -> CertifiedTestChain + Send + 'static,
 ) {
     let (clock, source) = TimeSource::new_mock(Duration::ZERO);
@@ -120,7 +120,7 @@ fn authenticated_proposer_time_above_floor_executes_and_replays_without_restampi
         builder.set_da_proof_policies(proposal.da_proof_policies().cloned());
         builder.set_da_pin_intents(proposal.da_pin_intents().cloned());
         builder.set_npos_consensus_effects(proposal.npos_consensus_effects().cloned());
-        builder.set_global_beacon_pulse(proposal.global_beacon_pulse().cloned());
+        builder.set_global_beacon_pulse(proposal.global_beacon_pulse().copied());
         builder.set_execution_context(proposal.execution_context().cloned());
         let fresh = builder.build(iroha_data_model::block::BlockSignatures::default());
         assert_eq!(

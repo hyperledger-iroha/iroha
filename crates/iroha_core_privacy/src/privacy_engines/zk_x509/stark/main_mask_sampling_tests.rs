@@ -167,10 +167,7 @@ fn pending_sampling_columns_clear_after_success_entropy_error_and_unwind() {
                 })
             }))
         });
-        assert!(match result {
-            Ok(result) => result.is_err(),
-            Err(_) => panic_on_failure,
-        });
+        assert!(result.map_or(panic_on_failure, |result| result.is_err()));
         assert_cleared(observations, 8 * 8);
         assert_eq!(rng.draws, 2 * (MASK_DEGREE + 1) + 2);
     }
@@ -196,10 +193,7 @@ fn pending_sampling_columns_clear_after_success_entropy_error_and_unwind() {
                 )
             })
         });
-        assert!(match result {
-            Ok(result) => result.is_err(),
-            Err(_) => unwind,
-        });
+        assert!(result.map_or(unwind, |result| result.is_err()));
         assert_cleared(observations, 11 * 8);
     }
 }
@@ -329,7 +323,9 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [0x81; 32],
             assembly.verifier_profile.compiled_profile_digest,
-            core::array::from_fn(|index| digest(index as u8 + 1)),
+            core::array::from_fn(|index| {
+                digest(u8::try_from(index).expect("fixture value fits u8") + 1)
+            }),
         ),
         digest(0x91),
         digest(0xa1),
@@ -340,7 +336,7 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
         main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses).unwrap();
     let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
     let bound = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-        &layout, &assembly, sha, p256, binding,
+        &layout, &assembly, sha, p256, &binding,
     )
     .unwrap();
     let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
@@ -352,9 +348,9 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
     let mut io =
         MainIoTraceGroupSourceV1::for_main_v1(&layout, &fixture.statement, &assembly.io).unwrap();
     projection
-        .bind_challenges_v1(binding.main_post_base())
+        .bind_challenges_v1(&binding.main_post_base())
         .unwrap();
-    io.bind_challenges_v1(binding.main_post_base()).unwrap();
+    io.bind_challenges_v1(&binding.main_post_base()).unwrap();
     let sources = MainTraceReplaySourcesV1::Bound {
         log19: &bound,
         projection: &projection,
@@ -445,11 +441,13 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
                 ZK_X509_DIGEST_CONTEXT_V1,
                 AUX_LEAF_DOMAIN,
                 AUX_NODE_DOMAIN,
-                5,
-                first_registration.segment.trace_log2,
-                layout.common_lde_log2,
-                width,
-                MASK_DEGREE,
+                aggregate::MaskedTraceShapeV1 {
+                    group: 5,
+                    native_trace_log2: first_registration.segment.trace_log2,
+                    lde_log2: layout.common_lde_log2,
+                    width,
+                    mask_degree: MASK_DEGREE,
+                },
                 &indices,
                 rng,
                 source,
@@ -672,7 +670,9 @@ fn maximum_rfc_base_batches_preserve_both_phases_and_registration_seams() {
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [0x81; 32],
             assembly.verifier_profile.compiled_profile_digest,
-            core::array::from_fn(|index| digest(index as u8 + 1)),
+            core::array::from_fn(|index| {
+                digest(u8::try_from(index).expect("fixture value fits u8") + 1)
+            }),
         ),
         digest(0x91),
         digest(0xa1),
@@ -680,13 +680,13 @@ fn maximum_rfc_base_batches_preserve_both_phases_and_registration_seams() {
     )
     .unwrap();
     let bound = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-        &layout, &assembly, sha, p256, binding,
+        &layout, &assembly, sha, p256, &binding,
     )
     .unwrap();
     projection
-        .bind_challenges_v1(binding.main_post_base())
+        .bind_challenges_v1(&binding.main_post_base())
         .unwrap();
-    io.bind_challenges_v1(binding.main_post_base()).unwrap();
+    io.bind_challenges_v1(&binding.main_post_base()).unwrap();
     let sources = MainTraceReplaySourcesV1::Bound {
         log19: &bound,
         projection: &projection,

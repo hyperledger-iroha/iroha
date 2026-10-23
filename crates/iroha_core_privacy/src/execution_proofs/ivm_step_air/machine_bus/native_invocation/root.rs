@@ -169,7 +169,7 @@ impl Plan {
             32..=39 => (
                 packet::Space::Owner,
                 1,
-                4 + (clock - 32) as u32,
+                4 + u32::try_from(clock - 32).expect("bounded circuit index"),
                 0,
                 self.descriptor[clock - 32],
             ),

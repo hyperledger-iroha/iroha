@@ -47,7 +47,7 @@ fn sns_mutation_instruction_error(
 ) -> InstructionExecutionError {
     match err {
         crate::sns::SnsError::BadRequest(message) => InstructionExecutionError::InvalidParameter(
-            InvalidParameterError::SmartContract(message.into()),
+            InvalidParameterError::SmartContract(message),
         ),
         error => error.retain_in_instruction(state),
     }
@@ -64,7 +64,7 @@ fn alias_setup_instruction_error(
             )
         }
         Err(error) => InstructionExecutionError::InvalidParameter(
-            InvalidParameterError::SmartContract(error.to_string().into()),
+            InvalidParameterError::SmartContract(error.to_string()),
         ),
     }
 }
@@ -74,7 +74,7 @@ fn namespace_from_suffix_id(
     // This pure numeric namespace check has no decoder or allocation scope.
     crate::sns::SnsNamespace::from_suffix_id(suffix_id).map_err(|error| {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            error.to_string().into(),
+            error.to_string(),
         ))
     })
 }
@@ -195,8 +195,7 @@ fn ensure_active_alias_record(
                 selector.normalized_label()
             )
             .into(),
-        )
-        .into());
+        ));
     }
     Ok((selector, record))
 }
@@ -243,8 +242,7 @@ fn ensure_alias_lifecycle_authority(
         "authority must own or hold exact management permission for the alias target"
             .to_owned()
             .into(),
-    )
-    .into())
+    ))
 }
 impl Execute for EnsureAlias {
     #[metrics(+"ensure_alias")]
@@ -295,8 +293,7 @@ impl Execute for EnsureAlias {
                     "alias.state.conflict: classifier returned a non-executable conflict"
                         .to_owned()
                         .into(),
-                )
-                .into());
+                ));
             }
         }
         let target = intent.target();
@@ -365,8 +362,7 @@ impl Execute for RenewAliasLease {
                     record.expires_at_ms
                 )
                 .into(),
-            )
-            .into());
+            ));
         }
         let namespace = namespace_from_suffix_id(selector.suffix_id)?;
         ensure_configured_policy_payment_asset(state_transaction, namespace)?;
@@ -392,7 +388,7 @@ impl Execute for RenewAliasLease {
             selector,
             expected_current_expiry_ms,
             target_expiry_ms,
-            payment,
+            &payment,
         )
         .map(|_| ())
         .map_err(|error| alias_lease_instruction_error(error, state_transaction))
@@ -404,20 +400,16 @@ fn validate_auto_renew_config(
 ) -> Result<(), Error> {
     crate::alias_setup::validate_alias_auto_renew_ranges(config).map_err(|error| {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            error.to_string().into(),
+            error.to_string(),
         ))
     })?;
     if config.term_years < policy.min_term_years || config.term_years > policy.max_term_years {
         return Err(InstructionExecutionError::InvalidParameter(
-            InvalidParameterError::SmartContract(
-                format!(
-                    "auto-renew term {} is outside policy range {}..={}",
-                    config.term_years, policy.min_term_years, policy.max_term_years
-                )
-                .into(),
-            ),
-        )
-        .into());
+            InvalidParameterError::SmartContract(format!(
+                "auto-renew term {} is outside policy range {}..={}",
+                config.term_years, policy.min_term_years, policy.max_term_years
+            )),
+        ));
     }
     if config.policy_version != policy.policy_version {
         return Err(InstructionExecutionError::InvariantViolation(
@@ -426,8 +418,7 @@ fn validate_auto_renew_config(
                 config.policy_version, policy.policy_version
             )
             .into(),
-        )
-        .into());
+        ));
     }
     let payment_asset = if let Ok(asset_id) = AssetId::parse_literal(&policy.payment_asset_id) {
         asset_id.definition().clone()
@@ -445,8 +436,7 @@ fn validate_auto_renew_config(
                 config.payment_asset
             )
             .into(),
-        )
-        .into());
+        ));
     }
     Ok(())
 }
@@ -468,8 +458,7 @@ impl Execute for ConfigureAliasAutoRenew {
                 "only the exact alias resource owner may configure auto-renew"
                     .to_owned()
                     .into(),
-            )
-            .into());
+            ));
         }
         let current = crate::sns::alias_auto_renew_state(state_transaction.world(), &target)
             .map_err(|error| alias_lease_instruction_error(error, state_transaction))?;
@@ -480,8 +469,7 @@ impl Execute for ConfigureAliasAutoRenew {
                     "alias.auto_renew.revision_conflict: expected revision {expected_revision}, actual revision is {current_revision}"
                 )
                 .into(),
-            )
-            .into());
+            ));
         }
         // The exact live lease owner and revision have been checked. A stale
         // persisted owner must not prevent explicit replacement or disable;
@@ -495,8 +483,7 @@ impl Execute for ConfigureAliasAutoRenew {
                 "alias.auto_renew.owner_conflict: persisted owner differs from the lease owner"
                     .to_owned()
                     .into(),
-            )
-            .into());
+            ));
         }
         if let Some(config) = config.as_ref() {
             let policy = crate::sns::policy_by_id(state_transaction.world(), selector.suffix_id)
@@ -555,8 +542,7 @@ impl Execute for RebindAccountAlias {
                     "alias.binding.conflict: expected target `{expected_target_account}`, actual target is `{actual}`"
                 )
                 .into(),
-            )
-            .into());
+            ));
         }
         state_transaction.world.account(&new_target_account)?;
         if state_transaction
@@ -569,15 +555,14 @@ impl Execute for RebindAccountAlias {
                 "alias.primary.conflict: clear or replace the primary alias before rebinding"
                     .to_owned()
                     .into(),
-            )
-            .into());
+            ));
         }
         if expected_target_account == new_target_account {
             return Ok(());
         }
         state_transaction
             .world
-            .insert_account_alias_binding(numeric_alias.clone(), new_target_account.clone());
+            .insert_account_alias_binding(&(numeric_alias.clone()), &(new_target_account.clone()));
         super::domain::isi::upsert_account_rekey_record(
             state_transaction,
             &numeric_alias,
@@ -607,8 +592,7 @@ impl Execute for CompareAndSetPrimaryAccountAlias {
                 "alias.primary.conflict: current primary alias differs from compare-and-set expectation"
                     .to_owned()
                     .into(),
-            )
-            .into());
+            ));
         }
         for alias in expected_alias.iter().chain(new_alias.iter()) {
             let target = iroha_data_model::alias_setup::AliasTargetV1::AccountAlias(alias.clone());
@@ -620,8 +604,7 @@ impl Execute for CompareAndSetPrimaryAccountAlias {
                 "only the account may compare-and-set an empty primary alias"
                     .to_owned()
                     .into(),
-            )
-            .into());
+            ));
         }
         let new_numeric = new_alias
             .as_ref()
@@ -643,8 +626,7 @@ impl Execute for CompareAndSetPrimaryAccountAlias {
                     "alias.binding.conflict: new primary alias is bound to another account"
                         .to_owned()
                         .into(),
-                )
-                .into());
+                ));
             }
         }
         if current == new_numeric {
@@ -816,8 +798,10 @@ mod tests {
                 payment_asset_definition_id.clone(),
                 account.clone(),
             ))
-            .map(|asset| asset.value().clone().into_inner())
-            .unwrap_or_else(|_| Quantity::zero())
+            .map_or_else(
+                |_| Quantity::zero(),
+                |asset| asset.value().clone().into_inner(),
+            )
     }
     fn resolved_account_alias(
         alias: &AccountAlias,

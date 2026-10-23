@@ -44,7 +44,7 @@ impl JoinedTraceCommitmentPlanV1 {
                     JoinedTraceColumnKindV1::Base => group.base_width,
                     JoinedTraceColumnKindV1::Aux => group.aux_width,
                 })
-                .filter(|&total| total <= usize::from(u16::MAX))
+                .filter(|&total| u16::try_from(total).is_ok())
                 .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
             groups.push((group.native_trace_log2, start..width));
         }
@@ -220,33 +220,30 @@ impl JoinedTraceCommitmentPlanV1 {
         domains.validate()?;
         let rows = checked_domain_size_v1(self.commitment_lde_log2)?;
         let (leaf, node) = self.roles_v1(domains);
-        let mut builder = match cut {
-            Some(cut) => RetainedReplayBuilderV1::Selected(
-                retained_commitment::SelectedRowCommitmentV1::new_v1(
-                    domains.digest_context,
-                    leaf,
-                    node,
-                    JOINED_TRACE_GROUP_MARKER_V1,
-                    rows,
-                    self.width,
-                    opening_indices,
-                    cut,
-                )?,
-            ),
-            None => {
-                if !opening_indices.is_empty() {
-                    return Err(AggregateStarkErrorV1::InvalidLayout);
-                }
-                RetainedReplayBuilderV1::Initial(StreamingRowCommitmentV1::new(
-                    domains.digest_context,
-                    leaf,
-                    node,
-                    JOINED_TRACE_GROUP_MARKER_V1,
-                    rows,
-                    self.width,
-                    &[],
-                )?)
+        let mut builder = if let Some(cut) = cut {
+            RetainedReplayBuilderV1::Selected(retained_commitment::SelectedRowCommitmentV1::new_v1(
+                domains.digest_context,
+                leaf,
+                node,
+                JOINED_TRACE_GROUP_MARKER_V1,
+                rows,
+                self.width,
+                opening_indices,
+                cut,
+            )?)
+        } else {
+            if !opening_indices.is_empty() {
+                return Err(AggregateStarkErrorV1::InvalidLayout);
             }
+            RetainedReplayBuilderV1::Initial(StreamingRowCommitmentV1::new(
+                domains.digest_context,
+                leaf,
+                node,
+                JOINED_TRACE_GROUP_MARKER_V1,
+                rows,
+                self.width,
+                &[],
+            )?)
         };
         for (group, (native, range)) in self.groups.iter().enumerate() {
             for start in (0..range.len()).step_by(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
@@ -322,9 +319,11 @@ impl JoinedTraceCommitmentPlanV1 {
             domains.digest_context,
             leaf,
             b"vector-row-leaf",
-            0,
-            u64::try_from(row_index).map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
-            u64::from(u16::MAX),
+            (
+                0,
+                u64::try_from(row_index).map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
+                u64::from(u16::MAX),
+            ),
             &[&group, &width],
             self.width
                 .checked_mul(core::mem::size_of::<u64>())

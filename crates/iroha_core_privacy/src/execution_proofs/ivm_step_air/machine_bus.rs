@@ -206,7 +206,9 @@ impl PublicPacketBus {
                 row[SORTED_COUNT] = F(sorted_count);
                 row[SORTED_ENDED] = F(u64::from(ended));
                 if b[packet::ENABLED] == F::ONE {
-                    row[TYPES + b[packet::SPACE].0 as usize - 1] = F::ONE;
+                    row[TYPES
+                        + usize::try_from(b[packet::SPACE].0).expect("bounded circuit index")
+                        - 1] = F::ONE;
                 }
                 for (column, value) in row.into_iter().enumerate() {
                     columns[NOTE_COPY_WIDTH_V1 + column][slot * PHASES + phase] = value;
@@ -313,7 +315,10 @@ impl ProofManagedNoteStarkAdapterV1 for PublicPacketBus {
             policies: vec![[NoteCopyCellPolicyV1::Inactive; NOTE_COPY_WIDTH_V1]; self.size()],
             sigma: (0..self.size())
                 .map(|row| {
-                    std::array::from_fn(|column| (row * NOTE_COPY_WIDTH_V1 + column + 1) as u32)
+                    std::array::from_fn(|column| {
+                        u32::try_from(row * NOTE_COPY_WIDTH_V1 + column + 1)
+                            .expect("bounded circuit index")
+                    })
                 })
                 .collect(),
         })
@@ -355,8 +360,7 @@ impl ProofManagedNoteStarkAdapterV1 for PublicPacketBus {
     }
     fn profile_constraint_residues_v1(
         &self,
-        row: &[F],
-        next: &[F],
+        (row, next): (&[F], &[F]),
         aux: &[F],
         next_aux: &[F],
         fixed: &[F],

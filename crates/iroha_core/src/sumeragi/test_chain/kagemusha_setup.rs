@@ -31,7 +31,7 @@ const SUPPLY: u128 = 1_000;
 const SETUP_SCHEMA: &str = "iroha.kagemusha.executed-ledger-setup.v1";
 
 /// The actual registered sources and still-live executed chain.
-pub(crate) struct ExecutedKagemushaSetup {
+pub struct ExecutedKagemushaSetup {
     /// Original executed, certified component chain; no injected ledger rows.
     pub(crate) chain: CertifiedTestChain,
     /// Canonical manifest of the same signed genesis.
@@ -107,10 +107,11 @@ fn prepare() -> PreparedTestChainConfig {
         &validators,
         instructions,
         parameters,
-        SumeragiConsensusMode::Permissioned,
-        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        1_000,
-        NonZeroU64::MIN,
+        (
+            SumeragiConsensusMode::Permissioned,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ),
+        (1_000, NonZeroU64::MIN),
     )
     .unwrap();
     // This matches irohad's fresh bootstrap, including no fixture clock account or money.
@@ -182,7 +183,7 @@ fn prepare() -> PreparedTestChainConfig {
 }
 
 /// Execute original registration and certify its successor, retaining the exact sources.
-pub(crate) fn start() -> ExecutedKagemushaSetup {
+pub fn start() -> ExecutedKagemushaSetup {
     let prepared = prepare();
     let manifest = prepared.manifest.clone();
     let mut chain = CertifiedTestChain::from_prepared(prepared).unwrap();

@@ -66,7 +66,7 @@ pub struct QueryProjectionCheckpointShard {
     pub asset_definition_id: Option<String>,
     /// Canonical digest of the referenced DA manifest.
     pub manifest_digest: BlobDigest,
-    /// Storage ticket resolving the shard in SoraFS.
+    /// Storage ticket resolving the shard in `SoraFS`.
     pub storage_ticket: StorageTicketId,
     /// Digest of the archived shard payload itself.
     pub blob_hash: BlobDigest,
@@ -102,7 +102,7 @@ pub struct QueryProjectionUploadedShardArchive {
     pub archive: QueryProjectionShardArchive,
     /// Canonical digest of the DA manifest pinning this shard archive.
     pub manifest_digest: BlobDigest,
-    /// Storage ticket resolving the shard archive in SoraFS.
+    /// Storage ticket resolving the shard archive in `SoraFS`.
     pub storage_ticket: StorageTicketId,
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]

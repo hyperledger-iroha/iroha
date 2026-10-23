@@ -49,6 +49,10 @@ pub(crate) enum FastpqQueueRefusal {
 impl FastpqLaneHandle {
     /// Retain the returned receiver until it yields the original source and result.
     /// A refusal returns the exact original job; retry never reconstructs authority.
+    #[expect(
+        clippy::result_large_err,
+        reason = "FASTPQ refusal returns original source custody and its paid work admission without allocating an error box"
+    )]
     pub(crate) fn submit(
         &self,
         job: FastpqWitnessJob,
@@ -142,6 +146,10 @@ impl FastpqWitnessJob {
             reason = "TODO: connect durable complete-effect artifact admission before automatic dispatch; preserve original-job queue refusal and cancellation custody"
         )
     )]
+    #[expect(
+        clippy::result_large_err,
+        reason = "FASTPQ refusal returns original source custody and its paid work admission without allocating an error box"
+    )]
     pub(crate) fn from_finalized(
         source: FinalizedFastpqSource,
     ) -> Result<Self, (FinalizedFastpqSource, FinalizedFastpqWorkError)> {
@@ -178,6 +186,10 @@ impl FastpqWitnessJob {
 /// Production output is the original successful facade owner. Component-only
 /// test outputs cannot manufacture its private verification receipt.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Production proof output keeps its original verified owner; the small variant exists only for component tests"
+)]
 enum FastpqProofOutput {
     Produced(offline_compact::ProducedExecutionEffectArtifact),
     #[cfg(test)]
@@ -264,6 +276,13 @@ impl FastpqCompletedEntry {
     pub(crate) fn identity(&self) -> &FastpqArtifactIdentityDescriptionV1 {
         self.output.identity()
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "Component proof fixtures deliberately have no verified artifact"
+        )
+    )]
     pub(crate) fn verified(&self) -> Option<&offline_compact::VerifiedArtifact> {
         match &self.output {
             FastpqProofOutput::Produced(value) => Some(value.verified()),
@@ -284,6 +303,10 @@ impl FastpqCompletedEntry {
     }
 }
 /// One entry per turn bounds retained artifacts independently of source entry count.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Completion and refusal move the original paid source job without a second allocation"
+)]
 pub(crate) enum FastpqJobOutcome {
     Complete(FastpqCompletedEntry),
     Deferred {
@@ -430,7 +453,7 @@ fn start_with_options(
         );
     }
     let producer =
-        state.map(|state| producer::WorkerProducer::new(state, cfg.producer.clone(), replay_seed));
+        state.map(|state| producer::WorkerProducer::new(state, cfg.producer, replay_seed));
     start_with_builder(backpressure, producer, external_shutdown, move || {
         build_engine(&cfg)
     })
@@ -488,6 +511,10 @@ fn start_with_builder(
         reason = "TODO: connect durable complete-effect artifact admission before automatic dispatch; preserve original-job queue refusal and cancellation custody"
     )
 )]
+#[expect(
+    clippy::result_large_err,
+    reason = "FASTPQ refusal returns original source custody and its paid work admission without allocating an error box"
+)]
 pub(crate) fn try_submit(
     job: FastpqWitnessJob,
 ) -> Result<oneshot::Receiver<FastpqJobOutcome>, (FastpqWitnessJob, FastpqQueueRefusal)> {
@@ -516,10 +543,9 @@ fn clear_generation(generation: u64) {
         .current
         .as_ref()
         .is_some_and(|registered| registered.generation == generation)
+        && let Some(registered) = registry.current.take()
     {
-        if let Some(registered) = registry.current.take() {
-            registered.handle.ready.store(false, Ordering::Release);
-        }
+        registered.handle.ready.store(false, Ordering::Release);
     }
 }
 fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
@@ -636,6 +662,10 @@ fn spawn_worker(
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval
         });
+        #[expect(
+            clippy::large_enum_variant,
+            reason = "The worker moves the already admitted request inline without adding a work-queue allocation"
+        )]
         enum Turn {
             Request(WorkRequest),
             Produce,
@@ -882,6 +912,9 @@ fn shutdown_requested(
 fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
     let _ = TEST_ENGINE.set(engine);
 }
+
+#[cfg(test)]
+pub(crate) use producer::isolated_replay_retryable_for_test;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2108,6 +2141,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-pub(crate) use producer::isolated_replay_retryable_for_test;

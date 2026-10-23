@@ -30,6 +30,9 @@ pub enum RaceSimulationErrorV1 {
 }
 
 /// Create the immutable two-column staggered starting grid.
+///
+/// # Errors
+/// Returns `PlayerCount` unless the grid contains one through eight players.
 pub fn initial_race_state_v1(
     track: RaceTrackV1,
     player_count: u8,
@@ -79,13 +82,16 @@ fn validate_state_v1(state: &RaceStateV1) -> Result<(), RaceSimulationErrorV1> {
 }
 
 /// Advance one exact tick. Rust integer division truncates toward zero, including negative values.
+///
+/// # Errors
+/// Rejects invalid states, terminal races, nonsequential ticks, incorrect control counts, or unsupported control bits.
 pub fn step_race_v1(
     state: &mut RaceStateV1,
     frame: &RaceInputFrameV1,
 ) -> Result<(), RaceSimulationErrorV1> {
     validate_state_v1(state)?;
     if state.tick == RACE_MAX_TICKS_V1
-        || (state.tick % 6 == 0
+        || (state.tick.is_multiple_of(6)
             && (state
                 .cars
                 .iter()
@@ -148,7 +154,8 @@ pub fn step_race_v1(
         let segment = usize::try_from(car.progress_mm.rem_euclid(length) * 12 / length)
             .map_err(|_| RaceSimulationErrorV1::StateBounds)?;
         let curvature_force = curves[segment] * car.speed_mm_per_tick / 120
-            + (wind as i32 * car.speed_mm_per_tick / 2400);
+            + (i32::try_from(wind).expect("bounded weather coefficient") * car.speed_mm_per_tick
+                / 2400);
         car.lateral_mm = (car.lateral_mm + car.lateral_velocity_mm_per_tick + curvature_force)
             .clamp(-9_000, 9_000);
         if car.lateral_mm.abs() > 6_000 {
@@ -204,6 +211,9 @@ pub fn step_race_v1(
 
 /// Apply a unique ascending list of consensus-authorized removals atomically.
 /// Already-finished cars retain their finish; repeated removals are invalid.
+///
+/// # Errors
+/// Rejects invalid states and empty, repeated, unordered, out-of-range, or already-removed participant slots.
 pub fn apply_race_dnf_v1(
     state: &mut RaceStateV1,
     slots: &[u8],
@@ -226,6 +236,9 @@ pub fn apply_race_dnf_v1(
 }
 
 /// Replay a complete or prefix transcript with strict frame and integer-domain validation.
+///
+/// # Errors
+/// Rejects excessive duration, invalid player counts, noncanonical removal order, and any invalid frame or state transition.
 pub fn replay_race_v1(replay: &RaceReplayV1) -> Result<RaceStateV1, RaceSimulationErrorV1> {
     if replay.frames.len() > RACE_MAX_TICKS_V1 as usize {
         return Err(RaceSimulationErrorV1::Terminal);
@@ -235,10 +248,9 @@ pub fn replay_race_v1(replay: &RaceReplayV1) -> Result<RaceStateV1, RaceSimulati
         .dnf_events
         .windows(2)
         .any(|pair| pair[0].tick >= pair[1].tick)
-        || replay
-            .dnf_events
-            .iter()
-            .any(|event| event.tick > replay.frames.len() as u32)
+        || replay.dnf_events.iter().any(|event| {
+            event.tick > u32::try_from(replay.frames.len()).expect("validated replay duration")
+        })
     {
         return Err(RaceSimulationErrorV1::TickSequence);
     }
@@ -256,6 +268,9 @@ pub fn replay_race_v1(replay: &RaceReplayV1) -> Result<RaceStateV1, RaceSimulati
 }
 
 /// Derive standings and every tied winner without allowing a display tie-break to redirect prizes.
+///
+/// # Errors
+/// Returns `PlayerCount` or `StateBounds` if the supplied state is outside the reachable simulation domain.
 pub fn race_result_v1(state: &RaceStateV1) -> Result<RaceResultV1, RaceSimulationErrorV1> {
     validate_state_v1(state)?;
     let mut standings: Vec<_> = state
@@ -263,7 +278,7 @@ pub fn race_result_v1(state: &RaceStateV1) -> Result<RaceResultV1, RaceSimulatio
         .iter()
         .enumerate()
         .map(|(slot, car)| RaceStandingV1 {
-            slot: slot as u8,
+            slot: u8::try_from(slot).expect("validated player or port count"),
             finish_tick: car.finish_tick,
             dnf_tick: car.dnf_tick,
             progress_mm: car.progress_mm,
@@ -294,7 +309,7 @@ pub fn race_result_v1(state: &RaceStateV1) -> Result<RaceResultV1, RaceSimulatio
                     .filter(|standing| standing.finish_tick == Some(earliest))
                     .map(|standing| standing.slot),
             );
-        } else if state.cars.len() >= 2 && state.tick % 6 == 0 {
+        } else if state.cars.len() >= 2 && state.tick.is_multiple_of(6) {
             if eligible.len() == 1 {
                 winners.push(leader.slot);
             } else if state.tick == RACE_MAX_TICKS_V1 {
@@ -568,7 +583,11 @@ mod eligibility_tests {
         for finished in 1..=4 {
             let mut state = state();
             for slot in 0..finished {
-                finish(&mut state, slot, 6 + slot as u32);
+                finish(
+                    &mut state,
+                    slot,
+                    6 + u32::try_from(slot).expect("bounded fixture value"),
+                );
             }
             for car in &mut state.cars {
                 car.dnf_tick = Some(24);

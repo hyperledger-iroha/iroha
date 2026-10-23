@@ -3,7 +3,7 @@ use super::*;
 
 /// Read the canonical registered controller and validate its native policy.
 /// Metadata alone never establishes a native multisig registration.
-pub(crate) fn read_registered_account_state<W: WorldReadOnly>(
+pub fn read_registered_account_state<W: WorldReadOnly>(
     world: &W,
     account: &AccountId,
 ) -> Result<Option<MultisigAccountState>, Attempt<ValidationFail>> {
@@ -18,12 +18,12 @@ pub(crate) fn read_registered_account_state<W: WorldReadOnly>(
         })
     })
     .map_err(multisig_decode_attempt)?;
-    validate_registered_account_state(world, account.clone(), state).map(Some)
+    validate_registered_account_state(world, &(account.clone()), state).map(Some)
 }
 
 fn validate_registered_account_state<W: WorldReadOnly>(
     world: &W,
-    resolved_account: AccountId,
+    resolved_account: &AccountId,
     state: MultisigAccountState,
 ) -> Result<MultisigAccountState, Attempt<ValidationFail>> {
     if state.account_id != resolved_account {
@@ -105,7 +105,7 @@ fn validate_registered_account_state<W: WorldReadOnly>(
 
 /// Sponsor a new proposal only when both exact native lifecycle keys are absent.
 /// Existing, malformed, expired, or terminal bodies cannot be replay-paid as new work.
-pub(crate) fn fee_proposal_key_is_unused<W: WorldReadOnly>(
+pub fn fee_proposal_key_is_unused<W: WorldReadOnly>(
     world: &W,
     account: &AccountId,
     proposal_id: &MultisigProposalId,
@@ -122,7 +122,7 @@ pub(crate) fn fee_proposal_key_is_unused<W: WorldReadOnly>(
 
 /// Project only an exact, live pending occurrence for admission.
 /// Terminal history cannot make a new approval eligible for sponsorship.
-pub(crate) fn read_pending_fee_proposal<W: WorldReadOnly>(
+pub fn read_pending_fee_proposal<W: WorldReadOnly>(
     world: &W,
     account: &AccountId,
     proposal_id: &MultisigProposalId,
@@ -153,7 +153,7 @@ pub(crate) fn read_pending_fee_proposal<W: WorldReadOnly>(
 /// Recover a successful proposal only for this exact transaction's fee settlement.
 /// The immutable terminal record is written before inner execution; its matching
 /// `Executed` outcome is also mandatory. Callers must never use this for admission.
-pub(crate) fn read_settled_fee_proposal<W: WorldReadOnly>(
+pub fn read_settled_fee_proposal<W: WorldReadOnly>(
     world: &W,
     account: &AccountId,
     proposal_id: &MultisigProposalId,
@@ -300,7 +300,7 @@ fn same_terminal_evidence(
 /// Seed component-only settlement read evidence through the native canonical writers.
 /// This does not execute the inner instructions or claim a committed transaction.
 #[cfg(test)]
-pub(crate) fn install_executed_fee_proposal_fixture(
+pub fn install_executed_fee_proposal_fixture(
     tx: &mut StateTransaction<'_, '_>,
     terminal: &MultisigProposalTerminalState,
     entrypoint_hash: [u8; Hash::LENGTH],

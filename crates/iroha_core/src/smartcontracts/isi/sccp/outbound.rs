@@ -411,7 +411,7 @@ mod tests {
     }
 
     /// Inject existing state with a native generation and Bidirectional Ethereum revision.
-    /// This does not establish the currently blocked RegisterRoute or launch requirements.
+    /// This does not establish the currently blocked `RegisterRoute` or launch requirements.
     fn setup(stx: &mut StateTransaction<'_, '_>, max_wrapped_supply: u128) {
         store::parameters::set(stx, Some(SccpParametersV1::taira_default()));
         escrow::create_route_escrows(stx).expect("escrows");

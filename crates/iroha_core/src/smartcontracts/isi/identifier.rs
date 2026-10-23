@@ -267,34 +267,31 @@ pub mod isi {
             .world
             .opaque_uaids
             .get(&receipt_payload.opaque_id)
+            && existing_uaid != &uaid
         {
-            if existing_uaid != &uaid {
-                return Err(Error::InvariantViolation(
-                    format!(
-                        "Opaque identifier {} is already bound to UAID {existing_uaid}",
-                        receipt_payload.opaque_id
-                    )
-                    .into(),
-                ));
-            }
+            return Err(Error::InvariantViolation(
+                format!(
+                    "Opaque identifier {} is already bound to UAID {existing_uaid}",
+                    receipt_payload.opaque_id
+                )
+                .into(),
+            ));
         }
         if let Some(existing_claim) = state_transaction
             .world
             .identifier_claims
             .get(&receipt_payload.opaque_id)
-        {
-            if existing_claim.policy_id != receipt_payload.policy_id
+            && (existing_claim.policy_id != receipt_payload.policy_id
                 || existing_claim.uaid != uaid
-                || existing_claim.account_id != account
-            {
-                return Err(Error::InvariantViolation(
-                    format!(
-                        "Opaque identifier {} is already claimed under a different binding",
-                        receipt_payload.opaque_id
-                    )
-                    .into(),
-                ));
-            }
+                || existing_claim.account_id != account)
+        {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "Opaque identifier {} is already claimed under a different binding",
+                    receipt_payload.opaque_id
+                )
+                .into(),
+            ));
         }
         let details = state_transaction
             .world
@@ -529,14 +526,8 @@ pub mod isi {
             .account_mut(&existing_claim.account_id)
             .map_err(Error::from)?
             .set_opaque_ids(retained);
-        state_transaction
-            .world
-            .opaque_uaids
-            .remove(opaque_id.clone());
-        state_transaction
-            .world
-            .identifier_claims
-            .remove(opaque_id.clone());
+        state_transaction.world.opaque_uaids.remove(*opaque_id);
+        state_transaction.world.identifier_claims.remove(*opaque_id);
         Ok(())
     }
     fn validate_program_receipt(
@@ -910,7 +901,7 @@ pub mod isi {
             mutate: impl FnOnce(&mut OpenVerifyEnvelope),
         ) -> ProofBox {
             let vk = VerifyingKeyBox::new(
-                verifier.proof_backend.clone().into(),
+                verifier.proof_backend.clone(),
                 verifier.verifying_key_bytes.clone(),
             );
             let mut envelope = OpenVerifyEnvelope {
@@ -923,7 +914,7 @@ pub mod isi {
             };
             mutate(&mut envelope);
             ProofBox::new(
-                verifier.proof_backend.clone().into(),
+                verifier.proof_backend.clone(),
                 norito::encode_canonical(&envelope).expect("encode canonical OpenVerifyEnvelope"),
             )
         }

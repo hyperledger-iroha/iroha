@@ -28,9 +28,9 @@ fn malformed(world: &mut World, bad: ContractSubjectBinding, prior: bool) {
         block.commit();
     }
 }
-fn source_image(error: GroupedOwnershipError, prior: bool) {
+fn source_image(error: &GroupedOwnershipError, prior: bool) {
     assert!(
-        matches!(error, GroupedOwnershipError::Source { image, .. } if image == if prior { GroupImage::Predecessor } else { GroupImage::Current })
+        matches!(error, GroupedOwnershipError::Source { image, .. } if *image == if prior { GroupImage::Predecessor } else { GroupImage::Current })
     );
 }
 
@@ -71,7 +71,7 @@ fn source_derivation_and_every_existing_lifecycle_rule_reject_in_both_images_wit
                 _ => unreachable!(),
             }
             malformed(&mut world, bad, prior);
-            source_image(check(&world, 100_000).unwrap_err(), prior);
+            source_image(&(check(&world, 100_000).unwrap_err()), prior);
         }
     }
 }
@@ -116,7 +116,7 @@ fn subject_current_and_pending_accounts_and_active_hash_use_the_matching_image()
                     block.commit();
                 }
             }
-            source_image(check(&world, 100_000).unwrap_err(), prior);
+            source_image(&(check(&world, 100_000).unwrap_err()), prior);
         }
     }
 }
@@ -173,7 +173,7 @@ fn exact_reverse_rejects_missing_foreign_and_wrong_addresses_in_both_images() {
                 block.commit();
             }
             assert!(
-                matches!(check(&world, 100_000), Err(GroupedOwnershipError::Corrupt { image, .. }) if image == if prior {GroupImage::Predecessor} else {GroupImage::Current})
+                matches!(check(&world, 100_000), Err(GroupedOwnershipError::Corrupt { image, .. }) if *image == if prior {GroupImage::Predecessor} else {GroupImage::Current})
             );
         }
     }
@@ -263,7 +263,7 @@ fn malformed_subject_envelopes_and_nested_owner_comparisons_remain_allocation_fr
         let mut bad = binding();
         bad.subject = subject;
         malformed(&mut world, bad, false);
-        source_image(check(&world, 100_000).unwrap_err(), false);
+        source_image(&(check(&world, 100_000).unwrap_err()), false);
     }
     let mut world = world();
     let mut bad = binding();

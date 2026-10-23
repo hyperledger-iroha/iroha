@@ -150,7 +150,10 @@ impl Returning {
             let offset = clock - first;
             if clocks.contains(&clock)
                 || (15..=24).contains(&offset)
-                || (100..100 + 2 * return_copyback::CELLS as u32).contains(&offset)
+                || (100..100
+                    + 2 * u32::try_from(return_copyback::CELLS)
+                        .expect("fixed port schedule fits u32"))
+                    .contains(&offset)
             {
                 continue;
             }
@@ -186,7 +189,12 @@ impl Fixed {
             parent: original(native, 47),
             start: original(native, 20),
             end: original(native, 21),
-            operands: core::array::from_fn(|index| original(native, 15 + index as u32)),
+            operands: core::array::from_fn(|index| {
+                original(
+                    native,
+                    15 + u32::try_from(index).expect("bounded circuit index"),
+                )
+            }),
             gas: [original(native, 22), original(native, 23)],
             memory: original(native, 24),
         }
@@ -209,8 +217,14 @@ struct Cell {
 impl Cell {
     fn new(native: &NativeInvocation, offset: usize) -> Self {
         Self {
-            child: original(native, 100 + 2 * offset as u32),
-            copyback: original(native, 101 + 2 * offset as u32),
+            child: original(
+                native,
+                100 + 2 * u32::try_from(offset).expect("bounded circuit index"),
+            ),
+            copyback: original(
+                native,
+                101 + 2 * u32::try_from(offset).expect("bounded circuit index"),
+            ),
         }
     }
 }

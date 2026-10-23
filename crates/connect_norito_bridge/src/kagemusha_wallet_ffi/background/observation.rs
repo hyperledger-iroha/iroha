@@ -62,7 +62,7 @@ impl FoldBridgeTurnV1 {
         {
             let mut record = turn.finish(returned);
             record.fold_record_id = Some(id);
-            self.inner.lock().fold.record_native_work(record);
+            self.inner.lock().fold.record_native_work(&record);
         }
     }
 }
@@ -101,10 +101,10 @@ mod tests {
             let previous_work = background.inner.lock().fold.native_work_count();
             let result = run_with_fence(
                 || {
-                    background.inner.sub_proof(core_record());
+                    background.inner.sub_proof(&core_record());
                     // Another caller can append a core record before this call releases.
                     let other = Arc::clone(&background.inner);
-                    std::thread::spawn(move || other.sub_proof(core_record()))
+                    std::thread::spawn(move || other.sub_proof(&core_record()))
                         .join()
                         .unwrap();
                     Ok(())

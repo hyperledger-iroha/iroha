@@ -93,7 +93,7 @@ fn settlement_namespace_v1(
 }
 
 /// Native state validation/mutation for the single Model-owned canonical record.
-pub(crate) trait PrivateSettlementPoolGovernanceExtV1: Sized {
+pub trait PrivateSettlementPoolGovernanceExtV1: Sized {
     #[cfg(test)]
     fn from_restricted(
         governance: &PrivateSettlementPoolGovernanceV1,
@@ -249,13 +249,14 @@ impl PrivateSettlementPoolGovernanceExtV1 for PrivateSettlementPoolGovernancePro
             || self.audit_policy_digest != policy_digest
             || self.audit_key_epoch != policy.body.key_epoch
             || self.lifecycle.activation_height < policy.body.activation_height
-            || match policy.body.retirement_height {
-                Some(policy_retirement) => self
-                    .lifecycle
-                    .retirement_height
-                    .is_none_or(|retirement| retirement > policy_retirement),
-                None => false,
-            }
+            || policy
+                .body
+                .retirement_height
+                .map_or(false, |policy_retirement| {
+                    self.lifecycle
+                        .retirement_height
+                        .is_none_or(|retirement| retirement > policy_retirement)
+                })
             || !self.lifecycle.is_active_at(height)
             || !policy.is_active_at(height)
         {
@@ -373,7 +374,7 @@ pub fn fetch_private_settlement_auditor_view_v1(
 }
 
 /// Native state validation/mutation for the single Model-owned canonical record.
-pub(crate) trait PrivateSettlementPoolStateExtV1: Sized {
+pub trait PrivateSettlementPoolStateExtV1: Sized {
     fn bootstrap(
         route: PrivateSettlementRouteV1,
         pool_id: PrivacyPoolIdV1,
@@ -643,7 +644,7 @@ impl PrivateSettlementPoolStateExtV1 for PrivateSettlementPoolStateV1 {
     name = "iroha_core::private_settlement::state::PrivateSettlementDurableAvailabilityV1"
 )]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub(crate) struct PrivateSettlementDurableAvailabilityV1 {
+pub struct PrivateSettlementDurableAvailabilityV1 {
     payload_digest: Hash,
     persisted_record_digest: Hash,
     payload_bytes: u64,
@@ -726,7 +727,7 @@ impl PrivateSettlementDurableAvailabilityV1 {
     name = "iroha_core::private_settlement::state::PrivateSettlementSuccessorFrontierV1"
 )]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub(crate) struct PrivateSettlementSuccessorFrontierV1 {
+pub struct PrivateSettlementSuccessorFrontierV1 {
     pub(super) epoch: u64,
     pub(super) root: PrivacyRootV1,
     pub(super) tree_size: u64,
@@ -757,7 +758,7 @@ struct PrivateSettlementVerifiedLegDigestMaterialV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::private_settlement::state::ValidatedPrivateSettlementLegV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub(crate) struct ValidatedPrivateSettlementLegV1 {
+pub struct ValidatedPrivateSettlementLegV1 {
     route: PrivateSettlementRouteV1,
     pool_id: PrivacyPoolIdV1,
     restricted_pool_policy_digest: Hash,
@@ -910,7 +911,7 @@ impl ValidatedPrivateSettlementLegV1 {
 
 /// Verify one complete leg and derive its sole admissible successor token.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn validate_private_settlement_leg_v1(
+pub fn validate_private_settlement_leg_v1(
     manifest: &AtomicPrivateSettlementV1,
     payload: &PrivateSettlementLegPayloadV1,
     policy: &PrivateSettlementAuditPolicyV1,
@@ -1047,7 +1048,7 @@ where
 /// This test-only seam keeps the large state-gate matrix fast and diagnostic;
 /// the real proof-bearing owner bundle and committee path are covered by the
 /// private-settlement proof and sidecar integration tests.
-pub(crate) fn validate_private_settlement_leg_without_proof_for_test_v1(
+pub fn validate_private_settlement_leg_without_proof_for_test_v1(
     manifest: &AtomicPrivateSettlementV1,
     payload: &PrivateSettlementLegPayloadV1,
     policy: &PrivateSettlementAuditPolicyV1,
@@ -1075,7 +1076,7 @@ pub(crate) fn validate_private_settlement_leg_without_proof_for_test_v1(
 }
 
 #[cfg(test)]
-pub(crate) fn validated_private_settlement_leg_for_sidecar_test_v1(
+pub fn validated_private_settlement_leg_for_sidecar_test_v1(
     manifest: &AtomicPrivateSettlementV1,
     payload: &PrivateSettlementLegPayloadV1,
     approvals: &[PrivateSettlementAuditApprovalV1],
@@ -1112,7 +1113,7 @@ pub(crate) fn validated_private_settlement_leg_for_sidecar_test_v1(
 
 /// Redacted state-validation failure before Prepare or atomic application.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub(crate) enum PrivateSettlementStateErrorV1 {
+pub enum PrivateSettlementStateErrorV1 {
     /// Persisted pool governance or compact frontier is invalid.
     #[error("private-settlement pool state is invalid")]
     PoolInvariant,

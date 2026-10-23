@@ -231,7 +231,7 @@ fn verify_zk_x509_credential_subproofs_v1(
     consensus_public: &ZkX509ConsensusPublicInputsV1,
     main_aggregate: &[u8],
     ca_subproof: &[u8],
-    joint_openings: JointOriginalOpeningsV1,
+    joint_openings: &JointOriginalOpeningsV1,
 ) -> Result<(), ZkX509EngineErrorV1> {
     construct_zk_x509_compiled_profile_v1()?;
     let sha_shape = ZkX509ShaCallPublicShapeV1 {
@@ -247,14 +247,18 @@ fn verify_zk_x509_credential_subproofs_v1(
         consensus_public.credential_binding,
         main_aggregate,
     )
-    .map_err(|_error| {
+    .map_err(|error| {
         #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-main", &_error);
+        prover_diagnostic::record_public_verifier_error_v1("credential-main", &error);
+        #[cfg(not(test))]
+        let _ = error;
         ZkX509CredentialProofErrorV1::MainProof
     })?;
-    let ca_base_root = ca_accumulator_base_root_from_proof_v1(ca_subproof).map_err(|_error| {
+    let ca_base_root = ca_accumulator_base_root_from_proof_v1(ca_subproof).map_err(|error| {
         #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-ca", &_error);
+        prover_diagnostic::record_public_verifier_error_v1("credential-ca", &error);
+        #[cfg(not(test))]
+        let _ = error;
         ZkX509CredentialProofErrorV1::CaProof
     })?;
     let credential_binding = derive_zk_x509_credential_pre_aux_binding_v1(
@@ -262,15 +266,17 @@ fn verify_zk_x509_credential_subproofs_v1(
         ca_profile_digest_v1().map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?,
         ca_public_digest_v1(
             proof_instance,
-            consensus_public.credential_binding.ca_public_v1(),
+            &consensus_public.credential_binding.ca_public_v1(),
             &sha_schedule,
         )
         .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?,
         ca_base_root,
     )
-    .map_err(|_error| {
+    .map_err(|error| {
         #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-cross-binding", &_error);
+        prover_diagnostic::record_public_verifier_error_v1("credential-cross-binding", &error);
+        #[cfg(not(test))]
+        let _ = error;
         ZkX509CredentialProofErrorV1::CrossSubproofMismatch
     })?;
     let auxiliary =
@@ -280,14 +286,14 @@ fn verify_zk_x509_credential_subproofs_v1(
         statement,
         &consensus_public.rfc_statement,
         consensus_public.credential_binding,
-        credential_binding,
+        &credential_binding,
         auxiliary,
         &sha_schedule,
         main_aggregate,
     )
     .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
     let ca = CaJointVerifierOraclesV1::new_v1(
-        consensus_public.credential_binding.ca_public_v1(),
+        &consensus_public.credential_binding.ca_public_v1(),
         &sha_schedule,
         main_pre_aux,
         auxiliary,
@@ -306,9 +312,9 @@ fn verify_zk_x509_credential_subproofs_v1(
     let binding = main
         .bind_ca_openings_v1(&mut ca, joint_openings)
         .map_err(|_| ZkX509CredentialProofErrorV1::CrossSubproofMismatch)?;
-    main.finish_v1(binding)
+    main.finish_v1(&binding)
         .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
-    ca.finish_v1(binding)
+    ca.finish_v1(&binding)
         .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?;
     Ok(())
 }
@@ -328,9 +334,11 @@ pub fn verify_zk_x509_credential_proof_v1(
 ) -> Result<(), ZkX509EngineErrorV1> {
     let consensus_public =
         compile_zk_x509_consensus_public_inputs_v1(statement, authoritative_state, genesis_hash)?;
-    let envelope = decode_zk_x509_credential_envelope_v1(encoded_proof).inspect_err(|_error| {
+    let envelope = decode_zk_x509_credential_envelope_v1(encoded_proof).inspect_err(|error| {
         #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", _error);
+        prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", error);
+        #[cfg(not(test))]
+        let _ = error;
     })?;
     if envelope.public != consensus_public.credential_binding {
         return Err(ZkX509CredentialProofErrorV1::PublicBindingMismatch.into());
@@ -341,7 +349,7 @@ pub fn verify_zk_x509_credential_proof_v1(
         &consensus_public,
         envelope.main_aggregate,
         envelope.ca_subproof,
-        envelope.joint_openings,
+        &envelope.joint_openings,
     )
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -501,9 +509,11 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     )?;
     #[cfg(test)]
     prover_diagnostic::capture_public_unverified_candidate_v1(&encoded);
-    let envelope = decode_zk_x509_credential_envelope_v1(&encoded).map_err(|_error| {
+    let envelope = decode_zk_x509_credential_envelope_v1(&encoded).map_err(|error| {
         #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", &_error);
+        prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", &error);
+        #[cfg(not(test))]
+        let _ = error;
         ZkX509EngineErrorV1::ProverSelfCheckFailed
     })?;
     if envelope.proof_instance != proof_instance
@@ -522,14 +532,16 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
         &consensus_public,
         envelope.main_aggregate,
         envelope.ca_subproof,
-        envelope.joint_openings,
+        &envelope.joint_openings,
     )
-    .map_err(|_error| {
+    .map_err(|error| {
         #[cfg(test)]
         prover_diagnostic::record_public_verifier_error_v1(
             "credential-subproof-self-check",
-            &_error,
+            &error,
         );
+        #[cfg(not(test))]
+        let _ = error;
         ZkX509EngineErrorV1::ProverSelfCheckFailed
     })?;
     #[cfg(test)]

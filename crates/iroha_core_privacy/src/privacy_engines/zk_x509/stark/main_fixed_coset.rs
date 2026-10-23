@@ -83,10 +83,14 @@ impl MainFixedCosetV1 {
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        let root = goldilocks_primitive_root_v1(stripe.rows.ilog2() as u8)
-            .map_err(map_transparent_error_v1)?;
-        let full_root = goldilocks_primitive_root_v1(full_rows.ilog2() as u8)
-            .map_err(map_transparent_error_v1)?;
+        let root = goldilocks_primitive_root_v1(
+            u8::try_from(stripe.rows.ilog2()).expect("usize logarithm fits u8"),
+        )
+        .map_err(map_transparent_error_v1)?;
+        let full_root = goldilocks_primitive_root_v1(
+            u8::try_from(full_rows.ilog2()).expect("usize logarithm fits u8"),
+        )
+        .map_err(map_transparent_error_v1)?;
         if stripe.root != root
             || stripe.shift != F(GOLDILOCKS_GENERATOR_V1).mul(full_root.pow(stripe.ordinal as u128))
         {

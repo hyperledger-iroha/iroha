@@ -73,7 +73,7 @@ pub struct NativeRetailMultisigTransferFixture {
     pub approval_height: u64,
     /// Ledger timestamp that executed the transfer.
     pub approval_time_ms: u64,
-    /// Exact native approval outcome and terminal execution StatePaths.
+    /// Exact native approval outcome and terminal execution `StatePaths`.
     pub keys: [StatePath; 2],
 }
 impl NativeRetailMultisigTransferFixture {
@@ -516,7 +516,9 @@ pub fn native_retail_multisig_transfer_fixture() -> NativeRetailMultisigTransfer
     // Author it in signed genesis, with the exact matching consensus mode.
     config.consensus_mode = SumeragiConsensusMode::Npos;
     config.genesis_parameters = vec![
-        Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(npos.epoch_length_blocks)),
+        Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+            npos.epoch_length_blocks,
+        )),
         Parameter::Custom(npos.into_custom_parameter()),
     ];
     let genesis_key = config.genesis_key.clone();
@@ -703,7 +705,6 @@ pub fn native_retail_multisig_transfer_fixture() -> NativeRetailMultisigTransfer
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::StateReadOnly as _;
     use iroha_data_model::account::address::ChainDiscriminantGuard;
 
     #[test]
@@ -719,9 +720,15 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(binding.xor_asset_id, parameters.xor_asset_definition_id);
-        let definition = view.world().asset_definition(&binding.xor_asset_id).unwrap();
+        let definition = view
+            .world()
+            .asset_definition(&binding.xor_asset_id)
+            .unwrap();
         assert_eq!(definition.spec().scale(), Some(9));
-        assert_eq!(definition.balance_scope_policy(), AssetBalancePolicy::Global);
+        assert_eq!(
+            definition.balance_scope_policy(),
+            AssetBalancePolicy::Global
+        );
         assert!(fixture.assessment.retail_enrolled);
         assert_ne!(fixture.assessment.state_commitment, [0; 32]);
         drop(view);

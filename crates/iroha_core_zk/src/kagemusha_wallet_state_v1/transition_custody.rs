@@ -191,10 +191,10 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         let address = self
             .archive
             .write_object(&bytes, SOURCE_CUSTODY_MAX_BYTES)?;
-        if let Some(previous) = manifest.capsule_sources.get(&mut self.archive, &capsule)? {
-            if previous != address {
-                return Err(Error::WitnessLost("changed source custody"));
-            }
+        if let Some(previous) = manifest.capsule_sources.get(&mut self.archive, &capsule)?
+            && previous != address
+        {
+            return Err(Error::WitnessLost("changed source custody"));
         }
         manifest.capsule_sources =
             manifest

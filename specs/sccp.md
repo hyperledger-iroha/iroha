@@ -3419,7 +3419,14 @@ its expiry only consumes its nonce.
 - **Release precheck.** Every escrow release (inbound release, refund,
   `ReleaseStranded`, reconciliation settlement) runs through the same core
   movement path, and settlement first runs a read-only precheck of that path
-  that shares its policy gate (`precheck_sccp_escrow_release` in `asset.rs`),
+  that shares its policy gate (`precheck_sccp_escrow_releases` in `asset.rs`).
+  The precheck evaluates native UID policy over each ordered credit prefix,
+  including aggregate holdings shared by separate recipient and fee accounts
+  and the escrow source's daily spending and outgoing limits. Source account
+  calendar transfer caps also use the complete prefix; receiver limits keep each
+  receiver's own credit amount. It commits no UID or account-control usage; the
+  actual movement charges usage once. The first refused credit keeps
+  its recipient or fee-sink pending reason, before either credit moves value,
   so a refused credit holds a record instead of failing the proof or void that
   triggered it (§4.12.3).
 
@@ -6528,9 +6535,16 @@ still missing is named separately from external authority and audit gates.
 | First-release retirement | Implemented removal of TRON, EIP-712 attestations, attestor rosters, bridge-key files/signature sets and obsolete readers. Live OpenAPI, inventory and test descriptions name native finality. Remaining rejection/removal references, native validator schedules and ordinary EVM signing/recovery serve distinct current purposes. |
 | Parliament post-quantum ballot | External launch dependency. Proof components do not supply the qualified binding ballot, authoritative eligibility/draw/due positions, casting-open anchor or finite attempt-latency contract. Both SCCP launch gates stay false until those authorities are integrated and qualified. |
 
-**Order of work.** SCCP's own allocation custody is implemented; the generic
-S8/H3 custody named in the penalty row belongs to the Sumeragi workstream.
-Qualify the current combined candidate: workspace compilation/tests/lint,
+**Allocation boundary.** Original-pool custody is implemented for the penalty,
+forgery, certified-prefix, BLS and snapshot paths listed above. Settlement
+preflight retains owned asset identifiers and quantities, including its cumulative
+source-control amount, and uses shared asset/UID policy scratch. Those allocations
+do not yet establish original-pool admission or physical-refusal handling. This
+SCCP settlement boundary is distinct from the generic S8/H3 custody owned by
+the Sumeragi workstream. Any added local resource refusal must remain a local
+Failed outcome and must not become a deterministic pending-credit reason.
+
+**Order of work.** Qualify the current combined candidate: workspace compilation/tests/lint,
 registered mutations with named causal kills, native four-peer targets and
 cross-language replay. The reference, native producers/readers, route
 installation, narrow Parliament consumer interface and destination tooling

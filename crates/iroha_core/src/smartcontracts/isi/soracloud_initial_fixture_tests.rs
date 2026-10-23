@@ -1310,8 +1310,7 @@ fn rollout_provenance(
     }
 }
 fn sample_bundle_with_state_binding(
-    service_name: &str,
-    service_version: &str,
+    (service_name, service_version): (&str, &str),
     canary_percent: u8,
     binding_name: &str,
     key_prefix: &str,
@@ -1336,13 +1335,17 @@ fn sample_bundle_with_state_binding(
     bundle
 }
 fn state_mutation_provenance(
-    service_name: &iroha_model_base::name::Name,
-    binding_name: &iroha_model_base::name::Name,
-    state_key: &str,
+    (service_name, binding_name, state_key): (
+        &iroha_model_base::name::Name,
+        &iroha_model_base::name::Name,
+        &str,
+    ),
     operation: SoraStateMutationOperationV1,
-    value_size_bytes: Option<u64>,
-    payload_commitment: Option<Hash>,
-    encryption: SoraStateEncryptionV1,
+    (value_size_bytes, payload_commitment, encryption): (
+        Option<u64>,
+        Option<Hash>,
+        SoraStateEncryptionV1,
+    ),
     governance_tx_hash: Hash,
     fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
 ) -> ManifestProvenance {

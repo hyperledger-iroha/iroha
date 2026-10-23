@@ -316,7 +316,11 @@ pub(super) fn populate_rows(
             row[BASE_IS_WRITE] = F(u64::from(offset == 0));
             row[BASE_STRICT] = F(u64::from(remaining == 0));
             row[BASE_INVERSE] = F(u64::from(offset)).inverse_or_zero_canonical_v1();
-            write_u8_bits_v1(&mut row, BASE_SMALL_BITS, (length - 1) as u8);
+            write_u8_bits_v1(
+                &mut row,
+                BASE_SMALL_BITS,
+                u8::try_from(length - 1).map_err(|_| ZkX509Rfc5280StarkErrorV1::Semantic)?,
+            );
             push_family_row_v1(rows, row)?;
             state = after;
         }

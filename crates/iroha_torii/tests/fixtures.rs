@@ -218,8 +218,7 @@ impl ToriiHarness {
                     state.clone(),
                     kura.clone(),
                     queue.clone(),
-                    peers_rx.clone(),
-                    local_peer_id.clone(),
+                    (peers_rx.clone(), local_peer_id.clone()),
                     time_source,
                     false,
                 )

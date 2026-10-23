@@ -239,10 +239,11 @@ mod tests {
     }
     #[test]
     fn engine_derivation_check_covers_every_router_input() {
+        type RouterMutation = (&'static str, fn(&mut config::Router));
         let baseline = config::Router::default();
         let engine = SettlementEngine::from_router_config(&baseline);
         assert!(engine.matches_router_config(&baseline));
-        let changes: [(&str, fn(&mut config::Router)); 7] = [
+        let changes: [RouterMutation; 7] = [
             ("twap_window", |config| {
                 config.twap_window += std::time::Duration::from_secs(1)
             }),

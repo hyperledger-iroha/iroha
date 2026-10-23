@@ -52,6 +52,10 @@ pub enum NativeAmxRelayDiscoveryErrorV1 {
 
 /// One bounded source step, one move-only delivery, or exhaustion of the original height.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The completed variant transfers the original funded relay or proof graph without an additional uncharged allocation"
+)]
 pub enum NativeAmxRelayDiscoveryPollV1 {
     /// The same original sources made progress without delivering an instruction.
     Pending,
@@ -157,7 +161,7 @@ fn discover<V: StateReadOnly>(
         ))?;
     let scope = view
         .native_execution_tip()
-        .map(|tip| tip.root_scope())
+        .map(crate::state::native_execution_tip::NativeExecutionTip::root_scope)
         .ok_or(Error::Source(
             "relay discovery requires authenticated root scope",
         ))?;
@@ -246,7 +250,11 @@ impl<V: StateReadOnly> Discovery<'_, V> {
         let index = usize::try_from(self.height - 1)
             .map_err(|_| Error::Source("height exceeds address space"))?;
         if self.view.block_hashes().get(index).copied() != Some(self.carrier)
-            || self.view.native_execution_tip().map(|tip| tip.root_scope()) != Some(self.scope)
+            || self
+                .view
+                .native_execution_tip()
+                .map(crate::state::native_execution_tip::NativeExecutionTip::root_scope)
+                != Some(self.scope)
             || self
                 .bytes
                 .as_ref()
@@ -264,20 +272,19 @@ impl<V: StateReadOnly> Discovery<'_, V> {
                 ));
             }
         }
-        if let Some(projection) = &self.projection {
-            if !projection.matches_root(
+        if let Some(projection) = &self.projection
+            && (!projection.matches_root(
                 self.bytes.as_ref().expect("original frame").as_slice(),
                 self.view,
                 self.height,
                 self.carrier,
             ) || !self
                 .source
-                .matches_completed_execution(self.carrier, projection.ordinary_writes_root)
-            {
-                return Err(Error::Source(
-                    "relay discovery frame differs from original certified execution",
-                ));
-            }
+                .matches_completed_execution(self.carrier, projection.ordinary_writes_root))
+        {
+            return Err(Error::Source(
+                "relay discovery frame differs from original certified execution",
+            ));
         }
         Ok(())
     }

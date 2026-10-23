@@ -5,7 +5,7 @@ use iroha_data_model::sccp::fast_pause::{SCCP_PAUSE_PANEL_MAX_DRAWN_V1, SccpPass
 
 /// Scalar fast-pause effect and its borrowed canonical destination parts.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct FastPauseDraft<'a> {
+pub struct FastPauseDraft<'a> {
     pub(crate) certificate_id: [u8; 32],
     pub(crate) effect_hash: [u8; 32],
     pub(crate) panel_id: [u8; 32],
@@ -16,9 +16,9 @@ pub(crate) struct FastPauseDraft<'a> {
     pub(crate) revisions: &'a [u32],
 }
 
-/// Original draw and sorted acceptances; neither borrowed slice owns an AccountId graph.
+/// Original draw and sorted acceptances; neither borrowed slice owns an `AccountId` graph.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PausePanelDraft<'a> {
+pub struct PausePanelDraft<'a> {
     pub(crate) panel_seq: u64,
     pub(crate) pulse_id: [u8; 32],
     pub(crate) seated_height: u64,
@@ -33,7 +33,7 @@ pub(crate) struct PausePanelDraft<'a> {
 
 /// Borrowed sorted endorsements, including former holders until the current-seat recheck.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct FastPauseRoundDraft<'a> {
+pub struct FastPauseRoundDraft<'a> {
     pub(crate) panel_id: [u8; 32],
     pub(crate) panel_seq: u64,
     pub(crate) head: u64,

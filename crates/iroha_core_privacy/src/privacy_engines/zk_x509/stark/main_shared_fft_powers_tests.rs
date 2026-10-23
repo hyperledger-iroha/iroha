@@ -93,7 +93,10 @@ fn shared_public_fft_powers_preserve_domain_errors_and_independent_small_evaluat
 #[test]
 fn shared_public_fft_powers_charge_exact_single_and_paired_capacity_before_dispatch() {
     for rows in [1usize, 2, 32, 1 << 14, 1 << 19] {
-        let root = goldilocks_primitive_root_v1(rows.trailing_zeros() as u8).unwrap();
+        let root = goldilocks_primitive_root_v1(
+            u8::try_from(rows.trailing_zeros()).expect("fixture value fits u8"),
+        )
+        .unwrap();
         let minimum = PublicPowers::required_payload_bytes_v1(rows).unwrap();
         assert_eq!(
             minimum,
@@ -150,7 +153,10 @@ fn shared_public_fft_powers_charge_exact_single_and_paired_capacity_before_dispa
         // separate table reservation or change the public selection.
         let exhausted = admitted.reserve_additional_v1(available).unwrap();
         for rows in [32usize, 128, 256, 1 << 19] {
-            let root = goldilocks_primitive_root_v1(rows.trailing_zeros() as u8).unwrap();
+            let root = goldilocks_primitive_root_v1(
+                u8::try_from(rows.trailing_zeros()).expect("fixture value fits u8"),
+            )
+            .unwrap();
             for selected in [admitted, exhausted] {
                 let pair = selected.cpu_power_pair_v1(rows, root, true).unwrap();
                 assert_eq!(pair.0.is_some(), rows >= SHARED_POWERS_MIN_ROWS_V1);
@@ -232,15 +238,20 @@ fn shared_public_fft_powers_preserve_all_workers_fixed_transitions_and_private_c
                     .unwrap()
                     .with_transform_policy_v1(policy())
                     .unwrap();
-            let full_root =
-                goldilocks_primitive_root_v1((rows.trailing_zeros() + 2) as u8).unwrap();
+            let full_root = goldilocks_primitive_root_v1(
+                u8::try_from(rows.trailing_zeros() + 2).expect("fixture value fits u8"),
+            )
+            .unwrap();
             for ordinal in 0..4 {
                 let stripe = main_quotient_stripes::MainQuotientStripeV1 {
                     rows,
                     count: 4,
                     ordinal,
                     next_stride: rows / 8,
-                    root: goldilocks_primitive_root_v1(rows.trailing_zeros() as u8).unwrap(),
+                    root: goldilocks_primitive_root_v1(
+                        u8::try_from(rows.trailing_zeros()).expect("fixture value fits u8"),
+                    )
+                    .unwrap(),
                     shift: F(GOLDILOCKS_GENERATOR_V1).mul(full_root.pow(ordinal as u128)),
                 };
                 let expected = baseline.evaluate_v1(stripe).unwrap();
@@ -273,14 +284,15 @@ fn shared_public_fft_powers_preserve_all_workers_fixed_transitions_and_private_c
                         }
                         let result = policy().forward_with_v1(
                             &mut values,
-                            goldilocks_primitive_root_v1(rows.trailing_zeros() as u8).unwrap(),
+                            goldilocks_primitive_root_v1(
+                                u8::try_from(rows.trailing_zeros()).expect("fixture value fits u8"),
+                            )
+                            .unwrap(),
                             no_device,
                             || false,
                         );
                         returned_error = Some(result.is_err());
-                        if unwind {
-                            panic!("shared public table cleanup");
-                        }
+                        assert!(!unwind, "shared public table cleanup")
                     }))
                 });
                 assert_eq!(returned_error, Some(malformed));
@@ -316,9 +328,12 @@ fn registered_shared_public_fft_powers_include_construction_in_alternating_full_
             0,
         )
         .unwrap();
-        stripe_logs.insert(stripe.rows.ilog2() as u8);
+        stripe_logs.insert(u8::try_from(stripe.rows.ilog2()).expect("fixture value fits u8"));
         if stripe.count > 1 {
-            transition_logs.insert((stripe.rows.ilog2() as u8, plan.quotient_coset_log2));
+            transition_logs.insert((
+                u8::try_from(stripe.rows.ilog2()).expect("fixture value fits u8"),
+                plan.quotient_coset_log2,
+            ));
         }
     }
     let mut cases = Vec::new();

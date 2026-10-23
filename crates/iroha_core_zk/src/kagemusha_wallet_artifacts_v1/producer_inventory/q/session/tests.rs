@@ -145,7 +145,7 @@ fn same_key(actual: &KeyArtifact<Ep>, expected: &KeyArtifact<Ep>) {
     assert_eq!(actual.key().to_bytes(), expected.key().to_bytes());
 }
 
-fn expect_fault<T>(result: Result<T, QQualificationErrorV1>, fault: Fault) {
+fn expect_fault<T>(result: &Result<T, QQualificationErrorV1>, fault: Fault) {
     match fault {
         Fault::Missing => assert!(matches!(
             result,
@@ -164,7 +164,7 @@ fn expect_fault<T>(result: Result<T, QQualificationErrorV1>, fault: Fault) {
 
 /// Check genuine first admissions and hits without repeating the complete cold graph.
 /// The cache is private and is populated only by its real native signature importer.
-pub(crate) fn assert_signature_reuse_controls(
+pub fn assert_signature_reuse_controls(
     qualified: &QualifiedWalletSourcesV1,
     installed: &InstalledVerifierPackV1,
     source: &mut dyn OriginalSourceV1,
@@ -270,7 +270,7 @@ pub(crate) fn assert_signature_reuse_controls(
                 opens: Vec::new(),
             };
             expect_fault(
-                admitted.qualify(&inputs, member, &plan, &mut observed),
+                &admitted.qualify(&inputs, member, &plan, &mut observed),
                 fault,
             );
             assert_eq!(observed.opens.last(), Some(&blob.sha256));
@@ -283,7 +283,7 @@ pub(crate) fn assert_signature_reuse_controls(
                 fault: Some((blob, fault)),
                 opens: Vec::new(),
             };
-            expect_fault(empty.qualify(&inputs, member, &plan, &mut observed), fault);
+            expect_fault(&empty.qualify(&inputs, member, &plan, &mut observed), fault);
             assert!(empty.entries.is_empty());
             cases += 1;
         }
@@ -514,7 +514,7 @@ pub(crate) fn assert_signature_reuse_controls(
         };
         let mut events = Vec::new();
         expect_fault(
-            authenticated.qualify_q_programs(
+            &authenticated.qualify_q_programs(
                 installed,
                 qualified.sigmas(),
                 &mut observed,
@@ -535,12 +535,12 @@ pub(crate) fn assert_signature_reuse_controls(
 
 /// Exercise every compiled signature role, including the 14 same-source hits.
 /// All entries originate from the real typed compiled-member importer.
-pub(crate) fn assert_builtin_signature_reuse_controls(
+pub fn assert_builtin_signature_reuse_controls(
     qualified: &QualifiedWalletSourcesV1,
     installed: &InstalledVerifierPackV1,
     source: &mut dyn OriginalSourceV1,
     config: ReadConfig,
-    profile: &iroha_plonk::keys::BuiltinSourceProfileV1,
+    profile: iroha_plonk::keys::BuiltinSourceProfileV1,
 ) -> usize {
     let inventory = qualified.inventory();
     let authenticated = installed
@@ -684,7 +684,7 @@ pub(crate) fn assert_builtin_signature_reuse_controls(
                     opens: Vec::new(),
                 };
                 expect_fault(
-                    cache.qualify_with_member(
+                    &cache.qualify_with_member(
                         &inputs,
                         member,
                         &plan,

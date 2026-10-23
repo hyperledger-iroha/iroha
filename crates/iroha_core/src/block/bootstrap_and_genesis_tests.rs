@@ -194,7 +194,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
         let existing_replay = make_bootstrap_transaction(
             &authority,
             &authority_keypair,
-            existing_replay_hash.clone(),
+            existing_replay_hash,
             false,
             &permission,
             50,
@@ -202,7 +202,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
         let decorated = make_bootstrap_transaction(
             &adversary,
             &adversary_keypair,
-            decorated_hash.clone(),
+            decorated_hash,
             true,
             &permission,
             51,

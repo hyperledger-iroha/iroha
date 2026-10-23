@@ -91,6 +91,10 @@ const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
 const PROFILE: &[u8] = b"ivm-branch-step-air-v1:public-single-step:beq-bne-blt-bge-bltu-bgeu:signed-imm8:64-bit-signed-unsigned-compare:read-only-registers:r0:aliases:pc-conditional:cycles+1:base-gas=1:no-machine-admission";
 
 #[derive(Clone, Copy, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Statement tags are independent authenticated before/after register bits"
+)]
 struct BranchStepStatement {
     word: u32,
     before_pc: u32,
@@ -476,7 +480,10 @@ impl ProofManagedNoteStarkAdapterV1 for BranchStepAdapter {
             policies: vec![[NoteCopyCellPolicyV1::Inactive; NOTE_COPY_WIDTH_V1]; TRACE_SIZE],
             sigma: (0..TRACE_SIZE)
                 .map(|row| {
-                    std::array::from_fn(|column| (row * NOTE_COPY_WIDTH_V1 + column + 1) as u32)
+                    std::array::from_fn(|column| {
+                        u32::try_from(row * NOTE_COPY_WIDTH_V1 + column + 1)
+                            .expect("bounded circuit index")
+                    })
                 })
                 .collect(),
         })
@@ -508,8 +515,7 @@ impl ProofManagedNoteStarkAdapterV1 for BranchStepAdapter {
 
     fn profile_constraint_residues_v1(
         &self,
-        current: &[F],
-        _: &[F],
+        (current, _): (&[F], &[F]),
         _: &[F],
         _: &[F],
         fixed: &[F],

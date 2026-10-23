@@ -7,7 +7,7 @@ use crate::state::authority_registry::original_images::RawStorageImages;
 
 /// The existing four canonical action projections; indexes add no authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ActionTable {
+pub enum ActionTable {
     /// Data-event actions.
     Data,
     /// Pipeline-event actions.
@@ -46,6 +46,10 @@ pub(super) struct NativeActions<'a, D, P, T, C, I, AD, AP, AT, AC> {
     pub(super) active_by_call: &'a AC,
 }
 trait Sources {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn actions<'a>(
         &'a self,
         table: ActionTable,
@@ -57,6 +61,10 @@ trait Sources {
             &mut CheckedStrategy,
         ) -> Result<(), TriggerContractError>,
     ) -> Result<(), TriggerContractError>;
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn ids<'a>(
         &'a self,
         image: Image,
@@ -67,6 +75,10 @@ trait Sources {
             &mut CheckedStrategy,
         ) -> Result<(), TriggerContractError>,
     ) -> Result<(), TriggerContractError>;
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn active<'a>(
         &'a self,
         table: ActionTable,
@@ -157,6 +169,10 @@ where
 fn fail(failure: SemanticFailure) -> TriggerContractError {
     TriggerContractError::Semantic(failure)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+)]
 fn increment(count: &mut usize, work: &mut CheckedStrategy) -> Result<(), TriggerContractError> {
     work.admit_action_work(3 + 2 * std::mem::size_of::<usize>() as u64)?; // read/add/write, both scalar footprints
     *count = count
@@ -164,6 +180,10 @@ fn increment(count: &mut usize, work: &mut CheckedStrategy) -> Result<(), Trigge
         .ok_or(TriggerContractError::CounterGeometry)?;
     Ok(())
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+)]
 fn find<'a>(
     sources: &'a impl Sources,
     id: &TriggerId,
@@ -187,6 +207,10 @@ fn find<'a>(
     }
     Ok((count, found))
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+)]
 fn enabled(
     action: ActionBits<'_>,
     work: &mut CheckedStrategy,
@@ -236,6 +260,10 @@ fn enabled(
         work.admit_action_work(units)
     })
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+)]
 fn forward(
     sources: &impl Sources,
     table: ActionTable,
@@ -290,6 +318,10 @@ fn forward(
     Ok(())
 }
 /// Contract checks first, then forward typed actions, IDs and all active reverse tails.
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+)]
 fn validate_image(
     sources: &impl Sources,
     image: Image,
@@ -361,6 +393,10 @@ where
     AC: RawStorageImages<TriggerId, ()>,
 {
     /// Validate only these original closed readers, retaining both-image call order at the owner.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(super) fn validate(
         &self,
         image: Image,
@@ -372,13 +408,13 @@ where
 
 /// Scheduling allowance only; actual complete physical scans debit the retained strategy.
 /// This grants no new accepted row/byte limit and cannot infer a successful scan cost.
-pub(crate) fn scheduled_work(limits: crate::state::authority_registry::leaf::LeafLimits) -> u64 {
+pub fn scheduled_work(limits: crate::state::authority_registry::leaf::LeafLimits) -> u64 {
     let rows = limits.max_rows.saturating_add(1);
     super::contract_source_work(limits)
         .saturating_add(
             rows.saturating_mul(rows)
                 .saturating_mul(256)
-                .saturating_mul(29 * usize::BITS as u64 + 44),
+                .saturating_mul(29 * u64::from(usize::BITS) + 44),
         )
         .saturating_add(limits.max_streamed_value_bytes.saturating_mul(64))
 }

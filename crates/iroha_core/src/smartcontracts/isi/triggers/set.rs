@@ -1807,10 +1807,10 @@ pub trait SetReadOnly {
     fn active_trigger_ids_iter(&self) -> impl Iterator<Item = &TriggerId> {
         self.active_data_trigger_ids()
             .iter()
-            .map(|(id, _)| id)
-            .chain(self.active_pipeline_trigger_ids().iter().map(|(id, _)| id))
-            .chain(self.active_time_trigger_ids().iter().map(|(id, _)| id))
-            .chain(self.active_by_call_trigger_ids().iter().map(|(id, _)| id))
+            .map(|(id, ())| id)
+            .chain(self.active_pipeline_trigger_ids().iter().map(|(id, ())| id))
+            .chain(self.active_time_trigger_ids().iter().map(|(id, ())| id))
+            .chain(self.active_by_call_trigger_ids().iter().map(|(id, ())| id))
     }
     /// Iterate triggers directly from the typed trigger stores.
     fn triggers_iter(&self) -> impl Iterator<Item = Trigger> + '_ {
@@ -4068,11 +4068,11 @@ fn load_trigger_entries<F>(
             continue;
         }
         let action = LoadedAction::try_from(dto)?;
-        if let Some(blob_hash) = action.extract_blob_hash() {
-            if !contracts.contains_key(&blob_hash) {
-                missing_contracts.push(id);
-                continue;
-            }
+        if let Some(blob_hash) = action.extract_blob_hash()
+            && !contracts.contains_key(&blob_hash)
+        {
+            missing_contracts.push(id);
+            continue;
         }
         ids.insert(id.clone(), event_type);
         entries.push((id, action));

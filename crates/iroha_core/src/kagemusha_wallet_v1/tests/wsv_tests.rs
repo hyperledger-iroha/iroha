@@ -98,7 +98,7 @@ fn transact<T>(
     action: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T>,
 ) -> Result<T> {
     let header = BlockHeader::new(height.try_into().unwrap(), None, None, height * 1_000, 0);
-    let mut block = state.block(header.clone());
+    let mut block = state.block(header);
     let invocation = Hash::new(height.to_le_bytes());
     let mut tx = block.transaction_for_fastpq_testing(invocation);
     // Explicit local fixture binding: this is not network/finality qualification.
@@ -129,8 +129,7 @@ fn balance(state: &State, memory: &Memory, owner: &AccountId) -> Quantity {
             memory.registration.asset.asset.clone(),
             owner.clone(),
         ))
-        .map(|v| v.as_ref().clone())
-        .unwrap_or_else(Quantity::zero)
+        .map_or_else(Quantity::zero, |v| v.as_ref().clone())
 }
 #[test]
 fn registration_requires_dedicated_asset_permission_and_reserve_consent() {

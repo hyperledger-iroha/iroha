@@ -149,7 +149,7 @@ fn committed_writes(view: &impl StateReadOnly, height: u64) -> Attempt<Committed
 /// # Errors
 /// Local archival availability, corruption and original allocation refusals defer execution.
 /// A fee corpus inconsistent with its authenticated original execution is rejected.
-pub(crate) fn committed_fee_evidence(
+pub fn committed_fee_evidence(
     view: &impl StateReadOnly,
     height: u64,
 ) -> Attempt<FeeEvidenceBlockProofV1> {
@@ -173,7 +173,7 @@ pub(crate) fn committed_fee_evidence(
 /// # Errors
 /// Local archival availability, corruption and original allocation refusals defer execution.
 /// Authenticated absent, substituted, malformed or nonchronological source records reject.
-pub(crate) fn committed_reward_exposure(
+pub fn committed_reward_exposure(
     view: &impl StateReadOnly,
     height: u64,
     key: &StatePath,

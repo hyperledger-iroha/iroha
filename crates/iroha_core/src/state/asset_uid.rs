@@ -16,11 +16,11 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 
 #[path = "asset_uid/wallet_holdings.rs"]
-pub(crate) mod wallet_holdings;
+pub mod wallet_holdings;
 
-pub(crate) const POLICY_ROOT: &str = "asset_uid_policy_v1/";
-pub(crate) const BINDING_ROOT: &str = "asset_uid_binding_v1/";
-pub(crate) const USAGE_ROOT: &str = "asset_uid_usage_v1/";
+pub const POLICY_ROOT: &str = "asset_uid_policy_v1/";
+pub const BINDING_ROOT: &str = "asset_uid_binding_v1/";
+pub const USAGE_ROOT: &str = "asset_uid_usage_v1/";
 type Error = InstructionExecutionError;
 
 fn reject(message: impl Into<String>) -> Error {
@@ -31,23 +31,25 @@ fn digest(value: impl std::fmt::Display) -> String {
     hex::encode(Hash::new(value.to_string().as_bytes()).as_ref())
 }
 
-fn path(value: String) -> StatePath {
+fn path(value: &str) -> StatePath {
     value.parse().expect("fixed native asset UID path is valid")
 }
 
-pub(crate) fn policy_key(definition: &AssetDefinitionId, uid: &[u8; 32]) -> StatePath {
+pub fn policy_key(definition: &AssetDefinitionId, uid: &[u8; 32]) -> StatePath {
     super::asset_context_keys::uid_policy_native(definition, uid)
 }
-pub(crate) fn binding_key(definition: &AssetDefinitionId, account: &AccountId) -> StatePath {
+pub fn binding_key(definition: &AssetDefinitionId, account: &AccountId) -> StatePath {
     super::asset_context_keys::uid_binding_native(definition, &account.to_string())
 }
 
-pub(crate) fn usage_key(definition: &AssetDefinitionId, uid: &[u8; 32], day: u64) -> StatePath {
-    path(format!(
-        "{USAGE_ROOT}{}/{}/{day}",
-        digest(definition),
-        hex::encode(uid)
-    ))
+pub fn usage_key(definition: &AssetDefinitionId, uid: &[u8; 32], day: u64) -> StatePath {
+    path(
+        &(format!(
+            "{USAGE_ROOT}{}/{}/{day}",
+            digest(definition),
+            hex::encode(uid)
+        )),
+    )
 }
 
 fn decode<T>(bytes: &[u8]) -> Result<T, Error>
@@ -58,12 +60,12 @@ where
     norito::decode_canonical(bytes).map_err(|e| reject(format!("invalid asset UID state: {e}")))
 }
 
-pub(crate) fn encode<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
+pub fn encode<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
     norito::encode_canonical(value)
         .map_err(|e| reject(format!("cannot encode asset UID state: {e}")))
 }
 
-pub(crate) fn policy(
+pub fn policy(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     uid: &[u8; 32],
@@ -82,7 +84,7 @@ pub(crate) fn policy(
     Ok(Some(value))
 }
 
-pub(crate) fn binding(
+pub fn binding(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
@@ -105,7 +107,7 @@ pub(crate) fn binding(
     Ok(Some(value))
 }
 
-pub(crate) fn member_policy(
+pub fn member_policy(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
@@ -150,15 +152,14 @@ fn balance(
         world
             .assets()
             .get(id)
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone())
     })
 }
 
 /// Sum exact member balances and retained payer-owned native escrow reserves.
 /// Custody balances, rather than a pending record mutation, determine the amount
 /// during release/refund. Thus returning funds to the payer has zero net effect.
-pub(crate) fn holdings(
+pub fn holdings(
     world: &impl WorldReadOnly,
     policy: &AssetUidPolicyV1,
     overrides: &BTreeMap<AssetId, Quantity>,
@@ -189,7 +190,7 @@ pub(crate) fn holdings(
     Ok(total)
 }
 
-pub(crate) fn check_holdings(
+pub fn check_holdings(
     world: &impl WorldReadOnly,
     policy: &AssetUidPolicyV1,
     overrides: &BTreeMap<AssetId, Quantity>,
@@ -211,7 +212,7 @@ pub(crate) fn check_holdings(
 }
 
 /// Mint/other direct credit must use aggregate headroom, even outside Transfer.
-pub(crate) fn check_credit(
+pub fn check_credit(
     world: &impl WorldReadOnly,
     id: &AssetId,
     candidate: &Quantity,
@@ -263,10 +264,10 @@ fn usage(
 
 #[path = "asset_uid_activity.rs"]
 mod activity;
-pub(crate) use activity::MovementActivity;
+pub use activity::MovementActivity;
 
 /// Exact purpose provenance supplied only by the sealed native movement kernel.
-pub(crate) struct Movement<'a> {
+pub struct Movement<'a> {
     pub(crate) source: &'a AssetId,
     pub(crate) destination: &'a AssetId,
     pub(crate) amount: &'a Quantity,
@@ -278,7 +279,7 @@ pub(crate) struct Movement<'a> {
 /// Returning encoded writes lets the caller finish every fallible preflight
 /// before writing balances. Every sibling wallet is checked against the same
 /// exclusive transaction World; independent legs call this separately.
-pub(crate) fn prepare_movements(
+pub fn prepare_movements(
     world: &impl WorldReadOnly,
     movements: &[Movement<'_>],
     now_ms: u64,
@@ -318,14 +319,14 @@ pub(crate) fn prepare_movements(
             .checked_add(movement.amount)
             .map_err(|_| MathError::Overflow)?;
         balances.insert(movement.destination.clone(), destination_after);
-        if let (Some(value), Some(ceiling)) = (&destination_policy, destination_ceiling) {
-            if holdings(world, value, &balances)? > ceiling {
-                return Err(Error::AssetTransferAdmission(
-                    AssetTransferAdmissionError::HoldingLimitExceeded(
-                        "identity-wide asset holding increase exceeds its current cap".into(),
-                    ),
-                ));
-            }
+        if let (Some(value), Some(ceiling)) = (&destination_policy, destination_ceiling)
+            && holdings(world, value, &balances)? > ceiling
+        {
+            return Err(Error::AssetTransferAdmission(
+                AssetTransferAdmissionError::HoldingLimitExceeded(
+                    "identity-wide asset holding increase exceeds its current cap".into(),
+                ),
+            ));
         }
         activity::charge_activity(world, movement, now_ms, &mut activities)?;
     }
@@ -336,7 +337,7 @@ pub(crate) fn prepare_movements(
 }
 
 /// Retain the allowed beneficial holding ceiling before funding new custody.
-pub(crate) fn opening_holding_ceiling(
+pub fn opening_holding_ceiling(
     world: &impl WorldReadOnly,
     source: &AssetId,
 ) -> Result<Option<Quantity>, Error> {
@@ -355,7 +356,7 @@ pub(crate) fn opening_holding_ceiling(
 /// Check the newly funded escrow before retaining its payer-owned reserve.
 /// This closes compound atomic settlements that both fund custody and credit
 /// another wallet of the same UID before the escrow record is installed.
-pub(crate) fn check_opening(
+pub fn check_opening(
     world: &impl WorldReadOnly,
     escrow: &iroha_data_model::escrow::AssetEscrowRecord,
     holding_ceiling: Option<&Quantity>,
@@ -379,7 +380,7 @@ pub(crate) fn check_opening(
 }
 
 /// Materialize exact owner-query rows from the captured native state.
-pub(crate) fn views(
+pub fn views(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     selected_uid: Option<&[u8; 32]>,
@@ -435,7 +436,7 @@ fn in_root(key: &StatePath, root: &str) -> bool {
 
 /// Native policy retains definitions/accounts so delete-and-recreate cannot
 /// discard membership or daily usage.
-pub(crate) fn retained(
+pub fn retained(
     world: &impl WorldReadOnly,
     definition: Option<&AssetDefinitionId>,
     account: Option<&AccountId>,
@@ -455,7 +456,7 @@ pub(crate) fn retained(
 
 /// Validate additive state after restoring a snapshot, including old snapshots
 /// with no UID roots. No defaults rewrite historical records or balances.
-pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
+pub fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
     for (key, bytes) in world.smart_contract_state().iter() {
         if in_root(key, POLICY_ROOT) {
             let value: AssetUidPolicyV1 = decode(bytes)?;

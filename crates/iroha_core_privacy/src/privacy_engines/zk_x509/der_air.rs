@@ -384,6 +384,9 @@ impl Drop for ZkX509DerDocumentTraceV1 {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+type SetOrderCoordinatesV1 = (u64, u64, u64, u64, u64, u64);
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerDocumentTraceV1 {
     fn zeroize_private_v1(&mut self) {
         for row in &mut self.bytes {
@@ -618,10 +621,10 @@ fn validate_primitive_contents_v1(
         }
         2 | 10 => {
             let first = *contents.first().ok_or(ZkX509DerAirErrorV1::Primitive)?;
-            if let Some(second) = contents.get(1).copied() {
-                if (first == 0 && second & 0x80 == 0) || (first == 0xff && second & 0x80 != 0) {
-                    return Err(ZkX509DerAirErrorV1::Primitive);
-                }
+            if let Some(second) = contents.get(1).copied()
+                && ((first == 0 && second & 0x80 == 0) || (first == 0xff && second & 0x80 != 0))
+            {
+                return Err(ZkX509DerAirErrorV1::Primitive);
             }
         }
         3 => {
@@ -895,7 +898,8 @@ fn build_set_comparison_rows_v1(
         let difference = u16::from(right_byte)
             .wrapping_sub(u16::from(left_byte))
             .wrapping_sub(1)
-            .wrapping_add(256 * u16::from(borrow)) as u8;
+            .wrapping_add(256 * u16::from(borrow))
+            .to_le_bytes()[0];
         let packed_difference = F(u64::from(left_byte)).sub(F(u64::from(right_byte)));
         output.push(ZkX509DerSetOrderRowV1 {
             set_node: ZkX509DerRangeWitnessV1::from_u64(
@@ -924,7 +928,7 @@ fn build_set_comparison_rows_v1(
         equal = equal_after;
         less = less_after;
     }
-    if !less && !(equal && left_bytes.len() <= right_bytes.len()) {
+    if !(less || equal && left_bytes.len() <= right_bytes.len()) {
         return Err(ZkX509DerAirErrorV1::SetOrder);
     }
     Ok(())
@@ -1296,56 +1300,53 @@ pub fn evaluate_der_node_transition_constraints_v1(
     let retained: [F; ZK_X509_DER_MAX_NESTING_DEPTH_V1] = core::array::from_fn(|index| {
         row.ancestor_active[index].sub(row.ancestor_gap_is_zero[index])
     });
-    match next {
-        Some(next) => {
-            constraints.push(next.ordinal.value.sub(row.ordinal.value.add(F::ONE)));
-            let expected_start = has_child
-                .mul(row.content_start.value)
-                .add(F::ONE.sub(has_child).mul(row.end.value));
-            constraints.push(next.start.value.sub(expected_start));
-            let retained_count = retained.iter().copied().fold(F::ZERO, F::add);
-            constraints.push(
-                next.depth.value.sub(
-                    has_child
-                        .mul(row.depth.value.add(F::ONE))
-                        .add(F::ONE.sub(has_child).mul(retained_count)),
-                ),
+    if let Some(next) = next {
+        constraints.push(next.ordinal.value.sub(row.ordinal.value.add(F::ONE)));
+        let expected_start = has_child
+            .mul(row.content_start.value)
+            .add(F::ONE.sub(has_child).mul(row.end.value));
+        constraints.push(next.start.value.sub(expected_start));
+        let retained_count = retained.iter().copied().fold(F::ZERO, F::add);
+        constraints.push(
+            next.depth.value.sub(
+                has_child
+                    .mul(row.depth.value.add(F::ONE))
+                    .add(F::ONE.sub(has_child).mul(retained_count)),
+            ),
+        );
+        for (index, &retained_active) in retained.iter().enumerate() {
+            let previous_active = if index == 0 {
+                F::ZERO
+            } else {
+                row.ancestor_active[index - 1]
+            };
+            let push = F::ONE.sub(row.ancestor_active[index]).mul(if index == 0 {
+                F::ONE
+            } else {
+                previous_active
+            });
+            let child_active = row.ancestor_active[index].add(push);
+            let child_end = row.ancestor_active[index]
+                .mul(row.ancestor_ends[index].value)
+                .add(push.mul(row.end.value));
+            let expected_active = has_child
+                .mul(child_active)
+                .add(F::ONE.sub(has_child).mul(retained_active));
+            let expected_end = has_child.mul(child_end).add(
+                F::ONE
+                    .sub(has_child)
+                    .mul(retained[index])
+                    .mul(row.ancestor_ends[index].value),
             );
-            for index in 0..ZK_X509_DER_MAX_NESTING_DEPTH_V1 {
-                let previous_active = if index == 0 {
-                    F::ZERO
-                } else {
-                    row.ancestor_active[index - 1]
-                };
-                let push = F::ONE.sub(row.ancestor_active[index]).mul(if index == 0 {
-                    F::ONE
-                } else {
-                    previous_active
-                });
-                let child_active = row.ancestor_active[index].add(push);
-                let child_end = row.ancestor_active[index]
-                    .mul(row.ancestor_ends[index].value)
-                    .add(push.mul(row.end.value));
-                let expected_active = has_child
-                    .mul(child_active)
-                    .add(F::ONE.sub(has_child).mul(retained[index]));
-                let expected_end = has_child.mul(child_end).add(
-                    F::ONE
-                        .sub(has_child)
-                        .mul(retained[index])
-                        .mul(row.ancestor_ends[index].value),
-                );
-                constraints.push(next.ancestor_active[index].sub(expected_active));
-                constraints.push(next.ancestor_ends[index].value.sub(expected_end));
-            }
+            constraints.push(next.ancestor_active[index].sub(expected_active));
+            constraints.push(next.ancestor_ends[index].value.sub(expected_end));
         }
-        None => {
-            constraints.push(has_child);
-            constraints.push(row.end.value.sub(F(
-                u64::try_from(document_len).expect("DER document length fits u64"),
-            )));
-            constraints.extend(retained);
-        }
+    } else {
+        constraints.push(has_child);
+        constraints.push(row.end.value.sub(F(
+            u64::try_from(document_len).expect("DER document length fits u64"),
+        )));
+        constraints.extend(retained);
     }
     constraints
 }
@@ -1787,9 +1788,7 @@ impl ZkX509DerDocumentTraceV1 {
         self.validate_set_order_terminals()?;
         Ok(())
     }
-    fn expected_set_order_rows(
-        &self,
-    ) -> Result<Vec<(u64, u64, u64, u64, u64, u64)>, ZkX509DerAirErrorV1> {
+    fn expected_set_order_rows(&self) -> Result<Vec<SetOrderCoordinatesV1>, ZkX509DerAirErrorV1> {
         let mut expected = Vec::new();
         for (set_index, set) in self.nodes.iter().enumerate() {
             if set.tag_class.value != F::ZERO || set.tag_number.value != F(17) {
@@ -1966,19 +1965,15 @@ const KEY_USAGE_KEY_CERT_SIGN_V1: u16 = 1 << 5;
 const KEY_USAGE_CRL_SIGN_V1: u16 = 1 << 6;
 /// Closed extended-key-usage code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(any(test, feature = "privacy-release-evidence"), derive(Default))]
 pub enum ZkX509DerEkuV1 {
     /// id-kp-clientAuth.
+    #[cfg_attr(any(test, feature = "privacy-release-evidence"), default)]
     ClientAuthentication,
     /// Iroha document-signing EKU.
     DocumentSigning,
     /// Iroha wallet-identity EKU.
     WalletIdentity,
-}
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-impl Default for ZkX509DerEkuV1 {
-    fn default() -> Self {
-        Self::ClientAuthentication
-    }
 }
 // The valid default variant is the desired erased value; Zeroize writes it
 // through its volatile default-value implementation without invalid enum bytes.
@@ -2020,7 +2015,9 @@ pub struct ZkX509Rfc5280StatementV1 {
         reason = "only the test and release-evidence RFC adapters construct every grammar role"
     )
 )]
+#[cfg_attr(any(test, feature = "privacy-release-evidence"), derive(Default))]
 pub enum ZkX509Rfc5280GrammarRoleV1 {
+    #[cfg_attr(any(test, feature = "privacy-release-evidence"), default)]
     Certificate = 1,
     CertificateTbs = 2,
     CertificateOuterAlgorithm = 3,
@@ -2079,12 +2076,6 @@ pub enum ZkX509Rfc5280GrammarRoleV1 {
     EmbeddedEkuOid = 55,
     EmbeddedCrlNumber = 56,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-impl Default for ZkX509Rfc5280GrammarRoleV1 {
-    fn default() -> Self {
-        Self::Certificate
-    }
-}
 // The valid default variant is the desired erased value; Zeroize writes it
 // through its volatile default-value implementation without invalid enum bytes.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2094,7 +2085,9 @@ impl zeroize::DefaultIsZeroes for ZkX509Rfc5280GrammarRoleV1 {}
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
+#[derive(Default)]
 pub enum ZkX509Rfc5280DocumentKindV1 {
+    #[default]
     Certificate = 1,
     Crl = 2,
     AuthorityKeyIdentifier = 3,
@@ -2103,12 +2096,6 @@ pub enum ZkX509Rfc5280DocumentKindV1 {
     BasicConstraints = 6,
     ExtendedKeyUsage = 7,
     CrlNumber = 8,
-}
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-impl Default for ZkX509Rfc5280DocumentKindV1 {
-    fn default() -> Self {
-        Self::Certificate
-    }
 }
 // The valid default variant is the desired erased value; Zeroize writes it
 // through its volatile default-value implementation without invalid enum bytes.
@@ -2284,7 +2271,7 @@ impl core::fmt::Debug for ZkX509Rfc5280TraceV1 {
             .debug_struct("ZkX509Rfc5280TraceV1")
             .field("statement", &self.statement)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2771,7 +2758,7 @@ fn parse_name_v1(
                 if value_row.tag_class.value != F::ZERO
                     || value_row.tag_number.value != F(19)
                     || contents.len() != 2
-                    || !contents.iter().all(|byte| byte.is_ascii_uppercase())
+                    || !contents.iter().all(u8::is_ascii_uppercase)
                 {
                     return Err(ZkX509DerAirErrorV1::Input);
                 }
@@ -4764,6 +4751,7 @@ impl ZkX509Rfc5280TraceV1 {
 }
 #[cfg(test)]
 mod tests {
+    type MutationV1<T> = Box<dyn Fn(&mut T)>;
     use super::*;
     use crate::privacy_engines::zk_x509::{
         der::{ZkX509DerLimitsV1, parse_single_der_value_v1},
@@ -4842,7 +4830,7 @@ mod tests {
         let mut encoded = tag.to_vec();
         if contents.len() < 128 {
             encoded.push(u8::try_from(contents.len()).expect("short DER length"));
-        } else if contents.len() <= usize::from(u8::MAX) {
+        } else if u8::try_from(contents.len()).is_ok() {
             encoded.extend_from_slice(&[
                 0x81,
                 u8::try_from(contents.len()).expect("one-octet DER length"),
@@ -4881,7 +4869,7 @@ mod tests {
         let boolean = tlv(&[0x01], &[0xff]);
         let ordered_set = set(&[tlv(&[0x02], &[1]), tlv(&[0x02], &[2])]);
         let high_context = tlv(&[0x9f, 0x81, 0x00], &[0x5a]);
-        let long_octets = tlv(&[0x04], &vec![0x77; 128]);
+        let long_octets = tlv(&[0x04], &[0x77; 128]);
         sequence(&[
             integer,
             oid,
@@ -4926,9 +4914,12 @@ mod tests {
     fn signature_der() -> Vec<u8> {
         sequence(&[integer(1), integer(1)])
     }
-    fn name(country: &[u8; 2], common_name: &[u8]) -> Vec<u8> {
+    fn name(country: [u8; 2], common_name: &[u8]) -> Vec<u8> {
         sequence(&[
-            set(&[sequence(&[oid(OID_COUNTRY_NAME_V1), tlv(&[0x13], country)])]),
+            set(&[sequence(&[
+                oid(OID_COUNTRY_NAME_V1),
+                tlv(&[0x13], &country),
+            ])]),
             set(&[sequence(&[
                 oid(OID_COMMON_NAME_V1),
                 tlv(&[0x0c], common_name),
@@ -5106,10 +5097,10 @@ mod tests {
         leaf_common_name: &[u8],
     ) -> (Vec<Vec<u8>>, Vec<u8>, ZkX509Rfc5280StatementV1) {
         assert!((2..=3).contains(&depth));
-        let leaf_name = name(b"IL", leaf_common_name);
-        let intermediate_name = name(b"IL", b"Intermediate");
-        let root_name = name(b"IL", b"Root");
-        let leaf_ski = [0x11; 20];
+        let leaf_name = name(*b"IL", leaf_common_name);
+        let intermediate_name = name(*b"IL", b"Intermediate");
+        let root_name = name(*b"IL", b"Root");
+        let leaf_subject_key_identifier = [0x11; 20];
         let intermediate_ski = [0x22; 20];
         let root_ski = [0x33; 20];
         let leaf_issuer = if depth == 2 {
@@ -5117,7 +5108,7 @@ mod tests {
         } else {
             &intermediate_name
         };
-        let leaf_aki = if depth == 2 {
+        let leaf_authority_key_identifier = if depth == 2 {
             &root_ski
         } else {
             &intermediate_ski
@@ -5126,8 +5117,8 @@ mod tests {
             7,
             leaf_issuer,
             &leaf_name,
-            &leaf_ski,
-            leaf_aki,
+            &leaf_subject_key_identifier,
+            leaf_authority_key_identifier,
             false,
             0,
         )];
@@ -5364,7 +5355,7 @@ mod tests {
         let trace = build_strict_der_document_trace_v1(&rich_document()).expect("trace");
         assert!(trace.nodes.len() >= 10);
         for node_index in 0..trace.nodes.len() {
-            let mut mutations: Vec<Box<dyn Fn(&mut ZkX509DerNodeRowV1)>> = vec![
+            let mut mutations: Vec<MutationV1<ZkX509DerNodeRowV1>> = vec![
                 Box::new(|row| row.ordinal.value = row.ordinal.value.add(F::ONE)),
                 Box::new(|row| row.ordinal.bits[0] = row.ordinal.bits[0].add(F::ONE)),
                 Box::new(|row| row.start.value = row.start.value.add(F::ONE)),
@@ -5651,11 +5642,12 @@ mod tests {
     #[test]
     fn certificate_and_crl_extension_grammars_reject_every_noncanonical_family() {
         let (chain, fixture_crl, statement) = rfc5280_fixture(2, &[10, 11]);
-        let leaf_name = name(b"IL", b"Leaf");
-        let root_name = name(b"IL", b"Root");
-        let leaf_ski = [0x11; 20];
+        let leaf_name = name(*b"IL", b"Leaf");
+        let root_name = name(*b"IL", b"Root");
+        let leaf_subject_key_identifier = [0x11; 20];
         let root_ski = [0x33; 20];
-        let leaf_extensions = certificate_extensions(&leaf_ski, &root_ski, false, 0);
+        let leaf_extensions =
+            certificate_extensions(&leaf_subject_key_identifier, &root_ski, false, 0);
         let mut invalid_leaf_profiles: Vec<(String, Vec<Vec<u8>>)> = Vec::new();
         let mut changed = leaf_extensions.clone();
         changed.swap(0, 1);
@@ -5676,7 +5668,7 @@ mod tests {
         changed[1] = extension(
             OID_SUBJECT_KEY_IDENTIFIER_V1,
             true,
-            &octet_string(&leaf_ski),
+            &octet_string(&leaf_subject_key_identifier),
         );
         invalid_leaf_profiles.push(("critical SKI".into(), changed));
         let mut changed = leaf_extensions.clone();
@@ -5836,7 +5828,7 @@ mod tests {
     #[test]
     fn closed_rfc5280_policy_rejects_adversarial_paths_and_crls() {
         let (chain, fixture_crl, statement) = rfc5280_fixture(2, &[10, 11]);
-        let invalid_statements: Vec<Box<dyn Fn(&mut ZkX509Rfc5280StatementV1)>> = vec![
+        let invalid_statements: Vec<MutationV1<ZkX509Rfc5280StatementV1>> = vec![
             Box::new(|value| value.presentation_not_before_unix_seconds = CERT_NOT_BEFORE - 1),
             Box::new(|value| value.presentation_not_after_unix_seconds = CRL_NEXT_UPDATE),
             Box::new(|value| {
@@ -5880,8 +5872,7 @@ mod tests {
             build_zk_x509_rfc5280_trace_v1(&chain, &ordered_crl, ordered_statement)
                 .expect("strict unsigned magnitude ordering boundary");
         }
-        let oversized_serials =
-            (10..10 + ZK_X509_MAX_CRL_ENTRIES_V1 as u64 + 1).collect::<Vec<_>>();
+        let oversized_serials = (10..=(10 + ZK_X509_MAX_CRL_ENTRIES_V1 as u64)).collect::<Vec<_>>();
         let (_, oversized_crl, oversized_statement) = rfc5280_fixture(2, &oversized_serials);
         assert!(
             build_zk_x509_rfc5280_trace_v1(&chain, &oversized_crl, oversized_statement).is_err()
@@ -5896,13 +5887,21 @@ mod tests {
             build_zk_x509_rfc5280_trace_v1(&damaged_algorithm, &fixture_crl, statement.clone())
                 .is_err()
         );
-        let leaf_name = name(b"IL", b"Leaf");
-        let root_name = name(b"IL", b"Root");
-        let other_name = name(b"IL", b"Other");
+        let leaf_name = name(*b"IL", b"Leaf");
+        let root_name = name(*b"IL", b"Root");
+        let other_name = name(*b"IL", b"Other");
         let root_ski = [0x33; 20];
-        let leaf_ski = [0x11; 20];
+        let leaf_subject_key_identifier = [0x11; 20];
         let wrong_issuer_chain = vec![
-            certificate(7, &other_name, &leaf_name, &leaf_ski, &root_ski, false, 0),
+            certificate(
+                7,
+                &other_name,
+                &leaf_name,
+                &leaf_subject_key_identifier,
+                &root_ski,
+                false,
+                0,
+            ),
             certificate(9, &root_name, &root_name, &root_ski, &root_ski, true, 0),
         ];
         assert!(
@@ -5910,7 +5909,15 @@ mod tests {
                 .is_err()
         );
         let wrong_aki_chain = vec![
-            certificate(7, &root_name, &leaf_name, &leaf_ski, &[0x44; 20], false, 0),
+            certificate(
+                7,
+                &root_name,
+                &leaf_name,
+                &leaf_subject_key_identifier,
+                &[0x44; 20],
+                false,
+                0,
+            ),
             certificate(9, &root_name, &root_name, &root_ski, &root_ski, true, 0),
         ];
         assert!(
@@ -5951,7 +5958,7 @@ mod tests {
         let (chain, crl, statement) = rfc5280_fixture(3, &[10, 11]);
         let trace =
             build_zk_x509_rfc5280_trace_v1(&chain, &crl, statement).expect("RFC 5280 trace");
-        let output_mutations: Vec<Box<dyn Fn(&mut ZkX509Rfc5280TraceV1)>> = vec![
+        let output_mutations: Vec<MutationV1<ZkX509Rfc5280TraceV1>> = vec![
             Box::new(|value| value.certificates[0].tbs_der[0] ^= 1),
             Box::new(|value| value.certificates[0].serial[0] ^= 1),
             Box::new(|value| value.certificates[0].issuer.encoded[0] ^= 1),

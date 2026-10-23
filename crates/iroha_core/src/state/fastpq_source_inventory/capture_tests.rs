@@ -135,7 +135,7 @@ fn refuse_late_source_capture(block: &mut StateBlock<'_>, hash: Hash) {
     // The accumulator's independent sticky-seal rule remains a live negative control.
     let mut offered = crate::fastpq::FastpqSourceCaptureAccumulator::default();
     offered.seal().unwrap();
-    offered.record(captured.clone());
+    offered.record(captured);
     assert_eq!(
         offered.sealed_sources().unwrap_err(),
         crate::fastpq::FastpqSourceCaptureError::AppliedAfterSeal

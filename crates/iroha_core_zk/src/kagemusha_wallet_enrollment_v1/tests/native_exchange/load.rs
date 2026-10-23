@@ -1,5 +1,5 @@
 //! Native BLS evidence for an actual funded Load with exact retained-output recovery.
-//! TODO: Run the pinned StateExecutor capture and installed-wallet qualification.
+//! TODO: Run the pinned `StateExecutor` capture and installed-wallet qualification.
 use super::*;
 use crate::kagemusha_wallet_artifacts_v1::producer_inventory::{
     QualifiedReceiptSourceV1, open_pinned_engineering_finality_sources,
@@ -468,7 +468,7 @@ fn inputs(genesis: &SumeragiFinalityVerifier, installation: InstallationV1) -> I
         if height <= 2 {
             assert_eq!(
                 *original,
-                norito::encode_canonical(&initial[height as usize - 1]).unwrap()
+                norito::encode_canonical(&initial[usize::try_from(height).unwrap() - 1]).unwrap()
             );
         }
         let block = native.verify(&proof).unwrap();
@@ -501,7 +501,7 @@ fn inputs(genesis: &SumeragiFinalityVerifier, installation: InstallationV1) -> I
                 *signed_original
             );
         } else {
-            require_block(&rows[height as usize - 2], &block);
+            require_block(&rows[usize::try_from(height).unwrap() - 2], &block);
             blocks.push(block);
         }
     }
@@ -624,7 +624,7 @@ fn activation_wire_selects_exact_original_without_block_shape_assumptions() {
             iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
         let authority = iroha_data_model::account::AccountId::new(keys.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            network.clone(),
+            network,
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         );

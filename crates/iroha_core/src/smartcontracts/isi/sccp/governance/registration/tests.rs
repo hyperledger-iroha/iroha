@@ -323,7 +323,7 @@ fn ton_address_binds_original_identity_pin_revision_cap_and_all_code_references(
     let original = ton_action(&record, &identity);
     assert!(deployment(&original, &retained_generation_fixture(&record), &identity).is_ok());
     for variant in 0..11 {
-        let mut changed = original.clone();
+        let mut changed = original;
         let mut changed_identity = OriginalIdentity { ..identity };
         match variant {
             0 => changed_identity.network[0] ^= 1,
@@ -370,7 +370,7 @@ fn ton_deployment_refuses_substituted_code_at_its_matching_state_init_address() 
     let original = ton_action(&record, &identity);
     assert!(deployment(&original, &retained, &identity).is_ok());
     for variant in 0..9 {
-        let mut changed = original.clone();
+        let mut changed = original;
         let SccpDeploymentV1::Ton(ton) = &mut changed.deployment else {
             unreachable!()
         };
@@ -457,7 +457,7 @@ fn evm_address_binds_original_identity_network_pin_revision_and_cap() {
         let original = evm_action(&record, &identity, network);
         assert!(deployment(&original, &retained, &identity).is_ok());
         for variant in 0..10 {
-            let mut changed = original.clone();
+            let mut changed = original;
             let mut changed_identity = OriginalIdentity { ..identity };
             match variant {
                 0 => changed_identity.network[0] ^= 1,
@@ -527,7 +527,7 @@ fn evm_deployment_refuses_another_creation_code_proxy_or_salt() {
             2 => salt[0] ^= 1,
             _ => unreachable!(),
         }
-        let mut changed = original.clone();
+        let mut changed = original;
         let SccpDeploymentV1::Evm(evm) = &mut changed.deployment else {
             unreachable!()
         };

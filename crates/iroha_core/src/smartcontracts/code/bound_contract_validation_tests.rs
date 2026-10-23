@@ -228,7 +228,7 @@ fn bound_contract_validation_borrows_exact_stored_payloads_and_preserves_owned_r
         ));
         assert!(std::ptr::eq(
             borrowed.contract_subject,
-            &transaction
+            &raw const transaction
                 .world
                 .contract_subject_bindings
                 .get(&address)
@@ -405,7 +405,7 @@ fn bound_contract_validation_many_contracts_diagnostic() {
     let started = std::time::Instant::now();
     for _ in 0..ROUNDS {
         let snapshot = eager_snapshot(std::hint::black_box(&transaction)).expect("eager snapshot");
-        assert_eq!(snapshot.len(), CONTRACTS as usize);
+        assert_eq!(snapshot.len(), usize::try_from(CONTRACTS).expect("contract count fits usize"));
         std::hint::black_box(snapshot);
     }
     let eager_elapsed = started.elapsed();
@@ -417,7 +417,7 @@ fn bound_contract_validation_many_contracts_diagnostic() {
     eprintln!(
         "bound contract setup: {CONTRACTS} contracts x {BYTES} bytes x {ROUNDS} rounds; eager={eager_elapsed:?}, validation={:?}; eliminated {} copied bytecode bytes per invocation",
         started.elapsed(),
-        CONTRACTS as usize * BYTES,
+        usize::try_from(CONTRACTS).expect("contract count fits usize") * BYTES,
     );
 }
 

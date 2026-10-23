@@ -152,10 +152,12 @@ pub(super) fn validate_retained<'a>(
         if locks.locks.is_empty() {
             return Err("retained governance corpus contains an empty referendum group".into());
         }
-        if let Some((old, new)) = rekey {
-            if old != new && locks.locks.contains_key(old) && locks.locks.contains_key(new) {
-                return Err("governance rekey would merge distinct retained obligations".into());
-            }
+        if let Some((old, new)) = rekey
+            && old != new
+            && locks.locks.contains_key(old)
+            && locks.locks.contains_key(new)
+        {
+            return Err("governance rekey would merge distinct retained obligations".into());
         }
         for (owner, record) in &locks.locks {
             if &record.owner != owner {

@@ -93,8 +93,7 @@ fn provision_fee_sponsor_program(
     program_id: &FeeSponsorProgramId,
     asset_definition_id: &AssetDefinitionId,
     instruction: &InstructionBox,
-    allocation: u128,
-    activate_at_height: u64,
+    (allocation, activate_at_height): (u128, u64),
 ) {
     let setup_call_hash = fee_sponsor_setup_hash(program_id);
     let mut state_transaction = state_block.transaction_for_fastpq_testing(setup_call_hash);
@@ -529,8 +528,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         &program_id,
         &asset_def_id,
         &instruction,
-        init,
-        2,
+        (init, 2),
     );
     let mut state_tx =
         block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
@@ -560,8 +558,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         .world
         .assets()
         .get(&sponsor_asset)
-        .map(|asset| asset.0.as_numeric().try_mantissa_u128().unwrap())
-        .unwrap_or(0);
+        .map_or(0, |asset| asset.0.as_numeric().try_mantissa_u128().unwrap());
     let custody_balance_after = state_tx
         .world
         .assets()
@@ -663,8 +660,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
             &program_id,
             &asset_def_id,
             &instruction,
-            init,
-            1,
+            (init, 1),
         );
     }
     let policy_entries = vec![iroha_data_model::nexus::AxtPolicyBinding {
@@ -764,8 +760,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .world
         .assets()
         .get(&sponsor_asset)
-        .map(|asset| asset.0.as_numeric().try_mantissa_u128().unwrap())
-        .unwrap_or(0);
+        .map_or(0, |asset| asset.0.as_numeric().try_mantissa_u128().unwrap());
     let custody_balance_after = inspect_tx
         .world
         .assets()
@@ -794,8 +789,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .world
         .assets()
         .get(&tech_asset)
-        .map(|asset| asset.0.as_numeric().try_mantissa_u128().unwrap())
-        .unwrap_or(0);
+        .map_or(0, |asset| asset.0.as_numeric().try_mantissa_u128().unwrap());
     assert!(
         payee_balance_after > 0,
         "gas fee recipient must receive sponsored fee units"

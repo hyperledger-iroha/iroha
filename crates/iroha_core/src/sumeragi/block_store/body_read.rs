@@ -20,6 +20,10 @@ use crate::sumeragi::{
 
 /// The same original decode/projection can either return its QC to a committed reader or
 /// let the ordinary body-read adapter release it before returning untrusted restoration input.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 pub(super) enum StoredBodyReadPoll {
     Pending(ByteAdmissionError),
     Ready(BodyRestoration, Qc),

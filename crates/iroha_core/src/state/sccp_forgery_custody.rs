@@ -335,7 +335,8 @@ pub type OffenceStorage = mv::storage::Storage<OffenceKey, [u8; 32], OffenceMode
 mod tests;
 
 /// The predecessor value retained for rollback of the maximum generation cell.
-pub(crate) enum MaxGenerationPredecessor {
+#[derive(Clone, Copy)]
+pub enum MaxGenerationPredecessor {
     /// No prior value was recorded in the current block.
     Unchanged,
     /// The prior value was recorded, including an absent maximum.
@@ -343,7 +344,7 @@ pub(crate) enum MaxGenerationPredecessor {
 }
 
 /// Admit the scalar cell's original current and undo controls; absent is not generation zero.
-pub(crate) fn initialize_max(
+pub fn initialize_max(
     current: Option<u64>,
     previous: MaxGenerationPredecessor,
     budget: &AllocationBudget,

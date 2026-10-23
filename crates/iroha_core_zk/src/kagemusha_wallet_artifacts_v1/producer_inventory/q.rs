@@ -4,9 +4,7 @@
 mod session;
 pub use session::QQualificationProgressV1;
 #[cfg(test)]
-pub(crate) use session::{
-    assert_builtin_signature_reuse_controls, assert_signature_reuse_controls,
-};
+pub use session::{assert_builtin_signature_reuse_controls, assert_signature_reuse_controls};
 
 use iroha_kagemusha_proof::{
     a_relation::native::artifact::{ArtifactError, KeyArtifact},
@@ -404,8 +402,7 @@ impl StrictImportedQ {
 
 fn import_with_admission(
     index: usize,
-    source: Option<&QSigmaSource>,
-    signatures: &[QSignaturePlan],
+    (source, signatures): (Option<&QSigmaSource>, &[QSignaturePlan]),
     bytes: &OriginalBytesV1,
     pallas: &PinnedParams<Ep>,
     config: ReadConfig,
@@ -523,8 +520,7 @@ impl AuthenticatedProducerInventoryV1 {
             let bytes = self.read_original(original, originals, config.maximum_bytes)?;
             let metadata = import_with_admission(
                 index,
-                source.as_ref(),
-                &signatures,
+                (source.as_ref(), &signatures),
                 &bytes,
                 &pallas,
                 config,

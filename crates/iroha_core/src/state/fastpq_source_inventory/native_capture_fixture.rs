@@ -187,7 +187,7 @@ fn quantity_execution_context(
 }
 
 /// Execute one genuine Network source; false is a successful zero-transfer Log.
-pub(crate) fn with_native_capture_source<T>(
+pub fn with_native_capture_source<T>(
     with_transfer: bool,
     action: impl FnOnce(&State, Box<StateBlock<'_>>, ExecWitnessGuard, SignedBlock, Hash) -> T,
 ) -> T {
@@ -203,7 +203,7 @@ pub(crate) fn with_native_capture_source<T>(
 /// Execute distinct original entries with the specified transfer counts.
 /// A distinct diagnostic Log in every entry gives repeated equal transfer bodies
 /// separate authentic identities without fabricating an execution-call hash.
-pub(crate) fn with_native_capture_sources<T>(
+pub fn with_native_capture_sources<T>(
     transfers_per_entry: &[usize],
     action: impl FnOnce(&State, Box<StateBlock<'_>>, ExecWitnessGuard, SignedBlock, Vec<Hash>) -> T,
 ) -> T {
@@ -316,7 +316,7 @@ fn with_native_state_sources<T>(
 }
 
 /// Complete the real owned output boundary and retain its quantity-source journal.
-pub(crate) fn seal_native_source(
+pub fn seal_native_source(
     block: &mut StateBlock<'_>,
     source: &mut SignedBlock,
 ) -> Result<(), crate::state::output_capacity::ExecutionOutputSealError<String>> {
@@ -380,7 +380,7 @@ fn genuine_capture_fixture_retains_signed_root_and_complete_empty_and_transfer_s
 /// Exercise original ordinary or mandatory quota custody with a real producer.
 /// The mandatory branch is the genuine height-two expired governance-lock sweep;
 /// its returned hash is read from that applied purpose's retained transcript.
-pub(crate) fn with_native_capture_quota_source<T>(
+pub fn with_native_capture_quota_source<T>(
     protocol: bool,
     action: impl FnOnce(&State, Box<StateBlock<'_>>, ExecWitnessGuard, SignedBlock, Hash) -> T,
 ) -> T {
@@ -465,7 +465,7 @@ fn genuine_capture_fixture_mandatory_source_is_original_expired_lock_work() {
 /// Exercise refusal through the actual retained native producer and exact quorum.
 /// Inspection can tamper only before certification. A rejected attempt cannot
 /// replace its original result, durably append H2, or publish its State overlay.
-pub(crate) fn assert_native_publication_refuses(
+pub fn assert_native_publication_refuses(
     with_transfer: bool,
     inspect: impl for<'borrow, 'state> FnOnce(
         crate::sumeragi::executor::PendingExecutionView<'borrow, 'state>,
@@ -476,7 +476,7 @@ pub(crate) fn assert_native_publication_refuses(
 }
 
 /// A refused mutable projection preserves the genuine pending execution and its finality path.
-pub(crate) fn assert_native_publication_preserved(
+pub fn assert_native_publication_preserved(
     with_transfer: bool,
     inspect: impl for<'borrow, 'state> FnOnce(
         crate::sumeragi::executor::PendingExecutionView<'borrow, 'state>,
@@ -572,7 +572,7 @@ fn native_publication_refuses_original_source_public_content_substitution() {
 
 /// Execute a genuine transfer under a signed nondefault dataspace root.
 /// Both native routing and physical asset scope originate in the actual signed genesis.
-pub(crate) fn with_native_capture_dataspace_source<T>(
+pub fn with_native_capture_dataspace_source<T>(
     action: impl FnOnce(&State, Box<StateBlock<'_>>, ExecWitnessGuard, SignedBlock, Hash) -> T,
 ) -> T {
     use crate::sumeragi::{
@@ -680,8 +680,7 @@ pub(crate) fn with_native_capture_dataspace_source<T>(
 }
 
 /// Signed root and funded Alice transfer source for actual native publication controls.
-pub(crate) fn native_publication_chain()
--> (crate::sumeragi::test_chain::CertifiedTestChain, AssetId) {
+pub fn native_publication_chain() -> (crate::sumeragi::test_chain::CertifiedTestChain, AssetId) {
     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
     let (component, alice, _) = component_fixture();
     let nexus = component.nexus_snapshot();

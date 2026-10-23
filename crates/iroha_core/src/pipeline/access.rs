@@ -578,17 +578,17 @@ fn manifest_access_set(
             artifact_id,
             entrypoint: Some(entrypoint.name.clone()),
         };
-        if let Some(hash) = manifest_hash.as_ref() {
-            if let Some(mut set) = access_set_cache_get(&key, hash) {
-                if authorization_read_required {
-                    set.add_read(AUTHORIZATION_EPOCH_KEY.to_owned());
-                }
-                return Some((set, AccessSetSource::EntrypointHints));
+        if let Some(hash) = manifest_hash.as_ref()
+            && let Some(mut set) = access_set_cache_get(&key, hash)
+        {
+            if authorization_read_required {
+                set.add_read(AUTHORIZATION_EPOCH_KEY.to_owned());
             }
+            return Some((set, AccessSetSource::EntrypointHints));
         }
         if let Some(set) = entrypoint_access_set_if_safe(contract, entrypoint, budget) {
             if let Some(hash) = manifest_hash.as_ref() {
-                access_set_cache_put(key, hash.clone(), set.clone());
+                access_set_cache_put(key, *hash, set.clone());
             }
             return Some((set, AccessSetSource::EntrypointHints));
         }
@@ -609,20 +609,20 @@ fn manifest_access_set(
             artifact_id,
             entrypoint: selected_entrypoint_name,
         };
-        if let Some(hash) = manifest_hash.as_ref() {
-            if let Some(mut set) = access_set_cache_get(&key, hash) {
-                if authorization_read_required {
-                    set.add_read(AUTHORIZATION_EPOCH_KEY.to_owned());
-                }
-                return Some((set, AccessSetSource::ManifestHints));
+        if let Some(hash) = manifest_hash.as_ref()
+            && let Some(mut set) = access_set_cache_get(&key, hash)
+        {
+            if authorization_read_required {
+                set.add_read(AUTHORIZATION_EPOCH_KEY.to_owned());
             }
+            return Some((set, AccessSetSource::ManifestHints));
         }
         if let Some(mut set) = manifest_hint_access_set_if_safe(contract, hints, budget) {
             if authorization_read_required {
                 set.add_read(AUTHORIZATION_EPOCH_KEY.to_owned());
             }
             if let Some(hash) = manifest_hash.as_ref() {
-                access_set_cache_put(key, hash.clone(), set.clone());
+                access_set_cache_put(key, *hash, set.clone());
             }
             return Some((set, AccessSetSource::ManifestHints));
         }
@@ -805,41 +805,36 @@ where
                     super::overlay::routed_artifact_id(view, tx.payload(), code_hash).ok()
                 });
                 // 1) Try static hints from the exact routed registry entry.
-                if let Some(view) = state_ro {
-                    if let Some(artifact_id) = artifact_id
-                        && let Some(manifest) = view.world().contract_manifests().get(&artifact_id)
-                    {
-                        if let Some((set, source)) = manifest_access_set(
-                            manifest,
-                            artifact_id,
-                            contract,
-                            view.pipeline().access_set_cache_enabled,
-                            requested_entrypoint.as_deref(),
-                            view.prepared_contract_cache().execution_budget(),
-                        ) {
-                            return with_stateful_admission_keys(tx, set, Some(source));
-                        }
-                    }
+                if let Some(view) = state_ro
+                    && let Some(artifact_id) = artifact_id
+                    && let Some(manifest) = view.world().contract_manifests().get(&artifact_id)
+                    && let Some((set, source)) = manifest_access_set(
+                        manifest,
+                        artifact_id,
+                        contract,
+                        view.pipeline().access_set_cache_enabled,
+                        requested_entrypoint.as_deref(),
+                        view.prepared_contract_cache().execution_budget(),
+                    )
+                {
+                    return with_stateful_admission_keys(tx, set, Some(source));
                 }
                 // 1b) Fallback to manifest provided in transaction metadata.
                 if let Some(view) = state_ro
                     && let Some(manifest) = manifest_from_metadata(tx)
                     && let Some(artifact_id) = artifact_id
+                    && manifest.code_hash == Some(code_hash)
+                    && manifest_matches_prepared_contract(contract, &manifest)
+                    && let Some((set, source)) = manifest_access_set(
+                        &manifest,
+                        artifact_id,
+                        contract,
+                        false,
+                        requested_entrypoint.as_deref(),
+                        view.prepared_contract_cache().execution_budget(),
+                    )
                 {
-                    if manifest.code_hash == Some(code_hash)
-                        && manifest_matches_prepared_contract(contract, &manifest)
-                    {
-                        if let Some((set, source)) = manifest_access_set(
-                            &manifest,
-                            artifact_id,
-                            contract,
-                            false,
-                            requested_entrypoint.as_deref(),
-                            view.prepared_contract_cache().execution_budget(),
-                        ) {
-                            return with_stateful_admission_keys(tx, set, Some(source));
-                        }
-                    }
+                    return with_stateful_admission_keys(tx, set, Some(source));
                 }
             }
             // 2) Otherwise, use dynamic prepass if enabled with view, else conservative
@@ -854,25 +849,28 @@ where
                                 ivm::contract_code_hash(bytecode_ref),
                             )
                             .map_err(|error| error.to_string())?;
-                            if let Some(contract) = prepared.as_ref() {
-                                derive_from_prepared_ivm_dynamic(
-                                    contract,
-                                    tx.authority(),
-                                    tx.metadata(),
-                                    view,
-                                    gas_limit,
-                                    artifact_id,
-                                )
-                            } else {
-                                derive_from_ivm_dynamic(
-                                    bytecode_ref,
-                                    tx.authority(),
-                                    tx.metadata(),
-                                    view,
-                                    gas_limit,
-                                    artifact_id,
-                                )
-                            }
+                            prepared.as_ref().map_or_else(
+                                || {
+                                    derive_from_ivm_dynamic(
+                                        bytecode_ref,
+                                        tx.authority(),
+                                        tx.metadata(),
+                                        view,
+                                        gas_limit,
+                                        artifact_id,
+                                    )
+                                },
+                                |contract| {
+                                    derive_from_prepared_ivm_dynamic(
+                                        contract,
+                                        tx.authority(),
+                                        tx.metadata(),
+                                        view,
+                                        gas_limit,
+                                        artifact_id,
+                                    )
+                                },
+                            )
                         })
                         .unwrap_or_else(|_| AccessSet::global());
                     let fenced = if let Some(contract) = prepared.as_ref() {
@@ -980,17 +978,15 @@ where
     R: StateReadOnly + QueryStateSource,
 {
     let mut set = AccessSet::new();
-    let max_depth = state_ro
-        .map(|state| {
-            u16::from(
-                state
-                    .world()
-                    .parameters()
-                    .smart_contract()
-                    .execution_depth(),
-            )
-        })
-        .unwrap_or(0);
+    let max_depth = state_ro.map_or(0, |state| {
+        u16::from(
+            state
+                .world()
+                .parameters()
+                .smart_contract()
+                .execution_depth(),
+        )
+    });
     let mut visited_triggers = BTreeSet::new();
     for isi in overlay.instructions() {
         set.union_with(derive_from_instruction(
@@ -1678,9 +1674,9 @@ where
         return set;
     }
     let mut set = AccessSet::new();
-    let max_depth = state_ro
-        .map(|view| u16::from(view.world().parameters().smart_contract().execution_depth()))
-        .unwrap_or(0);
+    let max_depth = state_ro.map_or(0, |view| {
+        u16::from(view.world().parameters().smart_contract().execution_depth())
+    });
     let mut visited_triggers = BTreeSet::new();
     for instr in batch {
         set.union_with(derive_from_instruction(
@@ -1900,13 +1896,12 @@ where
     }
     if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
         match ub {
-            UnregisterBox::Domain(_) => set = AccessSet::global(),
             UnregisterBox::Account(u) => add_account_rw(&mut set, &u.object),
             UnregisterBox::AssetDefinition(u) => {
                 add_asset_def_rw(&mut set, &u.object, state_ro);
             }
             UnregisterBox::Nft(u) => add_nft_rw(&mut set, &u.object),
-            UnregisterBox::Peer(_) => set = AccessSet::global(),
+            UnregisterBox::Domain(_) | UnregisterBox::Peer(_) => set = AccessSet::global(),
             UnregisterBox::Trigger(u) => add_trigger_rw(&mut set, &u.object),
             UnregisterBox::Role(u) => {
                 add_role_rw(&mut set, &u.object);
@@ -2482,19 +2477,24 @@ where
         .map_err(|error| dynamic_execution::vm_error("ivm.heap_limit", error))?;
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
-    let mut host = if let Some(context) = contract_call_context.as_ref() {
-        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
-            authority.clone(),
-            Arc::clone(&accounts),
-            context.argument_record.clone(),
+    let mut host = contract_call_context
+        .as_ref()
+        .map_or_else(
+            || {
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
+                    authority.clone(),
+                    Arc::clone(&accounts),
+                )
+            },
+            |context| {
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
+                    authority.clone(),
+                    Arc::clone(&accounts),
+                    context.argument_record.clone(),
+                )
+            },
         )
-    } else {
-        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
-            authority.clone(),
-            Arc::clone(&accounts),
-        )
-    }
-    .with_access_logging();
+        .with_access_logging();
     host.set_output_limits_from_parameters(state_ro.world().parameters().smart_contract());
     host.set_prepared_contract_cache(cache);
     host.hydrate_axt_state(state_ro)
@@ -2642,7 +2642,7 @@ mod tests {
                 iroha_data_model::bridge::BridgeTransparentProof {
                     verifier_manifest_hash: [0xB0 | (seed & 0x0F); 32],
                     proof: iroha_data_model::proof::ProofBox::new(
-                        format!("halo2/mock/{seed}").into(),
+                        format!("halo2/mock/{seed}"),
                         vec![0xCA, 0xFE, seed],
                     ),
                     recursion_depth: Some(1),
@@ -2724,12 +2724,12 @@ mod tests {
         access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
         entrypoints: Vec<EntrypointDescriptor>,
     ) -> (Vec<u8>, IrohaHash, ContractManifest) {
-        test_contract_artifact_with_literals(code, access_set_hints, entrypoints, &[])
+        test_contract_artifact_with_literals(&(code), access_set_hints, &(entrypoints), &[])
     }
     fn test_contract_artifact_with_literals(
-        code: Vec<u8>,
+        code: &[u8],
         access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
-        entrypoints: Vec<EntrypointDescriptor>,
+        entrypoints: &[EntrypointDescriptor],
         literals: &[Vec<u8>],
     ) -> (Vec<u8>, IrohaHash, ContractManifest) {
         let meta = ivm::ProgramMetadata {
@@ -3611,7 +3611,7 @@ seiyaku HelperStaticAccess { permission CanWrite;
             let mut entrypoint = default_test_entrypoint();
             entrypoint.write_keys = vec!["state:claimed".to_owned()];
             let (program, code_hash, manifest) =
-                test_contract_artifact_with_literals(code, None, vec![entrypoint], &literals);
+                test_contract_artifact_with_literals(&(code), None, &(vec![entrypoint]), &literals);
             assert!(
                 manifest_access_set_from_bytecode(
                     &manifest,
@@ -3648,7 +3648,7 @@ seiyaku HelperStaticAccess { permission CanWrite;
             let mut entrypoint = default_test_entrypoint();
             entrypoint.write_keys = vec!["state:claimed".to_owned()];
             let (program, code_hash, manifest) =
-                test_contract_artifact_with_literals(code, None, vec![entrypoint], &literals);
+                test_contract_artifact_with_literals(&(code), None, &(vec![entrypoint]), &literals);
             let (set, _) = manifest_access_set_from_bytecode(
                 &manifest,
                 code_hash,

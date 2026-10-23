@@ -1679,7 +1679,8 @@ pub mod query {
                 .world()
                 .bonds()
                 .iter()
-                .filter_map(move |(_, record)| filter.applies(record).then(|| record.clone())))
+                .filter(move |&(_, record)| filter.applies(record))
+                .map(|(_, record)| record.clone()))
         }
     }
 

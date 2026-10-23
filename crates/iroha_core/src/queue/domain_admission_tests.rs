@@ -50,7 +50,7 @@ fn assert_preaccepted_foreign_domain_rejected(form: usize) {
         let queue = Queue::test(config_factory(), &time);
         let plan = queue.route_plan_with_state(transaction, &state).unwrap();
         let result = match boundary {
-            0 => queue.push(transaction.clone(), state.view()).map(|_| ()),
+            0 => queue.push(transaction.clone(), state.view()).map(|()| ()),
             1 => queue
                 .push_with_lane_with_state(transaction.clone(), &state)
                 .map(|_| ()),

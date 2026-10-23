@@ -64,8 +64,7 @@ fn asset_balance_or_zero(tx: &StateTransaction<'_, '_>, id: &AssetId) -> Quantit
     tx.world
         .assets
         .get(id)
-        .map(|asset| asset.as_ref().clone())
-        .unwrap_or_else(Quantity::zero)
+        .map_or_else(Quantity::zero, |asset| asset.as_ref().clone())
 }
 
 fn seed_prepared_test_orchard_reserve(
@@ -983,8 +982,7 @@ fn exact_pair_rechecks_destination_before_touching_source_or_its_indexes() {
             &definition
         )
         .cloned()
-        .collect::<std::collections::BTreeSet<_>>()
-        .contains(&source)
+        .any(|x| x == source)
     );
     assert!(
         crate::state::range_bounds::index_members(
@@ -1050,11 +1048,11 @@ fn original_supply_preparation_is_read_only_and_consumes_exact_balance_then_tota
         if expected == 0 {
             assert!(transaction.world.assets.get(&source).is_none());
             assert!(
-                !transaction
+                transaction
                     .world
                     .asset_definition_nonzero_holders
                     .get(&(definition.clone(), ALICE_ID.clone()))
-                    .is_some()
+                    .is_none()
             );
         }
         drop(transaction);
@@ -1271,9 +1269,7 @@ fn funded_turnstile_apply_rechecks_deposit_owner_and_consumes_exact_delta_once()
         unreachable!()
     };
     *funded_allowance = Quantity::from(4_u32);
-    tx.world
-        .privacy_commitments
-        .insert(key.clone(), unbacked.clone());
+    tx.world.privacy_commitments.insert(key, unbacked.clone());
     let error = tx
         .world
         .apply_prechecked_numeric_asset_transfer_delta_exact(

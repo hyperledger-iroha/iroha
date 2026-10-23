@@ -9,7 +9,7 @@ use std::io;
 
 /// Exact operation which failed before a retained leaf could be returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum EncodingOperation {
+pub enum EncodingOperation {
     /// First canonical pass determining exact bytes and length.
     #[error("measure canonical payload")]
     MeasurePayload,
@@ -26,7 +26,7 @@ pub(crate) enum EncodingOperation {
 
 /// Bounded failure information; formatting occurs only at a caller boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum EncodingReason {
+pub enum EncodingReason {
     /// The concrete serializer rejected its input.
     #[error("canonical serializer rejected the input")]
     Codec,
@@ -56,7 +56,7 @@ pub(crate) enum EncodingReason {
 /// Copy-sized operation/reason pair with no retained diagnostic allocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{operation}: {reason}")]
-pub(crate) struct EncodingError {
+pub struct EncodingError {
     operation: EncodingOperation,
     reason: EncodingReason,
 }

@@ -13,6 +13,10 @@ pub(super) fn buffer_error(error: ChargedBufferError) -> LeafError {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(super) fn vector(length: usize) -> Result<Vec<u8>, LeafError> {
     let mut bytes = Vec::new();
     bytes
@@ -25,6 +29,10 @@ pub(super) fn vector(length: usize) -> Result<Vec<u8>, LeafError> {
 pub(super) struct FundedFrame(ChargedBuffer<u8>);
 
 impl FundedFrame {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+    )]
     pub(super) fn new(length: usize, budget: &AllocationBudget) -> Result<Self, LeafError> {
         ChargedBuffer::new(length, budget)
             .map(Self)
@@ -52,6 +60,10 @@ impl Write for FundedFrame {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn bare_payload_with_bound<T: Encode, B: Write + AsRef<[u8]>>(
     value: &T,
     max_payload_bytes: usize,
@@ -114,6 +126,10 @@ fn bare_payload_with_bound<T: Encode, B: Write + AsRef<[u8]>>(
     Ok(bytes)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(super) fn typed_bare_payload<T: Encode + NoritoSchema, B: Write + AsRef<[u8]>>(
     table: &'static str,
     schema: Schema,

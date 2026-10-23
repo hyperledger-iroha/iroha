@@ -74,14 +74,12 @@ impl Kura {
             resumable.remove(&binding.identity());
         }
         let h0_creation = self.exact_durable_blocks_count()? == 0 && journal.records.is_empty();
-        if h0_creation {
-            if let Some(primary) = &journal.configured_primary_binding {
-                let blocks = self.binding_blocks_path(primary);
-                if !self.validate_path_kind(&blocks, true)?
-                    || !self.validate_path_kind(&blocks.join(MARKER_FILE_NAME), false)?
-                {
-                    resumable.insert(primary.identity());
-                }
+        if h0_creation && let Some(primary) = &journal.configured_primary_binding {
+            let blocks = self.binding_blocks_path(primary);
+            if !self.validate_path_kind(&blocks, true)?
+                || !self.validate_path_kind(&blocks.join(MARKER_FILE_NAME), false)?
+            {
+                resumable.insert(primary.identity());
             }
         }
         // Validate every completed/rolled-back object before writing any new
@@ -168,7 +166,7 @@ impl Kura {
             ));
         }
         let marker = self.read_lane_marker(&blocks.join(MARKER_FILE_NAME))?;
-        self.require_lane_marker_value(&marker, &blocks, binding)?;
+        Self::require_lane_marker_value(&marker, &blocks, binding)?;
         Ok(())
     }
 }

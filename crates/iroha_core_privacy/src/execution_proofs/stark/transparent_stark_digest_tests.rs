@@ -81,8 +81,7 @@ fn execution_digest_stream_matches_all_chunk_boundaries_and_rejects_wrong_length
         for split in 0..=len {
             let mut stream = goldilocks_digest384_last_field_stream_v1(
                 CONTEXT,
-                ROLE,
-                PHASE,
+                (ROLE, PHASE),
                 2,
                 17,
                 3,
@@ -96,7 +95,8 @@ fn execution_digest_stream_matches_all_chunk_boundaries_and_rejects_wrong_length
         }
     }
     let mut overrun =
-        goldilocks_digest384_last_field_stream_v1(CONTEXT, ROLE, PHASE, 2, 17, 3, &[], 1).unwrap();
+        goldilocks_digest384_last_field_stream_v1(CONTEXT, (ROLE, PHASE), 2, 17, 3, &[], 1)
+            .unwrap();
     let error = overrun.update(b"ab").unwrap_err();
     assert!(matches!(
         error,
@@ -107,7 +107,8 @@ fn execution_digest_stream_matches_all_chunk_boundaries_and_rejects_wrong_length
         TransparentStarkErrorV1::FrameLengthOverflow
     );
     let underrun =
-        goldilocks_digest384_last_field_stream_v1(CONTEXT, ROLE, PHASE, 2, 17, 3, &[], 1).unwrap();
+        goldilocks_digest384_last_field_stream_v1(CONTEXT, (ROLE, PHASE), 2, 17, 3, &[], 1)
+            .unwrap();
     let error = underrun.finalize().unwrap_err();
     assert!(matches!(
         error,
@@ -126,16 +127,14 @@ fn execution_digest_stream_matches_all_chunk_boundaries_and_rejects_wrong_length
 #[test]
 fn execution_digest_rejects_empty_and_oversized_domains_before_hashing() {
     const OVERSIZED: &[u8] = &[b'x'; u16::MAX as usize + 1];
-    for context in [
-        CONTEXT,
-        TransparentStarkDigestContextV1::execution_v1(b"classed-touring-s1-proof-v1"),
-    ] {
-        assert_eq!(context.protocol_label_v1(), b"native-execution-v1");
-        assert_eq!(
-            context.maximum_proof_bytes_v1(),
-            iroha_data_model::execution_proofs::EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1
-        );
-    }
+    assert_eq!(
+        TransparentStarkDigestContextV1::protocol_label_v1(),
+        b"native-execution-v1"
+    );
+    assert_eq!(
+        TransparentStarkDigestContextV1::maximum_proof_bytes_v1(),
+        iroha_data_model::execution_proofs::EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1
+    );
     for (context, role, phase) in [
         (
             TransparentStarkDigestContextV1::execution_v1(b""),
@@ -157,7 +156,7 @@ fn execution_digest_rejects_empty_and_oversized_domains_before_hashing() {
             Err(TransparentStarkErrorV1::InvalidDigestDomain)
         );
         assert!(matches!(
-            goldilocks_digest384_last_field_stream_v1(context, role, phase, 0, 0, 0, &[], 0),
+            goldilocks_digest384_last_field_stream_v1(context, (role, phase), 0, 0, 0, &[], 0),
             Err(TransparentStarkErrorV1::InvalidDigestDomain)
         ));
     }

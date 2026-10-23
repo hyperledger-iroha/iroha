@@ -208,8 +208,7 @@ fn build_app_with_stream_signer() -> (
         state.clone(),
         kura.clone(),
         queue.clone(),
-        peers_rx.clone(),
-        local_peer_id,
+        (peers_rx.clone(), local_peer_id),
         time_source,
         false,
     )

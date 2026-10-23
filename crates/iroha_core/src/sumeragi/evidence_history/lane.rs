@@ -42,6 +42,10 @@ pub(super) struct LaneProofRead {
     ordered: bool,
 }
 impl LaneProofRead {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn new(
         context: LaneEvidenceContext,
         height: u64,

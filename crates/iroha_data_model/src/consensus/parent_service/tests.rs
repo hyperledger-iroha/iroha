@@ -289,7 +289,7 @@ fn producer_copy_binds_actual_parent_control_pool_and_unchanged_vec_wire() {
 fn producer_input_cannot_substitute_a_canonical_field_or_missing_certificate() {
     let pool = AllocationBudget::new(1 << 20);
     let parent = native_parent(&pool);
-    let _flags = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
+    let flags_guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
     let (input, span) = source(parent.commit_certificate().unwrap().commit_qc(), &pool);
     let mut field = PreparedParentServiceCommitQc::from_source(&input, span, &pool).unwrap();
     let mut producer = PreparedParentServiceCommitQc::from_parent(&parent, &pool).unwrap();
@@ -309,7 +309,7 @@ fn producer_input_cannot_substitute_a_canonical_field_or_missing_certificate() {
         Err(Error::SourceRange)
     ));
     // Raw parent bytes are already a field value; no inherited Norito layout is guessed.
-    drop(_flags);
+    drop(flags_guard);
     producer.prepare_parent(&parent, &pool).unwrap();
     assert_eq!(
         producer

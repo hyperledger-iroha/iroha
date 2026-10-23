@@ -80,7 +80,7 @@ pub(in crate::kagemusha_wallet_state_v1::native_owner) fn certify(
     native.verifier().verify_retained_decision(&proof).unwrap()
 }
 
-/// The short NPoS boundary chain (H3 selects epoch one) whose first epoch-one block, H4, holds
+/// The short `NPoS` boundary chain (H3 selects epoch one) whose first epoch-one block, H4, holds
 /// exactly the inputs and synthetic results `make` builds against the fixture at H3. Returns
 /// the fixture, the chain, the verified H4 and those inputs.
 pub(in crate::kagemusha_wallet_state_v1::native_owner) fn successor_epoch_block(
@@ -91,19 +91,19 @@ pub(in crate::kagemusha_wallet_state_v1::native_owner) fn successor_epoch_block(
     VerifiedSumeragiBlock,
     Vec<SignedTransaction>,
 ) {
-    let mut made = Vec::new();
+    let mut inputs = Vec::new();
     let (native, chain) =
         NativeFinalityFixture::short_npos_boundary_chain_with_successor_block(4, |fixture, _| {
             let (transactions, results) = make(fixture);
             let built = block(fixture, &transactions, results);
-            made = transactions;
+            inputs = transactions;
             built
         });
     let h4 = native
         .verifier()
         .verify_retained_decision(&chain[3])
         .unwrap();
-    (native, chain, h4, made)
+    (native, chain, h4, inputs)
 }
 
 /// Certify `count` ordinary blocks, so a later attempt sits far above genesis.

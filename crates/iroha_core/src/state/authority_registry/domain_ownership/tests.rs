@@ -468,7 +468,7 @@ fn predecessor_masking_funds_every_physical_candidate_after_an_equal_key() {
             &view,
             OwnershipImage::Predecessor,
             &mut Work(56),
-            |_, _, _| {
+            |_, (), _| {
                 inspected.set(inspected.get() + 1);
                 Ok(())
             }
@@ -481,7 +481,7 @@ fn predecessor_masking_funds_every_physical_candidate_after_an_equal_key() {
             &view,
             OwnershipImage::Predecessor,
             &mut Work(57),
-            |_, _, _| {
+            |_, (), _| {
                 inspected.set(inspected.get() + 1);
                 Ok(())
             },

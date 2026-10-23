@@ -356,7 +356,9 @@ pub fn decode_zk_x509_credential_envelope_v1(
 #[cfg(test)]
 mod tests {
     fn proof_instance_fixture_v1() -> super::ZkX509ProofInstanceV1 {
-        super::ZkX509ProofInstanceV1::new_v1(core::array::from_fn(|i| i as u8))
+        super::ZkX509ProofInstanceV1::new_v1(core::array::from_fn(|i| {
+            u8::try_from(i).expect("fixture value fits u8")
+        }))
     }
     fn joint_openings_fixture_v1() -> [u8; super::JointOriginalOpeningsV1::ENCODED_BYTES] {
         [0; super::JointOriginalOpeningsV1::ENCODED_BYTES]
@@ -502,7 +504,11 @@ mod tests {
     #[test]
     fn all_nonce_values_are_canonical_but_missing_or_extra_nonce_bytes_are_rejected() {
         let (public, encoded) = proof_fixture();
-        for nonce in [[0; 32], [255; 32], core::array::from_fn(|i| i as u8)] {
+        for nonce in [
+            [0; 32],
+            [255; 32],
+            core::array::from_fn(|i| u8::try_from(i).expect("fixture value fits u8")),
+        ] {
             let proof_instance = ZkX509ProofInstanceV1::new_v1(nonce);
             let encoded = encode_zk_x509_credential_envelope_v1(
                 proof_instance,

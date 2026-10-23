@@ -15,7 +15,7 @@ use mv::storage::{Storage, StorageReadOnly};
 use std::collections::BTreeMap;
 
 /// Validate both authoritative images before replacing the derived inverse.
-pub(crate) fn rebuild(world: &mut World) -> Result<(), String> {
+pub fn rebuild(world: &mut World) -> Result<(), String> {
     let world = &mut world.0;
     let rows = world.contract_subject_bindings.history();
     let accounts = world.accounts.history();

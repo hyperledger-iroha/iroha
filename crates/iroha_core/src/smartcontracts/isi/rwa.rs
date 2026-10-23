@@ -126,7 +126,7 @@ pub mod isi {
         let mut child = Rwa::new(
             child_id,
             quantity.clone(),
-            parent.spec.clone(),
+            parent.spec,
             parent.primary_reference().clone(),
             parent.status().clone(),
             parent.metadata().clone(),
@@ -141,8 +141,7 @@ pub mod isi {
     fn child_from_merge(
         child_id: RwaId,
         owner: AccountId,
-        quantity: Quantity,
-        spec: NumericSpec,
+        (quantity, spec): (Quantity, NumericSpec),
         primary_reference: String,
         status: Option<Name>,
         metadata: Metadata,
@@ -217,7 +216,7 @@ pub mod isi {
             )
             .build(rwa_id, authority.clone());
             let (id, value) = rwa.clone().into_key_value();
-            state_transaction.world.insert_rwa_entry(id, value);
+            state_transaction.world.insert_rwa_entry(&(id), value);
             state_transaction
                 .world
                 .emit_events(Some(DomainEvent::Rwa(RwaEvent::Created(rwa))));
@@ -248,7 +247,7 @@ pub mod isi {
                 &source_lot,
                 "transfer",
             )?;
-            ensure_quantity_matches_spec(source_lot.spec.clone(), &quantity, "transfer")?;
+            ensure_quantity_matches_spec(source_lot.spec, &quantity, "transfer")?;
             if source_lot.owned_by != source {
                 return Err(Error::InvariantViolation(
                     format!(
@@ -332,7 +331,7 @@ pub mod isi {
                 destination.clone(),
             );
             let (id, value) = child.clone().into_key_value();
-            state_transaction.world.insert_rwa_entry(id, value);
+            state_transaction.world.insert_rwa_entry(&(id), value);
             state_transaction.world.emit_events([
                 DomainEvent::Rwa(RwaEvent::Created(child)),
                 DomainEvent::Rwa(RwaEvent::Split(RwaSplit {
@@ -396,14 +395,10 @@ pub mod isi {
                             "all merge parents must use the same numeric spec".into(),
                         ));
                     }
-                    None => spec = Some(source_lot.spec.clone()),
+                    None => spec = Some(source_lot.spec),
                     Some(_) => {}
                 }
-                ensure_quantity_matches_spec(
-                    source_lot.spec.clone(),
-                    parent.quantity(),
-                    "merge parent",
-                )?;
+                ensure_quantity_matches_spec(source_lot.spec, parent.quantity(), "merge parent")?;
                 let available = source_lot.available_quantity().ok_or_else(|| {
                     Error::InvariantViolation(
                         format!(
@@ -458,15 +453,14 @@ pub mod isi {
             let child = child_from_merge(
                 child_id.clone(),
                 authority.clone(),
-                merged_quantity,
-                spec,
+                (merged_quantity, spec),
                 self.primary_reference,
                 self.status,
                 self.metadata,
                 self.parents.clone(),
             );
             let (id, value) = child.clone().into_key_value();
-            state_transaction.world.insert_rwa_entry(id, value);
+            state_transaction.world.insert_rwa_entry(&(id), value);
             state_transaction.world.emit_events([
                 DomainEvent::Rwa(RwaEvent::Created(child)),
                 DomainEvent::Rwa(RwaEvent::Merged(RwaMerged {
@@ -498,7 +492,7 @@ pub mod isi {
                     format!("redeem is disabled for RWA {}", rwa.id()).into(),
                 ));
             }
-            ensure_quantity_matches_spec(rwa.spec.clone(), &self.quantity, "redeem")?;
+            ensure_quantity_matches_spec(rwa.spec, &self.quantity, "redeem")?;
             let available = rwa.available_quantity().ok_or_else(|| {
                 Error::InvariantViolation(
                     format!("RWA {} has invalid held quantity accounting", rwa.id()).into(),
@@ -626,7 +620,7 @@ pub mod isi {
                 rwa.controls().hold_enabled,
                 "hold",
             )?;
-            ensure_quantity_matches_spec(rwa.spec.clone(), &self.quantity, "hold")?;
+            ensure_quantity_matches_spec(rwa.spec, &self.quantity, "hold")?;
             let new_held = rwa
                 .held_quantity
                 .clone()
@@ -665,7 +659,7 @@ pub mod isi {
                 rwa.controls().hold_enabled,
                 "release",
             )?;
-            ensure_quantity_matches_spec(rwa.spec.clone(), &self.quantity, "release")?;
+            ensure_quantity_matches_spec(rwa.spec, &self.quantity, "release")?;
             let new_held = rwa
                 .held_quantity
                 .clone()
@@ -708,11 +702,7 @@ pub mod isi {
                 source_lot.controls().force_transfer_enabled,
                 "force transfer",
             )?;
-            ensure_quantity_matches_spec(
-                source_lot.spec.clone(),
-                &self.quantity,
-                "force transfer",
-            )?;
+            ensure_quantity_matches_spec(source_lot.spec, &self.quantity, "force transfer")?;
             let available = source_lot.available_quantity().ok_or_else(|| {
                 Error::InvariantViolation(
                     format!(
@@ -781,7 +771,7 @@ pub mod isi {
                 self.destination.clone(),
             );
             let (id, value) = child.clone().into_key_value();
-            state_transaction.world.insert_rwa_entry(id, value);
+            state_transaction.world.insert_rwa_entry(&(id), value);
             state_transaction.world.emit_events([
                 DomainEvent::Rwa(RwaEvent::Created(child)),
                 DomainEvent::Rwa(RwaEvent::ForceTransferred(RwaSplit {
@@ -1140,10 +1130,10 @@ pub mod isi {
             assert_eq!(rwa.owned_by, recipient);
             assert_eq!(rwa.quantity, "3".parse::<Quantity>().unwrap());
             assert!(
-                !stx.world
+                stx.world
                     .rwas_by_owner
                     .get(&(owner.clone(), rwa_id.clone()))
-                    .is_some(),
+                    .is_none(),
                 "full transfer should remove the lot from the previous owner index",
             );
             assert!(
@@ -1731,11 +1721,10 @@ pub mod query {
                     Box::new(world.rwas_iter().map(entry_to_rwa))
                 };
             Ok(iter.filter(move |rwa| {
-                if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_rwa(predicate, rwa)
-                } else {
-                    filter.applies(rwa)
-                }
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(rwa),
+                    |predicate| predicate_matches_rwa(predicate, rwa),
+                )
             }))
         }
     }
@@ -2014,14 +2003,14 @@ pub mod query {
             assert!(
                 stx.world
                     .rwas_by_status
-                    .get(&((&Some(vaulted.clone())).clone(), target_id.clone()))
+                    .get(&(Some(vaulted.clone()).clone(), target_id.clone()))
                     .is_some(),
                 "target lot should be present in the status index before commit",
             );
             assert!(
                 stx.world
                     .rwas_by_frozen
-                    .get(&(true.clone(), target_id.clone()))
+                    .get(&(true, target_id.clone()))
                     .is_some(),
                 "target lot should be present in the frozen-state index before commit",
             );

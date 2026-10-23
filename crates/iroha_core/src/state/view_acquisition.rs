@@ -38,7 +38,7 @@ impl From<mv::PublicationPreparationError<std::convert::Infallible>> for StateVi
 
 /// The exhaustive World inventory selects each field's actual reader-release owner.
 /// Cell reads are lock-free EBR pins; collector allocation remains a separate owner.
-pub(crate) trait StateFieldReader {
+pub trait StateFieldReader {
     type Releases;
     type View<'a>
     where
@@ -74,7 +74,7 @@ impl<V: mv::Value, C: Send + Sync + 'static> StateFieldReader for Cell<V, C> {
     where
         Self: 'a;
     fn reader_releases(&self) {}
-    fn try_read_field(&self, _: &mut ()) -> Result<Self::View<'_>, StateViewError> {
+    fn try_read_field(&self, (): &mut ()) -> Result<Self::View<'_>, StateViewError> {
         Ok(self.view())
     }
 }

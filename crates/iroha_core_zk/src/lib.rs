@@ -204,7 +204,7 @@ fn has_trusted_setup_backend_segment(backend: &str) -> bool {
 fn has_trusted_setup_backend_compact_label(backend: &str) -> bool {
     let compact = backend
         .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect::<String>();
     [
         "groth16",
@@ -286,7 +286,7 @@ const PRODUCTION_CLAIM_BACKEND_FRAGMENTS: &[&str] = &[
 fn compact_ascii_lowercase_label(value: &str) -> String {
     value
         .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .map(|ch| ch.to_ascii_lowercase())
         .collect()
 }
@@ -1339,9 +1339,13 @@ pub mod test_utils {
                 .expect("fixture output owner");
                 let key = confidential_transfer_v2_vk_box().expect("compiled transfer key");
                 let proof = build_confidential_transfer_proof_v2(
-                    &network,
-                    asset,
-                    &spend_key,
+                    crate::confidential_v2::ConfidentialProofContext {
+                        network_id: &network,
+                        asset_definition_id: asset,
+                        spend_key: &spend_key,
+                        circuit_id: CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                        vk_box: &key,
+                    },
                     &[commitment],
                     &[ConfidentialTransferInputV2 {
                         amount: 7,
@@ -1355,8 +1359,6 @@ pub mod test_utils {
                         owner_tag: output_owner,
                     }],
                     root,
-                    CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-                    &key,
                 )
                 .expect("genuine native transfer fixture");
                 let envelope: OpenVerifyEnvelope = norito::decode_canonical(&proof.proof.bytes)
@@ -1627,10 +1629,10 @@ pub fn preverify_with_budget(
             return Ok(PreverifyResult::VerifyingKeyMismatch);
         }
     }
-    if let (Some(expected), Some(commit)) = (expected_vk_commitment, vk_commitment) {
-        if expected != commit {
-            return Ok(PreverifyResult::VerifyingKeyMismatch);
-        }
+    if let (Some(expected), Some(commit)) = (expected_vk_commitment, vk_commitment)
+        && expected != commit
+    {
+        return Ok(PreverifyResult::VerifyingKeyMismatch);
     }
     if let Err(err) = preverify_open_verify_envelope_metadata(
         proof,
@@ -2389,12 +2391,11 @@ mod stark_backend_tag_tests {
     #[test]
     fn stark_open_verify_circuit_ids_are_bound_to_the_sole_production_profile() {
         let backend = ZK_BACKEND_STARK_FRI_V1;
-        for circuit_id in [format!("{backend}:binding-air")] {
-            assert!(stark_open_verify_circuit_id_matches_backend(
-                backend,
-                &circuit_id
-            ));
-        }
+        let circuit_id = format!("{backend}:binding-air");
+        assert!(stark_open_verify_circuit_id_matches_backend(
+            backend,
+            &circuit_id
+        ));
         for circuit_id in [
             "stark/fri".to_owned(),
             "stark/fri:binding-air".to_owned(),
@@ -2623,6 +2624,12 @@ macro_rules! consensus_stark_vk {
         }
     };
 }
+#[cfg(test)]
+type OpenVerifyMutation = (
+    &'static str,
+    fn(&mut iroha_data_model::zk::OpenVerifyEnvelope),
+);
+
 #[cfg(all(test, feature = "zk-stark"))]
 mod stark_prover_tests {
     use super::{
@@ -2958,16 +2965,19 @@ mod stark_prover_tests {
             merkle_arity: vk_payload.merkle_arity,
             domain_tag,
         };
-        let env_circuit_id = if let Some(relation) = circuit_id
+        let env_circuit_id = circuit_id
             .strip_prefix(backend)
             .and_then(|suffix| suffix.strip_prefix('/'))
-        {
-            format!("{backend}:{relation}")
-        } else if circuit_id.starts_with(&format!("{backend}:")) {
-            circuit_id.to_owned()
-        } else {
-            format!("{backend}:{circuit_id}")
-        };
+            .map_or_else(
+                || {
+                    if circuit_id.starts_with(&format!("{backend}:")) {
+                        circuit_id.to_owned()
+                    } else {
+                        format!("{backend}:{circuit_id}")
+                    }
+                },
+                |relation| format!("{backend}:{relation}"),
+            );
         let public_digest = stark_open_verify_air_public_digest_current(
             backend,
             circuit_id,
@@ -2979,7 +2989,7 @@ mod stark_prover_tests {
         let envelope_bytes = match crate::stark::prove_stark_fri_air_envelope_bytes(
             params.clone(),
             transcript_label.to_owned(),
-            env_circuit_id.to_owned(),
+            env_circuit_id.clone(),
             public_digest,
         ) {
             Ok(envelope_bytes) => envelope_bytes,
@@ -3592,10 +3602,10 @@ mod stark_prover_tests {
         }
     }
     fn stark_field_add_for_test(a: u64, b: u64) -> u64 {
-        (((a as u128) + (b as u128)) % STARK_GOLDILOCKS_MODULUS) as u64
+        ((u128::from(a) + u128::from(b)) % STARK_GOLDILOCKS_MODULUS) as u64
     }
     fn stark_field_mul_for_test(a: u64, b: u64) -> u64 {
-        (((a as u128) * (b as u128)) % STARK_GOLDILOCKS_MODULUS) as u64
+        ((u128::from(a) * u128::from(b)) % STARK_GOLDILOCKS_MODULUS) as u64
     }
     fn attach_valid_auxiliary_composition_to_open_verify_proof(
         backend: &str,
@@ -3816,7 +3826,7 @@ mod stark_prover_tests {
     #[test]
     fn verify_stark_open_verify_envelope_rejects_noncanonical_outer_shape() {
         let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
-        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 7] = [
+        let cases: [super::OpenVerifyMutation; 7] = [
             ("backend tag", |outer| {
                 outer.backend = BackendTag::NativePipaRPasta
             }),
@@ -4528,7 +4538,7 @@ mod guardrails_tests {
     }
     #[test]
     fn guardrails_reject_open_verify_shape_failures_before_dispatch() {
-        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 6] = [
+        let cases: [super::OpenVerifyMutation; 6] = [
             ("empty circuit id", |env| env.circuit_id.clear()),
             ("zero verifier-key hash", |env| env.vk_hash = [0u8; 32]),
             ("empty public inputs", |env| env.public_inputs.clear()),

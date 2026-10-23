@@ -233,6 +233,7 @@ type PreparedProofManagedNoteApplyV1 = (
     Vec<(PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1)>,
     PrivacyProofManagedPoolAccumulatorStateV1,
 );
+#[derive(Clone, Copy)]
 struct ProofManagedNoteApplyContextV1<'a, 'block, 'state> {
     effect: &'a VerifiedProofManagedPoolLedgerEffectV1,
     snapshot: &'a PrivacyProofManagedPoolSnapshotV1,
@@ -241,6 +242,7 @@ struct ProofManagedNoteApplyContextV1<'a, 'block, 'state> {
     expected_action_index: u32,
     state_transaction: &'a StateTransaction<'block, 'state>,
 }
+#[derive(Clone, Copy)]
 enum TypedProofManagedNoteApplyV1<'a> {
     IvmPrivateNote {
         statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
@@ -611,7 +613,7 @@ impl Execute for TransitionPrivacyProtocolLifecycleV1 {
             .world
             .privacy_activations
             .get(&key)
-            .cloned()
+            .copied()
             .ok_or_else(|| {
                 invalid_privacy_parameter(format!(
                     "privacy protocol {:?} is not registered",
@@ -1161,9 +1163,9 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
             || {
                 self.bootstrap
                     .initial_note_commitments()
-                    .map_or(0, |values| values.len())
+                    .map_or(0, <[iroha_data_model::privacy::PrivacyCommitmentV1]>::len)
             },
-            |values| values.len(),
+            <[iroha_data_model::privacy::PrivacyFcmpOutputTupleV1]>::len,
         );
         let mut output_records = Vec::new();
         output_records
@@ -1655,7 +1657,7 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
             self.bootstrap.total_supply,
             &native_public_keys,
             &native_balances,
-            TranscriptBindingV1 {
+            &TranscriptBindingV1 {
                 network_id: state_transaction.network_id.as_bytes(),
                 genesis_hash,
                 action_index: expected_action_index,
@@ -3962,7 +3964,10 @@ impl PreparedPrivacySubmissionV1 {
             if let Some(root) = fcmp_root
                 && current_epoch == snapshot.current_epoch()
                 && current_root == snapshot.current_root()
-                && snapshot.fcmp_accumulator_state().map(|state| state.root()) != Some(root)
+                && snapshot
+                    .fcmp_accumulator_state()
+                    .map(iroha_core_privacy::privacy_state::PrivacyFcmpAccumulatorStateV1::root)
+                    != Some(root)
             {
                 return Err(invalid_privacy_parameter(
                     "FCMP++ statement typed root differs from the authoritative curve frontier",
@@ -5454,8 +5459,7 @@ impl PreparedPrivacySubmissionV1 {
                     self.envelope.statement_digest,
                     &effect.asset_definition_id,
                     effect.public_balance_scope,
-                    &effect.source,
-                    &effect.destination,
+                    (&effect.source, &effect.destination),
                     amount,
                 )?;
                 state_transaction
@@ -6317,7 +6321,7 @@ mod tests {
                     total_supply,
                     &public_keys,
                     &encrypted_balances,
-                    TranscriptBindingV1 {
+                    &TranscriptBindingV1 {
                         network_id: &TEST_GENESIS_HASH,
                         genesis_hash: TEST_GENESIS_HASH,
                         action_index: 0,
@@ -6486,7 +6490,7 @@ mod tests {
                     &current_balances,
                     recipient_count,
                     pool_invariant,
-                    TranscriptBindingV1 {
+                    &TranscriptBindingV1 {
                         network_id: &TEST_GENESIS_HASH,
                         genesis_hash: TEST_GENESIS_HASH,
                         action_index: 0,
@@ -7412,6 +7416,8 @@ mod tests {
     }
     #[test]
     fn bootle_lantern_submit_policy_resolution_is_exact_and_fail_closed() {
+        type StatementMutation = fn(&mut IrohaBootleLanternAnoncredStatementV1);
+
         let policy = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
         let statement = bootle_lantern_statement(&policy);
         let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
@@ -7436,7 +7442,7 @@ mod tests {
                 .expect("exact active policy"),
             policy
         );
-        let statement_mutations: [(&str, fn(&mut IrohaBootleLanternAnoncredStatementV1), &str); 6] = [
+        let statement_mutations: [(&str, StatementMutation, &str); 6] = [
             (
                 "issuer",
                 |statement| statement.issuer_id.0[0] ^= 1,

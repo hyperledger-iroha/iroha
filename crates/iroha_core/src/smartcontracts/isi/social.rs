@@ -108,9 +108,9 @@ impl Execute for ClaimTwitterFollowReward {
         let mut budget = refresh_budget(state_transaction, day);
         let mut campaign_budget = refresh_campaign_budget(state_transaction);
         let total = cfg.follow_reward_amount.clone();
-        budget = consume_budget(state_transaction, &cfg, budget, total.clone())?;
+        budget = consume_budget(state_transaction, &cfg, budget, &(total.clone()))?;
         campaign_budget =
-            consume_campaign_budget(state_transaction, &cfg, campaign_budget, total.clone())?;
+            consume_campaign_budget(state_transaction, &cfg, campaign_budget, &(total.clone()))?;
         let campaign_cap = cfg.campaign_cap.clone();
         execute_social_reward_transfer(
             state_transaction,
@@ -177,55 +177,54 @@ impl Execute for SendToTwitter {
             .twitter_bindings
             .get(&binding_digest)
             .cloned();
-        if let Some(record) = binding_record {
-            if record.attestation.status == TwitterBindingStatus::Following
-                && !record.attestation.is_expired(now_ms)
-            {
-                let uaid = record.attestation.uaid;
-                ensure_not_denied(state_transaction, &cfg, uaid, &binding_hash)?;
-                let reward_account = select_account_for_uaid(&state_transaction.world, uaid)?;
-                let recipient_asset = AssetId::new(
-                    cfg.reward_asset_definition_id.clone(),
-                    reward_account.clone(),
-                );
-                execute_social_send_transfer(
-                    state_transaction,
-                    authority,
-                    binding_digest,
-                    sender_asset,
-                    recipient_asset,
-                    amount.clone(),
-                )?;
-                let mut budget = refresh_budget(state_transaction, day);
-                let mut campaign_budget = refresh_campaign_budget(state_transaction);
-                let mut payout_ctx = ViralPayoutContext {
-                    stx: state_transaction,
-                    cfg: &cfg,
-                    binding_hash: &binding_hash,
-                    budget: &mut budget,
-                    campaign: &mut campaign_budget,
-                    campaign_cap: cfg.campaign_cap.clone(),
-                    promo,
-                    now_ms,
-                };
-                let bonus_paid = maybe_pay_bonus(&mut payout_ctx, authority, uaid)?;
-                payout_ctx
-                    .stx
-                    .world
-                    .emit_events(Some(SocialEvent::EscrowReleased(ViralEscrowReleased {
-                        escrow: ViralEscrowRecord {
-                            binding_hash: binding_hash.clone(),
-                            sender: authority.clone(),
-                            amount,
-                            created_at_ms: now_ms,
-                        },
-                        uaid,
-                        account: reward_account,
-                        bonus_paid,
-                        released_at_ms: now_ms,
-                    })));
-                return Ok(());
-            }
+        if let Some(record) = binding_record
+            && record.attestation.status == TwitterBindingStatus::Following
+            && !record.attestation.is_expired(now_ms)
+        {
+            let uaid = record.attestation.uaid;
+            ensure_not_denied(state_transaction, &cfg, uaid, &binding_hash)?;
+            let reward_account = select_account_for_uaid(&state_transaction.world, uaid)?;
+            let recipient_asset = AssetId::new(
+                cfg.reward_asset_definition_id.clone(),
+                reward_account.clone(),
+            );
+            execute_social_send_transfer(
+                state_transaction,
+                authority,
+                binding_digest,
+                sender_asset,
+                recipient_asset,
+                amount.clone(),
+            )?;
+            let mut budget = refresh_budget(state_transaction, day);
+            let mut campaign_budget = refresh_campaign_budget(state_transaction);
+            let mut payout_ctx = ViralPayoutContext {
+                stx: state_transaction,
+                cfg: &cfg,
+                binding_hash: &binding_hash,
+                budget: &mut budget,
+                campaign: &mut campaign_budget,
+                campaign_cap: cfg.campaign_cap.clone(),
+                promo,
+                now_ms,
+            };
+            let bonus_paid = maybe_pay_bonus(&mut payout_ctx, authority, uaid)?;
+            payout_ctx
+                .stx
+                .world
+                .emit_events(Some(SocialEvent::EscrowReleased(ViralEscrowReleased {
+                    escrow: ViralEscrowRecord {
+                        binding_hash: binding_hash.clone(),
+                        sender: authority.clone(),
+                        amount,
+                        created_at_ms: now_ms,
+                    },
+                    uaid,
+                    account: reward_account,
+                    bonus_paid,
+                    released_at_ms: now_ms,
+                })));
+            return Ok(());
         }
         if state_transaction
             .world
@@ -418,7 +417,7 @@ fn consume_budget(
     stx: &mut StateTransaction<'_, '_>,
     cfg: &ViralIncentives,
     mut budget: ViralRewardBudget,
-    delta: Quantity,
+    delta: &Quantity,
 ) -> Result<ViralRewardBudget, Error> {
     if delta.is_zero() {
         return Ok(budget);
@@ -439,7 +438,7 @@ fn consume_campaign_budget(
     stx: &mut StateTransaction<'_, '_>,
     cfg: &ViralIncentives,
     mut campaign: ViralCampaignBudget,
-    delta: Quantity,
+    delta: &Quantity,
 ) -> Result<ViralCampaignBudget, Error> {
     if delta.is_zero() {
         return Ok(campaign);
@@ -496,8 +495,9 @@ fn maybe_pay_bonus(
     assert_numeric_spec_with(ctx.cfg.sender_bonus_amount.as_numeric(), spec)?;
     let bonus = ctx.cfg.sender_bonus_amount.clone();
     let campaign_cap = ctx.campaign_cap.clone();
-    *ctx.budget = consume_budget(ctx.stx, ctx.cfg, ctx.budget.clone(), bonus.clone())?;
-    *ctx.campaign = consume_campaign_budget(ctx.stx, ctx.cfg, ctx.campaign.clone(), bonus.clone())?;
+    *ctx.budget = consume_budget(ctx.stx, ctx.cfg, ctx.budget.clone(), &(bonus.clone()))?;
+    *ctx.campaign =
+        consume_campaign_budget(ctx.stx, ctx.cfg, ctx.campaign.clone(), &(bonus.clone()))?;
     execute_social_reward_transfer(
         ctx.stx,
         ctx.binding_hash.digest,

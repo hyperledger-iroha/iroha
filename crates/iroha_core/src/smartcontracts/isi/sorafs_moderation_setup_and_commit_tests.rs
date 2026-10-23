@@ -731,8 +731,7 @@ fn voting_asset_balance(state: &State, account: &AccountId) -> Quantity {
         .assets
         .view()
         .get(&id)
-        .map(|value| value.as_ref().clone())
-        .unwrap_or_else(Quantity::zero)
+        .map_or_else(Quantity::zero, |value| value.as_ref().clone())
 }
 fn assert_unique_voting_asset_total(state: &State, accounts: &[AccountId], expected_total: u32) {
     let mut accounts = accounts.to_vec();

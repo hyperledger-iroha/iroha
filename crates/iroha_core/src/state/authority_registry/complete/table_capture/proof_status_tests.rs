@@ -37,7 +37,7 @@ fn state(backend: &str) -> State {
     for _ in 0..2 {
         let mut block = world.block();
         let mut tx = block.transaction_without_telemetry(LaneConfig::default(), 0);
-        tx.insert_proof_record(record.clone());
+        tx.insert_proof_record(&(record.clone()));
         tx.apply();
         block.commit();
     }
@@ -67,6 +67,10 @@ fn state(backend: &str) -> State {
     state
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture(
     state: &State,
     limits: LeafLimits,
@@ -134,8 +138,7 @@ fn actual_catalog_rejects_proof_status_corruption_after_state_construction() {
                         },
                         mismatch: match defect {
                             0 | 2 => GroupMismatch::MissingMember,
-                            1 => GroupMismatch::ForeignMember,
-                            3 | 4 => GroupMismatch::ForeignMember,
+                            1 | 3 | 4 => GroupMismatch::ForeignMember,
                             _ => unreachable!(),
                         },
                     }

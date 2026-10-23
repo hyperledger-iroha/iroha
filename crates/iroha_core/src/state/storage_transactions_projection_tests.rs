@@ -23,6 +23,10 @@ fn commit(storage: &TransactionsStorage, at: usize, keys: &[Key]) {
     block.commit().unwrap();
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "The fixture implements the production fallible callback contract"
+)]
 fn record(map: &mut Membership, key: &Key, at: Value) -> Result<(), ()> {
     assert!(map.insert(*key, at).is_none(), "logical key visited twice");
     Ok(())

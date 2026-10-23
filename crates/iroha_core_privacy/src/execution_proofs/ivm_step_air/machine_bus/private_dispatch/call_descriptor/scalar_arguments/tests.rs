@@ -112,9 +112,15 @@ impl<'p> Fixture<'p> {
             BEFORE,
             0,
         );
-        let parent = fixture.original.packets
-            [super::super::dispatch_slot(super::super::super::CHILD_ACTIVE)][BEFORE]
-            .0 as u16;
+        let parent = u16::from_le_bytes(
+            u64::to_le_bytes(
+                fixture.original.packets
+                    [super::super::dispatch_slot(super::super::super::CHILD_ACTIVE)][BEFORE]
+                    .0,
+            )[..2]
+                .try_into()
+                .expect("low-byte width"),
+        );
         let mut gas = packet::half(
             &fixture.original.packets[super::super::FRAME_DEBIT],
             AFTER,
@@ -141,7 +147,11 @@ impl<'p> Fixture<'p> {
                 space: Space::Initialization,
                 vm: 7,
                 generation: parent,
-                index: (address / 16) as u32,
+                index: u32::from_le_bytes(
+                    u64::to_le_bytes(address / 16)[..4]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
                 write: false,
                 before: dispatch_tests::bytes(0xffff),
                 after: dispatch_tests::bytes(0xffff),
@@ -162,7 +172,11 @@ impl<'p> Fixture<'p> {
                 space: Space::Memory,
                 vm: 7,
                 generation: 0,
-                index: (address / 16) as u32,
+                index: u32::from_le_bytes(
+                    u64::to_le_bytes(address / 16)[..4]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
                 write: false,
                 before: bytes,
                 after: bytes,
@@ -184,13 +198,11 @@ impl<'p> Fixture<'p> {
                 .iter()
                 .position(|v| *v == F::ONE)
                 .unwrap();
-            if let Some(CallTypeNodeV1::Error(descriptor)) = schedule.leaf(selected, index) {
-                if let Ok(code) = u32::try_from(value) {
-                    if let Ok(ordinal) = descriptor.variants.binary_search_by_key(&code, |v| v.code)
-                    {
-                        fixture.errors[schedule.shape.error_range(index).start + ordinal] = F::ONE;
-                    }
-                }
+            if let Some(CallTypeNodeV1::Error(descriptor)) = schedule.leaf(selected, index)
+                && let Ok(code) = u32::try_from(value)
+                && let Ok(ordinal) = descriptor.variants.binary_search_by_key(&code, |v| v.code)
+            {
+                fixture.errors[schedule.shape.error_range(index).start + ordinal] = F::ONE;
             }
             gas = gas.wrapping_sub(9);
         }
@@ -247,11 +259,8 @@ fn scalar_roles_and_both_original_halves_are_exact() {
             packet::half(&f.original.packets[super::super::FRAME_DEBIT], AFTER, 0)
                 - 9 * values.len() as u64
         );
-        for i in 0..values.len() {
-            assert_eq!(
-                packet::half(&f.packets[i][MEMORY], BEFORE, i % 2),
-                values[i]
-            );
+        for (i, &value) in values.iter().enumerate() {
+            assert_eq!(packet::half(&f.packets[i][MEMORY], BEFORE, i % 2), value);
         }
     }
     for (role, value) in [
@@ -402,7 +411,7 @@ fn final_gas_and_all_original_completion_joins_reject_substitution() {
         let gas = remaining.checked_add(cost + 2);
         if let Some(gas) = gas {
             let d = dispatch_tests::Fixture::with_controls(&p, 0, false, 0, gas, 100);
-            let f = Fixture::from_original(&p, Original::from_dispatch(&p, 0, d), &[1, 0, 1]);
+            let f = Fixture::from_original(&p, Original::from_dispatch(&p, 0, &d), &[1, 0, 1]);
             assert_eq!(f.accepts(&p), remaining >= 27);
         }
     }
@@ -488,8 +497,22 @@ fn public_geometry_retains_all_callables_and_fixed_degree_four() {
     let zero = simple(&[]);
     let z = Shape::new(&zero).unwrap();
     assert_eq!((z.ports(), z.width(), z.history_rows()), (48, 4827, 384));
-    assert!(Schedule::new(&p, 7, u32::MAX - shape.ports() as u32 + 1).is_some());
-    assert!(Schedule::new(&p, 7, u32::MAX - shape.ports() as u32 + 2).is_none());
+    assert!(
+        Schedule::new(
+            &p,
+            7,
+            u32::MAX - u32::try_from(shape.ports()).expect("bounded fixture value") + 1
+        )
+        .is_some()
+    );
+    assert!(
+        Schedule::new(
+            &p,
+            7,
+            u32::MAX - u32::try_from(shape.ports()).expect("bounded fixture value") + 2
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -510,14 +533,34 @@ fn all_original_and_scalar_packets_share_every_typed_history_stage() {
             4 => Space::Owner,
             _ => panic!("enabled typed event"),
         },
-        vm: p[VM].0 as u8,
-        generation: p[GENERATION].0 as u16,
-        index: p[INDEX].0 as u32,
+        vm: u8::from_le_bytes(
+            u64::to_le_bytes(p[VM].0)[..1]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        generation: u16::from_le_bytes(
+            u64::to_le_bytes(p[GENERATION].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        index: u32::from_le_bytes(
+            u64::to_le_bytes(p[INDEX].0)[..4]
+                .try_into()
+                .expect("low-byte width"),
+        ),
         write: p[WRITE] == F::ONE,
         before: core::array::from_fn(|i| ((p[BEFORE + i / 2].0 >> (8 * (i % 2))) & 255) as u8),
         after: core::array::from_fn(|i| ((p[AFTER + i / 2].0 >> (8 * (i % 2))) & 255) as u8),
-        before_private: p[BEFORE_TAG].0 as u16,
-        after_private: p[AFTER_TAG].0 as u16,
+        before_private: u16::from_le_bytes(
+            u64::to_le_bytes(p[BEFORE_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        after_private: u16::from_le_bytes(
+            u64::to_le_bytes(p[AFTER_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
     };
     let original = fixture.row();
     let mut events = vec![None; 64];
@@ -627,8 +670,7 @@ fn all_original_and_scalar_packets_share_every_typed_history_stage() {
                 residues.clear();
                 private_history::append_residues(
                     &mut residues,
-                    h.current,
-                    h.next,
+                    (h.current, h.next),
                     h.aux,
                     h.next_aux,
                     h.fixed,
@@ -653,15 +695,20 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
             if roles.is_empty() { 0 } else { 31 },
             0,
         ),
-        enc::encode_ri(wide::arithmetic::ADDI, 11, 0, roles.len() as i8),
+        enc::encode_ri(
+            wide::arithmetic::ADDI,
+            11,
+            0,
+            i8::try_from(roles.len()).expect("bounded fixture value"),
+        ),
         enc::encode_ri(wide::arithmetic::ADDI, 12, 31, 32),
     ];
     for i in 0..values.len() {
         body.push(enc::encode_store(
             wide::memory::STORE64,
             31,
-            2 + i as u8,
-            (i * 8) as i8,
+            2 + u8::try_from(i).expect("bounded fixture value"),
+            i8::try_from(i * 8).expect("bounded fixture value"),
         ));
     }
     let call_slot = body.len();
@@ -671,13 +718,13 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
         enc::encode_jump(wide::control::JAL, 1, 2)
     });
     body.push(enc::encode_halt());
-    let p = program(&body, call_slot, roles);
+    let prepared = program(&body, call_slot, roles);
     let mut vm = ivm::IVM::new(gas);
     // Limb-boundary gas can exceed the minimum guest stack. Bind the original
     // VM owner to the immutable V1 policy before checking every native address.
     let top = Memory::STACK_START + ivm::IvmStackPolicy::V1.stack_limit_for_gas(gas);
     assert_eq!(vm.memory.stack_top(), top);
-    vm.load_prepared(p.artifact()).unwrap();
+    vm.load_prepared(prepared.artifact()).unwrap();
     vm.set_zk_trace_enabled(true);
     for (i, &v) in values.iter().enumerate() {
         vm.set_register(2 + i, v);
@@ -704,18 +751,18 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
             step.outcome,
             ivm::execution_step_recorder::DiagnosticStepOutcome::Completed
         );
-        assert_eq!(step.before.pc, u64::from(p.first_pc) + i as u64 * 4);
+        assert_eq!(step.before.pc, u64::from(prepared.first_pc) + i as u64 * 4);
         assert_eq!(step.after.cycles, step.before.cycles + 1);
     }
     let step = &recorder.records()[call_slot];
-    let c = super::super::callable(&p, call_slot).unwrap();
+    let callee = super::super::callable(&prepared, call_slot).unwrap();
     assert_eq!(
         step.before.gas_remaining - step.after.gas_remaining,
-        2 + super::super::frame_work(c) + 9 * roles.len() as u64
+        2 + super::super::frame_work(callee) + 9 * roles.len() as u64
     );
     let sp = top - 64;
     assert_eq!(
-        [10, 11, 12, 13, 31].map(|r| step.before.registers[r]),
+        [10, 11, 12, 13, 31].map(|register| step.before.registers[register]),
         [
             if roles.is_empty() { 0 } else { sp },
             roles.len() as u64,
@@ -724,24 +771,24 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
             sp
         ]
     );
-    let d = dispatch_tests::Fixture::with_controls(
-        &p,
+    let dispatch = dispatch_tests::Fixture::with_controls(
+        &prepared,
         call_slot,
         false,
         0,
         step.before.gas_remaining,
         step.before.cycles,
     );
-    let mut original = Original::from_dispatch(&p, call_slot, d);
+    let mut original = Original::from_dispatch(&prepared, call_slot, &dispatch);
     // These diagnostic descriptor coordinates come from the actual root frame
     // and before-CALL registers. Abstract lifecycle generations remain the
     // component's declared original fixture owners, not a whole-invocation claim.
     let (descriptor, ports) = frame_descriptor::tests::child_for_original_tables(
         (
-            c.entry_pc,
-            u64::from(c.frame_bytes),
-            c.argument_word_count().unwrap() as u64,
-            c.result_word_count().unwrap() as u64,
+            callee.entry_pc,
+            u64::from(callee.frame_bytes),
+            callee.argument_word_count().unwrap() as u64,
+            callee.result_word_count().unwrap() as u64,
         ),
         top,
         [sp, top],
@@ -755,7 +802,7 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
     for (i, source) in super::super::VALIDATION_SOURCES.into_iter().enumerate() {
         original.packets[super::super::VALIDATION_START + i] = ports[source];
     }
-    let mut f = Fixture::from_original(&p, original, values);
+    let mut fixture = Fixture::from_original(&prepared, original, values);
     // Derive each parent initialization cell from every observed STORE byte,
     // rather than granting the unused half of a partial final cell. Root setup
     // has empty arguments and all writes below belong to the declared parent.
@@ -773,12 +820,12 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
             }
         }
         dispatch_tests::bits(
-            &mut f.words[index][INITIALIZED..INITIALIZED + 16],
+            &mut fixture.words[index][INITIALIZED..INITIALIZED + 16],
             initialized,
         );
         for port in [EARLY, LATE] {
-            f.packets[index][port][BEFORE] = F(initialized);
-            f.packets[index][port][AFTER] = F(initialized);
+            fixture.packets[index][port][BEFORE] = F(initialized);
+            fixture.packets[index][port][AFTER] = F(initialized);
         }
         assert_eq!((initialized >> (address % 16)) & 0xff, 0xff);
         if index + 1 == values.len() && values.len() % 2 == 1 {
@@ -791,34 +838,40 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
     // Bind the explicit final original read from the actual post-CALL snapshot,
     // then require the same owner and last WORD debit in the composed equations.
     for i in 0..4 {
-        f.completion[BEFORE + i] = super::super::super::constant_limb(step.after.gas_remaining, i);
-        f.completion[AFTER + i] = f.completion[BEFORE + i];
+        fixture.completion[BEFORE + i] =
+            super::super::super::constant_limb(step.after.gas_remaining, i);
+        fixture.completion[AFTER + i] = fixture.completion[BEFORE + i];
     }
-    assert!(f.accepts(&p));
-    let mut wrong = f.clone();
+    assert!(fixture.accepts(&prepared));
+    let mut wrong = fixture.clone();
     for i in 0..4 {
         wrong.completion[BEFORE + i] =
             super::super::super::constant_limb(step.after.gas_remaining + 8, i);
         wrong.completion[AFTER + i] = wrong.completion[BEFORE + i];
     }
-    assert!(!wrong.accepts(&p));
+    assert!(!wrong.accepts(&prepared));
     let mut registers = step.before.registers;
     registers[1] = step.before.pc + 4;
     let mut tags = step.before.tags;
     tags[1] = false;
     assert_eq!(step.after.registers, registers);
     assert_eq!(step.after.tags, tags);
-    assert_eq!(step.after.pc, u64::from(p.first_pc) + c.entry_pc);
+    assert_eq!(
+        step.after.pc,
+        u64::from(prepared.first_pc) + callee.entry_pc
+    );
     assert_eq!(
         (vm.gas_remaining, vm.pc(), vm.get_cycle_count()),
         (step.after.gas_remaining, step.after.pc, step.after.cycles)
     );
     assert!(vm.call_result_word_count().is_err());
     let tables = [(10, 0), (11, 0), (12, Memory::HEAP_START), (13, 1)];
-    let mut expected = tables.map(|(r, v)| (true, r, v, false)).to_vec();
-    expected.extend(tables.map(|(r, v)| (false, r, v, false)));
-    for (r, v) in [(31, top), (1, p.code_end())] {
-        expected.extend([(true, r, v, false); 2]);
+    let mut expected = tables
+        .map(|(register, v)| (true, register, v, false))
+        .to_vec();
+    expected.extend(tables.map(|(register, v)| (false, register, v, false)));
+    for (register, v) in [(31, top), (1, prepared.code_end())] {
+        expected.extend([(true, register, v, false); 2]);
     }
     expected.extend([
         (false, 10, 0, false),
@@ -827,16 +880,16 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
         (false, 13, 1, false),
     ]);
     for (i, step) in recorder.records()[..4].iter().enumerate() {
-        let r = [31, 10, 11, 12][i];
+        let register = [31, 10, 11, 12][i];
         let source = [31, if roles.is_empty() { 0 } else { 31 }, 0, 31][i];
         expected.push((false, source, step.before.registers[source], false));
-        expected.extend([(true, r, step.after.registers[r], false); 2]);
+        expected.extend([(true, register, step.after.registers[register], false); 2]);
     }
     for (i, &v) in values.iter().enumerate() {
         expected.extend([(false, 31, sp, false), (false, 2 + i, v, false)]);
     }
-    for r in [31, 10, 11, 12, 13, 10, 12, 11, 13] {
-        expected.push((false, r, step.before.registers[r], false));
+    for register in [31, 10, 11, 12, 13, 10, 12, 11, 13] {
+        expected.push((false, register, step.before.registers[register], false));
     }
     expected.extend([(true, 1, step.before.pc + 4, false); 2]);
     let snapshot = vm.try_diagnostic_snapshot(&budget).unwrap();
@@ -853,7 +906,7 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
             .try_read_log_snapshot()
             .unwrap()
             .iter()
-            .map(|r| (r.addr, r.len))
+            .map(|register| (register.addr, register.len))
             .collect::<Vec<_>>(),
         (0..values.len())
             .map(|i| (sp + i as u64 * 8, 8))
@@ -874,7 +927,7 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
     );
     // Expose the actual budget at the first NODE to the boundary controls;
     // all original native, chronology, scalar-bank and final-gas assertions above remain.
-    step.before.gas_remaining - 2 - super::super::frame_work(c)
+    step.before.gas_remaining - 2 - super::super::frame_work(callee)
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! Explicit authority declarations for every actual WorldData field.
+//! Explicit authority declarations for every actual `WorldData` field.
 
 use iroha_data_model::nexus::{
     PrivateSettlementNullifierKeyV1, PrivateSettlementOutputKeyV1,

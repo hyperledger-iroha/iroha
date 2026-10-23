@@ -194,7 +194,7 @@ fn escrow_of(stx: &StateTransaction<'_, '_>, network: SccpNetworkV1) -> AccountI
 }
 
 fn set_enabled(stx: &mut StateTransaction<'_, '_>, enabled: bool) {
-    let mut params = store::parameters::get(&*stx.world).clone().expect("SCCP");
+    let mut params = (*store::parameters::get(&*stx.world)).expect("SCCP");
     params.enabled = enabled;
     store::parameters::set(stx, Some(params));
 }
@@ -1118,7 +1118,7 @@ fn a_void_never_releases_a_multisig_sender_inline() {
     assert_pending_counts(&stx, "after the multisig void");
 }
 
-/// Deterministic 64-bit generator (SplitMix64), so every seed replays exactly.
+/// Deterministic 64-bit generator (`SplitMix64`), so every seed replays exactly.
 struct SplitMix64(u64);
 
 impl SplitMix64 {
@@ -1404,24 +1404,42 @@ fn release_credits_skip_zero_legs_and_merge_a_self_sink() {
     let unavailable = SccpPendingReasonV1::FeeSinkUnavailable;
     assert_eq!(
         release_credits(&recipient, 5, None, 0),
-        vec![(recipient.clone(), 5, refused)]
+        [Some((&recipient, 5, refused)), None]
     );
+    let both = release_credits(&recipient, 5, Some(&sink), 2);
     assert_eq!(
-        release_credits(&recipient, 5, Some(&sink), 2),
-        vec![
-            (recipient.clone(), 5, refused),
-            (sink.clone(), 2, unavailable)
+        both,
+        [
+            Some((&recipient, 5, refused)),
+            Some((&sink, 2, unavailable))
         ]
     );
+    assert!(std::ptr::eq(
+        both[0].expect("recipient credit").0,
+        &raw const recipient
+    ));
+    assert!(std::ptr::eq(
+        both[1].expect("fee credit").0,
+        &raw const sink
+    ));
     assert_eq!(
         release_credits(&recipient, 0, Some(&sink), 2),
-        vec![(sink.clone(), 2, unavailable)]
+        [Some((&sink, 2, unavailable)), None]
     );
     assert_eq!(
         release_credits(&recipient, 5, Some(&recipient), 2),
-        vec![(recipient.clone(), 7, refused)]
+        [Some((&recipient, 7, refused)), None]
     );
-    assert!(release_credits(&recipient, 0, None, 0).is_empty());
+    assert_eq!(release_credits(&recipient, 0, None, 0), [None, None]);
+    // Preserve the existing self-sink branch even for a zero or saturated sum.
+    assert_eq!(
+        release_credits(&recipient, 0, Some(&recipient), 0),
+        [Some((&recipient, 0, refused)), None]
+    );
+    assert_eq!(
+        release_credits(&recipient, u128::MAX, Some(&recipient), 1),
+        [Some((&recipient, u128::MAX, refused)), None]
+    );
 }
 
 #[test]
@@ -1765,3 +1783,6 @@ fn late_void_keeps_full_refund_pending_when_reconciled_claims_spent_liability() 
     assert!(attempt_refund(&mut stx, outbound).unwrap().is_held());
     assert_escrow_invariant(&*stx.world, "late void after reconciliation");
 }
+
+mod source_controls;
+mod uid;

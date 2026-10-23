@@ -25,16 +25,16 @@ use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly};
 use TransitionError as Error;
 
 /// Root reserved against contract reads, writes and deletes by the native host.
-pub(crate) const STATE_ROOT: &str = "sorafs_stream_token_gateway_v1";
+pub const STATE_ROOT: &str = "sorafs_stream_token_gateway_v1";
 /// Maximum canonical frame for any individual gateway row, including an original admission.
-pub(crate) const MAX_ROW_BYTES: usize = 64 * 1024;
+pub const MAX_ROW_BYTES: usize = 64 * 1024;
 /// Aggregate encoded replacement/path bytes staged by one bounded native instruction.
 const MAX_STAGED_BYTES: usize = 2 * 1024 * 1024;
 
 /// Immutable original governance transition, distinct from the policy's own commitment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::GatewayPolicyRecordV1")]
-pub(crate) struct GatewayPolicyRecordV1 {
+pub struct GatewayPolicyRecordV1 {
     /// Complete original policy, including its own revision and policy digest.
     pub policy: Policy,
     /// Previous immutable policy-record digest, zero only at revision one.
@@ -48,7 +48,7 @@ pub(crate) struct GatewayPolicyRecordV1 {
 /// Small current-policy pointer; policy and history commitments have separate meanings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::GatewayPolicyHeadV1")]
-pub(crate) struct GatewayPolicyHeadV1 {
+pub struct GatewayPolicyHeadV1 {
     /// Exact latest adjacent policy revision.
     pub revision: u64,
     /// Canonical policy commitment, excluding its own digest field.
@@ -60,7 +60,7 @@ pub(crate) struct GatewayPolicyHeadV1 {
 /// Operational head paired with its last immutable native mutation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::GatewayStoredHeadV1")]
-pub(crate) struct GatewayStoredHeadV1 {
+pub struct GatewayStoredHeadV1 {
     /// Existing pure-transition head, unaffected by policy rotation.
     pub head: GatewayHeadV1,
     /// Last immutable mutation commitment; zero exactly before the first mutation.
@@ -70,7 +70,7 @@ pub(crate) struct GatewayStoredHeadV1 {
 /// Immutable commitment to one changed delta, including its indexed acknowledgement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::GatewayMutationRecordV1")]
-pub(crate) struct GatewayMutationRecordV1 {
+pub struct GatewayMutationRecordV1 {
     /// Previous immutable mutation digest, zero only for the first mutation.
     pub predecessor_digest: [u8; 32],
     /// Exact policy revision under which this operation executed.
@@ -95,7 +95,7 @@ pub(crate) struct GatewayMutationRecordV1 {
 
 /// Same-World control and operational inputs; neither wire form nor finality capability.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GatewayCurrentV1 {
+pub struct GatewayCurrentV1 {
     /// Latest immutable governance transition.
     pub policy: GatewayPolicyRecordV1,
     /// Current policy/history pointer.
@@ -105,7 +105,7 @@ pub(crate) struct GatewayCurrentV1 {
 }
 
 /// Bound canonical encoding, checked before allocating its frame.
-pub(crate) fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
+pub fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
     if norito::canonical_frame_len(value).map_err(|_| Error::Invalid)? > MAX_ROW_BYTES {
         return Err(Error::Invalid);
     }
@@ -113,7 +113,7 @@ pub(crate) fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Result<Vec<
 }
 
 /// Bound exact canonical decoding; stored frames never choose ambient codec flags.
-pub(crate) fn decode<T>(bytes: &[u8]) -> Result<T, Error>
+pub fn decode<T>(bytes: &[u8]) -> Result<T, Error>
 where
     T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
 {
@@ -145,7 +145,7 @@ fn commitment<T: norito::core::NoritoSerialize>(
 }
 
 /// Commitment to a complete immutable policy record, not merely to the policy.
-pub(crate) fn policy_record_digest(record: &GatewayPolicyRecordV1) -> Result<[u8; 32], Error> {
+pub fn policy_record_digest(record: &GatewayPolicyRecordV1) -> Result<[u8; 32], Error> {
     commitment(
         b"iroha.sorafs.stream-token.gateway-policy-record.v1\0",
         record,
@@ -153,7 +153,7 @@ pub(crate) fn policy_record_digest(record: &GatewayPolicyRecordV1) -> Result<[u8
 }
 
 /// Commitment to one immutable operational mutation.
-pub(crate) fn mutation_record_digest(record: &GatewayMutationRecordV1) -> Result<[u8; 32], Error> {
+pub fn mutation_record_digest(record: &GatewayMutationRecordV1) -> Result<[u8; 32], Error> {
     commitment(b"iroha.sorafs.stream-token.gateway-mutation.v1\0", record)
 }
 
@@ -180,27 +180,27 @@ fn prefix_bounds(gateway: [u8; 32], suffix: &str) -> Result<(StatePath, StatePat
 }
 
 /// Canonical current-policy pointer path.
-pub(crate) fn policy_head_path(gateway: [u8; 32]) -> Result<StatePath, Error> {
+pub fn policy_head_path(gateway: [u8; 32]) -> Result<StatePath, Error> {
     path(gateway, "policy/head")
 }
 
 /// Canonical immutable policy-history path.
-pub(crate) fn policy_record_path(gateway: [u8; 32], revision: u64) -> Result<StatePath, Error> {
+pub fn policy_record_path(gateway: [u8; 32], revision: u64) -> Result<StatePath, Error> {
     path(gateway, &format!("policy/revision/{revision:020}"))
 }
 
 /// Canonical operational-head path.
-pub(crate) fn head_path(gateway: [u8; 32]) -> Result<StatePath, Error> {
+pub fn head_path(gateway: [u8; 32]) -> Result<StatePath, Error> {
     path(gateway, "head")
 }
 
 /// Canonical immutable operational-mutation path.
-pub(crate) fn mutation_path(gateway: [u8; 32], revision: u64) -> Result<StatePath, Error> {
+pub fn mutation_path(gateway: [u8; 32], revision: u64) -> Result<StatePath, Error> {
     path(gateway, &format!("mutation/{revision:020}"))
 }
 
 /// Canonical typed row path; expiry ordering exactly matches the engine's key order.
-pub(crate) fn row_path(gateway: [u8; 32], key: &GatewayRowKey) -> Result<StatePath, Error> {
+pub fn row_path(gateway: [u8; 32], key: &GatewayRowKey) -> Result<StatePath, Error> {
     let suffix = match key {
         GatewayRowKey::Admission(sequence) => format!("row/admission/{sequence:020}"),
         GatewayRowKey::Acknowledgement(sequence) => format!("row/acknowledgement/{sequence:020}"),
@@ -330,7 +330,7 @@ fn policy_record_bare(
 }
 
 /// Read an immutable policy and verify its adjacent predecessor in this exact World view.
-pub(crate) fn read_policy_record(
+pub fn read_policy_record(
     world: &impl WorldReadOnly,
     network: &NetworkId,
     gateway: [u8; 32],
@@ -419,7 +419,7 @@ fn mutation_bare(
 }
 
 /// Read one retained mutation and its adjacent predecessor without scanning history.
-pub(crate) fn read_mutation(
+pub fn read_mutation(
     world: &impl WorldReadOnly,
     network: &NetworkId,
     gateway: [u8; 32],
@@ -439,7 +439,7 @@ pub(crate) fn read_mutation(
 }
 
 /// Read exact current policy/head association within one World, rejecting partial rollback.
-pub(crate) fn read_current(
+pub fn read_current(
     world: &impl WorldReadOnly,
     network: &NetworkId,
     gateway: [u8; 32],
@@ -518,7 +518,7 @@ pub(crate) fn read_current(
 }
 
 /// Borrowed exact-World row source; its constructor supplies no finality or permissions.
-pub(crate) struct WorldGatewayRows<'a, W: WorldReadOnly> {
+pub struct WorldGatewayRows<'a, W: WorldReadOnly> {
     world: &'a W,
     network: NetworkId,
     gateway: [u8; 32],
@@ -592,7 +592,6 @@ impl<W: WorldReadOnly> GatewayRows for WorldGatewayRows<'_, W> {
             }
             value
                 .record
-                .clone()
                 .validate_for_request(&value.request, policy.policy.qualification)
                 .map_err(|_| Error::CorruptHistory)?;
             execution_under_policy(
@@ -702,7 +701,7 @@ fn after_current(
 }
 
 /// Atomically configure or replace a policy; the native owner separately checks Manage permission.
-pub(crate) fn configure(
+pub fn configure(
     tx: &mut StateTransaction<'_, '_>,
     policy: &Policy,
     expected_revision: u64,
@@ -795,7 +794,7 @@ pub(crate) fn configure(
 }
 
 /// Atomically publish a pure transition after exact policy, head and per-row CAS revalidation.
-pub(crate) fn prepare_delta(
+pub fn prepare_delta(
     tx: &StateTransaction<'_, '_>,
     current: &GatewayCurrentV1,
     execution: &Execution,
@@ -903,10 +902,10 @@ pub(crate) fn prepare_delta(
                 return Err(Error::BindingMismatch);
             }
         }
-        if let Some(GatewayRow::LeaseTerminal(row)) = &write.after {
-            if row.execution != *execution || row.policy_revision != policy.qualification.revision {
-                return Err(Error::BindingMismatch);
-            }
+        if let Some(GatewayRow::LeaseTerminal(row)) = &write.after
+            && (row.execution != *execution || row.policy_revision != policy.qualification.revision)
+        {
+            return Err(Error::BindingMismatch);
         }
         let key = row_path(gateway, &write.key)?;
         let before = write
@@ -963,7 +962,7 @@ pub(crate) fn prepare_delta(
 }
 
 /// Bounded fully validated gateway writes; publication cannot fail after another native owner writes.
-pub(crate) struct PreparedGatewayDelta {
+pub struct PreparedGatewayDelta {
     writes: Vec<(StatePath, Option<Vec<u8>>)>,
 }
 impl PreparedGatewayDelta {
@@ -981,7 +980,7 @@ impl PreparedGatewayDelta {
 
 /// Apply one delta directly in storage fixtures; production prepares all owners first.
 #[cfg(test)]
-pub(crate) fn apply_delta(
+pub fn apply_delta(
     tx: &mut StateTransaction<'_, '_>,
     current: &GatewayCurrentV1,
     execution: &Execution,

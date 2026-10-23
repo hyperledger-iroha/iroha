@@ -162,11 +162,10 @@ fn proof_fixture_uses_supplied_id_and_updates_status_index_without_finality() {
     }
     let view = state.view();
     assert!(
-        !view
-            .world()
+        view.world()
             .proofs_by_status()
             .get(&(ProofStatus::Verified, id.clone()))
-            .is_some()
+            .is_none()
     );
 }
 

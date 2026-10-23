@@ -8,7 +8,7 @@ fn expected(left: u64, right: u64) -> Option<u64> {
     let remainder = left.checked_rem(right)?;
     quotient
         .checked_add(i64::from(remainder != 0 && (left < 0) == (right < 0)))
-        .map(|v| i64::cast_unsigned(v))
+        .map(i64::cast_unsigned)
 }
 
 fn set_destination(fixture: &mut ScalarFixture, value: u64) {

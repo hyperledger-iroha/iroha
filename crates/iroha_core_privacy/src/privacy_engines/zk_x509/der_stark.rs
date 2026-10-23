@@ -331,36 +331,38 @@ impl ZkX509DerStarkPrivateShapeV1 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ZkX509DerStarkShapeV1;
 impl ZkX509DerStarkShapeV1 {
-    pub(crate) const fn validate(&self) -> Result<(), ZkX509DerStarkErrorV1> {
-        Ok(())
-    }
     #[cfg(test)]
-    pub(crate) const fn active_rows(&self) -> usize {
+    pub(crate) const fn active_rows(self) -> usize {
+        let Self = self;
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
     }
     #[cfg(test)]
-    pub(crate) const fn transcript_bytes(&self) -> &'static [u8] {
+    pub(crate) const fn transcript_bytes(self) -> &'static [u8] {
+        let Self = self;
         b"zk-x509-der-stark-fixed-registration-v1"
     }
 }
 /// Verifier-owned constant fixed schedule; it never stores native fixed rows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkX509DerStarkFixedScheduleV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerStarkFixedScheduleV1 {
     #[cfg(test)]
-    pub(crate) const fn active_rows(&self) -> usize {
+    pub(crate) const fn active_rows(self) -> usize {
+        let Self = self;
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
     }
     #[cfg(test)]
-    pub(crate) const fn aggregate_rows(&self) -> usize {
+    pub(crate) const fn aggregate_rows(self) -> usize {
+        let Self = self;
         ZK_X509_DER_STARK_TRACE_SIZE_V1
     }
     pub(crate) fn fixed_row(
-        &self,
+        self,
         index: usize,
     ) -> Result<[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1], ZkX509DerStarkErrorV1> {
+        let Self = self;
         if index >= ZK_X509_DER_STARK_TRACE_SIZE_V1 {
             return Err(ZkX509DerStarkErrorV1::Resource);
         }
@@ -395,9 +397,9 @@ impl ZkX509DerStarkFixedScheduleV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn compile_zk_x509_der_stark_fixed_schedule_v1(
     shape: ZkX509DerStarkShapeV1,
-) -> Result<ZkX509DerStarkFixedScheduleV1, ZkX509DerStarkErrorV1> {
-    shape.validate()?;
-    Ok(ZkX509DerStarkFixedScheduleV1)
+) -> ZkX509DerStarkFixedScheduleV1 {
+    let ZkX509DerStarkShapeV1 = shape;
+    ZkX509DerStarkFixedScheduleV1
 }
 /// Transcript challenges used by stack, event, and byte lookup buses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -552,7 +554,6 @@ pub struct ZkX509DerStarkPublicTerminalsV1;
 /// consume them in the same verifier-fixed role order.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(test)]
 pub struct ZkX509DerStarkTerminalClaimsV1 {
     pub(crate) input_byte: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
     pub(crate) node: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
@@ -629,6 +630,10 @@ struct FrameV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "these independent DER parser flags represent separate constrained state columns"
+)]
 struct ParserStateV1 {
     document: u64,
     document_len: u64,
@@ -1599,18 +1604,17 @@ fn derive_zk_x509_der_stark_private_document_product_v1(
             F(u64::try_from(document).map_err(|_| ZkX509DerStarkErrorV1::Resource)?),
             F(u64::from(length)),
         );
-        for lane in 0..ZK_X509_DER_STARK_BUS_LANES_V1 {
-            document_product[lane] =
-                document_product[lane].mul(compress_tuple_v1(&tuple, challenges.tuple[lane]));
+        for (lane, product) in document_product.iter_mut().enumerate() {
+            *product = product.mul(compress_tuple_v1(&tuple, challenges.tuple[lane]));
         }
     }
     Ok(document_product)
 }
 pub fn derive_zk_x509_der_stark_public_terminals_v1(
-    shape: &ZkX509DerStarkShapeV1,
+    shape: ZkX509DerStarkShapeV1,
     challenges: &ZkX509DerStarkChallengesV1,
 ) -> Result<ZkX509DerStarkPublicTerminalsV1, ZkX509DerStarkErrorV1> {
-    shape.validate()?;
+    let ZkX509DerStarkShapeV1 = shape;
     challenges.validate()?;
     Ok(ZkX509DerStarkPublicTerminalsV1)
 }
@@ -1868,7 +1872,7 @@ pub fn validate_zk_x509_der_stark_base_trace_v1(
     base: &ZkX509DerStarkBaseV1,
 ) -> Result<(), ZkX509DerStarkErrorV1> {
     base.private_shape.validate()?;
-    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)?;
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     if base.rows.len() != base.private_shape.active_rows()?
         || base
             .rows
@@ -1915,11 +1919,11 @@ pub fn validate_zk_x509_der_stark_base_trace_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_der_stark_trace_v1(
     base: ZkX509DerStarkBaseV1,
-    challenges: ZkX509DerStarkChallengesV1,
+    challenges: &ZkX509DerStarkChallengesV1,
 ) -> Result<ZkX509DerStarkTraceV1, ZkX509DerStarkErrorV1> {
     challenges.validate()?;
     validate_zk_x509_der_stark_base_trace_v1(&base)?;
-    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)?;
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     if base.rows.len() != base.private_shape.active_rows()? {
         return Err(ZkX509DerStarkErrorV1::Transition);
     }
@@ -2044,7 +2048,7 @@ pub fn build_zk_x509_der_stark_trace_v1(
                         current[BASE_BYTE_VALUE],
                     ),
                     lane,
-                    &challenges,
+                    challenges,
                 );
                 let zero = F(u64::from(denominator == F::ZERO));
                 let inverse = denominator.inverse_or_zero_canonical_v1();
@@ -2059,12 +2063,12 @@ pub fn build_zk_x509_der_stark_trace_v1(
                 let left_denominator = byte_denominator_v1(
                     byte_tuple_v1(current[0], current[4].add(current[9]), current[10]),
                     lane,
-                    &challenges,
+                    challenges,
                 );
                 let right_denominator = byte_denominator_v1(
                     byte_tuple_v1(current[0], current[6].add(current[9]), current[11]),
                     lane,
-                    &challenges,
+                    challenges,
                 );
                 for (denominator, inverse_column, zero_column) in [
                     (
@@ -2115,7 +2119,7 @@ pub fn build_zk_x509_der_stark_trace_v1(
     let terminals = zk_x509_der_stark_terminals_v1(&trace)?;
     let private_document_product = derive_zk_x509_der_stark_private_document_product_v1(
         &trace.base.private_shape,
-        &challenges,
+        challenges,
     )?;
     if terminals.stack_push != terminals.stack_pop
         || terminals.document != private_document_product
@@ -2302,7 +2306,7 @@ pub fn zk_x509_der_stark_native_aux_cell_v1(
 }
 #[cfg(test)]
 pub fn zk_x509_der_stark_native_fixed_cell_v1(
-    schedule: &ZkX509DerStarkFixedScheduleV1,
+    schedule: ZkX509DerStarkFixedScheduleV1,
     row: usize,
     column: usize,
 ) -> Result<F, ZkX509DerStarkErrorV1> {
@@ -2354,7 +2358,7 @@ pub fn build_zk_x509_der_stark_native_aux_column_v1(
 /// Generate one verifier-owned fixed column over the full native domain.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_der_stark_native_fixed_column_v1(
-    schedule: &ZkX509DerStarkFixedScheduleV1,
+    schedule: ZkX509DerStarkFixedScheduleV1,
     column_index: usize,
 ) -> Result<Vec<F>, ZkX509DerStarkErrorV1> {
     if column_index >= ZK_X509_DER_STARK_FIXED_WIDTH_V1 {
@@ -2528,7 +2532,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1<A: PolynomialAirFieldV1>(
     push_one_hot_projection_residues_v1(residues, phases, parser, phase_value);
     let depth = pack_bits_v1(&current[BASE_DEPTH_BITS..BASE_DEPTH_BITS + 5]);
     let depth_selectors: &[A; 17] = current_aux
-        [AUX_DEPTH_SELECTORS..AUX_DEPTH_SELECTORS + ZK_X509_DER_MAX_NESTING_DEPTH_V1 + 1]
+        [AUX_DEPTH_SELECTORS..=(AUX_DEPTH_SELECTORS + ZK_X509_DER_MAX_NESTING_DEPTH_V1)]
         .try_into()
         .expect("seventeen depth selectors");
     push_one_hot_projection_residues_v1(residues, depth_selectors, parser, depth);
@@ -2861,8 +2865,8 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1<A: PolynomialAirFieldV1>(
     residues.push(fixed[FIX_FIRST_PARSER].mul(current[BASE_OFFSET]));
     residues.push(fixed[FIX_FIRST_PARSER].mul(current[BASE_NODE_COUNT]));
     residues.push(fixed[FIX_FIRST_PARSER].mul(depth));
-    for column in BASE_FRAME_ID..=BASE_FRAME_PREVIOUS_END {
-        residues.push(fixed[FIX_FIRST_PARSER].mul(current[column]));
+    for &value in &current[BASE_FRAME_ID..=BASE_FRAME_PREVIOUS_END] {
+        residues.push(fixed[FIX_FIRST_PARSER].mul(value));
     }
     residues.push(
         parser
@@ -3535,12 +3539,12 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1<A: PolynomialAirFieldV1>(
             .mul(last_primitive)
             .mul(byte_bits[7]),
     );
-    for bit in 3..8 {
+    for &bit in &byte_bits[3..8] {
         residues.push(
             primitive
                 .mul(kind_selectors[3])
                 .mul(current[BASE_PRIMITIVE_FIRST])
-                .mul(byte_bits[bit]),
+                .mul(bit),
         );
     }
     residues.push(
@@ -4204,7 +4208,6 @@ pub fn evaluate_zk_x509_der_stark_local_residues_into_v1<A: PolynomialAirFieldV1
 /// MAIN uses the local relation and private joined endpoint quotients instead.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
 pub fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV1>(
     current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
@@ -4212,8 +4215,8 @@ pub fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV1>(
     next_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
     fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
     next_fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
-    challenges: ZkX509DerStarkChallengesV1,
-    _public: ZkX509DerStarkPublicTerminalsV1,
+    challenges: &ZkX509DerStarkChallengesV1,
+    public: ZkX509DerStarkPublicTerminalsV1,
     terminal_claims: ZkX509DerStarkTerminalClaimsV1,
     residues: &mut Vec<A>,
 ) -> Result<(), ZkX509DerStarkErrorV1> {
@@ -4232,8 +4235,8 @@ pub fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV1>(
         next_aux,
         fixed,
         next_fixed,
-        &challenges,
-        _public,
+        challenges,
+        public,
         residues,
     )?;
     residues.extend(evaluate_zk_x509_der_stark_terminal_claim_residues_v1(
@@ -4275,7 +4278,6 @@ pub fn evaluate_zk_x509_der_stark_local_residues_v1<A: PolynomialAirFieldV1>(
 /// Complete standalone DER constraints including its explicit public endpoints.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
 pub fn evaluate_zk_x509_der_stark_residues_v1<A: PolynomialAirFieldV1>(
     current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
@@ -4283,7 +4285,7 @@ pub fn evaluate_zk_x509_der_stark_residues_v1<A: PolynomialAirFieldV1>(
     next_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
     fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
     next_fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
-    challenges: ZkX509DerStarkChallengesV1,
+    challenges: &ZkX509DerStarkChallengesV1,
     public: ZkX509DerStarkPublicTerminalsV1,
     terminal_claims: ZkX509DerStarkTerminalClaimsV1,
 ) -> Result<Vec<A>, ZkX509DerStarkErrorV1> {

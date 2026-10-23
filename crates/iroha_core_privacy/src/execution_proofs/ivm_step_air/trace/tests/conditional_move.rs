@@ -140,8 +140,8 @@ fn moves_bind_zero_and_nonzero_predicates_even_with_coherent_false_outputs() {
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                forged[0].before,
-                forged[0].after,
+                &forged[0].before,
+                &forged[0].after,
                 SegmentOutcome::Continue,
             )
             .unwrap();
@@ -173,8 +173,8 @@ fn moves_bind_selected_values_retained_values_and_untouched_registers() {
                 let changed = ScalarSegment::new(
                     segment.contract.clone(),
                     1,
-                    forged[0].before,
-                    forged[0].after,
+                    &forged[0].before,
+                    &forged[0].after,
                     SegmentOutcome::Continue,
                 )
                 .unwrap();
@@ -190,8 +190,8 @@ fn moves_bind_selected_values_retained_values_and_untouched_registers() {
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                forged[0].before,
-                forged[0].after,
+                &forged[0].before,
+                &forged[0].after,
                 SegmentOutcome::Continue,
             )
             .unwrap();
@@ -269,8 +269,8 @@ fn conditional_moves_keep_public_tags_and_reject_private_condition_source_and_re
             let segment = ScalarSegment::new(
                 contract.clone(),
                 1,
-                record.before,
-                record.after,
+                &record.before,
+                &record.after,
                 SegmentOutcome::Continue,
             )
             .unwrap();
@@ -293,8 +293,8 @@ fn conditional_moves_keep_public_tags_and_reject_private_condition_source_and_re
                         ScalarSegment::new(
                             contract.clone(),
                             1,
-                            entry,
-                            exit,
+                            &entry,
+                            &exit,
                             SegmentOutcome::Continue
                         )
                         .is_err()
@@ -355,8 +355,8 @@ fn native_stark_proves_moves_and_binds_both_branches_and_signed_immediate() {
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             segment.steps,
-            segment.before,
-            after,
+            &segment.before,
+            &after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -369,8 +369,8 @@ fn native_stark_proves_moves_and_binds_both_branches_and_signed_immediate() {
     let changed = ScalarSegment::new(
         ivm::prepare_contract(Arc::from(artifact)).unwrap(),
         segment.steps,
-        segment.before,
-        segment.after,
+        &segment.before,
+        &segment.after,
         SegmentOutcome::Continue,
     )
     .unwrap();

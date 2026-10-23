@@ -214,7 +214,7 @@ impl ByteRegion<'_, '_> {
                     .faults
                     .iter()
                     .find(|fault| fault.row == row && fault.column == column)
-                    .map_or(Scalar::from(value), |fault| fault.value);
+                    .map_or_else(|| Scalar::from(value), |fault| fault.value);
                 self.region
                     .assign_advice(self.config.advice[column], row, Value::known(value))
                     .map(|cell| cell.cell())
@@ -317,14 +317,18 @@ impl ByteRegion<'_, '_> {
         word: &ByteWord<N>,
         bits: u32,
     ) -> Result<ByteWord<N>, Error> {
-        let bits = bits % (8 * N) as u32;
+        let bits = bits % u32::try_from(8 * N).map_err(|_| Error::Synthesis)?;
         let whole = (bits / 8) as usize;
         let remainder = bits % 8;
         if !self.config.all_rotations && !matches!(remainder, 0 | 1 | 4 | 7) {
             return Err(Error::Synthesis);
         }
         let output = Zeroizing::new(if N == 4 {
-            u64::from((*word.value as u32).rotate_right(bits))
+            u64::from(
+                u32::try_from(*word.value & u64::from(u32::MAX))
+                    .expect("masked 32-bit word")
+                    .rotate_right(bits),
+            )
         } else {
             word.value.rotate_right(bits)
         });

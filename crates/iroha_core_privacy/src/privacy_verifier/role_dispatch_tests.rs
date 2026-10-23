@@ -380,13 +380,13 @@ fn assert_effect_seals_only_for_its_role(
     use crate::privacy_dispatch::{PrivacyRoleEffectClassV1, privacy_role_dispatch_row_v1};
     let digest = PrivacyStatementDigestV1::new([0x77; 32]);
     for role in PrivacyActionRoleV1::ALL {
-        let belongs = match owner {
-            Some(owner) => owner == role,
-            None => {
+        let belongs = owner.map_or_else(
+            || {
                 privacy_role_dispatch_row_v1(role).effect_class
                     == PrivacyRoleEffectClassV1::VerifyOnly
-            }
-        };
+            },
+            |owner| owner == role,
+        );
         assert_eq!(effect.discharges_role_v1(role), belongs, "{role}");
         match VerifiedPrivacyEffectsV1::seal_v1(role, digest, 3, 77, effect.clone()) {
             Ok(sealed) => {

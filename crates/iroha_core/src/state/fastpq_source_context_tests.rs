@@ -509,6 +509,10 @@ fn changing_the_apply_bucket_after_recording_invalidates_source_capture() {
 
 #[test]
 fn normal_and_replacement_scopes_freeze_incarnation_before_pristine_stage() {
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "The fixture implements the production fallible callback contract"
+    )]
     fn mutate_stage(block: &mut StateBlock<'_>) -> Result<(), core::convert::Infallible> {
         block
             .lane_incarnations
@@ -668,6 +672,10 @@ fn native_incarnation_is_frozen_before_world_and_transaction_mutation() {
 
 #[test]
 fn normal_and_replacement_scopes_do_not_admit_native_lanes_created_after_freeze() {
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "The fixture implements the production fallible callback contract"
+    )]
     fn create_stage(block: &mut StateBlock<'_>) -> Result<(), core::convert::Infallible> {
         block.world.sumeragi_lanes.get_mut().upsert(native_lane());
         Ok(())

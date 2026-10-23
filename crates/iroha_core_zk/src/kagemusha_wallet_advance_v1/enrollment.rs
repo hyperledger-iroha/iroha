@@ -552,7 +552,7 @@ where
             slot,
             generation_policy,
             Some(authorization.request_id()),
-            |provider| authorization.check(provider),
+            move |provider| authorization.check(provider),
         )
     }
 
@@ -773,7 +773,7 @@ where
             });
         }
         let request_id = authorization.request_id();
-        self.resume_enrollment_inner(&slot, false, Some(request_id), |provider| {
+        self.resume_enrollment_inner(&slot, false, Some(request_id), move |provider| {
             authorization.check(provider)
         })
     }
@@ -1923,7 +1923,7 @@ where
         };
         let record: KagemushaWalletAbandonedSlotV1 =
             decode_envelope_v1(&bytes, KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1)
-                .map_err(|_| corrupt.clone())?;
+                .map_err(|_| corrupt)?;
         if record.version != KAGEMUSHA_WALLET_ENROLLMENT_FILE_VERSION_V1 || record.slot != slot.0 {
             return Err(corrupt);
         }

@@ -17,7 +17,7 @@ use iroha_data_model::fastpq::{
 
 /// Exact failed source join; no partially authenticated owner escapes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum FinalizedFastpqSourceError {
+pub enum FinalizedFastpqSourceError {
     /// No native R preparation consumed this original captured witness.
     #[error("original FASTPQ witness has no native execution commitment")]
     MissingNativeResult,
@@ -47,12 +47,16 @@ pub(crate) enum FinalizedFastpqSourceError {
 /// The witness retains its original D7 write backing, mandatory source and optional
 /// complete-effect archive. Optional archive refusal can prevent work selection but
 /// cannot change certified bytes, coverage, block validity or source finality.
-pub(crate) struct FinalizedFastpqSource {
+pub struct FinalizedFastpqSource {
     native: AuthenticatedExecutionBlock,
     witness: CapturedExecWitness,
 }
 impl FinalizedFastpqSource {
     /// Move both actual owners once. On failure both originals are returned unchanged.
+    #[expect(
+        clippy::result_large_err,
+        reason = "FASTPQ refusal returns original source custody and its paid work admission without allocating an error box"
+    )]
     pub(crate) fn bind(
         witness: CapturedExecWitness,
         native: AuthenticatedExecutionBlock,
@@ -71,6 +75,10 @@ impl FinalizedFastpqSource {
     }
     /// Consume the actual native owner and admit its immutable archive once.
     /// Every failure returns this same source; no job can pair another archive.
+    #[expect(
+        clippy::result_large_err,
+        reason = "FASTPQ refusal returns original source custody and its paid work admission without allocating an error box"
+    )]
     pub(crate) fn into_work(
         self,
     ) -> Result<AdmittedFinalizedFastpqSource, (Self, FinalizedFastpqWorkError)> {
@@ -157,17 +165,17 @@ impl FinalizedFastpqSource {
 mod tests;
 
 #[cfg(test)]
-pub(crate) mod test_fixture;
+pub mod test_fixture;
 
 /// A native source and its one-time admitted complete archive cannot be separated
 /// or paired with another source. Only the consuming original join constructs it.
-pub(crate) struct AdmittedFinalizedFastpqSource {
+pub struct AdmittedFinalizedFastpqSource {
     original: FinalizedFastpqSource,
     archive: AdmittedQuantityArchive,
 }
 /// A rejected work admission returns the original native owner unchanged.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum FinalizedFastpqWorkError {
+pub enum FinalizedFastpqWorkError {
     #[error(transparent)]
     Native(#[from] FinalizedFastpqSourceError),
     #[error("original complete-effect archive unavailable: {0:?}")]

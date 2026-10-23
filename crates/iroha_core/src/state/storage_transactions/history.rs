@@ -156,7 +156,7 @@ pub(super) fn new_identity(
 
 /// One original preparation. A capacity retry resumes this same cursor/batch;
 /// it cannot rebuild already completed work against a newly sampled cut.
-pub(crate) struct Pending {
+pub struct Pending {
     pub(super) predecessor: Identity,
     pub(super) latest: Option<Tip>,
     pub(super) replacement: bool,
@@ -307,7 +307,7 @@ impl Pending {
                 writer
                     .try_release_into_observed(
                         releases,
-                        |writer| writer.detach(),
+                        concread::bptree::BptreeMapWriteTxn::detach,
                         || storage.blocks.is_poisoned(),
                     )
                     .unwrap_or_else(|_| unreachable!("original physical history release family")),

@@ -488,7 +488,7 @@ fn accepted_uaid_dataspace_tx(
         .by_id(dataspace)
         .expect("fixture target dataspace exists")
         .alias;
-    let target = DomainId::try_new(&unique_test_domain_name("uaid"), alias)
+    let target = DomainId::try_new(unique_test_domain_name("uaid"), alias)
         .expect("domain in the actual configured target dataspace");
     let tx = accepted_tx_with(
         account.clone(),

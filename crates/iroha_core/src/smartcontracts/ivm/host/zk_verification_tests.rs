@@ -42,6 +42,8 @@ fn enforce_zk_envelope_maps_errors_and_ok() {
 }
 #[test]
 fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
+    type EnvelopeMutation = fn(&mut iroha_data_model::zk::OpenVerifyEnvelope);
+
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
@@ -65,7 +67,7 @@ fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
     let mut map = BTreeMap::new();
     map.insert(VerifyingKeyId::new(backend, "vk"), rec);
     host.set_verifying_keys(map).expect("set registry");
-    let invalid_cases: [(&str, fn(&mut iroha_data_model::zk::OpenVerifyEnvelope), u64); 10] = [
+    let invalid_cases: [(&str, EnvelopeMutation, u64); 10] = [
         (
             "empty circuit id",
             |env| env.circuit_id.clear(),

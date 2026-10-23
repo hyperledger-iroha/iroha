@@ -156,8 +156,7 @@ pub fn advance(block: &mut StateBlock<'_>, input: &LaneStepInput) -> Result<(), 
         &mut state,
         &block.world,
         &block.nexus,
-        &network,
-        block.chain_id().as_str(),
+        (&network, block.chain_id().as_str()),
         policy.as_ref(),
         height,
         budget,
@@ -621,6 +620,10 @@ mod tests {
             .collect()
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "The fixture implements the optional committee-selection callback contract."
+    )]
     fn pool(_incarnation: &[u8; 32], size: u32) -> Option<Vec<SumeragiLaneMember>> {
         Some(
             (1..=u8::try_from(size).unwrap())

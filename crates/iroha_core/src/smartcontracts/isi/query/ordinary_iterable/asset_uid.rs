@@ -91,32 +91,48 @@ fn own_row(
         }
         let usage_key =
             asset_uid::usage_key(&policy.asset_definition_id, &policy.uid, day_start_ms);
-        let (daily_spend_usage, daily_outgoing_usage) = if let Some(bytes) = world.smart_contract_state().get(&usage_key) {
-            if bytes.len() > maximum {
-                return Err(Error::CapacityLimit);
-            }
-            let value =
-                norito::decode_from_bytes_with_limits::<AssetUidUsageV1>(bytes, decode_limits)
-                    .map_err(|_| Error::CapacityLimit)?;
-            if value.asset_definition_id != policy.asset_definition_id
-                || value.uid != policy.uid
-                || value.daily_window != policy.daily_window
-                || value.day_start_ms != day_start_ms
-            {
-                return Err(Error::Conversion(
-                    "UID usage differs from exact source key".into(),
-                ));
-            }
-            (value.spend_amount, value.outgoing_amount)
-        } else {
-            (Quantity::zero(), Quantity::zero())
-        };
-        let wallet_holdings = query.wallet_account_id.as_ref().map(|account| {
-            asset_uid::wallet_holdings::collect(
-                world, network, &policy, account, now, maximum, decode_limits,
-                || stats.record_preflighted_item(work.checked_mul(3).ok_or(Error::CapacityLimit)?, budget),
-            )
-        }).transpose()?;
+        let (daily_spend_usage, daily_outgoing_usage) =
+            if let Some(bytes) = world.smart_contract_state().get(&usage_key) {
+                if bytes.len() > maximum {
+                    return Err(Error::CapacityLimit);
+                }
+                let value =
+                    norito::decode_from_bytes_with_limits::<AssetUidUsageV1>(bytes, decode_limits)
+                        .map_err(|_| Error::CapacityLimit)?;
+                if value.asset_definition_id != policy.asset_definition_id
+                    || value.uid != policy.uid
+                    || value.daily_window != policy.daily_window
+                    || value.day_start_ms != day_start_ms
+                {
+                    return Err(Error::Conversion(
+                        "UID usage differs from exact source key".into(),
+                    ));
+                }
+                (value.spend_amount, value.outgoing_amount)
+            } else {
+                (Quantity::zero(), Quantity::zero())
+            };
+        let wallet_holdings = query
+            .wallet_account_id
+            .as_ref()
+            .map(|account| {
+                asset_uid::wallet_holdings::collect(
+                    world,
+                    network,
+                    &policy,
+                    account,
+                    now,
+                    maximum,
+                    decode_limits,
+                    || {
+                        stats.record_preflighted_item(
+                            work.checked_mul(3).ok_or(Error::CapacityLimit)?,
+                            budget,
+                        )
+                    },
+                )
+            })
+            .transpose()?;
         Ok(AssetUidPolicyViewV1 {
             policy,
             beneficial_holdings,
@@ -140,7 +156,9 @@ pub(super) fn collect_asset_uid_policies(
     state: &impl StateReadOnly,
 ) -> Result<(ExactOwnedRows<AssetUidPolicyViewV1>, QueryExecutionStats), Error> {
     if query.wallet_account_id.is_some() && query.uid.is_none() {
-        return Err(Error::Conversion("wallet holdings require one exact selected UID".into()));
+        return Err(Error::Conversion(
+            "wallet holdings require one exact selected UID".into(),
+        ));
     }
     let now = state.authenticated_query_ledger_time_ms().ok_or_else(|| {
         Error::Conversion("UID policy query requires authenticated ledger time".into())
@@ -152,13 +170,13 @@ pub(super) fn collect_asset_uid_policies(
     let start = asset_uid::policy_key(&query.asset_definition_id, &query.uid.unwrap_or([0; 32]));
     let end = asset_uid::policy_key(&query.asset_definition_id, &query.uid.unwrap_or([255; 32]));
     let source = world.smart_contract_state();
-    let mut stats = QueryExecutionStats::default();
+    let mut execution_stats = QueryExecutionStats::default();
     let mut selected = 0;
     let single_graph = maximum
         .checked_sub(core::mem::size_of::<AssetUidPolicyViewV1>())
         .ok_or(Error::CapacityLimit)?;
     for (key, bytes) in source.range(start.clone()..=end.clone()).take(maximum_rows) {
-        stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+        execution_stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
         let (row, _) = own_row(
             query,
             key,
@@ -169,14 +187,16 @@ pub(super) fn collect_asset_uid_policies(
             as_of_height,
             maximum,
             single_graph,
-            &mut stats,
+            &mut execution_stats,
             limits,
         )?;
         drop(encode_bounded_frame(&row, maximum)?);
         selected += 1;
     }
     if query.wallet_account_id.is_some() && selected != 1 {
-        return Err(Error::Conversion("requested wallet UID policy is unavailable".into()));
+        return Err(Error::Conversion(
+            "requested wallet UID policy is unavailable".into(),
+        ));
     }
     let (mut graph, slot_bytes) = RetainedDecodeBudget::new::<AssetUidPolicyViewV1>(
         selected,
@@ -184,7 +204,7 @@ pub(super) fn collect_asset_uid_policies(
     )?;
     let mut rows = ExactOwnedRows::new(selected, slot_bytes)?;
     for (key, bytes) in source.range(start..=end).take(selected) {
-        stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+        execution_stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
         let (row, allocated) = own_row(
             query,
             key,
@@ -195,14 +215,14 @@ pub(super) fn collect_asset_uid_policies(
             as_of_height,
             maximum,
             graph.next_limit()?,
-            &mut stats,
+            &mut execution_stats,
             limits,
         )?;
         drop(encode_bounded_frame(&row, maximum)?);
         graph.record_decoded(allocated)?;
         rows.push(row)?;
     }
-    Ok((rows.finish()?, stats))
+    Ok((rows.finish()?, execution_stats))
 }
 
 #[cfg(test)]

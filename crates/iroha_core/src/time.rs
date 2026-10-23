@@ -214,10 +214,10 @@ impl Params {
             self.per_peer_buffer = defaults.per_peer_buffer;
         }
         self.health_policy.min_samples = self.health_policy.min_samples.max(1);
-        if !self.smoothing_alpha.is_finite() {
-            self.smoothing_alpha = defaults.smoothing_alpha;
-        } else {
+        if self.smoothing_alpha.is_finite() {
             self.smoothing_alpha = self.smoothing_alpha.clamp(0.0, 1.0);
+        } else {
+            self.smoothing_alpha = defaults.smoothing_alpha;
         }
         self
     }

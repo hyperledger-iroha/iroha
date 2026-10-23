@@ -86,13 +86,13 @@ mod planner_tests {
                         state.record_hidden_sortition_capacity_failure_batch(
                             id,
                             payload.requests.clone(),
-                            snapshot,
+                            &(snapshot),
                         )
                     } else {
                         state.register_sortition_request_batch(
                             id,
                             payload.requests.clone(),
-                            snapshot,
+                            &(snapshot),
                         )
                     }
                 }
@@ -668,7 +668,7 @@ mod planner_tests {
                         logical,
                     ),
                 }],
-                single,
+                &(single),
             )
             .expect("record sub-floor capacity evidence");
         let governance = Governance {
@@ -749,7 +749,7 @@ mod planner_tests {
                         logical,
                     ),
                 }],
-                single,
+                &(single),
             )
             .expect("record sub-floor capacity evidence");
         let governance = Governance {
@@ -781,7 +781,7 @@ mod planner_tests {
                         logical,
                     ),
                 }],
-                still_small,
+                &(still_small),
             )
             .expect("a submitter may still record the unchanged shortfall");
     }

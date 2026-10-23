@@ -403,10 +403,10 @@ pub fn multisig_approval_outcome_state_key(
 }
 fn account_role_suffix(account: &AccountId) -> String {
     const MAX_CANONICAL_SUFFIX_LEN: usize = 128;
-    if let Ok(canonical_suffix) = account.canonical_i105() {
-        if canonical_suffix.len() <= MAX_CANONICAL_SUFFIX_LEN {
-            return canonical_suffix;
-        }
+    if let Ok(canonical_suffix) = account.canonical_i105()
+        && canonical_suffix.len() <= MAX_CANONICAL_SUFFIX_LEN
+    {
+        return canonical_suffix;
     }
     HashOf::new(account).to_string()
 }
@@ -415,11 +415,10 @@ fn multisig_role_for(
     account: &AccountId,
 ) -> RoleId {
     let suffix = account_role_suffix(account);
-    let literal = if let Some(home_domain) = home_domain {
-        format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}",)
-    } else {
-        format!("{MULTISIG_SIGNATORY}{DELIMITER}{DOMAINLESS_NAMESPACE}{DELIMITER}{suffix}")
-    };
+    let literal = home_domain.map_or_else(
+        || format!("{MULTISIG_SIGNATORY}{DELIMITER}{DOMAINLESS_NAMESPACE}{DELIMITER}{suffix}"),
+        |home_domain| format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}",),
+    );
     literal.parse().expect("multisig role name must be valid")
 }
 fn rekey_multisig_account(
@@ -815,7 +814,7 @@ fn rekey_account_id(
     for (label, record) in rekey_record_updates {
         state_transaction
             .world
-            .insert_account_alias_binding(label.clone(), new_account.clone());
+            .insert_account_alias_binding(&(label.clone()), &(new_account.clone()));
         debug_assert_eq!(label, record.label);
         state_transaction.world.replace_account_rekey_record(record);
     }
@@ -852,21 +851,20 @@ fn rekey_account_id(
             .account_permissions
             .insert(new_account.clone(), perms);
     }
-    if old_multisig_role != new_multisig_role {
-        if let Some(mut role) = state_transaction
+    if old_multisig_role != new_multisig_role
+        && let Some(mut role) = state_transaction
             .world
             .roles
             .remove(old_multisig_role.clone())
-        {
-            role.id = new_multisig_role.clone();
-            state_transaction
-                .world
-                .roles
-                .insert(new_multisig_role.clone(), role);
-        }
+    {
+        role.id = new_multisig_role.clone();
+        state_transaction
+            .world
+            .roles
+            .insert(new_multisig_role.clone(), role);
     }
     let mut role_updates = Vec::new();
-    for (role_id, _) in state_transaction.world.account_roles.iter() {
+    for (role_id, ()) in state_transaction.world.account_roles.iter() {
         let mut updated = role_id.clone();
         if updated.account == *old_account {
             updated.account = new_account.clone();
@@ -973,7 +971,7 @@ fn rekey_account_id(
         .provider_owners
         .iter()
         .filter(|(_, owner)| *owner == old_account)
-        .map(|(id, _)| id.clone())
+        .map(|(id, _)| *id)
         .collect();
     for provider_id in provider_ids {
         state_transaction
@@ -1562,7 +1560,7 @@ fn replace_account_id_in_oracle(
         .world
         .oracle_changes
         .iter()
-        .map(|(id, _)| id.clone())
+        .map(|(id, _)| *id)
         .collect();
     for change_id in change_ids {
         if let Some(change) = state_transaction.world.oracle_changes.get_mut(&change_id) {
@@ -1578,7 +1576,7 @@ fn replace_account_id_in_oracle(
         .world
         .oracle_disputes
         .iter()
-        .map(|(id, _)| id.clone())
+        .map(|(id, _)| *id)
         .collect();
     for dispute_id in dispute_ids {
         if let Some(dispute) = state_transaction.world.oracle_disputes.get_mut(&dispute_id) {
@@ -1615,19 +1613,18 @@ fn replace_account_id_in_oracle(
             .world
             .oracle_observations
             .get_mut(&observation_key)
+            && window.observations.contains_key(old)
         {
-            if window.observations.contains_key(old) {
-                let mut updated = BTreeMap::new();
-                for (provider, observation) in std::mem::take(&mut window.observations) {
-                    let provider = if provider == *old {
-                        new.clone()
-                    } else {
-                        provider
-                    };
-                    updated.insert(provider, observation);
-                }
-                window.observations = updated;
+            let mut updated = BTreeMap::new();
+            for (provider, observation) in std::mem::take(&mut window.observations) {
+                let provider = if provider == *old {
+                    new.clone()
+                } else {
+                    provider
+                };
+                updated.insert(provider, observation);
             }
+            window.observations = updated;
         }
     }
 }
@@ -1640,7 +1637,7 @@ fn replace_account_id_in_content_bundles(
         .world
         .content_bundles
         .iter()
-        .map(|(id, _)| id.clone())
+        .map(|(id, _)| *id)
         .collect();
     for bundle_id in bundle_ids {
         if let Some(bundle) = state_transaction.world.content_bundles.get_mut(&bundle_id) {
@@ -1857,7 +1854,7 @@ fn execute_approve(
             MultisigProposalTerminalStatus::Expired,
             &instruction.account,
         )?;
-        prune_down(state_transaction, &account, &instruction.proposal_id)?;
+        prune_down(state_transaction, &account, &instruction.proposal_id);
         return store_multisig_approval_outcome(
             state_transaction,
             &instruction.account,
@@ -1898,7 +1895,7 @@ fn execute_approve(
             MultisigProposalTerminalStatus::Finalized,
             &instruction.account,
         )?;
-        prune_down(state_transaction, &account, &instruction.proposal_id)?;
+        prune_down(state_transaction, &account, &instruction.proposal_id);
         for inner in proposal.instructions {
             executor.execute_instruction(state_transaction, &account, inner)?;
         }
@@ -1972,7 +1969,8 @@ fn execute_cancel(
         MultisigProposalTerminalStatus::Canceled,
         &instruction.account,
     )?;
-    prune_down(state_transaction, &multisig_account, &proposal_id)
+    prune_down(state_transaction, &multisig_account, &proposal_id);
+    Ok(())
 }
 fn execute_invalidate_outstanding(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -2072,7 +2070,8 @@ fn prune_expired_with_guard(
             MultisigProposalTerminalStatus::Expired,
             entrypoint_account,
         )?;
-        prune_down(state_transaction, multisig_account, proposal_id)
+        prune_down(state_transaction, multisig_account, proposal_id);
+        Ok(())
     })();
     active_path.remove(&execution_id);
     result
@@ -2081,12 +2080,11 @@ fn prune_down(
     state_transaction: &mut StateTransaction<'_, '_>,
     account: &AccountId,
     proposal_id: &MultisigProposalId,
-) -> Result<(), ValidationFail> {
+) {
     state_transaction
         .world
         .smart_contract_state
         .remove(multisig_proposal_state_key(account, proposal_id));
-    Ok(())
 }
 fn validate_registration(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -2991,7 +2989,7 @@ pub(crate) fn invalidate_outstanding_proposals(
             state_transaction,
             &proposal.multisig_account_id,
             &proposal.proposal_id,
-        )?;
+        );
     }
     Ok(invalidated)
 }
@@ -3569,11 +3567,10 @@ mod tests {
                 b"retail_registration|alias=clear-orbit-3941@hbl.sbp",
             ))
         });
-        let registration_account = if let Some(uaid) = registration_uaid {
-            Account::new(retail_account.clone()).with_uaid(Some(uaid))
-        } else {
-            Account::new(retail_account.clone())
-        };
+        let registration_account = registration_uaid.map_or_else(
+            || Account::new(retail_account.clone()),
+            |uaid| Account::new(retail_account.clone()).with_uaid(Some(uaid)),
+        );
         let resolved_alias = ResolvedAccountAliasV1::new(
             "clear-orbit-3941@hbl.sbp"
                 .parse()
@@ -5301,7 +5298,7 @@ mod tests {
                 total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                 metadata: Metadata::default(),
-                status: active.clone(),
+                status: active,
                 activation_height: 1,
                 election_exit_height: None,
                 deactivation_height: None,
@@ -5485,8 +5482,7 @@ mod tests {
                 &asset_def_id
             )
             .cloned()
-            .collect::<std::collections::BTreeSet<_>>()
-            .contains(&old_account)
+            .any(|x| x == old_account)
         );
         let new_key = checked_keypair();
         let new_account = new_account_id(&new_key);
@@ -5605,8 +5601,7 @@ mod tests {
                         &definition
                     )
                     .cloned()
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .contains(&moved)
+                    .any(|x| x == moved)
                 );
             }
             assert!(
@@ -6358,10 +6353,7 @@ mod tests {
             "multisig-trigger-contract-entrypoint"
         );
         let network_id = tx.network_id;
-        tx.tx_call_hash = Some(
-            tx.direct_execution_identity()
-                .expect("component approval root"),
-        );
+        tx.tx_call_hash = Some(tx.direct_execution_identity());
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
@@ -6926,10 +6918,7 @@ seiyaku TriggerDispatch { permission Admin;
             "multisig-staged-mint-json-args"
         );
         let network_id = tx.network_id;
-        tx.tx_call_hash = Some(
-            tx.direct_execution_identity()
-                .expect("component approval root"),
-        );
+        tx.tx_call_hash = Some(tx.direct_execution_identity());
         let domain_id: DomainId = DomainId::try_new("staged", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();

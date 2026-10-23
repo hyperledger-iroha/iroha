@@ -95,10 +95,10 @@ impl RngCore for UnavailableIssuanceRngV1 {
     }
 }
 impl CryptoRng for UnavailableIssuanceRngV1 {}
-/// One canonical network-bound VeRange action.
+/// One canonical network-bound `VeRange` action.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseVeRangeNetworkActionV1 {
-    /// Ordinary signed transaction carrying exactly one VeRange proof.
+    /// Ordinary signed transaction carrying exactly one `VeRange` proof.
     pub transaction: SignedTransaction,
     /// Exact public statement carried by `transaction`.
     pub statement: VeRangeTransparentRangeStatementV1,
@@ -263,13 +263,12 @@ fn secret_scalar_v1(
 /// Returns an error if the context or signer is invalid, the amount is zero or the accounts coincide,
 /// the compiled engine is unavailable, or witness construction, proving, or transaction binding fails.
 pub fn build_privacy_release_zk_ace_network_action_v1(
-    transaction_context: PrivacyReleaseTransactionContextV1,
+    transaction_context: &PrivacyReleaseTransactionContextV1,
     source: AccountId,
     destination: AccountId,
     asset_definition_id: AssetDefinitionId,
     amount: u128,
-    fixture_seed: [u8; 32],
-    proof_seed: [u8; 32],
+    (fixture_seed, proof_seed): ([u8; 32], [u8; 32]),
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseZkAceNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
     validate_context_and_signer_v1(&transaction_context, private_key)?;
@@ -349,7 +348,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         statement,
     })
 }
-/// Build one transaction-intent- and genesis-bound native VeRange action.
+/// Build one transaction-intent- and genesis-bound native `VeRange` action.
 ///
 /// Values are restricted to the canonical 32-bit profile and the closed
 /// one-to-eight aggregation bound before any proof allocation.
@@ -359,10 +358,10 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
 /// Returns an error for an invalid context, signer, policy, aggregation count, or value range,
 /// or when commitments, the native proof, or the bound transaction cannot be constructed.
 pub fn build_privacy_release_verange_network_action_v1(
-    transaction_context: PrivacyReleaseTransactionContextV1,
+    transaction_context: &PrivacyReleaseTransactionContextV1,
     asset_definition_id: AssetDefinitionId,
     policy_id: PrivacyPolicyIdV1,
-    values: Vec<u64>,
+    values: &[u64],
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseVeRangeNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
@@ -436,7 +435,7 @@ pub fn build_privacy_release_verange_network_action_v1(
         generator_digest: parameters.generator_digest(),
     };
     let native_statement =
-        VeRangeType1BatchStatementV1::new(native_profile, commitments, transcript)
+        VeRangeType1BatchStatementV1::new(native_profile, commitments, &transcript)
             .map_err(|_| evidence_error())?;
     let mut rng = EvidenceRng06::new(network_seed_v1(fixture_seed, b"verange-proof", 0));
     let proof = prove_batch(&native_statement, &values, &blindings, &mut rng)
@@ -461,7 +460,7 @@ pub fn build_privacy_release_verange_network_action_v1(
 /// Returns an error if context validation, issuer key generation, issuance storage, credential
 /// issuance, proving, or transaction binding fails, or if replay and rotation invariants disagree.
 pub fn build_privacy_release_bootle_lantern_network_action_v1(
-    transaction_context: PrivacyReleaseTransactionContextV1,
+    transaction_context: &PrivacyReleaseTransactionContextV1,
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseBootleLanternNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
@@ -515,9 +514,7 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
     ));
     let authorization = issuer_authorize_blind_issuance_with_rng_v1(
         &issuer_key_pair,
-        &context,
-        transaction_context.genesis_hash,
-        &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash: transaction_context.genesis_hash, policy: &policy },
         network_seed_v1(fixture_seed, b"bootle-requester-authorization", 0),
         100,
         200,
@@ -530,7 +527,7 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
     )
     .map_err(|_| evidence_error())?;
     let mut statement = IrohaBootleLanternAnoncredStatementV1 {
-        context: context.clone(),
+        context,
         issuer_id: policy.issuer_id,
         policy_id: policy.policy_id,
         issuer_policy_epoch: policy.epoch,
@@ -577,9 +574,7 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
     ));
     let issuance_response = issuer_blind_issue_once_encoded_with_rng_v1(
         &issuer_key_pair,
-        &context,
-        transaction_context.genesis_hash,
-        &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash: transaction_context.genesis_hash, policy: &policy },
         &authorization,
         &issuance_request_wire,
         100,
@@ -597,9 +592,7 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
     let mut unavailable_issuance_rng = UnavailableIssuanceRngV1;
     let cached_response = issuer_blind_issue_once_encoded_with_rng_v1(
         &issuer_key_pair,
-        &context,
-        transaction_context.genesis_hash,
-        &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash: transaction_context.genesis_hash, policy: &policy },
         &authorization,
         &issuance_request_wire,
         201,
@@ -725,7 +718,7 @@ fn model_pgc_accounts_v1(
 /// Returns an error if the context, signer, or compiled parameters are invalid, account-table
 /// construction or native proving/verification fails, or bootstrap and payment state roots disagree.
 pub fn build_privacy_release_anonymous_pgc_network_action_v1(
-    transaction_context: PrivacyReleaseTransactionContextV1,
+    transaction_context: &PrivacyReleaseTransactionContextV1,
     asset_definition_id: AssetDefinitionId,
     pool_id: PrivacyPoolIdV1,
     bootstrap_action_index: u32,
@@ -822,7 +815,7 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
         total_supply,
         &public_keys,
         &opening_ciphertexts,
-        bootstrap_binding,
+        &bootstrap_binding,
     )
     .map_err(|_| evidence_error())?;
     let opening_balances = [OPENING_BALANCE; ACCOUNT_COUNT];
@@ -947,7 +940,7 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
         &opening_ciphertexts,
         RECIPIENT_COUNT,
         invariant,
-        payment_binding,
+        &payment_binding,
     )
     .map_err(|_| evidence_error())?;
     let witness = AnonymousPgcPaymentWitnessV1 {
@@ -1006,7 +999,7 @@ fn fcmp_scalar_v1(value: u64) -> [u8; 32] {
 /// Returns an error if context or signer validation, pool bootstrap, output construction,
 /// native proving, or transaction binding fails, or the fixture and proof public inputs disagree.
 pub fn build_privacy_release_fcmp_network_action_v1(
-    transaction_context: PrivacyReleaseTransactionContextV1,
+    transaction_context: &PrivacyReleaseTransactionContextV1,
     asset_definition_id: AssetDefinitionId,
     pool_id: PrivacyPoolIdV1,
     fixture_seed: [u8; 32],
@@ -1155,7 +1148,7 @@ pub fn build_privacy_release_fcmp_network_action_v1(
 /// Returns an error if the context, signer, compiled profile, or pool bootstrap is invalid,
 /// the fixture state root disagrees, or native proving and transaction binding fail.
 pub fn build_privacy_release_ivm_private_note_network_action_v1(
-    transaction_context: PrivacyReleaseTransactionContextV1,
+    transaction_context: &PrivacyReleaseTransactionContextV1,
     asset_definition_id: AssetDefinitionId,
     pool_id: PrivacyPoolIdV1,
     reserve_account: AccountId,
@@ -1300,10 +1293,10 @@ mod tests {
         let valid = context(&key_pair);
         assert_eq!(
             build_privacy_release_verange_network_action_v1(
-                valid.clone(),
+                &valid,
                 asset(),
                 PrivacyPolicyIdV1::new([0x31; 32]),
-                Vec::new(),
+                &[],
                 [0x41; 32],
                 key_pair.private_key(),
             )
@@ -1312,10 +1305,10 @@ mod tests {
         );
         assert_eq!(
             build_privacy_release_verange_network_action_v1(
-                valid.clone(),
+                &valid,
                 asset(),
                 PrivacyPolicyIdV1::new([0x31; 32]),
-                vec![1; 9],
+                &[1; 9],
                 [0x41; 32],
                 key_pair.private_key(),
             )
@@ -1324,7 +1317,7 @@ mod tests {
         );
         assert_eq!(
             build_privacy_release_zk_ace_network_action_v1(
-                valid.clone(),
+                &valid,
                 valid.authority.clone(),
                 AccountId::new(
                     KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519)
@@ -1334,8 +1327,7 @@ mod tests {
                 ),
                 asset(),
                 0,
-                [0x51; 32],
-                [0x52; 32],
+                ([0x51; 32], [0x52; 32]),
                 key_pair.private_key(),
             )
             .expect_err("zero ZK-ACE amount must reject"),
@@ -1343,7 +1335,7 @@ mod tests {
         );
         assert_eq!(
             build_privacy_release_zk_ace_network_action_v1(
-                valid.clone(),
+                &valid,
                 valid.authority.clone(),
                 AccountId::new(
                     KeyPair::try_from_seed(vec![0x23; 32], Algorithm::Ed25519)
@@ -1353,8 +1345,7 @@ mod tests {
                 ),
                 asset(),
                 1,
-                [0x53; 32],
-                [0x54; 32],
+                ([0x53; 32], [0x54; 32]),
                 key_pair.private_key(),
             )
             .expect_err("ZK-ACE must remain unavailable without qROM qualification"),
@@ -1364,7 +1355,7 @@ mod tests {
         zero_genesis.genesis_hash = [0; 32];
         assert_eq!(
             build_privacy_release_bootle_lantern_network_action_v1(
-                zero_genesis,
+                &zero_genesis,
                 [0x61; 32],
                 key_pair.private_key(),
             )

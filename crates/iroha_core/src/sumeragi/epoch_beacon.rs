@@ -8,8 +8,8 @@
 //! work is selected. Followers verify that exact signed witness; local aggregation timing
 //! never grants validity. The original schedule owner applies it once before transaction effects.
 
-pub(crate) mod control;
-pub(crate) mod producer;
+pub mod control;
+pub mod producer;
 
 use crate::{
     beacon::{
@@ -35,7 +35,7 @@ use mv::storage::StorageReadOnly;
 
 /// No public constructor or mutable proof field: only exact prestate verification produces it.
 #[derive(Debug)]
-pub(crate) struct VerifiedEpochPulse {
+pub struct VerifiedEpochPulse {
     pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
     link: Option<GlobalThresholdBeaconPulseLinkV1>,
 }
@@ -78,7 +78,7 @@ fn owns_global_control(
 /// True exactly at the `NPoS` pre-boundary height of a root that owns global control. No
 /// governance state takes part: a pending Parliament slot never makes a pulse mandatory and
 /// never blocks a block that carries none.
-pub(crate) fn required(
+pub fn required(
     scope: SumeragiRootScope,
     world: &impl WorldReadOnly,
     current: &ValidatorEpochContextV1,
@@ -109,7 +109,7 @@ pub(crate) fn required(
     clippy::large_types_passed_by_value,
     reason = "the supplied pulse is validated and transferred into the retained native schedule result"
 )]
-pub(crate) fn capture(
+pub fn capture(
     scope: SumeragiRootScope,
     world: &impl WorldReadOnly,
     hashes: &(impl BlockHashRead + ?Sized),

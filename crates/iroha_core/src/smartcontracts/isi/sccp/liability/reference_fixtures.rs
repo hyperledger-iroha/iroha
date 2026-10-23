@@ -1,9 +1,11 @@
 //! Shared liability fixture generated from the production clock, liability and State owners.
 use super::*;
+use crate::smartcontracts::isi::sccp::reference_fixture_support as fixture;
 use crate::smartcontracts::isi::sccp::{
     generations, governance, pruning, store,
     test_support::{blank_state, header, install_generation, sample_route},
 };
+use fixture::{CAP, GRACE, HEARTBEAT, START, UNTIL, VALIDITY};
 use iroha_data_model::{
     bridge::SccpNetworkV1,
     sccp::{
@@ -15,9 +17,6 @@ use iroha_data_model::{
     },
 };
 use norito::{json, json::Value};
-#[path = "../reference_fixture_support.rs"]
-mod fixture;
-use fixture::{CAP, GRACE, HEARTBEAT, START, UNTIL, VALIDITY};
 
 const GENERATOR: &str = "two independent generators: python3.11 scripts/sccp_reference/generate.py --write; cargo test -p iroha_core --lib sccp -- --ignored regenerate_liability_v1";
 const CONVENTION: &str = "Times are integer milliseconds; every liability boundary is inclusive. DATA fixtures call production clock, L3, L5, pruning and P2 predicates without opening either route launch gate or manufacturing Parliament authority.";

@@ -310,12 +310,12 @@ pub fn prepare_atomic_private_settlement_leg_v1(
             AtomicPrivateSettlementInputWitnessV1::new(
                 first.spending_secret,
                 first.leaf_position,
-                first.authentication_path,
+                &first.authentication_path,
             )?,
             AtomicPrivateSettlementInputWitnessV1::new(
                 second.spending_secret,
                 second.leaf_position,
-                second.authentication_path,
+                &second.authentication_path,
             )?,
         ],
     );

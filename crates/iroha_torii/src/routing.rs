@@ -3462,8 +3462,7 @@ impl MaybeTelemetry {
             state,
             kura,
             queue,
-            peers_rx,
-            local_peer_id,
+            (peers_rx, local_peer_id),
             time_source,
             true,
         )

@@ -264,7 +264,7 @@ fn signed_fixture_pulses(
 }
 
 /// A committed State holding `pulses`, canonical hashes up to `height` and
-/// NPoS epochs of [`FIXTURE_EPOCH_LENGTH`] blocks.
+/// `NPoS` epochs of [`FIXTURE_EPOCH_LENGTH`] blocks.
 fn vrf_fixture_state(
     key_record: &crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
     pulses: impl IntoIterator<Item = FinalizedGlobalThresholdBeaconPulseV1>,

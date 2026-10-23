@@ -1,10 +1,10 @@
-//! Exact domain-owner buckets over the original frozen StateBlock.
+//! Exact domain-owner buckets over the original frozen `StateBlock`.
 //!
 //! The committed and frozen owners share one complete bounded both-image relation.
 //! This retains the existing storage-key/bucket semantics without account existence,
 //! embedded record-id or execution authority predicates. No fresh State view is needed.
 //! TODO: consume this scoped encoder with every canonical table/cell and authenticated history
-//! in the sole StatePublication owner. Whole predecessor coherence, custody and finality remain open.
+//! in the sole `StatePublication` owner. Whole predecessor coherence, custody and finality remain open.
 
 use super::{CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits};
 use crate::state::{
@@ -49,9 +49,13 @@ impl<'frozen> Original<'frozen> {
 ///
 /// `None` refuses incomplete, foreign, differently acquired or released sources.
 /// Both original borrows and their State allocation pool survive validation and
-/// paired encoding; every local refusal leaves the same StateBlock available for
+/// paired encoding; every local refusal leaves the same `StateBlock` available for
 /// retry. No State view, publication reacquisition or replacement pool is opened.
 /// Success grants no complete State root, finality or private-row disclosure.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,

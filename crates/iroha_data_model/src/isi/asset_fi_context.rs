@@ -99,7 +99,7 @@ pub(crate) mod test_values {
         isi::asset_fi::{SetAssetFiLinkV1, TransferToLinkedFiV1},
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    pub(crate) fn current(transfer: bool) -> AssertAssetFiContextV1 {
+    pub fn current(transfer: bool) -> AssertAssetFiContextV1 {
         let account = |seed| {
             AccountId::new(
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -160,7 +160,7 @@ pub(crate) mod test_values {
             minimum_block_hash: *Hash::new("fi-context-fixture-floor").as_ref(),
         }
     }
-    pub(crate) fn historical() -> AssertAssetFiTransferReceiptV1 {
+    pub fn historical() -> AssertAssetFiTransferReceiptV1 {
         let current = current(false);
         let AssetFiContextTargetV1::LinkApproval(value) = current.target else {
             unreachable!()

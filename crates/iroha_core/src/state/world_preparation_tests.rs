@@ -140,12 +140,11 @@ fn world_publication_slot_late_caught_panic_retains_every_writer_until_terminal_
     impl Wake for Probe {
         fn wake(self: Arc<Self>) {
             self.wakes.fetch_add(1, Ordering::SeqCst);
-            if let Ok(mut original) = self.original.try_lock() {
-                if let Some(original) = original.take() {
-                    if let Ok(mut counts) = self.counts.try_lock() {
-                        *counts = Some(probe_fields(original, &self.world));
-                    }
-                }
+            if let Ok(mut original) = self.original.try_lock()
+                && let Some(original) = original.take()
+                && let Ok(mut counts) = self.counts.try_lock()
+            {
+                *counts = Some(probe_fields(original, &self.world));
             }
         }
     }

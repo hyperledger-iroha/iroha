@@ -23,7 +23,7 @@ use mv::storage::StorageReadOnly;
 
 /// Why one local exact-value capture was refused.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RetailContractStateSnapshotErrorV1 {
+pub enum RetailContractStateSnapshotErrorV1 {
     /// A pre-genesis view has no committed height to associate with the map.
     #[error("retail contract-state snapshot has no committed block")]
     NoCommittedBlock,
@@ -53,7 +53,7 @@ pub(crate) enum RetailContractStateSnapshotErrorV1 {
 /// authenticates `accumulated_root` to Sumeragi finality. This type is private
 /// to Core so a response route cannot publish it without a reviewed finality
 /// field and restricted-dataspace permission check.
-pub(crate) struct LocalRetailContractStateSnapshotV1 {
+pub struct LocalRetailContractStateSnapshotV1 {
     pub(crate) height: u64,
     pub(crate) block_hash: HashOf<BlockHeader>,
     pub(crate) accumulated_root: Hash,

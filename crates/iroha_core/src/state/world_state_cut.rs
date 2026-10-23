@@ -16,7 +16,7 @@ use std::alloc::Layout;
 
 #[derive(Debug)]
 /// Native cut refusal preserves semantic failure or its original local resource cause.
-pub(crate) enum CutError {
+pub enum CutError {
     /// The original native journal no longer proves its exact root/count.
     Invalid(String),
     /// Local resource refusal; the same original owner may retry.
@@ -85,6 +85,10 @@ pub(in crate::state) struct PendingCutCapsule {
 
 impl PendingCutCapsule {
     /// Admit and allocate only the final shell using this same original pool.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Refusal returns the original retained owner without an additional fallible error allocation"
+    )]
     pub(in crate::state) fn try_share(self) -> Result<ChargedShared<CutCapsule>, (Self, CutError)> {
         let mut reservation = match self
             .budget
@@ -418,6 +422,10 @@ impl JournalCapture {
 
     /// Return a completed original capsule only when its final shell locally refuses.
     /// Earlier journal/verification errors retain their original order and no success.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Refusal returns the original retained owner without an additional fallible error allocation"
+    )]
     pub(in crate::state) fn prepare_retained(
         &self,
         world: &WorldBlock<'_>,
@@ -556,7 +564,7 @@ mod tests;
 /// Observe actual completed tail backing without giving it publication authority.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CutIdentityForTest {
+pub struct CutIdentityForTest {
     rows: usize,
     count: usize,
     tip: NativeExecutionTip,
@@ -585,7 +593,7 @@ impl CutCapsule {
 
 /// Thread-local real-pool refusal only after actual tail reconstruction succeeds.
 #[cfg(test)]
-pub(crate) mod completion_observer {
+pub mod completion_observer {
     use super::*;
     use std::cell::RefCell;
 
@@ -600,18 +608,22 @@ pub(crate) mod completion_observer {
     }
 
     /// Exact native shell size without exposing the private capsule type.
-    pub(crate) fn control_bytes() -> usize {
+    pub fn control_bytes() -> usize {
         ChargedShared::<CutCapsule>::allocation_layout().size()
     }
 
     /// Exact physical layout for the existing test allocator's one-failure observer.
-    pub(crate) fn control_layout() -> Layout {
+    pub fn control_layout() -> Layout {
         ChargedShared::<CutCapsule>::allocation_layout()
     }
 
     /// Borrow the observation on the actual synchronous Worker fixture thread.
-    pub(crate) struct Observation;
+    pub struct Observation;
     impl Observation {
+        #[expect(
+            clippy::unused_self,
+            reason = "The thread-bound guard must remain borrowed while accessing its scoped test observer"
+        )]
         pub(crate) fn snapshot(&self) -> (usize, Option<CutIdentityForTest>) {
             ORIGINAL.with(|slot| {
                 let slot = slot.borrow();
@@ -619,6 +631,10 @@ pub(crate) mod completion_observer {
                 (original.completed, original.first)
             })
         }
+        #[expect(
+            clippy::unused_self,
+            reason = "The thread-bound guard must remain borrowed while accessing its scoped test observer"
+        )]
         pub(crate) fn release_original_blocker(&self) {
             let held = ORIGINAL.with(|slot| {
                 slot.borrow_mut()
@@ -632,10 +648,7 @@ pub(crate) mod completion_observer {
         }
     }
 
-    pub(crate) fn observe<R>(
-        budget: &AllocationBudget,
-        action: impl FnOnce(&Observation) -> R,
-    ) -> R {
+    pub fn observe<R>(budget: &AllocationBudget, action: impl FnOnce(&Observation) -> R) -> R {
         struct Restore(Option<Original>);
         impl Drop for Restore {
             fn drop(&mut self) {

@@ -68,10 +68,13 @@ impl MainShaUnionPlanV1 {
                 bridges[index][lane] = column(rfc, bridge_columns[index][lane])?;
                 consumers[index][lane] = column(rfc, consumer_columns[index][lane])?;
             }
-            let sha = layout.registered_segment(SegmentAdapterIdV1::Sha256CallBus, index as u16)?;
-            for stream in 0..4 {
-                for lane in 0..4 {
-                    streams[index][stream][lane] = column(
+            let sha = layout.registered_segment(
+                SegmentAdapterIdV1::Sha256CallBus,
+                u16::try_from(index).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            )?;
+            for (stream, lanes) in streams[index].iter_mut().enumerate() {
+                for (lane, target) in lanes.iter_mut().enumerate() {
+                    *target = column(
                         sha,
                         ZK_X509_SHA_RFC_CONSUMER_PRODUCTS_V1 + stream * 4 + lane,
                     )?;
@@ -106,7 +109,7 @@ impl MainShaUnionPlanV1 {
             .map_err(map_transparent_error_v1)?;
         for (index, point) in self.points.iter().enumerate() {
             let mut record = [0_u8; 10];
-            record[0] = index as u8;
+            record[0] = u8::try_from(index).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
             record[1] = NATIVE_LOG_V1;
             record[2..].copy_from_slice(&point.0.to_be_bytes());
             transcript
@@ -512,7 +515,7 @@ impl ShaUnionEndpointDenominatorsV1 {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
         let expected = main_quotient_stripes::MainQuotientStripeV1::new_v1(
             NATIVE_LOG_V1,
-            full_rows.ilog2() as u8,
+            u8::try_from(full_rows.ilog2()).expect("usize logarithm fits u8"),
             stripe.ordinal,
         )?;
         if stripe.rows != NATIVE_ROWS_V1
@@ -548,8 +551,10 @@ impl ShaUnionEndpointDenominatorsV1 {
             || !rows.is_power_of_two()
             || rows > NATIVE_ROWS_V1
             || root
-                != goldilocks_primitive_root_v1(rows.ilog2() as u8)
-                    .map_err(map_transparent_error_v1)?
+                != goldilocks_primitive_root_v1(
+                    u8::try_from(rows.ilog2()).expect("usize logarithm fits u8"),
+                )
+                .map_err(map_transparent_error_v1)?
             || !shift.is_canonical()
             || shift == F::ZERO
             || shift.pow(rows as u128) == F::ONE

@@ -73,6 +73,10 @@ pub struct ControlOccurrence(pub(super) u64);
 
 /// An operation for the executor thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 pub enum ExecOp {
     /// Execute a block on its parent's post-state.
     Execute {
@@ -140,13 +144,17 @@ pub enum ExecOp {
         height: u64,
         /// View.
         view: u64,
-        /// AvailableBody hash.
+        /// `AvailableBody` hash.
         block_hash: Hash32,
     },
 }
 
 /// The executor thread's answer to the operation in flight.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 pub enum ExecDone {
     /// `Execute`: the outcome, or `None` if the parent post-state is not held.
     Executed(Result<Option<ExecOutcome>, PublicationError>),
@@ -189,6 +197,10 @@ pub enum ExecDone {
 impl ExecDone {
     /// Extract a terminal original before completion-kind or source checks can discard it.
     /// Unmatched completions retain every original field for their normal handling.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn into_recovery_refusal(self) -> Result<crate::execution_attempt::ExecutionDeferred, Self> {
         match self {
             Self::Executed(Err(PublicationError::RecoveryRefusal(original)))
@@ -223,6 +235,10 @@ impl Job {
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum Running {
     Execute(Job),
     Discard,
@@ -498,6 +514,10 @@ struct CommitWait {
 
 /// The execution scheduler of one instance.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent scheduler signals can be active together and are not mutually exclusive states."
+)]
 pub struct ExecSched {
     /// Queued `Execute`s; the last is the most recent.
     jobs: Vec<Job>,
@@ -1173,7 +1193,7 @@ impl ExecSched {
     /// Bind all original prepaid release nodes to the native loop thread. This
     /// startup operation grants no capacity and creates no replacement waiter.
     /// Arbitrary callbacks retain ordinary physical-writer deferral semantics.
-    pub(crate) fn bind_release_thread(&mut self, thread: std::thread::Thread) {
+    pub(crate) fn bind_release_thread(&mut self, thread: &std::thread::Thread) {
         if !cfg!(all(test, sumeragi_core_mutation = "HC252")) {
             self.commit_registration.bind_thread(thread.clone());
         }
@@ -1919,7 +1939,7 @@ mod refusal_tests {
         let registration = ExecutionRegistrations::admit(&budget).unwrap();
         let held = budget.try_reserve_bytes(1).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
-        let body = block(1, Hash32::ZERO, Hash32::ZERO, vec![1]);
+        let body = block(1, Hash32::ZERO, Hash32::ZERO, &vec![1]);
         let result = Hash32([9; 32]);
         let qc = commit_qc(&body, result);
         let mut scheduler = ExecSched::new(0, Backoff::default(), registration);

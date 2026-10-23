@@ -74,12 +74,12 @@ impl RetainedSccpHistoryPath {
     }
 }
 
-pub(crate) trait BorrowedHistorySource {
+pub trait BorrowedHistorySource {
     fn size(&self) -> u64;
     fn peaks(&self) -> &[Hash];
     fn leaf(&self, index: u64) -> Option<Hash>;
 }
-pub(crate) struct WorldHistory<'a, W: WorldReadOnly + ?Sized>(pub &'a W);
+pub struct WorldHistory<'a, W: WorldReadOnly + ?Sized>(pub &'a W);
 impl<W: WorldReadOnly + ?Sized> BorrowedHistorySource for WorldHistory<'_, W> {
     fn size(&self) -> u64 {
         store::history::get(self.0).size
@@ -92,7 +92,7 @@ impl<W: WorldReadOnly + ?Sized> BorrowedHistorySource for WorldHistory<'_, W> {
     }
 }
 
-pub(crate) struct HistoryDraft<'a> {
+pub struct HistoryDraft<'a> {
     cache: &'a mut SccpHistoryNodeCache,
     source: &'a dyn BorrowedHistorySource,
     index: u64,
@@ -101,7 +101,7 @@ pub(crate) struct HistoryDraft<'a> {
     path_len: usize,
 }
 
-pub(crate) fn path_len(mut index: u64, mut count: u64) -> usize {
+pub fn path_len(mut index: u64, mut count: u64) -> usize {
     let mut length = 0;
     while count > 1 {
         if index % 2 == 1 || index + 1 < count {
@@ -356,7 +356,7 @@ impl SccpHistoryNodeCache {
 
 /// Reserve both real owners before constructing any request or cache graph. When both
 /// identities are the same, a single acquisition avoids a cleanup-generated self-wake.
-pub(crate) fn reserve_operation(
+pub fn reserve_operation(
     request: &AllocationBudget,
     request_bytes: usize,
     cache: &AllocationBudget,
@@ -503,6 +503,7 @@ impl HistoryDraft<'_> {
             Ok(RetainedSccpHistoryPath { root, path })
         })();
         mutation.complete = result.is_ok();
+        drop(mutation);
         result
     }
 }

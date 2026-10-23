@@ -62,20 +62,19 @@ pub(crate) fn execute_with_verifier(
         state.require_direct_kagemusha_load(&instruction, authority)?;
         // Receipt evidence authenticates the original global root, including work on
         // its dataspace lanes. The current execution dataspace is not the root scope.
-        let scope = match crate::executor::root_scope::execution_root_scope(state) {
-            Ok(scope) => scope,
-            Err(_) => {
-                if state.is_execution_deferred() {
-                    return Err(Error::InvariantViolation(
-                        "local KAGEMUSHA root read did not complete".into(),
-                    )
-                    .into());
-                }
+        let scope = if let Ok(scope) = crate::executor::root_scope::execution_root_scope(state) {
+            scope
+        } else {
+            if state.is_execution_deferred() {
                 return Err(Error::InvariantViolation(
-                    "KAGEMUSHA Load requires the original Global root".into(),
+                    "local KAGEMUSHA root read did not complete".into(),
                 )
                 .into());
             }
+            return Err(Error::InvariantViolation(
+                "KAGEMUSHA Load requires the original Global root".into(),
+            )
+            .into());
         };
         if scope != SumeragiRootScope::Global {
             return Err(Error::InvariantViolation(

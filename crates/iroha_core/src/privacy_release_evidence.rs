@@ -1708,7 +1708,7 @@ fn run_fcmp_plus_plus_stage_v1(
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let new_outputs = output_openings
         .iter()
-        .map(|opening| opening.output())
+        .map(iroha_core_privacy::privacy_engines::fcmp_plus_plus::FcmpOutputCommitmentOpeningV1::output)
         .collect::<Vec<_>>();
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
@@ -1772,10 +1772,10 @@ fn run_fcmp_plus_plus_stage_v1(
             let first_input = changed_key_image
                 .first_mut()
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-            first_input.key_image = if first_input.key_image != first_input.pseudo_out {
-                first_input.pseudo_out
-            } else {
+            first_input.key_image = if first_input.key_image == first_input.pseudo_out {
                 first_input.output_key_tilde
+            } else {
+                first_input.pseudo_out
             };
             if verify_fcmp_transaction_v1(
                 context_hash,
@@ -2124,7 +2124,7 @@ fn run_anonymous_pgc_stage_v1(
         &current_balances,
         recipient_count,
         pool_invariant,
-        binding,
+        &binding,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let witness = AnonymousPgcPaymentWitnessV1 {
@@ -2235,7 +2235,7 @@ fn run_anonymous_pgc_stage_v1(
                 &current_balances,
                 recipient_count,
                 pool_invariant,
-                mutated_binding,
+                &mutated_binding,
             )
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
             if verify_payment_encoded(&mutated, &proof_bytes).is_ok() {
@@ -2405,7 +2405,7 @@ fn anonymous_pgc_bootstrap_material_v1(
         total_supply,
         public_keys,
         encrypted_balances,
-        binding,
+        &binding,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let witness = AnonymousPgcBootstrapWitnessV1 {
@@ -2617,9 +2617,7 @@ fn run_bootle_lantern_stage_v1(
     )?);
     let authorization = issuer_authorize_blind_issuance_with_rng_v1(
         &issuer_key_pair,
-        &context,
-        GENESIS_HASH,
-        &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash: GENESIS_HASH, policy: &policy },
         [0xA1; 32],
         10,
         20,
@@ -2676,9 +2674,7 @@ fn run_bootle_lantern_stage_v1(
     )?);
     let issuance_response = issuer_blind_issue_once_encoded_with_rng_v1(
         &issuer_key_pair,
-        &context,
-        GENESIS_HASH,
-        &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash: GENESIS_HASH, policy: &policy },
         &authorization,
         &issuance_request_wire,
         10,
@@ -2698,9 +2694,7 @@ fn run_bootle_lantern_stage_v1(
     let mut unavailable_issuance_rng = UnavailableIssuanceRngV1;
     let cached_response = issuer_blind_issue_once_encoded_with_rng_v1(
         &issuer_key_pair,
-        &context,
-        GENESIS_HASH,
-        &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash: GENESIS_HASH, policy: &policy },
         &authorization,
         &issuance_request_wire,
         21,
@@ -2932,7 +2926,7 @@ fn run_zk_ams_stage_v1(
     let mut random_source =
         EvidenceRng06::new(stage_seed_v1(PrivacyProtocolIdV1::IrohaZkAmsV1, case_kind));
     let prepared = prepare_zk_ams_provision_privacy_action_with_rng_v1(
-        provision_context,
+        &provision_context,
         governance,
         provision_action,
         signer_index,
@@ -2985,10 +2979,8 @@ fn run_zk_ams_stage_v1(
     let (public_statement_material, proof_artifacts, failure_class) = match case_kind {
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd
         | PrivacyReleaseCaseKindV1::MaximumShapeResource => {
-            if provision.admitted_seed_key_ring.len() != ZK_AMS_MAX_RING_SIZE_V1 {
-                if maximum {
-                    return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
-                }
+            if provision.admitted_seed_key_ring.len() != ZK_AMS_MAX_RING_SIZE_V1 && maximum {
+                return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
             }
             if admission.anchor_count != ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 {
                 return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
@@ -3710,7 +3702,7 @@ fn zk_ams_admission_lineage_material_v1(
         &proof_purpose,
     )?);
     let prepared = prepare_zk_ams_batch_admission_privacy_action_with_rng_v1(
-        zk_ams_admission_transaction_context_v1()?,
+        &zk_ams_admission_transaction_context_v1()?,
         governance,
         action,
         &witnesses,
@@ -4072,7 +4064,7 @@ fn run_jindo_stage_v1(
         case_kind,
     ));
     let prepared = prepare_jindo_privacy_action_with_rng_v1(
-        context,
+        &context,
         witness,
         JINDO_RELEASE_GENESIS_HASH_V1,
         &mut rng,
@@ -4439,7 +4431,7 @@ fn run_orchard_stage_v1(
                 Scope::External,
                 u32::from(seed),
                 value,
-                [seed; 512],
+                &[seed; 512],
             )],
             0,
             -i64::try_from(value)
@@ -4495,9 +4487,8 @@ fn run_orchard_stage_v1(
         &consensus_limits,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let proved =
-        authorize_orchard_bundle_v1(prepared, consensus_binding.clone(), &consensus_limits)
-            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let proved = authorize_orchard_bundle_v1(prepared, &consensus_binding, &consensus_limits)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     let proof_bytes = proved.authorization;
     let public = proved.public;
     verify_orchard_bundle_v1(&public, &proof_bytes, &consensus_limits)

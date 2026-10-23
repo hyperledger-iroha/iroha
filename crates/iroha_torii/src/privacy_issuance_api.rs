@@ -2047,9 +2047,7 @@ mod tests {
             let mut authorization_rng = TestRng::seeded(0x510e_527f_ade6_82d1);
             let authorization = issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1(
                 &issuer,
-                &context,
-                canonical_genesis_hash,
-                &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash, policy: &policy },
                 raw(0x71),
                 10,
                 26,
@@ -2177,9 +2175,7 @@ mod tests {
             }
             issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1(
                 &self.issuer,
-                context,
-                canonical_genesis_hash,
-                policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context, canonical_genesis_hash, policy },
                 authorization,
                 request_bytes,
                 current_height,
@@ -3027,9 +3023,7 @@ mod tests {
         let second_authorization =
             issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1(
                 &fixture.issuer,
-                &fixture.snapshot.context,
-                fixture.snapshot.canonical_genesis_hash,
-                &fixture.snapshot.policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &fixture.snapshot.context, canonical_genesis_hash: fixture.snapshot.canonical_genesis_hash, policy: &fixture.snapshot.policy },
                 fixture.authorization.requester_authorization_digest(),
                 fixture.authorization.issued_at_height(),
                 fixture.authorization.expires_at_height(),
@@ -3638,9 +3632,7 @@ mod tests {
         let mut substituted_response =
             issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1(
                 &fixture.issuer,
-                &fixture.snapshot.context,
-                fixture.snapshot.canonical_genesis_hash,
-                &fixture.snapshot.policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &fixture.snapshot.context, canonical_genesis_hash: fixture.snapshot.canonical_genesis_hash, policy: &fixture.snapshot.policy },
                 &fixture.authorization,
                 &fixture.request_bytes,
                 fixture.snapshot.committed_height,

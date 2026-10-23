@@ -529,11 +529,9 @@ impl ParliamentAttemptStateV1 {
         // snapshot, so a slot whose awaiting requests froze different snapshots could never
         // be consumed.
         let mut awaiting_slot_snapshots = BTreeMap::new();
-        for election in self
-            .elections
-            .values()
-            .filter(|election| election.attempt.status == BodyElectionAttemptStatusV1::AwaitingPulse)
-        {
+        for election in self.elections.values().filter(|election| {
+            election.attempt.status == BodyElectionAttemptStatusV1::AwaitingPulse
+        }) {
             let request = election.attempt.request;
             let slot = ParliamentPulseSlotV1::new(request.beacon_session_id, request.pulse_height);
             if *awaiting_slot_snapshots
@@ -1299,14 +1297,13 @@ impl ParliamentAttemptStateV1 {
             {
                 return Err(ParliamentReducerErrorV1::InvalidBallotCount);
             }
-            if let Some(accepted) = ballot.accepted_ballots {
-                if accepted < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+            if let Some(accepted) = ballot.accepted_ballots
+                && (accepted < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
                     || accepted > ballot.registered_voters.unwrap_or(0)
                     || accepted > ballot.max_corpus_entries
-                    || ballot.survivors != Some(accepted)
-                {
-                    return Err(ParliamentReducerErrorV1::InvalidBallotCount);
-                }
+                    || ballot.survivors != Some(accepted))
+            {
+                return Err(ParliamentReducerErrorV1::InvalidBallotCount);
             }
             let terminal_failure = matches!(
                 ballot.attempt.status,
@@ -1569,11 +1566,8 @@ impl ParliamentAttemptStateV1 {
                         return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
                     }
                 }
-                BallotAttemptStatusV1::NoResult => {
+                BallotAttemptStatusV1::NoResult | BallotAttemptStatusV1::Superseded => {
                     // The exact terminal phase and frozen field set were checked above.
-                }
-                BallotAttemptStatusV1::Superseded => {
-                    // Supersession preserves the exact validated no-result transcript.
                 }
             }
         }

@@ -526,6 +526,10 @@ impl PreparedStreamTokenGatewayCheckV1 {
     /// Rejects signed body, authority, network, floor, size or deadline substitution.
     /// Every failure retains the exact signed graph and original preparation. Local refusals may
     /// retry only that same attempt; terminal rejection never reopens signing or renews its deadline.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn bind_signed_transaction(
         self,
         signed: SignedTransaction,
@@ -646,6 +650,10 @@ impl StreamTokenGatewayCheckBindingFailureV1 {
     ///
     /// # Errors
     /// Returns the unchanged signed custody and original rejection or latest local refusal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn retry(self) -> Result<PendingStreamTokenGatewayCheckV1, Self> {
         if !self.0.error.is_retryable() {
             return Err(self);
@@ -692,6 +700,10 @@ impl PendingStreamTokenGatewayCheckV1 {
     /// # Errors
     /// Any missing proof, changed row/permission/policy, invalid UTC interval or deadline returns
     /// the attempt to the caller unchanged. Both clock endpoints must satisfy the original subject.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn verify_finalized(
         self,
         sample_time: impl FnOnce() -> Result<Time, Error>,
@@ -869,6 +881,10 @@ impl VerifiedStreamTokenGatewayCheckV1 {
     /// # Errors
     /// Rejects another purpose/source, changed State, missing durable evidence, stale permission,
     /// malformed clock or the original elapsed monotonic deadline. It never renews that deadline.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn consume_for_reputation_delivery<T>(
         self,
         original: &Record,
@@ -999,6 +1015,10 @@ impl VerifiedStreamTokenGatewayCheckV1 {
     /// # Errors
     /// Rejects a changed publication, purpose/attempt, durable proof, permission, policy, original
     /// lease deadline or UTC endpoint. Failure retains the original Pending without renewal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn consume_for_serving<T>(
         self,
         original: &Request,

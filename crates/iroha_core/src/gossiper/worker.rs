@@ -5,6 +5,10 @@ use std::{sync::Arc, time::Duration};
 use tokio::{runtime::RuntimeFlavor, sync::mpsc};
 
 /// One actor-owned physical step; steps never run concurrently.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Incoming work retains the original paid gossip owner without allocating a second carrier"
+)]
 pub(super) enum Work {
     /// Perform the next periodic queue fanout.
     Tick,

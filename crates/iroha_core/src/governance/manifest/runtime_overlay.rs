@@ -55,7 +55,7 @@ impl LaneManifestRegistry {
     /// CLI producers use the same bounded parser and semantic authority as runtime
     /// installation. `governance` must be the effective governance catalog, including
     /// any authenticated startup overlay. This check neither authorizes publication
-    /// nor verifies live account, peer, role, consensus-key or PoP eligibility.
+    /// nor verifies live account, peer, role, consensus-key or `PoP` eligibility.
     /// Installation additionally enforces immutable baseline ownership, cumulative
     /// source budgets, cross-lane authority consistency and the complete catalog.
     ///
@@ -157,7 +157,7 @@ impl LaneManifestRegistry {
     /// Always rebuilds from the original startup source, even when `self` already
     /// contains additions. This method performs no filesystem access. The caller
     /// must authenticate the cumulative world-state overlay, enforce append-only
-    /// publication, and verify live account, peer, consensus-key, role and PoP
+    /// publication, and verify live account, peer, consensus-key, role and `PoP`
     /// eligibility at its activation height.
     ///
     /// # Errors

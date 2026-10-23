@@ -125,7 +125,7 @@ impl CanonicalPhysicalStageIdentity {
             }
             // Share the canonical bounded decoder and complete image validator.
             // The retained descriptor is never reopened through the mutable name.
-            Some(store.decode_da_block_rewrite_stage_bytes(bytes)?)
+            Some(store.decode_da_block_rewrite_stage_bytes(&(bytes))?)
         } else {
             None
         };

@@ -32,7 +32,7 @@ fn successful_claim_fee_exempt_draft_returns_zero_quote_in_direct_mode() {
         AssetId::new(fee_asset, payload.authority.clone()),
     ))]
     .into();
-    assert_direct_fee_exempt_draft(world, &nexus, &pipeline, payload);
+    assert_direct_fee_exempt_draft(&(world), &nexus, &pipeline, payload);
 }
 #[test]
 fn successful_claim_fee_exemption_uses_exact_account_identity() {

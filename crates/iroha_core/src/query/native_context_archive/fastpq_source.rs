@@ -5,7 +5,7 @@
 //! execution and its mandatory D7 write before issuing a fresh opaque source.
 
 mod read;
-pub(crate) use read::{
+pub use read::{
     AuthenticatedRecoveredFastpqSource, NativeFastpqSourceRead, SourceReadError, SourceReadLimits,
 };
 

@@ -9,7 +9,7 @@ use std::{cmp::Ordering, convert::Infallible};
 
 /// Original semantic failures, in the original phase order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SemanticFailure {
+pub enum SemanticFailure {
     Overflow,
     Lookup,
     Code,
@@ -50,7 +50,7 @@ impl SemanticFailure {
 }
 /// Bounded equality descriptor; equality does not assert original cause identity.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct HashFailureDescriptor {
+pub struct HashFailureDescriptor {
     category: std::mem::Discriminant<norito::Error>,
     resource: Option<norito::core::DecodeResourceError>,
     io: Option<std::io::ErrorKind>,
@@ -60,7 +60,7 @@ pub(crate) struct HashFailureDescriptor {
 /// Moves the exact codec cause without boxing, copying or rendering its diagnostic.
 #[derive(Debug, thiserror::Error)]
 #[error("original trigger typed-hash encoding failed")]
-pub(crate) struct HashFailure {
+pub struct HashFailure {
     descriptor: HashFailureDescriptor,
     #[source]
     original: norito::Error,
@@ -112,7 +112,7 @@ impl HashFailure {
 }
 /// Exact local refusal categories; semantic failures retain their existing String boundary.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum TriggerContractError {
+pub enum TriggerContractError {
     /// The original Set predicate failed.
     #[error("{0:?}")]
     Semantic(SemanticFailure),
@@ -178,6 +178,10 @@ impl Work {
             observed: Observed::default(),
         }
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn prepay(&mut self, amount: u64) -> Result<(), TriggerContractError> {
         self.remaining = self
             .remaining
@@ -185,9 +189,17 @@ impl Work {
             .ok_or(TriggerContractError::WorkLimit)?;
         Ok(())
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn bytes(&mut self, amount: usize) -> Result<(), TriggerContractError> {
         self.prepay(u64::try_from(amount).map_err(|_| TriggerContractError::WorkLimit)?)
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn setup(&mut self) -> Result<(), TriggerContractError> {
         self.prepay(CURSOR_SETUP)?;
         #[cfg(test)]
@@ -196,6 +208,10 @@ impl Work {
         }
         Ok(())
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn next<I: Iterator>(&mut self, rows: &mut I) -> Result<Option<I::Item>, TriggerContractError> {
         self.prepay(CURSOR_NEXT)?;
         #[cfg(test)]
@@ -204,6 +220,10 @@ impl Work {
         }
         Ok(rows.next())
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn hash_equal<T: PartialEq>(
         &mut self,
         left: &T,
@@ -391,7 +411,7 @@ impl Strategy for CheckedStrategy {
     }
 }
 fn compact_prefix(value: usize) -> u64 {
-    ((usize::BITS - value.leading_zeros()).max(1) as u64).div_ceil(7)
+    u64::from((usize::BITS - value.leading_zeros()).max(1)).div_ceil(7)
 }
 #[derive(Clone, Copy)]
 enum Phase {
@@ -499,6 +519,10 @@ pub(super) fn validate_current(world: &(impl SetReadOnly + ?Sized)) -> Result<()
     )
 }
 pub(super) trait MergeKey: mv::Key {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn compare(&self, other: &Self, work: &mut Work) -> Result<Ordering, TriggerContractError>;
 }
 impl MergeKey for TriggerId {
@@ -525,6 +549,10 @@ impl MergeKey for HashOf<IvmBytecode> {
         Ok(self.cmp(other))
     }
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+)]
 pub(super) fn visit_original<'a, K: MergeKey, V: mv::Value>(
     rows: &'a impl RawStorageImages<K, V>,
     image: Image,
@@ -632,6 +660,10 @@ where
         visit_original(self.contracts, image, strategy, contract)
     }
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+)]
 fn capacity<K: mv::Key, V: mv::Value>(
     rows: &impl RawStorageImages<K, V>,
     work: &mut Work,
@@ -650,6 +682,10 @@ fn capacity<K: mv::Key, V: mv::Value>(
         .ok_or(TriggerContractError::CounterGeometry)
 }
 impl CheckedStrategy {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(super) fn prepare<D, P, T, C, R>(
         sources: &NativeSources<'_, D, P, T, C, R>,
         max_work: u64,
@@ -678,6 +714,10 @@ impl CheckedStrategy {
         let counts = ChargedBuffer::new(size, budget)?;
         Ok(Self { work, counts })
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(super) fn encoding_rows<'a, K: mv::Key, V: mv::Value>(
         &mut self,
         source: &'a impl RawStorageImages<K, V>,
@@ -695,6 +735,10 @@ impl CheckedStrategy {
         self.work.prepay(units)?;
         Ok(rows)
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn reset(&mut self) -> Result<(), TriggerContractError> {
         self.work.prepay(2)?;
         self.work.bytes(self.counts.as_slice().len())?;
@@ -717,10 +761,18 @@ impl CheckedStrategy {
         self.work.remaining
     }
     /// Admit action-local source-event/byte capsules on the same remaining allowance.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(super) fn admit_action_work(&mut self, units: u64) -> Result<(), TriggerContractError> {
         self.work.prepay(units)
     }
-    /// Compare complete original TriggerIds through the one prepaid key primitive.
+    /// Compare complete original `TriggerIds` through the one prepaid key primitive.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(super) fn compare_action_ids(
         &mut self,
         left: &TriggerId,
@@ -730,6 +782,10 @@ impl CheckedStrategy {
             .map(|order| order == Ordering::Equal)
     }
     /// Invoke the original contract engine for one image, without another predicate.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(super) fn validate_action_contract_image<D, P, T, C, R>(
         &mut self,
         sources: &NativeSources<'_, D, P, T, C, R>,
@@ -745,9 +801,17 @@ impl CheckedStrategy {
         validate_image(sources, image, self)
     }
     /// Retire only the initialized fixed counter prefix before the next image.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(super) fn reset_action_contract_counts(&mut self) -> Result<(), TriggerContractError> {
         self.reset()
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(super) fn validate<D, P, T, C, R>(
         &mut self,
         sources: &NativeSources<'_, D, P, T, C, R>,
@@ -766,9 +830,9 @@ impl CheckedStrategy {
 }
 /// Empty capture control baseline; the incremental reference is one L3 no-undo singleton.
 /// These are scheduling references, never validity, bytecode length or row-count rules.
-pub(crate) const TRIGGER_CONTRACT_BASE_WORK: u64 = 24 * CURSOR_SETUP + 16 * CURSOR_NEXT + 83;
-pub(crate) const TRIGGER_CONTRACT_ROW_WORK: u64 = 5 * CURSOR_NEXT + 923;
-pub(crate) fn scheduled_work(limits: crate::state::authority_registry::leaf::LeafLimits) -> u64 {
+pub const TRIGGER_CONTRACT_BASE_WORK: u64 = 24 * CURSOR_SETUP + 16 * CURSOR_NEXT + 83;
+pub const TRIGGER_CONTRACT_ROW_WORK: u64 = 5 * CURSOR_NEXT + 923;
+pub fn scheduled_work(limits: crate::state::authority_registry::leaf::LeafLimits) -> u64 {
     TRIGGER_CONTRACT_BASE_WORK
         .saturating_add(limits.max_rows.saturating_mul(TRIGGER_CONTRACT_ROW_WORK))
         .saturating_add(limits.max_streamed_value_bytes.saturating_mul(3))

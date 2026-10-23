@@ -18,6 +18,7 @@ use super::NativeEvidenceError;
 use crate::state::EvidencePreparationError;
 
 /// Scalar canonical fields; no source, backing or allocation authority is created here.
+#[derive(Clone, Copy)]
 pub(super) struct AttributionFields {
     pub(super) scope: EvidenceScope,
     pub(super) instance: [u8; 32],
@@ -159,8 +160,8 @@ impl fmt::Debug for FundedOffenders {
 }
 
 /// Move-only canonical attribution retaining every actual offender allocation.
-/// Ordinary clones of get() are separate unfunded graphs, never this admission.
-pub(crate) struct FundedEvidenceAttribution(RetainedPayload<EvidenceAttribution>);
+/// Ordinary clones of `get()` are separate unfunded graphs, never this admission.
+pub struct FundedEvidenceAttribution(RetainedPayload<EvidenceAttribution>);
 impl FundedEvidenceAttribution {
     /// Move only the original fields into the private immutable record body.
     #[allow(unsafe_code)]
@@ -214,4 +215,4 @@ mod tests;
 
 #[path = "funded_attribution/restore.rs"]
 mod restore;
-pub(crate) use restore::restore_attribution;
+pub use restore::restore_attribution;

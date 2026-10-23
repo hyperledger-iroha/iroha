@@ -387,7 +387,7 @@ fn wire_evidence_admissions(
 mod funded_actions;
 #[path = "penalties/sccp.rs"]
 mod sccp;
-pub(crate) use funded_actions::FundedPenaltyActions;
+pub use funded_actions::FundedPenaltyActions;
 
 struct ParentPenaltySnapshot {
     pending: ChargedBuffer<PendingPenaltyEvidence>,
@@ -745,9 +745,7 @@ impl<'a> PenaltyApplier<'a> {
             .as_mut_slice()
             .sort_unstable_by(|left, right| left.0.0.cmp(&right.0.0));
         let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
-        let mut scratch = self
-            .state
-            .consensus_effects_probe_block(block_header.clone())?;
+        let mut scratch = self.state.consensus_effects_probe_block(*block_header)?;
         let mut actions =
             funded_actions::ActionBuilder::new(demand, self.state.evidence_preparation_budget())?;
         for record in pending.as_slice() {
@@ -918,7 +916,7 @@ fn canonicalize_penalty_actions(actions: &mut Vec<NposPenaltyAction>) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn apply_npos_consensus_effects_to_transaction(
+pub fn apply_npos_consensus_effects_to_transaction(
     tx: &mut StateTransaction<'_, '_>,
     effects: &NposConsensusEffects,
     stake_index: Option<&PublicLaneStakeIndex>,
@@ -948,7 +946,7 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
 /// to the transaction execution witness in either application mode.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn validate_npos_consensus_effects_after_execution(
+pub fn validate_npos_consensus_effects_after_execution(
     state_block: &mut StateBlock<'_>,
     effects: &NposConsensusEffects,
     evidence_prune_keys: &[Hash],
@@ -1273,7 +1271,7 @@ fn penalty_staking_fixture_header() -> BlockHeader {
 /// The setup is committed through a real world overlay so asset indexes and the
 /// definition incarnation stay consistent with production instruction execution.
 #[cfg(test)]
-pub(crate) fn configure_penalty_staking_state_for_tests(state: &mut State) {
+pub fn configure_penalty_staking_state_for_tests(state: &mut State) {
     use crate::smartcontracts::Execute as _;
     use iroha_data_model::{
         account::Account,
@@ -1320,7 +1318,7 @@ pub(crate) fn configure_penalty_staking_state_for_tests(state: &mut State) {
 /// Seed one validator with an account, an exactly backed escrow balance, and
 /// the matching retained validator/share and exact custody rows needed by the slash executor.
 #[cfg(test)]
-pub(crate) fn seed_penalty_validator_for_tests(
+pub fn seed_penalty_validator_for_tests(
     state: &State,
     lane_id: LaneId,
     peer: &PeerId,
@@ -1428,7 +1426,7 @@ pub(crate) fn seed_penalty_validator_for_tests(
 /// Install explicit accepted penalty-kernel prestate for an original payload pool test.
 /// Native evidence admission and offence authentication have separate real-history controls.
 #[cfg(test)]
-pub(crate) fn pending_payload_penalty_fixture(state: &State) -> (Hash, usize) {
+pub fn pending_payload_penalty_fixture(state: &State) -> (Hash, usize) {
     let key = tests::insert_evidence(state, tests::fixture_vote_evidence(1, 0), 1);
     (key, std::mem::size_of::<PendingPenaltyEvidence>())
 }
@@ -1530,7 +1528,7 @@ mod tests {
         state
     }
 
-    /// Execute real signed NPoS genesis before testing a finalized slash operation.
+    /// Execute real signed `NPoS` genesis before testing a finalized slash operation.
     /// Component evidence below remains explicit fixture prestate; no retired sidecar
     /// substitutes for the native committed authority required by monetary execution.
     fn native_penalty_state() -> State {
@@ -4492,7 +4490,7 @@ mod tests {
         }
     }
 
-    /// Certified NPoS parent whose native history authenticates one local report.
+    /// Certified `NPoS` parent whose native history authenticates one local report.
     fn certified_npos_chain() -> crate::sumeragi::test_chain::CertifiedTestChain {
         use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::parameter::system::SumeragiConsensusMode;

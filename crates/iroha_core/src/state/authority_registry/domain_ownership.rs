@@ -16,7 +16,7 @@ use std::{collections::BTreeSet, convert::Infallible};
 
 /// The image in which a secondary index differs from its canonical source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OwnershipImage {
+pub enum OwnershipImage {
     /// Published current rows.
     Current,
     /// Rows reconstructed from the exact original undo map.
@@ -25,7 +25,7 @@ pub(crate) enum OwnershipImage {
 
 /// The exact relation violated by one retained owner index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OwnershipMismatch {
+pub enum OwnershipMismatch {
     /// A canonical domain is absent from its owner's bucket.
     MissingDomain,
     /// A bucket has no logical members and should not exist.
@@ -36,7 +36,7 @@ pub(crate) enum OwnershipMismatch {
 
 /// Local traversal refusal and source corruption are separate outcomes.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum DomainOwnershipError {
+pub enum DomainOwnershipError {
     /// Exhaustion grants no validity verdict; retry with an admitted larger bound.
     #[error("domain-owner derivation exceeds its local work bound")]
     WorkLimit,
@@ -252,10 +252,9 @@ fn before<'a, K: mv::Key, V: mv::Value>(
     view: &'a CommittedStorageView<'_, K, V>,
     key: &K,
 ) -> Option<&'a V> {
-    match view.undo().get(key) {
-        Some(prior) => prior.as_ref(),
-        None => view.current().get(key),
-    }
+    view.undo()
+        .get(key)
+        .map_or_else(|| view.current().get(key), |prior| prior.as_ref())
 }
 
 #[cfg(test)]

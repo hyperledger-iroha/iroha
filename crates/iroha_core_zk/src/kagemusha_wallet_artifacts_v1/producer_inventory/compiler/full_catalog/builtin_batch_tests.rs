@@ -39,14 +39,14 @@ fn builtin_complete_batch_reuse_preserves_every_role_and_original() {
         &installed,
         &mut originals,
         config,
-        &profile,
+        profile,
     );
     let receive_controls = inventory::operation::assert_builtin_receive_alias_controls(
         &qualified,
         &installed,
         &mut originals,
         config,
-        &profile,
+        profile,
     );
     // Twenty current signature references plus every existing refusal/retry case.
     assert_eq!(signature_controls, 57);

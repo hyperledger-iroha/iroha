@@ -236,7 +236,7 @@ impl ZkX509WitnessV1 {
                         norito::Error::NonCanonicalEncoding
                     })
             })
-            .map_err(|error| shape_error.unwrap_or_else(|| map_norito_error_v1(error)))
+            .map_err(|error| shape_error.unwrap_or_else(|| map_norito_error_v1(&error)))
         })
     }
     /// Construct malformed-shape frames using the actual serializer in tests.
@@ -358,7 +358,7 @@ impl std::io::Write for PrivateWitnessWriterV1 {
     }
 }
 
-fn map_norito_error_v1(error: norito::Error) -> ZkX509WitnessCodecErrorV1 {
+fn map_norito_error_v1(error: &norito::Error) -> ZkX509WitnessCodecErrorV1 {
     match error {
         norito::Error::AllocationFailed { .. } => ZkX509WitnessCodecErrorV1::AllocationFailed,
         norito::Error::SequenceLengthExceeded { .. }
@@ -469,7 +469,8 @@ fn reserve_sequence_v1<T>(
     let additional = count
         .checked_mul(core::mem::size_of::<T>().saturating_sub(1))
         .ok_or(ZkX509WitnessCodecErrorV1::LengthOverflow)?;
-    norito::core::reserve_decode_allocation(additional).map_err(map_norito_error_v1)?;
+    norito::core::reserve_decode_allocation(additional)
+        .map_err(|error| map_norito_error_v1(&error))?;
     values
         .try_reserve_exact(count)
         .map_err(|_| ZkX509WitnessCodecErrorV1::AllocationFailed)
@@ -498,7 +499,7 @@ fn validate_witness_shape_v1(witness: &ZkX509WitnessV1) -> Result<(), ZkX509Witn
         || witness
             .attribute_openings
             .iter()
-            .any(|opening| opening.index >= MAX_DISCLOSED_ATTRIBUTES_V1 as u8)
+            .any(|opening| usize::from(opening.index) >= MAX_DISCLOSED_ATTRIBUTES_V1)
         || witness
             .attribute_openings
             .windows(2)
@@ -525,8 +526,8 @@ impl<'a> WitnessReaderV1<'a> {
     }
     fn field(&mut self) -> Result<Self, ZkX509WitnessCodecErrorV1> {
         // These are borrowed spans. Only actual owned allocations are charged.
-        let (length, prefix) =
-            norito::core::inspect_len_from_slice(self.remaining).map_err(map_norito_error_v1)?;
+        let (length, prefix) = norito::core::inspect_len_from_slice(self.remaining)
+            .map_err(|error| map_norito_error_v1(&error))?;
         self.take(prefix)?;
         Ok(Self::new(self.take(length)?))
     }
@@ -539,7 +540,8 @@ impl<'a> WitnessReaderV1<'a> {
     }
     fn scalar<T: DecodeFromSlice<'a>>(&mut self) -> Result<T, ZkX509WitnessCodecErrorV1> {
         let field = self.field()?;
-        let (value, used) = T::decode_from_slice(field.remaining).map_err(map_norito_error_v1)?;
+        let (value, used) =
+            T::decode_from_slice(field.remaining).map_err(|error| map_norito_error_v1(&error))?;
         if used != field.remaining.len() {
             return Err(ZkX509WitnessCodecErrorV1::NonCanonicalField);
         }
@@ -551,13 +553,14 @@ impl<'a> WitnessReaderV1<'a> {
         maximum: usize,
         error: ZkX509WitnessCodecErrorV1,
     ) -> Result<usize, ZkX509WitnessCodecErrorV1> {
-        let (raw, _) = u64::decode_from_slice(self.remaining).map_err(map_norito_error_v1)?;
+        let (raw, _) =
+            u64::decode_from_slice(self.remaining).map_err(|error| map_norito_error_v1(&error))?;
         let count = usize::try_from(raw).map_err(|_| error)?;
         if !(minimum..=maximum).contains(&count) {
             return Err(error);
         }
-        let (count, used) =
-            norito::core::read_seq_len_slice(self.remaining).map_err(map_norito_error_v1)?;
+        let (count, used) = norito::core::read_seq_len_slice(self.remaining)
+            .map_err(|error| map_norito_error_v1(&error))?;
         self.take(used)?;
         Ok(count)
     }

@@ -47,13 +47,8 @@ impl ReadPhase {
         address: u64,
         vm: u8,
         clocks: [u32; 5],
-        gas: u64,
-        pc: u64,
-        cycles: u64,
-        stack_top: u64,
-        zk: bool,
-        vector: bool,
-        base_private: bool,
+        (gas, pc, cycles, stack_top): (u64, u64, u64, u64),
+        (zk, vector, base_private): (bool, bool, bool),
     ) -> Option<Self> {
         let wide = match wide::opcode(instruction) {
             wide::memory::LOAD64 => false,
@@ -141,8 +136,14 @@ pub(super) fn append_residues(
         read,
         Space::Memory,
         phase,
-        0,
-        (phase.address >> 4) as u32,
+        (
+            0,
+            u32::from_le_bytes(
+                u64::to_le_bytes(phase.address >> 4)[..4]
+                    .try_into()
+                    .expect("low-byte width"),
+            ),
+        ),
         F::ONE,
         F::ZERO,
     );
@@ -164,8 +165,10 @@ pub(super) fn append_residues(
             write,
             Space::Register,
             phase,
-            slot + 1,
-            destination as u32,
+            (
+                slot + 1,
+                u32::try_from(destination).expect("bounded circuit index"),
+            ),
             enabled,
             enabled,
         );
@@ -178,7 +181,7 @@ pub(super) fn append_residues(
         let half = if phase.wide {
             operand
         } else {
-            (phase.address as usize & 8) / 8
+            usize::try_from((phase.address & 8) / 8).expect("one address bit")
         };
         for limb in 0..8 {
             let expected = if limb >= 4 {
@@ -273,12 +276,16 @@ pub(super) fn mask_flags(
 
 fn header(
     out: &mut Vec<F>,
+
     port: &[F; packet::WIDTH],
+
     space: packet::Space,
+
     phase: ReadPhase,
-    slot: usize,
-    index: u32,
+    (slot, index): (usize, u32),
+
     enabled: F,
+
     write: F,
 ) {
     use packet::*;

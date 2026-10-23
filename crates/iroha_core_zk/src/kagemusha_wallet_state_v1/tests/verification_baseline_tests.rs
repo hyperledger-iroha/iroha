@@ -182,6 +182,8 @@ fn fold_completion_and_adoption_verify_each_new_omega_once() {
 /// nothing is recorded, published or advanced.
 #[test]
 fn warm_fold_caches_never_admit_changed_records_heads_or_custody() {
+    type Mutation = (&'static str, fn(&mut RecordedFold));
+
     let (mut w, ..) = folded_bootstrap();
     let step = w.released_steps().expect("steps").remove(0);
     let recorded = w
@@ -200,7 +202,7 @@ fn warm_fold_caches_never_admit_changed_records_heads_or_custody() {
     let folded = w.manifest().expect("manifest").1.folded;
     let before = verifies(&w);
 
-    let mutations: [(&str, fn(&mut RecordedFold)); 11] = [
+    let mutations: [Mutation; 11] = [
         ("first sequence", |f| f.record.first_sequence += 1),
         ("sequence", |f| f.record.sequence += 1),
         ("head", |f| f.record.head.value[0] ^= 1),

@@ -9,7 +9,7 @@ use std::io::Write;
 
 /// Borrow an existing canonical payload without copying its variable storage.
 #[derive(Clone, Copy)]
-pub(crate) struct Ref<'a, T: ?Sized>(pub(crate) &'a T);
+pub struct Ref<'a, T: ?Sized>(pub(crate) &'a T);
 impl<T: SerializePayload + ?Sized> SerializePayload for Ref<'_, T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(writer)
@@ -17,7 +17,7 @@ impl<T: SerializePayload + ?Sized> SerializePayload for Ref<'_, T> {
 }
 
 /// Preserve a derived struct's special raw fixed-byte-array field layout.
-pub(crate) struct Raw<'a>(pub(crate) &'a [u8]);
+pub struct Raw<'a>(pub(crate) &'a [u8]);
 impl SerializePayload for Raw<'_> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(self.0)?;
@@ -26,7 +26,7 @@ impl SerializePayload for Raw<'_> {
 }
 
 /// An immutable stack projection whose fields are measured and streamed twice.
-pub(crate) struct Payload<F>(pub(crate) F);
+pub struct Payload<F>(pub(crate) F);
 impl<F> SerializePayload for Payload<F>
 where
     F: Fn(&mut Encoder<'_>) -> Result<(), Error>,
@@ -37,9 +37,9 @@ where
 }
 
 /// An immutable linked tuple of already borrowed record fields.
-pub(crate) struct FieldsEnd;
-pub(crate) struct FieldsCons<H, T>(pub(crate) H, pub(crate) T);
-pub(crate) trait Fields {
+pub struct FieldsEnd;
+pub struct FieldsCons<H, T>(pub(crate) H, pub(crate) T);
+pub trait Fields {
     fn fields(&self, writer: &mut Encoder<'_>) -> Result<(), Error>;
 }
 impl Fields for FieldsEnd {
@@ -53,7 +53,7 @@ impl<H: SerializePayload, T: Fields> Fields for FieldsCons<H, T> {
         self.1.fields(writer)
     }
 }
-pub(crate) struct Record<T>(pub(crate) T);
+pub struct Record<T>(pub(crate) T);
 impl<T: Fields> SerializePayload for Record<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.0.fields(writer)
@@ -77,7 +77,7 @@ macro_rules! record {
 pub(crate) use record;
 
 /// Borrow or project an ordered sequence without collecting a second vector.
-pub(crate) struct Seq<I>(pub(crate) I);
+pub struct Seq<I>(pub(crate) I);
 impl<I> SerializePayload for Seq<I>
 where
     I: Clone + ExactSizeIterator,
@@ -89,7 +89,7 @@ where
 }
 
 /// Emit a nested bare payload using the wire layout of its original `Vec<u8>`.
-pub(crate) struct BareBytes<T>(pub(crate) T);
+pub struct BareBytes<T>(pub(crate) T);
 impl<T: SerializePayload> SerializePayload for BareBytes<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let length = norito::core::encoded_payload_len(&self.0)?;
@@ -103,7 +103,7 @@ impl<T: SerializePayload> SerializePayload for BareBytes<T> {
 
 /// Original pool refusal or impossible source/backing count discrepancy.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum OrderError {
+pub enum OrderError {
     #[error(transparent)]
     Allocation(#[from] ChargedBufferError),
     #[error("canonical policy source exceeded its admitted reference count")]
@@ -113,7 +113,7 @@ pub(crate) enum OrderError {
 }
 
 /// Original-pool references used when policy semantics require a sorted set.
-pub(crate) struct SortedRefs<'a, T>(ChargedBuffer<&'a T>);
+pub struct SortedRefs<'a, T>(ChargedBuffer<&'a T>);
 impl<'a, T> SortedRefs<'a, T> {
     pub(crate) fn new_by(
         source: &'a [T],
@@ -151,7 +151,7 @@ impl<'a, T> SortedRefs<'a, T> {
 }
 
 /// Exact-cardinality iteration of a sorted reference set, with no new allocation.
-pub(crate) struct Unique<'view, 'source, T> {
+pub struct Unique<'view, 'source, T> {
     source: &'view [&'source T],
     offset: usize,
     remaining: usize,
@@ -187,7 +187,7 @@ impl<'source, T: PartialEq> Iterator for Unique<'_, 'source, T> {
 impl<T: PartialEq> ExactSizeIterator for Unique<'_, '_, T> {}
 
 /// Exact encoded originals needed for a set ordered by canonical bytes.
-pub(crate) struct EncodedSet(ChargedBuffer<ChargedBuffer<u8>>);
+pub struct EncodedSet(ChargedBuffer<ChargedBuffer<u8>>);
 impl EncodedSet {
     pub(crate) fn new<T: SerializePayload>(
         source: &[T],
@@ -225,7 +225,7 @@ impl EncodedSet {
 }
 
 #[derive(Clone)]
-pub(crate) struct UniqueEncoded<'a> {
+pub struct UniqueEncoded<'a> {
     source: &'a [ChargedBuffer<u8>],
     offset: usize,
     remaining: usize,
@@ -263,10 +263,7 @@ impl Write for BufferWriter<'_> {
 }
 
 /// Hash the canonical bare bytes directly, without allocating a preimage vector.
-pub(crate) fn hash_payload(
-    domain: &[u8],
-    value: &impl SerializePayload,
-) -> Result<[u8; 32], Error> {
+pub fn hash_payload(domain: &[u8], value: &impl SerializePayload) -> Result<[u8; 32], Error> {
     let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let mut encoded = Ok(());
     let hash = iroha_crypto::Hash::new_from_writer(|writer| {
@@ -279,7 +276,7 @@ pub(crate) fn hash_payload(
 }
 
 /// The original display text as a Norito string, without an intermediate String.
-pub(crate) struct DisplayString<'a, T: ?Sized>(pub(crate) &'a T);
+pub struct DisplayString<'a, T: ?Sized>(pub(crate) &'a T);
 impl<T: std::fmt::Display + ?Sized> SerializePayload for DisplayString<'_, T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let mut count = CountWriter(0);
@@ -352,7 +349,7 @@ impl Write for CountedWriter<'_> {
 }
 
 /// Canonical source JSON as the exact original Norito String payload.
-pub(crate) struct JsonString<'a, T: ?Sized>(pub(crate) &'a T);
+pub struct JsonString<'a, T: ?Sized>(pub(crate) &'a T);
 impl<T: norito::json::JsonSerialize + ?Sized> SerializePayload for JsonString<'_, T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let mut count = CountWriter(0);
@@ -403,9 +400,7 @@ fn json_to(
     result.map_err(norito::json::BoundedJsonError::into_core_error)
 }
 /// Hash the exact retained canonical source body without collecting JSON text.
-pub(crate) fn hash_json(
-    value: &(impl norito::json::JsonSerialize + ?Sized),
-) -> Result<[u8; 32], Error> {
+pub fn hash_json(value: &(impl norito::json::JsonSerialize + ?Sized)) -> Result<[u8; 32], Error> {
     let mut encoded = Ok(());
     let hash = iroha_crypto::Hash::new_from_writer(|writer| {
         encoded = json_to(value, writer);
@@ -416,7 +411,7 @@ pub(crate) fn hash_json(
 }
 
 #[cfg(test)]
-pub(crate) fn assert_same_payload(left: &impl SerializePayload, right: &impl SerializePayload) {
+pub fn assert_same_payload(left: &impl SerializePayload, right: &impl SerializePayload) {
     let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let mut left_bytes = Vec::new();
     let mut right_bytes = Vec::new();

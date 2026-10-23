@@ -745,9 +745,9 @@ fn native_stark_accepts_interpreter_sub_alias_and_r0_and_rejects_forged_subtract
         let mut wrong_opcode = admitted;
         wrong_opcode.word = ivm::encoding::wide::encode_rr(
             wide::arithmetic::ADD,
-            wide::rd(admitted.word) as u8,
-            wide::rs1(admitted.word) as u8,
-            wide::rs2(admitted.word) as u8,
+            u8::try_from(wide::rd(admitted.word)).expect("bounded fixture value"),
+            u8::try_from(wide::rs1(admitted.word)).expect("bounded fixture value"),
+            u8::try_from(wide::rs2(admitted.word)).expect("bounded fixture value"),
         );
         assert!(verify_proof_managed_note_stark_v1(&AluStepAdapter(wrong_opcode), &proof).is_err());
     }

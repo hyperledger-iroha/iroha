@@ -18,7 +18,7 @@ pub(super) fn observe_work_clear(zero: bool) {
     CLEARED.with(|values| values.borrow_mut().push(zero));
 }
 
-struct Inputs<const L: usize>([[u8; 32]; L]);
+struct Inputs<const L: usize>(Box<[[u8; 32]; L]>);
 
 impl<const L: usize> Drop for Inputs<L> {
     fn drop(&mut self) {
@@ -41,8 +41,16 @@ struct HashCircuit<F: PastaField, const L: usize> {
 
 impl<F: PastaField, const L: usize> HashCircuit<F, L> {
     fn new(values: [F; L]) -> Self {
+        Self::from_values(values.into_iter())
+    }
+
+    fn from_values(values: impl Iterator<Item = F>) -> Self {
+        let encoded = values
+            .map(|value| value.to_repr())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self {
-            values: Arc::new(Inputs(values.map(|value| value.to_repr()))),
+            values: Arc::new(Inputs(encoded.try_into().expect("fixed input length"))),
             faults: Vec::new(),
             bind_output: true,
             stop: Stop::None,
@@ -52,7 +60,7 @@ impl<F: PastaField, const L: usize> HashCircuit<F, L> {
     fn expected(&self) -> Vec<F> {
         if self.bind_output {
             vec![
-                Option::from(F::from_repr(F::native_hash(&self.values.0)))
+                Option::from(F::from_repr(F::native_hash(self.values.0.as_ref())))
                     .expect("native canonical output"),
             ]
         } else {
@@ -75,9 +83,9 @@ impl<F: PastaField, const L: usize> HashCircuit<F, L> {
         Ok(())
     }
 
-    fn check(&self, k: u32, instances: Vec<Vec<F>>) -> Result<CheckReport<F>, Error> {
+    fn check(&self, k: u32, instances: &[Vec<F>]) -> Result<CheckReport<F>, Error> {
         Self::preflight(k)?;
-        check_circuit(self, k, &instances, CheckMode::Strict)
+        check_circuit(self, k, instances, CheckMode::Strict)
     }
 }
 
@@ -140,7 +148,7 @@ impl<F: PastaField, const L: usize> Circuit<F> for HashCircuit<F, L> {
             &config,
             &mut layouter,
             &inputs,
-            &self.values.0,
+            self.values.0.as_ref(),
             &self.faults,
             self.stop,
         )?;
@@ -154,7 +162,7 @@ impl<F: PastaField, const L: usize> Circuit<F> for HashCircuit<F, L> {
 fn assert_valid<F: PastaField, const L: usize>(values: [F; L], k: u32) {
     let circuit = HashCircuit::new(values);
     circuit
-        .check(k, vec![circuit.expected()])
+        .check(k, &[circuit.expected()])
         .expect("bounded shape")
         .into_result()
         .expect("all constraints hold");
@@ -172,7 +180,7 @@ fn every_upstream_hash_vector_matches_both_field_circuits() {
             let circuit = HashCircuit::<F, 2>::new(values);
             assert_eq!(circuit.expected(), vec![expected]);
             circuit
-                .check(7, vec![vec![expected]])
+                .check(7, &[vec![expected]])
                 .unwrap()
                 .into_result()
                 .expect("all constraints hold");
@@ -199,13 +207,7 @@ fn odd_even_lengths_match_native_and_reject_wrong_public_output() {
         let circuit = HashCircuit::new([F::ONE; 3]);
         let mut public = circuit.expected();
         public[0] += F::ONE;
-        assert!(
-            circuit
-                .check(8, vec![public])
-                .unwrap()
-                .into_result()
-                .is_err()
-        );
+        assert!(circuit.check(8, &[public]).unwrap().into_result().is_err());
     }
     check::<Fp>();
     check::<Fq>();
@@ -217,7 +219,7 @@ fn failures<F: PastaField>(fault: Fault<F>) -> Vec<CheckFailure<F>> {
     circuit.bind_output = false;
     circuit.faults.push(fault);
     circuit
-        .check(8, vec![Vec::new()])
+        .check(8, &[Vec::new()])
         .unwrap()
         .into_result()
         .expect_err(&label)
@@ -337,7 +339,7 @@ fn actual_owned_field_and_input_cells_clear_on_success_error_and_unwind() {
             let outcome = std::panic::catch_unwind(|| {
                 let mut circuit = HashCircuit::new([F::ONE; 3]);
                 circuit.stop = stop;
-                circuit.check(8, vec![circuit.expected()])
+                circuit.check(8, &[circuit.expected()])
             });
             if matches!(stop, Stop::PanicAfterAbsorb | Stop::PanicAfterPartialSbox) {
                 assert!(outcome.is_err());
@@ -382,12 +384,12 @@ fn geometry_and_fixed_bounds_are_explicit() {
     );
     assert!(
         HashCircuit::<Fp, 0>::new([])
-            .check(8, vec![Vec::new()])
+            .check(8, &[Vec::new()])
             .is_err()
     );
     assert!(
-        HashCircuit::<Fp, 2055>::new([Fp::ZERO; 2055])
-            .check(8, vec![Vec::new()])
+        HashCircuit::<Fp, 2055>::from_values(std::iter::repeat_n(Fp::ZERO, 2055))
+            .check(8, &[Vec::new()])
             .is_err()
     );
     println!(
@@ -411,11 +413,11 @@ fn maximum_record_matches_native_and_refuses_insufficient_rows() {
             F::from(17 * i as u64 + 3)
         }));
         assert!(matches!(
-            circuit.check(15, vec![circuit.expected()]),
+            circuit.check(15, &[circuit.expected()]),
             Err(Error::NotEnoughRowsAvailable { current_k: 15 })
         ));
         circuit
-            .check(16, vec![circuit.expected()])
+            .check(16, &[circuit.expected()])
             .unwrap()
             .into_result()
             .expect("all constraints hold");

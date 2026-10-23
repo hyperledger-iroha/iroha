@@ -127,7 +127,7 @@ pub(super) fn run_ivm_private_note_stage_v1(
                     );
                 }
             }
-            let mut changed_genesis_binding = consensus_binding.clone();
+            let mut changed_genesis_binding = consensus_binding;
             changed_genesis_binding.genesis_hash[0] ^= 0x80;
             if verify_ivm_private_note_v1(
                 &statement,
@@ -337,7 +337,7 @@ pub(super) fn run_pq_masp_stage_v1(
                     );
                 }
             }
-            let mut changed_genesis_binding = consensus_binding.clone();
+            let mut changed_genesis_binding = consensus_binding;
             changed_genesis_binding.genesis_hash[0] ^= 0x80;
             if verify_pq_masp_v1(
                 &statement,

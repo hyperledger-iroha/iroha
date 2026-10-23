@@ -18,7 +18,7 @@ use norito::core::{DecodeFlagsGuard, SequencePayloadLength, header_flags};
 
 /// Explicit inclusive sizing limits; no production defaults or E ownership.
 #[derive(Clone, Copy)]
-pub(crate) struct PrefixLengthLimits {
+pub struct PrefixLengthLimits {
     /// Maximum original deltas in this single occurrence.
     pub(crate) max_deltas: usize,
     /// Maximum complete canonical original transcript frame, including paths.
@@ -29,7 +29,7 @@ pub(crate) struct PrefixLengthLimits {
 
 /// Sizes of the supplied prefix, without a semantic or authority certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PrefixFrameLengths {
+pub struct PrefixFrameLengths {
     /// Complete original delta count; the nonempty prefix represents one T.
     pub(crate) deltas: usize,
     /// Complete original private transcript frame I.
@@ -40,7 +40,7 @@ pub(crate) struct PrefixFrameLengths {
 
 /// A failed sizing attempt; none of these variants authorizes entry deferral.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PrefixLengthError {
+pub enum PrefixLengthError {
     /// This schema-coupled sizer has not been reviewed for another canonical layout.
     #[error("incremental source sizing requires canonical COMPACT_LEN layout")]
     UnsupportedLayout,
@@ -127,7 +127,7 @@ fn checked_row_count(deltas: usize) -> Result<u32, PrefixLengthError> {
 /// Later changes to prior public facts or private paths invalidate these counts;
 /// the adapter must preserve the measured snapshot or explicitly remeasure it.
 #[derive(Clone)]
-pub(crate) struct SourcePrefixFrameSizer {
+pub struct SourcePrefixFrameSizer {
     flags: u8,
     limits: PrefixLengthLimits,
     private_deltas: SequencePayloadLength,
@@ -297,11 +297,11 @@ impl SourcePrefixFrameSizer {
 }
 
 #[path = "source_prefix_lengths/entry.rs"]
-pub(crate) mod entry;
+pub mod entry;
 
 #[cfg(test)]
 #[path = "source_prefix_lengths/checked.rs"]
-pub(crate) mod checked;
+pub mod checked;
 
 #[cfg(test)]
 #[path = "source_prefix_lengths/tests.rs"]

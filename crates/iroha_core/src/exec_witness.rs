@@ -273,13 +273,16 @@ pub(crate) fn begin_exec_witness_overlay() -> ExecWitnessOverlay {
     let witness = lock_slot();
     let depth = EXEC_WITNESS_OVERLAYS.with(|overlays| {
         let mut overlays = overlays.borrow_mut();
-        let generation = if let Some(parent) = overlays.last() {
-            parent.witness.generation.clone()
-        } else if owns_exec_witness() && witness.active {
-            witness.generation.clone()
-        } else {
-            None
-        };
+        let generation = overlays.last().map_or_else(
+            || {
+                if owns_exec_witness() && witness.active {
+                    witness.generation.clone()
+                } else {
+                    None
+                }
+            },
+            |parent| parent.witness.generation.clone(),
+        );
         overlays.push(WitnessOverlayFrame {
             witness: BlockWitness {
                 generation,
@@ -848,103 +851,103 @@ pub fn record_read_asset_def_kv(
 pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &str) {
     if let Some(rest) = access_key.strip_prefix("account.detail:") {
         let mut it = rest.splitn(2, ':');
-        if let (Some(acc_s), Some(name_s)) = (it.next(), it.next()) {
-            if let (Ok(acc), Ok(name)) = (
+        if let (Some(acc_s), Some(name_s)) = (it.next(), it.next())
+            && let (Ok(acc), Ok(name)) = (
                 iroha_data_model::account::AccountId::parse_encoded(acc_s),
                 Name::from_str(name_s),
-            ) {
-                if let Ok(acct) = state_block.world.account(&acc) {
-                    let pre = acct.value().metadata().get(&name).cloned();
-                    record_read_account_kv(&acc, &name, pre.as_ref());
-                } else {
-                    record_read_account_kv(&acc, &name, None);
-                }
+            )
+        {
+            if let Ok(acct) = state_block.world.account(&acc) {
+                let pre = acct.value().metadata().get(&name).cloned();
+                record_read_account_kv(&acc, &name, pre.as_ref());
+            } else {
+                record_read_account_kv(&acc, &name, None);
             }
         }
     }
     if let Some(rest) = access_key.strip_prefix("domain.detail:") {
         let mut it = rest.splitn(2, ':');
-        if let (Some(dom_s), Some(name_s)) = (it.next(), it.next()) {
-            if let (Ok(dom), Ok(name)) = (
+        if let (Some(dom_s), Some(name_s)) = (it.next(), it.next())
+            && let (Ok(dom), Ok(name)) = (
                 iroha_model_base::domain::DomainId::parse_fully_qualified(dom_s),
                 Name::from_str(name_s),
-            ) {
-                if let Ok(domv) = state_block.world.domain(&dom) {
-                    let pre = domv.metadata.get(&name).cloned();
-                    record_read_domain_kv(&dom, &name, pre.as_ref());
-                } else {
-                    record_read_domain_kv(&dom, &name, None);
-                }
+            )
+        {
+            if let Ok(domv) = state_block.world.domain(&dom) {
+                let pre = domv.metadata.get(&name).cloned();
+                record_read_domain_kv(&dom, &name, pre.as_ref());
+            } else {
+                record_read_domain_kv(&dom, &name, None);
             }
         }
     }
     if let Some(rest) = access_key.strip_prefix("asset_def.detail:") {
         let mut it = rest.splitn(2, ':');
-        if let (Some(ad_s), Some(name_s)) = (it.next(), it.next()) {
-            if let (Ok(ad), Ok(name)) = (
+        if let (Some(ad_s), Some(name_s)) = (it.next(), it.next())
+            && let (Ok(ad), Ok(name)) = (
                 iroha_data_model::asset::AssetDefinitionId::parse_address_literal(ad_s),
                 Name::from_str(name_s),
-            ) {
-                if let Ok(def) = state_block.world.asset_definition(&ad) {
-                    let pre = def.metadata.get(&name).cloned();
-                    record_read_asset_def_kv(&ad, &name, pre.as_ref());
-                } else {
-                    record_read_asset_def_kv(&ad, &name, None);
-                }
+            )
+        {
+            if let Ok(def) = state_block.world.asset_definition(&ad) {
+                let pre = def.metadata.get(&name).cloned();
+                record_read_asset_def_kv(&ad, &name, pre.as_ref());
+            } else {
+                record_read_asset_def_kv(&ad, &name, None);
             }
         }
     }
     if let Some(rest) = access_key.strip_prefix("nft.detail:") {
         let mut it = rest.splitn(2, ':');
-        if let (Some(nft_s), Some(name_s)) = (it.next(), it.next()) {
-            if let (Ok(nft), Ok(name)) = (
+        if let (Some(nft_s), Some(name_s)) = (it.next(), it.next())
+            && let (Ok(nft), Ok(name)) = (
                 iroha_data_model::nft::NftId::from_str(nft_s),
                 Name::from_str(name_s),
-            ) {
-                if let Ok(nftv) = state_block.world.nft(&nft) {
-                    let pre = nftv.content.get(&name).cloned();
-                    record_read_nft_kv(&nft, &name, pre.as_ref());
-                } else {
-                    record_read_nft_kv(&nft, &name, None);
-                }
+            )
+        {
+            if let Ok(nftv) = state_block.world.nft(&nft) {
+                let pre = nftv.content.get(&name).cloned();
+                record_read_nft_kv(&nft, &name, pre.as_ref());
+            } else {
+                record_read_nft_kv(&nft, &name, None);
             }
         }
     }
     if let Some(rest) = access_key.strip_prefix("role.binding:") {
         // role.binding:{account}:{role}
         let mut it = rest.splitn(2, ':');
-        if let (Some(acc_s), Some(role_s)) = (it.next(), it.next()) {
-            if let (Ok(acc), Ok(role)) = (
+        if let (Some(acc_s), Some(role_s)) = (it.next(), it.next())
+            && let (Ok(acc), Ok(role)) = (
                 iroha_data_model::account::AccountId::parse_encoded(acc_s),
                 iroha_data_model::role::RoleId::from_str(role_s),
-            ) {
-                let present = state_block
-                    .world
-                    .account_roles_iter(&acc)
-                    .any(|r| r == &role);
-                let k = enc_key_prefix(
-                    ExecutionWitnessKeyTagV1::AccountRoleBinding,
-                    &acc.to_string(),
-                    &role.to_string(),
-                );
-                let v = Json::new(present).get().as_bytes().to_vec();
-                with_active_slot(|g| {
-                    g.reads.entry(k).or_insert(v);
-                });
-            }
-        }
-    }
-    if let Some(rest) = access_key.strip_prefix("role:") {
-        if let Ok(role) = iroha_data_model::role::RoleId::from_str(rest) {
-            let present = state_block.world.roles().get(&role).is_some();
-            let mut out = Vec::with_capacity(1 + rest.len());
-            out.push(ExecutionWitnessKeyTagV1::Role as u8);
-            out.extend_from_slice(rest.as_bytes());
+            )
+        {
+            let present = state_block
+                .world
+                .account_roles_iter(&acc)
+                .any(|r| r == &role);
+            let k = enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountRoleBinding,
+                &acc.to_string(),
+                &role.to_string(),
+            );
             let v = Json::new(present).get().as_bytes().to_vec();
             with_active_slot(|g| {
-                g.reads.entry(out).or_insert(v);
+                g.reads.entry(k).or_insert(v);
             });
         }
+    }
+    if let Some(rest) = access_key.strip_prefix("role:")
+        && let Ok(role) = iroha_data_model::role::RoleId::from_str(rest)
+    {
+        let present = state_block.world.roles().get(&role).is_some();
+        let mut out = Vec::with_capacity(1 + rest.len());
+        out.push(ExecutionWitnessKeyTagV1::Role as u8);
+        out.extend_from_slice(rest.as_bytes());
+        let v = Json::new(present).get().as_bytes().to_vec();
+        with_active_slot(|g| {
+            g.reads.entry(out).or_insert(v);
+        });
     }
     if let Some(rest) = access_key.strip_prefix("perm.account:") {
         // perm.account:{account}:{perm}
@@ -990,7 +993,11 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
     if let Some(rest) = access_key.strip_prefix("asset:")
         && let Ok(id) = iroha_data_model::asset::AssetId::parse_literal(rest)
     {
-        let pre = state_block.world.assets().get(&id).map(|v| v.as_ref());
+        let pre = state_block
+            .world
+            .assets()
+            .get(&id)
+            .map(std::convert::AsRef::as_ref);
         record_read_asset(&id, pre);
         // no further processing needed for asset access
     }

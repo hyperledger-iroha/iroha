@@ -1102,9 +1102,9 @@ impl Kura {
             if index
                 .seek(SeekFrom::Start(intent.index_write_offset))
                 .and_then(|_| index.write_all(&intent.new_index_bytes))
-                .and_then(|_| index.set_len(intent.new_index_len))
-                .and_then(|_| index.flush())
-                .and_then(|_| index.sync_data())
+                .and_then(|()| index.set_len(intent.new_index_len))
+                .and_then(|()| index.flush())
+                .and_then(|()| index.sync_data())
                 .is_err()
             {
                 return false;
@@ -1165,8 +1165,8 @@ impl Kura {
                     .and_then(|_| {
                         index_file.write_all(&SidecarIndexLayout::base_header(intent.height))
                     })
-                    .and_then(|_| index_file.set_len(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
-                    .and_then(|_| index_file.sync_data())
+                    .and_then(|()| index_file.set_len(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+                    .and_then(|()| index_file.sync_data())
                     .is_err()
                 {
                     return false;
@@ -1993,17 +1993,17 @@ impl Kura {
                 return false;
             }
         }
-        if let Some(parent) = main_path.parent() {
-            if let Err(err) = sync_sidecar_promotion_dir(parent) {
-                warn!(
-                    ?err,
-                    ?parent,
-                    kind,
-                    label,
-                    "failed to sync sidecar parent after temp promotion"
-                );
-                return false;
-            }
+        if let Some(parent) = main_path.parent()
+            && let Err(err) = sync_sidecar_promotion_dir(parent)
+        {
+            warn!(
+                ?err,
+                ?parent,
+                kind,
+                label,
+                "failed to sync sidecar parent after temp promotion"
+            );
+            return false;
         }
         true
     }
@@ -2506,31 +2506,32 @@ impl Kura {
                 return false;
             }
         };
-        let payload_len = match u64::try_from(payload.len()) {
-            Ok(len) => len,
-            Err(_) => {
-                iroha_logger::warn!(
-                    len = payload.len(),
-                    kind,
-                    "sidecar payload length exceeds u64"
-                );
-                return false;
-            }
+        let payload_len = if let Ok(len) = u64::try_from(payload.len()) {
+            len
+        } else {
+            iroha_logger::warn!(
+                len = payload.len(),
+                kind,
+                "sidecar payload length exceeds u64"
+            );
+            return false;
         };
         let Some(projected_data_len) = data_len.checked_add(payload_len) else {
             iroha_logger::warn!(data_len, payload_len, kind, "sidecar data length overflows");
             return false;
         };
         let temp_index_path = index_path.with_extension("index.prepend.tmp");
-        let remove_temp = || match namespace {
-            Some(namespace) => {
-                Self::remove_bound_progress_temp_if_present(namespace, &temp_index_path)
-            }
-            None => match std::fs::remove_file(&temp_index_path) {
-                Ok(()) => Ok(()),
-                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error),
-            },
+        let remove_temp = || {
+            namespace.map_or_else(
+                || match std::fs::remove_file(&temp_index_path) {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                    Err(error) => Err(error),
+                },
+                |namespace| {
+                    Self::remove_bound_progress_temp_if_present(namespace, &temp_index_path)
+                },
+            )
         };
         if let Err(err) = remove_temp() {
             iroha_logger::warn!(
@@ -2550,14 +2551,16 @@ impl Kura {
                 return false;
             }
         };
-        let mut temp_index = match match namespace {
-            Some(namespace) => Self::create_new_bound_progress_temp(namespace, &temp_index_path),
-            None => std::fs::OpenOptions::new()
-                .create_new(true)
-                .read(true)
-                .write(true)
-                .open(&temp_index_path),
-        } {
+        let mut temp_index = match namespace.map_or_else(
+            || {
+                std::fs::OpenOptions::new()
+                    .create_new(true)
+                    .read(true)
+                    .write(true)
+                    .open(&temp_index_path)
+            },
+            |namespace| Self::create_new_bound_progress_temp(namespace, &temp_index_path),
+        ) {
             Ok(file) => file,
             Err(err) => {
                 iroha_logger::warn!(
@@ -2626,7 +2629,7 @@ impl Kura {
         if let Err(err) = data
             .seek(SeekFrom::Start(data_len))
             .and_then(|_| data.write_all(payload))
-            .and_then(|_| data.flush())
+            .and_then(|()| data.flush())
         {
             iroha_logger::warn!(?err, ?data_path, kind, "failed to append sidecar payload");
             let _ = rollback_unindexed_sidecar_payload(&data, data_len, data_path, kind);
@@ -2650,61 +2653,64 @@ impl Kura {
             return false;
         }
         let mut index_was_published = false;
-        let promoted = if let Some(namespace) = namespace {
-            let temp_layout = temp_index.metadata().ok().and_then(|metadata| {
-                SidecarIndexLayout::read_from(&mut temp_index, metadata.len()).ok()
-            });
-            if temp_layout.is_some_and(|temp_layout| {
-                temp_layout.entry_count > 0
-                    && temp_layout.aligned_len == projected_index_len
-                    && Self::repair_unindexed_sidecar_tail(
-                        &data,
-                        &mut temp_index,
-                        temp_layout,
-                        data_path,
-                        &temp_index_path,
-                        kind,
-                    )
-            }) {
-                match Self::promote_bound_progress_temp(
-                    namespace,
+        let promoted = namespace.map_or_else(
+            || {
+                Self::sidecar_index_sane_with_label(
                     &temp_index_path,
-                    index_path,
-                    &temp_index,
-                ) {
-                    Ok(()) => {
-                        index_was_published = true;
-                        Self::sync_indexed_sidecar_bound_mutation(
+                    projected_data_len,
+                    kind,
+                    "prepend temp",
+                ) && Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "prepend index")
+            },
+            |namespace| {
+                let temp_layout = temp_index.metadata().ok().and_then(|metadata| {
+                    SidecarIndexLayout::read_from(&mut temp_index, metadata.len()).ok()
+                });
+                if temp_layout.is_some_and(|temp_layout| {
+                    temp_layout.entry_count > 0
+                        && temp_layout.aligned_len == projected_index_len
+                        && Self::repair_unindexed_sidecar_tail(
                             &data,
-                            &temp_index,
-                            namespace,
+                            &mut temp_index,
+                            temp_layout,
+                            data_path,
+                            &temp_index_path,
                             kind,
                         )
+                }) {
+                    match Self::promote_bound_progress_temp(
+                        namespace,
+                        &temp_index_path,
+                        index_path,
+                        &temp_index,
+                    ) {
+                        Ok(()) => {
+                            index_was_published = true;
+                            Self::sync_indexed_sidecar_bound_mutation(
+                                &data,
+                                &temp_index,
+                                namespace,
+                                kind,
+                            )
+                        }
+                        Err(error) => {
+                            index_was_published = error.published;
+                            iroha_logger::warn!(
+                                source = ?error.source,
+                                published = error.published,
+                                ?temp_index_path,
+                                ?index_path,
+                                kind,
+                                "failed to promote bound progress prepend index"
+                            );
+                            false
+                        }
                     }
-                    Err(error) => {
-                        index_was_published = error.published;
-                        iroha_logger::warn!(
-                            source = ?error.source,
-                            published = error.published,
-                            ?temp_index_path,
-                            ?index_path,
-                            kind,
-                            "failed to promote bound progress prepend index"
-                        );
-                        false
-                    }
+                } else {
+                    false
                 }
-            } else {
-                false
-            }
-        } else {
-            Self::sidecar_index_sane_with_label(
-                &temp_index_path,
-                projected_data_len,
-                kind,
-                "prepend temp",
-            ) && Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "prepend index")
-        };
+            },
+        );
         if !promoted {
             // Once rename publishes the new index, its new entry owns the
             // appended payload even if a later directory barrier fails. Keep
@@ -3106,7 +3112,14 @@ impl Kura {
             }
             .seal();
             return Self::execute_bound_progress_append(
-                data_path, index_path, payload, kind, namespace, intent, data, index,
+                data_path,
+                index_path,
+                payload,
+                kind,
+                namespace,
+                &(intent),
+                data,
+                index,
             );
         }
         if let Some(layout) = layout
@@ -3136,33 +3149,39 @@ impl Kura {
                 }
             };
             return Self::execute_bound_progress_append(
-                data_path, index_path, payload, kind, namespace, intent, data, index,
+                data_path,
+                index_path,
+                payload,
+                kind,
+                namespace,
+                &(intent),
+                data,
+                index,
             );
         }
         let mut new_index_bytes = Vec::new();
-        let (layout, index_write_offset) = match layout {
-            Some(layout) => (layout, old_index_len),
-            None => {
-                new_index_bytes
-                    .extend_from_slice(&SidecarIndexLayout::base_header(initial_base_height));
-                let layout = match SidecarIndexLayout::based(
-                    initial_base_height,
-                    INDEXED_SIDECAR_BASE_HEADER_SIZE_U64,
-                ) {
-                    Ok(layout) => layout,
-                    Err(reason) => {
-                        warn!(
-                            reason,
-                            height,
-                            ?index_path,
-                            kind,
-                            "invalid initial progress index base"
-                        );
-                        return false;
-                    }
-                };
-                (layout, 0)
-            }
+        let (layout, index_write_offset) = if let Some(layout) = layout {
+            (layout, old_index_len)
+        } else {
+            new_index_bytes
+                .extend_from_slice(&SidecarIndexLayout::base_header(initial_base_height));
+            let layout = match SidecarIndexLayout::based(
+                initial_base_height,
+                INDEXED_SIDECAR_BASE_HEADER_SIZE_U64,
+            ) {
+                Ok(layout) => layout,
+                Err(reason) => {
+                    warn!(
+                        reason,
+                        height,
+                        ?index_path,
+                        kind,
+                        "invalid initial progress index base"
+                    );
+                    return false;
+                }
+            };
+            (layout, 0)
         };
         let Some(expected_height) = layout.next_height() else {
             return false;
@@ -3244,7 +3263,14 @@ impl Kura {
         }
         .seal();
         Self::execute_bound_progress_append(
-            data_path, index_path, payload, kind, namespace, intent, data, index,
+            data_path,
+            index_path,
+            payload,
+            kind,
+            namespace,
+            &(intent),
+            data,
+            index,
         )
     }
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -3254,7 +3280,7 @@ impl Kura {
         payload: &[u8],
         kind: &str,
         namespace: &BoundProgressNamespace,
-        intent: BoundProgressAppendIntentV1,
+        intent: &BoundProgressAppendIntentV1,
         mut data: Option<std::fs::File>,
         mut index: Option<std::fs::File>,
     ) -> bool {
@@ -3363,8 +3389,8 @@ impl Kura {
         if let Err(error) = data
             .seek(SeekFrom::Start(intent.old_data_len))
             .and_then(|_| data.write_all(payload))
-            .and_then(|_| data.flush())
-            .and_then(|_| sync_bound_progress_append_data(data))
+            .and_then(|()| data.flush())
+            .and_then(|()| sync_bound_progress_append_data(data))
         {
             warn!(
                 ?error,
@@ -3377,9 +3403,9 @@ impl Kura {
         if let Err(error) = index
             .seek(SeekFrom::Start(intent.index_write_offset))
             .and_then(|_| index.write_all(&intent.new_index_bytes))
-            .and_then(|_| index.set_len(intent.new_index_len))
-            .and_then(|_| index.flush())
-            .and_then(|_| sync_bound_progress_append_index(index))
+            .and_then(|()| index.set_len(intent.new_index_len))
+            .and_then(|()| index.flush())
+            .and_then(|()| sync_bound_progress_append_index(index))
         {
             warn!(
                 ?error,
@@ -3623,18 +3649,17 @@ impl Kura {
         ) {
             return false;
         }
-        let expected_height = match layout.next_height() {
-            Some(height) => height,
-            None => {
-                iroha_logger::warn!(
-                    base_height = layout.base_height,
-                    entries = layout.entry_count,
-                    ?index_path,
-                    kind,
-                    "sidecar index height range overflows"
-                );
-                return false;
-            }
+        let expected_height = if let Some(height) = layout.next_height() {
+            height
+        } else {
+            iroha_logger::warn!(
+                base_height = layout.base_height,
+                entries = layout.entry_count,
+                ?index_path,
+                kind,
+                "sidecar index height range overflows"
+            );
+            return false;
         };
         if let Some(entry_pos) = layout.entry_position(height) {
             let mut entry_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
@@ -3729,16 +3754,16 @@ impl Kura {
                 }
                 drop(index);
                 drop(data);
-                if let Some(retention) = retention {
-                    if !Self::prune_indexed_sidecars_with_pinned_height(
+                if let Some(retention) = retention
+                    && !Self::prune_indexed_sidecars_with_pinned_height(
                         data_path,
                         index_path,
                         retention,
                         pinned_height,
                         kind,
-                    ) {
-                        return false;
-                    }
+                    )
+                {
+                    return false;
                 }
                 if should_sync
                     && namespace.is_none()
@@ -3773,12 +3798,10 @@ impl Kura {
                 let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
                 return false;
             }
-            if should_sync {
-                if let Err(err) = sync_indexed_sidecar_initial_data(&data) {
-                    iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
-                    let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
-                    return false;
-                }
+            if should_sync && let Err(err) = sync_indexed_sidecar_initial_data(&data) {
+                iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
+                let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
+                return false;
             }
             let new_entry = SidecarIndexEntry {
                 offset,
@@ -3800,16 +3823,16 @@ impl Kura {
             }
             drop(index);
             drop(data);
-            if let Some(retention) = retention {
-                if !Self::prune_indexed_sidecars_with_pinned_height(
+            if let Some(retention) = retention
+                && !Self::prune_indexed_sidecars_with_pinned_height(
                     data_path,
                     index_path,
                     retention,
                     pinned_height,
                     kind,
-                ) {
-                    return false;
-                }
+                )
+            {
+                return false;
             }
             if should_sync
                 && namespace.is_none()
@@ -3923,12 +3946,10 @@ impl Kura {
             let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
             return false;
         }
-        if should_sync {
-            if let Err(err) = sync_indexed_sidecar_initial_data(&data) {
-                iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
-                let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
-                return false;
-            }
+        if should_sync && let Err(err) = sync_indexed_sidecar_initial_data(&data) {
+            iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
+            let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
+            return false;
         }
         let entry = SidecarIndexEntry {
             offset,
@@ -3960,16 +3981,16 @@ impl Kura {
         }
         drop(index);
         drop(data);
-        if let Some(retention) = retention {
-            if !Self::prune_indexed_sidecars_with_pinned_height(
+        if let Some(retention) = retention
+            && !Self::prune_indexed_sidecars_with_pinned_height(
                 data_path,
                 index_path,
                 retention,
                 pinned_height,
                 kind,
-            ) {
-                return false;
-            }
+            )
+        {
+            return false;
         }
         if should_sync
             && namespace.is_none()
@@ -4277,19 +4298,18 @@ impl Kura {
             return None;
         };
         let data_len = data.metadata().ok()?.len();
-        let entry_end = match entry.offset.checked_add(entry.len) {
-            Some(end) => end,
-            None => {
-                iroha_logger::warn!(
-                    height,
-                    offset = entry.offset,
-                    len = entry.len,
-                    ?data_path,
-                    kind,
-                    "sidecar payload range overflows"
-                );
-                return None;
-            }
+        let entry_end = if let Some(end) = entry.offset.checked_add(entry.len) {
+            end
+        } else {
+            iroha_logger::warn!(
+                height,
+                offset = entry.offset,
+                len = entry.len,
+                ?data_path,
+                kind,
+                "sidecar payload range overflows"
+            );
+            return None;
         };
         if entry_end > data_len {
             iroha_logger::warn!(

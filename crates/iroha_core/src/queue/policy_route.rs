@@ -4,11 +4,11 @@ use super::*;
 
 /// A resolved physical policy lane; native ordering identifiers cannot construct it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PhysicalExecutionPolicyRoute(RoutingDecision);
+pub struct PhysicalExecutionPolicyRoute(RoutingDecision);
 
 /// Fixed-size retained refusal. Resolver-owned diagnostic strings never enter source rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PhysicalPolicyRouteRejection {
+pub enum PhysicalPolicyRouteRejection {
     /// Stable resolver classification; every label is a static closed-set value.
     Routing(&'static str),
     /// The current executor admits exactly one physical route.
@@ -57,7 +57,7 @@ impl PhysicalExecutionPolicyRoute {
         native: RoutingDecision,
     ) -> Result<Self, PhysicalPolicyRouteRejection> {
         if self.0.dataspace_id != native.dataspace_id {
-            return Err(PhysicalPolicyRouteRejection::DataspaceMismatch.into());
+            return Err(PhysicalPolicyRouteRejection::DataspaceMismatch);
         }
         Ok(self)
     }
@@ -322,7 +322,7 @@ mod tests {
         );
         assert_eq!(
             route.require_dataspace(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(1))),
-            Err(PhysicalPolicyRouteRejection::DataspaceMismatch.into())
+            Err(PhysicalPolicyRouteRejection::DataspaceMismatch)
         );
     }
 }

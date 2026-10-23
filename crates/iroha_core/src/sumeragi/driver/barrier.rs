@@ -250,7 +250,7 @@ mod tests {
             },
             Action::RecoverProposalAdmission {
                 req: 2,
-                body: block(1, Hash32::ZERO, Hash32::ZERO, vec![1]),
+                body: block(1, Hash32::ZERO, Hash32::ZERO, &vec![1]),
             },
             Action::PayloadRejected {
                 height: 1,
@@ -262,7 +262,7 @@ mod tests {
         for action in &exempt {
             assert!(!gated(action), "{action:?}");
         }
-        let effects = [
+        let effects = vec![
             send(1),
             Action::Broadcast {
                 to: vec![key.clone()],
@@ -328,7 +328,7 @@ mod tests {
     /// and a newer fetch of a body replaces the held one.
     #[test]
     fn held_effects_are_bounded() {
-        let b1 = block(1, Hash32::ZERO, Hash32::ZERO, vec![0; 1_000]);
+        let b1 = block(1, Hash32::ZERO, Hash32::ZERO, &vec![0; 1_000]);
         // Retained original payload and signed table both count, together with the
         // bounded control witness allowance. Two bodies fit; three must not.
         let retained_bytes = b1.payload().as_slice().len() as u64
@@ -368,7 +368,7 @@ mod tests {
         barrier.persisting(1);
         let response = |h: u64| Action::DisseminatePayload {
             peers: vec![PublicKey::new(vec![1; 32]).unwrap()],
-            body: block(h, Hash32::ZERO, Hash32::ZERO, vec![0; 1_000]),
+            body: block(h, Hash32::ZERO, Hash32::ZERO, &vec![0; 1_000]),
         };
         barrier.admit(commit.clone());
         barrier.admit(response(2));

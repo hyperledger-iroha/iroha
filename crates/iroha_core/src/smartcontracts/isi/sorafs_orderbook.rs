@@ -124,6 +124,10 @@ struct OrderbookPersistedEventV1 {
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_orderbook::OrderbookEventJournalHeadV1"
 )]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Canonical journal fields identify the last committed event and retain their serialized names"
+)]
 struct OrderbookEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -177,60 +181,57 @@ fn emit_orderbook_event(
     };
     let head = read_event_journal_head(state_transaction.world())?;
     ensure_no_event_after_head(state_transaction.world(), head)?;
-    let (sequence, event_index) = match head {
-        Some(head) => {
-            let sequence = head
-                .last_sequence
+    let (sequence, event_index) = if let Some(head) = head {
+        let sequence = head
+            .last_sequence
+            .checked_add(1)
+            .ok_or_else(|| corrupt_state("orderbook event sequence overflow"))?;
+        let event_index = match head.last_target_block_height.cmp(&target_block_height) {
+            core::cmp::Ordering::Less => 0,
+            core::cmp::Ordering::Equal => head
+                .last_event_index
                 .checked_add(1)
-                .ok_or_else(|| corrupt_state("orderbook event sequence overflow"))?;
-            let event_index = match head.last_target_block_height.cmp(&target_block_height) {
-                core::cmp::Ordering::Less => 0,
-                core::cmp::Ordering::Equal => head
-                    .last_event_index
-                    .checked_add(1)
-                    .ok_or_else(|| corrupt_state("orderbook event block index overflow"))?,
-                core::cmp::Ordering::Greater => {
-                    return Err(corrupt_state(
-                        "orderbook event target height regressed behind the journal head",
-                    ));
-                }
-            };
-            (sequence, event_index)
-        }
-        None => {
-            let policy = read_policy(state_transaction.world())?
-                .ok_or_else(|| corrupt_state("first orderbook event has no active policy"))?;
-            let status = read_status(state_transaction.world())?
-                .ok_or_else(|| corrupt_state("first orderbook event has no ledger status"))?;
-            let counters_empty = status.open_orders == 0
-                && status.partially_filled_orders == 0
-                && status.filled_orders == 0
-                && status.cancelled_orders == 0
-                && status.expired_orders == 0
-                && status.provider_revoked_orders == 0
-                && status.trades == 0
-                && status.settlement_receipts == 0
-                && status.settlement_channels == 0
-                && status.open_settlement_channels == 0
-                && status.book_revision == 0
-                && status.last_match_scan_book_revision == 0
-                && status.next_admission_sequence == 1
-                && status.next_trade_sequence == 1;
-            if kind != SorafsOrderbookLedgerEventKind::PolicyActivated
-                || order_id.is_some()
-                || trade_id.is_some()
-                || channel_id.is_some()
-                || receipt_id.is_some()
-                || provider_id.is_some()
-                || policy.policy.revision != 1
-                || !counters_empty
-            {
+                .ok_or_else(|| corrupt_state("orderbook event block index overflow"))?,
+            core::cmp::Ordering::Greater => {
                 return Err(corrupt_state(
-                    "orderbook event journal must begin with initial policy activation",
+                    "orderbook event target height regressed behind the journal head",
                 ));
             }
-            (1, 0)
+        };
+        (sequence, event_index)
+    } else {
+        let policy = read_policy(state_transaction.world())?
+            .ok_or_else(|| corrupt_state("first orderbook event has no active policy"))?;
+        let status = read_status(state_transaction.world())?
+            .ok_or_else(|| corrupt_state("first orderbook event has no ledger status"))?;
+        let counters_empty = status.open_orders == 0
+            && status.partially_filled_orders == 0
+            && status.filled_orders == 0
+            && status.cancelled_orders == 0
+            && status.expired_orders == 0
+            && status.provider_revoked_orders == 0
+            && status.trades == 0
+            && status.settlement_receipts == 0
+            && status.settlement_channels == 0
+            && status.open_settlement_channels == 0
+            && status.book_revision == 0
+            && status.last_match_scan_book_revision == 0
+            && status.next_admission_sequence == 1
+            && status.next_trade_sequence == 1;
+        if kind != SorafsOrderbookLedgerEventKind::PolicyActivated
+            || order_id.is_some()
+            || trade_id.is_some()
+            || channel_id.is_some()
+            || receipt_id.is_some()
+            || provider_id.is_some()
+            || policy.policy.revision != 1
+            || !counters_empty
+        {
+            return Err(corrupt_state(
+                "orderbook event journal must begin with initial policy activation",
+            ));
         }
+        (1, 0)
     };
     let key = event_key(sequence);
     if state_transaction
@@ -2035,7 +2036,7 @@ impl Execute for SubmitSorafsOrderbookOrder {
                 .ok_or_else(|| invalid_parameter("bid custody expiry overflow"))?;
             super::escrow::open_orderbook_order_asset_lock(
                 state_transaction,
-                binding.escrow_id.clone(),
+                binding.escrow_id,
                 &owner,
                 binding.asset_definition,
                 binding.initial_xor_locked.clone().into_quantity(),
@@ -4320,7 +4321,7 @@ mod tests {
         operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
     ) -> Result<(), InstructionExecutionError> {
         let header = block_header_at(height, now_unix);
-        let mut block = state.block(header.clone());
+        let mut block = state.block(header);
         // Local journal fixture only: retain a bounded direct execution slot before
         // custody changes. This World-only commit does not publish a Network carrier.
         let mut transaction = block.transaction_for_callback_testing();
@@ -4559,8 +4560,7 @@ mod tests {
             .world
             .assets
             .get(&AssetId::of(settlement_asset_definition(), account.clone()))
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone())
     }
     fn assert_no_receipt_status_mutation(state_transaction: &StateTransaction<'_, '_>) {
         let status = read_status(state_transaction.world())

@@ -145,7 +145,7 @@ fn execute_network(
             let Executable::Instructions(instructions) = signed.instructions() else {
                 unreachable!()
             };
-            for instruction in instructions.iter() {
+            for instruction in instructions {
                 instruction
                     .clone()
                     .execute(signed.authority(), transaction)

@@ -69,10 +69,7 @@ fn account(seed: u8) -> AccountId {
             .clone(),
     )
 }
-pub(crate) fn fixture(
-    now: u64,
-    test: impl FnOnce(&mut StateTransaction<'_, '_>, ValidationFeePolicyV1),
-) {
+pub fn fixture(now: u64, test: impl FnOnce(&mut StateTransaction<'_, '_>, ValidationFeePolicyV1)) {
     crate::validation_fee::tests::with_validation_fee_payout_invocation_at_time(
         200_000,
         now,
@@ -85,7 +82,7 @@ pub(crate) fn fixture(
         },
     );
 }
-pub(crate) fn fixture_block(
+pub fn fixture_block(
     now: u64,
     test: impl FnOnce(&mut crate::state::StateBlock<'_>, ValidationFeePolicyV1),
 ) {
@@ -1232,7 +1229,7 @@ fn original_idle_sweep_admits_exact_native_receipts_before_carrier_execution() {
     });
 }
 
-pub(crate) fn with_original_due_idle_wallet(
+pub fn with_original_due_idle_wallet(
     test: impl FnOnce(&mut crate::state::StateBlock<'_>, ValidationFeePolicyV1, AccountId),
 ) {
     fixture_block(START + 30 * 86_400_000, |block, policy| {
@@ -1703,7 +1700,7 @@ fn enrolled_privacy_reserve_maintenance_preserves_backing_and_ordinary_fee_colle
                 PrivacyCommitmentKeyV1::public_reserve_custody(owner.protocol_id(), &id).unwrap();
             if protected {
                 stx.world.privacy_commitments.insert(
-                    key.clone(),
+                    key,
                     PrivacyStateItemRecordV1::PublicReserveCustody {
                         reserve_asset_id: id.clone(),
                         owner,
@@ -1746,9 +1743,7 @@ fn malformed_exact_reserve_custody_refuses_fees_but_unrelated_rows_do_not() {
         let wrong = AssetId::new(policy.ds_asset_id.clone(), account(4));
         let malformed =
             PrivacyStateItemRecordV1::public_reserve_custody(wrong.clone(), owner).unwrap();
-        stx.world
-            .privacy_commitments
-            .insert(key.clone(), malformed.clone());
+        stx.world.privacy_commitments.insert(key, malformed.clone());
         let before = stx
             .world
             .smart_contract_state
@@ -1828,9 +1823,7 @@ fn payment_fee_rechecks_reserve_custody_installed_after_principal() {
             };
             let custody =
                 PrivacyStateItemRecordV1::public_reserve_custody(bound_id, owner).unwrap();
-            stx.world
-                .privacy_commitments
-                .insert(key.clone(), custody.clone());
+            stx.world.privacy_commitments.insert(key, custody.clone());
             let treasury = AssetId::new(
                 policy.ds_asset_id.clone(),
                 policy.treasury_account_id.clone(),
@@ -1897,10 +1890,7 @@ fn native_idle_sweep_preserves_enrolled_privacy_reserve_and_fee_evidence() {
         {
             let mut setup = block.transaction();
             seed(&mut setup, &policy, &wallet, 1000, 0, START);
-            setup
-                .world
-                .privacy_commitments
-                .insert(key.clone(), custody.clone());
+            setup.world.privacy_commitments.insert(key, custody.clone());
             setup.apply();
         }
         let native_before = block.native_maintenance_usage_for_testing();

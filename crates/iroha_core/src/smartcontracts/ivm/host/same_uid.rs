@@ -71,7 +71,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .query_state
             .get()
             .ok_or(ivm::VMError::NotImplemented { syscall })?;
-        let (equal, stats) = state.same_uid(
+        let (equal, execution_stats) = state.same_uid(
             &self.effect_authority(),
             context,
             &definition,
@@ -83,8 +83,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             vm,
             remaining,
             &context_gas,
-            stats.processed_items(),
-            stats.processed_bytes(),
+            execution_stats.processed_items(),
+            execution_stats.processed_bytes(),
             0,
         )?;
         // Bool is one canonical public word. No heap/TLV allocation and no queued effect.
@@ -153,13 +153,13 @@ mod tests {
             assert_eq!(vm.register(10), u64::from(expected));
             assert_eq!(vm.alloc_input_tlv(&[]).unwrap(), input);
             assert_eq!(vm.alloc_heap(0).unwrap(), heap);
-            let (_, stats) = f.read(tx.world(), &f.source, destination).unwrap();
+            let (_, execution_stats) = f.read(tx.world(), &f.source, destination).unwrap();
             assert_eq!(
                 gas,
                 CoreHost::query_gas_cost(
                     &QueryGasContext::singular(),
-                    stats.processed_items(),
-                    stats.processed_bytes()
+                    execution_stats.processed_items(),
+                    execution_stats.processed_bytes()
                 )
             );
             assert!(host.queued.is_empty());
@@ -248,11 +248,11 @@ mod tests {
             ivm::VMError::OutOfGas
         ));
     }
-    const SOURCE: &str = r#"seiyaku SameUid {
+    const SOURCE: &str = r"seiyaku SameUid {
         view fn same(AssetDefinitionId asset, AccountId source, AccountId destination) authorize(anyone) -> bool {
             ledger::asset::same_uid(asset_definition: asset, source: source, destination: destination)
         }
-    }"#;
+    }";
     struct Probe<QS: Default + QueryStateAccess> {
         inner: CoreHostImpl<QS>,
         before: std::cell::Cell<Option<u64>>,

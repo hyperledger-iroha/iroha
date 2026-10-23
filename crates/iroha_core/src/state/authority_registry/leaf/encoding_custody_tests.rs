@@ -82,6 +82,10 @@ impl norito::SerializePayload for Scripted {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn scripted_frame(
     value: &Scripted,
     bound: usize,

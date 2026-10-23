@@ -99,7 +99,7 @@ mod argument_refusal_tests {
             }
             // Fund the actual selector/JSON-encoding prefix, then refuse at the
             // canonical decoder. Earlier raw JSON-owner repairs are separate.
-            let (_, prefix) = with_decode_limits_measured(limits(usize::MAX), || {
+            let ((), prefix) = with_decode_limits_measured(limits(usize::MAX), || {
                 if matches!(route, Route::Metadata | Route::TriggerMetadata) {
                     requested_contract_address(&metadata).unwrap();
                     requested_contract_alias(&metadata).unwrap();
@@ -227,7 +227,7 @@ seiyaku DeferredArguments { permission Admin;
             iroha_data_model::smart_contract::ContractArtifactId::for_address(&address, code_hash)
                 .unwrap();
         let mut world = state.world.block();
-        world.contract_code.insert(artifact_id.clone(), program);
+        world.contract_code.insert(artifact_id, program);
         world.contract_manifests.insert(
             artifact_id,
             manifest
@@ -289,7 +289,7 @@ seiyaku DeferredArguments { permission Admin;
             // Measure the real admitted prefix of execute_resolved_contract_invocation.
             // Its earlier root/permission JSON decoders have separate owner follow-ons.
             // An argument-owner assertion below prevents an earlier refusal passing this test.
-            let (_, prefix) = with_decode_limits_measured(limits(usize::MAX), || {
+            let ((), prefix) = with_decode_limits_measured(limits(usize::MAX), || {
                 root_scope::ensure_contract_scope(&mut tx, &address).unwrap();
                 validate_prepared_ivm_execution_policy(&tx, &resolved.summary.metadata).unwrap();
                 let manifest = tx
@@ -347,8 +347,7 @@ seiyaku DeferredArguments { permission Admin;
                     &authority,
                     &invocation,
                     resolved,
-                    1_000_000,
-                    0,
+                    (1_000_000, 0),
                     None,
                 )
             };

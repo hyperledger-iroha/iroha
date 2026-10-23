@@ -104,7 +104,7 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     let oid = fixed[FIX_OID_QUERY];
     let value = disclosure.sub(subject).sub(oid);
     let live = row[BASE_D];
-    let half = A::from_base(F((GOLDILOCKS_MODULUS_V1 + 1) / 2));
+    let half = A::from_base(F(GOLDILOCKS_MODULUS_V1.div_ceil(2)));
     let oid_last = fixed[FIX_OID_OFFSET]
         .mul(fixed[FIX_OID_OFFSET].sub(A::ONE))
         .mul(half);

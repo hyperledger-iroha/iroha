@@ -50,7 +50,7 @@ pub(super) fn npos_genesis_parameters(npos: Option<SumeragiNposParameters>) -> V
 ///
 /// # Errors
 /// Any rejection other than the policy mismatch, with the failing execution outputs.
-pub(crate) fn staged_genesis_policies(
+pub fn staged_genesis_policies(
     genesis: SignedBlock,
     topology: &Topology,
     genesis_account: &AccountId,
@@ -111,7 +111,7 @@ pub(crate) fn staged_genesis_policies(
 ///
 /// # Errors
 /// The genesis cannot be built or signed, or original native execution rejects it.
-pub(crate) fn signed_genesis_fixture_for_state(
+pub fn signed_genesis_fixture_for_state(
     chain_id: &ChainId,
     genesis_key: &KeyPair,
     validators: &[(PeerId, Vec<u8>)],
@@ -131,10 +131,11 @@ pub(crate) fn signed_genesis_fixture_for_state(
         validators,
         instructions,
         npos_genesis_parameters(npos),
-        mode.into(),
-        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        genesis_time_ms,
-        std::num::NonZeroU64::MIN,
+        (
+            mode.into(),
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ),
+        (genesis_time_ms, std::num::NonZeroU64::MIN),
     )?;
     let account = AccountId::new(genesis_key.public_key().clone());
     let topology = Topology::new(

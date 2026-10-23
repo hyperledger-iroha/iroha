@@ -23,7 +23,7 @@ use super::{
 };
 
 fn original(tag: u8) -> AvailableBody {
-    block(1, Hash32::ZERO, Hash32::ZERO, vec![tag])
+    block(1, Hash32::ZERO, Hash32::ZERO, &vec![tag])
 }
 
 fn recover(
@@ -275,7 +275,7 @@ fn proposal_recovery_waits_for_applied_parent_and_cannot_enter_commit_overlay() 
     let mut scheduler = ExecSched::new(0, Backoff::default(), test_registrations());
     let parent = original(1);
     let result = Hash32([8; 32]);
-    let child = block(2, hash(&parent), result, vec![2]);
+    let child = block(2, hash(&parent), result, &vec![2]);
     scheduler.recover_proposal_admission(9, child.clone());
     assert!(scheduler.next(0).is_none());
     assert_eq!(scheduler.wakeup(), u64::MAX);

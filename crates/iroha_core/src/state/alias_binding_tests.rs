@@ -78,8 +78,7 @@ fn seed_trigger_domain_name_lease(
             .world
             .domains
             .get(domain_id)
-            .map(|domain| domain.owned_by().clone())
-            .unwrap_or_else(|| owner.clone());
+            .map_or_else(|| owner.clone(), |domain| domain.owned_by().clone());
         let address = iroha_data_model::account::AccountAddress::from_account_id(&domain_owner)
             .expect("domain owner address");
         let record = iroha_data_model::sns::NameRecordV1::new(

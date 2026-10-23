@@ -17,13 +17,13 @@ use super::{
 
 /// The rule identifiers of `specs/sumeragi.md` §16.4, in the order of its table. Every
 /// identifier is checked by this suite, and the suite reports no other.
-pub(crate) const RULES: [&str; 12] = [
+pub const RULES: [&str; 12] = [
     "K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K10", "K11", "K12",
 ];
 
 /// The first contract rule a candidate violates.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Violation {
+pub struct Violation {
     /// Rule identifier of the contract specification, one of [`RULES`].
     pub(crate) rule: &'static str,
     /// What was observed.
@@ -265,6 +265,10 @@ fn history_independence<C: KeyedStateCommitment>(
     Ok(())
 }
 
+type ContentVariant<'a> = (&'a str, &'static str, &'a [u8], Option<&'a [u8]>);
+type ModelEntry = ((&'static str, Vec<u8>), Vec<u8>);
+type StagedEntry = (&'static str, Vec<u8>, Option<Vec<u8>>);
+
 /// Contents that differ in one value, one table, one empty-valued entry or only in
 /// how the same bytes split into key and value have different roots (K3).
 fn content_binding<C: KeyedStateCommitment>(
@@ -272,7 +276,7 @@ fn content_binding<C: KeyedStateCommitment>(
     model: &Model,
 ) -> Result<(), Violation> {
     let base: C = build(schema, model)?;
-    let variants: [(&str, &'static str, &[u8], Option<&[u8]>); 5] = [
+    let variants: [ContentVariant<'_>; 5] = [
         ("one replaced value", TABLE_A, b"a", Some(b"9")),
         ("one value emptied", TABLE_A, b"a", Some(b"")),
         ("one removed entry", TABLE_A, b"a", None),
@@ -1026,11 +1030,10 @@ fn incremental_equals_cold<C: KeyedStateCommitment>(
     let mut workload = Workload(0x9e37_79b9_7f4a_7c15);
     let mut model = base.clone();
     let mut incremental: C = build(schema, &model)?;
-    let mut roots: BTreeMap<Vec<((&'static str, Vec<u8>), Vec<u8>)>, KeyedStateRoot> =
-        BTreeMap::new();
+    let mut roots: BTreeMap<Vec<ModelEntry>, KeyedStateRoot> = BTreeMap::new();
     for round in 0..ROUNDS {
         let mut touched = BTreeSet::new();
-        let mut staged: Vec<(&'static str, Vec<u8>, Option<Vec<u8>>)> = Vec::new();
+        let mut staged: Vec<StagedEntry> = Vec::new();
         for _ in 0..=workload.next(6) {
             let (table, key) = if workload.next(8) == 0 {
                 (CELL, CELL_KEY.to_vec())
@@ -1155,7 +1158,7 @@ fn incremental_equals_cold<C: KeyedStateCommitment>(
 ///
 /// # Errors
 /// The first violated rule, with the observation that violates it.
-pub(crate) fn check_contract<C: KeyedStateCommitment>() -> Result<(), Violation> {
+pub fn check_contract<C: KeyedStateCommitment>() -> Result<(), Violation> {
     let schema = schema();
     let model = base_model();
     schema_binding::<C>()?;

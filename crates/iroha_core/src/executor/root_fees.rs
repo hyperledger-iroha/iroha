@@ -61,7 +61,7 @@ pub(super) fn effective(
 ///
 /// # Errors
 /// Initial genesis must install its explicit root fee policy before using sponsor custody.
-pub(crate) fn sponsor_vault_custody<'a>(
+pub fn sponsor_vault_custody<'a>(
     state_transaction: &'a StateTransaction<'_, '_>,
 ) -> Result<&'a AccountId, InstructionExecutionError> {
     let policy = if is_initial_genesis_context(state_transaction) {
@@ -82,7 +82,7 @@ pub(crate) fn sponsor_vault_custody<'a>(
 
 /// Validate the complete committed policy for executed-genesis schedule admission.
 /// This borrows the existing projection; it never decodes parameters or selects local defaults.
-pub(crate) fn validate_committed(
+pub fn validate_committed(
     world: &impl WorldReadOnly,
 ) -> Result<(), ExecutionAttemptError<NexusFeeAdmissionError>> {
     let policy = world
@@ -824,8 +824,16 @@ mod tests {
         tx.tx_call_hash = Some(Hash::from(transaction.hash_as_entrypoint()));
         tx.current_lane_id = Some(iroha_model_base::topology::LaneId::SINGLE);
         let tx_bytes_len = norito::canonical_frame_len(transaction.payload()).unwrap();
-        Executor::charge_nexus_fees(&mut tx, &ALICE_ID, &transaction, None, tx_bytes_len, 1, 1)
-            .unwrap();
+        Executor::charge_nexus_fees(
+            &mut tx,
+            &ALICE_ID,
+            &transaction,
+            &(None),
+            tx_bytes_len,
+            1,
+            1,
+        )
+        .unwrap();
         let scoped = AssetId::with_scope(
             asset.clone(),
             ALICE_ID.clone(),

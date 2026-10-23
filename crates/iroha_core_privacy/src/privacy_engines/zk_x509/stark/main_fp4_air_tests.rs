@@ -184,7 +184,7 @@ fn scalar_bus_fp4_capability_binds_all_five_local_terminal_columns() {
         };
         let mut input = rows(registration);
         let original = evaluator
-            .evaluate_residues_v1(opening(&input), &input[4], challenges)
+            .evaluate_residues_v1(opening(&input), &input[4], &challenges)
             .unwrap();
         assert_eq!(original.len(), registration.segment.constraint_count);
         let identity = p256_main_registration_from_main_layout_v1(registration).unwrap();
@@ -194,14 +194,14 @@ fn scalar_bus_fp4_capability_binds_all_five_local_terminal_columns() {
                 input[2][column] = value.add(E::ONE);
                 assert_ne!(
                     evaluator
-                        .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                        .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                         .unwrap(),
                     original
                 );
                 input[2][column] = E::noncanonical_fixture_v1();
                 assert!(
                     evaluator
-                        .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                        .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                         .is_err()
                 );
                 input[2][column] = value;
@@ -210,7 +210,7 @@ fn scalar_bus_fp4_capability_binds_all_five_local_terminal_columns() {
         input[0].pop();
         assert!(
             evaluator
-                .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                 .is_err()
         );
         count += 1;
@@ -290,7 +290,7 @@ fn binding_sink_fp4_capability_binds_each_private_terminal_column() {
         };
         let mut input = rows(registration);
         let original = evaluator
-            .evaluate_residues_v1(opening(&input), &input[4], challenges)
+            .evaluate_residues_v1(opening(&input), &input[4], &challenges)
             .unwrap();
         assert_eq!(original.len(), registration.segment.constraint_count);
         let identity = p256_main_registration_from_main_layout_v1(registration).unwrap();
@@ -300,14 +300,14 @@ fn binding_sink_fp4_capability_binds_each_private_terminal_column() {
                 input[2][column] = value.add(E::ONE);
                 assert_ne!(
                     evaluator
-                        .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                        .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                         .unwrap(),
                     original
                 );
                 input[2][column] = E::noncanonical_fixture_v1();
                 assert!(
                     evaluator
-                        .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                        .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                         .is_err()
                 );
                 input[2][column] = value;
@@ -316,7 +316,7 @@ fn binding_sink_fp4_capability_binds_each_private_terminal_column() {
         input[0].pop();
         assert!(
             evaluator
-                .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                 .is_err()
         );
         count += 1;
@@ -343,7 +343,7 @@ fn main_comparison_fp4_residues_match_independent_base_polynomial_lifting() {
         };
         let rows = rows(registration);
         let actual = evaluator
-            .evaluate_residues_v1(opening(&rows), &rows[4], challenges)
+            .evaluate_residues_v1(opening(&rows), &rows[4], &challenges)
             .unwrap();
         assert_eq!(actual.len(), registration.segment.constraint_count);
         // Degree <=4 INCLUDING fixed selectors. Each cell is a cubic in w,
@@ -364,7 +364,7 @@ fn main_comparison_fp4_residues_match_independent_base_polynomial_lifting() {
                     .collect::<Vec<_>>()
             });
             let base =
-                p256_opened_residues_v1(registration, opening(&lifted), &lifted[4], challenges)
+                p256_opened_residues_v1(registration, opening(&lifted), &lifted[4], &challenges)
                     .unwrap();
             let mut numerator = E::ONE;
             let mut denominator = F::ONE;
@@ -412,7 +412,7 @@ fn main_comparison_fp4_residues_match_independent_base_polynomial_lifting() {
                     .map(|row| row.iter().copied().map(E::from_base).collect());
                 assert_eq!(
                     evaluator
-                        .evaluate_residues_v1(opening(&embedded), &embedded[4], challenges)
+                        .evaluate_residues_v1(opening(&embedded), &embedded[4], &challenges)
                         .unwrap(),
                     base.into_iter().map(E::from_base).collect::<Vec<_>>()
                 );
@@ -449,7 +449,7 @@ fn main_comparison_fp4_binds_private_terminal_columns_and_rejects_malformed_inpu
         };
         let mut input = rows(registration);
         let original = evaluator
-            .evaluate_residues_v1(opening(&input), &input[4], challenges)
+            .evaluate_residues_v1(opening(&input), &input[4], &challenges)
             .unwrap();
         assert_eq!(original.len(), registration.segment.constraint_count);
         let identity = p256_main_registration_from_main_layout_v1(registration).unwrap();
@@ -459,14 +459,14 @@ fn main_comparison_fp4_binds_private_terminal_columns_and_rejects_malformed_inpu
                 input[2][column] = value.add(E::ONE);
                 assert_ne!(
                     evaluator
-                        .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                        .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                         .unwrap(),
                     original
                 );
                 input[2][column] = E::noncanonical_fixture_v1();
                 assert!(
                     evaluator
-                        .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                        .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                         .is_err()
                 );
                 input[2][column] = value;
@@ -475,7 +475,7 @@ fn main_comparison_fp4_binds_private_terminal_columns_and_rejects_malformed_inpu
         input[0].pop();
         assert!(
             evaluator
-                .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                 .is_err()
         );
         count += 1;
@@ -505,7 +505,7 @@ fn arithmetic_fp4_capability_binds_five_private_terminal_columns() {
         };
         let mut input = rows(registration);
         let original = evaluator
-            .evaluate_residues_v1(opening(&input), &input[4], challenges)
+            .evaluate_residues_v1(opening(&input), &input[4], &challenges)
             .unwrap();
         assert_eq!(original.len(), registration.segment.constraint_count);
         let identity = p256_main_registration_from_main_layout_v1(registration).unwrap();
@@ -515,14 +515,14 @@ fn arithmetic_fp4_capability_binds_five_private_terminal_columns() {
                 input[2][column] = value.add(E::ONE);
                 assert_ne!(
                     evaluator
-                        .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                        .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                         .unwrap(),
                     original
                 );
                 input[2][column] = E::noncanonical_fixture_v1();
                 assert!(
                     evaluator
-                        .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                        .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                         .is_err()
                 );
                 input[2][column] = value;
@@ -531,7 +531,7 @@ fn arithmetic_fp4_capability_binds_five_private_terminal_columns() {
         input[0].pop();
         assert!(
             evaluator
-                .evaluate_residues_v1(opening(&input), &input[4], challenges)
+                .evaluate_residues_v1(opening(&input), &input[4], &challenges)
                 .is_err()
         );
         count += 1;
@@ -573,13 +573,13 @@ fn der_and_rfc_fp4_capabilities_require_complete_registered_openings() {
                     .map(|&value| value.add(E::ONE))
                     .collect::<Vec<_>>();
                 let actual = evaluator
-                    .evaluate_residues_v1(opening(&input), &input[4], &next_fixed, der_context())
+                    .evaluate_residues_v1(opening(&input), &input[4], &next_fixed, &der_context())
                     .unwrap();
                 assert_eq!(actual.len(), registration.segment.constraint_count);
                 assert_ne!(
                     actual,
                     evaluator
-                        .evaluate_residues_v1(opening(&input), &input[4], &input[4], der_context())
+                        .evaluate_residues_v1(opening(&input), &input[4], &input[4], &der_context())
                         .unwrap()
                 );
                 assert!(
@@ -588,7 +588,7 @@ fn der_and_rfc_fp4_capabilities_require_complete_registered_openings() {
                             opening(&input),
                             &input[4],
                             &next_fixed[1..],
-                            der_context()
+                            &der_context()
                         )
                         .is_err()
                 );
@@ -597,7 +597,7 @@ fn der_and_rfc_fp4_capabilities_require_complete_registered_openings() {
             MainFp4AirEvaluatorV1::Rfc5280(evaluator) => {
                 assert_eq!(
                     evaluator
-                        .evaluate_residues_v1(opening(&input), &input[4], rfc_context())
+                        .evaluate_residues_v1(opening(&input), &input[4], &rfc_context())
                         .unwrap()
                         .len(),
                     registration.segment.constraint_count
@@ -606,7 +606,7 @@ fn der_and_rfc_fp4_capabilities_require_complete_registered_openings() {
                 malformed[2].pop();
                 assert!(
                     evaluator
-                        .evaluate_residues_v1(opening(&malformed), &malformed[4], rfc_context())
+                        .evaluate_residues_v1(opening(&malformed), &malformed[4], &rfc_context())
                         .is_err()
                 );
                 counts[1] += 1;

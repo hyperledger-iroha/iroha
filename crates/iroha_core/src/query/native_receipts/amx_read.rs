@@ -84,6 +84,10 @@ impl From<WriteDecodeError> for NativeAmxRecordProofErrorV1 {
 
 /// Bounded acquisition is distinct from authenticated absence or a completed proof.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The completed variant transfers the original funded relay or proof graph without an additional uncharged allocation"
+)]
 pub enum NativeAmxRecordProofPollV1 {
     /// The original descriptor acquired at most one 4096-byte prefix.
     Pending,
@@ -121,6 +125,10 @@ struct Projection {
 
 // The sole proof engine has no State reference. Its carrier is issued only by the existing
 // CertifiedChain reader; its descriptor, charged frame and all later stages move unchanged.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The completed variant transfers the original funded relay or proof graph without an additional uncharged allocation"
+)]
 enum PortableProof {
     Unbuilt,
     Completed(Option<AllocatedAmxRecordProofV1>),
@@ -231,7 +239,7 @@ impl NativeAmxRecordProofOwnedV1 {
         )
     }
 
-    /// Deliver the original proof or authenticated absence once, without a StateView borrow.
+    /// Deliver the original proof or authenticated absence once, without a `StateView` borrow.
     ///
     /// # Errors
     /// Original source/resource refusal; the mutable owner retains all unfinished stages.
@@ -362,7 +370,7 @@ impl<'v, V: StateReadOnly> NativeAmxRecordProofReadV1<'v, V> {
     /// extra read occurs if the caller already acquired a partial prefix, full frame, witness
     /// or portable proof. On refusal this reader retains its exact acquisition; retry does not
     /// construct a new source. Success retires this borrowed wrapper, which may then be dropped
-    /// under its existing caller scope before its StateView. Its completed prefix verifier stays
+    /// under its existing caller scope before its `StateView`. Its completed prefix verifier stays
     /// here until that normal drop: detachment does not refund prefix/genesis owners while the
     /// original State borrow is still live. In tests only, an armed borrowed portable probe prevents detach
     /// until it fires; a borrowed callback never escapes into an independent owner.

@@ -52,8 +52,10 @@ fn bind(
         state,
         round,
         NativeCustodyCheckRefV1::FinalPromotionAccount(instruction),
-        state.view().chain_id().as_ref(),
-        *state.network_id_ref().as_bytes(),
+        (
+            state.view().chain_id().as_ref(),
+            *state.network_id_ref().as_bytes(),
+        ),
         &AccountId::new(key(2).public_key().clone()),
         floor(),
         signed,
@@ -62,6 +64,10 @@ fn bind(
 
 // Existing closed-purpose tests borrow their independent fixture inputs. The production binder
 // still owns its signed attempt; no production wrapper exposes this fixture-only projection.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "The fixture implements the same fallible scope callback used by production signer-check binding"
+)]
 fn test_scope<'a>(scope: &'a mut BindingScope<'_>) -> Result<BindingScope<'a>, Error> {
     Ok(BindingScope {
         state: scope.state,
@@ -77,8 +83,7 @@ fn bind_fixture(
     state: &State,
     round: &mut NativeCheckRoundV1,
     instruction: NativeCustodyCheckRefV1<'_>,
-    chain_id: &str,
-    network_id: [u8; 32],
+    (chain_id, network_id): (&str, [u8; 32]),
     authority: &AccountId,
     floor: NativeCheckFloorV1,
     signed: SignedTransaction,

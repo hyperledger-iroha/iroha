@@ -207,7 +207,7 @@ pub fn insert_proof_record_for_test(
     let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    stx.world.insert_proof_record(rec);
+    stx.world.insert_proof_record(&(rec));
     stx.apply();
     block
         .commit_world_overlay_for_testing()

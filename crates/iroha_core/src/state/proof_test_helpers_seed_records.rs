@@ -476,7 +476,7 @@ state_test! { sync constrained_pipeline_transaction_trigger_ignores_near_miss_ev
     let wanted_height = block1.as_ref().header().height();
     let trigger_id: TriggerId = "pipeline_tx_constrained".parse().unwrap();
     let key: Name = "pipeline_tx_constrained".parse().unwrap();
-    let_row! { action = Action::new( vec![InstructionBox::from(SetKeyValue::account( ALICE_ID.clone(), key.clone(), Json::from(norito::json!("matched")), ))], Repeats::Exactly(1), ALICE_ID.clone(), PipelineEventFilterBox::from( TransactionEventFilter::new() .for_hash(wanted_hash.clone()) .for_block_height(Some(wanted_height)) .for_lane_id(LaneId::SINGLE) .for_dataspace_id(DataSpaceId::UNIVERSAL) .for_status(TransactionStatus::Approved), ), ) .expect("trigger action fixture satisfies validation invariants") };
+    let_row! { action = Action::new( vec![InstructionBox::from(SetKeyValue::account( ALICE_ID.clone(), key.clone(), Json::from(norito::json!("matched")), ))], Repeats::Exactly(1), ALICE_ID.clone(), PipelineEventFilterBox::from( TransactionEventFilter::new() .for_hash(wanted_hash) .for_block_height(Some(wanted_height)) .for_lane_id(LaneId::SINGLE) .for_dataspace_id(DataSpaceId::UNIVERSAL) .for_status(TransactionStatus::Approved), ), ) .expect("trigger action fixture satisfies validation invariants") };
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();

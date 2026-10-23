@@ -290,7 +290,7 @@ fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
             "the rejected transaction must contain a successful custody write"
         );
         let unauthorized_bond = BondPublicLaneStake {
-            monetary_plan: fixture_bond_plan(&stx, lane, &validator, &delegator, &Quantity::one()),
+            monetary_plan: fixture_bond_plan(&stx, lane, &validator, &delegator, Quantity::one()),
             lane_id: lane,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -689,7 +689,7 @@ fn participant_exit_and_unbonds_keep_reserved_custody_until_liability_ends() {
             lane_id,
             &(validator.clone()),
             &(delegator.clone()),
-            &(100_u64.into()),
+            Quantity::from(100_u64),
         ),
         lane_id,
         validator: validator.clone(),

@@ -547,14 +547,13 @@ fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<
             _ => return false,
         }
     }
-    if let Some(tag) = selector.capability_tag.as_deref() {
-        if !ctx
+    if let Some(tag) = selector.capability_tag.as_deref()
+        && !ctx
             .capability_tags
             .iter()
             .any(|capability| capability == tag)
-        {
-            return false;
-        }
+    {
+        return false;
     }
     if !selector.privacy_commitments_any_of.is_empty() {
         let has_verified = selector

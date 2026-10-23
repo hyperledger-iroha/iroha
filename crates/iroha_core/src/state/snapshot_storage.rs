@@ -19,7 +19,7 @@ pub(super) fn manifest_set_matches_key(
 
 /// Mandatory current/undo envelope; first-release snapshots have one wire shape.
 #[derive(JsonSerialize, JsonDeserialize)]
-pub(crate) struct SnapshotStorage {
+pub struct SnapshotStorage {
     revert: Vec<SnapshotStorageUndo>,
     blocks: Vec<SnapshotStorageEntry>,
 }
@@ -73,11 +73,7 @@ fn serialize_maps<'a, K: mv::Key + Encode, V: mv::Value + Encode>(
 }
 
 /// Encode borrowed MV maps under the caller's State publication generation fence.
-pub(crate) fn serialize<
-    K: mv::Key + Encode,
-    V: mv::Value + Encode,
-    M: mv::storage::StorageMode<K, V>,
->(
+pub fn serialize<K: mv::Key + Encode, V: mv::Value + Encode, M: mv::storage::StorageMode<K, V>>(
     store: &Storage<K, V, M>,
     out: &mut String,
 ) {
@@ -87,7 +83,7 @@ pub(crate) fn serialize<
 
 /// Encode the exact staged post-commit maps without losing their original undo.
 #[cfg(test)]
-pub(crate) fn serialize_block<
+pub fn serialize_block<
     K: mv::Key + Encode,
     V: mv::Value + Encode,
     M: mv::storage::StorageMode<K, V>,

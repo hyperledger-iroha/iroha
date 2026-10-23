@@ -13,7 +13,7 @@ use iroha_data_model::sccp::generation::SccpAnchorV1;
 
 /// Consensus and liability facts borrowed from the same original World cut.
 /// Returned records borrow the retained source, not this lightweight adapter.
-pub(crate) trait OriginalRead<'a>: EligibilityRead + Copy {
+pub trait OriginalRead<'a>: EligibilityRead + Copy {
     /// Original selected generation.
     fn committee_current(self) -> u64;
     /// Original SCCP liability clock before S0 advances it.

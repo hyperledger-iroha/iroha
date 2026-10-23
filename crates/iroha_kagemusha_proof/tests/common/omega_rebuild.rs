@@ -197,7 +197,7 @@ fn bootstrap_omega_rebuild(compare_rebuild: bool) {
     let bound = seal.bind(&binding, &verifier, None).unwrap();
     assert!(core::ptr::eq(bound.binding(), &raw const binding));
     assert!(core::ptr::eq(bound.verifying_key(), &raw const verifier));
-    let compared_proofs = if let Some(circuit) = comparison_circuit.as_ref() {
+    let compared_proofs = comparison_circuit.as_ref().map_or(0, |circuit| {
         rebuild_measurement::compare(
             "bootstrap_omega_compact_k16",
             &params,
@@ -216,9 +216,7 @@ fn bootstrap_omega_rebuild(compare_rebuild: bool) {
                     .unwrap();
             },
         )
-    } else {
-        0
-    };
+    });
     drop(comparison_circuit);
     let owner =
         iroha_kagemusha_proof::omega::native::ProverView::from_source_bound(&program, bound)

@@ -145,7 +145,7 @@ fn fq_inverse_round_trip() {
 fn fq_new_reduces_large_inputs() {
     let value = u64::MAX;
     let reduced = Fq::new(value);
-    let expected = Fq::from_canonical_u64(((value as u128) % MOD_P) as u64).unwrap();
+    let expected = Fq::from_canonical_u64((u128::from(value) % MOD_P) as u64).unwrap();
     assert_eq!(reduced, expected);
 }
 #[test]
@@ -324,8 +324,8 @@ fn air_composition_root_uses_its_own_role_for_every_tree_level() {
         merkle_arity: 2,
         domain_tag: "iroha:test:air-composition-root-role".to_owned(),
     };
-    for domain in [1, 2, 16] {
-        let values = (0..domain).map(|value| value as u64).collect::<Vec<_>>();
+    for domain in [1_u64, 2, 16] {
+        let values = (0..domain).collect::<Vec<_>>();
         let fields = values.iter().copied().map(Fq::new).collect::<Vec<_>>();
         let expected =
             merkle_levels_from_values(&params, &fields, StarkMerkleDomainV1::air_composition())
@@ -532,6 +532,7 @@ fn six_lane_digest_rejects_noncanonical_field_words() {
 #[test]
 fn stark_fri_canonical_verifying_key_payload_validation_fails_closed() {
     const CIRCUIT_ID: &str = "soracloud:test-canonical-circuit";
+    type PayloadMutation = (&'static str, fn(&mut StarkFriVerifyingKeyV1));
     let valid = StarkFriVerifyingKeyV1 {
         version: 1,
         circuit_id: CIRCUIT_ID.to_owned(),
@@ -543,7 +544,7 @@ fn stark_fri_canonical_verifying_key_payload_validation_fails_closed() {
     };
     validate_stark_fri_canonical_verifying_key_payload(&valid, CIRCUIT_ID, "test")
         .expect("canonical STARK/FRI payload is accepted");
-    let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 10] = [
+    let mutations: [PayloadMutation; 10] = [
         ("version", |payload: &mut StarkFriVerifyingKeyV1| {
             payload.version = 2
         }),
@@ -572,7 +573,8 @@ fn stark_fri_canonical_verifying_key_payload_validation_fails_closed() {
             payload.n_log2 = MAX_DOMAIN_LOG2 + 1;
         }),
         ("query_limit", |payload: &mut StarkFriVerifyingKeyV1| {
-            payload.queries = MAX_FRI_QUERIES as u16 + 1;
+            payload.queries =
+                u16::try_from(MAX_FRI_QUERIES).expect("native query cap fits u16") + 1;
         }),
     ];
     for (label, mutate) in mutations {
@@ -616,9 +618,7 @@ fn generic_binding_verifying_key_rejects_domain_above_exact_root_cap() {
     let error = validate_stark_fri_canonical_verifying_key_payload(&payload, circuit_id, "test")
         .expect_err("oversized generic Binding verifier key must fail admission");
     assert!(
-        error
-            .to_string()
-            .contains("exact trace-root reconstruction limit"),
+        error.contains("exact trace-root reconstruction limit"),
         "unexpected generic Binding verifier-key error: {error}"
     );
 }
@@ -640,11 +640,7 @@ fn ivm_binding_verifying_key_is_unavailable_without_complete_relation() {
     };
     let error = validate_stark_fri_canonical_verifying_key_payload(&payload, &circuit_id, "test")
         .expect_err("binding-only IVM verifier key must fail admission");
-    assert!(
-        error
-            .to_string()
-            .contains("complete native STARK verification")
-    );
+    assert!(error.contains("complete native STARK verification"));
 }
 /// The length predicate of the envelope bound, which the verifier calls before it decodes
 /// a byte: the bound is inclusive, and a caller can lower it but not raise it above
@@ -659,13 +655,17 @@ fn stark_envelope_length_predicate_admits_exactly_the_bound_and_refuses_one_byte
     assert!(envelope_exceeds_limit(MAX_ENVELOPE_BYTES + 1, &limits));
     assert!(!envelope_exceeds_limit(0, &limits));
 
-    let mut lowered = StarkVerifierLimits::default();
-    lowered.max_envelope_bytes = 4096;
+    let lowered = StarkVerifierLimits {
+        max_envelope_bytes: 4096,
+        ..StarkVerifierLimits::default()
+    };
     assert!(!envelope_exceeds_limit(4096, &lowered));
     assert!(envelope_exceeds_limit(4097, &lowered));
 
-    let mut raised = StarkVerifierLimits::default();
-    raised.max_envelope_bytes = MAX_ENVELOPE_BYTES + 1;
+    let raised = StarkVerifierLimits {
+        max_envelope_bytes: MAX_ENVELOPE_BYTES + 1,
+        ..StarkVerifierLimits::default()
+    };
     assert!(!envelope_exceeds_limit(MAX_ENVELOPE_BYTES, &raised));
     assert!(
         envelope_exceeds_limit(MAX_ENVELOPE_BYTES + 1, &raised),
@@ -728,16 +728,18 @@ fn stark_verifier_limits_cannot_relax_canonical_structure_caps() {
         validate_params(&valid, 5, 2, &StarkVerifierLimits::default()),
         Some(4)
     );
-    let mut relaxed = StarkVerifierLimits::default();
-    relaxed.max_domain_log2 = MAX_DOMAIN_LOG2 + 1;
-    relaxed.max_blowup_log2 = MAX_DOMAIN_LOG2 + 1;
-    relaxed.max_queries = MAX_FRI_QUERIES + 1;
-    relaxed.max_merkle_depth = MAX_MERKLE_DEPTH + 1;
-    relaxed.max_aux_terms = MAX_AUX_TERMS + 1;
-    relaxed.max_air_width = MAX_AIR_WIDTH + 1;
-    relaxed.max_domain_tag_len = MAX_DOMAIN_TAG_LEN + 1;
-    relaxed.max_transcript_label_len = MAX_TRANSCRIPT_LABEL_LEN + 1;
-    relaxed.max_envelope_bytes = MAX_ENVELOPE_BYTES + 1;
+    let relaxed = StarkVerifierLimits {
+        max_domain_log2: MAX_DOMAIN_LOG2 + 1,
+        max_blowup_log2: MAX_DOMAIN_LOG2 + 1,
+        max_queries: MAX_FRI_QUERIES + 1,
+        max_merkle_depth: MAX_MERKLE_DEPTH + 1,
+        max_aux_terms: MAX_AUX_TERMS + 1,
+        max_air_width: MAX_AIR_WIDTH + 1,
+        max_domain_tag_len: MAX_DOMAIN_TAG_LEN + 1,
+        max_transcript_label_len: MAX_TRANSCRIPT_LABEL_LEN + 1,
+        max_envelope_bytes: MAX_ENVELOPE_BYTES + 1,
+        ..StarkVerifierLimits::default()
+    };
     let mut oversized_domain = valid.clone();
     oversized_domain.n_log2 = MAX_DOMAIN_LOG2 + 1;
     oversized_domain.queries = 1;
@@ -765,7 +767,8 @@ fn stark_verifier_limits_cannot_relax_canonical_structure_caps() {
     );
     let mut too_many_queries = valid.clone();
     too_many_queries.n_log2 = 6;
-    too_many_queries.queries = (MAX_FRI_QUERIES + 1) as u16;
+    too_many_queries.queries =
+        u16::try_from(MAX_FRI_QUERIES + 1).expect("oversized query fixture fits u16");
     assert!(
         validate_params(&too_many_queries, 7, MAX_FRI_QUERIES + 1, &relaxed).is_none(),
         "caller limits must not relax canonical query count"
@@ -1443,7 +1446,7 @@ fn generic_binding_air_reserves_governance_vote_role_aliases() {
             let err = validate_generic_stark_air_circuit_id(&circuit_id)
                 .expect_err("governance vote roles must be reserved from generic AIR");
             assert!(
-                err.to_string().contains("governance vote role"),
+                err.contains("governance vote role"),
                 "unexpected governance role rejection for {circuit_id}: {err}"
             );
             let air = StarkAirProofV1 {
@@ -1496,8 +1499,7 @@ fn generic_air_circuit_classifier_reserves_every_soracloud_fhe_relation_alias() 
             let err = validate_generic_stark_air_circuit_id(&circuit_id)
                 .expect_err("Soracloud FHE relation must be reserved from generic AIR");
             assert!(
-                err.to_string().contains("Soracloud")
-                    || err.to_string().contains("BFV full-bootstrap"),
+                err.contains("Soracloud") || err.contains("BFV full-bootstrap"),
                 "unexpected Soracloud relation rejection for {circuit_id}: {err}"
             );
         }
@@ -2175,8 +2177,10 @@ fn explicit_composition_air_envelope_binds_caller_rows_to_fri_queries() {
     )
     .expect("bind AIR public statement");
     let extra_query_roots = [air.trace_root, air.composition_root, statement_commitment];
-    let mut tight_opening_limits = StarkVerifierLimits::default();
-    tight_opening_limits.max_domain_log2 = params.n_log2.saturating_sub(1);
+    let tight_opening_limits = StarkVerifierLimits {
+        max_domain_log2: params.n_log2.saturating_sub(1),
+        ..StarkVerifierLimits::default()
+    };
     assert_eq!(
         validate_stark_air_opening_commitment_roots_with_limits_v1(
             &params,
@@ -2187,8 +2191,10 @@ fn explicit_composition_air_envelope_binds_caller_rows_to_fri_queries() {
         .expect_err("opening root replay must honor caller domain limits"),
         "STARK opening commitment parameters invalid"
     );
-    let mut tight_query_limits = StarkVerifierLimits::default();
-    tight_query_limits.max_queries = envelope.proof.queries.len().saturating_sub(1);
+    let tight_query_limits = StarkVerifierLimits {
+        max_queries: envelope.proof.queries.len().saturating_sub(1),
+        ..StarkVerifierLimits::default()
+    };
     assert_eq!(
         validate_stark_fri_query_shape_and_indices_with_limits_v1(
             &envelope.params,
@@ -2209,8 +2215,10 @@ fn explicit_composition_air_envelope_binds_caller_rows_to_fri_queries() {
         &envelope.proof.queries,
     )
     .expect("query shape replays");
-    let mut tight_base_index_limits = StarkVerifierLimits::default();
-    tight_base_index_limits.max_queries = envelope.proof.queries.len().saturating_sub(1);
+    let tight_base_index_limits = StarkVerifierLimits {
+        max_queries: envelope.proof.queries.len().saturating_sub(1),
+        ..StarkVerifierLimits::default()
+    };
     assert!(
             !verify_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_with_limits(
                 &bytes,

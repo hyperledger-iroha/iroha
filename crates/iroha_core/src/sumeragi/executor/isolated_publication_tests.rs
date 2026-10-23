@@ -1,4 +1,4 @@
-//! Actual PendingCommit retries retain one immutable original after physical I/O refusal.
+//! Actual `PendingCommit` retries retain one immutable original after physical I/O refusal.
 use super::*;
 use crate::{
     fastpq::lane::isolated_replay_retryable_for_test,

@@ -268,7 +268,7 @@ fn native_validation_rechecks_signature_despite_forged_positive_cache_entry() {
         .state()
         .stateless_validation_cache()
         .lock()
-        .insert_ok(invalid_key.clone(), None, 0);
+        .insert_ok(invalid_key, None, 0);
     assert!(
         fixture
             .chain

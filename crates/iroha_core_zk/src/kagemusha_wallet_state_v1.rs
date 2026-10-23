@@ -77,8 +77,8 @@ pub use archive::{ArchiveKey, ArchiveStore, FsArchive};
 pub use collection::CollectionStatus;
 pub(crate) use custody::NativeObservationsV1;
 pub use custody::{
-    AdvanceHandle, Custody, CustodyDeletionProgressV1, CustodyDeletionReviewV1, ProviderArchive,
-    ReviewedCustodyDeletionV1, TransitionOwner,
+    AdvanceHandle, ArchiveCheckpointV1, Custody, CustodyDeletionProgressV1,
+    CustodyDeletionReviewV1, ProviderArchive, ReviewedCustodyDeletionV1, TransitionOwner,
 };
 pub use fee_claims::{FEE_CLAIM_MAX_BYTES_V1, FinalizedPayoutEvidence, RetainedFeeClaim};
 pub use fold_custody::FoldCustodyV1;
@@ -183,10 +183,9 @@ pub(crate) fn decode_attempt_error(
     error: norito::core::DecodeAttemptError,
     invalid: Error,
 ) -> Error {
-    match error.into_local_refusal() {
-        Ok(original) => Error::DecodeResource(original),
-        Err(_) => invalid,
-    }
+    error
+        .into_local_refusal()
+        .map_or(invalid, Error::DecodeResource)
 }
 
 /// Observe an actual model original decoder before projecting its completed shape errors.
@@ -476,6 +475,10 @@ impl CheckpointLayout {
 
 /// One sub-proof result, checked against the authenticated native stage's exact layout.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fold completion transfers inline lineage while checkpoint bytes retain their original private owner"
+)]
 pub enum FoldProgress {
     /// Persist this result before asking for the next sub-proof.
     Checkpoint(PrivateArchiveBytes),
@@ -762,38 +765,38 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Ok(map_outcome(outcome));
         }
         let (_, manifest) = self.sync_manifest()?;
-        if let KagemushaWalletEffectV1::Receive { credit_id, .. } = c.body().statement.effect {
-            if let Some(credit) = self.indexed_credit(&manifest, &credit_id)? {
-                let original = c
-                    .body()
-                    .retained_inputs
-                    .iter()
-                    .find(|input| input.role == KagemushaWalletRetainedInputRoleV1::Payment)
-                    .ok_or(Error::Invalid("duplicate Payment original"))?;
-                let payment = read_model_original(
-                    || KagemushaWalletPaymentV1::decode_canonical(&original.bytes, &self.scheme_id),
-                    Error::Invalid("G1 validation"),
-                )?;
-                let identity = valid(payment.digests())?;
-                if credit.payment_digest != c.body().payment_digest
-                    || identity.payment != credit.payment_digest
-                    || identity.credit_id != credit_id
-                    || valid(payment.signed_request())?.body.amount != credit.amount
-                {
-                    return Err(Error::CreditConflict);
-                }
-                let entry = self.step_entry(&manifest, credit.sequence)?;
-                if entry.collected {
-                    let status = self.credit_status(&credit_id, &credit.payment_digest)?;
-                    return Ok(Completion::CreditStatus(archive::encode(&status)?));
-                }
-                return Ok(Completion::Complete(
-                    self.indexed_step(&manifest, credit.sequence)?
-                        .retained
-                        .record
-                        .output,
-                ));
+        if let KagemushaWalletEffectV1::Receive { credit_id, .. } = c.body().statement.effect
+            && let Some(credit) = self.indexed_credit(&manifest, &credit_id)?
+        {
+            let original = c
+                .body()
+                .retained_inputs
+                .iter()
+                .find(|input| input.role == KagemushaWalletRetainedInputRoleV1::Payment)
+                .ok_or(Error::Invalid("duplicate Payment original"))?;
+            let payment = read_model_original(
+                || KagemushaWalletPaymentV1::decode_canonical(&original.bytes, &self.scheme_id),
+                Error::Invalid("G1 validation"),
+            )?;
+            let identity = valid(payment.digests())?;
+            if credit.payment_digest != c.body().payment_digest
+                || identity.payment != credit.payment_digest
+                || identity.credit_id != credit_id
+                || valid(payment.signed_request())?.body.amount != credit.amount
+            {
+                return Err(Error::CreditConflict);
             }
+            let entry = self.step_entry(&manifest, credit.sequence)?;
+            if entry.collected {
+                let status = self.credit_status(&credit_id, &credit.payment_digest)?;
+                return Ok(Completion::CreditStatus(archive::encode(&status)?));
+            }
+            return Ok(Completion::Complete(
+                self.indexed_step(&manifest, credit.sequence)?
+                    .retained
+                    .record
+                    .output,
+            ));
         }
         if released_receive {
             return Err(Error::WitnessLost("released Receive index"));
@@ -845,10 +848,12 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     state,
                     c.body().kind,
                     refresh,
-                    manifest.issued_requests,
-                    manifest.direct_anchors,
-                    manifest.finality_epochs,
-                    manifest.blacklist.clone(),
+                    crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+                        issued: manifest.issued_requests,
+                        anchors: manifest.direct_anchors,
+                        epochs: manifest.finality_epochs,
+                        blacklist: manifest.blacklist.clone(),
+                    },
                 )
             })
             .transpose()?;
@@ -859,19 +864,21 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             folded.as_ref(),
             &mut context,
         )?;
-        let mut next_custody = context.finish(&c.body().successor_state)?;
-        if c.body().kind == KagemushaWalletOperationKindV1::Bootstrap {
+        let finished_custody = context.finish(&c.body().successor_state)?;
+        let next_custody = if c.body().kind == KagemushaWalletOperationKindV1::Bootstrap {
             if predecessor.is_some() {
                 return Err(Error::Invalid("bootstrap predecessor"));
             }
             let certificates = self.proofs.enrollment_certificates(&frozen.credential)?;
-            next_custody = Some(preparation_custody::SourceCustodyV1::bootstrap(
+            Some(preparation_custody::SourceCustodyV1::bootstrap(
                 &mut self.archive,
                 &c.body().successor_state,
                 &valid(frozen.credential.to_canonical_bytes())?,
                 &certificates,
-            )?);
-        }
+            )?)
+        } else {
+            finished_custody
+        };
         let digest = c.custody_digest();
         if let Some(source) = next_custody {
             self.retain_source_custody(digest, &source)?;
@@ -884,6 +891,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         if matches!(outcome, Completion::Complete(_)) {
             self.sync_manifest()?;
         }
+        drop(frozen);
         Ok(outcome)
     }
 

@@ -319,7 +319,11 @@ fn direct_jump_composition_preserves_control_degree_two_and_full_degree_four() {
     ))
     .unwrap();
     let width = super::super::super::WIDTH;
-    let schedule = Schedule::new(7, core::array::from_fn(|i| i as u32)).unwrap();
+    let schedule = Schedule::new(
+        7,
+        core::array::from_fn(|i| u32::try_from(i).expect("bounded fixture value")),
+    )
+    .unwrap();
     for composed in [false, true] {
         let degree = if composed { 4 } else { 2 };
         let measured = measured_maximum_affine_degree_v1(

@@ -456,7 +456,7 @@ fn vega_public_action_builder_fails_closed_with_an_otherwise_valid_fixture() {
     )
     .expect("canonical Vega action witness material");
     let result = prepare_vega_privacy_action_with_rng_v1(
-        vega_release_transaction_context_v1().expect("canonical transaction context"),
+        &vega_release_transaction_context_v1().expect("canonical transaction context"),
         fixture.public_input,
         witness_material,
         &fixture.device_signing_key,
@@ -1027,8 +1027,8 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
     let context =
         crate::privacy_engines::zk_x509::relation::release_fixture::reference_statement_context_v1(
         );
-    let canonical = build_zk_x509_release_fixture_v1(context.clone(), false)
-        .expect("canonical X.509 release fixture");
+    let canonical =
+        build_zk_x509_release_fixture_v1(context, false).expect("canonical X.509 release fixture");
     let maximum =
         build_zk_x509_release_fixture_v1(context, true).expect("maximum X.509 release fixture");
     canonical
@@ -1054,12 +1054,12 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
     );
     let statement_material = b"canonical-statement".to_vec();
     let canonical_material = zk_x509_release_public_statement_material_v1(
-        statement_material.clone(),
+        &(statement_material.clone()),
         canonical.resource_shape,
     )
     .expect("canonical shape material");
     let maximum_material = zk_x509_release_public_statement_material_v1(
-        statement_material.clone(),
+        &(statement_material.clone()),
         maximum.resource_shape,
     )
     .expect("maximum shape material");
@@ -1097,7 +1097,7 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
     let mut invalid_shape = maximum.resource_shape;
     invalid_shape.crl_der_length = 0;
     assert_eq!(
-        zk_x509_release_public_statement_material_v1(statement_material, invalid_shape,),
+        zk_x509_release_public_statement_material_v1(&statement_material, invalid_shape,),
         Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)
     );
 }

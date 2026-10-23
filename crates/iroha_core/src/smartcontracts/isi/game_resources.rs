@@ -105,7 +105,7 @@ fn validate_record_geometry(session: &GameSessionRecordV1) -> Result<(), String>
     .map_err(str::to_owned)
 }
 /// Cross-check the complete retained authorization, phase and exact native custody record.
-pub(crate) fn validate_restored_resources(
+pub fn validate_restored_resources(
     world: &World,
     session: &GameSessionRecordV1,
 ) -> Result<(), String> {

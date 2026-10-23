@@ -209,6 +209,7 @@ impl<T: ResidentOwner> Drop for ResidentGuard<'_, T> {
         } else {
             failure.armed = false;
         }
+        drop(failure);
         // The registry lock is released before the original owner lock drops.
     }
 }

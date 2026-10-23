@@ -238,10 +238,8 @@ impl KagemushaWalletCopyV1 {
     }
 
     fn split(name: &str) -> (&str, Self) {
-        match name.strip_suffix(REPLICA_SUFFIX) {
-            Some(stem) => (stem, Self::Replica),
-            None => (name, Self::Primary),
-        }
+        name.strip_suffix(REPLICA_SUFFIX)
+            .map_or((name, Self::Primary), |stem| (stem, Self::Replica))
     }
 }
 
@@ -733,14 +731,14 @@ fn kagemusha_wallet_ensure_durable_dir_v1<F: KagemushaWalletFsV1>(
     name: &KagemushaWalletEntryNameV1,
 ) -> Result<(), KagemushaWalletProviderErrorV1> {
     let dir = parent.child(name);
-    if let Some(entries) = kagemusha_wallet_list_dir_v1(store, &dir)? {
-        if entries.iter().all(|entry| {
+    if let Some(entries) = kagemusha_wallet_list_dir_v1(store, &dir)?
+        && entries.iter().all(|entry| {
             entry.kind == KagemushaWalletEntryKindV1::File
                 && kagemusha_wallet_is_staging_name_v1(&entry.name)
-        }) {
-            store.remove_staging(&dir)?;
-            kagemusha_wallet_require_removed_v1(store.remove_dir(parent, name))?;
-        }
+        })
+    {
+        store.remove_staging(&dir)?;
+        kagemusha_wallet_require_removed_v1(store.remove_dir(parent, name))?;
     }
     kagemusha_wallet_ensure_dir_v1(store, parent, name)
 }

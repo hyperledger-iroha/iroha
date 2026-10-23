@@ -55,11 +55,11 @@ fn prekey_name(id: &[u8; 32], role: &str) -> String {
 fn file_snapshot(d: &DeviceV1) -> BTreeMap<(KagemushaWalletCustodyDirV1, String), Vec<u8>> {
     fn visit(
         d: &DeviceV1,
-        dir: KagemushaWalletCustodyDirV1,
+        dir: &KagemushaWalletCustodyDirV1,
         files: &mut BTreeMap<(KagemushaWalletCustodyDirV1, String), Vec<u8>>,
     ) {
-        for name in d.fs.visible_names(&dir) {
-            if let Some(bytes) = d.fs.visible_file(&dir, &name) {
+        for name in d.fs.visible_names(dir) {
+            if let Some(bytes) = d.fs.visible_file(dir, &name) {
                 files.insert((dir.clone(), name), bytes);
             } else {
                 let child = dir.child(&KagemushaWalletEntryNameV1::new(&name).unwrap());
@@ -67,12 +67,12 @@ fn file_snapshot(d: &DeviceV1) -> BTreeMap<(KagemushaWalletCustodyDirV1, String)
                     d.fs.visible_dir(&child),
                     "fixture contains only ordinary files/directories"
                 );
-                visit(d, child, files);
+                visit(d, &child, files);
             }
         }
     }
     let mut files = BTreeMap::new();
-    visit(d, KagemushaWalletCustodyDirV1::root(), &mut files);
+    visit(d, &KagemushaWalletCustodyDirV1::root(), &mut files);
     files
 }
 

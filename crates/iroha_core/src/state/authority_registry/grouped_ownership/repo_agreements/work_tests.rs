@@ -86,7 +86,7 @@ fn independent_repo_singletons_variable_names_and_original_fixture_work_are_exac
             let mut block = world.block();
             let mut tx =
                 block.transaction_without_telemetry(crate::state::LaneConfig::default(), 0);
-            tx.insert_repo_agreement_entry(record);
+            tx.insert_repo_agreement_entry(&(record));
             tx.apply();
             block.commit();
         }
@@ -118,7 +118,7 @@ fn independent_repo_singletons_variable_names_and_original_fixture_work_are_exac
         let mut block = world.block();
         let mut tx = block.transaction_without_telemetry(crate::state::LaneConfig::default(), 0);
         tx.remove_repo_agreement_entry(&id());
-        tx.insert_repo_agreement_entry(inserted);
+        tx.insert_repo_agreement_entry(&(inserted));
         tx.apply();
         block.commit();
     }

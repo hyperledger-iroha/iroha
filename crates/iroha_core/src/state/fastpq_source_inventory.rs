@@ -37,7 +37,7 @@ use public_seal::{SourceTranscriptSeal, seal_public_transcripts};
 /// zero-transcript calls remain present; a transcript capture does not invent an
 /// additional execution call. Protocol work without a transcript is not a proof
 /// source. Applied SNS maintenance and retained governance share the public
-/// ProtocolPurpose kind but final reconciliation requires exactly one private
+/// `ProtocolPurpose` kind but final reconciliation requires exactly one private
 /// native or governance quota owner for every purpose; the kind grants neither.
 ///
 /// Private construction prevents a supplied archive from becoming an owned
@@ -301,7 +301,7 @@ impl StateBlock<'_> {
                 .as_ref()
                 .ok_or("source capacity was not frozen")?
                 .as_ref()
-                .map_err(|error| error.clone())?
+                .map_err(std::clone::Clone::clone)?
                 .reconcile_and_retain(inventory.entries(), &self.fastpq_transcripts)?;
             self.fastpq_source_captures
                 .seal()
@@ -367,15 +367,14 @@ impl StateBlock<'_> {
             let expected = frozen
                 .capture_transcript(Some(call), call, source.lane(), Some(source.dataspace()), 0)
                 .map_err(|error| error.to_string())?;
-            if let Some(captured) = captures.get(&call) {
-                if captured.entry_hash() != call
+            if let Some(captured) = captures.get(&call)
+                && (captured.entry_hash() != call
                     || captured.source() != expected.source()
                     || captured.route() != expected.route()
                     || captured.dataspace_id() != expected.dataspace_id()
-                    || captured.execution_kind() != expected.execution_kind()
-                {
-                    return Err("FASTPQ block entry differs from its applied source context".into());
-                }
+                    || captured.execution_kind() != expected.execution_kind())
+            {
+                return Err("FASTPQ block entry differs from its applied source context".into());
             }
             entries.push(FastpqSourceExecutionEntryV1 {
                 entry_hash: call,
@@ -484,14 +483,13 @@ impl StateBlock<'_> {
             let expected = frozen
                 .capture_transcript(Some(hash), hash, lane, Some(dataspace), 0)
                 .map_err(|error| error.to_string())?;
-            if let Some(captured) = captures.get(&hash) {
-                if captured.source() != expected.source()
+            if let Some(captured) = captures.get(&hash)
+                && (captured.source() != expected.source()
                     || captured.route() != expected.route()
                     || captured.dataspace_id() != expected.dataspace_id()
-                    || captured.execution_kind() != expected.execution_kind()
-                {
-                    return Err("FASTPQ block entry differs from its applied source context".into());
-                }
+                    || captured.execution_kind() != expected.execution_kind())
+            {
+                return Err("FASTPQ block entry differs from its applied source context".into());
             }
             push(FastpqSourceExecutionEntryV1 {
                 entry_hash: hash,
@@ -612,18 +610,17 @@ impl StateBlock<'_> {
                         .into(),
                 );
             }
-            if let Some(captured) = captures.get(&entry.entry_hash) {
-                if captured.source() != inventory.source
+            if let Some(captured) = captures.get(&entry.entry_hash)
+                && (captured.source() != inventory.source
                     || captured.entry_hash() != entry.entry_hash
                     || captured.route() != entry.route
                     || captured.dataspace_id() != entry.dataspace_id
-                    || captured.execution_kind() != entry.execution_kind
-                {
-                    return Err(
-                        "FASTPQ witness capture execution source differs from the owned inventory"
-                            .into(),
-                    );
-                }
+                    || captured.execution_kind() != entry.execution_kind)
+            {
+                return Err(
+                    "FASTPQ witness capture execution source differs from the owned inventory"
+                        .into(),
+                );
             }
         }
         Ok(Arc::clone(inventory))
@@ -647,4 +644,4 @@ mod tests;
 mod owned_sources_tests;
 
 #[cfg(test)]
-pub(crate) mod native_capture_fixture;
+pub mod native_capture_fixture;

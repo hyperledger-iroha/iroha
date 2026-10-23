@@ -196,8 +196,7 @@ mod tests {
             let error: WorldStateSnapshotError =
                 amx_approval_originals(&snapshot, &world, &approval, &relay, &request)
                     .err()
-                    .unwrap()
-                    .into();
+                    .unwrap();
             let WorldStateSnapshotError::Allocation(AllocationRefusal::Capacity {
                 requested_bytes,
                 reserved_bytes,
@@ -222,8 +221,7 @@ mod tests {
         let error: WorldStateSnapshotError =
             amx_approval_originals(&snapshot, &world, &approval, &relay, &empty)
                 .err()
-                .unwrap()
-                .into();
+                .unwrap();
         assert!(matches!(
             error,
             WorldStateSnapshotError::Allocation(AllocationRefusal::ExceedsLimit {
@@ -262,8 +260,7 @@ mod tests {
         let error: WorldStateSnapshotError = outer
             .with(|| amx_approval_originals(&snapshot, &world, &approval, &relay, &request))
             .err()
-            .unwrap()
-            .into();
+            .unwrap();
         let WorldStateSnapshotError::RootScopeRead(cause) = error else {
             panic!("the first actual root metadata read refusal was erased: {error}");
         };
@@ -287,8 +284,7 @@ mod tests {
         let error: WorldStateSnapshotError =
             amx_approval_originals(&snapshot, &world, &approval, &relay, &request)
                 .err()
-                .unwrap()
-                .into();
+                .unwrap();
         assert!(matches!(error, WorldStateSnapshotError::Invalid(_)));
         assert_eq!(request.reserved_bytes(), 0);
     }

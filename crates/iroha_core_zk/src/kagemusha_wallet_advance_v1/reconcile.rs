@@ -125,6 +125,10 @@ impl KagemushaWalletSlotAbandonReasonV1 {
 
 /// Classified top level of one slot directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent file-presence facts must represent every partial crash state."
+)]
 pub(super) struct SlotFilesV1 {
     pub(super) intent: bool,
     pub(super) generation_attempt: bool,
@@ -686,39 +690,36 @@ where
             &expectation,
             &R::marker_binding(record.marker()),
         )?;
-        match loaded {
-            Some(mut pair) => {
-                let fresh = Self::written_this_boot(&pair, boot);
-                self.with_ballast(true, || {
-                    kagemusha_wallet_settle_pair_v1(&self.store, &pair, fresh)
-                })?;
-                self.with_ballast(true, || {
-                    kagemusha_wallet_repair_pair_v1(&self.store, &mut pair, boot)
-                })
-            }
-            None => {
-                let Some((_, operation_id, _)) = record.head() else {
-                    return Ok(());
-                };
-                let names = kagemusha_wallet_completion_names_v1(&operation_id);
-                let dir = kagemusha_wallet_completion_dir_v1(slot);
-                let mut present = false;
-                for name in &names {
-                    match self.store.read(&dir, name, 0) {
-                        KagemushaWalletReadV1::Absent => {}
-                        KagemushaWalletReadV1::Unavailable(reason) => {
-                            return Err(KagemushaWalletProviderErrorV1::Unavailable(reason));
-                        }
-                        KagemushaWalletReadV1::Present(_) | KagemushaWalletReadV1::Oversized => {
-                            present = true;
-                        }
+        if let Some(mut pair) = loaded {
+            let fresh = Self::written_this_boot(&pair, boot);
+            self.with_ballast(true, || {
+                kagemusha_wallet_settle_pair_v1(&self.store, &pair, fresh)
+            })?;
+            self.with_ballast(true, || {
+                kagemusha_wallet_repair_pair_v1(&self.store, &mut pair, boot)
+            })
+        } else {
+            let Some((_, operation_id, _)) = record.head() else {
+                return Ok(());
+            };
+            let names = kagemusha_wallet_completion_names_v1(&operation_id);
+            let dir = kagemusha_wallet_completion_dir_v1(slot);
+            let mut present = false;
+            for name in &names {
+                match self.store.read(&dir, name, 0) {
+                    KagemushaWalletReadV1::Absent => {}
+                    KagemushaWalletReadV1::Unavailable(reason) => {
+                        return Err(KagemushaWalletProviderErrorV1::Unavailable(reason));
+                    }
+                    KagemushaWalletReadV1::Present(_) | KagemushaWalletReadV1::Oversized => {
+                        present = true;
                     }
                 }
-                if present {
-                    remove_pair(&self.store, &dir, &names)?;
-                }
-                Ok(())
             }
+            if present {
+                remove_pair(&self.store, &dir, &names)?;
+            }
+            Ok(())
         }
     }
 

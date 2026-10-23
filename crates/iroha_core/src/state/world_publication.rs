@@ -29,7 +29,7 @@ pub(super) fn field_vector_layout(capacity: usize) -> Result<Layout, std::alloc:
 pub(in crate::state) struct FieldRefusal {
     /// Original field from the exhaustive World inventory.
     pub field: &'static str,
-    /// Inner TriggerSet component, when that aggregate refused preparation.
+    /// Inner `TriggerSet` component, when that aggregate refused preparation.
     pub trigger_component: Option<&'static str>,
     /// Original physical refusal; never a consensus verdict.
     pub cause: PublicationPreparationError<mv::storage::AdmittedStorageError>,
@@ -182,12 +182,23 @@ where
     })
 }
 
+type CellPublicationPhase<'target, V, C> = FieldPhase<
+    mv::cell::DetachedPublicationSlot<'target, V, (), (), C>,
+    mv::cell::PreparedPublication<'target, V, (), (), C>,
+>;
+
+type WorldPreparationResult<'target, Admission, Installation, E> = Result<
+    PreparedWorld<'target, Admission, Installation>,
+    (
+        DetachedWorld<Admission>,
+        WorldPublicationError<E>,
+        AbortedWorld<'target, Installation>,
+    ),
+>;
+
 struct PreparedCell<'target, V: Value, C: Send + Sync + 'static> {
     original: Option<Box<RetainedCell<V, C>>>,
-    phase: FieldPhase<
-        mv::cell::DetachedPublicationSlot<'target, V, (), (), C>,
-        mv::cell::PreparedPublication<'target, V, (), (), C>,
-    >,
+    phase: CellPublicationPhase<'target, V, C>,
     published: Option<mv::cell::PublishedPublication<V, (), (), C>>,
     aborted: Option<mv::PublicationCleanup<()>>,
     released: bool,
@@ -496,18 +507,15 @@ mod preparation;
 
 impl<Admission> DetachedWorld<Admission> {
     /// Prepare through the same caller-owned aggregate used by State publication.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Refusal returns the original retained owner without an additional fallible error allocation"
+    )]
     pub(in crate::state) fn try_prepare_publication<Installation, E>(
         self,
         target: &World,
         admit: impl FnOnce(&Self, &World) -> Result<Installation, E>,
-    ) -> Result<
-        PreparedWorld<'_, Admission, Installation>,
-        (
-            Self,
-            WorldPublicationError<E>,
-            AbortedWorld<'_, Installation>,
-        ),
-    > {
+    ) -> WorldPreparationResult<'_, Admission, Installation, E> {
         let mut slot = self.publication_slot(target);
         match slot.try_prepare(admit) {
             Ok(()) => Ok(slot.into_prepared()),

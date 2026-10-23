@@ -82,10 +82,8 @@ impl GlobalThresholdBeaconSessionError {
             | Self::Signature(SignatureAllocationError::Allocation(
                 ChargedBufferFromChargeError::Allocator { .. },
             )) => Attempt::Deferred(ExecutionDeferral::AllocationUnavailable.into()),
-            Self::Encoding(_) => {
-                Attempt::Deferred(ExecutionDeferral::LocalInvariantViolation.into())
-            }
-            Self::Buffer(PrepaidBufferError::Reservation(_))
+            Self::Encoding(_)
+            | Self::Buffer(PrepaidBufferError::Reservation(_))
             | Self::Reservation(_)
             | Self::PublicKey(_)
             | Self::Signature(_)
@@ -361,6 +359,7 @@ impl SessionDemand {
         })
     }
 }
+#[derive(Clone, Copy)]
 struct ScratchDemand {
     bytes: usize,
     preimage: usize,

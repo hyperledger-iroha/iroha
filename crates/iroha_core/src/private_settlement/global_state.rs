@@ -43,7 +43,7 @@ use thiserror::Error;
 
 const RECEIPT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:global-receipt:v1\0";
 
-pub(crate) fn canonical_receipt_digest_v1(
+pub fn canonical_receipt_digest_v1(
     receipt: &PrivateSettlementReceiptV1,
 ) -> Result<Hash, PrivateSettlementGlobalStateErrorV1> {
     let encoded = norito::encode_canonical(receipt)
@@ -58,7 +58,7 @@ pub(crate) fn canonical_receipt_digest_v1(
 }
 
 /// Native state validation/mutation for the single Model-owned canonical record.
-pub(crate) trait PrivateSettlementPoolKeyExtV1: Sized {
+pub trait PrivateSettlementPoolKeyExtV1: Sized {
     fn new(
         route: PrivateSettlementRouteV1,
         pool_id: PrivacyPoolIdV1,
@@ -93,7 +93,7 @@ impl PrivateSettlementPoolKeyExtV1 for PrivateSettlementPoolKeyV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::private_settlement::global_state::PrivateSettlementRootKeyV1")]
-pub(crate) struct PrivateSettlementRootKeyV1 {
+pub struct PrivateSettlementRootKeyV1 {
     pub(crate) pool: PrivateSettlementPoolKeyV1,
     pub(crate) epoch: u64,
     pub(crate) root: PrivacyRootV1,
@@ -122,7 +122,7 @@ pub(crate) struct PrivateSettlementRootKeyV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementStagedLockKeyV1"
 )]
-pub(crate) enum PrivateSettlementStagedLockKeyV1 {
+pub enum PrivateSettlementStagedLockKeyV1 {
     /// One exact complete-bundle Prepare registration.
     Bundle(Hash),
     /// The authoritative predecessor frontier of one governed pool.
@@ -149,7 +149,11 @@ pub(crate) enum PrivateSettlementStagedLockKeyV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementStagedLockRecordV1"
 )]
-pub(crate) enum PrivateSettlementStagedLockRecordV1 {
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The canonical staged-lock schema retains the complete barrier in its bundle variant"
+)]
+pub enum PrivateSettlementStagedLockRecordV1 {
     /// Complete public all-Prepare barrier and its global registration height.
     Bundle {
         /// Exact barrier bytes authorized by the sponsor.
@@ -202,7 +206,7 @@ impl_private_settlement_json_key_v1!(PrivateSettlementRootKeyV1, PrivateSettleme
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementFinalizationReferenceV1"
 )]
-pub(crate) struct PrivateSettlementFinalizationReferenceV1 {
+pub struct PrivateSettlementFinalizationReferenceV1 {
     pub(crate) bundle_id: Hash,
     pub(crate) receipt_digest: Hash,
     pub(crate) leg_ordinal: u8,
@@ -215,7 +219,7 @@ pub(crate) struct PrivateSettlementFinalizationReferenceV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementRootProvenanceV1"
 )]
-pub(crate) enum PrivateSettlementRootProvenanceV1 {
+pub enum PrivateSettlementRootProvenanceV1 {
     Governance {
         governance_digest: Hash,
         admitted_at_height: u64,
@@ -237,7 +241,7 @@ pub(crate) enum PrivateSettlementRootProvenanceV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementOutputRecordV1"
 )]
-pub(crate) struct PrivateSettlementOutputRecordV1 {
+pub struct PrivateSettlementOutputRecordV1 {
     pub(crate) reference: PrivateSettlementFinalizationReferenceV1,
     pub(crate) encrypted_output: PrivacyEncryptedOutputV1,
 }
@@ -248,7 +252,7 @@ pub(crate) struct PrivateSettlementOutputRecordV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementGlobalStateV1"
 )]
-pub(crate) struct PrivateSettlementGlobalStateV1 {
+pub struct PrivateSettlementGlobalStateV1 {
     governance: BTreeMap<PrivateSettlementPoolKeyV1, PrivateSettlementPoolGovernanceProjectionV1>,
     pools: BTreeMap<PrivateSettlementPoolKeyV1, PrivateSettlementPoolStateV1>,
     roots: BTreeMap<PrivateSettlementRootKeyV1, PrivateSettlementRootProvenanceV1>,
@@ -262,14 +266,14 @@ pub(crate) struct PrivateSettlementGlobalStateV1 {
 
 /// Outcome of an idempotent global-state operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PrivateSettlementGlobalStateOutcomeV1 {
+pub enum PrivateSettlementGlobalStateOutcomeV1 {
     /// The complete operation was applied.
     Applied,
     /// The exact operation was already durable.
     Idempotent,
 }
 
-pub(crate) struct PrivateSettlementPlannedLegV1 {
+pub struct PrivateSettlementPlannedLegV1 {
     pub(crate) key: PrivateSettlementPoolKeyV1,
     pub(crate) next_pool: PrivateSettlementPoolStateV1,
     pub(crate) root_key: PrivateSettlementRootKeyV1,
@@ -283,19 +287,19 @@ pub(crate) struct PrivateSettlementPlannedLegV1 {
 }
 
 /// Complete infallible write set for one globally replicated Prepare registration.
-pub(crate) struct PrivateSettlementPrepareLockPlanV1 {
+pub struct PrivateSettlementPrepareLockPlanV1 {
     pub(crate) records:
         BTreeMap<PrivateSettlementStagedLockKeyV1, PrivateSettlementStagedLockRecordV1>,
 }
 
 /// Complete infallible finalization write set, including exact lock release.
-pub(crate) struct PrivateSettlementReceiptPlanV1 {
+pub struct PrivateSettlementReceiptPlanV1 {
     pub(crate) legs: Vec<PrivateSettlementPlannedLegV1>,
     pub(crate) staged_lock_keys: Vec<PrivateSettlementStagedLockKeyV1>,
 }
 
 /// Complete infallible write set for bootstrapping one governed pool.
-pub(crate) struct PrivateSettlementPoolBootstrapPlanV1 {
+pub struct PrivateSettlementPoolBootstrapPlanV1 {
     pub(crate) key: PrivateSettlementPoolKeyV1,
     pub(crate) governance: PrivateSettlementPoolGovernanceProjectionV1,
     pub(crate) pool: PrivateSettlementPoolStateV1,
@@ -304,7 +308,7 @@ pub(crate) struct PrivateSettlementPoolBootstrapPlanV1 {
 }
 
 /// Complete infallible write set for one policy/key rotation.
-pub(crate) struct PrivateSettlementPoolRotationPlanV1 {
+pub struct PrivateSettlementPoolRotationPlanV1 {
     pub(crate) key: PrivateSettlementPoolKeyV1,
     pub(crate) governance: PrivateSettlementPoolGovernanceProjectionV1,
     pub(crate) pool: PrivateSettlementPoolStateV1,
@@ -351,7 +355,7 @@ fn receipt_leg_matches_governance_lineage_v1(
 }
 
 /// Validate and plan one governed pool bootstrap without mutating persistent state.
-pub(crate) fn plan_private_settlement_pool_bootstrap_v1(
+pub fn plan_private_settlement_pool_bootstrap_v1(
     governance_store: &impl StorageReadOnly<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -414,7 +418,7 @@ pub(crate) fn plan_private_settlement_pool_bootstrap_v1(
 }
 
 /// Validate and plan one exact governance rotation without changing the pool frontier.
-pub(crate) fn plan_private_settlement_pool_rotation_v1(
+pub fn plan_private_settlement_pool_rotation_v1(
     governance_store: &impl StorageReadOnly<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -508,7 +512,7 @@ fn staged_lock_resource_record_v1(
 }
 
 /// Derive the exact bundle and resource rows for one complete Prepare barrier.
-pub(crate) fn private_settlement_staged_lock_records_v1(
+pub fn private_settlement_staged_lock_records_v1(
     barrier: &PrivateSettlementPrepareBarrierV1,
     registered_at_height: u64,
 ) -> Result<
@@ -627,7 +631,7 @@ fn exact_staged_lock_keys_v1(
 /// The stored barrier keeps its original aggregate QC bytes. A retry or
 /// recovered coordinator may supply independently valid quorum-equivalent QCs;
 /// signer-subset encoding therefore does not orphan the replicated lock.
-pub(crate) fn validate_private_settlement_prepare_lock_registration_v1(
+pub fn validate_private_settlement_prepare_lock_registration_v1(
     staged_locks: &impl StorageReadOnly<
         PrivateSettlementStagedLockKeyV1,
         PrivateSettlementStagedLockRecordV1,
@@ -647,7 +651,7 @@ pub(crate) fn validate_private_settlement_prepare_lock_registration_v1(
 
 /// Validate and plan one complete all-Prepare control-lock registration.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn plan_private_settlement_prepare_locks_v1(
+pub fn plan_private_settlement_prepare_locks_v1(
     governance: &impl StorageReadOnly<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -758,7 +762,7 @@ pub(crate) fn plan_private_settlement_prepare_locks_v1(
 
 /// Validate and plan a complete certified receipt without mutating persistent state.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn plan_private_settlement_receipt_v1(
+pub fn plan_private_settlement_receipt_v1(
     governance: &impl StorageReadOnly<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -899,7 +903,7 @@ pub(crate) fn plan_private_settlement_receipt_v1(
 }
 
 /// Validate an abort marker against terminal WSV state without mutating it.
-pub(crate) fn plan_private_settlement_abort_v1(
+pub fn plan_private_settlement_abort_v1(
     staged_locks: &impl StorageReadOnly<
         PrivateSettlementStagedLockKeyV1,
         PrivateSettlementStagedLockRecordV1,
@@ -953,7 +957,7 @@ pub(crate) fn plan_private_settlement_abort_v1(
 }
 
 /// Return every exact row whose owner bundle expired before `current_height`.
-pub(crate) fn expired_private_settlement_staged_lock_keys_v1(
+pub fn expired_private_settlement_staged_lock_keys_v1(
     staged_locks: &impl StorageReadOnly<
         PrivateSettlementStagedLockKeyV1,
         PrivateSettlementStagedLockRecordV1,
@@ -989,7 +993,7 @@ pub(crate) fn expired_private_settlement_staged_lock_keys_v1(
 /// The index is deliberately omitted from snapshots. A duplicate recipient is
 /// therefore detected from canonical state during every restore instead of
 /// being hidden by last-write-wins map construction.
-pub(crate) fn rebuild_private_settlement_recipient_index_v1(
+pub fn rebuild_private_settlement_recipient_index_v1(
     outputs: &impl StorageReadOnly<PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1>,
 ) -> Result<
     BTreeMap<PrivacyRecipientIdV1, PrivateSettlementFinalizationReferenceV1>,
@@ -1010,7 +1014,7 @@ pub(crate) fn rebuild_private_settlement_recipient_index_v1(
 
 /// Validate every private-settlement map and cross-reference after snapshot recovery.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub(crate) fn validate_private_settlement_persisted_state_v1(
+pub fn validate_private_settlement_persisted_state_v1(
     governance: &impl StorageReadOnly<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -1746,7 +1750,7 @@ impl PrivateSettlementGlobalStateV1 {
 
 /// Redacted global-state failure safe for consensus diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub(crate) enum PrivateSettlementGlobalStateErrorV1 {
+pub enum PrivateSettlementGlobalStateErrorV1 {
     /// The governed feature is disabled in the consensus configuration.
     #[error("private-settlement is disabled")]
     Disabled,
@@ -1804,7 +1808,7 @@ impl PrivateSettlementGlobalStateErrorV1 {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     use crate::private_settlement::{
         protocol::{
@@ -1827,7 +1831,7 @@ pub(crate) mod tests {
     use iroha_model_base::peer::PeerId;
 
     /// Verify one declared owner frame, reconstruction, and strict malformed-frame rejection.
-    pub(crate) fn assert_private_settlement_frame_v1<T>(value: &T, nominal: &str)
+    pub fn assert_private_settlement_frame_v1<T>(value: &T, nominal: &str)
     where
         T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + PartialEq,
     {
@@ -2224,7 +2228,7 @@ pub(crate) mod tests {
         world.commit();
     }
 
-    pub(crate) fn fixture() -> (
+    pub fn fixture() -> (
         PrivateSettlementGlobalStateV1,
         PrivateSettlementReceiptV1,
         SidecarFixtureV1,
@@ -2274,7 +2278,7 @@ pub(crate) mod tests {
             fixture.sidecar.payload.delta.clone(),
         ];
         for (index, pool) in [&first_pool, &second_pool].into_iter().enumerate() {
-            let manifest_leg = manifest.legs[index].clone();
+            let manifest_leg = manifest.legs[index];
             let delta = &mut deltas[index];
             delta.bundle_id = manifest.bundle_id;
             delta.leg_ordinal = u8::try_from(index).expect("fixture ordinal");
@@ -3154,7 +3158,7 @@ pub(crate) mod tests {
         let (mut state, receipt, _) = fixture();
         let abort = PrivateSettlementAbortReceiptV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-            network_id: receipt.manifest.network_id.clone(),
+            network_id: receipt.manifest.network_id,
             bundle_id: receipt.manifest.bundle_id,
             manifest_digest: receipt.manifest.manifest_digest().expect("manifest digest"),
             finalized_height: 19,
@@ -3188,7 +3192,7 @@ pub(crate) mod tests {
             reason: iroha_data_model::nexus::PrivateSettlementAbortReasonV1::Expired,
         };
         assert_eq!(
-            state.apply_abort(expired.clone(), 21),
+            state.apply_abort(expired, 21),
             Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
         );
         assert!(state.staged_locks.is_empty());
@@ -3204,7 +3208,7 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn world_from_private_settlement_state(
+    pub fn world_from_private_settlement_state(
         state: PrivateSettlementGlobalStateV1,
     ) -> crate::state::World {
         let PrivateSettlementGlobalStateV1 {
@@ -3232,14 +3236,14 @@ pub(crate) mod tests {
     }
 
     /// Build a valid World with one durable all-Prepare registration and no terminal marker.
-    pub(crate) fn prepared_world_fixture() -> crate::state::World {
+    pub fn prepared_world_fixture() -> crate::state::World {
         let (mut private_state, receipt, _) = fixture();
         register_receipt_prepare(&mut private_state, &receipt)
             .expect("register prepared fixture barrier");
         world_from_private_settlement_state(private_state)
     }
 
-    pub(crate) fn finalized_world_fixture() -> crate::state::World {
+    pub fn finalized_world_fixture() -> crate::state::World {
         let (mut private_state, receipt, _) = fixture();
         register_receipt_prepare(&mut private_state, &receipt)
             .expect("register finalized fixture Prepare barrier");
@@ -3281,7 +3285,7 @@ pub(crate) mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ChainId::from("private-settlement-wsv-test"),
-            receipt.manifest.network_id.clone(),
+            receipt.manifest.network_id,
         );
         install_private_settlement_authority_fixture(
             &state,

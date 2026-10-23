@@ -6,7 +6,7 @@ mod registry_refusal_tests;
 #[path = "runtime_dlmm_tests.rs"]
 mod runtime_dlmm_tests;
 #[path = "runtime_wrapper_tests.rs"]
-pub(crate) mod runtime_wrapper_tests;
+pub mod runtime_wrapper_tests;
 #[path = "signed_original_fixtures.rs"]
 mod signed_original_fixtures;
 use super::*;
@@ -23,7 +23,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::{domain::DomainId, name::Name, topology::DataSpaceId};
 use iroha_primitives::numeric::NumericSpec;
-pub(crate) use signed_original_fixtures::{
+pub use signed_original_fixtures::{
     sign_payout_fixture_work, signed_payout_lifecycle_registry_fixture,
     signed_payout_lifecycle_registry_fixture_with_config,
     with_original_validation_fee_payout_state_at_height,
@@ -92,7 +92,7 @@ fn test_contract_address() -> iroha_data_model::smart_contract::ContractAddress 
     .expect("test contract address")
 }
 
-pub(crate) fn treasury_payout_binding(
+pub fn treasury_payout_binding(
     contract_address: iroha_data_model::smart_contract::ContractAddress,
     code: &[u8],
 ) -> ValidationFeeTreasuryPayoutBindingV1 {
@@ -264,7 +264,7 @@ fn payout_permissions_require_dedicated_instance_roles() {
     assert_eq!(dedicated_payout_permission(&duplicate, selector), None);
 }
 
-pub(crate) fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
+pub fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
     use iroha_data_model::prelude::{Account, AssetDefinition, Domain};
     let contract_domain =
         Domain::new(DomainId::try_new("contracts", "universal").expect("contract domain id"))
@@ -315,7 +315,7 @@ pub(crate) fn validation_fee_payout_world(deployer: &AccountId) -> crate::state:
     world
 }
 
-pub(crate) fn register_bound_payout_time_trigger(
+pub fn register_bound_payout_time_trigger(
     state_tx: &mut StateTransaction<'_, '_>,
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     expected_code_hash: Hash,
@@ -356,13 +356,13 @@ pub(crate) fn register_bound_payout_time_trigger(
     trigger_id
 }
 
-pub(crate) fn with_validation_fee_payout_state_at_height(
+pub fn with_validation_fee_payout_state_at_height(
     height: u64,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
 ) {
     with_validation_fee_payout_state_at_time(height, 0, test)
 }
-pub(crate) fn with_validation_fee_payout_state_at_time(
+pub fn with_validation_fee_payout_state_at_time(
     height: u64,
     timestamp_ms: u64,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
@@ -377,7 +377,7 @@ pub(crate) fn with_validation_fee_payout_state_at_time(
 
 /// Retain a finite invocation owner before opening a direct component fixture.
 /// This does not authenticate a Network input or authorize publication.
-pub(crate) fn with_validation_fee_payout_invocation_at_time(
+pub fn with_validation_fee_payout_invocation_at_time(
     height: u64,
     timestamp_ms: u64,
     invocation: Hash,
@@ -393,7 +393,7 @@ pub(crate) fn with_validation_fee_payout_invocation_at_time(
 
 /// Own only the finite mandatory-purpose component scope for an idle maintenance test.
 /// This grants neither complete carrier inventory nor publication authority.
-pub(crate) fn with_validation_fee_payout_protocol_at_time(
+pub fn with_validation_fee_payout_protocol_at_time(
     height: u64,
     timestamp_ms: u64,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
@@ -406,7 +406,7 @@ pub(crate) fn with_validation_fee_payout_protocol_at_time(
     );
 }
 
-pub(crate) fn with_validation_fee_payout_block_at_time(
+pub fn with_validation_fee_payout_block_at_time(
     height: u64,
     timestamp_ms: u64,
     test: impl FnOnce(&mut crate::state::StateBlock<'_>, &AccountId, &[u8], Hash),
@@ -533,7 +533,7 @@ fn payout_component_quantity_requires_exact_retained_invocation() {
     });
 }
 
-pub(crate) fn activate_bound_payout_runtime(
+pub fn activate_bound_payout_runtime(
     state_tx: &mut StateTransaction<'_, '_>,
     deployer: &AccountId,
     code: &[u8],
@@ -687,7 +687,7 @@ fn assert_treasury_payout_plan_mismatch(
     ));
 }
 
-pub(crate) struct BoundPayoutRuntimeFixture {
+pub struct BoundPayoutRuntimeFixture {
     pub(crate) binding: ValidationFeeTreasuryPayoutBindingV1,
 }
 
@@ -912,7 +912,7 @@ fn test_parliament_candidates() -> Vec<AccountId> {
     (220_u8..=243).map(account).collect()
 }
 
-pub(crate) fn test_authorization(
+pub fn test_authorization(
     proposal: &iroha_data_model::governance::types::ProposalKind,
     enacted_at_height: u64,
 ) -> ValidationFeeParliamentAuthorizationV1 {
@@ -945,7 +945,7 @@ pub(crate) fn test_authorization(
     }
 }
 
-pub(crate) fn payout_registry_entry(
+pub fn payout_registry_entry(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     revision: u64,
     enacted_at_height: u64,
@@ -967,7 +967,7 @@ pub(crate) fn payout_registry_entry(
     }
 }
 
-pub(crate) fn policy_registry(
+pub fn policy_registry(
     policies: &[ValidationFeePolicyV1],
     bindings: &[ValidationFeeTreasuryPayoutBindingV1],
 ) -> ValidationFeePolicyRegistryV1 {
@@ -1041,7 +1041,7 @@ fn seed_authorized_proposal(
         .expect("persist exact enacted validation-fee Parliament attempt");
 }
 
-pub(crate) fn install_policy_registry_fixture(
+pub fn install_policy_registry_fixture(
     registry: &ValidationFeePolicyRegistryV1,
     state_tx: &mut StateTransaction<'_, '_>,
 ) {
@@ -1083,7 +1083,7 @@ pub(crate) fn install_policy_registry_fixture(
 
 /// Original signed root with an explicitly smaller native pool for retail admission controls.
 /// The later block remains a component projection; no limit or publication grant is enlarged.
-pub(crate) fn with_retail_native_capacity_block(
+pub fn with_retail_native_capacity_block(
     height: u64,
     timestamp_ms: u64,
     native_entries: u32,
@@ -1102,7 +1102,7 @@ pub(crate) fn with_retail_native_capacity_block(
 }
 
 /// Reuse the actual signed root for original Time-owner integration controls.
-pub(crate) fn with_retail_native_capacity_state(
+pub fn with_retail_native_capacity_state(
     native_entries: u32,
     test: impl FnOnce(&crate::state::State, &AccountId, &[u8], Hash),
 ) {

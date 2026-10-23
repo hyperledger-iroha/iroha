@@ -1154,7 +1154,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );
-    let mut block = state.block(latest_block.clone());
+    let mut block = state.block(latest_block);
     let mut state_transaction = block.transaction();
     let executor = super::Executor::Initial;
     let orderbook = QueryRequest::Singular(FindSorafsOrderbookPolicy.into());
@@ -1690,7 +1690,7 @@ fn native_exact_transaction_read_requires_source_account_grant_and_revalidates_r
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &request)
         .expect_err("role revocation is effective");
 }
-/// Every authoritative SoraFS orderbook and reserve query is gated by its operator permission,
+/// Every authoritative `SoraFS` orderbook and reserve query is gated by its operator permission,
 /// while PoP-registry, moderation and reputation transparency reads stay public.
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1716,7 +1716,7 @@ fn initial_executor_gates_every_authoritative_sorafs_query_variant() {
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );
-    let mut block = state.block(latest_block.clone());
+    let mut block = state.block(latest_block);
     let mut state_transaction = block.transaction();
     let executor = super::Executor::Initial;
     let singular = |query: SingularQueryBox| QueryRequest::Singular(query);

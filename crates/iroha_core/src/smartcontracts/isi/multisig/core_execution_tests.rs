@@ -197,7 +197,7 @@ fn bind_account_label_in_dataspace(
         .set_label(Some(label.clone()));
     state_transaction
         .world
-        .insert_account_alias_binding(label.clone(), account_id.clone());
+        .insert_account_alias_binding(&(label.clone()), &(account_id.clone()));
     state_transaction.world.replace_account_rekey_record(
         iroha_data_model::account::rekey::AccountRekeyRecord::new(
             label.clone(),

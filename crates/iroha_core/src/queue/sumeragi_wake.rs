@@ -65,7 +65,7 @@ impl SumeragiQueueWake {
 }
 
 /// Move-only startup ticket released only if the original native owner was not installed.
-pub(crate) struct SumeragiQueueReservation {
+pub struct SumeragiQueueReservation {
     pub(super) queue: Weak<Queue>,
     pub(super) ticket: u64,
 }
@@ -128,7 +128,7 @@ impl Drop for SumeragiQueueReservation {
 }
 
 /// Retire delivery while permanently excluding reuse of this successful native Queue.
-pub(crate) struct SumeragiQueueRegistration {
+pub struct SumeragiQueueRegistration {
     pub(super) queue: Weak<Queue>,
     pub(super) ticket: u64,
 }

@@ -196,10 +196,15 @@ impl IntegerAirV1 {
         let mut index = Value::constant(0);
         let mut results = vec![Value::constant(0); tables.len()];
         for row in 0..rows {
-            let selected = self.push(Operation::EqualConstant(value, row as i64), 0, 1);
+            let selected = self.push(
+                Operation::EqualConstant(value, i64::try_from(row).expect("bounded circuit index")),
+                0,
+                1,
+            );
             self.constraints.push(Constraint::Boolean(selected));
             total = self.add(total, selected);
-            let weighted = self.mul_constant(selected, row as i64);
+            let weighted =
+                self.mul_constant(selected, i64::try_from(row).expect("bounded circuit index"));
             index = self.add(index, weighted);
             for (result, table) in results.iter_mut().zip(tables) {
                 if table[row] != 0 {
@@ -310,7 +315,9 @@ impl IntegerAirV1 {
         ) -> [i64; 2] {
             let index = match source {
                 Source::Constant(value) => return [0, value],
-                Source::Fixed(index) => return [1, index as i64],
+                Source::Fixed(index) => {
+                    return [1, i64::try_from(index).expect("bounded circuit index")];
+                }
                 Source::Next(_) => panic!("next-row value is not an executable output"),
                 Source::Column(index) => index,
             };
@@ -319,7 +326,11 @@ impl IntegerAirV1 {
             }
             let operation = &air.operations[index];
             if matches!(operation, Operation::Input) {
-                let operand = [3, inputs[index].expect("input position") as i64];
+                let operand = [
+                    3,
+                    i64::try_from(inputs[index].expect("input position"))
+                        .expect("bounded circuit index"),
+                ];
                 cache[index] = Some(operand);
                 return operand;
             }
@@ -339,7 +350,10 @@ impl IntegerAirV1 {
             for operand in operands {
                 node.extend(visit(air, operand.source, inputs, cache, nodes));
             }
-            let operand = [2, nodes.len() as i64];
+            let operand = [
+                2,
+                i64::try_from(nodes.len()).expect("bounded circuit index"),
+            ];
             nodes.push(node);
             cache[index] = Some(operand);
             operand
@@ -434,45 +448,6 @@ impl IntegerAirV1 {
                 Constraint::GatedEquation(gate, a, b) => read(*gate).mul(read(*a).sub(read(*b))),
             })
             .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn signed_division_and_comparison_have_polynomial_constraints() {
-        let mut air = IntegerAirV1::default();
-        let a = air.input(-500, 500);
-        let b = air.input(-500, 500);
-        let less = air.less(a, b);
-        let quotient = air.divide(a, 8);
-        for av in [-499, -9, -1, 0, 1, 9, 499] {
-            for bv in [-499, 0, 499] {
-                let row = air.witness(&[av, bv], &[]);
-                let fields = row.iter().copied().map(field).collect::<Vec<_>>();
-                assert!(
-                    air.residues(&fields, &fields, &[])
-                        .iter()
-                        .all(|r| *r == F::ZERO)
-                );
-                let Source::Column(li) = less.source else {
-                    panic!("column")
-                };
-                let Source::Column(qi) = quotient.source else {
-                    panic!("column")
-                };
-                assert_eq!(row[li], i64::from(av < bv));
-                assert_eq!(row[qi], av / 8);
-                let mut corrupt = fields.clone();
-                corrupt[qi] = corrupt[qi].add(F::ONE);
-                assert!(
-                    air.residues(&corrupt, &corrupt, &[])
-                        .iter()
-                        .any(|r| *r != F::ZERO)
-                );
-            }
-        }
     }
 }
 
@@ -625,5 +600,44 @@ impl PackedIntegerAirV1 {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn signed_division_and_comparison_have_polynomial_constraints() {
+        let mut air = IntegerAirV1::default();
+        let a = air.input(-500, 500);
+        let b = air.input(-500, 500);
+        let less = air.less(a, b);
+        let quotient = air.divide(a, 8);
+        for av in [-499, -9, -1, 0, 1, 9, 499] {
+            for bv in [-499, 0, 499] {
+                let row = air.witness(&[av, bv], &[]);
+                let fields = row.iter().copied().map(field).collect::<Vec<_>>();
+                assert!(
+                    air.residues(&fields, &fields, &[])
+                        .iter()
+                        .all(|r| *r == F::ZERO)
+                );
+                let Source::Column(li) = less.source else {
+                    panic!("column")
+                };
+                let Source::Column(qi) = quotient.source else {
+                    panic!("column")
+                };
+                assert_eq!(row[li], i64::from(av < bv));
+                assert_eq!(row[qi], av / 8);
+                let mut corrupt = fields.clone();
+                corrupt[qi] = corrupt[qi].add(F::ONE);
+                assert!(
+                    air.residues(&corrupt, &corrupt, &[])
+                        .iter()
+                        .any(|r| *r != F::ZERO)
+                );
+            }
+        }
     }
 }

@@ -15,11 +15,11 @@ use super::p256::{
 };
 #[cfg(test)]
 use super::p256::{TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar};
-use once_cell::sync::Lazy;
 use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
 use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use thiserror::Error;
 #[cfg(test)]
 /// Closed identifier for Twisted-ElGamal public-key possession transcripts.
@@ -207,8 +207,8 @@ impl AnonymousPgcParametersV1 {
         })
     }
 }
-static PGC_PARAMETERS: Lazy<Result<AnonymousPgcParametersV1, AnonymousPgcError>> =
-    Lazy::new(AnonymousPgcParametersV1::derive);
+static PGC_PARAMETERS: LazyLock<Result<AnonymousPgcParametersV1, AnonymousPgcError>> =
+    LazyLock::new(AnonymousPgcParametersV1::derive);
 struct PgcDecryptionTableV1 {
     baby_steps: BTreeMap<[u8; 33], u16>,
     giant_stride: ProjectivePoint,
@@ -242,8 +242,8 @@ impl PgcDecryptionTableV1 {
         })
     }
 }
-static PGC_DECRYPTION_TABLE: Lazy<Result<PgcDecryptionTableV1, AnonymousPgcError>> =
-    Lazy::new(PgcDecryptionTableV1::derive);
+static PGC_DECRYPTION_TABLE: LazyLock<Result<PgcDecryptionTableV1, AnonymousPgcError>> =
+    LazyLock::new(PgcDecryptionTableV1::derive);
 /// Canonical non-identity Twisted-ElGamal public key `pk = g·sk`.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::privacy_engines::anonymous_pgc::TwistedElGamalPublicKeyV1")]
@@ -696,7 +696,7 @@ where
         let randomness = SecretScalarV1::generate(rng)?;
         match encrypt_with_randomness(public_key, message, &randomness) {
             Ok(ciphertext) => return Ok((ciphertext, randomness)),
-            Err(AnonymousPgcError::P256(P256EngineError::IdentityPoint)) => continue,
+            Err(AnonymousPgcError::P256(P256EngineError::IdentityPoint)) => {}
             Err(error) => return Err(error),
         }
     }
@@ -801,13 +801,13 @@ impl<'a> PgcKeyPossessionStatementV1<'a> {
     /// Returns an error for an invalid key or mismatched governed parameters.
     pub fn new(
         public_key: TwistedElGamalPublicKeyV1,
-        transcript_binding: TranscriptBindingV1<'a>,
+        transcript_binding: &TranscriptBindingV1<'a>,
     ) -> Result<Self, AnonymousPgcError> {
-        validate_binding(&transcript_binding)?;
+        validate_binding(transcript_binding)?;
         let _ = public_key.point.to_projective()?;
         Ok(Self {
             public_key,
-            transcript_binding,
+            transcript_binding: *transcript_binding,
         })
     }
     /// Return the registered public key.
@@ -954,15 +954,15 @@ impl<'a> PgcCiphertextOpeningStatementV1<'a> {
     pub fn new(
         public_key: TwistedElGamalPublicKeyV1,
         ciphertext: TwistedElGamalCiphertextV1,
-        transcript_binding: TranscriptBindingV1<'a>,
+        transcript_binding: &TranscriptBindingV1<'a>,
     ) -> Result<Self, AnonymousPgcError> {
-        validate_binding(&transcript_binding)?;
+        validate_binding(transcript_binding)?;
         let _ = public_key.point.to_projective()?;
         ciphertext.validate()?;
         Ok(Self {
             public_key,
             ciphertext,
-            transcript_binding,
+            transcript_binding: *transcript_binding,
         })
     }
     /// Return the public key.
@@ -1249,13 +1249,16 @@ mod tests {
             match self.0 {
                 AdversarialRngMode::Periodic => {
                     for (index, byte) in destination.iter_mut().enumerate() {
-                        *byte = ((index % 4) as u8).wrapping_mul(53).wrapping_add(3);
+                        *byte = u8::try_from(index % 4)
+                            .expect("sample lane")
+                            .wrapping_mul(53)
+                            .wrapping_add(3);
                     }
                     Ok(())
                 }
                 AdversarialRngMode::PartialFailure => {
                     for (index, byte) in destination.iter_mut().take(23).enumerate() {
-                        *byte = index as u8;
+                        *byte = index.to_le_bytes()[0];
                     }
                     Err(RngError::new(
                         "injected partial Anonymous-PGC entropy failure",
@@ -1300,7 +1303,7 @@ mod tests {
         let ciphertext =
             encrypt_with_randomness(key_pair.public_key(), 42, &randomness).expect("ciphertext");
         let statement =
-            PgcCiphertextOpeningStatementV1::new(key_pair.public_key(), ciphertext, binding())
+            PgcCiphertextOpeningStatementV1::new(key_pair.public_key(), ciphertext, &binding())
                 .expect("statement");
         let mut rng = KatRng::new([0x41; 32]);
         let proof = prove_ciphertext_opening(&statement, 42, &randomness, &mut rng).expect("proof");
@@ -1326,7 +1329,7 @@ mod tests {
     fn key_possession_proof_verifies_and_rejects_wrong_secret() {
         let key_pair = TwistedElGamalKeyPairV1::from_secret(scalar(9)).expect("key pair");
         let statement =
-            PgcKeyPossessionStatementV1::new(key_pair.public_key(), binding()).expect("statement");
+            PgcKeyPossessionStatementV1::new(key_pair.public_key(), &binding()).expect("statement");
         let mut rng = KatRng::new([0x55; 32]);
         let proof =
             prove_key_possession(&statement, key_pair.secret_scalar(), &mut rng).expect("proof");
@@ -1373,7 +1376,7 @@ mod tests {
     fn prover_entropy_failures_are_typed_and_follow_witness_checks() {
         let key_pair = TwistedElGamalKeyPairV1::from_secret(scalar(9)).expect("key pair");
         let possession =
-            PgcKeyPossessionStatementV1::new(key_pair.public_key(), binding()).expect("statement");
+            PgcKeyPossessionStatementV1::new(key_pair.public_key(), &binding()).expect("statement");
         assert!(matches!(
             prove_key_possession(
                 &possession,
@@ -1396,7 +1399,7 @@ mod tests {
         let ciphertext =
             encrypt_with_randomness(key_pair.public_key(), 42, &randomness).expect("ciphertext");
         let opening =
-            PgcCiphertextOpeningStatementV1::new(key_pair.public_key(), ciphertext, binding())
+            PgcCiphertextOpeningStatementV1::new(key_pair.public_key(), ciphertext, &binding())
                 .expect("opening statement");
         assert!(matches!(
             prove_ciphertext_opening(
@@ -1630,14 +1633,14 @@ mod tests {
             .expect("other key")
             .public_key();
         let wrong_key =
-            PgcCiphertextOpeningStatementV1::new(other_key, ciphertext, binding()).expect("wrong");
+            PgcCiphertextOpeningStatementV1::new(other_key, ciphertext, &binding()).expect("wrong");
         assert!(verify_ciphertext_opening(&wrong_key, &proof).is_err());
         let other_ciphertext =
             encrypt_with_randomness(key_pair.public_key(), 42, &scalar(12)).expect("other");
         let wrong_ciphertext = PgcCiphertextOpeningStatementV1::new(
             key_pair.public_key(),
             other_ciphertext,
-            binding(),
+            &binding(),
         )
         .expect("wrong");
         assert!(verify_ciphertext_opening(&wrong_ciphertext, &proof).is_err());
@@ -1680,7 +1683,7 @@ mod tests {
             PgcCiphertextOpeningStatementV1::new(
                 statement.public_key,
                 statement.ciphertext,
-                changed
+                &changed
             )
             .is_err(),
             "network/genesis disagreement must reject before proof evaluation"
@@ -1707,7 +1710,7 @@ mod tests {
             let changed = PgcCiphertextOpeningStatementV1::new(
                 statement.public_key,
                 statement.ciphertext,
-                binding,
+                &binding,
             )
             .expect("binding remains structurally valid");
             assert!(verify_ciphertext_opening(&changed, &proof).is_err());
@@ -1718,7 +1721,7 @@ mod tests {
             PgcCiphertextOpeningStatementV1::new(
                 statement.public_key,
                 statement.ciphertext,
-                wrong_parameter
+                &wrong_parameter
             ),
             Err(AnonymousPgcError::ParameterDigestMismatch)
         ));
@@ -1728,7 +1731,7 @@ mod tests {
             PgcCiphertextOpeningStatementV1::new(
                 statement.public_key,
                 statement.ciphertext,
-                wrong_generator
+                &wrong_generator
             ),
             Err(AnonymousPgcError::GeneratorDigestMismatch)
         ));

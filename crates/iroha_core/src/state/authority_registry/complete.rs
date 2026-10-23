@@ -23,7 +23,7 @@ const NATIVE_WORLD_CUT_HISTORY_SOURCE: &str = "Original pre-tail World root, cou
 const NATIVE_WORLD_CUT_HISTORY_AUTHENTICATION: &str = "Original completed executor captures R; frozen publication reconstructs that exact root and count from the complete native tail journal; restoration must replay original execution rather than decode a caller-supplied cut";
 #[path = "complete/native_capture.rs"]
 mod native_capture;
-pub(crate) use native_capture::{
+pub use native_capture::{
     capture_account_alias_table_once, capture_accounts_table_once, capture_domains_table_once,
 };
 
@@ -70,7 +70,7 @@ pub(in crate::state) mod frozen_validation_fee_proposals;
 
 #[path = "complete/grouped_capture.rs"]
 mod grouped_capture;
-pub(crate) use grouped_capture::{
+pub use grouped_capture::{
     capture_account_rekey_records_once, capture_asset_definitions_once, capture_assets_once,
     capture_contract_alias_bindings_once, capture_contract_subject_bindings_once,
     capture_escrows_once, capture_governance_proposals_once, capture_nfts_once,
@@ -80,7 +80,7 @@ pub(crate) use grouped_capture::{
 
 /// A field that cannot yet participate in a complete State commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum CompleteInventoryError {
+pub enum CompleteInventoryError {
     /// Stable field identities must be unique across nested owners.
     #[error("duplicate State authority identity: {0}")]
     DuplicateIdentity(&'static str),
@@ -166,7 +166,7 @@ fn check_history_field(
     }
 }
 
-pub(crate) mod original_stream;
+pub mod original_stream;
 
 mod derivation_path;
 use derivation_path::DerivationPath;
@@ -308,25 +308,23 @@ fn check_field(
 /// This checks schema and classification only. A successful result does not
 /// prove complete row traversal, derived-index reconstruction, durable root
 /// custody, or finality.
-pub(crate) fn require_complete_inventory(
-    fields: &'static [Field],
-) -> Result<(), CompleteInventoryError> {
+pub fn require_complete_inventory(fields: &'static [Field]) -> Result<(), CompleteInventoryError> {
     let mut result = Ok(());
     visit(fields, &mut |field| {
         if result.is_err() {
             return;
         }
-        result = if count_identity(fields, field.id) != 1 {
-            Err(CompleteInventoryError::DuplicateIdentity(field.id))
-        } else {
+        result = if count_identity(fields, field.id) == 1 {
             check_field(fields, field)
+        } else {
+            Err(CompleteInventoryError::DuplicateIdentity(field.id))
         };
     });
     result
 }
 
 /// Admit the actual typed inventory's schema metadata, without capturing State authority.
-pub(crate) fn require_complete_state_inventory() -> Result<(), CompleteInventoryError> {
+pub fn require_complete_state_inventory() -> Result<(), CompleteInventoryError> {
     require_complete_inventory(STATE_FIELDS)
 }
 
@@ -441,12 +439,7 @@ mod tests {
             .expect("bounded exact raw-key interval");
         let verified = CanonicalTableLeafSet::verify_paired_raw_range(
             "world.account_aliases",
-            limits,
-            &captured.root(),
-            &captured.lookup_root(),
-            &captured.ordered_root(),
-            &canonical_rows[0].0,
-            &canonical_rows[1].0,
+            limits,(&captured.root(), &captured.lookup_root(), &captured.ordered_root()),(&canonical_rows[0].0, &canonical_rows[1].0),
             1,
             8 * 1024,
             &range,

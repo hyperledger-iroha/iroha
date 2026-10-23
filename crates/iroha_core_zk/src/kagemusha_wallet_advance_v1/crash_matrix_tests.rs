@@ -40,6 +40,9 @@ use super::{
     *,
 };
 
+type CustodyFlowV1<'a> =
+    dyn Fn(&mut SimProviderV1) -> Result<(), KagemushaWalletProviderErrorV1> + 'a;
+
 const FAULTS: [KagemushaWalletSimFaultV1; 6] = [
     KagemushaWalletSimFaultV1::Error,
     KagemushaWalletSimFaultV1::ErrorKind(io::ErrorKind::StorageFull),
@@ -405,7 +408,7 @@ fn advance_matrix(
                 // I3 and I4: one released successor, byte-identical everywhere.
                 let mut distinct: Vec<&RetainedV1> = Vec::new();
                 for retained in &releases {
-                    if !distinct.iter().any(|seen| *seen == retained) {
+                    if !distinct.contains(&retained) {
                         distinct.push(retained);
                     }
                 }
@@ -1197,7 +1200,7 @@ fn faulted_recovery_matrix(first: KagemushaWalletSimFaultV1, seed: u8) -> usize 
             }
             let mut provider = device.open();
             assert_covered(&device, &mut provider, &label);
-            let competitor = (rotation % 2 == 0).then_some(&competitor);
+            let competitor = rotation.is_multiple_of(2).then_some(&competitor);
             let winner =
                 resolve_advance(&mut provider, &slot, &request, competitor, &earlier, &label);
             assert_covered(&device, &mut provider, &label);
@@ -1455,12 +1458,7 @@ fn wallet_advance_v1_crash_matrix_platform_faults_lifecycle() {
                 .delete_custody(&released_slot, &confirmation)
                 .map(|_| ())
         };
-        let flows: [(
-            &str,
-            &DeviceV1,
-            KagemushaWalletSlotIdV1,
-            &dyn Fn(&mut SimProviderV1) -> Result<(), KagemushaWalletProviderErrorV1>,
-        ); 2] = [
+        let flows: [(&str, &DeviceV1, KagemushaWalletSlotIdV1, &CustodyFlowV1<'_>); 2] = [
             ("abandon", &enrolled, slot, &abandon),
             ("delete", &released, released_slot, &delete),
         ];

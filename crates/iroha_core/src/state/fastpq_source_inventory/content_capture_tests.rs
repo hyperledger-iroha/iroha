@@ -558,7 +558,7 @@ fn cached_prebuilt_batches_are_refused_before_recapture_and_every_first_getter()
                     } else {
                         seal_native_source(&mut block, &mut native_source).unwrap();
                         assert!(native_source.fastpq_transcripts().is_empty());
-                    };
+                    }
                     block.capture_exec_witness().unwrap();
                     assert_eq!(cached_outputs(&block), [true, with_transfer, true]);
                     let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

@@ -85,6 +85,10 @@ const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_reputation::ReputationJournalHeadStateV1"
 )]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Canonical journal fields identify the last committed event and retain their serialized names"
+)]
 struct ReputationJournalHeadStateV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -141,14 +145,18 @@ where
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    let limits = match current.as_deref() {
-        Some(current) => current.decode_limits(bytes.len(), STATE_LIMITS),
-        None => crate::smartcontracts::isi::query::singular_query_decode_limits(
-            bytes.len(),
-            STATE_LIMITS,
-        ),
-    }
-    .map_err(InstructionExecutionError::Query)?;
+    let limits = current
+        .as_deref()
+        .map_or_else(
+            || {
+                crate::smartcontracts::isi::query::singular_query_decode_limits(
+                    bytes.len(),
+                    STATE_LIMITS,
+                )
+            },
+            |current| current.decode_limits(bytes.len(), STATE_LIMITS),
+        )
+        .map_err(InstructionExecutionError::Query)?;
     let (value, allocation_bytes) = if current.is_some() {
         let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
             decode_from_bytes_with_limits::<T>(bytes, limits)
@@ -286,12 +294,10 @@ fn read_policy_history_with_current(
     else {
         return Ok(None);
     };
-    let record: ReputationJournalAuthorityPolicyRecordV1 = match current {
-        Some(current) => {
-            decode_state_for_current(bytes, "reputation recorder-policy history", current)
-        }
-        None => decode_state(bytes, "reputation recorder-policy history"),
-    }?;
+    let record: ReputationJournalAuthorityPolicyRecordV1 = current.map_or_else(
+        || decode_state(bytes, "reputation recorder-policy history"),
+        |current| decode_state_for_current(bytes, "reputation recorder-policy history", current),
+    )?;
     record.validate().map_err(|error| {
         corrupt_state(format!(
             "stored reputation recorder-policy history is invalid: {error}"
@@ -662,10 +668,10 @@ fn read_journal_head_with_current(
         }
         return Ok(None);
     };
-    let head: ReputationJournalHeadStateV1 = match current {
-        Some(current) => decode_state_for_current(bytes, "reputation journal head", current),
-        None => decode_state(bytes, "reputation journal head"),
-    }?;
+    let head: ReputationJournalHeadStateV1 = current.map_or_else(
+        || decode_state(bytes, "reputation journal head"),
+        |current| decode_state_for_current(bytes, "reputation journal head", current),
+    )?;
     if head.last_sequence == 0 || head.last_target_block_height == 0 {
         return Err(corrupt_state("stored reputation journal head is inert"));
     }
@@ -697,10 +703,10 @@ fn read_event_with_current(
     let Some(bytes) = world.smart_contract_state().get(&event_key(sequence)) else {
         return Ok(None);
     };
-    let record: ReputationJournalCommittedEventRecordV1 = match current {
-        Some(current) => decode_state_for_current(bytes, "reputation committed event", current),
-        None => decode_state(bytes, "reputation committed event"),
-    }?;
+    let record: ReputationJournalCommittedEventRecordV1 = current.map_or_else(
+        || decode_state(bytes, "reputation committed event"),
+        |current| decode_state_for_current(bytes, "reputation committed event", current),
+    )?;
     record
         .validate()
         .map_err(|error| corrupt_state(format!("stored reputation event is invalid: {error}")))?;
@@ -732,10 +738,10 @@ fn read_event_id_sequence_with_current(
     let Some(bytes) = world.smart_contract_state().get(&event_id_key(event_id)) else {
         return Ok(None);
     };
-    let sequence: u64 = match current {
-        Some(current) => decode_state_for_current(bytes, "reputation event-id index", current),
-        None => decode_state(bytes, "reputation event-id index"),
-    }?;
+    let sequence: u64 = current.map_or_else(
+        || decode_state(bytes, "reputation event-id index"),
+        |current| decode_state_for_current(bytes, "reputation event-id index", current),
+    )?;
     if sequence == 0 {
         return Err(corrupt_state(
             "reputation event-id index points to sequence zero",
@@ -767,10 +773,10 @@ fn read_source_head_with_current(
     else {
         return Ok(None);
     };
-    let head: ReputationJournalSourceHeadV1 = match current {
-        Some(current) => decode_state_for_current(bytes, "reputation source head", current),
-        None => decode_state(bytes, "reputation source head"),
-    }?;
+    let head: ReputationJournalSourceHeadV1 = current.map_or_else(
+        || decode_state(bytes, "reputation source head"),
+        |current| decode_state_for_current(bytes, "reputation source head", current),
+    )?;
     head.validate().map_err(|error| {
         corrupt_state(format!("stored reputation source head is invalid: {error}"))
     })?;
@@ -1234,32 +1240,28 @@ fn exact_entry_replay(
     let journal_head = validate_journal_head(world)?;
     let indexed = read_event_id_sequence(world, entry.event_id)?;
     let source_head = read_source_head(world, entry.source_id)?;
-    match indexed {
-        Some(sequence) => {
-            if journal_head.is_none_or(|head| sequence > head.last_sequence) {
-                return Err(corrupt_state(
-                    "reputation event-id index points beyond the journal head",
-                ));
-            }
-            let record = read_event(world, sequence)?.ok_or_else(|| {
-                corrupt_state("reputation event-id index points to a missing event")
-            })?;
-            if &record.entry != entry {
-                return Err(corrupt_state(
-                    "reputation event-id index aliases different canonical content",
-                ));
-            }
-            validate_event_indexes(world, &record)?;
-            Ok(Some(sequence))
+    if let Some(sequence) = indexed {
+        if journal_head.is_none_or(|head| sequence > head.last_sequence) {
+            return Err(corrupt_state(
+                "reputation event-id index points beyond the journal head",
+            ));
         }
-        None => {
-            if source_head.is_some() {
-                return Err(invalid_parameter(
-                    "reputation source revision is already occupied by different content",
-                ));
-            }
-            Ok(None)
+        let record = read_event(world, sequence)?
+            .ok_or_else(|| corrupt_state("reputation event-id index points to a missing event"))?;
+        if &record.entry != entry {
+            return Err(corrupt_state(
+                "reputation event-id index aliases different canonical content",
+            ));
         }
+        validate_event_indexes(world, &record)?;
+        Ok(Some(sequence))
+    } else {
+        if source_head.is_some() {
+            return Err(invalid_parameter(
+                "reputation source revision is already occupied by different content",
+            ));
+        }
+        Ok(None)
     }
 }
 fn validate_new_source_revision(
@@ -1354,14 +1356,14 @@ fn append_validated_entry(
     tx: &mut StateTransaction<'_, '_>,
     entry: ReputationJournalEntryV1,
 ) -> Result<u64, InstructionExecutionError> {
-    let prepared = prepare_validated_entry(tx, entry)?;
+    let prepared = prepare_validated_entry(tx, &(entry))?;
     let sequence = prepared.sequence;
     prepared.publish(tx);
     Ok(sequence)
 }
 fn prepare_validated_entry(
     state_transaction: &StateTransaction<'_, '_>,
-    entry: ReputationJournalEntryV1,
+    entry: &ReputationJournalEntryV1,
 ) -> Result<PreparedReputationAppend, InstructionExecutionError> {
     let recorded_at_unix_ms = block_time_ms(state_transaction)?;
     validate_entry_commit_context(state_transaction.world(), &entry, recorded_at_unix_ms)?;
@@ -2779,8 +2781,8 @@ pub(crate) mod tests {
     }
 
     /// Synthetic World preimages for isolated index/time/dispute tests only. This helper never
-    /// executes SetPolicy, creates executor custody, or supplies a native authenticated proof.
-    pub(crate) fn seed_policy_preimage(
+    /// executes `SetPolicy`, creates executor custody, or supplies a native authenticated proof.
+    pub fn seed_policy_preimage(
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         policy: ReputationJournalAuthorityPolicyV1,
@@ -2964,7 +2966,7 @@ pub(crate) mod tests {
             timestamp_ms,
             0,
         );
-        let mut block = state.block(header.clone());
+        let mut block = state.block(header);
         let mut transaction = block.transaction();
         operation(&mut transaction)?;
         transaction.apply();
@@ -2978,7 +2980,7 @@ pub(crate) mod tests {
             .try_build_with_signature(0, block_signer.private_key())
             .expect("build executed reputation Kura fixture block");
         let block_hash = signed_block.hash();
-        let committed_header = signed_block.header().clone();
+        let committed_header = signed_block.header();
         state
             .kura()
             .store_block(crate::block::reserve_block_for_tests().initialize(signed_block))

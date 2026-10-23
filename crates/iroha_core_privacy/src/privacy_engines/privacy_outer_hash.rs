@@ -168,7 +168,11 @@ fn write_domain_prefix_v1(state: &mut WipingSha3V1, domain: PrivacyOuterDomainV1
         // Construction validates every conversion before any hashing.
         let scope = if index == 1 { domain.proof_scope } else { None };
         let length = label.len() + scope.map_or(0, |_| PROOF_INSTANCE_PROFILE_SUFFIX_BYTES_V1);
-        state.update(&(length as u16).to_be_bytes());
+        state.update(
+            &u16::try_from(length)
+                .expect("validated domain label length")
+                .to_be_bytes(),
+        );
         state.update(label);
         if let Some(scope) = scope {
             state.update(PROOF_INSTANCE_PROFILE_MARKER_V1);
@@ -179,7 +183,11 @@ fn write_domain_prefix_v1(state: &mut WipingSha3V1, domain: PrivacyOuterDomainV1
     state.update(&domain.level.to_be_bytes());
 }
 fn write_fields_v1(state: &mut WipingSha3V1, fields: &[&[u8]]) {
-    state.update(&(fields.len() as u32).to_be_bytes());
+    state.update(
+        &u32::try_from(fields.len())
+            .expect("validated field count")
+            .to_be_bytes(),
+    );
     for field in fields {
         state.update(&(field.len() as u64).to_be_bytes());
         state.update(field);
@@ -1416,7 +1424,9 @@ mod tests {
     #[test]
     fn sha3_wiping_owner_matches_standard_digest_and_wipes_cloned_buffers() {
         for length in [0, 1, 103, 104, 105, 207, 208, 4448] {
-            let payload: Vec<u8> = (0..length).map(|i| (i % 251) as u8).collect();
+            let payload: Vec<u8> = (0..length)
+                .map(|i| u8::try_from(i % 251).expect("fixture byte"))
+                .collect();
             let mut owner = WipingSha3V1::default();
             for chunk in payload.chunks(7) {
                 owner.update(chunk);

@@ -1,6 +1,6 @@
 //! Actual pulse execution, refusal rollback and cold replay over an exact certified prefix.
 //!
-//! Demand is consensus-native: the NPoS pre-boundary height 9 of the shared fixture. The
+//! Demand is consensus-native: the `NPoS` pre-boundary height 9 of the shared fixture. The
 //! undemanded source is the same chain one block earlier, whose next height 8 is ordinary.
 //! Governance state creates no demand: pending Parliament slots neither require a pulse nor
 //! block a block, and the native obligation is the same with or without them.
@@ -54,7 +54,7 @@ fn complete(mut fixture: Fixture) -> (Fixture, ControlWitness) {
 /// Another physical State over the fixture's exact certified prefix and seeded session.
 ///
 /// With `demand` the prefix ends at the fixture's predecessor 8, so the next height is the
-/// NPoS pre-boundary height 9 and the pulse is mandatory. Without it the prefix ends one block
+/// `NPoS` pre-boundary height 9 and the pulse is mandatory. Without it the prefix ends one block
 /// earlier at 7: the next height 8 is an ordinary height of the same epoch, the same session is
 /// active, and the only difference is that consensus demands no pulse there.
 fn same_predecessor(fixture: &Fixture, demand: bool) -> CertifiedTestChain {
@@ -829,7 +829,7 @@ fn pending_parliament_slots_create_no_native_control_demand_and_never_block_unre
 
 /// The consensus-native obligation is the same with or without Parliament state.
 ///
-/// On the ten-block NPoS fixture a sortition requested at height 3 with a three-block delay
+/// On the ten-block `NPoS` fixture a sortition requested at height 3 with a three-block delay
 /// freezes the first native pulse height at or after 6, which is 9. The ordinary heights
 /// before it, including 6, commit with the empty control witness. At 9 the native pulse is
 /// mandatory exactly as on the chain without any governance row: a block without the witness

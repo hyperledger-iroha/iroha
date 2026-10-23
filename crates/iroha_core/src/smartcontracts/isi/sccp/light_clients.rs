@@ -316,6 +316,10 @@ pub fn executing_profiles(
 /// # Errors
 ///
 /// Rejects when this release lacks an active version.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 pub fn admission_profiles(
     world: &(impl WorldReadOnly + ?Sized),
     height: u64,
@@ -885,6 +889,10 @@ pub fn keeper_advance_eligible(instruction: &AdvanceSccpLightClientV1) -> bool {
 /// Rejects an advance of an uninstalled light client or with a stale expected state hash, an
 /// advance that does not verify, an advance that would not move the head, and any advance
 /// while this release lacks an active profile version.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 pub fn preverify_keeper_advance(
     world: &(impl WorldReadOnly + ?Sized),
     view: &(impl super::admission::SccpAdmissionView + ?Sized),
@@ -1134,7 +1142,7 @@ mod tests {
 
     /// Return a decodable advance frame of `network`: an empty Ethereum update list, or an
     /// empty `Backfill` segment.
-    pub(crate) fn advance_frame(backfill: bool) -> AdvanceSccpLightClientV1 {
+    pub fn advance_frame(backfill: bool) -> AdvanceSccpLightClientV1 {
         use iroha_sccp::light_client::{
             ethereum::{EthereumHeaderSegmentV1, EthereumLcAdvanceV1},
             proof::{SccpLcAdvanceV1, SccpLcSegmentV1},
@@ -1783,7 +1791,7 @@ mod tests {
             &mut stx,
             &SccpInstallTrustedCheckpointActionV1 {
                 network: ton,
-                ..action.clone()
+                ..action
             },
             [1; 32],
         )
@@ -1816,7 +1824,7 @@ mod tests {
             store::light_client_checkpoints::get(&*stx.world, &(network, 5)).map(|c| c.origin),
             Some(SccpLcCheckpointOriginV1::Parliament)
         );
-        let mut conflicting = action.clone();
+        let mut conflicting = action;
         conflicting.checkpoint.block_hash = [9; 32];
         install_checkpoint(&mut stx, &conflicting, [2; 32]).expect_err("conflict");
 

@@ -162,7 +162,7 @@ impl<'a> Payload<'a> {
         let mut header = source.header;
         if count > 0 {
             header.merkle_root = MerkleTree::<TransactionEntrypoint>::root_from_typed_leaves(
-                external.iter().map(|entrypoint| entrypoint.hash()),
+                external.iter().map(TransactionEntrypoint::hash),
             );
             let context = execution_context
                 .as_ref()

@@ -3,10 +3,12 @@
 #[test]
 fn projection_serial_fixed_schedule_binds_exact_length_before_twenty_bytes() {
     for count in 0..=4 {
-        let mut shape = ZkX509Rfc5280StarkShapeV1::default();
-        shape.disclosed_attribute_count = count;
+        let mut shape = ZkX509Rfc5280StarkShapeV1 {
+            disclosed_attribute_count: count,
+            ..ZkX509Rfc5280StarkShapeV1::default()
+        };
         for i in 0..count as usize {
-            shape.disclosed_attribute_indices[i] = i as u8;
+            shape.disclosed_attribute_indices[i] = u8::try_from(i).expect("fixture value fits u8");
         }
         let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
         let mut counts = [0; 2];
@@ -82,9 +84,10 @@ fn projection_serial_actual_material_matches_original_integer_and_all_io_bytes()
             byte_queries = byte_queries.add(row[BASE_SERIAL_BYTE_QUERY_ACTIVE]);
             if row[BASE_SERIAL_BYTE_QUERY_ACTIVE] == F::ONE {
                 assert_eq!(
-                    trace.documents[0].bytes[row[BASE_ADDRESS].0 as usize]
-                        .value
-                        .value,
+                    trace.documents[0].bytes
+                        [usize::try_from(row[BASE_ADDRESS].0).expect("fixture value fits usize")]
+                    .value
+                    .value,
                     row[BASE_SERIAL_BYTE_QUERY_VALUE]
                 );
             }
@@ -187,8 +190,9 @@ fn projection_serial_sign_padding_full_width_and_every_metadata_mutation_are_con
                 );
             }
             if rows[i][BASE_D] == F::ONE {
-                let address =
-                    rows[i][BASE_ADDRESS].0 as usize - fixture.node.content_start as usize;
+                let address = usize::try_from(rows[i][BASE_ADDRESS].0)
+                    .expect("fixture value fits usize")
+                    - fixture.node.content_start as usize;
                 assert_eq!(
                     rows[i][BASE_VALUE],
                     F(u64::from(fixture.encoded_contents[address].value))
@@ -261,14 +265,14 @@ fn projection_serial_coherent_output_shadow_changes_authenticated_der_lookup_end
                 aux,
                 after,
                 &fixed,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
             )
             .unwrap()
         };
         assert!(evaluate(&row, &aux, &after).iter().all(|v| *v == F::ZERO));
         let mut changed = row;
-        let original = row[BASE_VALUE].0 as u8;
+        let original = u8::try_from(row[BASE_VALUE].0).expect("fixture value fits u8");
         let value = (original & 0x80) | if original & 0x7f == 1 { 2 } else { 1 };
         assert_ne!(value, 0);
         changed[BASE_VALUE] = F(u64::from(value));

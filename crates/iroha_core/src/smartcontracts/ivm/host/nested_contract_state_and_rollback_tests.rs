@@ -32,7 +32,7 @@ seiyaku Callee {
         &caller_contract,
         &nested_contract,
         "value",
-        Json::new(()),
+        &(Json::new(())),
     );
     result.expect("nested StateMap read");
     let logical_path = log

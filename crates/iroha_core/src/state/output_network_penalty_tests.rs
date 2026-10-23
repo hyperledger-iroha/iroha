@@ -20,7 +20,7 @@ use iroha_test_samples::{BOB_ID, gen_account_in};
 
 #[test]
 fn signed_conflicting_second_ballot_retains_actual_slash_and_rejection_fee() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),

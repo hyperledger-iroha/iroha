@@ -714,8 +714,10 @@ fn balance(fixture: &Fixture, account: &AccountId) -> Quantity {
         .view()
         .world()
         .asset(&AssetId::of(fixture.payment_asset.clone(), account.clone()))
-        .map(|asset| asset.value().clone().into_inner())
-        .unwrap_or_else(|_| Quantity::zero())
+        .map_or_else(
+            |_| Quantity::zero(),
+            |asset| asset.value().clone().into_inner(),
+        )
 }
 
 #[test]

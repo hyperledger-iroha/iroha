@@ -199,12 +199,12 @@ impl<'a> PreparationMapsV1<'a> {
         value: [u8; 32],
     ) -> Result<KagemushaWalletIndexedInsertV1, Error> {
         use KagemushaWalletOperationKindV1 as K;
-        let allowed = match (self.kind, role) {
+        let allowed = matches!(
+            (self.kind, role),
             (K::Receive, PreparationMapV1::Consumed)
-            | (K::Send, PreparationMapV1::Pending | PreparationMapV1::Fee)
-            | (K::Load | K::Unload, PreparationMapV1::Recovery) => true,
-            _ => false,
-        };
+                | (K::Send, PreparationMapV1::Pending | PreparationMapV1::Fee)
+                | (K::Load | K::Unload, PreparationMapV1::Recovery)
+        );
         if !allowed {
             return Err(Error::Invalid("preparation insertion role"));
         }

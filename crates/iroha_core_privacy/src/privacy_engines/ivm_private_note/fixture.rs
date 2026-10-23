@@ -278,7 +278,7 @@ fn build_fixture<R: RngCore + CryptoRng>(
         .zip(positions)
         .zip(paths)
         .map(|(((note, secret), position), path)| {
-            IvmPrivateNoteInputWitnessV1::new(note, secret, position, path)
+            IvmPrivateNoteInputWitnessV1::new(note, secret, position, &path)
                 .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)
         })
         .collect::<Result<Vec<_>, _>>()?;

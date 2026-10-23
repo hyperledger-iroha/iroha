@@ -118,8 +118,8 @@ fn recorded(
     let segment = ScalarSegment::new(
         contract,
         steps,
-        records[0].before,
-        records[steps - 1].after,
+        &records[0].before,
+        &records[steps - 1].after,
         SegmentOutcome::Continue,
     )
     .unwrap();
@@ -216,7 +216,8 @@ fn scalar_segment_mixed_loop_matches_interpreter_full_registers_fetch_and_u64_ga
         debit
     );
     for record in &records {
-        let offset = segment.contract.header_len() + record.before.pc as usize;
+        let offset = segment.contract.header_len()
+            + usize::try_from(record.before.pc).expect("bounded fixture value");
         assert_eq!(
             segment.contract.artifact()[offset..offset + 4],
             record.instruction.unwrap().to_le_bytes()
@@ -412,8 +413,8 @@ fn scalar_segment_boundaries_code_table_tags_and_record_claims_are_bound() {
                 ScalarSegment::new(
                     segment.contract.clone(),
                     segment.steps,
-                    before,
-                    after,
+                    &before,
+                    &after,
                     SegmentOutcome::Continue
                 )
                 .is_err()
@@ -427,8 +428,8 @@ fn scalar_segment_boundaries_code_table_tags_and_record_claims_are_bound() {
             ScalarSegment::new(
                 segment.contract.clone(),
                 segment.steps,
-                before,
-                segment.after,
+                &before,
+                &segment.after,
                 SegmentOutcome::Continue
             )
             .is_err()
@@ -439,8 +440,8 @@ fn scalar_segment_boundaries_code_table_tags_and_record_claims_are_bound() {
             ScalarSegment::new(
                 segment.contract.clone(),
                 steps,
-                segment.before,
-                segment.after,
+                &segment.before,
+                &segment.after,
                 SegmentOutcome::Continue
             )
             .is_err()
@@ -449,8 +450,8 @@ fn scalar_segment_boundaries_code_table_tags_and_record_claims_are_bound() {
     let mut changed = ScalarSegment::new(
         segment.contract.clone(),
         segment.steps,
-        segment.before,
-        segment.after,
+        &segment.before,
+        &segment.after,
         SegmentOutcome::Continue,
     )
     .unwrap();
@@ -499,8 +500,8 @@ fn scalar_segment_boundaries_code_table_tags_and_record_claims_are_bound() {
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             segment.steps,
-            before,
-            after,
+            &before,
+            &after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -571,8 +572,8 @@ fn native_stark_proves_mixed_scalar_segment_and_rejects_changed_boundaries_and_a
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             segment.steps,
-            before,
-            after,
+            &before,
+            &after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -586,8 +587,8 @@ fn native_stark_proves_mixed_scalar_segment_and_rejects_changed_boundaries_and_a
     let changed = ScalarSegment::new(
         changed_contract,
         segment.steps,
-        segment.before,
-        segment.after,
+        &segment.before,
+        &segment.after,
         SegmentOutcome::Continue,
     )
     .unwrap();
@@ -616,8 +617,8 @@ fn scalar_segment_caps_and_counter_carries_are_explicit() {
         ScalarSegment::new(
             too_large,
             segment.steps,
-            segment.before,
-            segment.after,
+            &segment.before,
+            &segment.after,
             SegmentOutcome::Continue
         )
         .is_err()
@@ -653,8 +654,8 @@ fn scalar_segment_caps_and_counter_carries_are_explicit() {
         ScalarSegment::new(
             segment.contract.clone(),
             1,
-            before,
-            after,
+            &before,
+            &after,
             SegmentOutcome::Continue
         )
         .is_err()
@@ -681,8 +682,8 @@ fn scalar_segment_enforces_artifact_and_normalized_zk_cycle_limits() {
         let segment = ScalarSegment::new(
             contract.clone(),
             1,
-            bounded_records[0].before,
-            bounded_records[0].after,
+            &bounded_records[0].before,
+            &bounded_records[0].after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -695,8 +696,8 @@ fn scalar_segment_enforces_artifact_and_normalized_zk_cycle_limits() {
             ScalarSegment::new(
                 contract,
                 1,
-                bounded_records[0].before,
-                bounded_records[0].after,
+                &bounded_records[0].before,
+                &bounded_records[0].after,
                 SegmentOutcome::Continue
             )
             .is_err()
@@ -730,8 +731,8 @@ fn scalar_segment_every_interior_column_and_outside_endpoints_reject_forgery() {
             ScalarSegment::new(
                 segment.contract.clone(),
                 segment.steps,
-                segment.before,
-                after,
+                &segment.before,
+                &after,
                 SegmentOutcome::Continue
             )
             .is_err()
@@ -841,8 +842,8 @@ fn scalar_comparison_results_control_and_high_halves_cannot_be_forged() {
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                forged[0].before,
-                forged[0].after,
+                &forged[0].before,
+                &forged[0].after,
                 SegmentOutcome::Continue,
             )
             .unwrap();
@@ -859,8 +860,8 @@ fn scalar_comparison_results_control_and_high_halves_cannot_be_forged() {
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             1,
-            forged[0].before,
-            forged[0].after,
+            &forged[0].before,
+            &forged[0].after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -921,8 +922,8 @@ fn native_stark_proves_scalar_comparisons_and_rejects_changed_results_and_signed
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             segment.steps,
-            segment.before,
-            after,
+            &segment.before,
+            &after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -936,8 +937,8 @@ fn native_stark_proves_scalar_comparisons_and_rejects_changed_results_and_signed
     let changed = ScalarSegment::new(
         changed_contract,
         segment.steps,
-        segment.before,
-        segment.after,
+        &segment.before,
+        &segment.after,
         SegmentOutcome::Continue,
     )
     .unwrap();

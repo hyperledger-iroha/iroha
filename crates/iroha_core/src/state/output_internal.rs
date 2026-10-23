@@ -177,6 +177,10 @@ impl InternalInvocation {
 }
 
 impl ExecutionOutputProducer<'_, '_, '_> {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Applying consumes the authenticated invocation owner exactly once"
+    )]
     pub(super) fn try_apply_internal(
         &mut self,
         invocation: InternalInvocation,
@@ -192,7 +196,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         if self.rows.len() >= self.rows.capacity() {
             return Err("internal row storage exhausted".into());
         }
-        let maximum = self.state.callback_output_byte_limit()?;
+        let maximum = self.state.callback_output_byte_limit();
         let reservation = self
             .budget
             .as_mut()
@@ -394,7 +398,7 @@ fn rejected_row(
             }
             ExecutableRef::Batch(items) => {
                 let mut bytes = 0_usize;
-                for item in items.iter() {
+                for item in items {
                     if let iroha_data_model::transaction::ExecutableBatchItem::Instruction(
                         instruction,
                     ) = item
@@ -417,23 +421,26 @@ fn rejected_row(
     } else {
         None
     };
-    let (reason, root, diagnostic) = if let Some(diagnostic) = diagnostic {
-        let root = match returned {
-            Some(step) => TriggerFailureRootV1::ReturnedBeforeRollback(step),
-            None => TriggerFailureRootV1::DeclaredInstructionProjection(
-                StateTransaction::execution_step_from_executable(executable),
-            ),
-        };
-        (reason, root, diagnostic)
-    } else {
-        (
-            TransactionRejectionReason::LimitCheck(TransactionLimitError {
-                reason: INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
-            }),
-            TriggerFailureRootV1::OmittedAfterRejection,
-            INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
-        )
-    };
+    let (reason, root, diagnostic) = diagnostic.map_or_else(
+        || {
+            (
+                TransactionRejectionReason::LimitCheck(TransactionLimitError {
+                    reason: INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
+                }),
+                TriggerFailureRootV1::OmittedAfterRejection,
+                INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
+            )
+        },
+        |diagnostic| {
+            let root = match returned {
+                Some(step) => TriggerFailureRootV1::ReturnedBeforeRollback(step),
+                None => TriggerFailureRootV1::DeclaredInstructionProjection(
+                    StateTransaction::execution_step_from_executable(executable),
+                ),
+            };
+            (reason, root, diagnostic)
+        },
+    );
     Ok(invocation.row(
         TransactionResult::new(Err(reason)),
         Some(root),

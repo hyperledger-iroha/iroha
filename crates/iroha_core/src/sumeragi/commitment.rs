@@ -282,6 +282,7 @@ fn result_preimage_length(body_length: usize) -> Result<usize, ResultPreimageErr
 
 /// An immutable consensus artifact whose canonical frame is carried by a certificate.
 /// This selects a writer only: no alternate layout, decoder or storage tag is introduced.
+#[derive(Clone, Copy)]
 pub(crate) enum CertificatePart<'a> {
     /// Complete context-bound block header.
     Header(&'a iroha_sumeragi::message::BlockHeader),
@@ -927,7 +928,7 @@ mod tests {
     }
 
     /// Encoding-only fixture with no dynamic payload allocations. Its empty roster deliberately
-    /// grants no signing authority; production first validates the real graph in execution_result.
+    /// grants no signing authority; production first validates the real graph in `execution_result`.
     #[allow(unsafe_code)]
     fn allocation_free_encoding_owner(
         budget: &AllocationBudget,

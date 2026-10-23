@@ -21,13 +21,13 @@ impl Fixture {
         Self::from_dispatch(
             program,
             slot,
-            dispatch_tests::Fixture::with_controls(program, slot, false, 0, 10_000_000, 100),
+            &dispatch_tests::Fixture::with_controls(program, slot, false, 0, 10_000_000, 100),
         )
     }
     pub(super) fn from_dispatch(
         program: &Program,
         slot: usize,
-        dispatch: dispatch_tests::Fixture,
+        dispatch: &dispatch_tests::Fixture,
     ) -> Self {
         let shape = callable(program, slot).map(|c| {
             (
@@ -88,7 +88,7 @@ impl Fixture {
         }
     }
     pub(super) fn padding(program: &Program) -> Self {
-        Self::from_dispatch(program, usize::MAX, dispatch_tests::Fixture::padding())
+        Self::from_dispatch(program, usize::MAX, &dispatch_tests::Fixture::padding())
     }
     pub(super) fn borrowed(&self) -> Row<'_> {
         Row {
@@ -108,12 +108,16 @@ impl Fixture {
     }
 }
 fn program(jals: bool, backwards: bool, frame: u32) -> (Program, usize) {
-    let slot = if backwards { 1 } else { 0 };
+    let slot = usize::from(backwards);
     let offset = if backwards { -1 } else { 2 };
     let call = if jals {
         enc::encode_offset24(wide::control::JALS, offset)
     } else {
-        enc::encode_jump(wide::control::JAL, 1, offset as i16)
+        enc::encode_jump(
+            wide::control::JAL,
+            1,
+            i16::try_from(offset).expect("bounded fixture value"),
+        )
     };
     let halt = enc::encode_halt();
     let body = if backwards {
@@ -170,6 +174,9 @@ fn callable_fields_come_from_the_original_artifact_for_both_call_encodings_and_c
 
 #[test]
 fn original_fetch_cannot_borrow_another_callable_or_accept_a_non_call_running_row() {
+    fn program_for_other_frame() -> (Program, usize) {
+        self::program(false, false, 128)
+    }
     let (program, slot) = program(false, false, 16);
     let fixture = Fixture::new(&program, slot);
     assert!(fixture.accepts(&program));
@@ -191,7 +198,7 @@ fn original_fetch_cannot_borrow_another_callable_or_accept_a_non_call_running_ro
     missing.words = super::super::code_words::CodeWords::new(&bytes).unwrap();
     let dispatch = dispatch_tests::Fixture::new(&missing, slot, false, 0);
     assert!(dispatch.accepts(&missing));
-    let bad = Fixture::from_dispatch(&missing, slot, dispatch);
+    let bad = Fixture::from_dispatch(&missing, slot, &dispatch);
     assert!(!bad.accepts(&missing));
     for word in [
         enc::encode_jump(wide::control::JAL, 0, 1),
@@ -210,9 +217,11 @@ fn original_fetch_cannot_borrow_another_callable_or_accept_a_non_call_running_ro
             // destination even before the memory-success bank supplies its value.
             let slot = super::super::SCALAR_DESTINATION;
             dispatch.packets.fields[slot] = dispatch_tests::event(
-                Space::Register,
-                0,
-                u32::try_from(wide::rd(word)).expect("bounded register index"),
+                (
+                    Space::Register,
+                    0,
+                    u32::try_from(wide::rd(word)).expect("bounded register index"),
+                ),
                 7,
                 11,
                 true,
@@ -225,10 +234,7 @@ fn original_fetch_cannot_borrow_another_callable_or_accept_a_non_call_running_ro
             dispatch.accepts(&p),
             "valid non-CALL instruction {word:08x}"
         );
-        assert!(!Fixture::from_dispatch(&p, 0, dispatch).accepts(&p));
-    }
-    fn program_for_other_frame() -> (Program, usize) {
-        self::program(false, false, 128)
+        assert!(!Fixture::from_dispatch(&p, 0, &dispatch).accepts(&p));
     }
 }
 
@@ -385,14 +391,34 @@ fn all_forty_seven_original_packets_and_all_eight_stages_share_one_private_histo
             4 => Space::Owner,
             _ => panic!("enabled typed event"),
         },
-        vm: p[VM].0 as u8,
-        generation: p[GENERATION].0 as u16,
-        index: p[INDEX].0 as u32,
+        vm: u8::from_le_bytes(
+            u64::to_le_bytes(p[VM].0)[..1]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        generation: u16::from_le_bytes(
+            u64::to_le_bytes(p[GENERATION].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        index: u32::from_le_bytes(
+            u64::to_le_bytes(p[INDEX].0)[..4]
+                .try_into()
+                .expect("low-byte width"),
+        ),
         write: p[WRITE] == F::ONE,
         before: core::array::from_fn(|i| ((p[BEFORE + i / 2].0 >> (8 * (i % 2))) & 255) as u8),
         after: core::array::from_fn(|i| ((p[AFTER + i / 2].0 >> (8 * (i % 2))) & 255) as u8),
-        before_private: p[BEFORE_TAG].0 as u16,
-        after_private: p[AFTER_TAG].0 as u16,
+        before_private: u16::from_le_bytes(
+            u64::to_le_bytes(p[BEFORE_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        after_private: u16::from_le_bytes(
+            u64::to_le_bytes(p[AFTER_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
     };
     let original = fixture.borrowed();
     let mut events = vec![None; 64];
@@ -500,8 +526,7 @@ fn all_forty_seven_original_packets_and_all_eight_stages_share_one_private_histo
                 residues.clear();
                 private_history::append_residues(
                     &mut residues,
-                    h.current,
-                    h.next,
+                    (h.current, h.next),
                     h.aux,
                     h.next_aux,
                     h.fixed,
@@ -629,7 +654,7 @@ fn actual_prepared_call_preserves_relative_descriptor_identity_and_joins_native_
             !collapsed.accepts(&program),
             "opcode debit cannot absorb dynamic work"
         );
-        let joined = Fixture::from_dispatch(&program, 2, dispatch);
+        let joined = Fixture::from_dispatch(&program, 2, &dispatch);
         assert!(joined.accepts(&program));
         assert_eq!(
             packet::half(&joined.packets[FRAME_DEBIT], BEFORE, 0),
@@ -706,7 +731,7 @@ fn frame_work_exact_subtraction_binds_both_gas_owners_and_rejects_underflow() {
                 let dispatch =
                     dispatch_tests::Fixture::with_controls(&program, slot, false, 0, gas, 100);
                 assert!(dispatch.accepts(&program));
-                let fixture = Fixture::from_dispatch(&program, slot, dispatch);
+                let fixture = Fixture::from_dispatch(&program, slot, &dispatch);
                 assert_eq!(
                     fixture.accepts(&program),
                     gas - 2 >= cost,
@@ -804,12 +829,14 @@ fn authenticated_v1_frame_work_limits_preserve_the_native_bitmap_formula() {
                 nodes: if results == 1 {
                     vec![ivm::call::CallTypeNodeV1::Unit]
                 } else {
-                    std::iter::once(ivm::call::CallTypeNodeV1::Tuple(results as u32))
-                        .chain(std::iter::repeat_n(
-                            ivm::call::CallTypeNodeV1::Unit,
-                            results,
-                        ))
-                        .collect()
+                    std::iter::once(ivm::call::CallTypeNodeV1::Tuple(
+                        u32::try_from(results).expect("bounded fixture value"),
+                    ))
+                    .chain(std::iter::repeat_n(
+                        ivm::call::CallTypeNodeV1::Unit,
+                        results,
+                    ))
+                    .collect()
                 },
             };
             assert!(callable.validate());
@@ -893,7 +920,7 @@ fn actual_native_frame_work_oog_retains_opcode_debit_without_completing_or_writi
         );
         assert!(dispatch.accepts(&program));
         assert!(
-            !Fixture::from_dispatch(&program, 2, dispatch).accepts(&program),
+            !Fixture::from_dispatch(&program, 2, &dispatch).accepts(&program),
             "successful descriptor/frame component cannot admit actual frame OutOfGas"
         );
     }

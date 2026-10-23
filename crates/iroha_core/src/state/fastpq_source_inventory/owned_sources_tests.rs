@@ -502,6 +502,10 @@ fn execute(block: &mut StateBlock<'_>, source: &SignedBlock) {
     cache_canonical_test_transaction_set(block, source.external_entrypoints_slice());
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "The fixture implements the production fallible callback contract"
+)]
 fn seal_metadata(
     block: &mut StateBlock<'_>,
     source: &SignedBlock,
@@ -685,7 +689,7 @@ fn actual_three_phase_zero_transcript_inventory_retains_every_call_in_output_ord
 
 #[test]
 fn known_rejected_call_capture_and_typed_protocol_extra_remain_owned() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let (state, mut source, _, _) = fixture_with_effects(false, true);
     let gas_fee = |index| {

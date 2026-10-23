@@ -32,7 +32,7 @@ use iroha_data_model::{
 use rand::TryRngCore;
 
 /// Exact settlement proof relation and transcript descriptor.
-pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:wire=APZ1-v1:shared-proof-managed-note-geometry:trace=2^14:base=556:profile-aux=1:profile-fixed=123:profile-constraints=1375:constraint-degree=4:max-proof=8388608:relation=ivm-private-note-fixed-2-input-3-output-balanced-with-virtual-zero-inputs-and-audited-input-openings:public-input=sha3-384-opaque48(canonical-manifest-intent-proof-binding,canonical-leg-statement-including-successor-root+epoch,canonical-internal-statement,canonical-genesis):successor-correctness=validator-derived-frontier:post-proof-artifacts=manifest+committee-qc+carrier:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms+success-fee-carriers-2:transparent-amx=separate:governed-disabled-by-default";
+pub const ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:wire=APZ1-v1:shared-proof-managed-note-geometry:trace=2^14:base=556:profile-aux=1:profile-fixed=123:profile-constraints=1375:constraint-degree=4:max-proof=8388608:relation=ivm-private-note-fixed-2-input-3-output-balanced-with-virtual-zero-inputs-and-audited-input-openings:public-input=sha3-384-opaque48(canonical-manifest-intent-proof-binding,canonical-leg-statement-including-successor-root+epoch,canonical-internal-statement,canonical-genesis):successor-correctness=validator-derived-frontier:post-proof-artifacts=manifest+committee-qc+carrier:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms+success-fee-carriers-2:transparent-amx=separate:governed-disabled-by-default";
 
 const SETTLEMENT_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     aggregate::AggregateStarkParametersV1 {
@@ -175,23 +175,23 @@ impl ProofManagedNoteStarkAdapterV1 for AtomicPrivateSettlementStarkAdapterV1<'_
     }
 
     fn trace_log2_v1(&self) -> u8 {
-        self.relation_v1().trace_log2_v1()
+        PrivateNoteStarkRelationV1::trace_log2_v1()
     }
 
     fn base_width_v1(&self) -> usize {
-        self.relation_v1().base_width_v1()
+        PrivateNoteStarkRelationV1::base_width_v1()
     }
 
     fn profile_aux_width_v1(&self) -> usize {
-        self.relation_v1().profile_aux_width_v1()
+        PrivateNoteStarkRelationV1::profile_aux_width_v1()
     }
 
     fn profile_fixed_width_v1(&self) -> usize {
-        self.relation_v1().profile_fixed_width_v1()
+        PrivateNoteStarkRelationV1::profile_fixed_width_v1()
     }
 
     fn profile_constraint_count_v1(&self) -> usize {
-        self.relation_v1().profile_constraint_count_v1()
+        PrivateNoteStarkRelationV1::profile_constraint_count_v1()
     }
 
     fn copy_schedule_v1(&self) -> Result<NoteCopyScheduleV1, ProofManagedNoteStarkErrorV1> {
@@ -223,15 +223,15 @@ impl ProofManagedNoteStarkAdapterV1 for AtomicPrivateSettlementStarkAdapterV1<'_
 
     fn profile_constraint_residues_v1(
         &self,
-        current_base: &[F],
-        next_base: &[F],
+        base_rows: (&[F], &[F]),
         current_aux: &[F],
         next_aux: &[F],
         fixed: &[F],
         _copy_challenges: NoteCopyChallengesV1,
         _profile_challenges: &Self::ProfileChallenges,
     ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
-        self.relation_v1().constraint_residues_v1(
+        let (current_base, next_base) = base_rows;
+        PrivateNoteStarkRelationV1::constraint_residues_v1(
             current_base,
             next_base,
             current_aux,
@@ -241,7 +241,7 @@ impl ProofManagedNoteStarkAdapterV1 for AtomicPrivateSettlementStarkAdapterV1<'_
     }
 }
 
-pub(crate) fn prove_atomic_private_settlement_stark_v1_with_rng<R: TryRngCore>(
+pub fn prove_atomic_private_settlement_stark_v1_with_rng<R: TryRngCore>(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -265,7 +265,7 @@ pub(crate) fn prove_atomic_private_settlement_stark_v1_with_rng<R: TryRngCore>(
     )
 }
 
-pub(crate) fn verify_atomic_private_settlement_stark_v1(
+pub fn verify_atomic_private_settlement_stark_v1(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -290,7 +290,7 @@ pub(crate) fn verify_atomic_private_settlement_stark_v1(
 }
 
 /// Independently reconstruct the public adapter and consume one unverified candidate.
-pub(crate) fn verify_constructed_atomic_private_settlement_stark_v1(
+pub fn verify_constructed_atomic_private_settlement_stark_v1(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -400,9 +400,9 @@ mod tests {
         let finalized_internal = internal_statement_v1(finalized_manifest, statement)
             .expect("finalized internal statement");
         let finalized_profile =
-            relation_profile_v1(&finalized_manifest, statement).expect("finalized profile");
+            relation_profile_v1(finalized_manifest, statement).expect("finalized profile");
         let finalized = AtomicPrivateSettlementStarkAdapterV1::new(
-            &finalized_manifest,
+            finalized_manifest,
             statement,
             &finalized_internal,
             canonical_genesis_hash,

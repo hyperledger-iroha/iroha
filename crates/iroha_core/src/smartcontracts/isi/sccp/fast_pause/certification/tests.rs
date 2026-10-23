@@ -8,7 +8,7 @@ use norito::codec::Encode;
 #[test]
 fn sccp_pause_controls_preflight_capacity_nonce_and_every_live_part_before_effects() {
     let mut route = sample_route(SccpNetworkV1::EthereumMainnet);
-    let prototype = route.revisions[&1].clone();
+    let prototype = route.revisions[&1];
     route.revisions.clear();
     for (index, activation) in [
         SccpRouteActivationV1::Staged,
@@ -20,7 +20,7 @@ fn sccp_pause_controls_preflight_capacity_nonce_and_every_live_part_before_effec
     .into_iter()
     .enumerate()
     {
-        let mut revision = prototype.clone();
+        let mut revision = prototype;
         revision.revision = u32::try_from(index).expect("fixture value fits u32") + 1;
         revision.activation = activation;
         route.revisions.insert(revision.revision, revision);
@@ -108,7 +108,7 @@ fn sccp_pause_certification_rechecks_revoked_members_and_exact_close_after_halt(
             network,
             SccpPanelRoleV1::Primary,
             time,
-            u32::MAX & !1
+            !1
         ),
         Err(NoResult::InsufficientEligibleEndorsements),
         "revoked endorsers must not count toward certification quorum"

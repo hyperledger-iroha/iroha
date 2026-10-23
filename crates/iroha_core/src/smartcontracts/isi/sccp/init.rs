@@ -1,12 +1,12 @@
 //! Genesis-only `InitializeSccpV1` (`specs/sccp.md` §4.1, §4.15, §4.18). Owner: ws31.
 //!
-//! Validates that it executes inside the genesis block under NPoS with `max_validators` in
+//! Validates that it executes inside the genesis block under `NPoS` with `max_validators` in
 //! 4..=31, checks the §4.1 parameter table with the staking floor L1 ([`check_parameters`]),
 //! stores the parameters and the nonzero reset nonce, creates the three route escrow accounts
 //! and an empty registry, and no route. SCCP exists on a network iff `sccp_parameters` is
 //! present, so a second initialization is refused.
 //!
-//! Generation 1 uses the original Global NPoS genesis context; staged World writes cannot
+//! Generation 1 uses the original Global `NPoS` genesis context; staged World writes cannot
 //! manufacture it. The epoch guard and pinned slash policy are checked before publication.
 
 use super::{Error, escrow, generations, parliament_iface, store};
@@ -68,7 +68,7 @@ pub fn check_parameters(
 ///
 /// # Errors
 ///
-/// Refuses outside the genesis block, when SCCP already exists, without NPoS parameters or
+/// Refuses outside the genesis block, when SCCP already exists, without `NPoS` parameters or
 /// with `max_validators` outside 4..=31, with a parameter set that breaks a §4.1 rule or the
 /// staking floor L1, or with a zero `reset_nonce`; propagates an escrow creation failure.
 pub fn execute_initialize(
@@ -279,7 +279,7 @@ mod tests {
         stx.native_genesis_context = Some(&original);
         seed_genesis_members(&mut stx, &original);
         let instruction = SampleInstructions::initialize();
-        execute_initialize(instruction.clone(), &authority(1), &mut stx).expect("initialize");
+        execute_initialize(instruction, &authority(1), &mut stx).expect("initialize");
         assert_eq!(
             store::parameters::get(&*stx.world).as_ref(),
             Some(&instruction.parameters)

@@ -392,8 +392,7 @@ mod gateway_direct_source {
                     &ALICE_ID,
                     &call(&state),
                     &mut IvmCache::new(),
-                    50_000_000,
-                    1_000,
+                    (50_000_000, 1_000),
                     None,
                 )
                 .is_err()

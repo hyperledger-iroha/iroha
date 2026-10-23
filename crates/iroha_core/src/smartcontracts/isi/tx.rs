@@ -675,11 +675,12 @@ impl CommittedNetworkOutcome {
 /// authority and inconsistent complete outputs. No partial carrier escapes on refusal.
 pub(crate) fn read_finalized_execution_carrier(
     kura: &crate::kura::Kura,
-    chain_id: &iroha_model_base::chain::ChainId,
-    network: iroha_data_model::NetworkId,
+    (chain_id, network): (
+        &iroha_model_base::chain::ChainId,
+        iroha_data_model::NetworkId,
+    ),
     hashes: &dyn crate::state::BlockHashRead,
-    height: NonZeroUsize,
-    expected_hash: HashOf<BlockHeader>,
+    (height, expected_hash): (NonZeroUsize, HashOf<BlockHeader>),
     max_work: u64,
     max_bytes: u64,
     budget: &iroha_allocation::AllocationBudget,
@@ -925,8 +926,7 @@ pub(crate) fn read_finalized_event_carrier(
     kura: &crate::kura::Kura,
     chain_id: &iroha_model_base::chain::ChainId,
     network: iroha_data_model::NetworkId,
-    height: NonZeroUsize,
-    expected_hash: HashOf<BlockHeader>,
+    (height, expected_hash): (NonZeroUsize, HashOf<BlockHeader>),
     max_work: u64,
     max_bytes: u64,
 ) -> Result<
@@ -1242,6 +1242,10 @@ pub struct TransactionHistoryWorkLimits {
 
 /// Independent hard limits for one indexed Kaigi signal-history page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Each max_ field is an explicit resource ceiling, distinct from observed work and current usage"
+)]
 pub struct KaigiSignalCandidateWorkLimits {
     max_candidates: u64,
     max_carrier_bytes: u64,
@@ -1561,9 +1565,7 @@ pub(crate) fn visit_committed_transactions(
     walk_committed_transactions(
         state_ro,
         filter,
-        anchor,
-        HistoryStart::Tip,
-        resume.map(HistoryResume::After),
+        (anchor, HistoryStart::Tip, resume.map(HistoryResume::After)),
         max_row_bytes,
         before_project,
         |transaction, matches, visit, _block| visitor(transaction, matches, visit.next),
@@ -1623,9 +1625,11 @@ struct HistoryVisit {
 fn walk_committed_transactions(
     state_ro: &impl StateReadOnly,
     filter: &CompoundPredicate<CommittedTransaction>,
-    anchor: TransactionHistoryAnchor,
-    start: HistoryStart,
-    resume: Option<HistoryResume>,
+    (anchor, start, resume): (
+        TransactionHistoryAnchor,
+        HistoryStart,
+        Option<HistoryResume>,
+    ),
     max_row_bytes: u64,
     before_project: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
     mut visitor: impl FnMut(
@@ -1938,9 +1942,11 @@ pub fn visit_committed_transaction_page(
     let walk = walk_committed_transactions(
         state_ro,
         &CompoundPredicate::PASS,
-        TransactionHistoryAnchor::capture(state_ro),
-        HistoryStart::Checkpoint,
-        resume.map(HistoryResume::Before),
+        (
+            TransactionHistoryAnchor::capture(state_ro),
+            HistoryStart::Checkpoint,
+            resume.map(HistoryResume::Before),
+        ),
         max_history_bytes,
         |items, bytes| {
             let work = total_work
@@ -2362,7 +2368,7 @@ pub(crate) mod tests {
         assert_eq!(work.output_work, 3);
     }
     /// Empty typed parent used only to bind the physical query history.
-    pub(crate) fn empty_query_block(previous: Option<&SignedBlock>) -> SignedBlock {
+    pub fn empty_query_block(previous: Option<&SignedBlock>) -> SignedBlock {
         let height = previous.map_or(1, |block| block.header().height().get() + 1);
         let time = previous.map_or(0, |block| {
             u64::try_from(block.header().creation_time().as_millis()).unwrap() + 10
@@ -2403,7 +2409,7 @@ pub(crate) mod tests {
         );
     }
     /// Two signed Network inputs with explicit full typed output rows; no merge sidecar.
-    pub(crate) fn canonical_query_carrier(
+    pub fn canonical_query_carrier(
         previous: &SignedBlock,
         epoch: u64,
         result_ok: bool,
@@ -2461,7 +2467,7 @@ pub(crate) mod tests {
         crate::block::reserve_block_for_tests().initialize(block)
     }
     /// Physical finality-backed Network history shared by pagination/index regressions.
-    pub(crate) struct CanonicalQueryFixture {
+    pub struct CanonicalQueryFixture {
         /// Query authority and canonical State history.
         pub(crate) state: Arc<crate::state::State>,
         /// Retain original execution and physical custody for every query continuation.
@@ -2589,11 +2595,11 @@ pub(crate) mod tests {
     }
 
     /// Sixteen actual two-input native carriers above their authentic genesis.
-    pub(crate) fn canonical_query_fixture() -> CanonicalQueryFixture {
+    pub fn canonical_query_fixture() -> CanonicalQueryFixture {
         canonical_query_fixture_with_optional_query_gas(None)
     }
     /// The same original history with a finite query policy committed in signed genesis.
-    pub(crate) fn canonical_query_fixture_with_query_gas(units: u64) -> CanonicalQueryFixture {
+    pub fn canonical_query_fixture_with_query_gas(units: u64) -> CanonicalQueryFixture {
         canonical_query_fixture_with_optional_query_gas(Some(units))
     }
     fn canonical_query_fixture_with_optional_query_gas(
@@ -3286,13 +3292,19 @@ pub(crate) mod tests {
                 assert!(std::ptr::eq(
                     input,
                     block
-                        .network_entrypoint_at(position.block_index() as usize)
+                        .network_entrypoint_at(
+                            usize::try_from(position.block_index())
+                                .expect("fixture block index fits usize")
+                        )
                         .unwrap()
                 ));
                 assert!(std::ptr::eq(
                     result,
-                    &block
-                        .network_output_at(position.block_index() as u32)
+                    &raw const block
+                        .network_output_at(
+                            u32::try_from(position.block_index())
+                                .expect("fixture block index fits u32")
+                        )
                         .unwrap()
                         .1
                         .result
@@ -3481,7 +3493,10 @@ pub(crate) mod tests {
                     assert_eq!(
                         transaction.entrypoint_hash,
                         block
-                            .network_entrypoint_at(position.block_index() as usize)
+                            .network_entrypoint_at(
+                                usize::try_from(position.block_index())
+                                    .expect("fixture block index fits usize")
+                            )
                             .unwrap()
                             .hash(),
                     );
@@ -3598,11 +3613,17 @@ pub(crate) mod tests {
                 assert_eq!(block.hash(), transaction.block_hash);
                 assert_eq!(block.header().height().get(), position.height());
                 let source = block
-                    .network_entrypoint_at(position.block_index() as usize)
+                    .network_entrypoint_at(
+                        usize::try_from(position.block_index())
+                            .expect("fixture block index fits usize"),
+                    )
                     .expect("carrier contains its projected transaction");
                 assert_eq!(source.hash(), transaction.entrypoint_hash);
                 let (_, output) = block
-                    .network_output_at(position.block_index() as u32)
+                    .network_output_at(
+                        u32::try_from(position.block_index())
+                            .expect("fixture block index fits u32"),
+                    )
                     .expect("carrier contains the exact committed output");
                 assert_eq!(&output.result, transaction.result());
                 visited += 1;

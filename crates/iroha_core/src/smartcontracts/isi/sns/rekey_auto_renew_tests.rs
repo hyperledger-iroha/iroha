@@ -126,8 +126,10 @@ impl RekeyFixture {
             .view()
             .world()
             .asset(&AssetId::of(self.payment.clone(), owner.clone()))
-            .map(|value| value.value().clone().into_inner())
-            .unwrap_or_else(|_| Quantity::zero())
+            .map_or_else(
+                |_| Quantity::zero(),
+                |value| value.value().clone().into_inner(),
+            )
     }
 
     fn assert_original_rekey(&self) {
@@ -847,8 +849,10 @@ fn signed_rekey_larger_owner_cannot_exceed_committed_native_renewal_allowance() 
         block
             .world
             .asset(&AssetId::of(fixture.payment.clone(), owner.clone()))
-            .map(|asset| asset.value().clone().into_inner())
-            .unwrap_or_else(|_| Quantity::zero())
+            .map_or_else(
+                |_| Quantity::zero(),
+                |asset| asset.value().clone().into_inner(),
+            )
     };
     assert_eq!(balance(&fixture.current_owner), owner_before);
     assert_eq!(balance(&fixture.collector), collector_before);

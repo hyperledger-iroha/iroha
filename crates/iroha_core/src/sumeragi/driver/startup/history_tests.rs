@@ -68,7 +68,7 @@ fn startup_history_refusal_retains_installed_vectors_and_exact_original_release_
         refusal: Mutex::new(Some(refusal.into())),
     };
     let genesis = (Hash32([1; 32]), Hash32([2; 32]));
-    let body = block(1, genesis.0, genesis.1, vec![9]);
+    let body = block(1, genesis.0, genesis.1, &vec![9]);
     let qc = commit_qc(&body, Hash32([3; 32]));
     original.append(&body, &qc).unwrap();
     let records = vec![(

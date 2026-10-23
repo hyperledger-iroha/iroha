@@ -471,7 +471,7 @@ impl ValidQueryRequest {
                             stored_cursor_budget,
                             replay_state.clone(),
                         )?;
-                        return Ok(QueryResponse::Iterable(output));
+                        Ok(QueryResponse::Iterable(output))
                     }
                     QueryItemKind::SignedBlock => run_query!(
                         iroha_data_model::block::SignedBlock,
@@ -569,7 +569,7 @@ impl ValidQueryRequest {
                             replay_state.clone(),
                             source_stats,
                         )?;
-                        return Ok(QueryResponse::Iterable(output));
+                        Ok(QueryResponse::Iterable(output))
                     }
                     QueryItemKind::AssetEscrowRecord => run_query!(
                         iroha_data_model::escrow::AssetEscrowRecord,
@@ -1104,7 +1104,7 @@ impl ValidQueryRequest {
                             limits,
                             budget_items,
                         )?;
-                        return Ok((QueryResponse::Iterable(output), processed_items));
+                        Ok((QueryResponse::Iterable(output), processed_items))
                     }
                     QueryItemKind::SignedBlock => run_query!(
                         iroha_data_model::block::SignedBlock,
@@ -1198,7 +1198,7 @@ impl ValidQueryRequest {
                                 budget_items,
                                 source_stats,
                             )?;
-                        return Ok((QueryResponse::Iterable(output), processed_items));
+                        Ok((QueryResponse::Iterable(output), processed_items))
                     }
                     QueryItemKind::AssetEscrowRecord => run_query!(
                         iroha_data_model::escrow::AssetEscrowRecord,

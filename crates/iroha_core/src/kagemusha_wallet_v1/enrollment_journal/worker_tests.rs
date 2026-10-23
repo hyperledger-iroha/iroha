@@ -98,9 +98,9 @@ impl Fixture {
         projection: Option<Value>,
     ) -> Vec<u8> {
         let request: Value = norito::json::from_slice(&packet.frame()[4..]).unwrap();
-        let evidence = projection
-            .map(|v| Value::from(STANDARD.encode(norito::json::to_vec(&v).unwrap())))
-            .unwrap_or(Value::Null);
+        let evidence = projection.map_or(Value::Null, |v| {
+            Value::from(STANDARD.encode(norito::json::to_vec(&v).unwrap()))
+        });
         let json = norito::json!({
             "schema": ("iroha.kagemusha.wallet-e1-verifier.v1"), "version": (1_u16),
             "exchange_id": (request.get("exchange_id").unwrap().clone()),

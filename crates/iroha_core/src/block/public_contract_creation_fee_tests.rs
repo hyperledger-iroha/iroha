@@ -5,9 +5,7 @@ mod public_contract_creation_fees {
     #[test]
     fn public_contract_artifact_stages_pay_fees_without_management_grants() {
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
-        let _guard = crate::status::nexus_fee_test_lock()
-            .lock()
-            .expect("fee status lock");
+        let _guard = crate::status::operator_status_test_guard();
         let (artifact, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 "seiyaku PublicQuote { view fn quote(int count) authorize(anyone) -> int { return count * 10; } }",

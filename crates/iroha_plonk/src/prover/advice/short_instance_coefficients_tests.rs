@@ -201,7 +201,11 @@ fn short_instance_coefficient_owner_and_oversized_instance_rejection() {
 #[ignore = "public-instance coefficient component diagnostic; no proof or phone timing claim"]
 fn short_instance_coefficient_shape_timing_diagnostic() {
     use std::{hint::black_box, time::Instant};
-    assert!(!cfg!(debug_assertions), "run in release");
+    fn require_release() {
+        #[cfg(debug_assertions)]
+        panic!("run in release");
+    }
+
     fn check<F: PastaField>() {
         for (label, k, lengths) in [
             ("sigma_shape", 12, &[1_usize][..]),
@@ -257,6 +261,7 @@ fn short_instance_coefficient_shape_timing_diagnostic() {
             }
         }
     }
+    require_release();
     check::<Fp>();
     check::<Fq>();
 }

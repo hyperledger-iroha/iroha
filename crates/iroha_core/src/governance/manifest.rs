@@ -1970,9 +1970,8 @@ impl LaneManifestRegistry {
     fn governance_overlay_path(cache_dir: &Path) -> Option<PathBuf> {
         let path = cache_dir.join("governance_catalog.json");
         match fs::symlink_metadata(&path) {
-            Ok(_) => Some(path),
             Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-            Err(_) => Some(path),
+            Ok(_) | Err(_) => Some(path),
         }
     }
     #[allow(clippy::too_many_lines)]

@@ -63,7 +63,7 @@ struct Coordinates<'a> {
 #[derive(Clone, Copy, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::amx::AmxIntentRowV1")]
 /// Scalar source selector; native proof verification still authenticates every claim.
-pub(crate) struct Row {
+pub struct Row {
     pub(crate) key: [u8; AMX_RECORD_WITNESS_KEY_BYTES],
     pub(crate) tx: [u8; 32],
     pub(crate) participant: Option<DataSpaceId>,
@@ -156,7 +156,7 @@ fn row(write: &ExecKv, context: RowContext<'_>) -> Result<Option<Row>, NativeCon
         value: Hash::new(&write.value),
     }))
 }
-pub(crate) fn count(writes: &[ExecKv]) -> Result<usize, NativeContextArchiveError> {
+pub fn count(writes: &[ExecKv]) -> Result<usize, NativeContextArchiveError> {
     let mut count = 0usize;
     for write in writes {
         if relay_key(&write.key)?.is_some() {
@@ -626,7 +626,7 @@ impl<'a> RowsRef<'a> {
 
 /// Scalar observations retain no authority or allocation outside the original charged frame.
 #[derive(Debug)]
-pub(crate) struct IntentProjection {
+pub struct IntentProjection {
     local_network: NetworkId,
     local_chain: Range<usize>,
     scope: SumeragiRootScope,
@@ -713,7 +713,10 @@ impl IntentProjection {
             && self.height == height
             && self.carrier == carrier
             && bytes.get(self.local_chain.clone()) == Some(view.chain_id().as_str().as_bytes())
-            && view.native_execution_tip().map(|tip| tip.root_scope()) == Some(self.scope)
+            && view
+                .native_execution_tip()
+                .map(crate::state::native_execution_tip::NativeExecutionTip::root_scope)
+                == Some(self.scope)
     }
     pub(crate) fn matches<V: StateReadOnly>(
         &self,
@@ -805,11 +808,11 @@ impl IntentProjection {
 }
 
 #[cfg(test)]
-pub(crate) mod test_helpers {
+pub mod test_helpers {
     use super::*;
     // Rewrite only untrusted scalar claims through the sole canonical codec for adversarial
     // controls. No proof, signature, source selection or production authority is manufactured.
-    pub(crate) fn one_row_subset(bytes: &[u8]) -> Vec<u8> {
+    pub fn one_row_subset(bytes: &[u8]) -> Vec<u8> {
         let mut value = read_coordinates(bytes).unwrap();
         assert_eq!(value.rows.count, 2, "genuine same-carrier two-row source");
         let row = value.rows.decode_rows().unwrap().next().unwrap().unwrap();
@@ -833,7 +836,7 @@ pub(crate) mod test_helpers {
         };
         norito::encode_canonical(&value).unwrap()
     }
-    pub(crate) fn rewrite_claims(bytes: &[u8], variant: u8) -> Vec<u8> {
+    pub fn rewrite_claims(bytes: &[u8], variant: u8) -> Vec<u8> {
         let mut value = read_coordinates(bytes).unwrap();
         match variant {
             0 => value.authority = 1,
@@ -846,7 +849,7 @@ pub(crate) mod test_helpers {
         }
         norito::encode_canonical(&value).unwrap()
     }
-    pub(crate) fn verify_original(
+    pub fn verify_original(
         bytes: &[u8],
         overlay: &StateBlock<'_>,
         executed: &SignedBlock,

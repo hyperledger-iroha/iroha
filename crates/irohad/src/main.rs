@@ -3073,8 +3073,8 @@ impl Iroha {
                 Arc::clone(&state),
                 kura.clone(),
                 queue.clone(),
-                network.online_peers_receiver(),
-                config.common.peer.id.clone(),
+                (network.online_peers_receiver(),
+                config.common.peer.id.clone()),
                 TimeSource::new_system(),
                 telemetry_profile.metrics_enabled(),
             )

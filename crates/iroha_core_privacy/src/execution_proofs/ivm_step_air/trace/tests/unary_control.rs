@@ -117,8 +117,8 @@ fn getgas_matches_interpreter_full_width_zero_cost_and_ignores_both_source_field
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             1,
-            records[0].before,
-            records[0].after,
+            &records[0].before,
+            &records[0].after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -142,7 +142,7 @@ fn pure_direct_jumps_match_interpreter_signed_control_without_link_writes() {
             );
             assert_eq!(
                 records[0].after.pc,
-                records[0].before.pc + displacement as u64 * 4
+                records[0].before.pc + i64::from(displacement).cast_unsigned() * 4
             );
             assert_eq!(records[0].after.registers, records[0].before.registers);
             assert_eq!(records[0].after.tags, records[0].before.tags);
@@ -239,8 +239,8 @@ fn unary_gas_and_direct_control_coherent_false_boundaries_fail_air() {
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                forged[0].before,
-                forged[0].after,
+                &forged[0].before,
+                &forged[0].after,
                 SegmentOutcome::Continue,
             )
             .unwrap();
@@ -336,8 +336,8 @@ fn native_stark_proves_unary_direct_mix_and_binds_gas_reads_and_jump_artifact() 
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             segment.steps,
-            segment.before,
-            after,
+            &segment.before,
+            &after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -349,8 +349,8 @@ fn native_stark_proves_unary_direct_mix_and_binds_gas_reads_and_jump_artifact() 
     let changed = ScalarSegment::new(
         ivm::prepare_contract(Arc::from(artifact)).unwrap(),
         segment.steps,
-        segment.before,
-        segment.after,
+        &segment.before,
+        &segment.after,
         SegmentOutcome::Continue,
     )
     .unwrap();
@@ -385,8 +385,8 @@ fn coherent_unary_banks_and_result_cannot_replace_the_canonical_source_read() {
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             1,
-            forged[0].before,
-            forged[0].after,
+            &forged[0].before,
+            &forged[0].after,
             SegmentOutcome::Continue,
         )
         .unwrap();

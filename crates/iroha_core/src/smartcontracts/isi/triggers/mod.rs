@@ -572,16 +572,16 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-            let remove_entry = if let Some(permissions) =
-                state_transaction.world.account_permissions.get_mut(&holder)
-            {
-                permissions.retain(|permission| {
-                    !is_permission_trigger_associated_with_any(permission, trigger_ids)
+            let remove_entry = state_transaction
+                .world
+                .account_permissions
+                .get_mut(&holder)
+                .map_or(false, |permissions| {
+                    permissions.retain(|permission| {
+                        !is_permission_trigger_associated_with_any(permission, trigger_ids)
+                    });
+                    permissions.is_empty()
                 });
-                permissions.is_empty()
-            } else {
-                false
-            };
             if remove_entry {
                 state_transaction
                     .world
@@ -680,8 +680,7 @@ pub mod isi {
                     Error::InvalidParameter(InvalidParameterError::SmartContract(
                         format!(
                             "contract manifest trigger authority `{owner}` must be registered before activation"
-                        )
-                        .into(),
+                        ),
                     ))
                 })?;
             }
@@ -703,31 +702,27 @@ pub mod isi {
         }
         if let EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(schedule))) =
             new_trigger.action().filter()
+            && let Some(period_ms) = schedule.period_ms
         {
-            if let Some(period_ms) = schedule.period_ms {
-                if period_ms == 0 {
-                    return Err(Error::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "Time trigger period must be greater than zero".into(),
-                        ),
-                    ));
-                }
-                let min_period_ms = state_transaction
-                    .world
-                    .parameters
-                    .sumeragi()
-                    .block_cadence_ms()
-                    .get();
-                if period_ms < min_period_ms {
-                    return Err(Error::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            format!(
-                                "Time trigger period must be at least the signed block cadence of {min_period_ms} ms"
-                            )
-                            .into(),
-                        ),
-                    ));
-                }
+            if period_ms == 0 {
+                return Err(Error::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "Time trigger period must be greater than zero".into(),
+                    ),
+                ));
+            }
+            let min_period_ms = state_transaction
+                .world
+                .parameters
+                .sumeragi()
+                .block_cadence_ms()
+                .get();
+            if period_ms < min_period_ms {
+                return Err(Error::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "Time trigger period must be at least the signed block cadence of {min_period_ms} ms"
+                    )),
+                ));
             }
         }
         if new_trigger.action().retry_policy().is_some()
@@ -1569,11 +1564,10 @@ pub mod query {
                 let iter: Box<dyn Iterator<Item = Trigger> + '_> =
                     Box::new(candidate_ids.into_iter().filter_map(move |id| {
                         triggers.trigger_by_id(&id).filter(|trigger| {
-                            if let Some(predicate) = predicate_json.as_ref() {
-                                predicate_matches_trigger(predicate, trigger)
-                            } else {
-                                filter.applies(trigger)
-                            }
+                            predicate_json.as_ref().map_or_else(
+                                || filter.applies(trigger),
+                                |predicate| predicate_matches_trigger(predicate, trigger),
+                            )
                         })
                     }));
                 return Ok(iter);
@@ -1583,11 +1577,10 @@ pub mod query {
                 return Ok(iter);
             }
             Ok(Box::new(iter.filter(move |trigger| {
-                if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_trigger(predicate, trigger)
-                } else {
-                    filter.applies(trigger)
-                }
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(trigger),
+                    |predicate| predicate_matches_trigger(predicate, trigger),
+                )
             })))
         }
     }
@@ -2730,7 +2723,7 @@ mod tests {
             norito::codec::Encode::encode(&lease),
         );
         stx.world
-            .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
+            .insert_account_alias_binding(&(alias.clone()), &(ALICE_ID.clone()));
         stx.world
             .replace_account_rekey_record(AccountRekeyRecord::new(alias.clone(), ALICE_ID.clone()));
         assert_eq!(

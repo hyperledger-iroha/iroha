@@ -413,10 +413,8 @@ async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
     kura.apply_lane_geometry_transition_at_height(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
         0,
     )
@@ -1247,7 +1245,7 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
     let manifest = sample_space_directory_manifest();
     let _account_id = insert_account_with_uaid(&mut state, manifest.uaid);
     let block = signed_block_with_transaction(accepted_manifest_transaction());
-    store_block_and_mark_state_height(&mut state, &kura, block);
+    store_block_and_mark_state_height(&mut state, &kura, &(block));
     let key_pair = checked_random_snapshot_keypair();
     let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
     write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
@@ -1285,7 +1283,7 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let block = signed_block_with_transaction(accepted_log_transaction("missing-section"));
-    store_block_and_mark_state_height(&mut state, &kura, block);
+    store_block_and_mark_state_height(&mut state, &kura, &(block));
     let key_pair = checked_random_snapshot_keypair();
     let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
     write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);

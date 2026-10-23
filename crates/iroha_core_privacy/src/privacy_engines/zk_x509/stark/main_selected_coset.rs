@@ -158,7 +158,9 @@ fn prune_v1<const INNER_PARALLEL: bool>(
         return;
     }
     let half = values.len() / 2;
-    let split = destinations.partition_point(|index| (index.0 as usize) < offset + half);
+    let split = destinations.partition_point(|index| {
+        index.0 < u64::try_from(offset + half).expect("selected-coset offset fits u64")
+    });
     let (even_destinations, odd_destinations) = destinations.split_at(split);
     let even_needed = !even_destinations.is_empty();
     let odd_needed = !odd_destinations.is_empty();
@@ -250,6 +252,7 @@ fn evaluate_horner_with_v1(
     selected: &[usize],
     after_evaluate: impl FnOnce(&[F]),
 ) -> Result<Column, AggregateStarkErrorV1> {
+    const POINTS_PER_TASK_V1: usize = 128;
     let rows = 1usize
         .checked_shl(u32::from(common_log))
         .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
@@ -293,7 +296,7 @@ fn evaluate_horner_with_v1(
                 .fold(F::ZERO, |sum, &coefficient| sum.mul(point).add(coefficient));
         }
     };
-    const POINTS_PER_TASK_V1: usize = 128;
+
     if selected.len() >= POINTS_PER_TASK_V1 && rayon::current_num_threads() > 1 {
         output
             .par_chunks_mut(POINTS_PER_TASK_V1)

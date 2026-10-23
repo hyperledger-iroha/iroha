@@ -29,7 +29,7 @@ fn optional_custodian_changes_and_rollback_preserve_exact_original_images() {
             let mut block = world.block();
             let mut tx =
                 block.transaction_without_telemetry(crate::state::LaneConfig::default(), 0);
-            tx.insert_repo_agreement_entry(replacement.clone());
+            tx.insert_repo_agreement_entry(&(replacement.clone()));
             tx.apply();
             block.commit();
         }
@@ -77,7 +77,7 @@ fn restored_groups_keep_untouched_members_across_insert_remove_and_rollback() {
         let mut block = world.block();
         let mut tx = block.transaction_without_telemetry(crate::state::LaneConfig::default(), 0);
         tx.remove_repo_agreement_entry(&id());
-        tx.insert_repo_agreement_entry(inserted.clone());
+        tx.insert_repo_agreement_entry(&(inserted.clone()));
         tx.apply();
         block.commit();
     }

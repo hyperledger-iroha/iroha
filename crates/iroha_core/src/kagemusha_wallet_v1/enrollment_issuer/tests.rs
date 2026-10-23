@@ -170,7 +170,7 @@ impl EnrollmentIssuerRuntimeV1 for Runtime {
             _ => "unavailable",
         };
         let evidence = if matches!(action, "complete" | "recover" | "inspect") {
-            self.fixture_evidence.as_ref().map(|request| {
+            self.fixture_evidence.as_ref().map_or(norito::json::Value::Null, |request| {
                 outcome = "evidence";
                 let body = &request.body;
                 let PlatformEvidenceV1::Apple { key_id, attestation, key_binding_assertion } =
@@ -193,7 +193,7 @@ impl EnrollmentIssuerRuntimeV1 for Runtime {
                     "app_attest_key_id": (hex::encode(key_id)), "app_attest_counter": (1_u32),
                 });
                 norito::json::Value::String(STANDARD.encode(norito::json::to_vec(&projection).unwrap()))
-            }).unwrap_or(norito::json::Value::Null)
+            })
         } else {
             norito::json::Value::Null
         };

@@ -271,19 +271,18 @@ pub(super) fn ensure_receiving_account(
     if policy.mode != AccountAdmissionMode::ImplicitReceive {
         return Err(AccountAdmissionError::ImplicitAccountCreationDisabled.into());
     }
-    if let Some((asset_def_id, amount)) = value_hint {
-        if let Some(required) = policy.min_initial_amount_for(asset_def_id) {
-            if amount < required {
-                return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
-                    AccountAdmissionMinInitialAmountUnsatisfied {
-                        asset_definition: asset_def_id.clone(),
-                        required: required.clone(),
-                        provided: amount.clone(),
-                    },
-                )
-                .into());
-            }
-        }
+    if let Some((asset_def_id, amount)) = value_hint
+        && let Some(required) = policy.min_initial_amount_for(asset_def_id)
+        && amount < required
+    {
+        return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
+            AccountAdmissionMinInitialAmountUnsatisfied {
+                asset_definition: asset_def_id.clone(),
+                required: required.clone(),
+                provided: amount.clone(),
+            },
+        )
+        .into());
     }
     let max_creations = policy.max_implicit_creations_per_tx();
     if state_transaction.implicit_account_creations_in_tx >= max_creations {

@@ -20,10 +20,8 @@ fn geometry_sidecar_temp_symlink_and_regular_collision_fail_without_clobbering()
         kura.apply_lane_geometry_transition(
             &initial,
             &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
+            (&initial_incarnations, &extended_incarnations),
+            (&initial_activations, &extended_activations),
             &BTreeSet::new(),
         )
         .expect_err("unsafe or unrelated temp collision must fail closed");
@@ -99,10 +97,8 @@ fn recovery_rejects_corrupt_and_forged_journals() {
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
     )
     .expect("prepare valid journal");
@@ -167,10 +163,8 @@ fn recovery_rejects_noncontiguous_phase_frontiers() {
         kura.apply_lane_geometry_transition_at_height(
             &config,
             &updated,
-            &incarnations,
-            &next_incarnations,
-            &activations,
-            &next_activations,
+            (&incarnations, &next_incarnations),
+            (&activations, &next_activations),
             &BTreeSet::new(),
             u64::from(id),
         )
@@ -751,10 +745,8 @@ fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journa
     kura.apply_lane_geometry_transition(
         &initial,
         &configured,
-        &initial_incarnations,
-        &configured_incarnations,
-        &initial_activations,
-        &configured_activations,
+        (&initial_incarnations, &configured_incarnations),
+        (&initial_activations, &configured_activations),
         &BTreeSet::new(),
     )
     .expect("journal configured secondary-lane creation");
@@ -868,10 +860,8 @@ fn configured_multilane_startup_rejects_unjournaled_secondary_storage() {
         .apply_lane_geometry_transition(
             &initial,
             &configured,
-            &initial_incarnations,
-            &configured_incarnations,
-            &initial_activations,
-            &configured_activations,
+            (&initial_incarnations, &configured_incarnations),
+            (&initial_activations, &configured_activations),
             &BTreeSet::new(),
         )
         .expect_err("unjournaled secondary storage must not be adopted");
@@ -1131,10 +1121,8 @@ fn configured_catalog_preflight_rejects_journal_derived_symlink_before_lane_muta
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
     )
     .expect("persist a valid journal-derived archive path");

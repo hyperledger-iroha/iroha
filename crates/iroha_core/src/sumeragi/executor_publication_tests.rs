@@ -192,8 +192,17 @@ pub(super) fn with_worker_chain_and_clock(
     );
 }
 
+type WorkerChainCallback<'a> = &'a mut (
+            dyn FnMut(
+    &CertifiedTestChain,
+    &mut Worker<'_>,
+    &KuraBlockStore,
+    &mut tokio::sync::broadcast::Receiver<EventBox>,
+) + 'a
+        );
+
 /// Construct the same signed fixture once per binary rather than per callback type.
-/// The borrowed adapter retains each original FnOnce closure without another allocation.
+/// The borrowed adapter retains each original `FnOnce` closure without another allocation.
 #[inline(never)]
 fn with_worker_chain_erased(
     chain: &CertifiedTestChain,
@@ -201,12 +210,7 @@ fn with_worker_chain_erased(
     lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
     time_source: iroha_primitives::time::TimeSource,
     isolated_source: bool,
-    test: &mut dyn FnMut(
-        &CertifiedTestChain,
-        &mut Worker<'_>,
-        &KuraBlockStore,
-        &mut tokio::sync::broadcast::Receiver<EventBox>,
-    ),
+    test: WorkerChainCallback<'_>,
 ) {
     assert_eq!(chain.validators().len(), 4);
     let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap().unwrap();
@@ -2629,7 +2633,7 @@ fn native_certificate_refusals_retain_original_execution_until_exact_publication
     }
 }
 
-/// Every certificate allocation boundary also preserves the genuine NPoS boundary execution.
+/// Every certificate allocation boundary also preserves the genuine `NPoS` boundary execution.
 #[test]
 fn boundary_certificate_refusals_retain_original_preimage_authority_and_exact_quorum() {
     for part in 1..=3 {

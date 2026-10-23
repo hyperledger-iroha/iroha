@@ -19,14 +19,8 @@ fn phase(word: u32, address: u64, outcome: MemoryOutcome) -> StorePhase {
         address,
         7,
         [10, 11, 12, 13],
-        100,
-        0,
-        0,
-        Memory::STACK_START + Memory::MIN_STACK_SIZE,
-        0,
-        true,
-        true,
-        false,
+        (100, 0, 0, Memory::STACK_START + Memory::MIN_STACK_SIZE, 0),
+        (true, true, false),
         outcome,
     )
     .unwrap()
@@ -64,24 +58,28 @@ struct Fixture {
 }
 impl Fixture {
     // The Boolean/integer oracle is independent of the polynomial equations.
-    fn new(p: StorePhase, mask: u16, values: [u64; 256], tags: [bool; 256]) -> Self {
+    fn new(p: StorePhase, mask: u16, values: &[u64; 256], tags: [bool; 256]) -> Self {
         Self::with_memory(p, mask, values, tags, OLD)
     }
     fn with_memory(
         p: StorePhase,
         mask: u16,
-        values: [u64; 256],
+        values: &[u64; 256],
         tags: [bool; 256],
         before: [u8; 16],
     ) -> Self {
         let mut reads = [[F::ZERO; packet::WIDTH]; 3];
-        for slot in 0..if p.wide { 3 } else { 2 } {
+        for (slot, read) in reads
+            .iter_mut()
+            .enumerate()
+            .take(if p.wide { 3 } else { 2 })
+        {
             let index = p.registers[slot];
-            reads[slot] = Event {
+            *read = Event {
                 space: Space::Register,
                 vm: p.vm,
                 generation: 0,
-                index: index as u32,
+                index: u32::try_from(index).expect("bounded fixture value"),
                 write: false,
                 before: bytes(values[index]),
                 after: bytes(values[index]),
@@ -107,13 +105,21 @@ impl Fixture {
             }
             let mut after = before;
             after[start..start + length].copy_from_slice(&payload[..length]);
-            let selected = (((1_u32 << length) - 1) << start) as u16;
+            let selected = u16::from_le_bytes(
+                u32::to_le_bytes(((1_u32 << length) - 1) << start)[..2]
+                    .try_into()
+                    .expect("low-byte width"),
+            );
             let after_mask = (mask & !selected) | if low { selected } else { 0 };
             memory = Event {
                 space: Space::Memory,
                 vm: p.vm,
                 generation: 0,
-                index: (p.address >> 4) as u32,
+                index: u32::from_le_bytes(
+                    u64::to_le_bytes(p.address >> 4)[..4]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
                 write: true,
                 before,
                 after,
@@ -203,7 +209,7 @@ fn store_truth_tables_preserve_half_masks_and_all_typed_effects() {
                     tags[1] = tag_bits & 1 != 0;
                     tags[2] = tag_bits & 2 != 0;
                     for mask in [0, 1, 0xff, 0xff00, 0xaaaa, 0xffff] {
-                        let f = Fixture::new(p, mask, registers(p), tags);
+                        let f = Fixture::new(p, mask, &registers(p), tags);
                         assert!(f.accepts());
                         assert_eq!(
                             f.control[COMMIT]
@@ -234,7 +240,7 @@ fn every_store_mask_effect_log_control_and_read_tuple_mutation_is_rejected() {
             let mut tags = [false; 256];
             tags[1] = private;
             tags[2] = private;
-            let f = Fixture::new(p, 0xa55a, registers(p), tags);
+            let f = Fixture::new(p, 0xa55a, &registers(p), tags);
             assert!(f.accepts());
             for i in 0..WIDTH {
                 let mut m = f.clone();
@@ -284,7 +290,7 @@ fn rejected_stores_cannot_erase_operand_reads_or_commit_memory_register_pc_cycle
             let mut tags = [false; 256];
             tags[1] = true;
             tags[2] = !mixed;
-            let f = Fixture::new(p, 0xffff, registers(p), tags);
+            let f = Fixture::new(p, 0xffff, &registers(p), tags);
             assert!(f.accepts());
             assert_eq!(f.control[PRIVACY_TRAP], F::ONE);
             assert_eq!(f.control[ACCESS_TRAP], F::ZERO);
@@ -316,7 +322,7 @@ fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted(
     for low in 0..4 {
         for high in 0..4 {
             let p = vector(Memory::HEAP_START, low, high);
-            let f = Fixture::new(p, 0, registers(p), [false; 256]);
+            let f = Fixture::new(p, 0, &registers(p), [false; 256]);
             assert!(f.accepts());
             if low == high {
                 let mut m = f.clone();
@@ -329,7 +335,7 @@ fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted(
     // Preserve the forged source's read-preservation tuple AND every derived
     // write/log byte. Only equality to the earlier same-register read may fail.
     let p = vector(Memory::HEAP_START, 1, 1);
-    let original = Fixture::new(p, 0, registers(p), [false; 256]);
+    let original = Fixture::new(p, 0, &registers(p), [false; 256]);
     assert!(original.accepts());
     let mut changed = original;
     changed.reads[2][BEFORE] = changed.reads[2][BEFORE].add(F::ONE);
@@ -355,7 +361,7 @@ fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted(
                 .wrapping_add(i64::cast_unsigned(i64::from(immediate))),
             p.address
         );
-        let f = Fixture::new(p, 0, registers(p), [false; 256]);
+        let f = Fixture::new(p, 0, &registers(p), [false; 256]);
         assert!(f.accepts());
         let mut m = f;
         m.reads[0][BEFORE] = m.reads[0][BEFORE].add(F::ONE);
@@ -369,14 +375,14 @@ fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted(
             address,
             7,
             clocks,
-            gas,
-            0,
-            cycles,
-            Memory::STACK_START + Memory::MIN_STACK_SIZE,
-            cursor,
-            zk,
-            vector,
-            private,
+            (
+                gas,
+                0,
+                cycles,
+                Memory::STACK_START + Memory::MIN_STACK_SIZE,
+                cursor,
+            ),
+            (zk, vector, private),
             MemoryOutcome::Ready,
         )
     };
@@ -497,7 +503,7 @@ fn assert_native_reads(vm: &IVM, fixture: &Fixture) {
         .map(|p| {
             (
                 false,
-                p[packet::INDEX].0 as usize,
+                usize::try_from(p[packet::INDEX].0).expect("bounded fixture value"),
                 packet::half(p, BEFORE, 0),
                 p[BEFORE_TAG] == F::ONE,
             )
@@ -515,7 +521,10 @@ fn assert_native_write(vm: &IVM, f: &Fixture) {
         assert_eq!(log[0].address(), f.phase.address);
         let payload: Vec<u8> = f.log[4..]
             .iter()
-            .flat_map(|v| (v.0 as u16).to_le_bytes())
+            .flat_map(|v| {
+                u16::from_le_bytes(v.0.to_le_bytes()[..2].try_into().expect("low-word width"))
+                    .to_le_bytes()
+            })
             .collect();
         assert_eq!(
             log[0].bytes(),
@@ -540,7 +549,7 @@ fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_regis
             let word = enc::encode_store128(wide::memory::STORE128, 3, low, high);
             let p = vector(Memory::HEAP_START + 0x80, low, high);
             let values = registers(p);
-            let f = Fixture::new(p, 0, values, [false; 256]);
+            let f = Fixture::new(p, 0, &values, [false; 256]);
             assert!(f.accepts());
             let mut vm = native(
                 &[word, enc::encode_halt()],
@@ -548,8 +557,8 @@ fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_regis
                 ivm_mode::ZK | ivm_mode::VECTOR,
             );
             vm.memory.store_bytes(p.address, &OLD).unwrap();
-            for i in 0..4 {
-                vm.set_register(i, values[i]);
+            for (i, &value) in values.iter().enumerate().take(4) {
+                vm.set_register(i, value);
             }
             let registers_before: [(u64, bool); 256] =
                 std::array::from_fn(|i| (vm.registers.get(i), vm.registers.tag(i)));
@@ -576,14 +585,18 @@ fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_regis
         for source in [0_u8, 1, 3] {
             let address = Memory::HEAP_START + 0x80;
             let word = enc::encode_store(wide::memory::STORE64, 3, source, half);
-            let p = phase(word, address + half as u64, MemoryOutcome::Ready);
+            let p = phase(
+                word,
+                address + i64::from(half).cast_unsigned(),
+                MemoryOutcome::Ready,
+            );
             let values = registers(p);
-            let f = Fixture::new(p, 0, values, [false; 256]);
+            let f = Fixture::new(p, 0, &values, [false; 256]);
             assert!(f.accepts());
             let mut vm = native(&[word, enc::encode_halt()], 100, ivm_mode::ZK);
             vm.memory.store_bytes(address, &OLD).unwrap();
-            for i in 0..4 {
-                vm.set_register(i, values[i]);
+            for (i, &value) in values.iter().enumerate().take(4) {
+                vm.set_register(i, value);
             }
             vm.memory.clear_tracking();
             vm.run().unwrap();
@@ -591,7 +604,10 @@ fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_regis
             assert_native_write(&vm, &f);
             let expected: Vec<u8> = f.memory[AFTER..AFTER + 8]
                 .iter()
-                .flat_map(|v| (v.0 as u16).to_le_bytes())
+                .flat_map(|v| {
+                    u16::from_le_bytes(v.0.to_le_bytes()[..2].try_into().expect("low-word width"))
+                        .to_le_bytes()
+                })
                 .collect();
             assert_eq!(
                 vm.memory
@@ -619,7 +635,7 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
             tags[1] = tag_bits & 1 != 0;
             tags[2] = tag_bits & 2 != 0;
             let values = registers(p);
-            let f = Fixture::new(p, 0, values, tags);
+            let f = Fixture::new(p, 0, &values, tags);
             assert!(f.accepts());
             let mut vm = native(
                 &[word, enc::encode_halt()],
@@ -627,8 +643,8 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
                 ivm_mode::ZK | ivm_mode::VECTOR,
             );
             vm.memory.store_bytes(address, &OLD).unwrap();
-            for i in 0..4 {
-                vm.set_register(i, values[i]);
+            for (i, &value) in values.iter().enumerate().take(4) {
+                vm.set_register(i, value);
                 vm.registers.set_tag(i, tags[i]);
             }
             let registers_before: [(u64, bool); 256] =
@@ -660,12 +676,12 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
     let p = phase(word, 0, MemoryOutcome::AccessRefused);
     assert_eq!(p.base_value, u64::MAX);
     let values = registers(p);
-    let f = Fixture::new(p, 0, values, [false; 256]);
+    let f = Fixture::new(p, 0, &values, [false; 256]);
     assert!(f.accepts());
     let mut vm = native(&[word, enc::encode_halt()], 100, ivm_mode::ZK);
     let code_before = vm.memory.load_u64(0).unwrap();
-    for i in 0..4 {
-        vm.set_register(i, values[i]);
+    for (i, &value) in values.iter().enumerate().take(4) {
+        vm.set_register(i, value);
     }
     vm.memory.clear_tracking();
     assert!(match (
@@ -719,7 +735,7 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
         vm.run().unwrap();
         let mut p = phase(
             words[2],
-            Memory::STACK_START + half as u64,
+            Memory::STACK_START + i64::from(half).cast_unsigned(),
             MemoryOutcome::Ready,
         );
         p.pc = 8;
@@ -732,7 +748,7 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
             .load_u128(Memory::STACK_START)
             .unwrap()
             .to_le_bytes();
-        let f = Fixture::with_memory(p, u16::MAX, values, tags, old_bytes);
+        let f = Fixture::with_memory(p, u16::MAX, &values, tags, old_bytes);
         assert!(f.accepts());
         let expected_mask = if half == 0 { 0xff00 } else { 0xff };
         assert_eq!(f.memory[AFTER_TAG], F(expected_mask));
@@ -762,7 +778,7 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
     let forward_fixture = Fixture::with_memory(
         forward,
         0,
-        core::array::from_fn(|i| vm.registers.get(i)),
+        &core::array::from_fn(|i| vm.registers.get(i)),
         [false; 256],
         [0; 16],
     );
@@ -785,7 +801,7 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
     let f = Fixture::new(
         p,
         0,
-        core::array::from_fn(|i| vm.registers.get(i)),
+        &core::array::from_fn(|i| vm.registers.get(i)),
         [false; 256],
     );
     assert!(f.accepts());
@@ -793,7 +809,11 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
     assert!(match (
         &(vm.run()),
         &(VMError::MemoryAccessViolation {
-            addr: (Memory::OUTPUT_START + 8) as u32,
+            addr: u32::from_le_bytes(
+                u64::to_le_bytes(Memory::OUTPUT_START + 8)[..4]
+                    .try_into()
+                    .expect("low-byte width")
+            ),
             perm: Perm::WRITE
         })
     ) {
@@ -834,25 +854,25 @@ fn store_bank_degree_and_geometry_are_explicit_without_complete_memory_admission
                 4,
                 3,
                 |row, _, _, _, _| {
-                    let a = WIDTH;
-                    let b = a + packet::WIDTH;
-                    let c = b + packet::WIDTH;
-                    let d = c + packet::WIDTH;
-                    let e = d + packet::WIDTH;
-                    let f = e + WRITE_LOG_WIDTH;
+                    let read_start = WIDTH;
+                    let low_start = read_start + packet::WIDTH;
+                    let high_start = low_start + packet::WIDTH;
+                    let output_start = high_start + packet::WIDTH;
+                    let write_log_start = output_start + packet::WIDTH;
+                    let control_start = write_log_start + WRITE_LOG_WIDTH;
                     let mut out = Vec::new();
                     append_residues(
                         &mut out,
                         p,
-                        row[..a].try_into().unwrap(),
+                        row[..read_start].try_into().unwrap(),
                         [
-                            row[a..b].try_into().unwrap(),
-                            row[b..c].try_into().unwrap(),
-                            row[c..d].try_into().unwrap(),
+                            row[read_start..low_start].try_into().unwrap(),
+                            row[low_start..high_start].try_into().unwrap(),
+                            row[high_start..output_start].try_into().unwrap(),
                         ],
-                        row[d..e].try_into().unwrap(),
-                        row[e..f].try_into().unwrap(),
-                        row[f..].try_into().unwrap(),
+                        row[output_start..write_log_start].try_into().unwrap(),
+                        row[write_log_start..control_start].try_into().unwrap(),
+                        row[control_start..].try_into().unwrap(),
                     );
                     Ok::<_, core::convert::Infallible>(out)
                 }
@@ -873,8 +893,8 @@ fn store_bank_degree_and_geometry_are_explicit_without_complete_memory_admission
         outcome: MemoryOutcome::AccessRefused,
         ..ready
     };
-    let a = Fixture::new(ready, 0, registers(ready), [false; 256]);
-    let b = Fixture::new(refused, 0, registers(refused), [false; 256]);
+    let a = Fixture::new(ready, 0, &registers(ready), [false; 256]);
+    let b = Fixture::new(refused, 0, &registers(refused), [false; 256]);
     assert!(a.accepts() && b.accepts());
     assert_ne!(a.control, b.control);
     let mut mixed = a;
@@ -903,7 +923,13 @@ fn native_early_trap_priority_and_scalar_late_alignment_keep_exact_read_prefix()
             true,
             false,
             true,
-            VMError::MisalignedAccess { addr: bad as u32 },
+            VMError::MisalignedAccess {
+                addr: u32::from_le_bytes(
+                    u64::to_le_bytes(bad)[..4]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
+            },
             1,
             5,
         ),
@@ -914,7 +940,13 @@ fn native_early_trap_priority_and_scalar_late_alignment_keep_exact_read_prefix()
             true,
             false,
             false,
-            VMError::MisalignedAccess { addr: bad as u32 },
+            VMError::MisalignedAccess {
+                addr: u32::from_le_bytes(
+                    u64::to_le_bytes(bad)[..4]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
+            },
             2,
             3,
         ),

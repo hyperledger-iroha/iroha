@@ -99,10 +99,10 @@ impl ProgramHashCache {
         }
         self.map.insert(code_hash, abi_hash);
         self.order.push_back(code_hash);
-        if self.order.len() > self.cap {
-            if let Some(evicted) = self.order.pop_front() {
-                self.map.remove(&evicted);
-            }
+        if self.order.len() > self.cap
+            && let Some(evicted) = self.order.pop_front()
+        {
+            self.map.remove(&evicted);
         }
         abi_hash
     }
@@ -180,6 +180,7 @@ fn validate_overlay_contract_runtime_context(
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
 enum ContractDispatchSource<'a> {
     Bytecode(&'a [u8]),
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -1175,10 +1176,10 @@ fn prune_redundant_contract_ops_with_metadata<R, M>(
                             .get(reg.artifact_id())
                             .cloned()
                     });
-                    if let Some(existing) = existing {
-                        if existing == reg.manifest() {
-                            return false;
-                        }
+                    if let Some(existing) = existing
+                        && existing == reg.manifest()
+                    {
+                        return false;
                     }
                 }
             } else if let Some(bytes) = instr.as_any().downcast_ref::<RegisterSmartContractBytes>()
@@ -1222,7 +1223,7 @@ fn prune_redundant_contract_ops_with_metadata<R, M>(
         let prior = mem::take(metadata);
         *metadata = prior
             .into_iter()
-            .zip(retain.into_iter())
+            .zip(retain)
             .filter_map(|(entry, keep)| keep.then_some(entry))
             .collect();
     }
@@ -1521,11 +1522,10 @@ impl TxOverlay {
         authorization: &ContractEntrypointAuthorizationSnapshot,
         execution_height: Option<u64>,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
-        if let Some(execution_height) = execution_height {
-            authorization.validate_at_height(world, execution_height)
-        } else {
-            authorization.validate(world)
-        }
+        execution_height.map_or_else(
+            || authorization.validate(world),
+            |execution_height| authorization.validate_at_height(world, execution_height),
+        )
     }
     fn validate_authorization_snapshot_for_authority(
         world: &impl WorldReadOnly,
@@ -1533,11 +1533,12 @@ impl TxOverlay {
         authority: &AccountId,
         execution_height: Option<u64>,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
-        if let Some(execution_height) = execution_height {
-            authorization.validate_for_authority_at_height(world, authority, execution_height)
-        } else {
-            authorization.validate_for_authority(world, authority)
-        }
+        execution_height.map_or_else(
+            || authorization.validate_for_authority(world, authority),
+            |execution_height| {
+                authorization.validate_for_authority_at_height(world, authority, execution_height)
+            },
+        )
     }
     /// Create an overlay from a list of instructions.
     pub fn from_instructions(instrs: Vec<InstructionBox>) -> Self {
@@ -1560,7 +1561,7 @@ impl TxOverlay {
     fn from_ivm_proved_instructions(
         instrs: Vec<InstructionBox>,
         _authority: &AccountId,
-        contract_runtime_context: crate::executor::ContractRuntimeExecutionContext,
+        contract_runtime_context: &crate::executor::ContractRuntimeExecutionContext,
         entrypoint_authorization: ContractEntrypointAuthorizationSnapshot,
     ) -> Self {
         let execution_contexts: Vec<_> = instrs
@@ -2044,8 +2045,8 @@ impl TxOverlay {
                                     admission_validate_fx_corridor(effect_authority, state_tx, fx)
                                         .map_err(ValidationFail::from)?;
                                 }
-                                SettlementInstructionBox::SetFxCorridorPolicy(_) => {}
-                                SettlementInstructionBox::FundFxCorridorEscrow(_)
+                                SettlementInstructionBox::SetFxCorridorPolicy(_)
+                                | SettlementInstructionBox::FundFxCorridorEscrow(_)
                                 | SettlementInstructionBox::RefundFxCorridorEscrow(_) => {}
                             }
                         }
@@ -2860,18 +2861,21 @@ pub fn build_overlay_for_transaction_with_accounts(
                 bytecode.as_ref(),
                 tx_gas_limit,
             )?;
-            let mut host = if let Some(context) = contract_call_context.as_ref() {
-                crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_argument_record(
-                    tx.authority().clone(),
-                    Arc::new(accounts.to_vec()),
-                    context.argument_record.clone(),
-                )
-            } else {
-                crate::smartcontracts::ivm::host::CoreHost::with_accounts(
-                    tx.authority().clone(),
-                    Arc::new(accounts.to_vec()),
-                )
-            };
+            let mut host = contract_call_context.as_ref().map_or_else(
+                || {
+                    crate::smartcontracts::ivm::host::CoreHost::with_accounts(
+                        tx.authority().clone(),
+                        Arc::new(accounts.to_vec()),
+                    )
+                },
+                |context| {
+                    crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_argument_record(
+                        tx.authority().clone(),
+                        Arc::new(accounts.to_vec()),
+                        context.argument_record.clone(),
+                    )
+                },
+            );
             host.set_state_free_generic_execution();
             apply_streaming_metadata(&mut host, StreamingOverlayMetadata::default());
             vm.set_host(host);
@@ -2918,12 +2922,10 @@ pub(crate) fn build_prepared_overlay_for_transaction_with_accounts_zk<R>(
     tx: &SignedTransaction,
     accounts: Arc<Vec<AccountId>>,
     state_ro: &R,
-    zk_enabled: bool,
-    header: &BlockHeader,
+    (zk_enabled, header): (bool, &BlockHeader),
     streaming_meta: StreamingOverlayMetadata,
     ivm_cache: &mut IvmCache,
-    capture_access_log: bool,
-    reused_argument_record: Option<ivm::PreparedArgumentRecord>,
+    (capture_access_log, reused_argument_record): (bool, Option<ivm::PreparedArgumentRecord>),
 ) -> Result<PreparedTxOverlay, OverlayBuildError>
 where
     R: StateReadOnly + QueryStateSource,
@@ -3410,8 +3412,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
     tx: &SignedTransaction,
     accounts: Arc<Vec<AccountId>>,
     state_ro: &(impl StateReadOnly + QueryStateSource),
-    max_cycles_cap: u64,
-    upper_bound_cap: NonZeroU64,
+    (max_cycles_cap, upper_bound_cap): (u64, NonZeroU64),
     streaming_meta: StreamingOverlayMetadata,
     ivm_cache: &mut IvmCache,
     reused_argument_record: Option<ivm::PreparedArgumentRecord>,
@@ -3781,7 +3782,7 @@ pub(crate) mod test_support {
     use iroha_model_base::chain::ChainId;
 
     /// Component fixture with explicit committed global-root metadata.
-    pub(crate) fn with_global_root(world: crate::state::World) -> crate::state::World {
+    pub fn with_global_root(world: crate::state::World) -> crate::state::World {
         let mut parameters = world.parameters.block();
         parameters
             .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
@@ -3793,7 +3794,7 @@ pub(crate) mod test_support {
     }
 
     /// Apply the original signed genesis to its uniquely retained fixture State.
-    pub(crate) fn state_after_genesis(world: crate::state::World) -> State {
+    pub fn state_after_genesis(world: crate::state::World) -> State {
         state_after_genesis_with_chain(world, ChainId::from("sumeragi-certified-test-chain"))
     }
 
@@ -5182,8 +5183,7 @@ seiyaku QuarantineArguments { permission CanInspectQuarantine;
             transaction,
             Arc::clone(&accounts),
             &*block,
-            0,
-            upper_bound,
+            (0, upper_bound),
             StreamingOverlayMetadata::default(),
             &mut cache,
             None,
@@ -5201,8 +5201,7 @@ seiyaku QuarantineArguments { permission CanInspectQuarantine;
             transaction,
             accounts,
             &*block,
-            0,
-            upper_bound,
+            (0, upper_bound),
             StreamingOverlayMetadata::default(),
             &mut cache,
             Some(retained.clone()),
@@ -5245,24 +5244,20 @@ seiyaku QuarantineArguments { permission CanInspectQuarantine;
             &raw_ivm,
             Arc::clone(&accounts),
             &block,
-            false,
-            &header,
+            (false, &header),
             StreamingOverlayMetadata::default(),
             &mut cache,
-            false,
-            None,
+            (false, None),
         )
         .expect("prepare an ordinary raw-IVM overlay before the hold");
         let after_release = build_prepared_overlay_for_transaction_with_accounts_zk(
             &raw_ivm,
             Arc::clone(&accounts),
             &block,
-            false,
-            &header,
+            (false, &header),
             StreamingOverlayMetadata::default(),
             &mut cache,
-            false,
-            None,
+            (false, None),
         )
         .expect("retain a second authentic preparation for the hold-release check");
         let captured_revision = outdated
@@ -5326,12 +5321,10 @@ seiyaku QuarantineArguments { permission CanInspectQuarantine;
                 &raw_ivm,
                 Arc::clone(&accounts),
                 &block,
-                false,
-                &header,
+                (false, &header),
                 StreamingOverlayMetadata::default(),
                 &mut cache,
-                false,
-                None,
+                (false, None),
             )
             .expect_err("the production raw-IVM overlay builder must reject the active hold"),
         );
@@ -5341,8 +5334,7 @@ seiyaku QuarantineArguments { permission CanInspectQuarantine;
                 &raw_ivm,
                 accounts,
                 &block,
-                0,
-                upper_bound,
+                (0, upper_bound),
                 StreamingOverlayMetadata::default(),
                 &mut cache,
                 None,
@@ -5836,12 +5828,12 @@ seiyaku GuardedOverlayRebound { permission CanInvokeContractEntrypoint;
         let proved_overlay = TxOverlay::from_ivm_proved_instructions(
             overlay.instructions().cloned().collect(),
             &authority,
-            crate::executor::ContractRuntimeExecutionContext {
+            &(crate::executor::ContractRuntimeExecutionContext {
                 contract_subject: contract_address.subject_id(),
                 contract_address: contract_address.clone(),
                 contract_alias: Some(contract_alias.clone()),
                 entrypoint: "main".to_owned(),
-            },
+            }),
             overlay
                 .entrypoint_authorization
                 .clone()
@@ -8592,10 +8584,10 @@ fn extract_amx_budget_violation(vm: &mut ivm::IVM) -> Option<AmxBudgetViolation>
         .and_then(crate::smartcontracts::ivm::host::CoreHost::take_amx_budget_violation)
 }
 fn clear_axt_reject(vm: &mut ivm::IVM) {
-    if let Some(host_any) = vm.host_mut_any() {
-        if let Some(host) = host_any.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>() {
-            host.clear_axt_reject();
-        }
+    if let Some(host_any) = vm.host_mut_any()
+        && let Some(host) = host_any.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
+    {
+        host.clear_axt_reject();
     }
 }
 fn extract_axt_reject(vm: &mut ivm::IVM) -> Option<AxtRejectContext> {
@@ -8772,8 +8764,9 @@ impl core::fmt::Display for OverlayBuildError {
         match self {
             OverlayBuildError::IvmHeaderParse => write!(f, "IVM header parse error"),
             OverlayBuildError::HeaderPolicy(e) => write!(f, "header policy: {e:?}"),
-            OverlayBuildError::ContractCall(msg) => write!(f, "{msg}"),
-            OverlayBuildError::GasLimit(msg) => write!(f, "{msg}"),
+            OverlayBuildError::ContractCall(msg) | OverlayBuildError::GasLimit(msg) => {
+                write!(f, "{msg}")
+            }
             OverlayBuildError::IvmLoad(e) => write!(f, "ivm.load_program: {e}"),
             OverlayBuildError::IvmRun(e) => write!(f, "ivm.run: {e}"),
             OverlayBuildError::ExecutionOwner(message) => write!(f, "execution owner: {message}"),
@@ -8787,8 +8780,9 @@ impl core::fmt::Display for OverlayBuildError {
             OverlayBuildError::AxtReject(ctx) => write!(f, "axt_reject: {ctx}"),
             OverlayBuildError::AmxBudgetViolation(v) => write!(f, "{}", amx_timeout_message(v)),
             OverlayBuildError::QuarantineOverflow => write!(f, "quarantine overflow"),
-            OverlayBuildError::ZkProof(msg) => write!(f, "zk_proof: {msg}"),
-            OverlayBuildError::IvmProvedReplay(msg) => write!(f, "zk_proof: {msg}"),
+            OverlayBuildError::ZkProof(msg) | OverlayBuildError::IvmProvedReplay(msg) => {
+                write!(f, "zk_proof: {msg}")
+            }
         }
     }
 }

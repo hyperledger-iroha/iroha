@@ -358,6 +358,14 @@ impl BlockStore {
             )
         })
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            clippy::unnecessary_wraps,
+            reason = "The test build reads the instance's injected crash flag and returns its I/O failure through this same boundary."
+        )
+    )]
     fn maybe_fail_commit_marker_after_temp_sync(&self, temporary_path: &Path) -> Result<()> {
         #[cfg(test)]
         if self

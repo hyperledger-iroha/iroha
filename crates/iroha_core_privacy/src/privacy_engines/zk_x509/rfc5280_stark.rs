@@ -284,7 +284,7 @@ const FIXED_PADDING_ROWS_V1: usize =
     ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - FIXED_NON_PADDING_ROWS_V1;
 const _: () = assert!(ZK_X509_RFC5280_STARK_BUS_LANES_V1 == ZK_X509_DER_STARK_BUS_LANES_V1);
 const _: () = assert!(MAX_ACTIVE_ROWS_V1 <= ZK_X509_RFC5280_STARK_TRACE_SIZE_V1);
-const _: () = assert!(MAX_OUTPUT_EVENT_ROWS_V1 % 2 == 0);
+const _: () = assert!(MAX_OUTPUT_EVENT_ROWS_V1.is_multiple_of(2));
 const _: () = assert!(FIXED_NON_PADDING_ROWS_V1 < ZK_X509_RFC5280_STARK_TRACE_SIZE_V1);
 const _: () = assert!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1 <= u16::MAX as usize);
 const _: () = {
@@ -318,7 +318,7 @@ fn serial_comparison_descriptor_v1(
         let entry = if comparison == 0 {
             0
         } else {
-            (comparison + 1) / 2
+            comparison.div_ceil(2)
         };
         return Ok((
             ZkX509Rfc5280SerialComparisonKindV1::LeafNonMembership,
@@ -455,7 +455,7 @@ impl ZkX509Rfc5280StarkPrivateShapeV1 {
     ) -> Result<usize, ZkX509Rfc5280StarkErrorV1> {
         values
             .into_iter()
-            .try_fold(0_usize, |sum, value| sum.checked_add(value))
+            .try_fold(0_usize, usize::checked_add)
             .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)
     }
     pub(crate) fn source_bytes(&self) -> Result<usize, ZkX509Rfc5280StarkErrorV1> {
@@ -582,9 +582,7 @@ impl ZkX509Rfc5280StarkPrivateShapeV1 {
                         *count != 0
                     }
                 })
-            || self.embedded_document_lengths[..embedded_count]
-                .iter()
-                .any(|length| *length == 0)
+            || self.embedded_document_lengths[..embedded_count].contains(&0)
             || self.embedded_document_lengths[embedded_count..]
                 .iter()
                 .any(|length| *length != 0)
@@ -744,7 +742,7 @@ impl ZkX509Rfc5280StarkShapeV1 {
     pub(super) const fn disclosed_attribute_count(&self) -> u8 {
         self.disclosed_attribute_count
     }
-    pub(crate) const fn family_counts(&self) -> [usize; FAMILY_COUNT_V1] {
+    pub(crate) const fn family_counts() -> [usize; FAMILY_COUNT_V1] {
         [
             FIXED_SOURCE_BYTE_ROWS_V1,
             FIXED_SOURCE_NODE_ROWS_V1,
@@ -959,9 +957,8 @@ fn role_tag_is_admitted_v1(row: ZkX509Rfc5280NodeProvenanceV1) -> bool {
         | R::EmbeddedBasicConstraints
         | R::EmbeddedEku => tag == (0, true, 16),
         R::NameRdn => tag == (0, true, 17),
-        R::CertificateVersion => tag == (2, true, 0),
+        R::CertificateVersion | R::CrlExtensionsWrapper => tag == (2, true, 0),
         R::CertificateExtensionsWrapper => tag == (2, true, 3),
-        R::CrlExtensionsWrapper => tag == (2, true, 0),
         R::CertificateVersionInteger
         | R::CertificateSerial
         | R::CrlVersion
@@ -1154,6 +1151,10 @@ fn expected_child_role_v1(
     Ok(result)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "grammar rules independently constrain construction, ordinal bounds, and child counts"
+)]
 struct ZkX509Rfc5280GrammarRuleV1 {
     parent_role: u16,
     child_role: u16,
@@ -1307,7 +1308,7 @@ fn grammar_rule_matches_node_v1(
         || rule.tag_class != node.tag_class
         || rule.constructed != node.constructed
         || rule.tag_number != node.tag_number
-        || (rule.root_kind == 0) != !root
+        || (rule.root_kind == 0) == root
         || (rule.ordinal_exact && ordinal != rule.ordinal_parameter)
         || (rule.ordinal_last && ordinal.checked_add(1) != Some(child_count))
         || (rule.count_exact && child_count != rule.count_parameter)
@@ -1498,21 +1499,21 @@ pub struct ZkX509Rfc5280DerSourceTerminalsV1 {
 #[cfg(test)]
 pub fn zk_x509_rfc5280_der_source_terminals_v1(
     trace: &ZkX509Rfc5280TraceV1,
-    challenges: ZkX509DerStarkChallengesV1,
+    challenges: &ZkX509DerStarkChallengesV1,
 ) -> Result<ZkX509Rfc5280DerSourceTerminalsV1, ZkX509Rfc5280StarkErrorV1> {
     validate_zk_x509_rfc5280_provenance_v1(trace)?;
     let mut input_byte = [F::ONE; ZK_X509_RFC5280_STARK_BUS_LANES_V1];
     let mut node = [F::ONE; ZK_X509_RFC5280_STARK_BUS_LANES_V1];
     for (document_index, document) in source_documents_v1(trace).enumerate() {
         for (address, byte) in document.bytes.iter().enumerate() {
-            for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-                input_byte[lane] = input_byte[lane].mul(zk_x509_der_stark_input_byte_factor_v1(
+            for (lane, product) in input_byte.iter_mut().enumerate() {
+                *product = product.mul(zk_x509_der_stark_input_byte_factor_v1(
                     F(u64::try_from(document_index)
                         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?),
                     F(u64::try_from(address).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?),
                     byte.value.value,
                     lane,
-                    &challenges,
+                    challenges,
                 )?);
             }
         }
@@ -1543,9 +1544,8 @@ pub fn zk_x509_rfc5280_der_source_terminals_v1(
                 depth: F(u64::from(row.depth)),
                 content_len: F(u64::from(content_len)),
             };
-            for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-                node[lane] =
-                    node[lane].mul(zk_x509_der_stark_node_factor_v1(event, lane, &challenges)?);
+            for (lane, product) in node.iter_mut().enumerate() {
+                *product = product.mul(zk_x509_der_stark_node_factor_v1(event, lane, challenges)?);
             }
         }
     }
@@ -1592,6 +1592,13 @@ fn find_role_instance_node_v1(
     }
     Ok(row)
 }
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "test-only unsupported roles exercise the same fallible role mapping"
+    )
+)]
 fn endpoint_role_code_v1(role: ZkX509IoSegmentRoleV1) -> Result<u64, ZkX509Rfc5280StarkErrorV1> {
     match role {
         ZkX509IoSegmentRoleV1::StrictDer => Ok(1),
@@ -1608,9 +1615,7 @@ fn output_role_index_v1(role: ZkX509Rfc5280OutputRoleV1) -> usize {
     role as usize - 1
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn output_roles_v1(
-    trace: &ZkX509Rfc5280TraceV1,
-) -> Result<Vec<ZkX509Rfc5280OutputRoleV1>, ZkX509Rfc5280StarkErrorV1> {
+fn output_roles_v1(trace: &ZkX509Rfc5280TraceV1) -> Vec<ZkX509Rfc5280OutputRoleV1> {
     let mut roles = Vec::new();
     roles.extend(core::iter::repeat_n(
         ZkX509Rfc5280OutputRoleV1::Projection,
@@ -1641,16 +1646,12 @@ fn output_roles_v1(
         ZkX509Rfc5280OutputRoleV1::IssuerSpkiSha,
         ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor,
     ]);
-    Ok(roles)
+    roles
 }
 #[cfg(test)]
 fn output_factor_v1(
     role: ZkX509Rfc5280OutputRoleV1,
-    channel: u32,
-    endpoint: ZkX509IoEndpointV1,
-    offset: usize,
-    value: u8,
-    is_write: bool,
+    (channel, endpoint, offset, value, is_write): (u32, ZkX509IoEndpointV1, usize, u8, bool),
     lane: usize,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
 ) -> Result<F, ZkX509Rfc5280StarkErrorV1> {
@@ -1788,7 +1789,7 @@ pub fn zk_x509_rfc5280_output_terminals_v1(
 ) -> Result<ZkX509Rfc5280OutputTerminalsV1, ZkX509Rfc5280StarkErrorV1> {
     challenges.validate()?;
     let witnesses = rfc5280_io_witnesses_v1(trace, 0)?;
-    let roles = output_roles_v1(trace)?;
+    let roles = output_roles_v1(trace);
     if roles.len() != witnesses.len() {
         return Err(ZkX509Rfc5280StarkErrorV1::Output);
     }
@@ -1812,11 +1813,13 @@ pub fn zk_x509_rfc5280_output_terminals_v1(
                 terminals.producer[role_index][lane] =
                     terminals.producer[role_index][lane].mul(output_factor_v1(
                         role,
-                        witness.declaration.channel,
-                        witness.declaration.producer,
-                        offset,
-                        value,
-                        true,
+                        (
+                            witness.declaration.channel,
+                            witness.declaration.producer,
+                            offset,
+                            value,
+                            true,
+                        ),
                         lane,
                         challenges,
                     )?);
@@ -1840,11 +1843,7 @@ pub fn zk_x509_rfc5280_output_terminals_v1(
                     terminals.consumer[role_index][lane] = terminals.consumer[role_index][lane]
                         .mul(output_factor_v1(
                             role,
-                            witness.declaration.channel,
-                            consumer,
-                            offset,
-                            value,
-                            false,
+                            (witness.declaration.channel, consumer, offset, value, false),
                             lane,
                             challenges,
                         )?);
@@ -2127,7 +2126,7 @@ fn serial_frame_v1(
     }
     let mut frame = [0_u8; SERIAL_COMPARISON_WIDTH_V1];
     frame[0] = u8::try_from(serial.len()).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
-    frame[1..1 + serial.len()].copy_from_slice(serial);
+    frame[1..=serial.len()].copy_from_slice(serial);
     Ok(frame)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -3679,7 +3678,7 @@ pub fn zk_x509_rfc_key_join_rows_v1(
         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
     let p256 = u8::try_from(endpoint_role_code_v1(ZkX509IoSegmentRoleV1::P256)?)
         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
-    let producer_start = shape.family_counts()
+    let producer_start = ZkX509Rfc5280StarkShapeV1::family_counts()
         [..ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize]
         .iter()
         .try_fold(0_usize, |sum, count| sum.checked_add(*count))
@@ -3743,7 +3742,7 @@ pub fn compile_zk_x509_rfc5280_stark_fixed_schedule_v1(
         shape.presentation_not_before_unix_seconds,
         shape.presentation_not_after_unix_seconds,
     )?;
-    let counts = shape.family_counts();
+    let counts = ZkX509Rfc5280StarkShapeV1::family_counts();
     let mut starts = [0_usize; FAMILY_COUNT_V1];
     let mut cursor = 0_usize;
     for family in 0..FAMILY_COUNT_V1 {
@@ -3770,9 +3769,6 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
         &self,
         row: usize,
     ) -> Result<(ZkX509Rfc5280StarkFamilyV1, usize), ZkX509Rfc5280StarkErrorV1> {
-        if row >= ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
-            return Err(ZkX509Rfc5280StarkErrorV1::Shape);
-        }
         const FAMILIES: [ZkX509Rfc5280StarkFamilyV1; FAMILY_COUNT_V1] = [
             ZkX509Rfc5280StarkFamilyV1::SourceByte,
             ZkX509Rfc5280StarkFamilyV1::SourceNode,
@@ -3794,6 +3790,10 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
             ZkX509Rfc5280StarkFamilyV1::NameValue,
             ZkX509Rfc5280StarkFamilyV1::Padding,
         ];
+        if row >= ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
+            return Err(ZkX509Rfc5280StarkErrorV1::Shape);
+        }
+
         for (index, family) in FAMILIES.into_iter().enumerate() {
             let start = self.starts[index];
             let end = start
@@ -3862,8 +3862,7 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
                 F(u64::try_from(address).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?);
             fixed[FIX_ADDRESS_FIXED] = F::ONE;
             fixed[FIX_DOCUMENT_FIXED] = F::ONE;
-            fixed[FIX_REQUIRED_ACTIVE] =
-                F(u64::from(address == 0 && matches!(document, 0 | 1 | 2)));
+            fixed[FIX_REQUIRED_ACTIVE] = F(u64::from(address == 0 && matches!(document, 0..=2)));
             // With contiguous strict-DER document identifiers, slot three is
             // present exactly for a depth-three chain (it carries the CRL).
             // A depth-two chain has only documents 0, 1, and 2.
@@ -3885,7 +3884,7 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
                 F(u64::try_from(node).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?);
             fixed[FIX_ADDRESS_FIXED] = F::ONE;
             fixed[FIX_DOCUMENT_FIXED] = F::ONE;
-            fixed[FIX_REQUIRED_ACTIVE] = F(u64::from(node == 0 && matches!(document, 0 | 1 | 2)));
+            fixed[FIX_REQUIRED_ACTIVE] = F(u64::from(node == 0 && matches!(document, 0..=2)));
             fixed[FIX_EXPECTED + 2] = F(u64::from(node == 0));
             fixed[FIX_EXPECTED + 3] = F(u64::from(node == 0 && matches!(document, 0 | 1)));
             fixed[FIX_EXPECTED + 4] = F(u64::from(node == 0 && document == 2));
@@ -4260,7 +4259,7 @@ pub(super) fn build_zk_x509_rfc5280_serial_source_rows_v1(
     validate_serial_frame_v1(&source.frame)?;
     let length = source.frame[0];
     let encoded = private_bytes_v1(source.encoded_contents.iter().map(|cell| cell.value))?;
-    let magnitude = &source.frame[1..1 + usize::from(length)];
+    let magnitude = &source.frame[1..=usize::from(length)];
     let sign_padding = encoded.len() == magnitude.len() + 1
         && encoded.first() == Some(&0)
         && encoded.get(1..) == Some(magnitude);
@@ -4730,13 +4729,13 @@ impl ZkX509P256PrivateProductsV1 {
     /// independently enforces those equalities through masked polynomial links.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn from_p256_air_terminals_v1(
-        certificate_or_crl: [ZkX509P256CertificatePrivateProductsV1;
-            P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1],
-        wallet: ZkX509P256WalletPrivateProductsV1,
+        certificate_or_crl: &[ZkX509P256CertificatePrivateProductsV1;
+             P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1],
+        wallet: &ZkX509P256WalletPrivateProductsV1,
     ) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
         let claims = Self {
-            certificate_or_crl,
-            wallet,
+            certificate_or_crl: *certificate_or_crl,
+            wallet: *wallet,
         };
         claims.validate_air_terminals_v1()?;
         Ok(claims)
@@ -4967,8 +4966,8 @@ impl ZkX509P256PrivateProductsV1 {
 /// The first fixture must satisfy the complete bus and source-chain equalities.
 #[cfg(test)]
 pub fn evaluate_zk_x509_p256_terminal_claim_residues_v1(
-    committed: ZkX509P256PrivateProductsV1,
-    claims: ZkX509P256PrivateProductsV1,
+    committed: &ZkX509P256PrivateProductsV1,
+    claims: &ZkX509P256PrivateProductsV1,
 ) -> Result<[F; P256_TERMINAL_CLAIM_RECORDS_V1], ZkX509Rfc5280StarkErrorV1> {
     committed.validate_air_terminals_v1()?;
     claims.validate_topology_v1()?;
@@ -5788,6 +5787,10 @@ fn ensure_family_slot_v1(
     Ok(())
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "the row is moved into its zeroizing trace owner after capacity admission"
+)]
 fn push_family_row_v1(
     rows: &mut Vec<ZkX509Rfc5280StarkBaseRowV1>,
     row: ZkX509Rfc5280StarkBaseRowV1,
@@ -5933,9 +5936,13 @@ fn spki_output_nodes_v1(
         let node = nodes.next().ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?;
         if nodes.next().is_some()
             || usize::from(node.document) != document
-            || node.content_end.checked_sub(node.start) != Some(SPKI_OUTPUT_BYTES_V1 as u16)
+            || node.content_end.checked_sub(node.start)
+                != Some(u16::try_from(SPKI_OUTPUT_BYTES_V1).expect("fixed SPKI size fits u16"))
             || node.content_end.checked_sub(node.content_start)
-                != Some(SPKI_OUTPUT_CONTENT_BYTES_V1 as u16)
+                != Some(
+                    u16::try_from(SPKI_OUTPUT_CONTENT_BYTES_V1)
+                        .expect("fixed SPKI content size fits u16"),
+                )
             || node.tag_class != 0
             || !node.constructed
             || node.tag_number != 16
@@ -5983,7 +5990,10 @@ fn key_output_nodes_v1(
         if nodes.next().is_some()
             || usize::from(node.document) != document
             || node.content_end.checked_sub(node.content_start)
-                != Some(KEY_OUTPUT_CONTENT_BYTES_V1 as u16)
+                != Some(
+                    u16::try_from(KEY_OUTPUT_CONTENT_BYTES_V1)
+                        .expect("fixed key content size fits u16"),
+                )
             || node.tag_class != 0
             || node.constructed
             || node.tag_number != 3
@@ -6216,22 +6226,28 @@ pub fn build_zk_x509_rfc5280_stark_base_material_v1(
                 usize::from(entry.document) == document && usize::from(entry.node) == node
             })
             .map_or(0, |entry| entry.required_multiplicity)
-            + (key_nodes
-                .iter()
-                .flatten()
-                .filter(|entry| {
-                    usize::from(entry.document) == document && usize::from(entry.node) == node
-                })
-                .count()
-                * ZK_X509_UNCOMPRESSED_P256_BYTES_V1) as u16
-            + (spki_nodes
-                .iter()
-                .flatten()
-                .filter(|entry| {
-                    usize::from(entry.document) == document && usize::from(entry.node) == node
-                })
-                .count()
-                * SPKI_OUTPUT_BYTES_V1) as u16
+            + u16::try_from(
+                key_nodes
+                    .iter()
+                    .flatten()
+                    .filter(|entry| {
+                        usize::from(entry.document) == document && usize::from(entry.node) == node
+                    })
+                    .count()
+                    * ZK_X509_UNCOMPRESSED_P256_BYTES_V1,
+            )
+            .expect("bounded key node multiplicity fits u16")
+            + u16::try_from(
+                spki_nodes
+                    .iter()
+                    .flatten()
+                    .filter(|entry| {
+                        usize::from(entry.document) == document && usize::from(entry.node) == node
+                    })
+                    .count()
+                    * SPKI_OUTPUT_BYTES_V1,
+            )
+            .expect("bounded SPKI node multiplicity fits u16")
             + variable_output::node_multiplicity(&variable_nodes, document, node)
             + projection_serial::node_multiplicity(&projection_serial_source, document, node)
             + projection_disclosure::node_multiplicity(
@@ -6263,9 +6279,8 @@ pub fn build_zk_x509_rfc5280_stark_base_material_v1(
                 u64::try_from(address).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
                 value,
             );
-            row[SERIAL_BYTE_TABLE_MULTIPLICITY] = F(u64::from(serial_byte_multiplicity(
-                document, address, value,
-            )));
+            row[SERIAL_BYTE_TABLE_MULTIPLICITY] =
+                F(serial_byte_multiplicity(document, address, value));
             family_rows[source_byte_family][ordinal] = row;
         }
     }
@@ -6285,9 +6300,8 @@ pub fn build_zk_x509_rfc5280_stark_base_material_v1(
                 u64::try_from(address).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
                 value,
             );
-            row[SERIAL_BYTE_TABLE_MULTIPLICITY] = F(u64::from(serial_byte_multiplicity(
-                document, address, value,
-            )));
+            row[SERIAL_BYTE_TABLE_MULTIPLICITY] =
+                F(serial_byte_multiplicity(document, address, value));
             family_rows[source_byte_family][embedded_byte_ordinal] = row;
             embedded_byte_ordinal = embedded_byte_ordinal
                 .checked_add(1)
@@ -6600,7 +6614,7 @@ pub fn build_zk_x509_rfc5280_stark_base_material_v1(
     let output_producer_family = ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize;
     let output_consumer_family = ZkX509Rfc5280StarkFamilyV1::OutputConsumer as usize;
     let io = rfc5280_io_witnesses_v1(trace, 0)?;
-    let roles = output_roles_v1(trace)?;
+    let roles = output_roles_v1(trace);
     if io.len() != roles.len() {
         return Err(ZkX509Rfc5280StarkErrorV1::Output);
     }
@@ -6970,7 +6984,7 @@ fn product_relation_factor_v1(
     relation: usize,
     row: &ZkX509Rfc5280StarkBaseRowV1,
     lane: usize,
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
 ) -> Result<F, ZkX509Rfc5280StarkErrorV1> {
     match relation {
         0 => Ok(zk_x509_der_stark_input_byte_factor_v1(
@@ -6978,7 +6992,7 @@ fn product_relation_factor_v1(
             row[BASE_ADDRESS],
             row[BASE_VALUE],
             lane,
-            &der_challenges,
+            der_challenges,
         )?),
         1 => Ok(zk_x509_der_stark_node_factor_v1(
             ZkX509DerStarkNodeEventV1 {
@@ -6995,7 +7009,7 @@ fn product_relation_factor_v1(
                 content_len: row[BASE_A],
             },
             lane,
-            &der_challenges,
+            der_challenges,
         )?),
         _ => Err(ZkX509Rfc5280StarkErrorV1::Shape),
     }
@@ -7041,7 +7055,7 @@ fn selected_output_role_preflight_v1(
 #[cfg(test)]
 pub fn compile_zk_x509_rfc5280_stark_terminal_claims_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
 ) -> Result<ZkX509Rfc5280StarkTerminalClaimsV1, ZkX509Rfc5280StarkErrorV1> {
     der_challenges.validate()?;
@@ -7337,7 +7351,7 @@ pub const fn zk_x509_rfc_aux_replay_scratch_bytes_v1() -> usize {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_rfc5280_stark_aux_column_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     column: usize,
     sha_union: &ZkX509ShaUnionCentersV1,
@@ -7422,7 +7436,7 @@ impl ZkX509ShaUnionCentersV1 {
     /// Segment and compact-CA coverage/order are checked before returning an owner.
     pub(crate) fn from_bound_sources_v1(
         sources: &[ZkX509ShaBatchSegmentAuxSourceV1<'_>; 4],
-        binding: ZkX509CredentialPreAuxBindingV1,
+        binding: &ZkX509CredentialPreAuxBindingV1,
     ) -> Result<(Self, [ZkX509ShaCallBoundaryTerminalV1; 13]), ZkX509Rfc5280StarkErrorV1> {
         let mut owner = Self::empty_v1();
         let mut boundaries = zeroize::Zeroizing::new(Vec::new());
@@ -7451,7 +7465,7 @@ impl ZkX509ShaUnionCentersV1 {
                 .map_err(|_| ZkX509Rfc5280StarkErrorV1::TerminalClaim)?;
         }
         owner.validate_v1()?;
-        owner.binding = Some(binding);
+        owner.binding = Some(*binding);
         Ok((owner, *calls))
     }
     #[cfg(test)]
@@ -7499,22 +7513,22 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
     /// Consume the private union owner from the same original X5B1 phase.
     pub(crate) fn new_v1(
         material: &'a ZkX509Rfc5280StarkBaseMaterialV1,
-        binding: ZkX509CredentialPreAuxBindingV1,
+        binding: &ZkX509CredentialPreAuxBindingV1,
         sha_union: ZkX509ShaUnionCentersV1,
     ) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
-        if sha_union.binding != Some(binding) {
+        if sha_union.binding != Some(*binding) {
             return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
         }
         Self::with_centers_v1(
             material,
-            binding.main_post_base().der(),
+            &binding.main_post_base().der(),
             binding.rfc5280(),
             sha_union,
         )
     }
     fn with_centers_v1(
         material: &'a ZkX509Rfc5280StarkBaseMaterialV1,
-        der_challenges: ZkX509DerStarkChallengesV1,
+        der_challenges: &ZkX509DerStarkChallengesV1,
         challenges: &ZkX509Rfc5280StarkChallengesV1,
         sha_union: ZkX509ShaUnionCentersV1,
     ) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
@@ -7523,7 +7537,7 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
         sha_union.validate_v1()?;
         Ok(Self {
             material,
-            der_challenges,
+            der_challenges: *der_challenges,
             challenges: *challenges,
             sha_union,
         })
@@ -7532,7 +7546,7 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
     /// Local test fixture for RFC recurrences; grants no production union owner.
     pub(crate) fn fixture_v1(
         material: &'a ZkX509Rfc5280StarkBaseMaterialV1,
-        der_challenges: ZkX509DerStarkChallengesV1,
+        der_challenges: &ZkX509DerStarkChallengesV1,
         challenges: &ZkX509Rfc5280StarkChallengesV1,
     ) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
         Self::with_centers_v1(
@@ -7588,7 +7602,7 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
     ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
         aux_replay::fill_columns_v1(
             self.material,
-            self.der_challenges,
+            &self.der_challenges,
             &self.challenges,
             first,
             outputs,
@@ -7601,7 +7615,7 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
     ) -> Result<Vec<F>, ZkX509Rfc5280StarkErrorV1> {
         build_zk_x509_rfc5280_stark_aux_column_v1(
             self.material,
-            self.der_challenges,
+            &self.der_challenges,
             &self.challenges,
             column,
             &self.sha_union,
@@ -7613,7 +7627,7 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
     ) -> Result<ZkX509Rfc5280StarkTerminalClaimsV1, ZkX509Rfc5280StarkErrorV1> {
         compile_zk_x509_rfc5280_stark_terminal_claims_v1(
             self.material,
-            self.der_challenges,
+            &self.der_challenges,
             &self.challenges,
         )
     }
@@ -7630,7 +7644,7 @@ pub fn evaluate_zk_x509_rfc5280_stark_residues_v1<A: PolynomialAirFieldV1>(
     current_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
     next_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
     fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     terminal_claims: ZkX509Rfc5280StarkTerminalClaimsV1,
 ) -> Result<Vec<A>, ZkX509Rfc5280StarkErrorV1> {
@@ -7654,7 +7668,7 @@ pub fn evaluate_zk_x509_rfc5280_local_residues_v1<A: PolynomialAirFieldV1>(
     current_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
     next_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
     fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
 ) -> Result<Vec<A>, ZkX509Rfc5280StarkErrorV1> {
     evaluate_rfc5280_relation_v1(
@@ -7676,7 +7690,7 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
     current_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
     next_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
     fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     terminal_claims: Option<ZkX509Rfc5280StarkTerminalClaimsV1>,
 ) -> Result<Vec<A>, ZkX509Rfc5280StarkErrorV1> {
@@ -7702,11 +7716,11 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
     };
     let mut residues = Vec::with_capacity(expected_count);
     let mut residue_section_start = 0;
-    for bit in &current[BASE_BYTE_BITS..BASE_BYTE_BITS + 8] {
+    let byte_bits = &current[BASE_BYTE_BITS..][..8];
+    for bit in byte_bits {
         push_boolean_v1(&mut residues, A::ONE, *bit);
     }
-    residues
-        .push(current[BASE_VALUE].sub(pack_bits_v1(&current[BASE_BYTE_BITS..BASE_BYTE_BITS + 8])));
+    residues.push(current[BASE_VALUE].sub(pack_bits_v1(byte_bits)));
     for value in [
         current[BASE_CONSTRUCTED],
         current[BASE_IS_WRITE],
@@ -8498,7 +8512,7 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
             current[BASE_ADDRESS],
             current[BASE_VALUE],
             lane,
-            &der_challenges,
+            der_challenges,
         )?;
         let der_node_factor = zk_x509_der_stark_node_factor_v1(
             ZkX509DerStarkNodeEventV1 {
@@ -8515,7 +8529,7 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
                 content_len: current[BASE_A],
             },
             lane,
-            &der_challenges,
+            der_challenges,
         )?;
         for (before, after, gate, factor) in [
             (
@@ -9013,7 +9027,7 @@ mod tests {
                     &current_aux,
                     &next_aux,
                     &fixed,
-                    der_challenges_v1(),
+                    &der_challenges_v1(),
                     &challenges_v1(),
                     terminal_claims_v1(),
                 )
@@ -9024,7 +9038,7 @@ mod tests {
                     &current_aux,
                     &next_aux,
                     &fixed,
-                    der_challenges_v1(),
+                    &der_challenges_v1(),
                     &challenges_v1(),
                 )
                 .unwrap();
@@ -9166,7 +9180,7 @@ mod tests {
             let mut caller_owned = expected;
             let provider = ZkX509Rfc5280StarkColumnProviderV1::fixture_v1(
                 &material,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &caller_owned,
             )
             .expect("validated independent owner");
@@ -9187,7 +9201,7 @@ mod tests {
         assert!(matches!(
             ZkX509Rfc5280StarkColumnProviderV1::with_centers_v1(
                 &material,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &invalid,
                 invalid_centers,
             ),
@@ -9222,12 +9236,10 @@ mod tests {
     fn terminal_aux_v1(claims: ZkX509Rfc5280StarkTerminalClaimsV1) -> ZkX509Rfc5280StarkAuxRowV1 {
         let mut aux = [F::ZERO; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1];
         for (role_index, role) in OUTPUT_ROLES_V1.into_iter().enumerate() {
-            let products = claims
-                .output_role_products_v1(role)
-                .map(|claim| claim.consumer_products)
-                .unwrap_or(core::array::from_fn(|lane| {
-                    F(4_000 + (role_index * 100 + lane) as u64)
-                }));
+            let products = claims.output_role_products_v1(role).map_or_else(
+                || core::array::from_fn(|lane| F(4_000 + (role_index * 100 + lane) as u64)),
+                |claim| claim.consumer_products,
+            );
             for consumer in [false, true] {
                 for (lane, product) in products.into_iter().enumerate() {
                     aux[output_role_aux_column_v1(role_index, consumer, lane)] = product;
@@ -9308,19 +9320,21 @@ mod tests {
     }
     fn p256_terminal_claims_v1() -> ZkX509P256PrivateProductsV1 {
         ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(
-            core::array::from_fn(p256_certificate_terminal_claims_v1),
-            p256_wallet_terminal_claims_v1(),
+            &core::array::from_fn(p256_certificate_terminal_claims_v1),
+            &p256_wallet_terminal_claims_v1(),
         )
         .expect("canonical five-signature P-256 AIR terminals")
     }
     #[test]
     fn key_join_rows_match_all_fixed_producer_bytes_and_selector_for_every_disclosure_count() {
         for count in 0..=4 {
-            let mut shape = ZkX509Rfc5280StarkShapeV1::default();
-            shape.disclosed_attribute_count = count;
+            let mut shape = ZkX509Rfc5280StarkShapeV1 {
+                disclosed_attribute_count: count,
+                ..ZkX509Rfc5280StarkShapeV1::default()
+            };
             shape.disclosed_attribute_indices = core::array::from_fn(|index| {
                 if index < usize::from(count) {
-                    index as u8
+                    u8::try_from(index).expect("fixture value fits u8")
                 } else {
                     0
                 }
@@ -9348,8 +9362,10 @@ mod tests {
                 );
             }
         }
-        let mut invalid = ZkX509Rfc5280StarkShapeV1::default();
-        invalid.disclosed_attribute_count = 5;
+        let invalid = ZkX509Rfc5280StarkShapeV1 {
+            disclosed_attribute_count: 5,
+            ..ZkX509Rfc5280StarkShapeV1::default()
+        };
         assert!(matches!(
             zk_x509_rfc_key_join_rows_v1(invalid),
             Err(ZkX509Rfc5280StarkErrorV1::Shape)
@@ -9443,9 +9459,7 @@ mod tests {
                     let mut rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
                     push_family_row_v1(&mut rows, [F(37); ZK_X509_RFC5280_STARK_BASE_WIDTH_V1])
                         .unwrap();
-                    if unwind {
-                        panic!("injected RFC partial-family unwind");
-                    }
+                    assert!(!unwind, "injected RFC partial-family unwind");
                     ensure_family_slot_v1(&mut rows, usize::MAX)
                 })
             });
@@ -9596,26 +9610,30 @@ mod tests {
             embedded_node_counts: [2_048; ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1],
             crl_entries: 64,
             disclosed_attributes: 4,
-            embedded_copy_rows: copy_census::EMBEDDED_ROWS as u32,
+            embedded_copy_rows: u32::try_from(copy_census::EMBEDDED_ROWS)
+                .expect("fixture value fits u32"),
             grammar_rows: u32::try_from(
                 ZK_X509_RFC5280_GRAMMAR_RULE_COUNT_V1 + MAX_SOURCE_NODES_V1
                     - MAX_SOURCE_DOCUMENTS_V1,
             )
             .expect("grammar row bound fits u32"),
-            name_value_rows: name_values::ROWS as u32,
+            name_value_rows: u32::try_from(name_values::ROWS).expect("fixture value fits u32"),
             fixed_byte_rows: 16_384,
-            equality_rows: copy_census::EQUALITY_ROWS as u32,
-            decimal_rows: FIXED_DECIMAL_ROWS_V1 as u32,
-            calendar_rows: 72 * CALENDAR_COPY_PHASES_V1 as u32,
-            relation_rows: FIXED_RELATION_ROWS_V1 as u32,
+            equality_rows: u32::try_from(copy_census::EQUALITY_ROWS)
+                .expect("fixture value fits u32"),
+            decimal_rows: u32::try_from(FIXED_DECIMAL_ROWS_V1).expect("fixture value fits u32"),
+            calendar_rows: 72
+                * u32::try_from(CALENDAR_COPY_PHASES_V1).expect("fixture value fits u32"),
+            relation_rows: u32::try_from(FIXED_RELATION_ROWS_V1).expect("fixture value fits u32"),
             basic_constraints_rows: 256,
             serial_source_rows: u32::try_from(MAX_SERIAL_SOURCE_ROWS_V1)
                 .expect("serial source bound fits u32"),
             serial_rows: u32::try_from(MAX_SERIAL_COMPARISON_PHYSICAL_ROWS_V1)
                 .expect("serial bound fits u32"),
-            range_rows: FIXED_RANGE_ROWS_V1 as u32,
+            range_rows: u32::try_from(FIXED_RANGE_ROWS_V1).expect("fixture value fits u32"),
             semantic_source_rows: 18_203,
-            semantic_consumer_rows: copy_census::CONSUMER_ROWS as u32,
+            semantic_consumer_rows: u32::try_from(copy_census::CONSUMER_ROWS)
+                .expect("fixture value fits u32"),
             output_producer_rows: 22_705,
             output_consumer_rows: 22_705,
             io_channels: 1,
@@ -9624,18 +9642,21 @@ mod tests {
     fn refresh_private_shape_derived_rows_v1(shape: &mut ZkX509Rfc5280StarkPrivateShapeV1) {
         let top_count = usize::from(shape.top_document_count);
         let embedded_count = usize::from(shape.embedded_document_count);
-        shape.embedded_copy_rows = copy_census::active_rows(
+        shape.embedded_copy_rows = u32::try_from(copy_census::active_rows(
             ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy,
             shape.chain_depth == 3,
-        ) as u32;
-        shape.equality_rows = copy_census::active_rows(
+        ))
+        .expect("fixture value fits u32");
+        shape.equality_rows = u32::try_from(copy_census::active_rows(
             ZkX509Rfc5280StarkFamilyV1::EqualByte,
             shape.chain_depth == 3,
-        ) as u32;
-        shape.semantic_consumer_rows = copy_census::active_rows(
+        ))
+        .expect("fixture value fits u32");
+        shape.semantic_consumer_rows = u32::try_from(copy_census::active_rows(
             ZkX509Rfc5280StarkFamilyV1::SemanticConsumer,
             shape.chain_depth == 3,
-        ) as u32;
+        ))
+        .expect("fixture value fits u32");
         shape.grammar_rows = u32::try_from(
             shape
                 .source_nodes()
@@ -9814,7 +9835,7 @@ mod tests {
         assert_eq!(
             compile_zk_x509_rfc5280_stark_terminal_claims_v1(
                 &material,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1()
             ),
             Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
@@ -9917,7 +9938,7 @@ mod tests {
                 &final_aux,
                 next_aux,
                 &fixed,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
                 changed_claims,
             )
@@ -9992,7 +10013,7 @@ mod tests {
         let der_trace = build_zk_x509_der_stark_trace_v1(
             build_zk_x509_der_stark_base_v1(&documents_ref)
                 .expect("same complete DER document order"),
-            der_challenges_v1(),
+            &der_challenges_v1(),
         )
         .expect("independent strict-DER native owner");
         let der = zk_x509_der_stark_terminal_claims_v1(&der_trace).unwrap();
@@ -10000,7 +10021,7 @@ mod tests {
         let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
         let provider = ZkX509Rfc5280StarkColumnProviderV1::with_centers_v1(
             &material,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             ZkX509ShaUnionCentersV1::identity_fixture_v1(),
         )
@@ -10047,7 +10068,7 @@ mod tests {
                 aux,
                 &neutral_aux_v1(),
                 &material.fixed_row(last).unwrap(),
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
                 claims,
             )
@@ -10102,7 +10123,7 @@ mod tests {
                 .set_claim_value_v1(index, original.add(F::ONE))
                 .unwrap();
             let differences =
-                evaluate_zk_x509_p256_terminal_claim_residues_v1(products, changed).unwrap();
+                evaluate_zk_x509_p256_terminal_claim_residues_v1(&products, &changed).unwrap();
             assert_eq!(
                 differences
                     .iter()
@@ -10196,7 +10217,7 @@ mod tests {
         let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
         let provider = ZkX509Rfc5280StarkColumnProviderV1::with_centers_v1(
             &material,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             ZkX509ShaUnionCentersV1::identity_fixture_v1(),
         )
@@ -10287,7 +10308,7 @@ mod tests {
         let challenges = challenges_v1();
         let provider = ZkX509Rfc5280StarkColumnProviderV1::with_centers_v1(
             &material,
-            der_challenges,
+            &der_challenges,
             &challenges,
             ZkX509ShaUnionCentersV1::identity_fixture_v1(),
         )
@@ -10342,7 +10363,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &fixed,
-            der_challenges,
+            &der_challenges,
             &challenges,
             claims,
         )
@@ -10358,7 +10379,7 @@ mod tests {
                 &current_aux,
                 &next_aux,
                 &fixed,
-                der_challenges,
+                &der_challenges,
                 &challenges,
                 claims,
             )
@@ -10375,7 +10396,7 @@ mod tests {
                 &current_aux,
                 &next_aux,
                 &fixed,
-                der_challenges,
+                &der_challenges,
                 &challenges,
                 claims,
             )
@@ -10383,7 +10404,7 @@ mod tests {
             F::ZERO,
             "the highest provider base column is algebraically replayed"
         );
-        let der_source = zk_x509_rfc5280_der_source_terminals_v1(&trace, der_challenges)
+        let der_source = zk_x509_rfc5280_der_source_terminals_v1(&trace, &der_challenges)
             .expect("independent DER source terminals");
         let private_der_fields = [der_source.input_byte, der_source.node].concat();
         for (slot, column) in zk_x509_rfc_der_terminal_columns_v1()
@@ -10451,7 +10472,7 @@ mod tests {
             &root_current_aux,
             &root_next_aux,
             &root_fixed,
-            der_challenges,
+            &der_challenges,
             &challenges,
             claims,
         )
@@ -10466,7 +10487,7 @@ mod tests {
                 &root_current_aux,
                 &wrong_root_next_aux,
                 &root_fixed,
-                der_challenges,
+                &der_challenges,
                 &challenges,
                 claims,
             )
@@ -10483,7 +10504,7 @@ mod tests {
                 &root_current_aux,
                 &root_next_aux,
                 &wrong_root_fixed,
-                der_challenges,
+                &der_challenges,
                 &challenges,
                 claims,
             )
@@ -10594,11 +10615,7 @@ mod tests {
         assert_eq!(
             output_factor_v1(
                 ZkX509Rfc5280OutputRoleV1::Projection,
-                7,
-                endpoint,
-                2,
-                3,
-                true,
+                (7, endpoint, 2, 3, true),
                 0,
                 &challenges,
             )
@@ -10750,7 +10767,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             claims,
         )
@@ -10765,7 +10782,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             claims,
         )
@@ -10779,7 +10796,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             claims,
         )
@@ -10788,7 +10805,7 @@ mod tests {
             residues.iter().any(|residue| *residue != F::ZERO),
             "inactive serial bit columns must be zero on padding rows"
         );
-        assert!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1 <= usize::from(u16::MAX));
+        assert!(u16::try_from(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1).is_ok());
     }
     fn affine_value_v1(seed: u64, domain: u64, column: usize, point: u64) -> F {
         let column = u64::try_from(column).expect("test column fits u64");
@@ -10824,6 +10841,7 @@ mod tests {
     }
     #[test]
     fn full_opened_input_affine_degree_inventory_is_exactly_four() {
+        const EXPECTED_AFFINE_DEGREE_INVENTORY_V1: [usize; 5] = [0, 1, 916, 577, 655];
         const SAMPLE_POINTS: u64 = 9;
         let mut maximum_degrees = vec![0_usize; ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1];
         for seed in [3_u64, 5, 11] {
@@ -10846,7 +10864,7 @@ mod tests {
                     &current_aux,
                     &next_aux,
                     &fixed,
-                    der_challenges_v1(),
+                    &der_challenges_v1(),
                     &challenges_v1(),
                     terminal_claims_v1(),
                 )
@@ -10882,7 +10900,7 @@ mod tests {
         // input at nine points for each of the three seeds above. The expected
         // inventory includes BasicConstraints126 plus copy40 and identity43,
         // replacing five old cubic equations. Native execution must confirm it.
-        const EXPECTED_AFFINE_DEGREE_INVENTORY_V1: [usize; 5] = [0, 1, 916, 577, 655];
+
         assert_eq!(
             inventory, EXPECTED_AFFINE_DEGREE_INVENTORY_V1,
             "the full-input interpolation is a proof-shape pin, independent of evaluator sections"
@@ -10891,6 +10909,7 @@ mod tests {
     }
     #[test]
     fn every_committed_degree_normalization_helper_is_constrained() {
+        const HELPER_RESIDUE_START: usize = 13;
         let current = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
         let next = current;
         let current_aux = neutral_aux_v1();
@@ -10914,7 +10933,7 @@ mod tests {
         ];
         // Thirteen elementary constraints precede this exact helper block:
         // eight byte-bit booleans, byte packing, and four global booleans.
-        const HELPER_RESIDUE_START: usize = 13;
+
         for (helper_index, column) in direct_helpers.into_iter().enumerate() {
             let mut mutated = current;
             mutated[column] = F::ONE;
@@ -10924,7 +10943,7 @@ mod tests {
                 &current_aux,
                 &next_aux,
                 &fixed,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
                 terminal_claims_v1(),
             )
@@ -10944,7 +10963,7 @@ mod tests {
                 &current_aux,
                 &next_aux,
                 &fixed,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
                 terminal_claims_v1(),
             )
@@ -10977,7 +10996,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &serial_fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             terminal_claims_v1(),
         )
@@ -10991,7 +11010,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &serial_fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             terminal_claims_v1(),
         )
@@ -11024,7 +11043,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &calendar_fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             terminal_claims_v1(),
         )
@@ -11038,7 +11057,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &calendar_fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             terminal_claims_v1(),
         )
@@ -11095,7 +11114,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges,
             terminal_claims_v1(),
         )
@@ -11250,20 +11269,21 @@ mod tests {
             expected[BASE_EQUAL] = F(u64::from(difference == 0));
             let expected_result = if difference == 0 {
                 Ok(())
-            } else if let Some(inverse) = F(difference).inv() {
-                expected[BASE_INVERSE] = inverse;
-                let gap = difference - 1;
-                expected[BASE_C] = F(gap);
-                if let Ok(gap) = u16::try_from(gap) {
-                    for bit in 0..16 {
-                        expected[GRAMMAR_CHILD_ORDINAL_BITS + bit] = F(u64::from((gap >> bit) & 1));
-                    }
-                    Ok(())
-                } else {
-                    Err(ZkX509Rfc5280StarkErrorV1::Resource)
-                }
             } else {
-                Err(ZkX509Rfc5280StarkErrorV1::Grammar)
+                F(difference)
+                    .inv()
+                    .map_or(Err(ZkX509Rfc5280StarkErrorV1::Grammar), |inverse| {
+                        expected[BASE_INVERSE] = inverse;
+                        let gap = difference - 1;
+                        expected[BASE_C] = F(gap);
+                        u16::try_from(gap).map_or(Err(ZkX509Rfc5280StarkErrorV1::Resource), |gap| {
+                            for bit in 0..16 {
+                                expected[GRAMMAR_CHILD_ORDINAL_BITS + bit] =
+                                    F(u64::from((gap >> bit) & 1));
+                            }
+                            Ok(())
+                        })
+                    })
             };
             assert_eq!(
                 populate_ordinal_gap_v1(&mut row, difference),
@@ -11320,7 +11340,7 @@ mod tests {
                     &neutral_aux_v1(),
                     &neutral_aux_v1(),
                     &fixed,
-                    der_challenges_v1(),
+                    &der_challenges_v1(),
                     &challenges_v1(),
                     terminal_claims_v1(),
                 )
@@ -11429,7 +11449,7 @@ mod tests {
                 &current_aux,
                 &next_aux,
                 &fixed,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
                 terminal_claims_v1(),
             )
@@ -11478,7 +11498,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges,
             terminal_claims_v1(),
         )
@@ -11492,7 +11512,7 @@ mod tests {
             &corrupted_aux,
             &next_aux,
             &fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges,
             terminal_claims_v1(),
         )
@@ -11511,8 +11531,8 @@ mod tests {
         let mut consumer = producer;
         for source in sources {
             for (offset, value) in source.frame.iter().copied().enumerate() {
-                for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-                    producer[lane] = producer[lane].mul(serial_copy_factor_v1(
+                for (lane, product) in producer.iter_mut().enumerate() {
+                    *product = product.mul(serial_copy_factor_v1(
                         F(u64::from(source.logical_id)),
                         F(u64::try_from(offset).expect("offset fits")),
                         F(u64::from(value)),
@@ -11528,8 +11548,8 @@ mod tests {
                 (comparison.right_instance, &comparison.right),
             ] {
                 for (offset, value) in frame.iter().copied().enumerate() {
-                    for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-                        consumer[lane] = consumer[lane].mul(serial_copy_factor_v1(
+                    for (lane, product) in consumer.iter_mut().enumerate() {
+                        *product = product.mul(serial_copy_factor_v1(
                             F(u64::from(logical_id)),
                             F(u64::try_from(offset).expect("offset fits")),
                             F(u64::from(value)),
@@ -11661,7 +11681,7 @@ mod tests {
                     &current_aux,
                     &next_aux,
                     &fixed,
-                    der_challenges_v1(),
+                    &der_challenges_v1(),
                     &challenges_v1(),
                     terminal_claims_v1(),
                 )
@@ -11755,7 +11775,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &wrong_fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             terminal_claims_v1(),
         )
@@ -11790,7 +11810,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             terminal_claims_v1(),
         )
@@ -11819,7 +11839,7 @@ mod tests {
             &current_aux,
             &next_aux,
             &fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             terminal_claims_v1(),
         )
@@ -11855,7 +11875,7 @@ mod tests {
                 &current_aux,
                 &next_aux,
                 &fixed,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
                 terminal_claims_v1(),
             )
@@ -11904,11 +11924,14 @@ mod tests {
     #[test]
     fn output_metadata_matches_every_verifier_owned_output_position() {
         for count in 0..=4_u8 {
-            let mut shape = ZkX509Rfc5280StarkShapeV1::default();
-            shape.disclosed_attribute_count = count;
+            let mut shape = ZkX509Rfc5280StarkShapeV1 {
+                disclosed_attribute_count: count,
+                ..ZkX509Rfc5280StarkShapeV1::default()
+            };
             assert_eq!(shape.disclosed_attribute_count(), count);
             for index in 0..usize::from(count) {
-                shape.disclosed_attribute_indices[index] = index as u8;
+                shape.disclosed_attribute_indices[index] =
+                    u8::try_from(index).expect("fixture value fits u8");
             }
             let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
             for consumer in [false, true] {
@@ -11985,7 +12008,7 @@ mod tests {
                     &neutral_aux_v1(),
                     &neutral_aux_v1(),
                     &fixed,
-                    der_challenges_v1(),
+                    &der_challenges_v1(),
                     &challenges_v1(),
                     terminal_claims_v1(),
                 )
@@ -12050,7 +12073,7 @@ mod tests {
             &aux,
             &aux,
             &fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             terminal_claims_v1(),
         )

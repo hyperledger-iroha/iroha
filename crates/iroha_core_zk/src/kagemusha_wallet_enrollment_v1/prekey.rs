@@ -272,7 +272,7 @@ impl PreKeyDispatchV1 {
 }
 
 /// Live verified permission consumed by one provider generation operation. Not serializable.
-pub(crate) struct GenerationAuthorizationV1 {
+pub struct GenerationAuthorizationV1 {
     root: [u8; 32],
     request_id: [u8; 32],
     challenge: KagemushaWalletEnrollmentChallengeV1,

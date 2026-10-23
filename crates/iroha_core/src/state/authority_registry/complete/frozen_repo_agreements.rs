@@ -1,6 +1,6 @@
 //! Four actual original frozen repo agreement owners and one exact both-image relation.
 //! Scoped rows do not establish instruction validity, complete State or AXT authority.
-//! TODO: join all remaining originals/cells/history to sole StatePublication and Kura.
+//! TODO: join all remaining originals/cells/history to sole `StatePublication` and Kura.
 use super::{CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits};
 use crate::state::{
     StateBlock, authority_registry::grouped_ownership::validate_original_repo_agreements,
@@ -61,6 +61,10 @@ impl<'frozen> Original<'frozen> {
 }
 /// Validate both original repo agreement images and encode the actual original current rows.
 /// The four targets/modes and original State pool remain borrowed through encoding.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,

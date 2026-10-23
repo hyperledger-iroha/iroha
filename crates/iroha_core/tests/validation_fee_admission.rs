@@ -692,8 +692,7 @@ fn complete_parliament_body_for_authorization(
                 .freeze_ballot_survivors(
                     governance_attempt_id,
                     ballot_attempt_id,
-                    dropout_root,
-                    survivor_root,
+                    (dropout_root, survivor_root),
                     3,
                     no_recovery_root,
                     37,
@@ -703,8 +702,7 @@ fn complete_parliament_body_for_authorization(
                 .freeze_timed_ovn_corpus(
                     governance_attempt_id,
                     ballot_attempt_id,
-                    corpus_root,
-                    survivor_root,
+                    (corpus_root, survivor_root),
                     3,
                     timed_commitment_root,
                     38,
@@ -819,7 +817,11 @@ fn test_parliament_authorization(
         });
     }
     attempt
-        .register_sortition_request_batch(governance_attempt_id, registrations, candidates.clone())
+        .register_sortition_request_batch(
+            governance_attempt_id,
+            registrations,
+            &(candidates.clone()),
+        )
         .expect("register deterministic sortition request batch");
     request_ids.sort_unstable();
     let sortition_pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));
@@ -827,10 +829,12 @@ fn test_parliament_authorization(
         .consume_sortition_pulse_batch(
             governance_attempt_id,
             request_ids,
-            sortition_session,
-            20,
-            sortition_pulse_id,
-            *sortition_pulse_id.as_bytes(),
+            (
+                sortition_session,
+                20,
+                sortition_pulse_id,
+                *sortition_pulse_id.as_bytes(),
+            ),
             state.network_id_ref(),
             &parliament_test_governance(&requirements),
         )

@@ -41,7 +41,7 @@ fn rows() -> [Vec<E>; 6] {
 
 fn evaluate<A: PolynomialAirFieldV1>(
     rows: &[Vec<A>; 6],
-    challenges: ZkX509DerStarkChallengesV1,
+    challenges: &ZkX509DerStarkChallengesV1,
     claims: ZkX509DerStarkTerminalClaimsV1,
 ) -> Result<Vec<A>, ZkX509DerStarkErrorV1> {
     evaluate_zk_x509_der_stark_residues_v1(
@@ -60,7 +60,7 @@ fn evaluate<A: PolynomialAirFieldV1>(
 #[test]
 fn der_fp4_matches_independent_base_polynomial_interpolation() {
     let rows = rows();
-    let actual = evaluate(&rows, challenges(), claims()).unwrap();
+    let actual = evaluate(&rows, &challenges(), claims()).unwrap();
     assert_eq!(actual.len(), ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1);
     let w = E::canonical([0, 1, 0, 0]).unwrap();
     let mut expected = vec![E::ZERO; actual.len()];
@@ -79,7 +79,7 @@ fn der_fp4_matches_independent_base_polynomial_interpolation() {
                 })
                 .collect::<Vec<_>>()
         });
-        let evaluated = evaluate(&base, challenges(), claims()).unwrap();
+        let evaluated = evaluate(&base, &challenges(), claims()).unwrap();
         let mut numerator = E::ONE;
         let mut denominator = F::ONE;
         for other in 0..22 {
@@ -97,7 +97,7 @@ fn der_fp4_matches_independent_base_polynomial_interpolation() {
                 .each_ref()
                 .map(|row| row.iter().copied().map(E::from_base).collect());
             assert_eq!(
-                evaluate(&embedded, challenges(), claims()).unwrap(),
+                evaluate(&embedded, &challenges(), claims()).unwrap(),
                 evaluated.into_iter().map(E::from_base).collect::<Vec<_>>()
             );
         }
@@ -156,20 +156,20 @@ fn der_fp4_binds_all_terminal_lanes_and_rejects_malformed_inputs() {
         let mut malformed = base.clone();
         malformed[row][0] = F(GOLDILOCKS_MODULUS_V1);
         assert_eq!(
-            evaluate(&malformed, challenges(), canonical),
+            evaluate(&malformed, &challenges(), canonical),
             Err(ZkX509DerStarkErrorV1::Row)
         );
     }
     let mut malformed_claims = canonical;
     malformed_claims.node[2] = F(GOLDILOCKS_MODULUS_V1);
     assert_eq!(
-        evaluate(&rows, challenges(), malformed_claims),
+        evaluate(&rows, &challenges(), malformed_claims),
         Err(ZkX509DerStarkErrorV1::Row)
     );
     let mut malformed_challenges = challenges();
     malformed_challenges.tuple[1] = malformed_challenges.tuple[0];
     assert_eq!(
-        evaluate(&rows, malformed_challenges, canonical),
+        evaluate(&rows, &malformed_challenges, canonical),
         Err(ZkX509DerStarkErrorV1::Challenge)
     );
 }

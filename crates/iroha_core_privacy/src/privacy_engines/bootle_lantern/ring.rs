@@ -12,6 +12,9 @@ use super::params::{
     INTERNAL_CRT_PRIMES_V1, INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1,
     INTERNAL_CRT_RING_DEGREE_INVERSES_V1, PROOF_MODULUS_V1,
 };
+#[cfg(test)]
+use core::ops::Add;
+use core::ops::Sub;
 // The fixed-modulus Montgomery arithmetic, its branch-free selects, the schoolbook product and
 // the transform skeleton are owned by `iroha_fhe`; this module pins the profile constants and
 // binds them to it.
@@ -103,9 +106,9 @@ impl ApplicationPolynomialV1 {
     }
     /// Construct from the unique centered integer lift of each coefficient.
     #[must_use]
-    pub fn from_centered_coefficients(coefficients: [i64; APPLICATION_RING_DEGREE_V1]) -> Self {
+    pub fn from_centered_coefficients(coefficients: &[i64; APPLICATION_RING_DEGREE_V1]) -> Self {
         let mut output = [0_u16; APPLICATION_RING_DEGREE_V1];
-        for (output, coefficient) in output.iter_mut().zip(coefficients) {
+        for (output, coefficient) in output.iter_mut().zip(coefficients.iter().copied()) {
             *output =
                 application_residue(APPLICATION_FIXED_MODULUS_V1.canonicalize_i64(coefficient));
         }
@@ -131,7 +134,7 @@ impl ApplicationPolynomialV1 {
         let mut attribute = [0_u8; 8];
         for (index, coefficient) in self.coefficients.iter().copied().enumerate() {
             if coefficient > 1 {
-                return Err(RingErrorV1::NonBinaryCoefficient {
+                return Err(RingErrorV1::AttributeNotBinary {
                     index: u8::try_from(index).expect("ring index fits u8"),
                     coefficient: u64::from(coefficient),
                 });
@@ -152,40 +155,6 @@ impl ApplicationPolynomialV1 {
         self.coefficients
             .iter()
             .all(|coefficient| *coefficient == 0)
-    }
-    /// Add in the application ring.
-    #[must_use]
-    pub fn add(self, rhs: Self) -> Self {
-        let mut output = [0_u16; APPLICATION_RING_DEGREE_V1];
-        for ((output, lhs), rhs) in output
-            .iter_mut()
-            .zip(self.coefficients)
-            .zip(rhs.coefficients)
-        {
-            *output = application_residue(
-                APPLICATION_FIXED_MODULUS_V1.add_canonical(u64::from(lhs), u64::from(rhs)),
-            );
-        }
-        Self {
-            coefficients: output,
-        }
-    }
-    /// Subtract in the application ring.
-    #[must_use]
-    pub fn sub(self, rhs: Self) -> Self {
-        let mut output = [0_u16; APPLICATION_RING_DEGREE_V1];
-        for ((output, lhs), rhs) in output
-            .iter_mut()
-            .zip(self.coefficients)
-            .zip(rhs.coefficients)
-        {
-            *output = application_residue(
-                APPLICATION_FIXED_MODULUS_V1.sub_canonical(u64::from(lhs), u64::from(rhs)),
-            );
-        }
-        Self {
-            coefficients: output,
-        }
     }
     /// Negate in the application ring.
     #[must_use]
@@ -298,7 +267,7 @@ impl ProofPolynomialV1 {
     /// # Errors
     ///
     /// Returns an error at the first coefficient at least `q`.
-    pub fn new(coefficients: [u64; APPLICATION_RING_DEGREE_V1]) -> Result<Self, RingErrorV1> {
+    pub fn new(coefficients: &[u64; APPLICATION_RING_DEGREE_V1]) -> Result<Self, RingErrorV1> {
         if let Some((index, coefficient)) = coefficients
             .iter()
             .copied()
@@ -310,7 +279,9 @@ impl ProofPolynomialV1 {
                 coefficient,
             });
         }
-        Ok(Self { coefficients })
+        Ok(Self {
+            coefficients: *coefficients,
+        })
     }
     /// Construct a constant polynomial from a canonical residue.
     ///
@@ -338,9 +309,9 @@ impl ProofPolynomialV1 {
     }
     /// Construct from arbitrary centered integer coefficients.
     #[must_use]
-    pub fn from_centered_coefficients(coefficients: [i64; APPLICATION_RING_DEGREE_V1]) -> Self {
+    pub fn from_centered_coefficients(coefficients: &[i64; APPLICATION_RING_DEGREE_V1]) -> Self {
         let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
-        for (output, coefficient) in output.iter_mut().zip(coefficients) {
+        for (output, coefficient) in output.iter_mut().zip(coefficients.iter().copied()) {
             *output = PROOF_FIXED_MODULUS_V1.canonicalize_i64(coefficient);
         }
         Self {
@@ -354,7 +325,7 @@ impl ProofPolynomialV1 {
         for (index, coefficient) in coefficients.iter_mut().enumerate() {
             *coefficient = i64::from(polynomial.centered_coefficient(index));
         }
-        Self::from_centered_coefficients(coefficients)
+        Self::from_centered_coefficients(&coefficients)
     }
     /// Borrow canonical residues.
     #[must_use]
@@ -367,36 +338,6 @@ impl ProofPolynomialV1 {
         self.coefficients
             .iter()
             .all(|coefficient| *coefficient == 0)
-    }
-    /// Add in the internal proof ring.
-    #[must_use]
-    pub fn add(self, rhs: Self) -> Self {
-        let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
-        for ((output, lhs), rhs) in output
-            .iter_mut()
-            .zip(self.coefficients)
-            .zip(rhs.coefficients)
-        {
-            *output = PROOF_FIXED_MODULUS_V1.add_canonical(lhs, rhs);
-        }
-        Self {
-            coefficients: output,
-        }
-    }
-    /// Subtract in the internal proof ring.
-    #[must_use]
-    pub fn sub(self, rhs: Self) -> Self {
-        let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
-        for ((output, lhs), rhs) in output
-            .iter_mut()
-            .zip(self.coefficients)
-            .zip(rhs.coefficients)
-        {
-            *output = PROOF_FIXED_MODULUS_V1.sub_canonical(lhs, rhs);
-        }
-        Self {
-            coefficients: output,
-        }
     }
     /// Negate in the internal proof ring.
     #[must_use]
@@ -485,7 +426,7 @@ impl ProofPolynomialV1 {
             let degree = index + reduced_power;
             let wraps = degree / APPLICATION_RING_DEGREE_V1;
             let destination = degree % APPLICATION_RING_DEGREE_V1;
-            output[destination] = if wraps % 2 == 0 {
+            output[destination] = if wraps.is_multiple_of(2) {
                 coefficient
             } else {
                 PROOF_FIXED_MODULUS_V1.sub_canonical(0, coefficient)
@@ -666,12 +607,83 @@ pub enum RingErrorV1 {
     },
     /// A direct attribute polynomial was not binary.
     #[error("direct attribute coefficient {index} is {coefficient}, not zero or one")]
-    NonBinaryCoefficient {
+    AttributeNotBinary {
         /// Coefficient index.
         index: u8,
         /// Rejected residue.
         coefficient: u64,
     },
+}
+impl core::ops::Add for ApplicationPolynomialV1 {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        let mut output = [0_u16; APPLICATION_RING_DEGREE_V1];
+        for ((output, lhs), rhs) in output
+            .iter_mut()
+            .zip(self.coefficients)
+            .zip(rhs.coefficients)
+        {
+            *output = application_residue(
+                APPLICATION_FIXED_MODULUS_V1.add_canonical(u64::from(lhs), u64::from(rhs)),
+            );
+        }
+        Self {
+            coefficients: output,
+        }
+    }
+}
+
+impl core::ops::Sub for ApplicationPolynomialV1 {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        let mut output = [0_u16; APPLICATION_RING_DEGREE_V1];
+        for ((output, lhs), rhs) in output
+            .iter_mut()
+            .zip(self.coefficients)
+            .zip(rhs.coefficients)
+        {
+            *output = application_residue(
+                APPLICATION_FIXED_MODULUS_V1.sub_canonical(u64::from(lhs), u64::from(rhs)),
+            );
+        }
+        Self {
+            coefficients: output,
+        }
+    }
+}
+
+impl core::ops::Add for ProofPolynomialV1 {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
+        for ((output, lhs), rhs) in output
+            .iter_mut()
+            .zip(self.coefficients)
+            .zip(rhs.coefficients)
+        {
+            *output = PROOF_FIXED_MODULUS_V1.add_canonical(lhs, rhs);
+        }
+        Self {
+            coefficients: output,
+        }
+    }
+}
+
+impl core::ops::Sub for ProofPolynomialV1 {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
+        for ((output, lhs), rhs) in output
+            .iter_mut()
+            .zip(self.coefficients)
+            .zip(rhs.coefficients)
+        {
+            *output = PROOF_FIXED_MODULUS_V1.sub_canonical(lhs, rhs);
+        }
+        Self {
+            coefficients: output,
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -684,7 +696,7 @@ mod tests {
     fn proof_monomial(index: usize, coefficient: u64) -> ProofPolynomialV1 {
         let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
         coefficients[index] = coefficient;
-        ProofPolynomialV1::new(coefficients).expect("canonical monomial")
+        ProofPolynomialV1::new(&coefficients).expect("canonical monomial")
     }
     fn splitmix64(state: &mut u64) -> u64 {
         *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -694,7 +706,7 @@ mod tests {
         value ^ (value >> 31)
     }
     fn random_proof_polynomial(state: &mut u64) -> ProofPolynomialV1 {
-        ProofPolynomialV1::new(core::array::from_fn(|_| {
+        ProofPolynomialV1::new(&core::array::from_fn(|_| {
             splitmix64(state) % PROOF_MODULUS_V1
         }))
         .expect("random residues are canonical")
@@ -1170,7 +1182,7 @@ mod tests {
             let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
             coefficients[41] = coefficient;
             assert_eq!(
-                ProofPolynomialV1::new(coefficients),
+                ProofPolynomialV1::new(&coefficients),
                 Err(RingErrorV1::NonCanonicalProofCoefficient {
                     index: 41,
                     coefficient
@@ -1194,7 +1206,7 @@ mod tests {
         let polynomial = application_monomial(37, 2);
         assert_eq!(
             polynomial.to_direct_attribute(),
-            Err(RingErrorV1::NonBinaryCoefficient {
+            Err(RingErrorV1::AttributeNotBinary {
                 index: 37,
                 coefficient: 2
             })
@@ -1252,9 +1264,9 @@ mod tests {
         let negative_half = positive_half + 1;
         let boundary_polynomials = [
             ProofPolynomialV1::ZERO,
-            ProofPolynomialV1::new([PROOF_MODULUS_V1 - 1; APPLICATION_RING_DEGREE_V1])
+            ProofPolynomialV1::new(&[PROOF_MODULUS_V1 - 1; APPLICATION_RING_DEGREE_V1])
                 .expect("minus-one residues are canonical"),
-            ProofPolynomialV1::new(core::array::from_fn(|index| {
+            ProofPolynomialV1::new(&core::array::from_fn(|index| {
                 if index % 2 == 0 {
                     positive_half
                 } else {
@@ -1262,7 +1274,7 @@ mod tests {
                 }
             }))
             .expect("centered boundary residues are canonical"),
-            ProofPolynomialV1::new(core::array::from_fn(|index| {
+            ProofPolynomialV1::new(&core::array::from_fn(|index| {
                 [0, 1, PROOF_MODULUS_V1 - 1, positive_half, negative_half][index % 5]
             }))
             .expect("boundary residues are canonical"),
@@ -1353,7 +1365,7 @@ mod tests {
             };
         }
         let a = ApplicationPolynomialV1::new(application_boundary).expect("canonical");
-        let q = ProofPolynomialV1::new(proof_boundary).expect("canonical");
+        let q = ProofPolynomialV1::new(&proof_boundary).expect("canonical");
         let application_one = ApplicationPolynomialV1::constant(1).expect("one");
         let proof_one = ProofPolynomialV1::constant(1).expect("one");
         assert_eq!(a.add(a.negate()), ApplicationPolynomialV1::ZERO);
@@ -1387,7 +1399,7 @@ mod tests {
     #[test]
     fn centered_lifts_scaling_automorphism_and_monomials_are_exact() {
         let application =
-            ApplicationPolynomialV1::from_centered_coefficients(core::array::from_fn(|index| {
+            ApplicationPolynomialV1::from_centered_coefficients(&core::array::from_fn(|index| {
                 if index == 0 {
                     -1
                 } else if index == 63 {
@@ -1423,9 +1435,9 @@ mod tests {
     #[test]
     fn zeroize_erases_every_residue() {
         let mut application =
-            ApplicationPolynomialV1::from_centered_coefficients([7; APPLICATION_RING_DEGREE_V1]);
+            ApplicationPolynomialV1::from_centered_coefficients(&[7; APPLICATION_RING_DEGREE_V1]);
         let mut proof =
-            ProofPolynomialV1::from_centered_coefficients([-9; APPLICATION_RING_DEGREE_V1]);
+            ProofPolynomialV1::from_centered_coefficients(&[-9; APPLICATION_RING_DEGREE_V1]);
         application.zeroize();
         proof.zeroize();
         assert!(application.is_zero());

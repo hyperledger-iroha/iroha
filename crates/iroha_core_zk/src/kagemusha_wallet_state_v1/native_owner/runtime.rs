@@ -6,6 +6,9 @@ use crate::kagemusha_wallet_intake_v1::{
     self as intake, PendingWalletOpenV1, WalletOpenBeginFailureV1,
 };
 
+/// An enrollment transition returns the original owner on refusal.
+pub type EnrollmentTransitionResult<T, Owner> = Result<T, (Owner, enrollment::Error)>;
+
 /// Authenticated installation and sole original store retained across account retries.
 /// Only native provisioning can construct its installed-source capabilities.
 pub struct NativeWalletRuntimeV1<F: KagemushaWalletFsV1, P, S> {
@@ -18,6 +21,10 @@ pub struct NativeWalletRuntimeV1<F: KagemushaWalletFsV1, P, S> {
     budget: MemoryBudget,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "retained phases own the original provider and challenge without adding a fallible allocation"
+)]
 pub(super) enum RuntimeCustodyV1<F: KagemushaWalletFsV1, P> {
     Exclusive(crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderV1<F, P>),
     // Enrollment retains the same installed proof graph and original source owner.
@@ -112,6 +119,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Returns the unchanged runtime if custody is not exclusive, or if enrollment
     /// configuration, authenticated session dates, platform roots or deployment
     /// identities fail validation.
+    #[expect(
+        clippy::result_large_err,
+        reason = "failure returns the original custody and source owners without an allocation"
+    )]
     pub fn start_enrollment(
         self,
         config: enrollment::EnrollmentConfigV1,
@@ -178,8 +189,15 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Returns the same runtime if enrollment custody or retained request/result
     /// originals are unavailable, fail authentication or binding checks, cannot be
     /// durably stored, or the selected account or asset cannot be encoded.
-    pub fn finish_enrollment(mut self) -> Result<(Self, [Vec<u8>; 4]), (Self, enrollment::Error)> {
-        let selected = match self.enrollment().and_then(|owner| owner.open_originals()) {
+    #[expect(
+        clippy::result_large_err,
+        reason = "failure returns the original custody and source owners without an allocation"
+    )]
+    pub fn finish_enrollment(mut self) -> EnrollmentTransitionResult<(Self, [Vec<u8>; 4]), Self> {
+        let selected = match self
+            .enrollment()
+            .and_then(enrollment::EnrollmentOwnerV1::open_originals)
+        {
             Ok(originals) => originals,
             Err(error) => return Err((self, error)),
         };
@@ -214,6 +232,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// begin and pending phases accept exactly their original DATA, never a replacement.
     /// # Errors
     /// Returns the exact runtime phase and its actual provider/source/original store.
+    #[expect(
+        clippy::result_large_err,
+        reason = "failure returns the original custody and source owners without an allocation"
+    )]
     pub fn begin(
         self,
         credential: &[u8],
@@ -353,6 +375,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// # Errors
     ///
     /// Returns the unchanged runtime unless it owns the retained pending phase.
+    #[expect(
+        clippy::result_large_err,
+        reason = "failure returns the original custody and source owners without an allocation"
+    )]
     pub fn recover_pending(self) -> Result<PendingNativeWalletOpenV1<F, P, S>, Self> {
         let Self {
             custody,
@@ -420,6 +446,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// An account/source refusal retains the SAME Pending/challenge and original store.
     /// Later coordinator initialization failures retain current custody/source ownership;
     /// their admitted/partial activation metadata recovery remains a separate contract.
+    #[expect(
+        clippy::result_large_err,
+        reason = "failure returns the original custody and source owners without an allocation"
+    )]
     pub fn finish(
         self,
         signature: &[u8],
@@ -520,6 +550,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// # Errors
     /// Invalid signatures, mismatched native configuration, incomplete source graphs or I/O.
     /// The exclusive provider and original source are returned on every failure.
+    #[expect(
+        clippy::result_large_err,
+        reason = "failure returns the original custody and source owners without an allocation"
+    )]
     pub fn load(
         config: &NativeInstallationConfigV1,
         provider: crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderV1<F, P>,

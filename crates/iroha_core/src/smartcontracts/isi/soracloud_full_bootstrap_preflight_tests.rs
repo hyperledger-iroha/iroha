@@ -91,10 +91,12 @@ fn unmutated_material_reaches_closed_production_qualification_gate() {
         &fixture.evaluation_keys,
         &fixture.transcript,
         &fixture.artifacts,
-        &fixture.release_audit_package,
-        fixture.release_audit_package_digest,
-        "sora-zk-audit-wg-2026",
-        fixture.reviewer_key_pair.public_key(),
+        (
+            &fixture.release_audit_package,
+            fixture.release_audit_package_digest,
+            "sora-zk-audit-wg-2026",
+            fixture.reviewer_key_pair.public_key(),
+        ),
         BfvRefreshTranscriptModeV1::ExactLift,
     )
     .expect_err("local material must remain rejected by production qualification");
@@ -123,10 +125,12 @@ fn malformed_key_context_rejects_before_audit_package_or_execution() {
             keys,
             refresh_transcript,
             &artifacts,
-            package,
-            release_audit_package_digest,
-            "sora-zk-audit-wg-2026",
-            reviewer_key_pair.public_key(),
+            (
+                package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
             required_refresh_mode,
         )
     };

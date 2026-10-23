@@ -209,7 +209,7 @@ fn prefix_capture_handles_identity_extremes_rollback_and_replacement() {
     let mut validators = registry.block();
     let selected_keys: Vec<_> = validators
         .range::<dyn ranges::AsValidatorPrefix>(ranges::ValidatorBounds::new(&lane))
-        .map(|(key, _)| key.clone())
+        .map(|(key, ())| key.clone())
         .collect();
     assert_eq!(selected_keys.len(), 2);
     assert!(selected_keys.iter().all(|key| key.0 == lane));

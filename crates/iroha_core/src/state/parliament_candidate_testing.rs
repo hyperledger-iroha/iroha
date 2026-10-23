@@ -10,7 +10,7 @@
 //! adapter with purpose-bound attempts and certificates. Testing selection grants no
 //! production qualification, SCCP or enactment authority.
 
-use super::{StateBlock, StateReadOnly, StateTransaction, WorldReadOnly};
+use super::{StateBlock, StateTransaction, WorldReadOnly};
 use crate::execution_attempt::{
     ExecutionAttemptError, genesis_read_attempt_error, json_decode_attempt_error,
     norito_decode_attempt_error,
@@ -29,7 +29,7 @@ use iroha_data_model::{
 };
 
 /// Original codec refusals retain local retry authority before error diagnostics.
-pub(crate) fn candidate_policy_attempt_error(
+pub fn candidate_policy_attempt_error(
     error: ParliamentCandidateTestingErrorV1,
 ) -> ExecutionAttemptError<&'static str> {
     const INVALID: &str = "Network genesis has no authenticated original candidate policy";
@@ -168,7 +168,7 @@ impl StateTransaction<'_, '_> {
 
 /// Require the sealed genesis output to reproduce exactly the optional original slot.
 /// Comparison uses original canonical values and introduces no second decoder.
-pub(crate) fn validate_genesis_output(
+pub fn validate_genesis_output(
     original: &SignedBlock,
     state: &StateBlock<'_>,
 ) -> Result<(), &'static str> {

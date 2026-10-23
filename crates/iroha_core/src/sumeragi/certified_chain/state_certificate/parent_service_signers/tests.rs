@@ -95,8 +95,7 @@ fn original_signer_late_capacity_retains_prefix_waiter_and_same_pool_retry() {
     );
     let expected = pool
         .try_reserve(second_layout)
-        .err()
-        .expect("original pool is full");
+        .expect_err("original pool is full");
     assert_eq!(first.allocation_refusal(), Some(&expected));
     assert!(
         matches!(&expected, AllocationRefusal::Capacity {requested_bytes, reserved_bytes, limit_bytes, ..}

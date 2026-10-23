@@ -425,7 +425,7 @@ fn assert_two_valid_certificates_of_one_block_give_one_consensus_receipt(
     assert_eq!(left.commitment(), right.commitment());
     assert_eq!(left.entry_anchor(&entry), right.entry_anchor(&entry));
     assert_eq!(left.block_time_ms(), right.block_time_ms());
-    for committed in [left, right] {
+    for committed in vec![left, right] {
         assert_eq!(
             reader
                 .check_certificate(committed.block, committed.height)
@@ -1307,7 +1307,7 @@ fn authenticated_scope_rejects_active_non_global_without_redecoding_result() {
         root_scope: non_global,
     };
     let budget = iroha_allocation::AllocationBudget::new(0);
-    for (parent, current) in [
+    for (parent, current) in vec![
         (chain.committed(2), retained.clone()),
         (retained, chain.committed(4)),
     ] {

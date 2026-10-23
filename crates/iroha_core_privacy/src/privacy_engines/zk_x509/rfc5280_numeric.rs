@@ -18,7 +18,8 @@ pub(super) const MAXIMUM_TIMESTAMP_V1: u64 = ZK_X509_MAX_UNIX_SECONDS_V1;
 /// Public affine offset of the CRL-age relation `thisUpdate + 300 >= end`.
 pub(super) const CRL_AGE_SECONDS_V1: u16 = {
     assert!(ZK_X509_MAX_CRL_AGE_SECONDS_V1 <= u16::MAX as u64);
-    ZK_X509_MAX_CRL_AGE_SECONDS_V1 as u16
+    let bytes = ZK_X509_MAX_CRL_AGE_SECONDS_V1.to_le_bytes();
+    u16::from_le_bytes([bytes[0], bytes[1]])
 };
 pub(super) const SLACK_BITS_V1: usize = 38;
 pub(super) const TIME_NODE_DOMAIN_V1: u64 = 100;
@@ -42,11 +43,15 @@ pub(super) enum TemporalSlotV1 {
 
 pub(super) fn temporal_slot_v1(index: usize) -> Option<TemporalSlotV1> {
     match index {
-        0..=2 => Some(TemporalSlotV1::CertificateNotBefore(index as u8)),
-        3..=5 => Some(TemporalSlotV1::CertificateNotAfter((index - 3) as u8)),
+        0..=2 => Some(TemporalSlotV1::CertificateNotBefore(
+            u8::try_from(index).ok()?,
+        )),
+        3..=5 => Some(TemporalSlotV1::CertificateNotAfter(
+            u8::try_from(index - 3).ok()?,
+        )),
         6 => Some(TemporalSlotV1::CrlThisUpdate),
         7 => Some(TemporalSlotV1::CrlNextUpdate),
-        8..TEMPORAL_SLOTS_V1 => Some(TemporalSlotV1::CrlEntry((index - 8) as u8)),
+        8..TEMPORAL_SLOTS_V1 => Some(TemporalSlotV1::CrlEntry(u8::try_from(index - 8).ok()?)),
         _ => None,
     }
 }
@@ -144,13 +149,13 @@ pub(super) fn relation_slot_v1(index: usize) -> Option<NumericRelationSlotV1> {
     };
     let (relation, instance, strict, activity, left, right) = match index {
         0..=5 => {
-            let certificate = (index / 2) as u8;
+            let certificate = u8::try_from(index / 2).ok()?;
             let activity = if certificate == 2 {
                 NumericActivityV1::CertificateTwo
             } else {
                 NumericActivityV1::Required
             };
-            if index % 2 == 0 {
+            if index.is_multiple_of(2) {
                 (
                     1,
                     u16::from(certificate),
@@ -198,7 +203,7 @@ pub(super) fn relation_slot_v1(index: usize) -> Option<NumericRelationSlotV1> {
             WindowEnd,
         ),
         9..RELATION_SLOTS_V1 => {
-            let entry = (index - 9) as u8;
+            let entry = u8::try_from(index - 9).ok()?;
             (
                 7,
                 u16::from(entry),

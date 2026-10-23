@@ -57,7 +57,7 @@ fn zero_file_create_intent_retains_exact_instance_through_rollback_and_replay() 
             .expect("zero-file Intent rollback is idempotent");
         kura.require_complete_geometry_binding_at(updated, &live_blocks)
             .expect("rollback completes only its exact journal-owned empty storage");
-        kura.require_lane_marker_value(
+        Kura::require_lane_marker_value(
             &kura
                 .read_lane_marker(&live_blocks.join(MARKER_FILE_NAME))
                 .unwrap(),
@@ -181,7 +181,7 @@ fn create_intent_repairs_authenticated_blocks_before_marker_for_rollback_and_rep
         .expect("rollback repairs authenticated partial provisioning");
     kura.require_complete_geometry_binding_at(updated, &staged_blocks)
         .expect("repaired rollback instance is complete at its original address");
-    kura.require_lane_marker_value(
+    Kura::require_lane_marker_value(
         &kura
             .read_lane_marker(&staged_blocks.join(MARKER_FILE_NAME))
             .unwrap(),
@@ -308,10 +308,8 @@ fn terminal_geometry_replay_never_reauthorizes_empty_provisioning() {
         kura.apply_lane_geometry_transition(
             &initial,
             &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
+            (&initial_incarnations, &extended_incarnations),
+            (&initial_activations, &extended_activations),
             &BTreeSet::new(),
         )
         .expect("apply create transition");
@@ -369,10 +367,8 @@ fn terminal_geometry_replay_never_reauthorizes_empty_provisioning() {
         kura.apply_lane_geometry_transition(
             &initial,
             &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
+            (&initial_incarnations, &extended_incarnations),
+            (&initial_activations, &extended_activations),
             &BTreeSet::new(),
         )
         .expect("apply create transition");

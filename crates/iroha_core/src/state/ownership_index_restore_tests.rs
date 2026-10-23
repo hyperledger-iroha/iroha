@@ -180,12 +180,12 @@ fn change(block: &mut WorldBlock<'_>, replacement: bool) {
         // Redundant touches must survive even though this bucket does not change.
         ("untouched", &third, Some("unchanged"), false),
     ] {
-        tx.insert_domain_entry(domain(name), Domain::new(domain(name)).build(owner));
+        tx.insert_domain_entry(&(domain(name)), Domain::new(domain(name)).build(owner));
         let (id, value) = Nft::new(nft_id(name), Metadata::default())
             .build(owner)
             .into_key_value();
-        tx.insert_nft_entry(id, value);
-        tx.insert_rwa_entry(rwa_id(name), rwa(name, owner, status, frozen));
+        tx.insert_nft_entry(&(id), value);
+        tx.insert_rwa_entry(&(rwa_id(name)), rwa(name, owner, status, frozen));
     }
     tx.remove_domain_entry(&domain("removed")).unwrap();
     tx.remove_nft_entry(&nft_id("removed")).unwrap();

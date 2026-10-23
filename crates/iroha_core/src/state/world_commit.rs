@@ -322,15 +322,17 @@ impl<'state> PreparedWorldCommit<'state> {
         pending: &PendingDaPinIntentBundle,
         lifecycle: Option<&PendingAutoscaleLaneLifecycle>,
     ) -> Result<Vec<DaPinIntentWithLocation>, String> {
-        let effective_nexus = if let Some(lifecycle) = lifecycle {
-            let mut updated = nexus.clone();
-            updated.lane_catalog = lifecycle.catalog_update.updated_catalog.clone();
-            updated.lane_config = lifecycle.catalog_update.updated_lane_config.clone();
-            updated.dataspace_catalog = lifecycle.catalog_update.updated_dataspace_catalog.clone();
-            std::borrow::Cow::Owned(updated)
-        } else {
-            std::borrow::Cow::Borrowed(nexus)
-        };
+        let effective_nexus = lifecycle.map_or_else(
+            || std::borrow::Cow::Borrowed(nexus),
+            |lifecycle| {
+                let mut updated = nexus.clone();
+                updated.lane_catalog = lifecycle.catalog_update.updated_catalog.clone();
+                updated.lane_config = lifecycle.catalog_update.updated_lane_config.clone();
+                updated.dataspace_catalog =
+                    lifecycle.catalog_update.updated_dataspace_catalog.clone();
+                std::borrow::Cow::Owned(updated)
+            },
+        );
         // Preserve positions in the authenticated canonical bundle even when a
         // later validation/reset filter removes an earlier element.
         let bundle =

@@ -142,9 +142,7 @@ fn failed_inverse_forward_later_batch_and_unwind_poison_and_clear_real_words() {
                                 calls += 1;
                                 if call == failing_call {
                                     words[0][0] = 99;
-                                    if unwind {
-                                        panic!("injected fixed device stage unwind");
-                                    }
+                                    assert!(!unwind, "injected fixed device stage unwind");
                                     return Err(TransformError::DeviceUnavailable);
                                 }
                                 transform_goldilocks_columns_v1(

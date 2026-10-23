@@ -1,7 +1,7 @@
 //! Original signed private-root H2 approval for downstream HTTP worker-boundary tests.
 //!
 //! Uses the existing native AMX private configuration, signed genesis, owner grant,
-//! paid native execution and CertifiedTestChain's real four-validator certificates.
+//! paid native execution and `CertifiedTestChain`'s real four-validator certificates.
 //! It signs certificates locally rather than running consensus and adds no proof authority.
 
 use super::{CertifiedTestChain, TestChainConfig};

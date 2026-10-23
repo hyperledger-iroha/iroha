@@ -65,8 +65,8 @@ fn native_base_columns_v1(
 /// Build only native auxiliary columns; no private terminal-product copies exist.
 fn native_aux_columns_v1(
     trace: &ZkX509CaAccumulatorTraceV1,
-    public: ZkX509CaAccumulatorStarkPublicV1,
-    binding: ZkX509CredentialPreAuxBindingV1,
+    public: &ZkX509CaAccumulatorStarkPublicV1,
+    binding: &ZkX509CredentialPreAuxBindingV1,
 ) -> Result<PrivateTableV1<Vec<F>>, ZkX509CaAccumulatorProofErrorV1> {
     trace
         .validate()
@@ -217,6 +217,11 @@ impl CaAwaitingMainAuxiliaryV1 {
         values: &[E],
         mixes: &[E],
     ) -> Result<PrivateTableV1<E>, ZkX509CaAccumulatorProofErrorV1> {
+        fn erase(values: &mut [E]) {
+            for value in values {
+                value.zeroize_v1();
+            }
+        }
         self.validate_link_plan_v1(plan, point)?;
         if values.len() != CA_EXTRA_OPENINGS_V1
             || mixes.len() != CA_EXTRA_OPENINGS_V1
@@ -226,11 +231,6 @@ impl CaAwaitingMainAuxiliaryV1 {
                 .any(|value| !value.is_canonical())
         {
             return Err(ZkX509CaAccumulatorProofErrorV1::ConstraintOpening);
-        }
-        fn erase(values: &mut [E]) {
-            for value in values {
-                value.zeroize_v1();
-            }
         }
         let count = ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1 + CA_MASK_DEGREE_V1 + 1;
         let mut deferred = PrivateTableV1::new(Vec::new(), erase);
@@ -288,7 +288,7 @@ impl CaAwaitingMainAuxiliaryV1 {
         if self.transcript.context() != self.binding.proof_instance_v1().ca_context_v1() {
             return Err(ZkX509CaAccumulatorProofErrorV1::TranscriptMismatch);
         }
-        validate_ca_proof_public_v1(self.public, &self.schedule)?;
+        validate_ca_proof_public_v1(&self.public, &self.schedule)?;
         if self.transcript.state() != self.auxiliary_transcript_state
             || self.trace_roots[0].base_root == PrivacyOuterDigestV1::default()
             || self.trace_roots[0].aux_root == PrivacyOuterDigestV1::default()
@@ -319,7 +319,7 @@ pub fn commit_ca_through_auxiliary_v1<R: TryRngCore>(
     validate_ca_proof_schedule_v1(schedule)?;
     let public = ca_accumulator_stark_public_v1(trace, schedule)
         .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    validate_ca_proof_public_v1(public, schedule)?;
+    validate_ca_proof_public_v1(&public, schedule)?;
     let request = ca_accumulator_resource_request_v1(
         ZK_X509_CA_ACCUMULATOR_REDUCED_AIR_DEGREE_V1,
         1,
@@ -345,7 +345,7 @@ pub fn commit_ca_through_auxiliary_v1<R: TryRngCore>(
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];
-    let mut transcript = new_ca_transcript_v1(proof_instance, public, schedule, &layout)?;
+    let mut transcript = new_ca_transcript_v1(proof_instance, &public, schedule, &layout)?;
     aggregate::absorb_base_roots_v1(
         &mut transcript,
         &ca_domains_v1(proof_instance),
@@ -355,15 +355,15 @@ pub fn commit_ca_through_auxiliary_v1<R: TryRngCore>(
     let binding = derive_zk_x509_credential_pre_aux_binding_v1(
         main_pre_aux,
         ca_profile_digest_v1()?,
-        ca_public_digest_v1(proof_instance, public, schedule)?,
+        ca_public_digest_v1(proof_instance, &public, schedule)?,
         trace_roots[0].base_root,
     )
     .map_err(map_credential_pre_aux_error_v1)?;
-    absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
+    absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, &binding)
         .map_err(map_credential_pre_aux_error_v1)?;
     let auxiliary = CaOriginalMaskedColumnsV1::sample_v1(
         CaColumnFamilyV1::Auxiliary,
-        native_aux_columns_v1(trace, public, binding)?.into_vec(),
+        native_aux_columns_v1(trace, &public, &binding)?.into_vec(),
         rng,
     )?;
     trace_roots[0].aux_root = commit_original_columns_v1(proof_instance, &auxiliary)?;
@@ -495,7 +495,7 @@ impl CaAwaitingMainAuxiliaryV1 {
                 }
                 let residues = PrivateTableV1::new(
                     evaluate_ca_accumulator_local_residues_v1(
-                        self.public,
+                        &self.public,
                         &scratch.base,
                         &scratch.next_base,
                         &scratch.aux,

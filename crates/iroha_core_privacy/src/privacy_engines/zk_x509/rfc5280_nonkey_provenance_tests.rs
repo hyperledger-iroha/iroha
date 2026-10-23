@@ -13,7 +13,10 @@ fn nonkey_output_shadow_bytes_reject_without_changing_authenticated_byte_endpoin
                 .schedule
                 .output_topology
                 .iter()
-                .position(|entry| entry.channel == 6 + 2 * slot as u32 && entry.offset == 0)
+                .position(|entry| {
+                    entry.channel == 6 + 2 * u32::try_from(slot).expect("fixture value fits u32")
+                        && entry.offset == 0
+                })
                 .unwrap();
             let index = material.schedule.starts
                 [ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize]
@@ -31,7 +34,7 @@ fn nonkey_output_shadow_bytes_reject_without_changing_authenticated_byte_endpoin
                     aux,
                     after,
                     &fixed,
-                    der_challenges_v1(),
+                    &der_challenges_v1(),
                     &challenges_v1(),
                 )
                 .unwrap()
@@ -39,7 +42,7 @@ fn nonkey_output_shadow_bytes_reject_without_changing_authenticated_byte_endpoin
             assert!(evaluate(&row, &aux, &after).iter().all(|v| *v == F::ZERO));
             assert_eq!(row[BASE_SERIAL_BYTE_QUERY_ACTIVE], F::ONE);
             let mut changed = row;
-            let value = row[BASE_VALUE].0 as u8 ^ 1;
+            let value = u8::try_from(row[BASE_VALUE].0).expect("fixture value fits u8") ^ 1;
             changed[BASE_VALUE] = F(u64::from(value));
             write_u8_bits_v1(&mut changed, BASE_BYTE_BITS, value);
             populate_degree_normalization_helpers_v1(&mut changed, &fixed);

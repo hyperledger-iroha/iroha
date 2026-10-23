@@ -248,15 +248,16 @@ impl CanonicalFrame {
             let magnitude = ((32 - value.leading_zeros()).max(1) as usize).div_ceil(8);
             let padding = usize::from(value & (1 << (magnitude * 8 - 1)) != 0);
             let integer_length = magnitude + padding;
-            frame.length = (7 + integer_length) as u8;
-            frame.bytes[1] = 5 + integer_length as u8;
+            frame.length = u8::try_from(7 + integer_length).expect("u32 DER frame length fits u8");
+            frame.bytes[1] =
+                5 + u8::try_from(integer_length).expect("u32 DER integer length fits u8");
             frame.bytes[2] = 1;
             frame.bytes[3] = 1;
             frame.bytes[4] = 0xff;
             frame.bytes[5] = 2;
-            frame.bytes[6] = integer_length as u8;
+            frame.bytes[6] = u8::try_from(integer_length).expect("u32 DER integer length fits u8");
             for index in 0..magnitude {
-                frame.bytes[7 + padding + index] = (value >> (8 * (magnitude - index - 1))) as u8;
+                frame.bytes[7 + padding + index] = value.to_be_bytes()[4 - magnitude + index];
             }
         }
         frame
@@ -303,7 +304,11 @@ pub(super) fn sources(
             || node.tag_number != 4
             || certificate.extensions.basic_constraints_ca != (slot != 0)
             || value.is_some() != (slot != 0)
-            || value.is_some_and(|value| *value < slot.saturating_sub(1) as u32)
+            || value.is_some_and(|value| {
+                *value
+                    < u32::try_from(slot.saturating_sub(1))
+                        .expect("fixed certificate slot fits u32")
+            })
         {
             return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
         }
@@ -354,13 +359,17 @@ pub(super) fn node_multiplicity(
     document: usize,
     node: usize,
 ) -> u16 {
-    sources
-        .iter()
-        .flatten()
-        .filter(|source| {
-            usize::from(source.node.document) == document && usize::from(source.node.node) == node
-        })
-        .count() as u16
+    u16::try_from(
+        sources
+            .iter()
+            .flatten()
+            .filter(|source| {
+                usize::from(source.node.document) == document
+                    && usize::from(source.node.node) == node
+            })
+            .count(),
+    )
+    .expect("fixed certificate slot count fits u16")
 }
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -375,7 +384,9 @@ pub(super) fn append_rows(
         };
         let value = source.value.copied().unwrap_or(0);
         let slack = value
-            .checked_sub(slot.saturating_sub(1) as u32)
+            .checked_sub(
+                u32::try_from(slot.saturating_sub(1)).expect("fixed certificate slot fits u32"),
+            )
             .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
         let magnitude = ((32 - value.leading_zeros()).max(1) as usize).div_ceil(8);
         let padding = usize::from(value & (1 << (magnitude * 8 - 1)) != 0);

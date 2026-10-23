@@ -110,7 +110,7 @@ pub(super) fn key(digest: Digest) -> KagemushaWalletLedgerKeyV1 {
 
 /// Preserve real local refusal separately from invalid retained event data.
 #[derive(Debug)]
-pub(crate) enum PreparationError {
+pub enum PreparationError {
     Invalid(String),
     Deferred(ExecutionDeferred),
 }
@@ -159,7 +159,7 @@ fn load_digest(event: &EventBox) -> Option<Digest> {
 ///
 /// Must run after the final deterministic event-producing effects and before
 /// witness/World-root capture. No publication event may have been appended.
-pub(crate) fn retain(
+pub fn retain(
     world: &mut WorldBlock<'_>,
     height: u64,
     budget: &AllocationBudget,
@@ -245,12 +245,12 @@ pub(crate) fn retain(
         if writer.position() != measured as u64 {
             return Err(invalid("Load event frame extent differs"));
         }
-        if let Some(prior) = world.kagemusha_wallet_ledger.get(&selected) {
-            if prior != &bytes {
-                return Err(invalid(
-                    "Load event identity already belongs to another stream",
-                ));
-            }
+        if let Some(prior) = world.kagemusha_wallet_ledger.get(&selected)
+            && prior != &bytes
+        {
+            return Err(invalid(
+                "Load event identity already belongs to another stream",
+            ));
         }
         rows.push_reserved(PreparedRow {
             key: selected,

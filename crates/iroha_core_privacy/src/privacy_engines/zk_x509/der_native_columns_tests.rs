@@ -16,7 +16,7 @@ fn trace() -> ZkX509DerStarkTraceV1 {
     // not represent a signed credential or source/finality authority.
     let ordered_set = [0x31, 0x04, 0x05, 0x00, 0x05, 0x00];
     let base = build_zk_x509_der_stark_base_v1(&[&ordered_set]).unwrap();
-    build_zk_x509_der_stark_trace_v1(base, challenges()).unwrap()
+    build_zk_x509_der_stark_trace_v1(base, &challenges()).unwrap()
 }
 
 #[test]

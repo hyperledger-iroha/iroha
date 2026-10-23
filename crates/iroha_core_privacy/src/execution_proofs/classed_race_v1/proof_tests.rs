@@ -31,7 +31,7 @@ fn request(track: ClassedRaceTrackV1, players: u8, refund: bool) -> ClassedRaceP
             .collect(),
         dnf_events: vec![ClassedRaceDnfEventV1 {
             tick: 6,
-            slots: (if refund { 0 } else { 1 }..players).collect(),
+            slots: (u8::from(!refund)..players).collect(),
         }],
     };
     let data = ClassedRaceParticipantDataV1 {
@@ -90,7 +90,8 @@ fn request(track: ClassedRaceTrackV1, players: u8, refund: bool) -> ClassedRaceP
         batch_ticks: 6,
         max_ticks: 5400,
         max_input_bytes: 12,
-        max_participant_data_bytes: data.encode().len() as u16,
+        max_participant_data_bytes: u16::try_from(data.encode().len())
+            .expect("bounded fixture value"),
         access: GameAccessV1::Public,
         payout_policy: GamePayoutPolicyV1::EqualWinnersOrRefund,
     };
@@ -154,8 +155,7 @@ fn retained_session(
         checkpoint.transcript_root,
         classed_race_transcript_root_v1(&request.statement.network_id, &empty).unwrap()
     );
-    let mut signatures = vec![];
-    if checkpoint_state.tick != 0 {
+    let signatures = if checkpoint_state.tick != 0 {
         assert_eq!(checkpoint_state.tick, 6);
         checkpoint.tick = 6;
         checkpoint.epoch = 1;
@@ -180,7 +180,7 @@ fn retained_session(
             &transcript,
         );
         let hash = game_message_hash_v1(&request.statement.network_id, "checkpoint", &checkpoint);
-        signatures = (0..replay.player_count)
+        (0..replay.player_count)
             .map(|slot| {
                 let key = KeyPair::try_from_seed(vec![slot + 65; 32], Algorithm::Ed25519).unwrap();
                 GameSlotSignatureV1 {
@@ -188,8 +188,10 @@ fn retained_session(
                     signature: iroha_crypto::Signature::new(key.private_key(), hash.as_ref()),
                 }
             })
-            .collect();
-    }
+            .collect()
+    } else {
+        vec![]
+    };
     let participants = request
         .admission
         .participants
@@ -202,7 +204,11 @@ fn retained_session(
             dnf_at_tick: replay
                 .dnf_events
                 .iter()
-                .find(|event| event.slots.contains(&(slot as u8)))
+                .find(|event| {
+                    event
+                        .slots
+                        .contains(&(u8::try_from(slot).expect("bounded participant slot")))
+                })
                 .map(|event| event.tick),
         })
         .collect::<Vec<_>>();
@@ -1002,7 +1008,7 @@ fn touring_native_stark_all_three_tracks_and_adversarial_bindings() {
         }
         let session = retained_session(&request);
         request.statement.dispute_root = session.dispute_root;
-        let envelope = prove_classed_race_v1(request.clone()).unwrap();
+        let envelope = prove_classed_race_v1(&request).unwrap();
         let result = verify_classed_race_proof_v1(&request.statement, &envelope).unwrap();
         assert_eq!(
             super::super::history::verify_classed_race_proof_for_session_v1(
@@ -1203,7 +1209,7 @@ fn touring_native_full_eight_car_timeout_proof_and_separate_verification() {
     std::fs::write(output.join("request.nrt"), request.encode()).unwrap();
     std::fs::write(output.join("session.nrt"), session.encode()).unwrap();
     let started = std::time::Instant::now();
-    let envelope = prove_classed_race_v1(request).unwrap();
+    let envelope = prove_classed_race_v1(&request).unwrap();
     let prove_seconds = started.elapsed().as_secs_f64();
     std::fs::write(output.join("proof.nrt"), envelope.encode()).unwrap();
     let verification = std::time::Instant::now();

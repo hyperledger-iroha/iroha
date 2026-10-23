@@ -77,8 +77,7 @@ fn privacy_public_reserve_refuses_owner_delegate_general_bridge_and_burn() {
         PrivacyStatementDigestV1::new([0xD3; 32]),
         &definition_id,
         iroha_data_model::asset::AssetBalanceScope::Global,
-        &ALICE_ID,
-        &BOB_ID,
+        (&ALICE_ID, &BOB_ID),
         Quantity::one(),
     )
     .expect_err("the general ZK-ACE bridge cannot debit a typed pool reserve");

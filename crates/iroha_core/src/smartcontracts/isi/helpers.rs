@@ -19,7 +19,7 @@ use crate::{
 
 /// Whether `authority` holds `permission` directly or through one of its roles in the
 /// transaction's world view.
-pub(crate) fn transaction_account_has_permission(
+pub fn transaction_account_has_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &str,
@@ -41,7 +41,7 @@ pub(crate) fn transaction_account_has_permission(
 }
 
 /// Whether the registered `account` holds `permission` inherently or through one of its roles.
-pub(crate) fn world_account_has_permission(
+pub fn world_account_has_permission(
     world: &impl WorldReadOnly,
     account: &AccountId,
     permission: Permission,
@@ -57,9 +57,7 @@ pub(crate) fn world_account_has_permission(
 /// Surface a query failure unchanged and report any other instruction error as a conversion
 /// failure.
 #[inline]
-pub(crate) fn instruction_error_as_query_failure(
-    error: InstructionExecutionError,
-) -> QueryExecutionFail {
+pub fn instruction_error_as_query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
     match error {
         InstructionExecutionError::Query(error) => error,
         error => QueryExecutionFail::Conversion(error.to_string()),
@@ -73,7 +71,7 @@ pub(crate) fn instruction_error_as_query_failure(
 ///
 /// Returns the parse or verification error from `iroha_crypto`.
 #[inline]
-pub(crate) fn verify_signature_for_signer(
+pub fn verify_signature_for_signer(
     signature: &Signature,
     signer: &PublicKey,
     payload: &[u8],
@@ -97,7 +95,7 @@ pub(crate) fn verify_signature_for_signer(
 /// # Errors
 ///
 /// Rejects a custody controller whose signing algorithm or curve is not allowed.
-pub(crate) fn ensure_custody_account(
+pub fn ensure_custody_account(
     custody: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<bool, InstructionExecutionError> {

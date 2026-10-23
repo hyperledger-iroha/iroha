@@ -184,10 +184,10 @@ impl WorldProjection for ShapeRecorder {
 /// The name under which the production World pass projects a registry field, if it does:
 /// World fields use their bare name, trigger stores keep their identity.
 fn pass_name(id: &'static str) -> Option<&'static str> {
-    match id.strip_prefix("world.") {
-        Some(name) => Some(name),
-        None => id.starts_with("triggers.").then_some(id),
-    }
+    id.strip_prefix("world.").map_or_else(
+        || id.starts_with("triggers.").then_some(id),
+        |name| Some(name),
+    )
 }
 
 /// Every field the production pass visits over the actual World overlay, with its shape.
@@ -3127,15 +3127,15 @@ fn fn_signatures(code: &str) -> Vec<FnSignature> {
         let parameters_end = closing(bytes, cursor);
         let parameters = &code[cursor..parameters_end];
         let tail = &code[parameters_end..header_end(bytes, parameters_end)];
-        let (output, bounds) = match tail.trim_start().strip_prefix("->") {
-            Some(rest) => {
+        let (output, bounds) = tail
+            .trim_start()
+            .strip_prefix("->")
+            .map_or(("", tail), |rest| {
                 let split = (0..rest.len())
                     .find(|at| keyword_at(rest.as_bytes(), *at, b"where"))
                     .unwrap_or(rest.len());
                 rest.split_at(split)
-            }
-            None => ("", tail),
-        };
+            });
         // The innermost `impl` or `trait` block that holds the function.
         let enclosing = blocks
             .iter()
@@ -6712,9 +6712,8 @@ fn defect_fields(id: &str, rows: &[Row]) -> Vec<String> {
         ]),
         "G1-D5" => named(&["world.state_accumulator"]),
         "G1-D6" => with(Commitment::History),
-        "G1-D7" => named(&["world.smart_contract_state"]),
+        "G1-D7" | "G1-D9" => named(&["world.smart_contract_state"]),
         "G1-D8" => named(&["world.merge_hint_roots", "world.merge_global_state_root"]),
-        "G1-D9" => named(&["world.smart_contract_state"]),
         "G1-D10" => named(&[
             "world.verifying_keys",
             "world.poseidon_params",
@@ -7589,7 +7588,7 @@ fn inventory_lists_every_registry_field_and_every_catalog_table() {
         schema
             .tables()
             .iter()
-            .map(|table| table.id())
+            .map(crate::state::authority_registry::keyed_commitment::TableDescriptor::id)
             .collect::<BTreeSet<_>>(),
         canonical
     );
@@ -9614,7 +9613,7 @@ fn enrollment_expiry_domains_bind_records_without_state_authority() {
 fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
     const MODULE: &str = "crates/iroha_data_model/src/governance/anonymous_ballot";
     let record = DomainOwner::Other(Use::Record);
-    let test = DomainOwner::Other(Use::Test);
+    let fixture_use = DomainOwner::Other(Use::Test);
     let tags: Vec<(&str, DomainOwner)> = domain_owners()
         .into_iter()
         .filter(|(literal, _)| literal.starts_with("PARL/"))
@@ -9634,8 +9633,8 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
             ("PARL/ROSTER/v1", record),
             ("PARL/STAMP-PAYLOAD/v1", record),
             ("PARL/STAMP-WORK/v1", record),
-            ("PARL/TEST/v1", test),
-            ("PARL/TEST/v2", test),
+            ("PARL/TEST/v1", fixture_use),
+            ("PARL/TEST/v2", fixture_use),
         ]
     );
     let sources: Vec<(String, String)> = rust_sources(&[MODULE])
@@ -11764,7 +11763,7 @@ fn protocol_carriers_classify_every_hash_bearing_field() {
 
 /// The retired validator-set checkpoint layout is gone. It declared a parent and a post
 /// State root beside a validator-set hash, was computed by nothing and carried by nothing,
-/// and Torii's OpenAPI contract requires its schema to stay absent. No source of the two
+/// and Torii's `OpenAPI` contract requires its schema to stay absent. No source of the two
 /// scanned crates declares or names it, and the data model declares no other record with
 /// that pair of State roots outside the listed execution result.
 #[test]

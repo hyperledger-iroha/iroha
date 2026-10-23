@@ -205,7 +205,9 @@ fn lifecycle_transition_and_partial_manifest_unwind_defer_original_indexes() {
             watch(&state.da_shard_cursors, &probe),
             watch(&state.da_indexes_hydrated, &probe),
         ];
-        if !unwind {
+        if unwind {
+            lifecycle_index_publication::panic_after_manifest_write_for_test();
+        } else {
             watches.extend([
                 watch(&state.lane_privacy_registry, &probe),
                 watch(&state.da_commitments, &probe),
@@ -213,8 +215,6 @@ fn lifecycle_transition_and_partial_manifest_unwind_defer_original_indexes() {
                 watch(&state.da_receipt_cursors, &probe),
                 watch(&state.da_pin_intents, &probe),
             ]);
-        } else {
-            lifecycle_index_publication::panic_after_manifest_write_for_test();
         }
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: vec![LaneConfig {
