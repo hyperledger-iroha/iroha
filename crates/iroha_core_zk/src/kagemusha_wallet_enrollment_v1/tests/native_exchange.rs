@@ -36,6 +36,8 @@ use std::{
 
 #[path = "native_exchange/archive.rs"]
 mod archive;
+#[path = "native_exchange/automatic_maintenance.rs"]
+mod automatic_maintenance;
 #[path = "native_exchange/controls.rs"]
 mod controls;
 #[path = "native_exchange/fee.rs"]
@@ -793,6 +795,12 @@ fn require_payment_bound(bytes: &[u8], scheme: &[u8; 32]) {
 #[test]
 #[ignore = "requires exported SAME A custody, genuine full22 grant and an independently pinned finalized Load for its exact target"]
 fn actual_native_a_to_b_to_c_then_unload_with_restart_and_replay() {
+    run_exchange(false);
+}
+
+// A separate ignored producer may stop at the authentic pre-Archive handoff boundary.
+// No environment switch changes the existing complete exchange acceptance path.
+fn run_exchange(automatic_maintenance_handoff: bool) {
     let output = fresh_output("KAGEMUSHA_NATIVE_EXCHANGE_OUTPUT");
     let sources = Sources::requalify(&output.join("source-admission"));
     let setup = LedgerSetup::read(&sources);
@@ -958,8 +966,8 @@ fn actual_native_a_to_b_to_c_then_unload_with_restart_and_replay() {
         (Completion::Pending, 0)
     );
     let payment_ab = complete(a.resume().unwrap().expect("selected Send remains pending"));
-    finish_exchange(
-        output,
+    finish_exchange_to(
+        (output, automatic_maintenance_handoff),
         sources,
         setup,
         target_bytes,
@@ -1003,6 +1011,26 @@ fn retain_frames(device: &HostDevice, frames: &[Vec<u8>; 4]) {
 
 fn finish_exchange(
     output: PathBuf,
+    sources: Sources,
+    setup: LedgerSetup,
+    target_bytes: Vec<u8>,
+    participants: [Participant; 3],
+    send_ab: OperationRequestV1,
+    payment_ab: Vec<u8>,
+) {
+    finish_exchange_to(
+        (output, false),
+        sources,
+        setup,
+        target_bytes,
+        participants,
+        send_ab,
+        payment_ab,
+    );
+}
+
+fn finish_exchange_to(
+    (output, automatic_maintenance_handoff): (PathBuf, bool),
     sources: Sources,
     setup: LedgerSetup,
     target_bytes: Vec<u8>,
@@ -1237,6 +1265,43 @@ fn finish_exchange(
     let credited_bc =
         norito::encode_canonical(&KagemushaWalletCreditedV1::from_status(status_bc).unwrap())
             .unwrap();
+    if automatic_maintenance_handoff {
+        let receive = automatic_maintenance::retain(
+            &output,
+            "receive",
+            automatic_maintenance::PendingReceipt {
+                wallet: &mut a,
+                device: &device_a,
+                frames: &frames_a,
+                send: &send_ab,
+                payment: &payment_ab,
+                original: &credited_ab,
+            },
+        );
+        let status = automatic_maintenance::retain(
+            &output,
+            "status",
+            automatic_maintenance::PendingReceipt {
+                wallet: &mut b,
+                device: &device_b,
+                frames: &frames_b,
+                send: &send_bc,
+                payment: &payment_bc,
+                original: &credited_bc,
+            },
+        );
+        drop(a);
+        drop(b);
+        drop(c);
+        automatic_maintenance::publish_handoff(
+            &output,
+            &sources,
+            &setup,
+            &target_bytes,
+            [receive, status],
+        );
+        return;
+    }
     let (reopened_a, archived_ab) = archive::exercise(
         a,
         &device_a,

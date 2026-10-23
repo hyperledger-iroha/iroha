@@ -19,14 +19,14 @@ pub struct ResourceUsage {
 }
 
 /// Raw process instruction counters; validity is checked by the public probe.
-pub(crate) struct ProcessInstructionCounters {
+pub struct ProcessInstructionCounters {
     pub process_id: u32,
     pub process_start_abstime: u64,
     pub instructions: u64,
 }
 
 /// An unavailable process instruction counter, without a numeric substitute.
-pub(crate) enum InstructionCounterError {
+pub enum InstructionCounterError {
     #[cfg(any(test, not(all(target_os = "macos", target_arch = "aarch64"))))]
     Unsupported,
     #[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
@@ -125,12 +125,54 @@ fn read_millidegrees(path: &Path) -> Option<i64> {
     text.trim().parse().ok()
 }
 
+/// Read every advertised trip point before assigning a zone's severity.
+#[cfg(any(test, target_os = "linux", target_os = "android"))]
+fn linux_thermal_zone_severity(zone: &Path) -> Option<u8> {
+    let temperature = read_millidegrees(&zone.join("temp"))?;
+    let mut trips = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir(zone).ok()? {
+        let name = entry.ok()?.file_name();
+        let name = name.to_str()?;
+        let Some(trip) = name.strip_prefix("trip_point_") else {
+            continue;
+        };
+        let Some(index) = trip
+            .strip_suffix("_type")
+            .or_else(|| trip.strip_suffix("_temp"))
+        else {
+            continue;
+        };
+        trips.insert(index.parse::<u32>().ok()?);
+    }
+    if trips.is_empty() {
+        return None;
+    }
+    let mut severity = 0_u8;
+    for trip in trips {
+        let kind = std::fs::read_to_string(zone.join(format!("trip_point_{trip}_type"))).ok()?;
+        let level = match kind.trim() {
+            "critical" => 3,
+            "hot" => 2,
+            "passive" | "active" => 1,
+            _ => return None,
+        };
+        let threshold = read_millidegrees(&zone.join(format!("trip_point_{trip}_temp")))?;
+        if temperature >= threshold {
+            severity = severity.max(level);
+        }
+    }
+    Some(severity)
+}
+
 /// Derive a thermal state from a Linux `thermal` sysfs class directory.
 ///
-/// Each `thermal_zone*` contributes its temperature against its own
-/// `passive`, `hot` and `critical` trip points; the most severe zone wins.
-/// Zones without a readable temperature are ignored, and a directory with no
-/// readable zone is unavailable.
+/// Each `thermal_zone*` contributes its temperature against all advertised
+/// `active`, `passive`, `hot` and `critical` trip points. Complete evidence from
+/// every zone is required: a missing or malformed temperature, missing or
+/// unreadable trip-point data, unknown type, empty trip-point set, or directory
+/// read failure makes the observation unavailable. Another readable zone cannot
+/// mask incomplete evidence, even when it reports thermal pressure. With all
+/// zones complete, the most severe zone wins; no zones is unavailable.
 ///
 /// Android exposes the same class directory, but its sandbox usually denies
 /// applications the read. The probe then reports unavailable, and a device
@@ -141,35 +183,17 @@ pub fn linux_thermal_state_from(directory: &Path) -> ThermalState {
         return ThermalState::Unavailable;
     };
     let mut worst: Option<u8> = None;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return ThermalState::Unavailable;
+        };
         let name = entry.file_name();
         if !name.to_string_lossy().starts_with("thermal_zone") {
             continue;
         }
-        let zone = entry.path();
-        let Some(temperature) = read_millidegrees(&zone.join("temp")) else {
-            continue;
+        let Some(severity) = linux_thermal_zone_severity(&entry.path()) else {
+            return ThermalState::Unavailable;
         };
-        let mut severity = 0_u8;
-        for trip in 0..16 {
-            let Ok(kind) = std::fs::read_to_string(zone.join(format!("trip_point_{trip}_type")))
-            else {
-                break;
-            };
-            let Some(threshold) = read_millidegrees(&zone.join(format!("trip_point_{trip}_temp")))
-            else {
-                continue;
-            };
-            if temperature < threshold {
-                continue;
-            }
-            severity = severity.max(match kind.trim() {
-                "critical" => 3,
-                "hot" => 2,
-                "passive" | "active" => 1,
-                _ => 0,
-            });
-        }
         worst = Some(worst.map_or(severity, |current| current.max(severity)));
     }
     match worst {
@@ -387,8 +411,7 @@ pub fn resource_usage() -> Option<ResourceUsage> {
 }
 
 /// Process-wide retired instructions on the supported diagnostic host.
-pub(crate) fn process_instructions() -> Result<ProcessInstructionCounters, InstructionCounterError>
-{
+pub fn process_instructions() -> Result<ProcessInstructionCounters, InstructionCounterError> {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         unix::process_instructions()
@@ -612,18 +635,96 @@ mod tests {
     }
 
     #[test]
-    fn linux_thermal_state_ignores_unreadable_zones_and_other_entries() {
-        let root = scratch("unreadable");
+    fn linux_thermal_state_ignores_only_unrelated_entries() {
+        let root = scratch("unrelated");
         zone(&root, "cooling_device0", "99999999", &[("critical", "1")]);
-        std::fs::create_dir_all(root.join("thermal_zone0")).unwrap();
-        zone(&root, "thermal_zone1", "not-a-number", &[("critical", "1")]);
         assert_eq!(linux_thermal_state_from(&root), ThermalState::Unavailable);
-        zone(&root, "thermal_zone2", "30000", &[("unknown", "1")]);
+        zone(&root, "thermal_zone0", "30000", &[("active", "80000")]);
+        std::fs::write(root.join("thermal_zone0/policy"), "unrelated").unwrap();
         assert_eq!(linux_thermal_state_from(&root), ThermalState::Nominal);
         assert_eq!(
             linux_thermal_state_from(&root.join("absent")),
             ThermalState::Unavailable
         );
+        let not_a_directory = root.join("file");
+        std::fs::write(&not_a_directory, "unrelated").unwrap();
+        assert_eq!(
+            linux_thermal_state_from(&not_a_directory),
+            ThermalState::Unavailable
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn linux_thermal_state_requires_complete_evidence_from_every_zone() {
+        let root = scratch("incomplete");
+        for file in ["temp", "trip_point_0_type", "trip_point_0_temp"] {
+            for fault in ["missing", "unreadable", "malformed"] {
+                let case = root.join(format!("{file}-{fault}"));
+                zone(&case, "thermal_zone0", "30000", &[("passive", "80000")]);
+                let path = case.join("thermal_zone0").join(file);
+                match fault {
+                    "missing" => std::fs::remove_file(&path).unwrap(),
+                    "unreadable" => {
+                        // A directory is reliably unreadable as text, including
+                        // when the test process can bypass file permissions.
+                        std::fs::remove_file(&path).unwrap();
+                        std::fs::create_dir(&path).unwrap();
+                    }
+                    "malformed" => std::fs::write(&path, "unknown").unwrap(),
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    linux_thermal_state_from(&case),
+                    ThermalState::Unavailable,
+                    "{file}/{fault}"
+                );
+                for temperature in ["30000", "101000"] {
+                    zone(
+                        &case,
+                        "thermal_zone1",
+                        temperature,
+                        &[("critical", "100000")],
+                    );
+                    assert_eq!(
+                        linux_thermal_state_from(&case),
+                        ThermalState::Unavailable,
+                        "{file}/{fault}: another zone at {temperature} must not mask missing evidence"
+                    );
+                }
+            }
+        }
+        let no_trips = root.join("no-trips");
+        zone(&no_trips, "thermal_zone0", "30000", &[]);
+        assert_eq!(
+            linux_thermal_state_from(&no_trips),
+            ThermalState::Unavailable
+        );
+        zone(&no_trips, "thermal_zone1", "30000", &[("passive", "80000")]);
+        assert_eq!(
+            linux_thermal_state_from(&no_trips),
+            ThermalState::Unavailable
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn linux_thermal_state_scans_sparse_and_high_trip_indices() {
+        let root = scratch("trip-indices");
+        zone(&root, "thermal_zone0", "101000", &[("passive", "200000")]);
+        assert_eq!(linux_thermal_state_from(&root), ThermalState::Nominal);
+        let directory = root.join("thermal_zone0");
+        for index in [2, 16] {
+            let kind = directory.join(format!("trip_point_{index}_type"));
+            let temperature = directory.join(format!("trip_point_{index}_temp"));
+            std::fs::write(&kind, "critical").unwrap();
+            std::fs::write(&temperature, "100000").unwrap();
+            assert_eq!(linux_thermal_state_from(&root), ThermalState::Critical);
+            std::fs::remove_file(&kind).unwrap();
+            assert_eq!(linux_thermal_state_from(&root), ThermalState::Unavailable);
+            std::fs::remove_file(&temperature).unwrap();
+            assert_eq!(linux_thermal_state_from(&root), ThermalState::Nominal);
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

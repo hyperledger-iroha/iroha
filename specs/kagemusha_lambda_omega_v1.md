@@ -643,7 +643,8 @@ of these schedules.
 |---|---|---|---|---:|---:|---|---|
 | Bootstrap | 1 (2V1F leaf); cells pending measurement | 1 terminal A; cells pending measurement | 1; cells pending measurement | 0 | 3 | Unqualified | Unqualified |
 | Load | 1 (own receipt); cells pending measurement | 1 terminal A; cells pending measurement | 1; cells pending measurement | 0 | 3 | Unqualified | Unqualified |
-| Send (every supported control mask) | 1 (own receipt); cells pending measurement | 3; cells pending measurement | 1; cells pending measurement | 2 | 5 (+ 2 W) | Unqualified | Unqualified |
+| Send (quota control off) | 1 (own receipt); cells pending measurement | 2; cells pending measurement | 1; cells pending measurement | 1 | 4 (+ 1 W) | Unqualified | Unqualified |
+| Send (quota control on) | 1 (own receipt); cells pending measurement | 3; cells pending measurement | 1; cells pending measurement | 2 | 5 (+ 2 W) | Unqualified | Unqualified |
 | Receive | 2 (incoming-only Q_σ; merged 3V leaf); cells pending measurement | 5; cells pending measurement | 1; cells pending measurement | 4 | 8 (+ 4 W) | Unqualified | Unqualified |
 | Receive (renewed) | 2 (incoming-only Q_σ; merged 4V1F leaf); cells pending measurement | 5; cells pending measurement | 1; cells pending measurement | 4 | 8 (+ 4 W) | Unqualified | Unqualified |
 | ArchiveSent (i; ArchiveReceive) | 2 (incoming-only Q_σ; merged 2V leaf); cells pending measurement | 9; cells pending measurement | 1; cells pending measurement | 8 | 12 (+ 8 W) | Unqualified | Unqualified |
@@ -666,10 +667,14 @@ their one hard own-receipt Q: A proves the `administrative::monetary` transition
 including the depth-32 recovery insertion for Unload, before Ω. Neither has a W
 continuation.
 
-Send has three A stages: A1 verifies the hard predecessor, binds the Send objects
-and proves σ_send's relation for the installed mask field by field against A's
-statement; W1 joins A2, which proves both depth-32 map insertions; W2 joins A3,
-which verifies the own-receipt Q; then Ω completes the fold.
+Send has two A stages without the quota control and three with it; its
+[native composer](../crates/iroha_kagemusha_proof/src/a_relation/native/send.rs)
+pins the schedule to the installed mask. A1 verifies the hard predecessor, binds
+the Send objects and proves σ_send's relation for the installed mask field by
+field against A's statement. Without quotas, A1 also proves both depth-32 map
+insertions and W1 joins terminal A2, which verifies the own-receipt Q. With quotas,
+W1 joins A2 for both map insertions and W2 joins terminal A3 for the same Q. In
+both schedules Ω completes the fold.
 
 Bootstrap is one terminal A over its 2V1F leaf. Both Receive variants use five A
 stages: A1 proves the transition and both map effects beside the hard predecessor;
@@ -736,18 +741,35 @@ Historical time model [E]:
 
 ## 6. RAM plan (≤ 1 GiB)
 
-The peak falls in the quotient phase [E]:
+The core proving-buffer envelope counts the columns held while the quotient
+recombines its residues [S `crates/iroha_plonk/src/prover/memory.rs`]:
 
-- vectors = PK[2(F + m) + 6] + witness[c·n_a + 8n_l + 2n_z] + coset[n_a + F + m + n_z + 3n_l +
-  4] + 2(d − 1);
+- columns = key[2(F + m + 3) + 2] + n_a + n_i + n_z + 3n_l + 1 + W + 3 + 2(d − 1): the key's fixed,
+  `sigma` and mask columns in both forms plus its forward/inverse FFT twiddles,
+  rounded together to two columns at these domain sizes; the advice and instance coefficients, the
+  permutation products, each lookup's `A'`, `S'` and `z`, `R`, the quotient workspace `W`, the
+  coset masks, and the residues beside the recombined `h`. `W` is the evaluator's own count:
+  fused F + m + n_a + n_i + n_z (at least 3 with lookups) + n_l + 1; lean the widest pass (at
+  least 3) + 1 + n_i + n_l;
 - × 2 MiB at k16 × 1.15, + 8 MiB params + 64 MiB MSM scratch cap + 50 MiB core baseline.
 
-The original borrowed-witness estimate used c = 3; the implemented consuming-witness
-path uses c = 2 in that estimate. Advice values move into coefficient buffers after
-the permutation and lookup products are built
-[S `crates/iroha_plonk/src/prover/advice.rs`]. The table below retains design estimates;
-current peak RSS qualification must use the measured owned-witness path and complete
-process lifetime. Streaming fixed/permutation columns remains a separate memory choice.
+Advice values move into coefficient buffers after the permutation and lookup products are
+built [S `crates/iroha_plonk/src/prover/advice.rs`]. A descriptor alone cannot bound
+circuit-owned synthesis allocations or deferred rational assignments. The native wallet
+uses evaluated-value assignments and keys without coset caches; its complete synthesis,
+key reconstruction and proving allocations must still fit the operation's admission bound.
+The `proving-memory-current-20261023-2` host regression verifies the actual retained key
+vectors, including FFT twiddles, and measures synthesis plus owned proving for one k14
+circuit under fused and 4/16-column plans. It does not establish a generic synthesis bound
+or whole-process RSS for the installed catalog.
+
+An earlier design record reports Pixel 6 k16 Q2 peaks of 490 MiB fused and 400 MiB in
+16-column passes above baseline, against earlier counts of 500 and 410 MiB with parameters.
+The original device/build identities and raw measurements have not been reconciled in
+`target/qualification/pixel6-q2-memory-evidence-review-20261023-1`; those figures do not
+qualify the changed engine or complete-process peak RSS. The table below keeps the original design
+estimates (a formula that counted the lookup and witness columns twice); streaming
+fixed/permutation columns remains a separate memory choice.
 
 | Circuit | Borrowed estimate (c = 3) | Owned estimate (c = 2) | Streamed estimate |
 |---|---:|---:|---:|
@@ -775,14 +797,15 @@ Rules:
    The fused plan transforms every coset column at once. The lean plan cuts the canonical
    terms into contiguous passes of at most 16 coset columns (`ProverConfig::quotient_columns`)
    and keeps the columns consecutive passes share; it costs about 1.2–1.4× the quotient's
-   coset FFTs. Its bound replaces the coset term by the evaluator's columns plus the same
-   `2n_l + 3` slack and counts passes at least 16 columns wide. Admission (§5.3) requires the
+   coset FFTs. Its bound counts the lean workspace in place of the fused one, with passes at
+   least 16 columns wide. Admission (§5.3) requires the
    largest lean bound (σ steps, which always prove fused, count their fused bound). Each proof
    of a fold chooses its own plan from the memory available when the fold started: fused when
    that covers its relation's fused bound, so small relations stay fused while a larger one
    takes passes; otherwise passes widened by one column per 2.4 MB (one k16 vector with margin)
-   above that relation's lean bound. Live generation (2026-10-22): fused 1.051 GiB, lean
-   0.892 GiB (W); the intake staging allowance is 0.902 GiB.
+   above that relation's lean bound. Live generation (2026-10-22 reset): fused 0.885 GiB,
+   lean 0.678 GiB (the A stage with 61 fixed columns); fresh intake stages one derivation, an
+   allowance of 0.480 GiB.
 
 ## 7. Soundness argument
 

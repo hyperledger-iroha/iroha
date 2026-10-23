@@ -256,7 +256,10 @@ fn diagnostic_implicit<F: PastaField>(
     challenges: &[F],
     output: &mut Vec<(F, F)>,
 ) -> (F, usize, usize) {
-    let mut evaluation = FoldedEvaluation::new(x, challenges.len() as u32);
+    let mut evaluation = FoldedEvaluation::new(
+        x,
+        u32::try_from(challenges.len()).expect("diagnostic challenge count fits u32"),
+    );
     let payload = evaluation.powers.capacity() * size_of::<F>();
     for (p, &challenge) in rounds.iter().zip(challenges) {
         let half = p.len() / 2;
@@ -326,8 +329,9 @@ fn measure_evaluation_vector<C: PastaCurve>(curve: &str, workers: usize) {
 #[test]
 #[ignore = "release-only balanced scalar-component diagnostic; not proof or phone latency"]
 fn measure_explicit_implicit_evaluation_vectors() {
+    // Refuse invocation in debug builds while keeping the ignored test compilable.
     assert!(
-        !cfg!(debug_assertions),
+        !std::hint::black_box(cfg!(debug_assertions)),
         "run this diagnostic with --release"
     );
     for workers in [1, 4] {

@@ -183,11 +183,24 @@ fn issuer_platform_uses_selected_originals_and_preserves_default_off_controls() 
     assert!(inputs.revalidate().is_err());
 }
 
+fn private_test_directory_in(parent: &Path) -> tempfile::TempDir {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(parent)
+            .unwrap()
+    }
+    #[cfg(not(unix))]
+    tempfile::tempdir_in(parent).unwrap()
+}
+
 fn private_test_directory() -> tempfile::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../target/qualification/issuer-provisioning-tests");
     fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base.canonicalize().unwrap()).unwrap()
+    private_test_directory_in(&base.canonicalize().unwrap())
 }
 
 #[test]
@@ -201,13 +214,34 @@ fn issuer_output_parent_is_bound_to_current_qualification_before_creation() {
     assert!(!output.exists());
     assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
     parent.revalidate().unwrap();
+    drop(parent);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert_eq!(
+            temporary.path().metadata().unwrap().permissions().mode() & 0o7777,
+            0o700
+        );
+        fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        let error = selected_output_parent(&request).err().unwrap();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            temporary.path().metadata().unwrap().permissions().mode() & 0o7777,
+            0o755
+        );
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
+    }
 }
 
 #[test]
 fn issuer_output_refuses_external_and_traversing_parent_before_creation() {
     let temporary = private_test_directory();
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let external = tempfile::tempdir_in(repository.join("target")).unwrap();
+    let external = private_test_directory_in(&repository.join("target"));
     let external_path = external.path().canonicalize().unwrap();
     let external_owner = PrivateDirectory::open_exact(&external_path).unwrap();
     let mut request = request();

@@ -56,10 +56,11 @@ pub(super) struct OtherDomains {
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
         usage: Use::Name,
-        reason: "Native FI relationship, asset UID policy/enrollment/reader and controlled-lock storage-key prefixes in world.smart_contract_state. They name canonical record paths; these literals compute no digest or independent State root",
+        reason: "Native FI relationship/occurrence receipts, asset UID policy/enrollment/reader and controlled-lock storage-key prefixes in world.smart_contract_state. They name canonical record paths; these literals compute no digest or independent State root",
         literals: &[
             r"asset_fi_link_attestation_v1/",
             r"asset_fi_link_v1/",
+            r"asset_fi_transfer_receipt_v1/",
             r"asset_fi_v1/",
             r"asset_lock_control_v1/",
             r"asset_uid_binding_v1/",
@@ -90,9 +91,12 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
-        reason: "Snapshot validation error field labels for native controlled-lock and asset UID records in world.smart_contract_state; these diagnostics name the failing record family and compute no digest",
+        reason: "Snapshot validation error field labels for native FI, controlled-lock and asset UID policy/enrollment/reader records in world.smart_contract_state; these diagnostics name the failing record family and compute no digest",
         literals: &[
+            r"world.smart_contract_state.asset_fi_v1",
             r"world.smart_contract_state.asset_lock_control_v1",
+            r"world.smart_contract_state.asset_uid_enrollment_v1",
+            r"world.smart_contract_state.asset_uid_reader_v1",
             r"world.smart_contract_state.asset_uid_v1",
         ],
     },

@@ -274,6 +274,32 @@ fn signed_sources(
     (installed, authenticated)
 }
 
+// This uses the actual wallet rebuild boundary. The general key generator still permits
+// Eager, but a wallet key reconstructed from that source must retain no coset cache.
+#[test]
+fn wallet_bootstrap_rebuild_omits_coset_cache_from_an_eager_source_key() {
+    use iroha_plonk::keys::SourceBoundVerifyingKeyV2;
+
+    let params12 = PinnedParams::<Eq>::derive(12).unwrap();
+    let params14 = PinnedParams::<Eq>::derive(14).unwrap();
+    let mut eager = KeygenConfigV2::pipa_r(BootstrapCircuit::instance_types().to_vec());
+    eager.coset_cache = CosetCachePolicy::Eager;
+    let original = keygen_pk_v2(&params12, &BootstrapProver::source_circuit(), &eager).unwrap();
+    assert!(original.has_coset_cache());
+    assert!(original.coset_cache_bytes() > 0);
+    let source = SourceBoundVerifyingKeyV2::from_proving_key(&original, None).unwrap();
+    let original_bytes = original.artifact_bytes_v2().unwrap();
+    drop(original);
+
+    let rebuilt = sigma::rebuild_prover(0, source.view(), &params12, &params14, None).unwrap();
+    let key = rebuilt.proving_key();
+    assert!(!key.has_coset_cache());
+    assert_eq!(key.coset_cache_bytes(), 0);
+    assert_eq!(key.binding(), source.binding());
+    assert_eq!(key.vk().to_bytes(), source.verifying_key().to_bytes());
+    assert_eq!(key.artifact_bytes_v2().unwrap(), original_bytes);
+}
+
 // D5: every sigma use binds the private seal its qualification minted, revalidates
 // the signed originals under current limits and rebuilds from the compiled source of
 // that selector, as Q/A/W/Omega do. No strict re-import exists to fall back to.
@@ -293,7 +319,6 @@ fn qualified_sigma_seals_rebuild_exact_originals_and_refuse_every_foreign_use() 
             view,
             params.0,
             params.1,
-            CosetCachePolicy::OnDemand,
             cancellation,
         )?)
     }

@@ -102,6 +102,158 @@ fn batched_coset_coefficients_validate_before_copying() {
 }
 
 #[test]
+fn public_constant_cosets_match_fft_on_both_fields_and_worker_counts() {
+    fn check<F: PastaField>() {
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                for k in [0, 1, 4, 12] {
+                    let domain = FftDomain::<F>::new(k).unwrap();
+                    let quotient = crate::keys::QuotientDomain::<F>::new(k, 8).unwrap();
+                    let n = domain.n();
+                    let mut constant = vec![F::ZERO; n];
+                    constant[0] = F::from(7);
+                    let mut last = constant.clone();
+                    last[n - 1] = F::from(11);
+                    let coefficients = [vec![F::ZERO; n], constant, last];
+                    let original = coefficients.clone();
+                    for count in [2, 3] {
+                        let sources: Vec<_> =
+                            coefficients[..count].iter().map(Vec::as_slice).collect();
+                        let mut output = vec![vec![F::from(29); n]; count];
+                        let pointers: Vec<_> = output.iter().map(Vec::as_ptr).collect();
+                        let mut powers = vec![F::ZERO; n];
+                        for coset in 0..quotient.pieces() {
+                            let shift = quotient.shift(coset).unwrap();
+                            let plan = domain.coset_plan(&mut powers, shift).unwrap();
+                            assert_eq!(plan.n(), n);
+                            let mut columns: Vec<_> =
+                                output.iter_mut().map(Vec::as_mut_slice).collect();
+                            evaluate_public_many(Some(&plan), &sources, &mut columns, None)
+                                .unwrap();
+                            for (actual, source) in output.iter().zip(&sources) {
+                                let mut expected = source.to_vec();
+                                domain.coset_fft(&mut expected, shift).unwrap();
+                                assert_eq!(*actual, expected, "k={k} coset={coset}");
+                            }
+                            assert_eq!(
+                                output.iter().map(Vec::as_ptr).collect::<Vec<_>>(),
+                                pointers
+                            );
+                            assert_eq!(coefficients, original);
+                        }
+                    }
+                }
+            });
+        }
+    }
+    check::<Fp>();
+    check::<Fq>();
+}
+
+#[test]
+fn public_constant_cosets_refuse_bad_batches_before_writes() {
+    fn check<F: PastaField>() {
+        let domain = FftDomain::<F>::new(3).unwrap();
+        let mut powers = vec![F::ZERO; 8];
+        let plan = domain.coset_plan(&mut powers, F::from(5)).unwrap();
+        let source = vec![F::ZERO; 8];
+        let short = vec![F::ZERO; 7];
+        let mut output = vec![vec![F::from(29); 8]; 2];
+        let original = output.clone();
+        for sources in [
+            vec![source.as_slice()],
+            vec![source.as_slice(), short.as_slice()],
+        ] {
+            let mut columns: Vec<_> = output.iter_mut().map(Vec::as_mut_slice).collect();
+            assert!(matches!(
+                evaluate_public_many(Some(&plan), &sources, &mut columns, None),
+                Err(KeyError::Shape { .. })
+            ));
+            assert_eq!(output, original);
+        }
+        let sources = [source.as_slice(), source.as_slice()];
+        let mut columns: Vec<_> = output.iter_mut().map(Vec::as_mut_slice).collect();
+        assert_eq!(
+            evaluate_public_many(None, &sources, &mut columns, None),
+            Err(KeyError::CosetIndex)
+        );
+        assert_eq!(output, original);
+        let wrong_domain = FftDomain::<F>::new(2).unwrap();
+        let mut wrong_powers = vec![F::ZERO; 4];
+        let wrong_plan = wrong_domain.coset_plan(&mut wrong_powers, F::ONE).unwrap();
+        let mut columns: Vec<_> = output.iter_mut().map(Vec::as_mut_slice).collect();
+        assert_eq!(
+            evaluate_public_many(Some(&wrong_plan), &sources, &mut columns, None),
+            Err(KeyError::Fft(iroha_pasta::fft::FftError::WrongLength {
+                expected: 4,
+                actual: 8,
+            }))
+        );
+        assert_eq!(output, original);
+        // Matching source/output lengths still must have the plan's geometry.
+        for rows in [0, 7] {
+            let malformed = vec![F::ZERO; rows];
+            let mut values = vec![F::from(29); rows];
+            let before = values.clone();
+            assert_eq!(
+                evaluate_public_many(
+                    Some(&plan),
+                    &[&malformed],
+                    &mut [values.as_mut_slice()],
+                    None,
+                ),
+                Err(KeyError::Fft(iroha_pasta::fft::FftError::WrongLength {
+                    expected: 8,
+                    actual: rows,
+                }))
+            );
+            assert_eq!(values, before);
+        }
+    }
+    check::<Fp>();
+    check::<Fq>();
+}
+
+#[test]
+fn cancelled_public_constant_cosets_leave_no_retained_workspace_values() {
+    fn check<F: PastaField>() {
+        let domain = FftDomain::<F>::new(4).unwrap();
+        let mut powers = vec![F::ZERO; domain.n()];
+        let plan = domain.coset_plan(&mut powers, F::from(5)).unwrap();
+        let mut source = vec![F::ZERO; domain.n()];
+        source[0] = F::from(7);
+        let mut workspace = QuotientWorkspace::<F>::new(domain.n() * size_of::<F>());
+        let token = CancellationToken::new();
+        {
+            let lease = workspace.lease(domain.n(), 1).unwrap();
+            let mut columns: Vec<_> = lease.columns.iter_mut().map(AsMut::as_mut).collect();
+            evaluate_public_many(Some(&plan), &[&source], &mut columns, Some(&token)).unwrap();
+            assert!(columns[0].iter().all(|value| *value == F::from(7)));
+            token.cancel();
+            assert_eq!(
+                evaluate_public_many(Some(&plan), &[&source], &mut columns, Some(&token)),
+                Err(KeyError::Cancelled)
+            );
+            assert!(columns[0].iter().all(|value| *value == F::from(7)));
+        }
+        assert!(workspace.is_zeroized());
+        {
+            let lease = workspace.lease(domain.n(), 1).unwrap();
+            let mut columns: Vec<_> = lease.columns.iter_mut().map(AsMut::as_mut).collect();
+            evaluate_public_many(Some(&plan), &[&source], &mut columns, None).unwrap();
+            assert!(columns[0].iter().all(|value| *value == F::from(7)));
+        }
+        assert!(workspace.is_zeroized());
+    }
+    check::<Fp>();
+    check::<Fq>();
+}
+
+#[test]
 fn key_cosets_keep_owned_allocations_or_borrow_each_cached_coset() {
     fn check<C: PastaCurve>() {
         let circuit = Arithmetic {

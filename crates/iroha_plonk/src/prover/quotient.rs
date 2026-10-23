@@ -66,7 +66,9 @@ use crate::{
         descriptor::{ColumnKindV1, ExprNodeV1, ExprV1, LookupV1, MAX_EXPRESSION_STACK, QueryV1},
     },
     keys::{CosetPolynomial, KeyError, ProvingKey},
-    protocol::{ConstraintFilter, ConstraintTerm, LookupConstraint, Protocol, ProtocolError},
+    protocol::{
+        ConstraintFilter, ConstraintTerm, LookupConstraint, Protocol, ProtocolError, Shape,
+    },
     transcript::decode_scalar,
 };
 
@@ -712,7 +714,15 @@ pub(super) fn workspace_elements<C: PastaCurve>(
     protocol: &Protocol,
 ) -> Result<usize, ProtocolError> {
     let shape = protocol.shape();
-    let key_columns = if pk.has_coset_cache() {
+    fused_workspace_columns(shape, pk.has_coset_cache())?
+        .checked_mul(shape.n)
+        .ok_or(ProtocolError::Overflow)
+}
+
+/// Field columns of [`workspace_elements`] for a key that does (`cached`) or does not keep
+/// its coset cache.
+pub(super) fn fused_workspace_columns(shape: &Shape, cached: bool) -> Result<usize, ProtocolError> {
+    let key_columns = if cached {
         0
     } else {
         shape
@@ -735,7 +745,6 @@ pub(super) fn workspace_elements<C: PastaCurve>(
     transformed
         .checked_add(shape.lookups)
         .and_then(|v| v.checked_add(usize::from(transformed != 0)))
-        .and_then(|v| v.checked_mul(shape.n))
         .ok_or(ProtocolError::Overflow)
 }
 
@@ -877,6 +886,76 @@ fn evaluate_instance_many<F: PastaField>(
     )?;
     CancellationToken::checkpoint(cancellation)?;
     Ok(())
+}
+
+/// Evaluates public key polynomials without transforming constants.
+/// This branch must not be used for witness, product or lookup coefficients.
+fn evaluate_public_many<F: PastaField>(
+    plan: Option<&CosetFftPlan<'_, '_, F>>,
+    coefficients: &[&[F]],
+    values: &mut [&mut [F]],
+    cancellation: Option<&CancellationToken>,
+) -> Result<(), KeyError> {
+    CancellationToken::checkpoint(cancellation)?;
+    if coefficients.len() != values.len() {
+        return Err(KeyError::Shape {
+            what: "coset columns",
+            expected: values.len(),
+            actual: coefficients.len(),
+        });
+    }
+    for (values, coefficients) in values.iter().zip(coefficients) {
+        if coefficients.len() != values.len() {
+            return Err(KeyError::Shape {
+                what: "coset coefficients",
+                expected: values.len(),
+                actual: coefficients.len(),
+            });
+        }
+    }
+    if values.is_empty() {
+        return Ok(());
+    }
+    let plan = plan.ok_or(KeyError::CosetIndex)?;
+    // Even an all-constant batch must match the actual plan. Validate the
+    // complete batch before filling any output, including empty columns.
+    for coefficients in coefficients {
+        if coefficients.len() != plan.n() {
+            return Err(iroha_pasta::fft::FftError::WrongLength {
+                expected: plan.n(),
+                actual: coefficients.len(),
+            }
+            .into());
+        }
+    }
+    let mut transformed_coefficients = Vec::with_capacity(coefficients.len());
+    let mut transformed_values = Vec::with_capacity(values.len());
+    for (coefficients, values) in coefficients.iter().zip(values.iter_mut()) {
+        let mut constant = true;
+        for chunk in coefficients[1..].chunks(ROWS_PER_TASK) {
+            CancellationToken::checkpoint(cancellation)?;
+            if chunk.iter().any(|value| *value != F::ZERO) {
+                constant = false;
+                break;
+            }
+        }
+        if constant {
+            for chunk in values.chunks_mut(ROWS_PER_TASK) {
+                CancellationToken::checkpoint(cancellation)?;
+                chunk.fill(coefficients[0]);
+            }
+        } else {
+            transformed_coefficients.push(*coefficients);
+            transformed_values.push(&mut **values);
+        }
+    }
+    CancellationToken::checkpoint(cancellation)?;
+    evaluate_many(
+        Some(plan),
+        &transformed_coefficients,
+        &mut transformed_values,
+        cancellation,
+    )
 }
 
 /// Borrows complete lookup triples without growing the field workspace.
@@ -1103,7 +1182,7 @@ fn refresh_key_cosets<'a, C: PastaCurve>(
             }
         }
     }
-    evaluate_many(plan, &owned_coefficients, &mut owned, cancellation)?;
+    evaluate_public_many(plan, &owned_coefficients, &mut owned, cancellation)?;
     Ok(())
 }
 
@@ -1173,38 +1252,41 @@ pub(super) fn evaluate_with_bound_instances_cancellable<C: PastaCurve>(
         return Err(KeyError::CosetIndex.into());
     }
     if !instances.has_short_prefixes() {
-        return match workspace {
-            Some(workspace) => evaluate_with_workspace_cancellable(
-                pk,
-                protocol,
-                compiled,
-                inputs,
-                challenges,
-                filter,
-                workspace,
-                cancellation,
-            ),
-            None => evaluate_cancellable(
-                pk,
-                protocol,
-                compiled,
-                inputs,
-                challenges,
-                filter,
-                cancellation,
-            ),
-        };
+        return workspace.map_or_else(
+            || {
+                evaluate_cancellable(
+                    pk,
+                    protocol,
+                    compiled,
+                    inputs,
+                    challenges,
+                    filter,
+                    cancellation,
+                )
+            },
+            |workspace| {
+                evaluate_with_workspace_cancellable(
+                    pk,
+                    protocol,
+                    compiled,
+                    inputs,
+                    challenges,
+                    filter,
+                    workspace,
+                    cancellation,
+                )
+            },
+        );
     }
     let mut owned;
-    let workspace = match workspace {
-        Some(workspace) => workspace,
-        None => {
-            let bytes = workspace_elements(pk, protocol)?
-                .checked_mul(size_of::<C::ScalarExt>())
-                .ok_or(ProtocolError::Overflow)?;
-            owned = QuotientWorkspace::new(bytes);
-            &mut owned
-        }
+    let workspace = if let Some(workspace) = workspace {
+        workspace
+    } else {
+        let bytes = workspace_elements(pk, protocol)?
+            .checked_mul(size_of::<C::ScalarExt>())
+            .ok_or(ProtocolError::Overflow)?;
+        owned = QuotientWorkspace::new(bytes);
+        &mut owned
     };
     evaluate_inner(
         pk,

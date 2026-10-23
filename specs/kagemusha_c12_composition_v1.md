@@ -98,7 +98,8 @@ At every fresh Q/A/W cut, the private owner first derives its frame from the
 exact retained history. The M-admitted local sampler then uses the actual RP57
 schedule, public-only evaluations, private pivots and complete final f/G
 binding. Its full canonical checkpoint becomes the original consumed by later
-frames. This applies to all three Q stages and restored incoming-Q custody.
+frames. This applies to every Q stage in each operation's compiled schedule and to
+restored incoming-Q custody.
 Sampling an Omega beside an unrelated genuine checkpoint is not allowed.
 
 For a private committed fold, fix its parameter owner, closed purpose, slot

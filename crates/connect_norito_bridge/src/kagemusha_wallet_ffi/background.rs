@@ -5,6 +5,8 @@
 //! and relative timer hints select another source read; they never grant admission.
 
 use super::*;
+#[cfg(test)]
+mod native_maintenance_tests;
 mod observation;
 mod runner;
 pub(crate) use observation::FoldBridgeTurnV1;

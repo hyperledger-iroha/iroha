@@ -139,6 +139,9 @@ Stage ENGINE-3 (tasks T12 and T13) provides:
   omitted gates keep their original zero-valued positions and the final partial
   group uses serial Horner evaluation. Both-field tests compare the full
   quotient against the independent serial evaluator and retain proof-byte goldens.
+  The fused evaluator fills constant public fixed and permutation polynomials
+  directly after validating the complete coset geometry. Other polynomials keep
+  the existing FFT path; witness-dependent coefficients never use this shortcut.
   `Witness::from_circuit` checks that a circuit matches its key (copies
   through the key's copy digest, in constant memory) and moves the
   synthesized advice into the zeroizing witness; `Witness::from_columns`

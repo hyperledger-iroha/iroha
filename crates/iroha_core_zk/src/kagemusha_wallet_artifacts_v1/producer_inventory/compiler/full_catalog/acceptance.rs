@@ -81,9 +81,16 @@ fn active_imports(
         // Each use rereads all three signed originals and rebuilds the key from
         // its qualified seal; the result is exactly the signed original.
         let before = originals.reads;
-        let owner = qualified
-            .import_sigma(u8::try_from(selector).unwrap(), originals, config)
-            .unwrap();
+        // Runtime operation imports and speculative bindings share this wallet boundary.
+        // A general importer's Eager request must not invalidate the wallet's memory bound.
+        let eager = ReadConfig {
+            coset_cache: iroha_plonk::keys::CosetCachePolicy::Eager,
+            ..config
+        };
+        let selected = u8::try_from(selector).unwrap();
+        let owner = qualified.import_sigma(selected, originals, eager).unwrap();
+        assert!(!owner.proving_key().has_coset_cache());
+        assert_eq!(owner.proving_key().coset_cache_bytes(), 0);
         assert_eq!(
             originals.reads - before,
             3,
@@ -100,6 +107,17 @@ fn active_imports(
         );
         drop(original);
         drop(owner);
+        let before_bind = originals.reads;
+        let rebound = qualified
+            .bind_sigma_cancellable(selected, eager, None)
+            .unwrap();
+        assert!(!rebound.proving_key().has_coset_cache());
+        assert_eq!(rebound.proving_key().coset_cache_bytes(), 0);
+        assert_eq!(
+            originals.reads, before_bind,
+            "sealed binding performs no source I/O"
+        );
+        drop(rebound);
     }
     let mut programs = std::collections::BTreeSet::new();
     let mut q_imports = 0;

@@ -1437,14 +1437,20 @@ that moment:
 - memory: memory currently available to the app covers the peak proving memory
   of the operation's step relation and of the lineage relation that folds it.
 
-Both bounds come from the installed relations, never from a phone model. The
-proof owner computes each relation's peak proving memory and fold-witness bytes
-from that relation's fixed, authenticated descriptor (its domain size and its
-column and lookup counts) with one conservative formula. The check adds no field
-to the artifact manifest, verifier pack or producer inventory, and needs no
-artifact-producer change. Measured peaks and fold times are recorded as evidence
-(§8); a measurement above the computed bound is a defect in the formula, which
-is fixed in code. A failed check
+Both requirements are selected from the installed relations, never from a phone
+model. The proof owner derives fold-witness bytes and a core proving-buffer
+envelope from each relation's fixed, authenticated descriptor (its domain size
+and column and lookup counts). The current memory formula adds a 15% field-buffer
+margin, pinned parameters, the process-wide MSM scratch budget and a wallet-core
+allowance. It does not separately count the native sources' synthesis caches,
+decoded proof tapes, prepared witnesses or reconstruction work. Those allocations
+must be shown to fit the complete admission budget for each installed source;
+that qualification remains open. The descriptor formula alone is not a
+whole-process RSS bound. The check adds no field to the artifact manifest,
+verifier pack or producer inventory, and needs no artifact-producer change.
+Measured peaks and fold times are recorded as evidence (§8); an excess requires
+identifying its allocation owner and correcting the budget or implementation,
+rather than assuming a defect in the core prover's column count. A failed check
 refuses the operation before commit with a typed `NotEnoughStorage` or
 `NotEnoughMemory` result, never a device verdict: nothing is debited or
 credited, the receipt or Payment stays deliverable, and the holder retries after
@@ -1457,8 +1463,8 @@ whose Advance did not commit leaves the head unchanged and is reported as
 interrupted, with its receipt or Payment still deliverable; an operation whose
 Advance committed completes from its retained outcome. An OS kill is never a
 device verdict, a refusal or a reason to discard a selected outcome. The
-capacity bounds stay derived from the installed relation descriptors, with no
-artifact change. There is no phone-model
+capacity budgets stay tied to the installed relation descriptors and compiled
+native sources, with no artifact change. There is no phone-model
 list, device class, roster or published per-model budget; per-phone latency,
 memory and energy measurements are recorded as evidence (§8), never as an
 admission list. Never rely on platform background-execution time for
@@ -2222,7 +2228,7 @@ remain unchanged.
 | --- | --- | --- |
 | 1. iOS rollback and release | G2 / native provider and Swift storage | Trace Selected marker, journal, signature, anchor and externally available Payment bytes. Reproduce interrupted/ambiguous writes, restart, concurrency and replay. Determine which backup/restore schedules supported stock-device operations actually permit. Establish the platform persistence guarantee before claiming that a released Payment precludes a competing successor from restored state; Keychain readback alone is insufficient. Preserve any residual counterexample and identify the smallest unavailable primitive or required design decision. |
 | 2. Complete monetary lifecycle | G4/G5, NF1–NF6 / wallet, node and SDK | From one source/artifact candidate, perform enrollment → activation → funded Load → A pays B → B pays C offline → Unload → ledger payout. Cover supported selectors, Receive folding, ArchiveReceive, ArchiveStatus, fees and enabled controls; crashes, lost acknowledgements, exact retries, duplicate credits, conflicting inputs, invalid proofs, stale state and restart must preserve conservation, committed payments and once-only payout. Retain actual four-validator and physical Android/iPhone results separately from software fixtures. |
-| 3. Proof correctness and privacy | G3 / proof owners and independent reviewer | Run genuine-proof native/circuit binding mutations for every consuming operation, including Ω opening and both exposed accumulator decisions at acceptance boundaries. Complete [C12](kagemusha_recursion_soundness_v1.md) for the actual recursive setup, three-Q prefix, RP57 interfaces, exposed challenges, adaptive histories, checkpoints, retries and joint folding/publication, with explicit assumptions and independent review. Regenerate affected artifacts after a construction change. |
+| 3. Proof correctness and privacy | G3 / proof owners and independent reviewer | Run genuine-proof native/circuit binding mutations for every consuming operation, including Ω opening and both exposed accumulator decisions at acceptance boundaries. Complete [C12](kagemusha_recursion_soundness_v1.md) for the actual recursive setup, every operation's compiled Q prefix, RP57 interfaces, exposed challenges, adaptive histories, checkpoints, retries and joint folding/publication, with explicit assumptions and independent review. Regenerate affected artifacts after a construction change. |
 | 4. Size and performance | G1/G4/G7 / native, SDK and carrier owners | Retain each genuine bounded message's exact canonical envelope and demonstrate ≤10,034 bytes across supported variants. Measure cold opening, peak memory, retained storage, durable payment completion and the separate time until received value is spendable. Evaluate the two-second p95 requirement on a declared physical-device/OS/carrier population; preserve failed, cancelled and slow trials. Stand-in proofs and host timings do not qualify phone payments. |
 | 5. One verified delivery | G6/G7 / native and managed consumer owners | Record source closure, lock/build inputs, catalog/key/native-library/SDK hashes and exact test commands. Rebuild matching consumers, run focused regressions followed by complete required suites and release checks, and update current specifications/status/public documentation. A changed source candidate requires affected evidence to be repeated; compilation or another candidate's results do not close a requirement. |
 

@@ -107,6 +107,12 @@ pub struct CosetFftPlan<'domain, 'scratch, F: PastaField> {
 }
 
 impl<F: PastaField> CosetFftPlan<'_, '_, F> {
+    /// The exact coefficient and output length required by this plan.
+    #[must_use]
+    pub fn n(&self) -> usize {
+        self.domain.n()
+    }
+
     /// Evaluates columns in place using the immutable validated powers.
     ///
     /// # Errors
@@ -814,11 +820,7 @@ fn dif_pass4<F: PastaField, const PARALLEL: bool>(
     let blocks = n / block;
     // A quarter no larger than the minimum inner chunk cannot split. Expose
     // independent blocks instead of running one inner task per serial block.
-    if !PARALLEL
-        || n < PARALLEL_MIN
-        || blocks >= rayon::current_num_threads() * 4
-        || m <= 256
-    {
+    if !PARALLEL || n < PARALLEL_MIN || blocks >= rayon::current_num_threads() * 4 || m <= 256 {
         let run = |blk: &mut [F]| {
             let (q0, rest) = blk.split_at_mut(m);
             let (q1, rest) = rest.split_at_mut(m);
@@ -1025,6 +1027,20 @@ mod tests {
                 Err(FftError::ZeroShift)
             );
             assert_eq!(domain.coset_fft_many(&mut [], F::ONE), Ok(()));
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[test]
+    fn coset_plan_reports_exact_domain_length() {
+        fn check<F: PastaField>() {
+            for k in [0, 1, 4, 13] {
+                let domain = FftDomain::<F>::new(k).unwrap();
+                let mut powers = vec![F::ZERO; domain.n()];
+                let plan = domain.coset_plan(&mut powers, F::from(7)).unwrap();
+                assert_eq!(plan.n(), 1 << k);
+            }
         }
         check::<Fp>();
         check::<Fq>();

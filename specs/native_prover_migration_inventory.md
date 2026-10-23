@@ -306,5 +306,6 @@ Retired formats, verifiers and compatibility paths are not retained in the relea
 - Still to capture (TODO): remaining per-family relation goldens and tamper corpora
   and the current complete KAGEMUSHA catalog. The earlier 45 non-measurement oracle
   tests and 73 companion cases passed on both instruction targets; hardware and
-  timing gates remain separate. These component results do not authorize M7
-  deletion while its retained-consumer, operation and release gates remain open.
+  timing gates remain separate. M7 source retirement is installed; these historical
+  component results do not qualify the current retained-consumer, operation or
+  release gates.

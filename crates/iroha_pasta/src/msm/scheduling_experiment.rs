@@ -67,16 +67,18 @@ fn payload_bound(n: usize, plan: Plan) -> usize {
 }
 
 /// Source-bound host experiment, not a portable std-layout promise. The
-/// accompanying manifest pins Rust1.93.1's pthread OnceBox and Darwin SDK layout.
-/// On this target the sole boxed pthread_mutex_t is8-byte long +56 opaque bytes.
+/// accompanying manifest pins Rust 1.93.1's pthread `OnceBox` and Darwin SDK layout.
+/// On this target the sole boxed `pthread_mutex_t` is an 8-byte long + 56 opaque bytes.
 /// Independent execution must reject a different compiler/std/SDK identity.
 fn verified_mutex_payload_bytes() -> usize {
+    // Refuse invocation on an unrecorded target without making its test
+    // binary fail to compile merely because this experiment is present.
     assert!(
-        cfg!(all(
+        std::hint::black_box(cfg!(all(
             target_os = "macos",
             target_arch = "aarch64",
             target_pointer_width = "64"
-        )),
+        ))),
         "this isolated mutex-accounting experiment requires the recorded host target"
     );
     assert_eq!(
@@ -164,6 +166,9 @@ fn dynamic_msm<C: PastaCurve, const SECRET: bool>(
         dynamic_payload_bound(scalars.len(), plan) <= reservation.bytes(),
         "this shape has insufficient original scratch for the accounted mutex"
     );
+    // Own the permit before declaring scratch so normal return, cancellation,
+    // and unwinding all destroy the joined operation's buffers first.
+    let _scratch = reservation;
     CancellationToken::checkpoint(cancellation)?;
     let skip: Vec<bool> = bases
         .iter()
@@ -215,9 +220,10 @@ fn dynamic_msm<C: PastaCurve, const SECRET: bool>(
                 let mut guard = windows
                     .lock()
                     .expect("poisoned reduction is a failed operation");
-                if task == 0 && hook == Hook::PanicWhileMerging {
-                    panic!("test unwind with merge guard and returned sums owned");
-                }
+                assert!(
+                    !(task == 0 && hook == Hook::PanicWhileMerging),
+                    "test unwind with merge guard and returned sums owned"
+                );
                 for (index, sum) in sums.iter().enumerate() {
                     guard[w0 + index] += sum;
                 }
@@ -249,9 +255,9 @@ fn execute<C: PastaCurve, const SECRET: bool>(
     original: Plan,
     shared: &SharedMemoryBudget,
     cancellation: Option<&CancellationToken>,
-    audit: Option<&Audit>,
-    hook: Hook,
+    observation: (Option<&Audit>, Hook),
 ) -> Result<C, MsmError> {
+    let (audit, hook) = observation;
     task_count(&original);
     let selected = match arm {
         Arm::Current => original,
@@ -283,13 +289,15 @@ fn execute<C: PastaCurve, const SECRET: bool>(
     }
 }
 
+type Inputs<C> = (
+    Zeroizing<Vec<<C as PastaCurve>::ScalarExt>>,
+    Vec<<C as PastaCurve>::AffineExt>,
+    C,
+);
+
 /// Known public generator multiples give an independent exact group oracle.
 /// Only synthetic scalars are secret-mode inputs, and their owner wipes on drop.
-fn inputs<C: PastaCurve>(
-    n: usize,
-    bounded: bool,
-    edge_cases: bool,
-) -> (Zeroizing<Vec<C::ScalarExt>>, Vec<C::AffineExt>, C) {
+fn inputs<C: PastaCurve>(n: usize, bounded: bool, edge_cases: bool) -> Inputs<C> {
     let mut rng = ChaCha20Rng::seed_from_u64(0x7363_6865_6475_6c65);
     let mut scalars = Zeroizing::new(Vec::with_capacity(n));
     let mut points = Vec::with_capacity(n);
@@ -369,8 +377,7 @@ fn check_modes<C: PastaCurve, const SECRET: bool>(
                     original,
                     &shared,
                     None,
-                    matches!(arm, Arm::Dynamic).then_some(&audit),
-                    Hook::None,
+                    (matches!(arm, Arm::Dynamic).then_some(&audit), Hook::None),
                 )
                 .unwrap();
                 assert_group(result, expected);
@@ -398,8 +405,6 @@ fn bounded_schedules_match_exact_groups_and_task_accounting() {
 
 #[test]
 fn bounded_schedules_handle_point_chunks_and_zero_scalars() {
-    check_modes::<Ep, true>(8192, 4, 8, true);
-    check_modes::<Eq, true>(8192, 4, 8, true);
     fn zero<C: PastaCurve>() {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(4)
@@ -419,8 +424,7 @@ fn bounded_schedules_handle_point_chunks_and_zero_scalars() {
                         original,
                         &shared,
                         None,
-                        None,
-                        Hook::None,
+                        (None, Hook::None),
                     )
                     .unwrap(),
                     C::identity(),
@@ -429,6 +433,8 @@ fn bounded_schedules_handle_point_chunks_and_zero_scalars() {
             }
         });
     }
+    check_modes::<Ep, true>(8192, 4, 8, true);
+    check_modes::<Eq, true>(8192, 4, 8, true);
     zero::<Ep>();
     zero::<Eq>();
 }
@@ -486,8 +492,7 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                         original,
                         &shared,
                         Some(&cancelled),
-                        None,
-                        Hook::None
+                        (None, Hook::None),
                     ),
                     Err(MsmError::Cancelled)
                 );
@@ -503,8 +508,7 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                     original,
                     &shared,
                     Some(&token),
-                    Some(&audit),
-                    Hook::CancelAfterTask
+                    (Some(&audit), Hook::CancelAfterTask),
                 ),
                 Err(MsmError::Cancelled)
             );
@@ -521,8 +525,7 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                     original,
                     &shared,
                     Some(&CancellationToken::new()),
-                    None,
-                    Hook::None,
+                    (None, Hook::None),
                 )
                 .unwrap(),
                 expected,
@@ -538,8 +541,7 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                         original,
                         &shared,
                         None,
-                        Some(&audit),
-                        hook,
+                        (Some(&audit), hook),
                     )
                 }));
                 assert!(result.is_err());
@@ -554,8 +556,7 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                         original,
                         &shared,
                         Some(&fresh),
-                        None,
-                        Hook::None,
+                        (None, Hook::None),
                     )
                     .unwrap(),
                     expected,
@@ -586,8 +587,7 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                     original,
                     &shared,
                     Some(&CancellationToken::new()),
-                    None,
-                    Hook::None,
+                    (None, Hook::None),
                 )
                 .unwrap(),
                 expected,
@@ -669,12 +669,12 @@ fn bounded_window_scheduling_component_diagnostic() {
         let order = [[0, 1, 2, 3, 3, 2, 1, 0], [1, 0, 3, 2, 2, 3, 0, 1]];
         pool.install(|| {
             for arm in arms {
-                assert_group(execute::<C, true>(arm, &scalars, &bases, original, &shared, None, None, Hook::None).unwrap(), expected);
+                assert_group(execute::<C, true>(arm, &scalars, &bases, original, &shared, None, (None, Hook::None)).unwrap(), expected);
             }
             for (block, sequence) in order.iter().enumerate() {
                 for (position, &index) in sequence.iter().enumerate() {
                     let start = Instant::now();
-                    let actual = execute::<C, true>(arms[index], &scalars, &bases, original, &shared, None, None, Hook::None).unwrap();
+                    let actual = execute::<C, true>(arms[index], &scalars, &bases, original, &shared, None, (None, Hook::None)).unwrap();
                     let elapsed_ns = start.elapsed().as_nanos();
                     assert_group(actual, expected);
                     assert_eq!(shared.in_use_bytes(), 0);
