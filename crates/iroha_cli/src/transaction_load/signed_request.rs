@@ -34,7 +34,7 @@ pub(super) struct DurablyPrepared {
 }
 
 pub(super) fn capture(
-    transaction: SignedTransaction,
+    transaction: &SignedTransaction,
     plan: Planned,
     warmup_count: usize,
 ) -> Result<Captured> {
@@ -62,16 +62,16 @@ pub(super) fn capture(
     }
     // Count the real canonical serialization, never an untrusted size hint, before
     // allocating the retained frame. No alternate or version-sniffed format exists.
-    let length = norito::canonical_frame_len(&transaction)?;
+    let length = norito::canonical_frame_len(transaction)?;
     if length == 0 || length > MAX_SIGNED_REQUEST_BYTES {
         bail!("signed request exceeds its fixed canonical frame bound");
     }
-    let bytes = norito::encode_canonical(&transaction)?;
+    let bytes = norito::encode_canonical(transaction)?;
     if bytes.len() != length {
         bail!("signed request canonical serialization changed after admission");
     }
     let hash = transaction.hash();
-    let payload = PreparedTransactionPayload::from_transaction(&transaction);
+    let payload = PreparedTransactionPayload::from_transaction(transaction);
     if payload.hash() != hash {
         bail!("signed request transport changed the canonical transaction identity");
     }

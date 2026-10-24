@@ -763,6 +763,10 @@ fn finalized_execution_read_error(
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Projection consumes the original authenticated source graph and its admitted canonical frame custody"
+)]
 fn finalized_execution_carrier_from_read(
     verified: crate::sumeragi::certified_chain::NativeExecutionRead,
     max_work: u64,
@@ -1791,7 +1795,7 @@ fn walk_committed_transaction_carriers(
 /// Rejects zero limits, exceeded work or bytes, unavailable history and corrupt bodies.
 pub fn visit_committed_transactions_bounded(
     state_ro: &impl StateReadOnly,
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     max_projection_work: u64,
     max_history_bytes: u64,
     visitor: impl FnMut(CommittedTransaction, bool) -> Result<ControlFlow<()>, QueryExecutionFail>,
@@ -1812,7 +1816,7 @@ pub fn visit_committed_transactions_bounded(
 /// Rejects invalid limits before scanning and exceeded limits before dependent work.
 pub fn visit_committed_transactions_with_work_budget(
     state_ro: &impl StateReadOnly,
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     max_carrier_projection_work: u64,
     max_total_projection_work: u64,
     max_history_bytes: u64,
@@ -1831,7 +1835,7 @@ pub fn visit_committed_transactions_with_work_budget(
     let mut total_bytes = 0_u64;
     visit_committed_transactions(
         state_ro,
-        &filter,
+        filter,
         TransactionHistoryAnchor::capture(state_ro),
         None,
         max_history_bytes,
@@ -2100,7 +2104,7 @@ pub fn visit_borrowed_committed_transaction_page(
 /// failures.
 pub fn committed_transactions_bounded_snapshot(
     state_ro: &impl StateReadOnly,
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     work_limits: TransactionHistoryWorkLimits,
     max_projected_transactions: u64,
     max_retained_bytes: u64,
@@ -2149,12 +2153,12 @@ pub fn committed_transactions_bounded_snapshot(
 /// work or retention limits. Partial history is never returned as a snapshot.
 pub fn committed_transactions_indexed_snapshot(
     state_ro: &impl StateReadOnly,
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     work_limits: TransactionHistoryWorkLimits,
     max_projected_transactions: u64,
     max_retained_bytes: u64,
 ) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
-    if transaction_query_plan(&filter, state_ro).1.is_none() {
+    if transaction_query_plan(filter, state_ro).1.is_none() {
         return Err(QueryExecutionFail::Conversion(
             "transaction aggregate/select queries require a positive indexed filter".into(),
         ));
@@ -2171,7 +2175,7 @@ pub fn committed_transactions_indexed_snapshot(
 /// Bounded fixture-only baseline; production uses the fallible page owner.
 #[cfg(test)]
 pub(crate) fn execute_transactions_fixture(
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     state: &impl StateReadOnly,
 ) -> Result<std::vec::IntoIter<CommittedTransaction>, QueryExecutionFail> {
     committed_transactions_bounded_snapshot(
@@ -2195,7 +2199,7 @@ pub(crate) fn execute_transactions_fixture(
 pub(crate) fn committed_transactions_snapshot(
     state: &impl StateReadOnly,
 ) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
-    execute_transactions_fixture(CompoundPredicate::PASS, state).map(Iterator::collect)
+    execute_transactions_fixture(&(CompoundPredicate::PASS), state).map(Iterator::collect)
 }
 
 #[cfg(test)]
@@ -2642,7 +2646,7 @@ pub(crate) mod tests {
     }
     fn execute_indexed_carrier_query(
         state_ro: &impl StateReadOnly,
-        filter: CompoundPredicate<CommittedTransaction>,
+        filter: &CompoundPredicate<CommittedTransaction>,
     ) -> Vec<CommittedTransaction> {
         state_ro.kura().reset_canonical_query_reads_for_test();
         let transactions =
@@ -2662,9 +2666,9 @@ pub(crate) mod tests {
         let state_view = fixture.state.view();
         let by_block = execute_indexed_carrier_query(
             &state_view,
-            CompoundPredicate::<CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals("block_hash", fixture.target_block_hash.to_string())
-            }),
+            })),
         );
         assert_eq!(by_block.len(), 2);
         assert!(
@@ -2674,20 +2678,20 @@ pub(crate) mod tests {
         );
         let by_hash = execute_indexed_carrier_query(
             &state_view,
-            CompoundPredicate::<CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals(
                     "entrypoint_hash",
                     fixture.target_entrypoint_hash.to_string(),
                 )
-            }),
+            })),
         );
         assert_eq!(by_hash.len(), 1);
         assert_eq!(by_hash[0].entrypoint_hash, fixture.target_entrypoint_hash);
         let by_authority = execute_indexed_carrier_query(
             &state_view,
-            CompoundPredicate::<CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals("authority", fixture.target_authority.to_string())
-            }),
+            })),
         );
         assert_eq!(by_authority.len(), 1);
         assert_eq!(
@@ -2696,9 +2700,9 @@ pub(crate) mod tests {
         );
         let by_timestamp = execute_indexed_carrier_query(
             &state_view,
-            CompoundPredicate::<CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals("timestamp_ms", fixture.target_timestamp_ms)
-            }),
+            })),
         );
         assert_eq!(by_timestamp.len(), 1);
         assert_eq!(
@@ -2707,16 +2711,16 @@ pub(crate) mod tests {
         );
         let by_timestamp_range = execute_indexed_carrier_query(
             &state_view,
-            CompoundPredicate::<CommittedTransaction>::from_filters(CommittedTxFilters {
+            &(CompoundPredicate::<CommittedTransaction>::from_filters(CommittedTxFilters {
                 ts_ge: Some(fixture.target_timestamp_ms),
                 ts_le: Some(fixture.target_timestamp_ms),
                 ..CommittedTxFilters::default()
-            }),
+            })),
         );
         assert_eq!(by_timestamp_range.len(), 1);
         let by_result = execute_indexed_carrier_query(
             &state_view,
-            CompoundPredicate::<CommittedTransaction>::build(|p| p.equals("result_ok", false)),
+            &(CompoundPredicate::<CommittedTransaction>::build(|p| p.equals("result_ok", false))),
         );
         assert_eq!(by_result.len(), 2);
         assert!(
@@ -2811,10 +2815,10 @@ pub(crate) mod tests {
         assert!(matches!(
             committed_transactions_indexed_snapshot(
                 &view,
-                CompoundPredicate::from_filters(CommittedTxFilters {
+                &(CompoundPredicate::from_filters(CommittedTxFilters {
                     entry_eq: Some(hash),
                     ..CommittedTxFilters::default()
-                }),
+                })),
                 query_work_limits(),
                 1,
                 TRANSACTION_HISTORY_MAX_BYTES,
@@ -3013,10 +3017,10 @@ pub(crate) mod tests {
         state_view.kura().reset_canonical_query_reads_for_test();
         let selected = committed_transactions_indexed_snapshot(
             &state_view,
-            CompoundPredicate::from_filters(CommittedTxFilters {
+            &(CompoundPredicate::from_filters(CommittedTxFilters {
                 entry_eq: Some(fixture.target_entrypoint_hash),
                 ..CommittedTxFilters::default()
-            }),
+            })),
             query_work_limits(),
             64,
             TRANSACTION_HISTORY_MAX_BYTES,
@@ -3033,10 +3037,10 @@ pub(crate) mod tests {
         let missing_hash = HashOf::from_untyped_unchecked(Hash::new(b"missing-query-entrypoint"));
         let missing = committed_transactions_indexed_snapshot(
             &state_view,
-            CompoundPredicate::from_filters(CommittedTxFilters {
+            &(CompoundPredicate::from_filters(CommittedTxFilters {
                 entry_eq: Some(missing_hash),
                 ..CommittedTxFilters::default()
-            }),
+            })),
             query_work_limits(),
             64,
             TRANSACTION_HISTORY_MAX_BYTES,
@@ -3050,7 +3054,7 @@ pub(crate) mod tests {
         );
         let error = committed_transactions_indexed_snapshot(
             &state_view,
-            CompoundPredicate::PASS,
+            &(CompoundPredicate::PASS),
             query_work_limits(),
             64,
             TRANSACTION_HISTORY_MAX_BYTES,
@@ -3083,17 +3087,17 @@ pub(crate) mod tests {
         }
         let indexed_error = committed_transactions_indexed_snapshot(
             &state_view,
-            CompoundPredicate::from_filters(CommittedTxFilters {
+            &(CompoundPredicate::from_filters(CommittedTxFilters {
                 entry_eq: Some(fixture.target_entrypoint_hash),
                 ..CommittedTxFilters::default()
-            }),
+            })),
             query_work_limits(),
             64,
             TRANSACTION_HISTORY_MAX_BYTES,
         )
         .expect_err("indexed history must reject a hash-only selected carrier");
         let unindexed_error = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::PASS,
+            &(CompoundPredicate::PASS),
             &state_view,
         )
         .expect_err("unindexed history must reject the same hash-only carrier");
@@ -3126,18 +3130,18 @@ pub(crate) mod tests {
         let unrelated_view = unrelated.state.view();
         let selected = execute_indexed_carrier_query(
             &unrelated_view,
-            CompoundPredicate::<CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals(
                     "entrypoint_hash",
                     unrelated.target_entrypoint_hash.to_string(),
                 )
-            }),
+            })),
         );
         assert_eq!(selected.len(), 1);
         unrelated_view.kura().reset_canonical_query_reads_for_test();
         assert!(
             crate::smartcontracts::isi::tx::execute_transactions_fixture(
-                CompoundPredicate::<CommittedTransaction>::PASS,
+                &(CompoundPredicate::<CommittedTransaction>::PASS),
                 &unrelated_view,
             )
             .is_err(),
@@ -3154,12 +3158,12 @@ pub(crate) mod tests {
         selected_view.kura().reset_canonical_query_reads_for_test();
         assert!(
             crate::smartcontracts::isi::tx::execute_transactions_fixture(
-                CompoundPredicate::<CommittedTransaction>::build(|p| {
+                &(CompoundPredicate::<CommittedTransaction>::build(|p| {
                     p.equals(
                         "entrypoint_hash",
                         selected.target_entrypoint_hash.to_string(),
                     )
-                }),
+                })),
                 &selected_view,
             )
             .is_err(),
@@ -3232,10 +3236,10 @@ pub(crate) mod tests {
         let expected_error = QueryExecutionFail::Conversion(frame_error.to_string());
         fixture.store.overwrite_body(fixture.target_height, &wire);
         let error = execute_transactions_fixture(
-            CompoundPredicate::from_filters(CommittedTxFilters {
+            &(CompoundPredicate::from_filters(CommittedTxFilters {
                 entry_eq: Some(fixture.target_entrypoint_hash),
                 ..Default::default()
-            }),
+            })),
             &fixture.state.view(),
         )
         .expect_err("original QC must reject self-consistent changed output");
@@ -3687,7 +3691,7 @@ pub(crate) mod tests {
         assert_eq!(
             committed_transactions_bounded_snapshot(
                 &state_view,
-                CompoundPredicate::PASS,
+                &(CompoundPredicate::PASS),
                 query_work_limits(),
                 1,
                 TRANSACTION_HISTORY_MAX_BYTES,
@@ -3698,7 +3702,7 @@ pub(crate) mod tests {
         assert_eq!(
             committed_transactions_bounded_snapshot(
                 &state_view,
-                CompoundPredicate::PASS,
+                &(CompoundPredicate::PASS),
                 query_work_limits(),
                 iroha_data_model::query::parameters::MAX_FETCH_SIZE.get(),
                 1,
@@ -3757,7 +3761,7 @@ pub(crate) mod tests {
             let mut visited = 0;
             let error = visit_committed_transactions_with_work_budget(
                 &state_view,
-                false_filter.clone(),
+                &(false_filter.clone()),
                 carrier_work,
                 total_work,
                 TRANSACTION_HISTORY_MAX_BYTES,
@@ -3774,7 +3778,7 @@ pub(crate) mod tests {
         let mut visited = 0_usize;
         let exhausted = visit_committed_transactions_with_work_budget(
             &state_view,
-            false_filter,
+            &(false_filter),
             carrier_bound,
             total_bound,
             TRANSACTION_HISTORY_MAX_BYTES,
@@ -3803,7 +3807,7 @@ pub(crate) mod tests {
         let mut visited = 0_usize;
         let error = visit_committed_transactions_with_work_budget(
             &state_view,
-            false_filter,
+            &(false_filter),
             2,
             3,
             TRANSACTION_HISTORY_MAX_BYTES,
@@ -3911,9 +3915,9 @@ pub(crate) mod tests {
         store.kura.reset_canonical_query_reads_for_test();
         let error = visit_committed_transactions_with_work_budget(
             &state_view,
-            CompoundPredicate::<CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals("field_that_does_not_exist", true)
-            }),
+            })),
             64,
             2,
             TRANSACTION_HISTORY_MAX_BYTES,

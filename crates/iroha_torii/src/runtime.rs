@@ -352,6 +352,10 @@ pub struct RuntimeUpgradesListResponse {
     pub items: Vec<RuntimeUpgradeListItem>,
 }
 /// GET /v1/runtime/abi/active
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_runtime_abi_active(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeAbiActiveResponse, crate::Error> {
@@ -361,6 +365,10 @@ pub async fn handle_runtime_abi_active(
     })
 }
 /// GET /v1/node/capabilities — advertise the fixed runtime ABI version and defaults
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_node_capabilities(
     state: Arc<iroha_core::state::State>,
 ) -> Result<NodeCapabilitiesResponse, crate::Error> {
@@ -459,6 +467,10 @@ pub async fn handle_node_capabilities(
     })
 }
 /// GET /v1/privacy/capabilities — return the canonical committed Exact12 manifest.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_privacy_capabilities(
     state: Arc<iroha_core::state::State>,
 ) -> Result<iroha_data_model::privacy::PrivacyExact12CapabilityManifestV1, crate::Error> {
@@ -478,6 +490,10 @@ pub async fn handle_privacy_capabilities(
 }
 /// GET /v1/node/query/projection/checkpoint — return the latest persisted checkpoint descriptor.
 #[must_use]
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_node_query_projection_checkpoint(
     state: Arc<iroha_core::state::State>,
 ) -> Option<NodeProjectionCheckpointResponse> {
@@ -516,6 +532,10 @@ fn node_projection_checkpoint_response(
 }
 /// GET /v1/node/query/projection/catalog/{resource} — enumerate the canonical live shard set.
 #[cfg(feature = "app_api")]
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_node_query_projection_shard_catalog(
     state: Arc<iroha_core::state::State>,
     resource: String,
@@ -630,8 +650,12 @@ pub async fn handle_node_query_projection_shard_catalog(
         ))),
     }
 }
-/// GET /v1/node/query/projection/shards/{resource}/{partition_id} — export one canonical shard archive.
+/// GET /`v1/node/query/projection/shards/{resource}/{partition_id`} — export one canonical shard archive.
 #[cfg(feature = "app_api")]
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_node_query_projection_shard_export(
     state: Arc<iroha_core::state::State>,
     resource: String,
@@ -1171,7 +1195,7 @@ pub fn build_asset_holders_projection_shard_archive(
     > = BTreeMap::new();
     for asset in world.asset_entries_by_definition_iter(&definition_id) {
         let account_id = asset.id().account().clone();
-        let scope = asset.id().scope().clone();
+        let scope = *asset.id().scope();
         let entry = aggregated
             .entry((account_id, scope))
             .or_insert_with(iroha_primitives::numeric::Quantity::zero);
@@ -1244,8 +1268,7 @@ fn projection_export_conversion_error(message: impl Into<String>) -> crate::Erro
 fn validate_projection_partition_id(partition_id: u32) -> Result<(), crate::Error> {
     if partition_id >= QUERY_PROJECTION_DEFAULT_PARTITION_COUNT {
         return Err(projection_export_conversion_error(format!(
-            "partition_id must be less than {}",
-            QUERY_PROJECTION_DEFAULT_PARTITION_COUNT
+            "partition_id must be less than {QUERY_PROJECTION_DEFAULT_PARTITION_COUNT}"
         )));
     }
     Ok(())
@@ -1353,6 +1376,10 @@ mod bitmap_tests {
     }
 }
 /// GET /v1/runtime/metrics — expose runtime metrics summary
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_runtime_metrics(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeMetricsResponse, crate::Error> {
@@ -1382,6 +1409,10 @@ pub async fn handle_runtime_metrics(
     })
 }
 /// GET /v1/runtime/abi/hash — return the canonical ABI hash for the node's active policy.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_runtime_abi_hash(
     _state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeAbiHashResponse, crate::Error> {
@@ -1426,8 +1457,8 @@ pub struct TxInstr {
     pub wire_id: String,
     pub payload_hex: String,
 }
-fn instruction_box_to_tx_instr(boxed: iroha_data_model::isi::InstructionBox) -> TxInstr {
-    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
+fn instruction_box_to_tx_instr(boxed: &iroha_data_model::isi::InstructionBox) -> TxInstr {
+    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(boxed)
         .expect("instruction must have a canonical V1 wire identifier and Norito frame");
     TxInstr {
         wire_id: wire_id.to_owned(),
@@ -1441,6 +1472,10 @@ pub struct ProposeUpgradeResponse {
     pub tx_instructions: Vec<TxInstr>,
 }
 /// POST /v1/runtime/upgrades/propose
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_runtime_propose_upgrade(
     NoritoJson(ProposeUpgradeDto(manifest)): NoritoJson<ProposeUpgradeDto>,
 ) -> Result<ProposeUpgradeResponse, crate::Error> {
@@ -1453,7 +1488,7 @@ pub async fn handle_runtime_propose_upgrade(
     })?;
     let isi = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes };
     let boxed: iroha_data_model::isi::InstructionBox = isi.into();
-    let tx_instructions = vec![instruction_box_to_tx_instr(boxed)];
+    let tx_instructions = vec![instruction_box_to_tx_instr(&(boxed))];
     Ok(ProposeUpgradeResponse {
         ok: true,
         tx_instructions,
@@ -1502,7 +1537,7 @@ pub async fn handle_runtime_activate_upgrade(
         id: iroha_data_model::runtime::RuntimeUpgradeId(arr),
     };
     let boxed: iroha_data_model::isi::InstructionBox = isi.into();
-    let tx_instructions = vec![instruction_box_to_tx_instr(boxed)];
+    let tx_instructions = vec![instruction_box_to_tx_instr(&(boxed))];
     Ok(ActivateCancelResponse {
         ok: true,
         tx_instructions,
@@ -1536,7 +1571,7 @@ pub async fn handle_runtime_cancel_upgrade(
         id: iroha_data_model::runtime::RuntimeUpgradeId(arr),
     };
     let boxed: iroha_data_model::isi::InstructionBox = isi.into();
-    let tx_instructions = vec![instruction_box_to_tx_instr(boxed)];
+    let tx_instructions = vec![instruction_box_to_tx_instr(&(boxed))];
     Ok(ActivateCancelResponse {
         ok: true,
         tx_instructions,
@@ -1555,7 +1590,7 @@ mod tests {
                 id: iroha_data_model::runtime::RuntimeUpgradeId([0xA5; 32]),
             }
             .into();
-        let draft = instruction_box_to_tx_instr(boxed);
+        let draft = instruction_box_to_tx_instr(&(boxed));
 
         assert_eq!(draft.wire_id, "iroha.runtime_upgrade.cancel");
         let framed = hex::decode(&draft.payload_hex).expect("decode framed instruction hex");
@@ -1780,7 +1815,7 @@ mod tests {
         assert_eq!(decoded, manifest);
         decoded.validate().expect("decoded manifest validates");
         let (parts, body) =
-            crate::utils::respond_with_format(manifest, crate::utils::ResponseFormat::Norito)
+            crate::utils::respond_with_format(&(manifest), crate::utils::ResponseFormat::Norito)
                 .into_parts();
         assert_eq!(
             parts

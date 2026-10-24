@@ -149,9 +149,9 @@ fn role_statement_invariant_v1(role: PrivacyActionRoleV1) -> Error {
         format!("resolved action role {role} disagrees with its typed statement").into(),
     )
 }
-fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
+fn privacy_verification_error(error: &PrivacyVerificationErrorV1) -> Error {
     let message = format!("privacy proof admission rejected: {error}");
-    let invariant = match &error {
+    let invariant = match error {
         PrivacyVerificationErrorV1::CompiledActivation(_)
         | PrivacyVerificationErrorV1::CanonicalEncoding(_) => true,
         PrivacyVerificationErrorV1::Context(detail) => {
@@ -3320,7 +3320,7 @@ impl Execute for RegisterPrivacyVegaIssuerV1 {
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
         require_registered_vega_protocol(state_transaction)?;
         execute_register_privacy_vega_issuer_after_admission_v1(
-            self,
+            &(self),
             expected_action_index,
             encoded_action_bytes,
             state_transaction,
@@ -3328,7 +3328,7 @@ impl Execute for RegisterPrivacyVegaIssuerV1 {
     }
 }
 fn execute_register_privacy_vega_issuer_after_admission_v1(
-    instruction: RegisterPrivacyVegaIssuerV1,
+    instruction: &RegisterPrivacyVegaIssuerV1,
     expected_action_index: u32,
     encoded_action_bytes: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -3384,7 +3384,7 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
         require_registered_vega_protocol(state_transaction)?;
         execute_rotate_privacy_vega_issuer_after_admission_v1(
-            self,
+            &(self),
             expected_action_index,
             encoded_action_bytes,
             state_transaction,
@@ -3392,7 +3392,7 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
     }
 }
 fn execute_rotate_privacy_vega_issuer_after_admission_v1(
-    instruction: RotatePrivacyVegaIssuerV1,
+    instruction: &RotatePrivacyVegaIssuerV1,
     expected_action_index: u32,
     encoded_action_bytes: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -3490,7 +3490,7 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
         require_registered_vega_protocol(state_transaction)?;
         execute_revoke_privacy_vega_issuer_after_admission_v1(
-            self,
+            &(self),
             expected_action_index,
             encoded_action_bytes,
             state_transaction,
@@ -3498,7 +3498,7 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
     }
 }
 fn execute_revoke_privacy_vega_issuer_after_admission_v1(
-    instruction: RevokePrivacyVegaIssuerV1,
+    instruction: &RevokePrivacyVegaIssuerV1,
     expected_action_index: u32,
     encoded_action_bytes: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -4654,7 +4654,7 @@ impl PreparedPrivacySubmissionV1 {
                 vega_issuer_record: vega_issuer_record.as_ref(),
             },
         )
-        .map_err(privacy_verification_error)?;
+        .map_err(|value| privacy_verification_error(&value))?;
         if effects.role() != role
             || effects.protocol_id() != self.envelope.protocol_id
             || effects.statement_digest() != self.envelope.statement_digest

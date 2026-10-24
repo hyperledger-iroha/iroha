@@ -90,7 +90,7 @@ pub fn open(
 /// Refuses a closed window, invalid source proof or payload binding, a genuine or repeated
 /// message id, or forged-supply overflow. Original local resource refusals abort publication.
 pub fn execute_prove(
-    instruction: ProveSccpForgedMintV1,
+    instruction: &ProveSccpForgedMintV1,
     _authority: &AccountId,
     state: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {

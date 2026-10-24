@@ -240,7 +240,7 @@ impl Fixture {
         assert_eq!(
             f.commit(
                 1_000,
-                vec![
+                &[
                     f.sign(configure.into(), 1, 1_000),
                     f.sign(configure_account.into(), 1, 1_000)
                 ],
@@ -313,7 +313,7 @@ impl Fixture {
         assert_eq!(
             f.commit(
                 1_500,
-                vec![
+                &[
                     f.sign(enroll.into(), 1, 1_500),
                     f.sign(enroll_account.into(), 1, 1_500)
                 ],
@@ -449,17 +449,17 @@ impl Fixture {
     pub(super) fn commit(
         &mut self,
         now: u64,
-        transactions: Vec<SignedTransaction>,
+        transactions: &[SignedTransaction],
         membership: bool,
         finality: bool,
     ) -> Vec<bool> {
         let outcomes = if finality {
-            chain_fixture::commit(&mut self.chain, now, transactions.clone())
+            chain_fixture::commit(&mut self.chain, now, transactions.to_vec())
         } else {
-            chain_fixture::commit_uncertified(&mut self.chain, now, transactions.clone())
+            chain_fixture::commit_uncertified(&mut self.chain, now, transactions.to_vec())
         };
         if !membership {
-            chain_fixture::misplace_membership(&self.chain, &transactions);
+            chain_fixture::misplace_membership(&self.chain, transactions);
         }
         outcomes
     }

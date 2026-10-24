@@ -130,7 +130,7 @@ fn execute_open(
         .map_err(|_| validation_err("cannot encode native asset lock control"))?;
     let state_key = key(&instruction.lock.escrow_id);
     execute_open_asset_lock(
-        &(instruction.lock),
+        instruction.lock,
         &instruction.source,
         tx,
         AssetLockNamespace::Controlled,

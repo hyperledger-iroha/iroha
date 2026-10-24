@@ -137,7 +137,7 @@ async fn pipeline_status_cache_rejects_uncertified_block_custody() {
     let header = block.header();
     let tx_hash = block.external_transactions().next().expect("tx").hash();
     let block_hash = store_block(&app, block);
-    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
+    record_committed_block_hash_for_test(&app, header, block_hash);
     let event = BlockEvent {
         header,
         status: BlockStatus::Applied,

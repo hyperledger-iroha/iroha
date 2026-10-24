@@ -333,6 +333,7 @@ fn validate_binding(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
 struct SessionDemand {
     graph_bytes: usize,
     scratch: ScratchDemand,

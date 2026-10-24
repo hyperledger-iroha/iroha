@@ -2121,7 +2121,7 @@ fn smart_contract_state_name(
     raw: &str,
     context: &'static str,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
-    StatePath::from_str(&raw).map_err(|_| {
+    StatePath::from_str(raw).map_err(|_| {
         NexusFeeAdmissionError::ConfigInvalid(format!(
             "invalid smart-contract state key: {context}"
         ))
@@ -5220,7 +5220,7 @@ fn charge_fees_for_applied_overlay(
             state_transaction,
             authority,
             transaction,
-            &(fee_sponsor),
+            fee_sponsor.as_ref(),
             tx_bytes_len,
             instruction_count,
             gas_used,
@@ -5658,7 +5658,7 @@ impl Executor {
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         transaction: &SignedTransaction,
-        sponsor: &Option<FeeSponsorProgramId>,
+        sponsor: Option<&FeeSponsorProgramId>,
         tx_bytes_len: usize,
         instruction_count: usize,
         gas_used: u64,
@@ -5725,7 +5725,7 @@ impl Executor {
         let receipt = state_transaction.prepare_actual_nexus_fee_receipt(
             authority,
             transaction,
-            sponsor.as_ref(),
+            sponsor,
             &asset_def,
             &fee,
             &cfg,
@@ -5733,7 +5733,7 @@ impl Executor {
             instruction_count,
             gas_used,
         )?;
-        let (payer, payer_id, program_revision) = if let Some(program_id) = sponsor.as_ref() {
+        let (payer, payer_id, program_revision) = if let Some(program_id) = sponsor {
             let program_revision = transaction
                 .fee_payment_intent()
                 .sponsor_program()
@@ -5781,7 +5781,7 @@ impl Executor {
         state_transaction.world.current_dataspace_id =
             Some(private_scope.unwrap_or(DataSpaceId::UNIVERSAL));
         let fee_burn_result = if matches!(payer_kind, NexusFeePayer::Sponsor) {
-            let program_id = sponsor.clone().ok_or_else(|| {
+            let program_id = sponsor.cloned().ok_or_else(|| {
                 ValidationFail::InternalError(
                     "sponsored Nexus burn lost its verified program id".to_owned(),
                 )
@@ -6655,7 +6655,7 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction,
-                &(fee_sponsor),
+                fee_sponsor.as_ref(),
                 tx_bytes_len,
                 instruction_count,
                 used,
@@ -6668,7 +6668,6 @@ impl Executor {
     /// The returned value owns its prepared-program handle and can therefore be executed after
     /// the caller releases any mutex guard used to access `ivm_cache`.
     pub(crate) fn resolve_contract_invocation(
-        &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         call: &ContractInvocation,
         ivm_cache: &mut IvmCache,
@@ -6742,7 +6741,6 @@ impl Executor {
     /// signed gas limit and settling exactly once.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn execute_contract_invocation(
-        &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         call: &ContractInvocation,
@@ -6761,8 +6759,8 @@ impl Executor {
         state_transaction.current_direct_stream_token_reputation_payload = None;
         state_transaction.current_direct_reputation_policy_origin = None;
         state_transaction.current_direct_musubi_pin_outbox_origin = None;
-        let resolved = self.resolve_contract_invocation(state_transaction, call, ivm_cache)?;
-        self.execute_resolved_contract_invocation(
+        let resolved = Self::resolve_contract_invocation(state_transaction, call, ivm_cache)?;
+        Self::execute_resolved_contract_invocation(
             state_transaction,
             authority,
             call,
@@ -6774,7 +6772,6 @@ impl Executor {
     /// Execute a previously resolved deployed-contract invocation without accessing `IvmCache`.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn execute_resolved_contract_invocation(
-        &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         call: &ContractInvocation,
@@ -7036,7 +7033,7 @@ impl Executor {
         instruction_count: usize,
         tx_bytes_len: usize,
         gas_asset_opt: Option<String>,
-        fee_sponsor: Option<FeeSponsorProgramId>,
+        fee_sponsor: Option<&FeeSponsorProgramId>,
         skip_nexus_fee: bool,
     ) -> Result<(), ValidationFail> {
         if state_transaction.last_tx_gas_used < direct_gas_used {
@@ -7058,7 +7055,7 @@ impl Executor {
                 transaction,
                 &gas_asset_id_str,
                 direct_gas_used,
-                fee_sponsor.as_ref(),
+                fee_sponsor,
             )?;
         }
         if !skip_nexus_fee {
@@ -7066,7 +7063,7 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction,
-                &(fee_sponsor),
+                fee_sponsor,
                 tx_bytes_len,
                 instruction_count,
                 direct_gas_used,
@@ -7640,7 +7637,7 @@ impl Executor {
                         .saturating_sub(state_transaction.gas_used_in_block_so_far)
                 };
                 let effective_limit = gas_limit.min(block_remaining);
-                let outcome = self.execute_contract_invocation(
+                let outcome = Self::execute_contract_invocation(
                     state_transaction,
                     authority,
                     &call,
@@ -7656,7 +7653,7 @@ impl Executor {
                     0,
                     tx_bytes_len,
                     gas_asset_opt,
-                    fee_sponsor,
+                    fee_sponsor.as_ref(),
                     skip_nexus_fee,
                 )
             }
@@ -7803,7 +7800,7 @@ impl Executor {
                                 block_remaining,
                                 state_transaction.last_tx_gas_used,
                             );
-                            let outcome = self.execute_contract_invocation(
+                            let outcome = Self::execute_contract_invocation(
                                 state_transaction,
                                 authority,
                                 &call,
@@ -7823,12 +7820,12 @@ impl Executor {
                     explicit_instructions.len(),
                     tx_bytes_len,
                     gas_asset_opt,
-                    fee_sponsor,
+                    fee_sponsor.as_ref(),
                     skip_nexus_fee,
                 )
             }
-            (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => self
-                .execute_raw_ivm_transaction(
+            (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
+                Self::execute_raw_ivm_transaction(
                     state_transaction,
                     authority,
                     &transaction_for_fee,
@@ -7842,14 +7839,14 @@ impl Executor {
                         skip_nexus_fee,
                         tx_bytes_len,
                     },
-                ),
+                )
+            }
         }
     }
     /// Run only the selected raw-IVM branch, retaining its original fee and effect order.
     /// Native instructions do not reserve the runtime and host locals from this stage.
     #[allow(clippy::too_many_lines)]
     fn execute_raw_ivm_transaction(
-        &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         transaction_for_fee: &SignedTransaction,
@@ -8030,7 +8027,7 @@ impl Executor {
                         state_transaction,
                         authority,
                         transaction_for_fee,
-                        &(fee_sponsor),
+                        fee_sponsor.as_ref(),
                         tx_bytes_len,
                         0,
                         gas_used,
@@ -8248,7 +8245,7 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction_for_fee,
-                &(fee_sponsor),
+                fee_sponsor.as_ref(),
                 tx_bytes_len,
                 0,
                 gas_used,
@@ -10048,7 +10045,7 @@ fn stack_limit_for_gas(gas_limit: u64) -> u64 {
     IvmConfig::new(gas_limit).stack_limit_for_gas()
 }
 impl LoadedExecutor {
-    pub(crate) fn load(raw_executor: data_model_executor::Executor) -> Result<Self, VMError> {
+    pub(crate) fn load(original_executor: data_model_executor::Executor) -> Result<Self, VMError> {
         // Restore validates the same static image as load_program, but has no State
         // resource owner yet. Mutable runtimes are funded only at live checkout.
         struct PoolControl {
@@ -10062,9 +10059,9 @@ impl LoadedExecutor {
                 }
             }
         }
-        IVM::validate_program(raw_executor.bytecode().as_ref())?;
+        IVM::validate_program(original_executor.bytecode().as_ref())?;
         // Normalize caller spare Vec capacity, then charge the actual owned Vec.
-        let bytecode = raw_executor.bytecode().as_ref().to_vec();
+        let bytecode = original_executor.bytecode().as_ref().to_vec();
         let bytecode_capacity = bytecode.capacity();
         let raw_executor = ivm::cache_memory::SharedValue::new(
             data_model_executor::Executor::new(
@@ -10087,6 +10084,8 @@ impl LoadedExecutor {
             _memory: Arc::clone(&pool_memory),
         };
         let eviction = ivm::cache_memory::register_cache_evictor(move || control.clear());
+        // Retire the caller's original spare-capacity allocation at the load boundary.
+        drop(original_executor);
         Ok(Self {
             runtime_pool,
             pool_memory,
@@ -12468,7 +12467,7 @@ mod tests {
         }
         fn submit(
             chain: &mut CertifiedTestChain,
-            inputs: Vec<(&KeyPair, InstructionBox, Option<&str>)>,
+            inputs: &[(&KeyPair, InstructionBox, Option<&str>)],
         ) {
             let height = chain.height() + 1;
             let time = height * 1_000;
@@ -12571,7 +12570,7 @@ mod tests {
         bad_pop.proof_of_possession[0] ^= 1;
         submit(
             &mut chain,
-            vec![
+            &[
                 (
                     intruder,
                     candidate.clone().into(),
@@ -12624,10 +12623,7 @@ mod tests {
                 Some(&before)
             );
         }
-        submit(
-            &mut chain,
-            vec![(&owners[4], candidate.clone().into(), None)],
-        );
+        submit(&mut chain, &[(&owners[4], candidate.clone().into(), None)]);
         {
             let view = chain.state().view();
             let registered = view
@@ -12655,7 +12651,7 @@ mod tests {
         forged_transcript.credentials.beacon.transcript_hash[0] ^= 1;
         submit(
             &mut chain,
-            vec![
+            &[
                 (
                     intruder,
                     operation(ValidatorCommitteeOperationV1::PrepareCredentials(
@@ -12695,7 +12691,7 @@ mod tests {
         );
         submit(
             &mut chain,
-            vec![(
+            &[(
                 &owners[0],
                 operation(ValidatorCommitteeOperationV1::PrepareCredentials(
                     credentials,
@@ -12779,7 +12775,7 @@ mod tests {
         corrupted.readiness.beacon.proof.z_s[0] ^= 1;
         submit(
             &mut chain,
-            vec![
+            &[
                 (
                     intruder,
                     operation(ValidatorCommitteeOperationV1::AdmitSeat(ready.clone())),
@@ -12815,7 +12811,7 @@ mod tests {
         );
         submit(
             &mut chain,
-            vec![(
+            &[(
                 &owners[0],
                 operation(ValidatorCommitteeOperationV1::AdmitSeat(ready.clone())),
                 None,
@@ -12892,7 +12888,7 @@ mod tests {
         )));
         submit(
             &mut chain,
-            vec![
+            &[
                 (&owners[4], candidate.into(), Some(fresh_peer_refusal)),
                 (
                     &owners[0],
@@ -18228,7 +18224,7 @@ mod tests {
         mut payload: TransactionPayload,
     ) {
         let authority = payload.authority.clone();
-        author_component_fee_policy(&world, &nexus.fees);
+        author_component_fee_policy(world, &nexus.fees);
         let world = world.block();
         let draft = quote_nexus_fee_admission_draft(
             &world,
@@ -18390,7 +18386,7 @@ mod tests {
             &mut state_tx,
             &authority,
             &transaction,
-            &(None),
+            None,
             1,
             1,
             0,
@@ -18465,7 +18461,7 @@ mod tests {
             &mut state_transaction,
             &authority,
             &transaction,
-            &(None),
+            None,
             1,
             1,
             0,
@@ -21529,10 +21525,10 @@ mod tests {
     }
     #[test]
     fn initial_executor_contract_alias_never_bypasses_transfer_control_validation() {
-        fn assert_rejected(result: Result<(), ValidationFail>, context: &str) {
+        fn assert_rejected(result: &Result<(), ValidationFail>, context: &str) {
             assert!(
                 matches!(
-                    &result,
+                    result,
                     Err(ValidationFail::NotPermitted(_)
                         | ValidationFail::InstructionFailed(
                             InstructionExecutionError::InvariantViolation(_)
@@ -21614,21 +21610,21 @@ mod tests {
             )
         }
         assert_rejected(
-            execute_case(
+            &(execute_case(
                 "apps_freeze::sbp",
                 "apply_freeze",
                 "availability",
                 AssetTransferControlWindow::Day,
-            ),
+            )),
             "unprivileged branded freeze",
         );
         assert_rejected(
-            execute_case(
+            &(execute_case(
                 "apps_limits_update::sbp",
                 "apply_limits",
                 "limit",
                 AssetTransferControlWindow::Day,
-            ),
+            )),
             "unprivileged branded limit update",
         );
         for (alias, entrypoint, kind, window) in [
@@ -21664,7 +21660,7 @@ mod tests {
             ),
         ] {
             assert_rejected(
-                execute_case(alias, entrypoint, kind, window),
+                &(execute_case(alias, entrypoint, kind, window)),
                 &format!("contract {alias}/{entrypoint} must not emit {kind}/{window}"),
             );
         }
@@ -23709,28 +23705,29 @@ seiyaku MeteredFailure { permission CanInvokeContractEntrypoint;
         state_transaction
             .begin_execution_effect_budget(&signed)
             .unwrap();
-        let executor = state_transaction.world.executor.clone();
         let cache = state_transaction.ivm_cache;
         let resolved = {
             let mut guard = cache.lock();
-            executor
-                .resolve_contract_invocation(&mut state_transaction, &invocation, &mut guard)
-                .expect("resolve deployed contract while the cache is locked")
+            crate::executor::Executor::resolve_contract_invocation(
+                &mut state_transaction,
+                &invocation,
+                &mut guard,
+            )
+            .expect("resolve deployed contract while the cache is locked")
         };
         assert!(
             cache.try_lock().is_some(),
             "the resolved invocation must not retain the outer cache mutex"
         );
-        let error = executor
-            .execute_resolved_contract_invocation(
-                &mut state_transaction,
-                &authority,
-                &invocation,
-                resolved,
-                (10, 0),
-                None,
-            )
-            .expect_err("ten units of gas cannot complete the contract");
+        let error = crate::executor::Executor::execute_resolved_contract_invocation(
+            &mut state_transaction,
+            &authority,
+            &invocation,
+            resolved,
+            (10, 0),
+            None,
+        )
+        .expect_err("ten units of gas cannot complete the contract");
         state_transaction.finish_execution_effect_budget().unwrap();
         let ValidationFail::IvmFault(fault) = error else {
             panic!("expected a typed gas-exhaustion fault, got {error}");

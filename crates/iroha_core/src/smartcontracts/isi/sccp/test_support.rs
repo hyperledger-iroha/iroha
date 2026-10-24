@@ -892,10 +892,10 @@ pub fn sample_anchor(seed: u8) -> SccpAnchorV1 {
 pub fn install_generation(
     stx: &mut crate::state::StateTransaction<'_, '_>,
     key: u64,
-    source: SccpCommitteeGenerationV1,
+    source: &SccpCommitteeGenerationV1,
 ) -> Result<Option<super::generation_record::RetainedSccpGeneration>, super::Error> {
     let budget = crate::state::StateReadOnly::execution_budget(stx);
-    let record = super::generation_record::RetainedSccpGeneration::admit(&source, &budget)
+    let record = super::generation_record::RetainedSccpGeneration::admit(source, &budget)
         .expect("fixture generation admission");
     super::store::committee_generations::insert(stx, key, record)
 }

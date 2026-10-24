@@ -290,8 +290,7 @@ impl SnapshotStorage {
             // and canonical Norito spellings without allocating a scratch Vec.
             let mut bytes = [0u8; 8];
             if encoded_hex.len() != 16
-                || blob
-                    .encoded_hex
+                || encoded_hex
                     .bytes()
                     .any(|b| !(b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
             {

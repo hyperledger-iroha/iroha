@@ -1189,7 +1189,8 @@ mod tests {
             clippy::used_underscore_binding,
             reason = "The custody test observes an otherwise drop-only charge owner."
         )]
-        let handle_count = genesis._decode._charges.as_slice().len();
+        let original_charge_handles = genesis._decode._charges.as_slice();
+        let handle_count = original_charge_handles.len();
         let original_body = genesis.committed().block().clone();
         assert!(original_body.belongs_to(&budget));
         // The canonical native acquisition funds its model children and shared
@@ -1198,7 +1199,7 @@ mod tests {
         let retained_genesis_bytes = SharedSignedBlock::allocation_layout().size()
             + genesis_child_bytes
             + size_of::<GenesisExecutionAnchor>()
-            + std::mem::size_of_val(genesis._decode._charges.as_slice())
+            + std::mem::size_of_val(original_charge_handles)
             + handle_count * ChargedShared::<AllocationCharge>::allocation_layout().size()
             + original_increment_bytes;
         assert!(

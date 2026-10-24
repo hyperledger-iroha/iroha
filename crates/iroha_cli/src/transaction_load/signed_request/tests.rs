@@ -16,7 +16,7 @@ fn plan(sequence: usize) -> Planned {
         cohort: Cohort::Measurement,
         sequence,
         logical_id: hex::encode(Sha256::digest(format!("fixture:{sequence}"))),
-        scheduled_offset_ns: sequence as i64 * NS,
+        scheduled_offset_ns: i64::try_from(sequence).expect("fixture sequence fits i64") * NS,
         account_index: sequence % 4,
     }
 }
@@ -55,6 +55,10 @@ fn framing_request(length: usize) -> SignedRequest {
 }
 
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The test writer independently controls flush/sync failures and records whether each operation occurred."
+)]
 struct Writer {
     bytes: Vec<u8>,
     fail_after: Option<usize>,
@@ -106,7 +110,7 @@ fn events(bytes: &[u8]) -> Vec<Value> {
 fn capture_uses_exact_canonical_frame_of_the_sdk_signed_transaction() {
     let tx = transaction();
     let expected = norito::encode_canonical(&tx).unwrap();
-    let captured = capture(tx.clone(), plan(1), 4).unwrap();
+    let captured = capture(&(tx), plan(1), 4).unwrap();
     assert_eq!(captured.request.bytes, expected);
     assert_eq!(
         captured.request.bytes.len(),
@@ -127,19 +131,22 @@ fn capture_uses_exact_canonical_frame_of_the_sdk_signed_transaction() {
 #[test]
 fn capture_binds_global_index_and_rejects_invalid_plan_before_retention() {
     assert_eq!(
-        capture(transaction(), plan(1), 4).unwrap().request.index(),
+        capture(&(transaction()), plan(1), 4)
+            .unwrap()
+            .request
+            .index(),
         4
     );
     let mut warmup = plan(4);
     warmup.cohort = Cohort::Warmup;
     assert_eq!(
-        capture(transaction(), warmup.clone(), 4)
+        capture(&(transaction()), warmup.clone(), 4)
             .unwrap()
             .request
             .index(),
         3
     );
-    assert!(capture(transaction(), warmup, 3).is_err());
+    assert!(capture(&(transaction()), warmup, 3).is_err());
     for invalid in [
         Planned {
             sequence: 0,
@@ -162,9 +169,9 @@ fn capture_binds_global_index_and_rejects_invalid_plan_before_retention() {
             ..plan(1)
         },
     ] {
-        assert!(capture(transaction(), invalid, 0).is_err());
+        assert!(capture(&(transaction()), invalid, 0).is_err());
     }
-    assert!(capture(transaction(), plan(2), usize::MAX).is_err());
+    assert!(capture(&(transaction()), plan(2), usize::MAX).is_err());
 }
 
 #[test]
@@ -180,7 +187,7 @@ fn actual_oversized_signed_frame_is_rejected_before_retained_encoding() {
     }
     let tx = transaction_with_metadata(metadata);
     assert!(norito::canonical_frame_len(&tx).unwrap() > MAX_SIGNED_REQUEST_BYTES);
-    assert!(capture(tx, plan(1), 0).is_err());
+    assert!(capture(&(tx), plan(1), 0).is_err());
 }
 
 #[test]
@@ -326,7 +333,7 @@ fn production_preparation_stays_pending_until_the_actual_receipt_is_sent() {
     runtime().block_on(async {
         let (send, receive) = mpsc::sync_channel(1);
         let journal = JournalSender(send);
-        let captured = capture(transaction(), plan(1), 0).unwrap();
+        let captured = capture(&(transaction()), plan(1), 0).unwrap();
         let expected = captured.payload.hash();
         let mut future = Box::pin(captured.retain(&journal));
         let mut submits = 0;
@@ -362,7 +369,7 @@ fn closed_or_saturated_queue_never_returns_a_submit_eligible_payload() {
             .record(norito::json!({"event": "occupied"}))
             .unwrap();
         assert!(
-            capture(transaction(), plan(1), 0)
+            capture(&(transaction()), plan(1), 0)
                 .unwrap()
                 .retain(&journal)
                 .await
@@ -370,7 +377,7 @@ fn closed_or_saturated_queue_never_returns_a_submit_eligible_payload() {
         );
         drop(receive);
         assert!(
-            capture(transaction(), plan(2), 0)
+            capture(&(transaction()), plan(2), 0)
                 .unwrap()
                 .retain(&journal)
                 .await
@@ -385,7 +392,7 @@ fn dropped_or_foreign_receipt_never_returns_a_submit_eligible_payload() {
         for foreign in [false, true] {
             let (send, receive) = mpsc::sync_channel(1);
             let journal = JournalSender(send);
-            let captured = capture(transaction(), plan(1), 0).unwrap();
+            let captured = capture(&(transaction()), plan(1), 0).unwrap();
             let hash = captured.payload.hash();
             let mut future = Box::pin(captured.retain(&journal));
             assert!(matches!(futures::poll!(future.as_mut()), Poll::Pending));
@@ -410,7 +417,7 @@ fn dropped_or_foreign_receipt_never_returns_a_submit_eligible_payload() {
 
 #[test]
 fn durable_transport_rejects_a_substituted_transaction_hash() {
-    let captured = capture(transaction(), plan(1), 0).unwrap();
+    let captured = capture(&(transaction()), plan(1), 0).unwrap();
     let mut writer = Writer::default();
     let receipt = captured
         .request
@@ -445,7 +452,7 @@ fn actual_journal_retains_canonical_bytes_before_prepared_and_offer() {
     let expected = norito::encode_canonical(&tx).unwrap();
     let durable = runtime()
         .block_on(
-            capture(tx, plan(1), 0)
+            capture(&(tx), plan(1), 0)
                 .unwrap()
                 .retain(journal.sender.as_ref()),
         )
@@ -493,7 +500,7 @@ fn actual_journal_duplicate_request_fails_collection_without_second_receipt() {
     assert!(
         runtime
             .block_on(
-                capture(transaction(), plan(1), 0)
+                capture(&(transaction()), plan(1), 0)
                     .unwrap()
                     .retain(journal.sender.as_ref())
             )
@@ -502,7 +509,7 @@ fn actual_journal_duplicate_request_fails_collection_without_second_receipt() {
     assert!(
         runtime
             .block_on(
-                capture(transaction(), plan(1), 0)
+                capture(&(transaction()), plan(1), 0)
                     .unwrap()
                     .retain(journal.sender.as_ref())
             )
@@ -540,7 +547,7 @@ fn actual_journal_canceled_receipt_fails_before_writing_the_request() {
             .sender
             .0
             .try_send(JournalCommand::RetainSignedRequest(
-                Box::new(capture(transaction(), plan(1), 0).unwrap().request),
+                Box::new(capture(&(transaction()), plan(1), 0).unwrap().request),
                 acknowledgment
             ))
             .is_ok()
@@ -565,7 +572,7 @@ fn bounded_concurrent_preparations_cannot_interleave_signed_request_groups() {
     )
     .unwrap();
     let prepared = runtime().block_on(futures::future::join_all((1..=8).rev().map(|sequence| {
-        capture(transaction(), plan(sequence), 0)
+        capture(&(transaction()), plan(sequence), 0)
             .unwrap()
             .retain(journal.sender.as_ref())
     })));
@@ -623,7 +630,7 @@ fn cancel_pending_preparation_after_actual_sync(queued_later: bool) {
     let canonical = norito::encode_canonical(&tx).unwrap();
     runtime().block_on(async {
         let sender = journal.sender.clone();
-        let mut first = Box::pin(capture(tx, plan(1), 0).unwrap().retain(sender.as_ref()));
+        let mut first = Box::pin(capture(&(tx), plan(1), 0).unwrap().retain(sender.as_ref()));
         assert!(matches!(futures::poll!(first.as_mut()), Poll::Pending));
         assert_eq!(reached_sync.recv_timeout(wait_bound).unwrap(), 0);
 
@@ -646,7 +653,7 @@ fn cancel_pending_preparation_after_actual_sync(queued_later: bool) {
 
         let mut later = if queued_later {
             Some(Box::pin(
-                capture(transaction(), plan(2), 0)
+                capture(&(transaction()), plan(2), 0)
                     .unwrap()
                     .retain(sender.as_ref()),
             ))

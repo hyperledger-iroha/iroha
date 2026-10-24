@@ -161,7 +161,7 @@ impl FileBodyRead {
             max_bytes,
         )
         .map_err(BodyReadError::Io)?
-        .map_or_else(|| ReadState::Absent, |read| ReadState::Reading(read));
+        .map_or_else(|| ReadState::Absent, ReadState::Reading);
         custody.revalidate().map_err(BodyReadError::Io)?;
         Ok(Self {
             source,

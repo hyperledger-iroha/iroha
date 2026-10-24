@@ -109,7 +109,7 @@ impl AliasSetupError {
                     deferred: None,
                 })
             },
-            |original| Ok(original),
+            Ok,
         )
     }
 
@@ -543,7 +543,7 @@ pub fn classify_alias_lease_renewal(
     }
     let quote = crate::sns::quote_resolved_name_renewal(
         world,
-        selector,
+        &(selector),
         renewal.expected_current_expiry_ms,
         renewal.target_expiry_ms,
         now_ms,

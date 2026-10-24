@@ -444,16 +444,19 @@ where
     }
     let start_chunk = start / chunk_size;
     let end_chunk = end.saturating_sub(1) / chunk_size;
-    let expected_len = end.checked_sub(start).ok_or(AssembleError::Overflow)? as usize;
+    let expected_len = usize::try_from(end.checked_sub(start).ok_or(AssembleError::Overflow)?)
+        .map_err(|_| AssembleError::Overflow)?;
     let mut out = Vec::with_capacity(expected_len);
     for idx in start_chunk..=end_chunk {
         let hash = *chunk_hashes
-            .get(idx as usize)
+            .get(usize::try_from(idx).map_err(|_| AssembleError::MissingChunk)?)
             .ok_or(AssembleError::MissingChunk)?;
         let chunk = chunk_lookup(&hash).ok_or(AssembleError::MissingChunk)?;
         let chunk_start = idx.checked_mul(chunk_size).ok_or(AssembleError::Overflow)?;
-        let slice_start = start.saturating_sub(chunk_start) as usize;
-        let slice_end = (end.min(chunk_start + chunk.len() as u64) - chunk_start) as usize;
+        let slice_start = usize::try_from(start.saturating_sub(chunk_start))
+            .map_err(|_| AssembleError::SliceBounds)?;
+        let slice_end = usize::try_from(end.min(chunk_start + chunk.len() as u64) - chunk_start)
+            .map_err(|_| AssembleError::SliceBounds)?;
         if slice_start > slice_end || slice_end > chunk.len() {
             return Err(AssembleError::SliceBounds);
         }
@@ -776,10 +779,13 @@ mod tests {
         method: &Method,
         uri: &Uri,
     ) -> HeaderMap {
-        let timestamp_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock")
-            .as_millis() as u64;
+        let timestamp_ms = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_millis(),
+        )
+        .expect("fixture timestamp fits u64");
         let nonce = format!("content-test-{timestamp_ms}-{}", uri.path());
         let message = crate::canonical_network_request_signature_message(
             network_id,

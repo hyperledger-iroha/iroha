@@ -15,8 +15,10 @@ pub(super) enum ResolutionKind {
     Error,
 }
 
+type ResolutionHook = Box<dyn FnOnce(ResolutionKind)>;
+
 thread_local! {
-    static AFTER_RESOLUTION: RefCell<Option<Box<dyn FnOnce(ResolutionKind)>>> = RefCell::new(None);
+    static AFTER_RESOLUTION: RefCell<Option<ResolutionHook>> = RefCell::new(None);
 }
 
 pub(super) fn after_resolution<T>(result: &Result<Option<T>>) {
@@ -112,7 +114,7 @@ fn selected_registry_rejects_removed_recreated_or_changed_preparation_before_res
     let mut changed = original.clone();
     changed.peers[0].log_name = "different.log".into();
     assert_eq!(changed.context, original.context);
-    let _hook = on_resolution(|_| panic!("changed generation reached registry resolution"));
+    let hook = on_resolution(|_| panic!("changed generation reached registry resolution"));
     let error = store
         .build_registry(&runtime, &changed, deadline())
         .unwrap_err();
@@ -138,7 +140,7 @@ fn selected_registry_rejects_removed_recreated_or_changed_preparation_before_res
         selection
     );
     require_no_effects(&store, &replacement);
-    drop(_hook);
+    drop(hook);
     assert!(
         store
             .build_registry(&runtime, &replacement, deadline())

@@ -123,7 +123,7 @@ fn current_custody(
 fn stage_transition(
     tx: &mut StateTransaction<'_, '_>,
     provider: ProviderId,
-    record: OperationRecordV1,
+    record: &OperationRecordV1,
     next: OperationHeadV1,
     first_admission: bool,
 ) -> Result<(), Error> {
@@ -147,7 +147,7 @@ fn stage_transition(
     {
         return Err(Error::CorruptHistory);
     }
-    let record_bytes = journal::encode(&record)?;
+    let record_bytes = journal::encode(record)?;
     let revision_bytes = journal::encode(&record.revision)?;
     let head_bytes = journal::encode(&next)?;
     // All fallible CAS checks and encodes precede publication to the transaction overlay.
@@ -169,7 +169,7 @@ fn stage_transition(
 }
 
 fn apply(
-    instruction: MutateSorafsStreamTokenAuthority,
+    instruction: &MutateSorafsStreamTokenAuthority,
     authority: &AccountId,
     tx: &mut StateTransaction<'_, '_>,
     execution: StreamTokenExecutionV1,
@@ -183,7 +183,7 @@ fn apply(
         return Err(Error::BindingMismatch);
     }
     if let Action::Check(check) = &request.action {
-        return check::evaluate_check(&instruction, authority, tx, &execution, check);
+        return check::evaluate_check(instruction, authority, tx, &execution, check);
     }
     let current = current_custody(
         tx,
@@ -192,7 +192,7 @@ fn apply(
         request.expected_control_digest,
     )?;
     let head = journal::read_head(tx.world(), provider)?;
-    let digest = journal::request_digest(&instruction, authority)?;
+    let digest = journal::request_digest(instruction, authority)?;
     let now = execution.recorded_at_unix_ms;
     let (row, next_audit, next_fence, next_total, active, first_admission) = match &request.action {
         Action::Reserve(reviewed) => {
@@ -359,7 +359,7 @@ fn apply(
         active_operation: active,
         total_admissions: next_total,
     };
-    stage_transition(tx, provider, record, next, first_admission)
+    stage_transition(tx, provider, &(record), next, first_admission)
 }
 
 impl Execute for MutateSorafsStreamTokenAuthority {
@@ -377,7 +377,7 @@ impl Execute for MutateSorafsStreamTokenAuthority {
         ) {
             return Err(rejected(Error::BindingMismatch));
         }
-        apply(self, authority, tx, exact_execution).map_err(rejected)
+        apply(&(self), authority, tx, exact_execution).map_err(rejected)
     }
 }
 

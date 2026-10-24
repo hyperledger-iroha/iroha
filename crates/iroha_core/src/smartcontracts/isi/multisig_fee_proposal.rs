@@ -26,7 +26,7 @@ fn validate_registered_account_state<W: WorldReadOnly>(
     resolved_account: &AccountId,
     state: MultisigAccountState,
 ) -> Result<MultisigAccountState, Attempt<ValidationFail>> {
-    if state.account_id != resolved_account {
+    if state.account_id != *resolved_account {
         return Err(
             ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
                 "native multisig account state is bound to `{}`, not `{resolved_account}`",
@@ -40,14 +40,14 @@ fn validate_registered_account_state<W: WorldReadOnly>(
     let expected_account = AccountId::new_multisig(
         multisig_policy_from_spec(&state.spec).map_err(ValidationFail::InstructionFailed)?,
     );
-    if expected_account != resolved_account {
+    if expected_account != *resolved_account {
         return Err(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
             format!(
                 "native multisig account state policy derives `{expected_account}`, not `{resolved_account}`"
             ),
         )).into());
     }
-    let account = world.account(&resolved_account).map_err(map_find_error)?;
+    let account = world.account(resolved_account).map_err(map_find_error)?;
     // Json::as_ref removes outer quotes from strings; typed decoders need the
     // exact canonical JSON document retained by get().
     if let Some(metadata_spec) = account.metadata().get(&spec_key()) {
@@ -191,7 +191,7 @@ pub fn read_settled_fee_proposal<W: WorldReadOnly>(
     })
     .map_err(|original| {
         canonical_decode_attempt_error(original, |original| {
-            multisig_state_encode_error(original.into_error())
+            multisig_state_encode_error(&(original.into_error()))
         })
     })?;
     if terminal.multisig_account_id != *account
@@ -289,7 +289,7 @@ fn same_terminal_evidence(
         })
         .map_err(|original| {
             canonical_decode_attempt_error(original, |original| {
-                multisig_state_encode_error(original.into_error())
+                multisig_state_encode_error(&(original.into_error()))
             })
         })
     };

@@ -770,6 +770,19 @@ pub fn prepare<'q>(
     query: &'q ListQuery,
     limits: &Limits,
 ) -> Result<Prepared<'q>, CollectionError> {
+    struct SortText<'a>(&'a [iroha_torii_shared::list_query::SortKey]);
+    impl core::fmt::Display for SortText<'_> {
+        fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            for (index, key) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.write_str(",")?;
+                }
+                write!(out, "{key}")?;
+            }
+            Ok(())
+        }
+    }
+
     query.validate()?;
     let plan_charge = admit_query_plan(spec, query, limits.bytes)?;
     let mut scratch = plan_charge;
@@ -831,18 +844,7 @@ pub fn prepare<'q>(
         .transpose()?
         .unwrap_or_default();
     scratch = memory::add(scratch, aggregate_text.capacity())?;
-    struct SortText<'a>(&'a [iroha_torii_shared::list_query::SortKey]);
-    impl core::fmt::Display for SortText<'_> {
-        fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            for (index, key) in self.0.iter().enumerate() {
-                if index != 0 {
-                    out.write_str(",")?;
-                }
-                write!(out, "{key}")?;
-            }
-            Ok(())
-        }
-    }
+
     let sort_text = BytePolicy {
         scratch_bytes: limits.bytes.scratch_bytes - scratch,
         ..limits.bytes
@@ -1945,10 +1947,10 @@ impl Prepared<'_> {
             charge,
         });
         *seq += 1;
-        if kept.len() > self.limit + 1 {
-            if let Some(evicted) = kept.pop() {
-                *retained -= evicted.charge;
-            }
+        if kept.len() > self.limit + 1
+            && let Some(evicted) = kept.pop()
+        {
+            *retained -= evicted.charge;
         }
         Ok(())
     }
@@ -2260,7 +2262,9 @@ where
                 format!("the aggregate would produce more than {max_groups} groups; add a filter"),
             ));
         }
-        let new_group = if !groups.contains_key(&key) {
+        let new_group = if groups.contains_key(&key) {
+            None
+        } else {
             let previous =
                 norito::core::owned_btree_allocation_bytes::<Vec<String>, Group>(groups.len())
                     .map_err(|_| memory::capacity("group tree"))?;
@@ -2319,8 +2323,6 @@ where
             }
             retained = admitted;
             Some(Group { values, metrics })
-        } else {
-            None
         };
         let group = match groups.entry(key) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),

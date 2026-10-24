@@ -68,12 +68,12 @@ pub fn private_settlement_prepared_bundle_digest_v1(
 /// Construct the canonical, self-digesting complete all-Prepare barrier.
 pub fn private_settlement_prepare_barrier_v1(
     manifest: AtomicPrivateSettlementV1,
-    authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+    authority_catalog: &[PrivateSettlementCommitteeAuthorityV1],
     deltas: Vec<PrivateSettlementDeltaV1>,
     prepare_certificates: Vec<PrivateSettlementPhaseCertificateV1>,
 ) -> Result<PrivateSettlementPrepareBarrierV1, PrivateSettlementProtocolErrorV1> {
     let authority_catalog =
-        PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &authority_catalog)
+        PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, authority_catalog)
             .map_err(|_| PrivateSettlementProtocolErrorV1::Binding)?;
     let prepared_bundle_digest = private_settlement_prepared_bundle_digest_v1(
         &manifest,
@@ -799,7 +799,7 @@ mod tests {
             .iter()
             .map(|leg| leg.prepare.clone())
             .collect::<Vec<_>>();
-        let authorities = (0..receipt.manifest.legs.len())
+        let authorities: Vec<_> = (0..receipt.manifest.legs.len())
             .map(|index| {
                 receipt
                     .authority_catalog
@@ -809,7 +809,7 @@ mod tests {
             .collect();
         let barrier = private_settlement_prepare_barrier_v1(
             receipt.manifest.clone(),
-            authorities,
+            &authorities,
             deltas,
             prepares,
         )

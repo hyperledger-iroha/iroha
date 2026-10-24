@@ -69,7 +69,7 @@ fn original_offender_graph_moves_exact_vector_keys_and_ledger_without_allocation
     let mut attribution = None;
     assert_eq!(
         allocations_during(|| {
-            attribution = Some(offenders.into_attribution(fields()));
+            attribution = Some(offenders.into_attribution(&fields()));
         }),
         0
     );
@@ -200,7 +200,7 @@ fn original_offender_graph_late_capacity_count_foreign_and_unwind_retire_partial
     );
     let mut metadata = fields();
     metadata.safety_violation = true;
-    let empty = empty.unwrap().into_attribution(metadata);
+    let empty = empty.unwrap().into_attribution(&metadata);
     assert!(empty.offenders.is_empty());
     assert!(
         empty.safety_violation,

@@ -54,13 +54,14 @@ unsafe impl GlobalAlloc for QueryAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let mut refuse = false;
         let _ = OBSERVATION.try_with(|cell| {
-            if let Some(mut observation) = cell.get() {
-                if observation.capturing && observation.refuse_layout == Some(layout) {
-                    observation.refused += 1;
-                    observation.capturing = false;
-                    refuse = true;
-                    cell.set(Some(observation));
-                }
+            if let Some(mut observation) = cell.get()
+                && observation.capturing
+                && observation.refuse_layout == Some(layout)
+            {
+                observation.refused += 1;
+                observation.capturing = false;
+                refuse = true;
+                cell.set(Some(observation));
             }
         });
         if refuse {
@@ -69,20 +70,21 @@ unsafe impl GlobalAlloc for QueryAllocator {
         // SAFETY: the caller supplied GlobalAlloc's original nonzero layout.
         let allocation = unsafe { System.alloc(layout) };
         let _ = OBSERVATION.try_with(|cell| {
-            if let Some(mut observation) = cell.get() {
-                if observation.capturing && !allocation.is_null() {
-                    if observation.length == MAX_ORIGINAL_ALLOCATIONS {
-                        observation.bad_order = true;
-                    } else {
-                        observation.original[observation.length] = OriginalAllocation {
-                            pointer: allocation as usize,
-                            layout,
-                            freed: false,
-                        };
-                        observation.length += 1;
-                    }
-                    cell.set(Some(observation));
+            if let Some(mut observation) = cell.get()
+                && observation.capturing
+                && !allocation.is_null()
+            {
+                if observation.length == MAX_ORIGINAL_ALLOCATIONS {
+                    observation.bad_order = true;
+                } else {
+                    observation.original[observation.length] = OriginalAllocation {
+                        pointer: allocation as usize,
+                        layout,
+                        freed: false,
+                    };
+                    observation.length += 1;
                 }
+                cell.set(Some(observation));
             }
         });
         allocation

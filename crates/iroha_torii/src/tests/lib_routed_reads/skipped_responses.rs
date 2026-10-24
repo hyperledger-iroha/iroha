@@ -18,7 +18,7 @@ fn skipped_response_test_fetch(
         torii_proxy_error_response(skipped, code, "route detail")
     } else {
         crate::utils::respond_value_with_format(
-            norito::json!({"items": [], "total": 0, "has_more": false, "count_mode": "exact"}),
+            &(norito::json!({"items": [], "total": 0, "has_more": false, "count_mode": "exact"})),
             ResponseFormat::Json,
         )
     };

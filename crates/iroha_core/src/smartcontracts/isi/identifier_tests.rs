@@ -210,8 +210,7 @@ fn phone_claim_receipt(
     network_id: NetworkId,
     (uaid, account_id): (UniversalAccountId, &AccountId),
     canonical_phone: &str,
-    ciphertext_seed: &[u8],
-    output_seed: &[u8],
+    (ciphertext_seed, output_seed): (&[u8], &[u8]),
     resolved_at_ms: u64,
 ) -> IdentifierResolutionReceipt {
     let mut receipt = claim_receipt(
@@ -760,8 +759,7 @@ fn output_binding_rejects_resigned_opaque_id_and_receipt_hash_changes() {
                 network,
                 (uaid, &owner),
                 "+15551234567",
-                b"ciphertext",
-                b"plaintext",
+                (b"ciphertext", b"plaintext"),
                 100,
             )
         } else {
@@ -1091,8 +1089,7 @@ fn phone_nullifier_identity_is_independent_of_ciphertext_and_globally_unique() {
         network,
         (owner_uaid, &owner),
         "+15551234567",
-        b"ciphertext-one",
-        b"output-one",
+        (b"ciphertext-one", b"output-one"),
         100,
     );
     let nullifier =
@@ -1123,8 +1120,7 @@ fn phone_nullifier_identity_is_independent_of_ciphertext_and_globally_unique() {
         network,
         (other_uaid, &other),
         "+15551234567",
-        b"ciphertext-two",
-        b"output-two",
+        (b"ciphertext-two", b"output-two"),
         100,
     );
     assert_eq!(second.payload.opaque_id, opaque_id);
@@ -1151,8 +1147,7 @@ fn phone_nullifier_identity_is_independent_of_ciphertext_and_globally_unique() {
         network,
         (other_uaid, &other),
         "+15551234568",
-        b"ciphertext-three",
-        b"output-three",
+        (b"ciphertext-three", b"output-three"),
         100,
     );
     assert_ne!(different.payload.opaque_id, opaque_id);

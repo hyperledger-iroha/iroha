@@ -863,8 +863,10 @@ mod tests {
             .ivm_execution_budget()
             .set_limit_bytes(2 * 1024 * 1024 * 1024);
         let calls = Arc::new(AtomicUsize::new(0));
-        let mut policy = FastpqProducer::default();
-        policy.poll_interval = std::time::Duration::from_millis(1);
+        let policy = FastpqProducer {
+            poll_interval: std::time::Duration::from_millis(1),
+            ..FastpqProducer::default()
+        };
         let producer = WorkerProducer::new(Arc::clone(chain.state()), policy, None);
         let (_sender, receiver) = tokio::sync::mpsc::channel(1);
         let shutdown = ShutdownSignal::new();

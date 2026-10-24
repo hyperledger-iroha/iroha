@@ -642,12 +642,13 @@ fn indexed_validator_totals_match(
     total_stake: &Quantity,
     self_stake: &Quantity,
 ) -> bool {
-    if let Some(entry) = indexed {
-        &entry.0.3 == total_stake && &entry.0.4 == self_stake
-    } else {
-        let zero = Quantity::zero();
-        total_stake == &zero && self_stake == &zero
-    }
+    indexed.map_or_else(
+        || {
+            let zero = Quantity::zero();
+            total_stake == &zero && self_stake == &zero
+        },
+        |entry| &entry.0.3 == total_stake && &entry.0.4 == self_stake,
+    )
 }
 
 /// Accumulate one exact borrowed row while retaining all arithmetic scratch inline.
@@ -1763,7 +1764,7 @@ fn register_public_lane_validator(
         is_genesis_bootstrap,
         stake_ctx.staker_asset.clone(),
         stake_ctx.escrow_asset.clone(),
-        initial_stake.clone(),
+        &(initial_stake.clone()),
     )?;
     if replacing_exited {
         let removal_key = validator_key.clone();
@@ -1805,7 +1806,7 @@ fn register_public_lane_validator(
     if let Some(prepared) = candidate_admission.and_then(|candidate| candidate.prepared_peer) {
         super::world::isi::commit_peer_identity_with_pop(
             registration.peer_id,
-            prepared,
+            &(prepared),
             state_transaction,
         );
     }
@@ -2171,14 +2172,14 @@ impl Execute for BondPublicLaneStake {
             return Err(Error::Math(MathError::NotEnoughQuantity));
         }
         validator_record.total_stake =
-            quantity_add(validator_record.total_stake.clone(), &(amount.clone()))?;
+            quantity_add(&(validator_record.total_stake.clone()), &(amount.clone()))?;
         if is_self_stake_share_staker(
             &self.staker,
             &self.validator,
             &validator_record.stake_account,
         ) {
             validator_record.self_stake =
-                quantity_add(validator_record.self_stake.clone(), &(amount.clone()))?;
+                quantity_add(&(validator_record.self_stake.clone()), &(amount.clone()))?;
         }
         ensure_frozen_validator_binding_preserved(
             state_transaction,
@@ -2228,7 +2229,7 @@ impl Execute for BondPublicLaneStake {
             }
         };
         share.metadata = self.metadata.clone();
-        share.bonded = quantity_add(share.bonded.clone(), &(amount.clone()))?;
+        share.bonded = quantity_add(&(share.bonded.clone()), &(amount.clone()))?;
         effects::verify_transfer_plan(
             state_transaction,
             &self.monetary_plan,
@@ -2250,7 +2251,7 @@ impl Execute for BondPublicLaneStake {
             false,
             stake_ctx.staker_asset.clone(),
             stake_ctx.escrow_asset.clone(),
-            amount.clone(),
+            &(amount.clone()),
         )?;
         state_transaction
             .world
@@ -2369,14 +2370,14 @@ impl Execute for SchedulePublicLaneUnbond {
             ));
         }
         validator_snapshot.total_stake =
-            quantity_sub(validator_snapshot.total_stake.clone(), &(amount.clone()))?;
+            quantity_sub(&(validator_snapshot.total_stake.clone()), &(amount.clone()))?;
         if is_self_stake_share_staker(
             &self.staker,
             &self.validator,
             &validator_snapshot.stake_account,
         ) {
             validator_snapshot.self_stake =
-                quantity_sub(validator_snapshot.self_stake.clone(), &(amount.clone()))?;
+                quantity_sub(&(validator_snapshot.self_stake.clone()), &(amount.clone()))?;
         }
         ensure_frozen_validator_binding_preserved(
             state_transaction,
@@ -2384,7 +2385,7 @@ impl Execute for SchedulePublicLaneUnbond {
             "schedule_public_lane_unbond",
         )
         .map_err(|error| retain_staking_attempt(state_transaction, error))?;
-        share.bonded = quantity_sub(share.bonded.clone(), &(amount.clone()))?;
+        share.bonded = quantity_sub(&(share.bonded.clone()), &(amount.clone()))?;
         share.pending_unbonds.insert(
             self.request_id,
             PublicLaneUnbonding {
@@ -2730,8 +2731,6 @@ fn original_unbond_liability(
     let copied_share = share.clone();
     #[cfg(all(test, sumeragi_core_mutation = "HC903"))]
     let share = &copied_share;
-    #[cfg(not(all(test, sumeragi_core_mutation = "HC903")))]
-    let share = share;
     let pending = share
         .pending_unbonds
         .get(&instruction.request_id)
@@ -2939,12 +2938,12 @@ fn ensure_positive_amount(amount: &Quantity, label: &str) -> Result<(), Error> {
     }
     Ok(())
 }
-fn quantity_add(lhs: Quantity, rhs: &Quantity) -> Result<Quantity, Error> {
-    lhs.checked_add(&rhs)
+fn quantity_add(lhs: &Quantity, rhs: &Quantity) -> Result<Quantity, Error> {
+    lhs.checked_add(rhs)
         .map_err(|_| Error::Math(MathError::Overflow))
 }
-fn quantity_sub(lhs: Quantity, rhs: &Quantity) -> Result<Quantity, Error> {
-    lhs.checked_sub(&rhs)
+fn quantity_sub(lhs: &Quantity, rhs: &Quantity) -> Result<Quantity, Error> {
+    lhs.checked_sub(rhs)
         .map_err(|_| Error::Math(MathError::Overflow))
 }
 /// Distinct native evidence clocks. A lane proof names its creation-time registration;
@@ -2984,10 +2983,9 @@ impl ConsensusSlashLiability {
             EvidenceScope::Root if offender.lane_stake.is_none() => {
                 Some(Self::Root(attribution.height))
             }
-            EvidenceScope::Root => None,
+            EvidenceScope::Root | EvidenceScope::SccpGeneration { .. } => None,
             // TODO: SCCP generation admission supplies a distinct authenticated liability owner.
             // It must never be converted to native root height or lane custody.
-            EvidenceScope::SccpGeneration { .. } => None,
             EvidenceScope::Lane(scope) => Some(Self::Lane {
                 scope,
                 instance: attribution.instance,
@@ -3208,14 +3206,14 @@ fn slashable_exposure_from_shares<'a>(
     let mut pending_unbonds = Quantity::zero();
     for share in shares {
         let (key, share) = share?;
-        bonded = quantity_add(bonded, &(share.bonded.clone()))?;
+        bonded = quantity_add(&(bonded), &(share.bonded.clone()))?;
         if key.2 == record.stake_account {
-            self_bonded = quantity_add(self_bonded, &(share.bonded.clone()))?;
+            self_bonded = quantity_add(&(self_bonded), &(share.bonded.clone()))?;
         }
         for (request_id, pending) in &share.pending_unbonds {
             ensure_canonical_pending_unbond(request_id, pending)?;
             if pending_unbond_is_slashable_at(pending, offence_height) {
-                pending_unbonds = quantity_add(pending_unbonds, &(pending.amount.clone()))?;
+                pending_unbonds = quantity_add(&(pending_unbonds), &(pending.amount.clone()))?;
             }
         }
     }
@@ -3224,7 +3222,7 @@ fn slashable_exposure_from_shares<'a>(
             "public-lane validator totals do not match canonical stake shares".into(),
         ));
     }
-    quantity_add(bonded, &(pending_unbonds))
+    quantity_add(&(bonded), &(pending_unbonds))
 }
 fn min_quantity(lhs: Quantity, rhs: Quantity) -> Quantity {
     if lhs <= rhs { lhs } else { rhs }
@@ -3482,8 +3480,8 @@ fn slash_bonded_share_group(
             continue;
         }
         let slash_part = min_quantity(share.bonded.clone(), remaining.clone());
-        share.bonded = quantity_sub(share.bonded.clone(), &(slash_part.clone()))?;
-        remaining = quantity_sub(remaining, &(slash_part))?;
+        share.bonded = quantity_sub(&(share.bonded.clone()), &(slash_part.clone()))?;
+        remaining = quantity_sub(&(remaining), &(slash_part))?;
     }
     if !remaining.is_zero() {
         return Err(Error::InvariantViolation(
@@ -3522,8 +3520,8 @@ fn slash_pending_unbond_group(
                     return Ok(true);
                 }
                 let slash_part = min_quantity(pending.amount.clone(), remaining.clone());
-                pending.amount = quantity_sub(pending.amount.clone(), &(slash_part.clone()))?;
-                remaining = quantity_sub(std::mem::take(&mut remaining), &(slash_part))?;
+                pending.amount = quantity_sub(&(pending.amount.clone()), &(slash_part.clone()))?;
+                remaining = quantity_sub(&(std::mem::take(&mut remaining)), &(slash_part))?;
                 Ok::<_, Error>(!pending.amount.is_zero())
             })();
             match updated {
@@ -3560,7 +3558,7 @@ fn pending_unbond_group_total(
         for (request_id, pending) in &share.pending_unbonds {
             ensure_canonical_pending_unbond(request_id, pending)?;
             if pending_unbond_is_slashable_at(pending, offence_height) {
-                total = quantity_add(total, &(pending.amount.clone()))?;
+                total = quantity_add(&(total), &(pending.amount.clone()))?;
             }
         }
     }
@@ -3790,28 +3788,32 @@ fn apply_slash_to_validator_inner(
         true,
         offence_height,
     )?;
-    let self_exposure = quantity_add(validator_snapshot.self_stake.clone(), &(self_pending))?;
+    let self_exposure = quantity_add(&(validator_snapshot.self_stake.clone()), &(self_pending))?;
     let self_slash = min_quantity(self_exposure, amount.clone());
     let self_bonded_slash = min_quantity(validator_snapshot.self_stake.clone(), self_slash.clone());
-    let self_pending_slash = quantity_sub(self_slash.clone(), &(self_bonded_slash.clone()))?;
-    let delegated_slash = quantity_sub(amount.clone(), &(self_slash))?;
+    let self_pending_slash = quantity_sub(&(self_slash.clone()), &(self_bonded_slash.clone()))?;
+    let delegated_slash = quantity_sub(&(amount.clone()), &(self_slash))?;
     let delegated_bonded = quantity_sub(
-        validator_snapshot.total_stake.clone(),
+        &(validator_snapshot.total_stake.clone()),
         &(validator_snapshot.self_stake.clone()),
     )?;
     let delegated_bonded_slash = min_quantity(delegated_bonded, delegated_slash.clone());
-    let delegated_pending_slash = quantity_sub(delegated_slash, &(delegated_bonded_slash.clone()))?;
-    let bonded_slash = quantity_add(self_bonded_slash.clone(), &(delegated_bonded_slash.clone()))?;
+    let delegated_pending_slash =
+        quantity_sub(&(delegated_slash), &(delegated_bonded_slash.clone()))?;
+    let bonded_slash = quantity_add(
+        &(self_bonded_slash.clone()),
+        &(delegated_bonded_slash.clone()),
+    )?;
     let pending_slash_amount = quantity_add(
-        self_pending_slash.clone(),
+        &(self_pending_slash.clone()),
         &(delegated_pending_slash.clone()),
     )?;
     let new_total_stake = quantity_sub(
-        validator_snapshot.total_stake.clone(),
+        &(validator_snapshot.total_stake.clone()),
         &(bonded_slash.clone()),
     )?;
     let new_self_stake = quantity_sub(
-        validator_snapshot.self_stake.clone(),
+        &(validator_snapshot.self_stake.clone()),
         &(self_bonded_slash.clone()),
     )?;
     let mut validator_update = validator_snapshot.clone();
@@ -9329,7 +9331,7 @@ pub(crate) mod tests {
             lane_id,
             &validator,
             stx.block_height(),
-            100_u64.into(),
+            Quantity::from(100_u64),
         );
         let escrow_before = stx
             .world

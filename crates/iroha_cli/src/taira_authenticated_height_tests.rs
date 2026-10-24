@@ -105,7 +105,7 @@ impl Fixture {
         certificate.view = view;
         let chosen: Vec<u32> = (0..4)
             .filter(|index| *index != omitted)
-            .map(|index| index as u32)
+            .map(|index| u32::try_from(index).expect("fixture value fits u32"))
             .collect();
         certificate.signers = Bitmap::from_indices(4, chosen.iter().copied()).unwrap();
         let signatures: Vec<_> = chosen
@@ -191,7 +191,7 @@ impl Fixture {
         let peer = &self.peers[index];
         let status = SumeragiStatus {
             protocol_version: 1,
-            config_fingerprint: peer.config_fingerprint.into(),
+            config_fingerprint: peer.config_fingerprint,
             beacon_horizon: None,
             instance: self.instance,
             height: proof.height() + 1,
@@ -554,7 +554,7 @@ fn authenticated_height_retained_evidence_revalidates_every_binding_and_certific
             6 => raw.block_hash = fixture.proofs[0].block_header.hash(),
             7 => raw.committed_height = NonZeroU64::new(1).unwrap(),
             _ => raw.peers[0].before.body.config_fingerprint = Hash::new(b"changed config"),
-        };
+        }
         let changed = VerifiedCommittedHeightV1 {
             schema: raw.schema,
             network_id: raw.network_id,
@@ -988,7 +988,9 @@ mod deployment_prefix {
                     if height.get() == 3 {
                         eyre::bail!("injected transport interruption after durable progress");
                     }
-                    let proof = fixture().proofs[height.get() as usize - 1].clone();
+                    let proof = fixture().proofs
+                        [usize::try_from(height.get()).expect("fixture value fits usize") - 1]
+                        .clone();
                     trial.verify(&proof)?;
                     Ok(proof)
                 },
@@ -1033,7 +1035,9 @@ mod deployment_prefix {
                 1,
                 |height, trial| {
                     fetched.push(height.get());
-                    let proof = fixture().proofs[height.get() as usize - 1].clone();
+                    let proof = fixture().proofs
+                        [usize::try_from(height.get()).expect("fixture value fits usize") - 1]
+                        .clone();
                     trial.verify(&proof)?;
                     Ok(proof)
                 },
@@ -1075,7 +1079,9 @@ mod deployment_prefix {
                     &fixture().proofs[0],
                     2,
                     |height, trial| {
-                        let proof = fixture().proofs[height.get() as usize - 1].clone();
+                        let proof = fixture().proofs
+                            [usize::try_from(height.get()).expect("fixture value fits usize") - 1]
+                            .clone();
                         trial.verify(&proof)?;
                         Ok(proof)
                     },

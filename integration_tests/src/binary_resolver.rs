@@ -7,25 +7,27 @@ use std::{
     time::SystemTime,
 };
 /// Resolve the `iroha` CLI binary, preferring already-built targets when available.
+///
+/// # Errors
+/// Returns an error if the CLI binary cannot be located or built.
 pub fn iroha_program() -> eyre::Result<PathBuf> {
     prepare_iroha_cli_test_environment();
-    iroha_test_network::Program::Iroha
-        .resolve()
-        .map_err(Into::into)
+    iroha_test_network::Program::Iroha.resolve()
 }
 /// Resolve the `iroha` CLI binary, reusing an already-built binary when one can be found.
 ///
 /// Unlike [`iroha_program`], this helper returns an existing compatible CLI binary immediately
 /// without forcing a freshness rebuild. When no reusable binary is available it falls back to the
 /// normal resolver; callers running under Cargo must provide a top-level prebuilt binary.
+///
+/// # Errors
+/// Returns an error if the CLI binary cannot be located or built.
 pub fn iroha_program_reuse_existing_or_resolve() -> eyre::Result<PathBuf> {
     prepare_iroha_cli_test_environment();
     if let Some(path) = find_existing_cli_binary_path() {
         return Ok(path);
     }
-    iroha_test_network::Program::Iroha
-        .resolve()
-        .map_err(Into::into)
+    iroha_test_network::Program::Iroha.resolve()
 }
 /// Prepare CLI integration tests to reuse already-built binaries when requested.
 pub fn prepare_iroha_cli_test_environment() {
@@ -168,12 +170,9 @@ fn configure_program_overrides_from_existing_binaries() {
         if !should_reuse_existing_cli_binary_for_tests() {
             return;
         }
-        let cli_path =
-            if let Some(path) = std::env::var_os(TEST_NETWORK_BIN_IROHA).map(PathBuf::from) {
-                Some(path)
-            } else {
-                find_existing_cli_binary_path()
-            };
+        let cli_path = std::env::var_os(TEST_NETWORK_BIN_IROHA)
+            .map(PathBuf::from)
+            .or_else(find_existing_cli_binary_path);
         if std::env::var_os(TEST_NETWORK_BIN_IROHA).is_none()
             && let Some(path) = cli_path.as_ref()
         {

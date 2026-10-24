@@ -428,7 +428,7 @@ fn serving_is_bounded_and_the_nodes_fetch_goes_first() {
     );
     assert!(backlog.serve_dropped >= 700, "{backlog:?}");
     // A CommitQC of height 1 whose body the node lacks.
-    let b1 = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), &vec![1, 2, 3]);
+    let b1 = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), &[1, 2, 3]);
     let qc = vals.qc(
         VoteKind::Commit,
         &INSTANCE,

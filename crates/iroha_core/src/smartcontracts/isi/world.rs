@@ -1938,6 +1938,10 @@ pub mod isi {
             state_transaction,
         )
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The signed execution boundary consumes its exact original singleton instruction"
+    )]
     fn consume_signed_standalone_governance_ballot_v1(
         instruction: InstructionBox,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -5233,7 +5237,7 @@ pub mod isi {
         ));
     }
     fn execute_plain_ballot_position(
-        ballot: PlainBallotPosition,
+        ballot: &PlainBallotPosition,
         action: PlainBallotAction,
         signed_instruction: InstructionBox,
         authority: &AccountId,
@@ -5275,9 +5279,9 @@ pub mod isi {
         // A scale change does not reinterpret retained bonds: their exact Quantity values
         // and frozen scale still define units. The live asset spec independently governs
         // whether an additional real transfer remains admissible.
-        ensure_plain_ballot_preconditions(&ballot, authority, &policy, state_transaction)?;
+        ensure_plain_ballot_preconditions(ballot, authority, &policy, state_transaction)?;
         ensure_plain_ballot_action_preconditions(
-            &ballot,
+            ballot,
             action,
             authority,
             &policy,
@@ -5294,9 +5298,9 @@ pub mod isi {
             &policy,
             state_transaction,
         )?;
-        let referendum = ensure_plain_referendum_open(&ballot, state_transaction)?;
-        ensure_plain_ballot_lock_covers_window(&ballot, &referendum, state_transaction)?;
-        apply_plain_ballot_lock(&ballot, authority, weight, &policy, state_transaction)?;
+        let referendum = ensure_plain_referendum_open(ballot, state_transaction)?;
+        ensure_plain_ballot_lock_covers_window(ballot, &referendum, state_transaction)?;
+        apply_plain_ballot_lock(ballot, authority, weight, &policy, state_transaction)?;
         Ok(())
     }
     impl Execute for gov::CastPlainBallot {
@@ -5314,7 +5318,7 @@ pub mod isi {
                 direction: self.direction,
             };
             execute_plain_ballot_position(
-                ballot,
+                &(ballot),
                 PlainBallotAction::Cast,
                 signed_instruction,
                 authority,
@@ -5353,7 +5357,7 @@ pub mod isi {
                 direction,
             };
             execute_plain_ballot_position(
-                ballot,
+                &(ballot),
                 PlainBallotAction::UpdateConviction,
                 signed_instruction,
                 authority,
@@ -6271,10 +6275,11 @@ pub mod isi {
         ensure_runtime_upgrade_abi_version(&payload.manifest, state_transaction)?;
         validate_runtime_upgrade_surface(&payload.manifest, state_transaction)?;
         ensure_runtime_upgrade_no_overlap(&payload.manifest, state_transaction)?;
-        let mut status = iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed;
-        if now_h == payload.manifest.start_height {
-            status = iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h);
-        }
+        let status = if now_h == payload.manifest.start_height {
+            iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h)
+        } else {
+            iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
+        };
         state_transaction.world.runtime_upgrades.insert(
             id,
             iroha_data_model::runtime::RuntimeUpgradeRecord {
@@ -9672,7 +9677,7 @@ pub mod isi {
     fn apply_parliament_sortition_request_batch_v1(
         attempt: &mut ParliamentAttemptStateV1,
         payload: gov::ParliamentRegisterSortitionRequestV1,
-        expected_candidates: Vec<AccountId>,
+        expected_candidates: &[AccountId],
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Option<iroha_data_model::governance::types::ParliamentNoResultKindV1>, Error> {
         let governance_attempt_id = attempt.attempt().id;
@@ -9718,7 +9723,7 @@ pub mod isi {
                 .record_hidden_sortition_capacity_failure_batch(
                     governance_attempt_id,
                     payload.requests,
-                    &expected_candidates,
+                    expected_candidates,
                 )
                 .map_err(parliament_reducer_error)?;
             if attempt.attempt().status
@@ -9733,7 +9738,7 @@ pub mod isi {
                 .register_sortition_request_batch(
                     governance_attempt_id,
                     payload.requests,
-                    &expected_candidates,
+                    expected_candidates,
                 )
                 .map_err(parliament_reducer_error)?;
         }
@@ -10011,7 +10016,7 @@ pub mod isi {
                     no_result_kind = apply_parliament_sortition_request_batch_v1(
                         &mut attempt,
                         payload,
-                        candidates,
+                        &(candidates),
                         state_transaction,
                     )?;
                 }
@@ -10029,7 +10034,7 @@ pub mod isi {
                     no_result_kind = apply_parliament_sortition_request_batch_v1(
                         &mut attempt,
                         payload,
-                        &expected_candidates,
+                        &(expected_candidates),
                         state_transaction,
                     )?;
                 }
@@ -14767,7 +14772,7 @@ pub mod isi {
             instruction_name,
             state_transaction,
         )? {
-            commit_peer_identity_with_pop(peer_id, record, state_transaction);
+            commit_peer_identity_with_pop(peer_id, &(record), state_transaction);
         }
         Ok(())
     }
@@ -14958,7 +14963,7 @@ pub mod isi {
     /// Publish a peer identity whose exact record was prepared in this transaction.
     pub(crate) fn commit_peer_identity_with_pop(
         peer_id: PeerId,
-        record: ConsensusKeyRecord,
+        record: &ConsensusKeyRecord,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) {
         // No instruction or trigger executes between preparation and commit.
@@ -15923,6 +15928,10 @@ pub mod isi {
     /// The sole production caller retains authority, frozen policy and proof verification above.
     /// Reading capacity and scheduled activation here keeps the ledger checks observable with a
     /// test-only faulty-verifier record, without replacing any production verifier result.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Allocation consumes the verifier-produced capability bound to this execution height"
+    )]
     fn apply_verified_fee_sponsor_vault_allocation(
         state_transaction: &mut StateTransaction<'_, '_>,
         record: VerifiedFeeSponsorVaultAllocation,
@@ -17088,7 +17097,7 @@ pub mod isi {
                 .world
                 .account_permissions
                 .get_mut(&account_id)
-                .map_or(false, |permissions| {
+                .is_some_and(|permissions| {
                     permissions.retain(|permission| {
                         !is_permission_domain_associated(
                             permission,
@@ -17314,8 +17323,9 @@ pub mod isi {
                     state_transaction.world(),
                     asset_definition_id,
                 )
-                .map_err(crate::smartcontracts::isi::asset::isi::kagemusha_custody_error)?
-                {
+                .map_err(|value| {
+                    crate::smartcontracts::isi::asset::isi::kagemusha_custody_error(&value)
+                })? {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!("cannot unregister domain {domain_id}: asset definition {asset_definition_id} backs permanent KAGEMUSHA reserve custody").into(),
                     ));
@@ -28882,7 +28892,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 .reassign_alias_to_account(alias_owner.clone())
                 .expect("independent alias reassignment");
             stx.world
-                .insert_account_alias_binding(alias.clone(), alias_owner.clone());
+                .insert_account_alias_binding(&(alias.clone()), &(alias_owner.clone()));
             stx.world.replace_account_rekey_record(history.clone());
             let call_name: Name = "active-call".parse().expect("call name");
             let call = KaigiId::new(call_domain.clone(), call_name.clone());
@@ -29084,7 +29094,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 .expect("account exists")
                 .set_label(Some(primary_label.clone()));
             stx.world
-                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+                .insert_account_alias_binding(&(primary_label.clone()), &(account_id.clone()));
             stx.world.replace_account_rekey_record(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     primary_label.clone(),
@@ -29092,7 +29102,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 ),
             );
             stx.world
-                .insert_account_alias_binding(retail_label.clone(), account_id.clone());
+                .insert_account_alias_binding(&(retail_label.clone()), &(account_id.clone()));
             stx.world.replace_account_rekey_record(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     retail_label.clone(),
@@ -30044,7 +30054,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 iroha_data_model::repo::RepoGovernance::new(1_000, 60, false),
                 None,
             );
-            stx.world.insert_repo_agreement_entry(agreement);
+            stx.world.insert_repo_agreement_entry(&(agreement));
             let settlement_id: iroha_data_model::isi::SettlementId =
                 iroha_data_model::isi::SettlementId::new(account_id.clone(), "settleguard".parse().expect("settlement reference"));
             let receipt = iroha_data_model::isi::SettlementReceipt {
@@ -31122,7 +31132,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         fn execute_vk_component_fixture(
             state_transaction: &mut StateTransaction<'_, '_>,
             authority: &AccountId,
-            instruction: InstructionBox,
+            instruction: &InstructionBox,
         ) -> Result<(), ValidationFail> {
             if let Some(value) = instruction
                 .as_any()
@@ -32195,7 +32205,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record,
             }
             .into();
-            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                 .expect("canonical Soracloud bootstrap verifier record should register");
             let stored = stx
                 .world
@@ -32254,7 +32264,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx = state_block.transaction_for_callback_testing();
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record }.into();
-                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                     .expect_err("Soracloud bootstrap verifier metadata drift must fail");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "unexpected msg for {suffix}: {msg}");
@@ -32271,7 +32281,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             ));
             record.status = ConfidentialStatus::Active;
             let instr: InstructionBox = verifying_keys::RegisterVerifyingKey { id, record }.into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                 .expect_err("active Soracloud bootstrap verifier requires inline key bytes");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "active verifying key bytes missing");
@@ -32302,7 +32312,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: new_record,
             }
             .into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                 .expect_err("Soracloud bootstrap verifier update drift must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "public-input schema mismatch");
@@ -32328,7 +32338,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     record,
                 }
                 .into();
-                execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+                execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                     .unwrap_or_else(|err| {
                         panic!(
                             "canonical Soracloud {} STARK verifier should register: {err:?}",
@@ -32390,7 +32400,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             attach_soracloud_fhe_stark_vk_box(&mut record, alternate_vk);
             let instruction: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record }.into();
-            let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
+            let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instruction))
                 .expect_err("registered alternate-layout STARK verifying key must fail");
             let message = smart_contract_error_message(error);
             assert_contains!(message, "invalid canonical STARK/FRI verifier key: non-canonical encoding", "unexpected registered alternate-layout rejection: {message}");
@@ -32414,7 +32424,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 attach_soracloud_fhe_stark_vk_box(&mut record, vk_box);
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record }.into();
-                let err = match execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr) {
+                let err = match execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr)) {
                     Ok(()) => panic!(
                         "Soracloud {} weak STARK verifier must fail cleanly",
                         profile.label
@@ -32458,7 +32468,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: new_record,
             }
             .into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                 .expect_err("Soracloud weak STARK verifier update must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "below consensus floor", "unexpected msg: {msg}");
@@ -32474,11 +32484,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
-                    verifying_keys::RegisterVerifyingKey {
+                    &(verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
                         record,
                     }
-                    .into(),
+                    .into()),
                 )
                 .expect("canonical compiled native key must register");
             let stored = stx
@@ -32504,11 +32514,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let error = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
-                    verifying_keys::RegisterVerifyingKey {
+                    &(verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
                         record,
                     }
-                    .into(),
+                    .into()),
                 )
                 .expect_err("a parseable key for another constraint system must not register");
             let message = smart_contract_error_message(error);
@@ -32525,11 +32535,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
-                    verifying_keys::RegisterVerifyingKey {
+                    &(verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
                         record: current.clone(),
                     }
-                    .into(),
+                    .into()),
                 )
                 .expect("canonical baseline key must register");
             stx.apply();
@@ -32540,11 +32550,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let error = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
-                    verifying_keys::UpdateVerifyingKey {
+                    &(verifying_keys::UpdateVerifyingKey {
                         id: id.clone(),
                         record: replacement,
                     }
-                    .into(),
+                    .into()),
                 )
                 .expect_err("update must enforce the same compiled-circuit key identity");
             let message = smart_contract_error_message(error);
@@ -32568,11 +32578,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let error = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
-                    verifying_keys::RegisterVerifyingKey {
+                    &(verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
                         record,
                     }
-                    .into(),
+                    .into()),
                 )
                 .expect_err("a caller-selected native descriptor must not register");
             let message = smart_contract_error_message(error);
@@ -32615,11 +32625,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let error = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
-                    verifying_keys::RegisterVerifyingKey {
+                    &(verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
                         record,
                     }
-                    .into(),
+                    .into()),
                 )
                 .expect_err("a forged inner length must fail before typed key storage");
             let message = smart_contract_error_message(error);
@@ -32637,7 +32647,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                 .expect_err("missing gas_schedule_id must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "gas_schedule_id", "unexpected msg: {msg}");
@@ -32655,7 +32665,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: rec,
             }
             .into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                 .expect_err("an empty verifier-key lifecycle must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "greater", "unexpected msg: {msg}");
@@ -32671,7 +32681,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                 .expect_err("inline verifying key length mismatch must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "vk_len", "unexpected msg: {msg}");
@@ -32686,7 +32696,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::Stark, "goldilocks", [0x41; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                 .expect_err("non-IPA backend must be rejected");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "must target stark/fri", "unexpected msg: {msg}");
@@ -32750,8 +32760,9 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     record,
                 }
                 .into();
-                let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
-                    .expect_err("rejected verifier backend must not register");
+                let error =
+                    execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instruction))
+                        .expect_err("rejected verifier backend must not register");
                 let message = smart_contract_error_message(error);
                 let expected_message = if backend == "groth16/bls12-377" {
                     "trusted-setup verifying key backends"
@@ -32812,7 +32823,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                         record: native_record(circuit_id.clone()),
                     }
                     .into();
-                    let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
+                    let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instruction))
                         .expect_err("reserved privacy circuit label must not register");
                     let message = smart_contract_error_message(error);
                     assert_contains!(message, "reserved privacy protocol label", "unexpected rejection for {circuit_id:?}: {message}");
@@ -32836,7 +32847,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                         record: native_record(circuit_id.clone()),
                     }
                     .into();
-                    let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
+                    let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instruction))
                         .expect_err("non-portable privacy alias must not register");
                     let message = smart_contract_error_message(error);
                     assert_contains!(message, "bounded portable identifier", "unexpected rejection for {circuit_id:?}: {message}");
@@ -32857,7 +32868,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                         record: native_record(circuit_id.clone()),
                     }
                     .into();
-                    let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
+                    let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instruction))
                         .expect_err("unregistered native circuit near miss must not register");
                     let message = smart_contract_error_message(error);
                     assert_contains!(message, "compiled circuit registry", "unexpected rejection for {circuit_id:?}: {message}");
@@ -32896,7 +32907,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                     .expect_err("trusted-setup Halo2 label must be rejected");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, "trusted-setup verifying key backends", "unexpected msg for {backend}: {msg}");
@@ -32962,7 +32973,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 vk_record!(rec, 1, "stark/fri:trusted-setup-circuit", BackendTag::Stark, "goldilocks", [0x73; 32], [0x74; 32]; status = ConfidentialStatus::Active, gas_schedule_id = Some("stark_default".into()));
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                     .expect_err("trusted-setup STARK label must be rejected before storage");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, "trusted-setup verifying key backends", "unexpected msg for {backend}: {msg}");
@@ -32979,7 +32990,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             vk_record!(rec, 1, "stark/fri/poseidon-x7-goldilocks-6x64-v1:curve-test", BackendTag::Stark, "GoLdIlOcKs", [0x42; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("stark_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(instr))
                 .expect_err("mixed-case STARK curve must be rejected");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "verifying key curve must be \"goldilocks\"", "unexpected msg: {msg}");
@@ -34279,7 +34290,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let err = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
-                    verifying_keys::RegisterVerifyingKey { id, record }.into(),
+                    &(verifying_keys::RegisterVerifyingKey { id, record }.into()),
                 )
                 .expect_err("a non-unit same-name token must not manage verifying keys");
             let msg = smart_contract_error_message(err);
@@ -34359,11 +34370,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             execute_vk_component_fixture(
                 &mut stx,
                 &ALICE_ID.clone(),
-                verifying_keys::RegisterVerifyingKey {
+                &(verifying_keys::RegisterVerifyingKey {
                     id: id.clone(),
                     record: current.clone(),
                 }
-                .into(),
+                .into()),
             )
             .expect("register verifying key");
             stx.apply();
@@ -34374,11 +34385,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let err = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
-                    verifying_keys::UpdateVerifyingKey {
+                    &(verifying_keys::UpdateVerifyingKey {
                         id: id.clone(),
                         record: replacement,
                     }
-                    .into(),
+                    .into()),
                 )
                 .expect_err("one verifying-key id must not be rebound to another circuit");
             let msg = smart_contract_error_message(err);
@@ -34411,7 +34422,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: rec,
             }
             .into();
-            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(register_vk_instruction))
                 .expect("register vk");
             stx.apply();
             // Attempt to update with a different supported engine tag.
@@ -34422,7 +34433,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: new_rec,
             }
             .into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), upd)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(upd))
                 .expect_err("update with non-IPA backend must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "backend cannot change", "unexpected msg: {msg}");
@@ -34536,7 +34547,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 }
                 .into();
                 let mut stx = state_block.transaction_for_callback_testing();
-                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), upd)
+                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(upd))
                     .expect_err("non-registry verifier label must be rejected on update");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "unexpected msg for {backend}: {msg}");
@@ -34555,7 +34566,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: rec,
             }
             .into();
-            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(register_vk_instruction))
                 .expect("register vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
@@ -34565,7 +34576,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: new_rec,
             }
             .into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), update_instruction)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(update_instruction))
                 .expect_err("inline verifying key length mismatch must fail on update");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "vk_len", "unexpected msg: {msg}");
@@ -34598,7 +34609,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: rec,
             }
             .into();
-            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(register_vk_instruction))
                 .expect("register vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
@@ -34608,7 +34619,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: new_rec,
             }
             .into();
-            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), upd)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(upd))
                 .expect_err("mixed-case STARK curve update must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "verifying key curve must be \"goldilocks\"", "unexpected msg: {msg}");
@@ -34632,7 +34643,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: rec,
             }
             .into();
-            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(register_vk_instruction))
                 .expect("register vk");
             stx.apply();
             // Remove circuit index entry to simulate missing mapping
@@ -34685,7 +34696,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: rec,
             }
             .into();
-            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(register_vk_instruction))
                 .expect("register vk");
             stx.apply();
             let proof_box = ProofBox::new("pipa-r/pasta".into(), vec![0xAA]);
@@ -34847,7 +34858,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: rec,
             }
             .into();
-            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(register_vk_instruction))
                 .expect("register vk");
             stx.apply();
             {
@@ -34895,7 +34906,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: rec,
             }
             .into();
-            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(register_vk_instruction))
                 .expect("register vk");
             stx.apply();
             let envelope = OpenVerifyEnvelope {
@@ -34950,7 +34961,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: rec,
             }
             .into();
-            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(register_vk_instruction))
                 .expect("register vk");
             stx.apply();
             let envelope = OpenVerifyEnvelope {
@@ -35036,7 +35047,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                         record: rec,
                     }
                     .into();
-                execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+                execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(register_vk_instruction))
                     .expect("register vk");
                 stx.apply();
                 let mut envelope_public_inputs = expected_public_inputs;
@@ -35215,7 +35226,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: rec,
             }
             .into();
-            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), &(register_vk_instruction))
                 .expect("register vk");
             stx.apply();
             // Corrupt stored record by removing gas schedule

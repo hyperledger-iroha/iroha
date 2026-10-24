@@ -97,7 +97,7 @@ async fn handle_get_sorafs_gateway_compliance_feed_inner(
     };
     match result {
         Ok(feed) => no_store_response(JsonBody(feed).into_response()),
-        Err(error) => gateway_compliance_error_response(error),
+        Err(error) => gateway_compliance_error_response(&(error)),
     }
 }
 /// Return a bounded, payload-free projection of the durable controller checkpoint. Catalog rules,
@@ -141,10 +141,10 @@ async fn handle_get_sorafs_gateway_compliance_status_inner(
             record_gateway_compliance_checkpoint_snapshot(&state, &checkpoint, observed_at_unix);
             match status_response(&checkpoint, observed_at_unix) {
                 Ok(status) => no_store_response(JsonBody(status).into_response()),
-                Err(error) => gateway_compliance_error_response(error),
+                Err(error) => gateway_compliance_error_response(&(error)),
             }
         }
-        Err(error) => gateway_compliance_error_response(error),
+        Err(error) => gateway_compliance_error_response(&(error)),
     }
 }
 /// Durably stage one exact canonical threshold-signed catalog.
@@ -205,7 +205,7 @@ async fn handle_post_sorafs_gateway_compliance_stage_inner(
     };
     match result {
         Ok(result) => action_response(StatusCode::ACCEPTED, "stage", result, binding.key_digest),
-        Err(error) => gateway_compliance_error_response(error),
+        Err(error) => gateway_compliance_error_response(&(error)),
     }
 }
 /// Durably record one exact canonical signed regional-gateway acknowledgement.
@@ -281,7 +281,7 @@ async fn handle_post_sorafs_gateway_compliance_acknowledge_inner(
             result,
             binding.key_digest,
         ),
-        Err(error) => gateway_compliance_error_response(error),
+        Err(error) => gateway_compliance_error_response(&(error)),
     }
 }
 /// Atomically promote the staged catalog after the signed regional-gateway
@@ -349,7 +349,7 @@ async fn handle_post_sorafs_gateway_compliance_promote_inner(
     };
     match result {
         Ok(result) => action_response(StatusCode::OK, "promote", result, binding.key_digest),
-        Err(error) => gateway_compliance_error_response(error),
+        Err(error) => gateway_compliance_error_response(&(error)),
     }
 }
 /// Atomically roll the serving pointer back to the last-known-good catalog
@@ -429,7 +429,7 @@ async fn handle_post_sorafs_gateway_compliance_rollback_inner(
     };
     match result {
         Ok(result) => action_response(StatusCode::OK, "rollback", result, binding.key_digest),
-        Err(error) => gateway_compliance_error_response(error),
+        Err(error) => gateway_compliance_error_response(&(error)),
     }
 }
 async fn observe_gateway_compliance_control_response(
@@ -1114,7 +1114,7 @@ fn no_store_response(mut response: Response) -> Response {
     );
     response
 }
-fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response {
+fn gateway_compliance_error_response(error: &GatewayComplianceError) -> Response {
     use GatewayComplianceError::{
         CatalogEquivocation, CatalogNotFresh, CheckpointConflict, Decompression, DnsRebinding,
         DuplicateSigner, Encoding, FeedTransportNotQualified, FeedTransportOperationFailed,
@@ -1129,7 +1129,7 @@ fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response 
         TimeOverflow, TooManyRedirects, TrustPinMismatch, UnknownFeed, UnsafeAddressSet, UnsafeUrl,
         UntrustedSigner,
     };
-    let (status, code, message) = match &error {
+    let (status, code, message) = match error {
         UnknownFeed(_) => (
             StatusCode::NOT_FOUND,
             "feed_not_found",
@@ -1351,55 +1351,63 @@ mod tests {
             assert_eq!(runtime.to_string(), message);
             assert_eq!(format!("{runtime:?}"), exact);
             assert!(exact.starts_with(variant));
-            assert_eq!(gateway_compliance_error_response(runtime).status(), status);
+            assert_eq!(
+                gateway_compliance_error_response(&(runtime)).status(),
+                status
+            );
         }
     }
 
     #[test]
     fn controller_errors_map_to_fail_closed_http_classes() {
         assert_eq!(
-            gateway_compliance_error_response(GatewayComplianceError::UnknownFeed(
-                "missing".to_owned()
-            ))
+            gateway_compliance_error_response(
+                &(GatewayComplianceError::UnknownFeed("missing".to_owned()))
+            )
             .status(),
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            gateway_compliance_error_response(GatewayComplianceError::DnsRebinding).status(),
+            gateway_compliance_error_response(&(GatewayComplianceError::DnsRebinding)).status(),
             StatusCode::BAD_GATEWAY
         );
         assert_eq!(
-            gateway_compliance_error_response(GatewayComplianceError::IdempotencyConflict).status(),
+            gateway_compliance_error_response(&(GatewayComplianceError::IdempotencyConflict))
+                .status(),
             StatusCode::CONFLICT
         );
         assert_eq!(
-            gateway_compliance_error_response(GatewayComplianceError::LeaseHeld).status(),
+            gateway_compliance_error_response(&(GatewayComplianceError::LeaseHeld)).status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(
-            gateway_compliance_error_response(GatewayComplianceError::CheckpointConflict).status(),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
-        assert_eq!(
-            gateway_compliance_error_response(GatewayComplianceError::FeedTransportSubstituted)
+            gateway_compliance_error_response(&(GatewayComplianceError::CheckpointConflict))
                 .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(
-            gateway_compliance_error_response(GatewayComplianceError::FeedTransportUnqualified)
+            gateway_compliance_error_response(&(GatewayComplianceError::FeedTransportSubstituted))
                 .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(
-            gateway_compliance_error_response(GatewayComplianceError::FeedTransportOperationFailed)
+            gateway_compliance_error_response(&(GatewayComplianceError::FeedTransportUnqualified))
                 .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
-        let signature_response =
-            gateway_compliance_error_response(GatewayComplianceError::InvalidSignature {
+        assert_eq!(
+            gateway_compliance_error_response(
+                &(GatewayComplianceError::FeedTransportOperationFailed)
+            )
+            .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let signature_response = gateway_compliance_error_response(
+            &(GatewayComplianceError::InvalidSignature {
                 signer_id: "catalog-a".to_owned(),
                 reason: "invalid".to_owned(),
-            });
+            }),
+        );
         assert_eq!(signature_response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             signature_response.headers().get(CACHE_CONTROL),
@@ -1726,7 +1734,7 @@ mod tests {
                 [0x11; 32],
             ),
             gateway_compliance_request_error(StatusCode::BAD_REQUEST, "fixture", "fixture"),
-            gateway_compliance_error_response(GatewayComplianceError::IdempotencyConflict),
+            gateway_compliance_error_response(&(GatewayComplianceError::IdempotencyConflict)),
         ];
         for response in responses {
             assert_eq!(

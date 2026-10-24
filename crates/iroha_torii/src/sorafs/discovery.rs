@@ -1,4 +1,4 @@
-//! Provider advert ingestion and validation for Torii's SoraFS discovery pipeline.
+//! Provider advert ingestion and validation for Torii's `SoraFS` discovery pipeline.
 #[cfg(test)]
 mod finalized_admission_tests;
 use super::admission::{
@@ -1117,13 +1117,13 @@ impl ProviderAdvertCache {
             }
         })?;
         let previous = self.by_provider.get(&provider_id).copied();
-        if let Some(prev_fp) = previous {
-            if prev_fp == fingerprint {
-                return Ok(AdvertIngestResult {
-                    outcome: AdvertIngest::Duplicate { fingerprint },
-                    warnings,
-                });
-            }
+        if let Some(prev_fp) = previous
+            && prev_fp == fingerprint
+        {
+            return Ok(AdvertIngestResult {
+                outcome: AdvertIngest::Duplicate { fingerprint },
+                warnings,
+            });
         }
         let already_durable = match self.replay_high_water.get(&provider_id).copied() {
             Some(current)
@@ -1328,9 +1328,7 @@ fn collect_warnings(advert: &ProviderAdvertV1) -> Vec<AdvertWarning> {
         .capabilities
         .iter()
         .any(|cap| cap.cap_type == CapabilityType::ChunkRangeFetch);
-    if !has_chunk_range {
-        warnings.push(AdvertWarning::ChunkRangeCapability);
-    } else {
+    if has_chunk_range {
         if advert.body.stream_budget.is_none() {
             warnings.push(AdvertWarning::StreamBudget);
         }
@@ -1338,10 +1336,12 @@ fn collect_warnings(advert: &ProviderAdvertV1) -> Vec<AdvertWarning> {
             .body
             .transport_hints
             .as_ref()
-            .map_or(true, Vec::is_empty)
+            .is_none_or(Vec::is_empty)
         {
             warnings.push(AdvertWarning::TransportHints);
         }
+    } else {
+        warnings.push(AdvertWarning::ChunkRangeCapability);
     }
     warnings
 }

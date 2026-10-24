@@ -1123,7 +1123,7 @@ fn replace_account_id_in_asset_id(
         asset_id.clone()
     }
 }
-fn replace_account_id_in_vec(accounts: &mut Vec<AccountId>, old: &AccountId, new: &AccountId) {
+fn replace_account_id_in_vec(accounts: &mut [AccountId], old: &AccountId, new: &AccountId) {
     for account in accounts.iter_mut() {
         replace_account_id(account, old, new);
     }
@@ -2274,14 +2274,16 @@ fn is_multisig(
 ) -> Result<bool, ValidationFail> {
     match load_multisig_account_state_optional(state_transaction, account) {
         Ok(Some(_)) => Ok(true),
-        Ok(None) => Ok(false),
-        Err(ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-            FindError::Account(_),
-        ))) => Ok(false),
+        Ok(None)
+        | Err(
+            ValidationFail::InstructionFailed(InstructionExecutionError::Find(FindError::Account(
+                _,
+            )))
+            | ValidationFail::QueryFailed(QueryExecutionFail::NotFound),
+        ) => Ok(false),
         Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::Account(_)))) => {
             Ok(false)
         }
-        Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => Ok(false),
         Err(err) => Err(err),
     }
 }
@@ -2453,7 +2455,8 @@ fn persist_multisig_account_state(
         home_domain_key(),
         Json::new(account_state.home_domain.clone()),
     );
-    let bytes = norito::to_bytes(account_state).map_err(multisig_state_encode_error)?;
+    let bytes =
+        norito::to_bytes(account_state).map_err(|value| multisig_state_encode_error(&value))?;
     state_transaction
         .world
         .smart_contract_state
@@ -2481,7 +2484,7 @@ fn load_multisig_signatory_memberships(
     let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
         return Ok(BTreeSet::new());
     };
-    norito::decode_from_bytes(bytes).map_err(multisig_state_decode_error)
+    norito::decode_from_bytes(bytes).map_err(|value| multisig_state_decode_error(&value))
 }
 fn store_multisig_signatory_memberships(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -2493,7 +2496,8 @@ fn store_multisig_signatory_memberships(
         state_transaction.world.smart_contract_state.remove(key);
         return Ok(());
     }
-    let bytes = norito::to_bytes(memberships).map_err(multisig_state_encode_error)?;
+    let bytes =
+        norito::to_bytes(memberships).map_err(|value| multisig_state_encode_error(&value))?;
     state_transaction
         .world
         .smart_contract_state
@@ -2566,7 +2570,8 @@ fn store_multisig_proposal_state(
             return Err(invalid_proposal_binding());
         }
     }
-    let bytes = norito::to_bytes(proposal_state).map_err(multisig_state_encode_error)?;
+    let bytes =
+        norito::to_bytes(proposal_state).map_err(|value| multisig_state_encode_error(&value))?;
     state_transaction
         .world
         .smart_contract_state
@@ -2579,7 +2584,8 @@ fn store_multisig_proposal_terminal_state(
 ) -> Result<(), ValidationFail> {
     validate_terminal_occurrence(terminal_state)
         .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?;
-    let bytes = norito::to_bytes(terminal_state).map_err(multisig_state_encode_error)?;
+    let bytes =
+        norito::to_bytes(terminal_state).map_err(|value| multisig_state_encode_error(&value))?;
     let key = multisig_proposal_terminal_state_key(
         &terminal_state.multisig_account_id,
         &terminal_state.proposal_id,
@@ -2618,7 +2624,8 @@ fn store_multisig_proposal_terminal_execution_state(
         state_transaction.block_height(),
         terminal_entrypoint_hash,
     );
-    let bytes = norito::to_bytes(&execution_state).map_err(multisig_state_encode_error)?;
+    let bytes =
+        norito::to_bytes(&execution_state).map_err(|value| multisig_state_encode_error(&value))?;
     let execution_key = multisig_proposal_terminal_execution_state_key(
         terminal_entrypoint_hash,
         entrypoint_account,
@@ -2667,7 +2674,7 @@ fn store_multisig_approval_outcome(
         state_transaction.block_height(),
         entrypoint_hash,
     );
-    let bytes = norito::to_bytes(&outcome).map_err(multisig_state_encode_error)?;
+    let bytes = norito::to_bytes(&outcome).map_err(|value| multisig_state_encode_error(&value))?;
     let outcome_key =
         multisig_approval_outcome_state_key(entrypoint_hash, entrypoint_account, proposal_id);
     if let Some(existing) = state_transaction
@@ -2709,10 +2716,10 @@ fn retain_multisig_read_attempt(
 
 fn multisig_decode_attempt(error: norito::core::DecodeAttemptError) -> Attempt<ValidationFail> {
     if cfg!(all(test, sumeragi_core_mutation = "HC67")) {
-        return Attempt::Rejected(multisig_state_decode_error(error.into_error()));
+        return Attempt::Rejected(multisig_state_decode_error(&(error.into_error())));
     }
     canonical_decode_attempt_error(error, |error| {
-        multisig_state_decode_error(error.into_error())
+        multisig_state_decode_error(&(error.into_error()))
     })
 }
 
@@ -2776,7 +2783,7 @@ fn decode_proposal_state_at_key(
     })
     .map_err(|error| {
         canonical_decode_attempt_error(error, |error| {
-            multisig_state_encode_error(error.into_error())
+            multisig_state_encode_error(&(error.into_error()))
         })
     })?;
     if !cfg!(all(test, sumeragi_core_mutation = "HC68"))
@@ -2806,8 +2813,9 @@ fn validate_terminal_occurrence(
     terminal: &MultisigProposalTerminalState,
 ) -> Result<(), Attempt<ValidationFail>> {
     let value = &terminal.proposal;
-    let hash = HashOf::try_new(&value.instructions)
-        .map_err(|error| multisig_instruction_decode_attempt(error, multisig_state_encode_error))?;
+    let hash = HashOf::try_new(&value.instructions).map_err(|error| {
+        multisig_instruction_decode_attempt(error, |value| multisig_state_encode_error(&value))
+    })?;
     if terminal.proposal_id != value.proposal_id
         || terminal.proposal_id
             != MultisigProposalId::derive(
@@ -2871,8 +2879,9 @@ fn proposal_instruction_attempt(
 ) -> Result<Option<MultisigInstructionBox>, Attempt<ValidationFail>> {
     match MultisigInstructionBox::try_from(instruction) {
         Ok(instruction) => Ok(Some(instruction)),
-        Err(error) => match multisig_instruction_decode_attempt(error, multisig_state_decode_error)
-        {
+        Err(error) => match multisig_instruction_decode_attempt(error, |value| {
+            multisig_state_decode_error(&value)
+        }) {
             Attempt::Deferred(reason) if !cfg!(all(test, sumeragi_core_mutation = "HC69")) => {
                 Err(Attempt::Deferred(reason))
             }
@@ -3019,10 +3028,10 @@ fn now_ms(state_transaction: &StateTransaction<'_, '_>) -> u64 {
         .try_into()
         .expect("block creation time must fit into u64")
 }
-fn multisig_state_encode_error(err: norito::Error) -> ValidationFail {
+fn multisig_state_encode_error(err: &norito::Error) -> ValidationFail {
     ValidationFail::InternalError(format!("failed to encode multisig state:\n{err}"))
 }
-fn multisig_state_decode_error(err: norito::Error) -> ValidationFail {
+fn multisig_state_decode_error(err: &norito::Error) -> ValidationFail {
     ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
         "multisig state malformed:\n{err}"
     )))
@@ -3583,7 +3592,7 @@ mod tests {
         .expect("FI account alias selector");
         let quote = quote_resolved_name_registration(
             tx.world(),
-            selector,
+            &(selector),
             &retail_account,
             1,
             None,
@@ -5481,8 +5490,7 @@ mod tests {
                 &tx.world.asset_definition_nonzero_holders,
                 &asset_def_id
             )
-            .cloned()
-            .any(|x| x == old_account)
+            .any(|x| x == &old_account)
         );
         let new_key = checked_keypair();
         let new_account = new_account_id(&new_key);
@@ -5600,8 +5608,7 @@ mod tests {
                         &tx.world.asset_definition_assets,
                         &definition
                     )
-                    .cloned()
-                    .any(|x| x == moved)
+                    .any(|x| x == &moved)
                 );
             }
             assert!(

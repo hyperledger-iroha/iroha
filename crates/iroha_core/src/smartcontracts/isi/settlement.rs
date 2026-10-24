@@ -308,7 +308,7 @@ fn resolve_settlement_leg_asset_ids(
 fn resolve_authorized_settlement_leg_asset_ids(
     stx: &StateTransaction<'_, '_>,
     leg: &SettlementLeg,
-    authorized_source: AssetId,
+    authorized_source: &AssetId,
 ) -> Result<(AssetId, AssetId), Error> {
     if authorized_source.account() != leg.from()
         || authorized_source.definition() != leg.asset_definition_id()
@@ -340,7 +340,7 @@ fn resolve_authorized_settlement_leg_asset_ids(
     };
     let withdraw = stx
         .world
-        .resolve_asset_id_for_scope_hint(&authorized_source, dataspace_hint)?;
+        .resolve_asset_id_for_scope_hint(authorized_source, dataspace_hint)?;
     let deposit = AssetId::with_scope(
         leg.asset_definition_id().clone(),
         leg.to().clone(),
@@ -664,7 +664,7 @@ fn validate_dvp_preconditions(
     ensure_leg_accounts(stx, payment_leg)?;
     let delivery_assets = resolve_settlement_leg_asset_ids(stx, delivery_leg)?;
     let payment_assets =
-        resolve_authorized_settlement_leg_asset_ids(stx, payment_leg, payment_source)?;
+        resolve_authorized_settlement_leg_asset_ids(stx, payment_leg, &(payment_source))?;
     validate_authorized_numeric_asset_pair(
         stx,
         authority,
@@ -712,7 +712,7 @@ fn validate_pvp_preconditions(
     ensure_leg_accounts(stx, counter_leg)?;
     let primary_assets = resolve_settlement_leg_asset_ids(stx, primary_leg)?;
     let counter_assets =
-        resolve_authorized_settlement_leg_asset_ids(stx, counter_leg, counter_source)?;
+        resolve_authorized_settlement_leg_asset_ids(stx, counter_leg, &(counter_source))?;
     validate_authorized_numeric_asset_pair(
         stx,
         authority,
@@ -1810,12 +1810,12 @@ mod tests {
     }
     fn insert_active_fx_alias(
         stx: &mut StateTransaction<'_, '_>,
-        alias: AccountAlias,
-        account_id: AccountId,
+        alias: &AccountAlias,
+        account_id: &AccountId,
     ) {
-        let selector = crate::sns::selector_for_account_alias(&alias, &stx.nexus.dataspace_catalog)
+        let selector = crate::sns::selector_for_account_alias(alias, &stx.nexus.dataspace_catalog)
             .expect("canonical FX alias selector");
-        let address = AccountAddress::from_account_id(&account_id)
+        let address = AccountAddress::from_account_id(account_id)
             .expect("FX alias owner must encode as an address");
         let record = NameRecordV1::new(
             selector.clone(),
@@ -1836,8 +1836,7 @@ mod tests {
                 alias.clone(),
                 account_id.clone(),
             ));
-        stx.world
-            .insert_account_alias_binding(&(alias), &(account_id));
+        stx.world.insert_account_alias_binding(alias, account_id);
     }
     fn fx_settlement(policy: &FxCorridorPolicy, id: &str, source_amount: u32) -> SettleFxCorridor {
         let event = FeedEvent {
@@ -2050,14 +2049,14 @@ mod tests {
         for (label, domain) in [("hbl_recipient", "hbl"), ("ubl_recipient", "ubl")] {
             insert_active_fx_alias(
                 &mut stx,
-                AccountAlias::new(
+                &(AccountAlias::new(
                     label.parse().expect("alias label"),
                     Some(AccountAliasDomain::new(
                         domain.parse().expect("alias domain"),
                     )),
                     policy.destination_dataspace,
-                ),
-                BOB_ID.clone(),
+                )),
+                &(BOB_ID),
             );
         }
         assert_smart_contract_parameter_contains(
@@ -2085,14 +2084,14 @@ mod tests {
         stx.world.remove_account_alias_bindings_for_account(&BOB_ID);
         insert_active_fx_alias(
             &mut stx,
-            AccountAlias::new(
+            &(AccountAlias::new(
                 "other_recipient".parse().expect("alias label"),
                 Some(AccountAliasDomain::new(
                     "other".parse().expect("alias domain"),
                 )),
                 policy.destination_dataspace,
-            ),
-            BOB_ID.clone(),
+            )),
+            &(BOB_ID),
         );
         assert_smart_contract_parameter_contains(
             fx_settlement(&policy, "fx_non_allowed_recipient_domain", 1)

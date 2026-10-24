@@ -102,7 +102,7 @@ seiyaku CycleFailure { permission AssetOps;
 ",
             1,
         );
-        grant_asset_ops_to_account(&state, &authority, caller.subject_id());
+        grant_asset_ops_to_account(&state, &authority, &(caller.subject_id()));
         let prologue_cycles = authenticated_test_probe_prologue().len() as u64;
         // Six additional moves restore r10..r15 from staged operands before A9.
         let completed_parent_cycles = prologue_cycles + (10..=15).count() as u64;

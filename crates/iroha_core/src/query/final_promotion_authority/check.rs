@@ -43,10 +43,10 @@ pub fn authorized(
                 || !has_permission(
                     world,
                     &check.expected_operator,
-                    CanOperateSorafsFinalPromotion {
+                    &(CanOperateSorafsFinalPromotion {
                         deployment_id: deployment.to_owned(),
                     }
-                    .into(),
+                    .into()),
                 )
             {
                 return false;
@@ -57,7 +57,7 @@ pub fn authorized(
             .into()
         }
     };
-    has_permission(world, authority, permission)
+    has_permission(world, authority, &(permission))
 }
 
 pub fn check_floor(

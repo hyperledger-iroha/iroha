@@ -184,10 +184,8 @@ impl WorldProjection for ShapeRecorder {
 /// The name under which the production World pass projects a registry field, if it does:
 /// World fields use their bare name, trigger stores keep their identity.
 fn pass_name(id: &'static str) -> Option<&'static str> {
-    id.strip_prefix("world.").map_or_else(
-        || id.starts_with("triggers.").then_some(id),
-        |name| Some(name),
-    )
+    id.strip_prefix("world.")
+        .map_or_else(|| id.starts_with("triggers.").then_some(id), Some)
 }
 
 /// Every field the production pass visits over the actual World overlay, with its shape.
@@ -502,7 +500,7 @@ const ROOTS: &[Root] = &[
         evidence: &[
             (
                 "crates/iroha_core/src/state/world_state_accumulator.rs",
-                "pub(crate) struct WorldStateAccumulator {",
+                "pub struct WorldStateAccumulator {",
             ),
             (
                 "crates/iroha_data_model/src/sumeragi_finality/commitment.rs",
@@ -529,7 +527,7 @@ const ROOTS: &[Root] = &[
         owner: "A.1",
         disposition: "kept in its E51 role as per-block witness roots; ordinary_writes_root stays the new_root of ordinary effects",
         defect: None,
-        domains: &[r"iroha:sumeragi:invalid-exec-witness"],
+        domains: &[],
         evidence: &[
             (
                 "crates/iroha_data_model/src/sumeragi_finality/commitment.rs",
@@ -1140,7 +1138,7 @@ const ROOTS: &[Root] = &[
         evidence: &[
             (
                 "crates/iroha_core/src/tle_release/casting.rs",
-                "pub(crate) fn derive_parliament_timed_ovn_casting_snapshot_v1(",
+                "pub fn derive_parliament_timed_ovn_casting_snapshot_v1(",
             ),
             (
                 "crates/iroha_data_model/src/parliament_casting.rs",
@@ -1373,7 +1371,7 @@ const ROOTS: &[Root] = &[
         evidence: &[
             (
                 "crates/iroha_core/src/query/reputation_finalized.rs",
-                "//! Durable exact-anchor archive for finalized SoraFS reputation projections.",
+                "//! Durable exact-anchor archive for finalized `SoraFS` reputation projections.",
             ),
             (
                 "crates/iroha_core/src/query/reputation_finalized.rs",
@@ -1406,7 +1404,7 @@ const ROOTS: &[Root] = &[
         evidence: &[
             (
                 "crates/iroha_core/src/query/provider_ingest_finalized.rs",
-                "//! Durable provider-indexed archive for finalized SoraFS replication orders.",
+                "//! Durable provider-indexed archive for finalized `SoraFS` replication orders.",
             ),
             (
                 "crates/iroha_core/src/query/provider_ingest_finalized.rs",
@@ -2615,7 +2613,7 @@ const HASH_TYPE_ENDINGS: &[&str] = &[
 /// function classifications instead of treating every `Id` or nonce as a hash.
 const RECORD_DIGEST_TYPES: &[&str] = &["MultisigProposalId"];
 
-/// Records that carry a root or digest of State content under another name.
+/// Records and type aliases that carry a root or digest of State content under another name.
 const ROOT_BEARING_RECORDS: &[&str] = &[
     "AxtPolicySnapshot",
     "CanonicalTablePairedSnapshot",
@@ -2623,9 +2621,11 @@ const ROOT_BEARING_RECORDS: &[&str] = &[
     "CapturedMembershipTables",
     "CapturedSnapshotIdentity",
     "LocalRetailContractStateSnapshotV1",
+    "MembershipRootPublicationResult",
     "NativeExecutionTipRecord",
     "PredecessorWorldReceipt",
     "QueryProjectionCheckpoint",
+    "RestoredNexusRuntime",
     "RetainedSccpHistoryPath",
     "RetainedSccpHistoryView",
     "StateCellDigestSliceV1",
@@ -2660,7 +2660,7 @@ fn carried_records() -> Vec<&'static str> {
 const STATE_READER_RULE: &str = "a function or method of a non-test iroha_core source, outside items under #[cfg(test)] or #[test], whose generics, parameters or where clause name a State reader type, or that has a self receiver inside an impl or trait block whose header names one anywhere between the keyword and the opening brace: in the generics, the implemented trait, the implementing type, the supertraits or the where clause. A blanket implementation for all readers, an extension trait of a reader trait, an implementation of a reader trait for a type with another name and an impl block in a macro body are therefore matched. The State reader types (state_reader_types) are the owners of the registry fields (State, World, the transaction storage, the block-hash journal, the trigger set and the canonical runtime) with their reader traits and their block, transaction, view, prepared, detached and published handles, every other type that implements a reader trait in a literal impl block, and the table and cell handles that State is built from";
 
 /// The rule that decides which return types are hash-bearing.
-const HASH_RETURN_RULE: &str = "a return type is hash-bearing when it names Hash, HashOf or Hash32; or one of the explicitly listed digest-derived record identity types (record_digest_types); or a raw digest array [u8; 32], [u8; Hash::LENGTH] or [u8; blake3::OUT_LEN]; or a type whose name, before an optional V<digits> version, ends in Commitment, Digest, Fingerprint, Hash, Proof, ProofBundle, Proofs or Root (wrappers, aliases and records named for what they carry); or one of the listed records that carry a root or digest of State content under another name (root_bearing_records); or one of the records of the peer handshake and of a lane block that the carrier walk reads (carried_records), whatever its name; Self in a return type stands for the implementing type of the enclosing impl block (an associated type Self::Name does not)";
+const HASH_RETURN_RULE: &str = "a return type is hash-bearing when it names Hash, HashOf or Hash32; or one of the explicitly listed digest-derived record identity types (record_digest_types); or a raw digest array [u8; 32], [u8; Hash::LENGTH] or [u8; blake3::OUT_LEN]; or a type whose name, before an optional V<digits> version, ends in Commitment, Digest, Fingerprint, Hash, Proof, ProofBundle, Proofs or Root (wrappers, aliases and records named for what they carry); or one of the listed records or type aliases that carry a root or digest of State content under another name (root_bearing_records); or one of the records of the peer handshake and of a lane block that the carrier walk reads (carried_records), whatever its name; Self in a return type stands for the implementing type of the enclosing impl block (an associated type Self::Name does not)";
 
 /// The identifiers of a code text.
 fn identifiers(code: &str) -> impl Iterator<Item = &str> {
@@ -3319,7 +3319,7 @@ const WITNESS_FAMILIES: &[WitnessFamily] = &[
         derivation: &[
             (
                 CASTING,
-                "pub(crate) fn derive_parliament_timed_ovn_casting_snapshot_v1(",
+                "pub fn derive_parliament_timed_ovn_casting_snapshot_v1(",
             ),
             (CASTING, "fn compact_binding_from_world_v1("),
         ],
@@ -6451,7 +6451,7 @@ const DEFECTS: &[Defect] = &[
         evidence: &[
             (
                 "crates/iroha_core/src/state/world_state_accumulator.rs",
-                "pub(crate) struct WorldStateAccumulator {",
+                "pub struct WorldStateAccumulator {",
             ),
             (
                 "crates/iroha_data_model/src/sumeragi_finality/world_state.rs",
@@ -9846,6 +9846,104 @@ fn state_hash_scan_actual_amx_complete_keeps_its_original_listing() {
     );
 }
 
+/// Naming the restored runtime tuple cannot hide its original State-reading seed producer.
+#[test]
+fn state_hash_scan_restored_nexus_alias_keeps_seed_classification() {
+    let path = "crates/iroha_core/src/state/deserialize_core.rs";
+    let (_, code) = split_source(&source(path));
+    let signatures = fn_signatures(&code);
+    let matched: Vec<_> = signatures
+        .iter()
+        .filter(|entry| entry.name == "nexus_from_snapshot_runtime")
+        .collect();
+    assert_eq!(matched.len(), 1);
+    assert!(matched[0].reads_state && matched[0].returns_hash);
+    let listed = STATE_HASH_FUNCTIONS
+        .iter()
+        .find(|entry| entry.path == path && entry.name == "nexus_from_snapshot_runtime")
+        .expect("the restored runtime retains its reviewed seed classification");
+    assert_eq!(listed.count, 1);
+    assert!(matches!(
+        listed.owner,
+        UseOwner::Other(Use::Seed, reason) if !reason.is_empty()
+    ));
+    assert!(returns_hash("Result<RestoredNexusRuntime, json::Error>"));
+    assert!(!returns_hash("RestoredNexusRuntimeError"));
+}
+
+/// The detached publication alias cannot hide either original membership-root publisher.
+#[test]
+fn state_hash_scan_membership_publication_alias_keeps_both_owners() {
+    let path = "crates/iroha_core/src/state/storage_transactions/block/membership_root.rs";
+    let (_, code) = split_source(&source(path));
+    let signatures = fn_signatures(&code);
+    let matched: Vec<_> = signatures
+        .iter()
+        .filter(|entry| entry.name == "publish_with_membership_root")
+        .collect();
+    assert_eq!(matched.len(), 2);
+    assert!(
+        matched
+            .iter()
+            .all(|entry| entry.reads_state && entry.returns_hash)
+    );
+    let listed = STATE_HASH_FUNCTIONS
+        .iter()
+        .find(|entry| entry.path == path && entry.name == "publish_with_membership_root")
+        .expect("both publications retain their reviewed membership-root classification");
+    assert_eq!(listed.count, 2);
+    assert!(matches!(
+        listed.owner,
+        UseOwner::Roots(["transaction_membership_root"])
+    ));
+    assert!(returns_hash(
+        "MembershipRootPublicationResult<N, Installation, Self>"
+    ));
+    assert!(!returns_hash("MembershipRootPublicationResultError"));
+}
+
+/// Removing an unused State receiver keeps the topology record domains inventoried.
+#[test]
+fn state_hash_scan_topology_record_helper_retirement_keeps_domains() {
+    let path = "crates/iroha_core/src/query/topology_authority.rs";
+    let text = source(path);
+    let (literals, code) = split_source(&text);
+    let signatures = fn_signatures(&code);
+    assert!(!signatures.iter().any(|entry| entry.name == "digest"));
+    let helper: Vec<_> = signatures
+        .iter()
+        .filter(|entry| entry.name == "topology_digest")
+        .collect();
+    assert_eq!(helper.len(), 1);
+    assert!(!helper[0].reads_state && helper[0].returns_hash);
+    assert!(
+        !STATE_HASH_FUNCTIONS.iter().any(|entry| {
+            entry.path == path && matches!(entry.name, "digest" | "topology_digest")
+        })
+    );
+    let owners = domain_owners();
+    for domain in [
+        r"iroha.sorafs.topology.control.v1\0",
+        r"iroha.sorafs.topology.history.v1\0",
+        r"iroha.sorafs.topology.operation.v1\0",
+    ] {
+        assert!(
+            literals.contains(&domain),
+            "missing source domain: {domain}"
+        );
+        assert_eq!(owners.get(domain), Some(&DomainOwner::Other(Use::Record)));
+    }
+    let probe = "fn topology_digest(world: &World) -> [u8; 32] { todo!() }";
+    assert_eq!(
+        scan_sources([(path, probe)])
+            .unlisted_functions
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [format!("{path}: topology_digest: found 1")],
+        "adding a direct State reader must require a fresh classification"
+    );
+}
+
 /// Fixture-only hash collection cannot replace the production replay-alias classification.
 #[test]
 fn state_hash_scan_carrier_fixture_keeps_production_alias_and_visitor_visible() {
@@ -12320,7 +12418,7 @@ fn inventory_text_helpers_escape_and_cite_exactly() {
     assert_eq!(shape_name(None), "null");
     let cited = evidence(
         "crates/iroha_core/src/state/world_state_accumulator.rs",
-        "pub(crate) struct WorldStateAccumulator {",
+        "pub struct WorldStateAccumulator {",
     );
     assert!(cited.contains("\"occurrences\":1"), "{cited}");
     assert!(cited.starts_with(

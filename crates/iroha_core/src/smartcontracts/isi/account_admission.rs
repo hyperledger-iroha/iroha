@@ -159,7 +159,7 @@ fn apply_implicit_creation_fee(
                 state_transaction,
                 authority,
                 created_account,
-                payer_asset_id,
+                &(payer_asset_id),
                 fee.amount.clone(),
             )?;
         }
@@ -378,7 +378,7 @@ mod tests {
         _domain_id: DomainId,
         authority: &AccountId,
     ) -> iroha_data_model::account::Account {
-        iroha_data_model::account::NewAccount::new(account_id.clone()).build(authority)
+        iroha_data_model::account::NewAccount::new(account_id).build(authority)
     }
     fn test_state(mut world: World, policy: AccountAdmissionPolicy) -> State {
         let custom = policy.into_custom_parameter();

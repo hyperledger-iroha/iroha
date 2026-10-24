@@ -35,7 +35,7 @@ seiyaku Callee { permission AssetOps;
 ",
         1,
     );
-    grant_asset_ops_to_account(&state, &authority, caller.subject_id());
+    grant_asset_ops_to_account(&state, &authority, &(caller.subject_id()));
     (state, authority, caller, target_contract)
 }
 

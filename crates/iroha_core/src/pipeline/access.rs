@@ -740,7 +740,7 @@ where
                             derive_from_prepared_ivm_dynamic_with_context(
                                 &contract,
                                 tx.authority(),
-                                Some(context),
+                                Some(&context),
                                 view,
                                 gas_limit,
                             )
@@ -1017,23 +1017,19 @@ fn apply_unverified_ivm_access_fence(bytecode: &[u8], set: &mut AccessSet) -> bo
         crate::pipeline::overlay::VmAccessFence::Global,
         crate::pipeline::overlay::VmAccessFence::from_syscall_numbers,
     );
-    if let Some(key) = fence.scheduler_write_key() {
+    fence.scheduler_write_key().is_some_and(|key| {
         set.add_write(key.to_owned());
         true
-    } else {
-        false
-    }
+    })
 }
 fn apply_prepared_ivm_access_fence(contract: &ivm::PreparedContract, set: &mut AccessSet) -> bool {
     let fence = crate::pipeline::overlay::VmAccessFence::from_syscall_numbers(
         ivm::analysis::prepared_syscall_numbers(contract),
     );
-    if let Some(key) = fence.scheduler_write_key() {
+    fence.scheduler_write_key().is_some_and(|key| {
         set.add_write(key.to_owned());
         true
-    } else {
-        false
-    }
+    })
 }
 fn manifest_matches_prepared_contract(
     contract: &ivm::PreparedContract,
@@ -1437,12 +1433,9 @@ fn access_set_from_hint_keys(
                 let Ok(key) = key_raw.parse::<Name>() else {
                     continue;
                 };
-                match AccountId::parse_encoded(id_raw) {
-                    Ok(id) => {
-                        parsed = Some(AccountMetadataKey { id, key });
-                        break;
-                    }
-                    Err(_) => continue,
+                if let Ok(id) = AccountId::parse_encoded(id_raw) {
+                    parsed = Some(AccountMetadataKey { id, key });
+                    break;
                 }
             }
             match parsed {
@@ -1481,12 +1474,9 @@ fn access_set_from_hint_keys(
                 let Ok(key) = key_raw.parse::<Name>() else {
                     continue;
                 };
-                match AssetId::parse_literal(id_raw) {
-                    Ok(id) => {
-                        parsed = Some(AssetMetadataKey { id, key });
-                        break;
-                    }
-                    Err(_) => continue,
+                if let Ok(id) = AssetId::parse_literal(id_raw) {
+                    parsed = Some(AssetMetadataKey { id, key });
+                    break;
                 }
             }
             match parsed {
@@ -1530,12 +1520,9 @@ fn access_set_from_hint_keys(
                 let Ok(role) = role_raw.parse::<RoleId>() else {
                     continue;
                 };
-                match AccountId::parse_encoded(account_raw) {
-                    Ok(account) => {
-                        parsed = Some(AccountRoleKey { account, role });
-                        break;
-                    }
-                    Err(_) => continue,
+                if let Ok(account) = AccountId::parse_encoded(account_raw) {
+                    parsed = Some(AccountRoleKey { account, role });
+                    break;
                 }
             }
             match parsed {
@@ -2317,7 +2304,7 @@ where
     derive_from_ivm_dynamic_with_context(
         bytecode,
         authority,
-        contract_call_context,
+        contract_call_context.as_ref(),
         state_ro,
         gas_limit,
     )
@@ -2370,7 +2357,7 @@ where
     derive_from_prepared_ivm_dynamic_with_context(
         contract,
         authority,
-        contract_call_context,
+        contract_call_context.as_ref(),
         state_ro,
         gas_limit,
     )
@@ -2383,7 +2370,7 @@ enum DynamicIvmProgram<'a> {
 fn derive_from_ivm_dynamic_with_context<R>(
     bytecode: &[u8],
     authority: &AccountId,
-    contract_call_context: Option<ContractCallExecutionContext>,
+    contract_call_context: Option<&ContractCallExecutionContext>,
     state_ro: &R,
     gas_limit: u64,
 ) -> Result<AccessSet, crate::execution_attempt::ExecutionAttemptError<String>>
@@ -2401,7 +2388,7 @@ where
 fn derive_from_prepared_ivm_dynamic_with_context<R>(
     contract: &ivm::PreparedContract,
     authority: &AccountId,
-    contract_call_context: Option<ContractCallExecutionContext>,
+    contract_call_context: Option<&ContractCallExecutionContext>,
     state_ro: &R,
     gas_limit: u64,
 ) -> Result<AccessSet, crate::execution_attempt::ExecutionAttemptError<String>>
@@ -2419,7 +2406,7 @@ where
 fn derive_from_ivm_dynamic_with_source<R>(
     program: DynamicIvmProgram<'_>,
     authority: &AccountId,
-    contract_call_context: Option<ContractCallExecutionContext>,
+    contract_call_context: Option<&ContractCallExecutionContext>,
     state_ro: &R,
     gas_limit: u64,
 ) -> Result<AccessSet, crate::execution_attempt::ExecutionAttemptError<String>>
@@ -2431,7 +2418,7 @@ where
         ivm::ProgramMetadata::parse(bytecode)
             .map_err(|error| dynamic_execution::vm_error("ivm.metadata", error))?;
     }
-    if let Some(context) = contract_call_context.as_ref() {
+    if let Some(context) = contract_call_context {
         match (&context.entrypoint, &context.authorization) {
             (Some(entrypoint), Some(authorization)) => {
                 if authorization.entrypoint != *entrypoint
@@ -2478,7 +2465,6 @@ where
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
     let mut host = contract_call_context
-        .as_ref()
         .map_or_else(
             || {
                 crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
@@ -2507,9 +2493,8 @@ where
     let vrf_epoch_length = crate::smartcontracts::ivm::host::vrf_epoch_length_from_state(state_ro)?;
     host.set_query_state_with_vrf_epoch_seeds(state_ro, vrf_epoch_length);
     host.set_chain_id(state_ro.chain_id());
-    if let Some(authorization) = contract_call_context
-        .as_ref()
-        .and_then(|context| context.authorization.as_ref())
+    if let Some(authorization) =
+        contract_call_context.and_then(|context| context.authorization.as_ref())
     {
         let contract_subject = crate::smartcontracts::code::bound_contract_subject_from_world(
             state_ro.world(),
@@ -2538,7 +2523,7 @@ where
             .map_err(|error| dynamic_execution::vm_error("ivm.load_prepared", error))?,
     }
     vm.set_gas_limit(gas_limit);
-    apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())
+    apply_contract_call_execution_context(&mut vm, contract_call_context)
         .map_err(|e| format!("ivm.contract_call: {e}"))?;
     vm.run_with_host(&mut host)
         .and_then(|()| host.finish_contract_result(&vm).map(|_| ()))
@@ -2571,7 +2556,7 @@ where
     if let Some(log) = access_log {
         merge_access_log(&mut set, &log);
     }
-    if contract_call_context.as_ref().is_some_and(|context| {
+    if contract_call_context.is_some_and(|context| {
         context.entrypoint_authorization != EntrypointAuthorizationV1::Anyone
     }) {
         set.add_read(AUTHORIZATION_EPOCH_KEY.to_owned());
@@ -2720,11 +2705,11 @@ mod tests {
         code
     }
     fn test_contract_artifact(
-        code: Vec<u8>,
+        code: &[u8],
         access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
-        entrypoints: Vec<EntrypointDescriptor>,
+        entrypoints: &[EntrypointDescriptor],
     ) -> (Vec<u8>, IrohaHash, ContractManifest) {
-        test_contract_artifact_with_literals(&(code), access_set_hints, &(entrypoints), &[])
+        test_contract_artifact_with_literals(code, access_set_hints, entrypoints, &[])
     }
     fn test_contract_artifact_with_literals(
         code: &[u8],
@@ -2759,7 +2744,7 @@ mod tests {
             })
             .collect();
         let mut callables = std::collections::BTreeMap::new();
-        callables.insert(0, fixture_callable(&code, 0));
+        callables.insert(0, fixture_callable(code, 0));
         for (index, bytes) in code.chunks_exact(4).enumerate() {
             use ivm::instruction::wide;
             let word = u32::from_le_bytes(bytes.try_into().expect("instruction word"));
@@ -2771,7 +2756,7 @@ mod tests {
             let target = (index as u64 * 4)
                 .checked_add_signed(offset * 4)
                 .expect("call target");
-            callables.insert(target, fixture_callable(&code, target));
+            callables.insert(target, fixture_callable(code, target));
         }
         let interface = ivm::EmbeddedContractInterfaceV1 {
             events: Vec::new(),
@@ -2851,7 +2836,7 @@ mod tests {
             }
             artifact.extend(std::iter::repeat_n(0, post_padding));
         }
-        artifact.extend_from_slice(&code);
+        artifact.extend_from_slice(code);
         let verified = ivm::verify_contract_artifact(&artifact).expect("valid test artifact");
         (artifact, verified.code_hash, verified.manifest)
     }
@@ -3067,7 +3052,7 @@ mod tests {
         code.extend_from_slice(&crate::ivm_test_support::unit_return());
         let mut entrypoint = default_test_entrypoint();
         entrypoint.read_keys = vec!["state:*".to_owned()];
-        test_contract_artifact(code, None, vec![entrypoint]).0
+        test_contract_artifact(&code, None, &[entrypoint]).0
     }
     fn generic_prepass_test_state(authority: &AccountId) -> State {
         let domain =
@@ -3188,9 +3173,9 @@ mod tests {
     #[test]
     fn verified_empty_entrypoint_access_is_distinct_from_missing_or_incomplete_metadata() {
         let program = test_contract_artifact(
-            crate::ivm_test_support::unit_return().to_vec(),
+            &crate::ivm_test_support::unit_return(),
             None,
-            vec![default_test_entrypoint()],
+            &[default_test_entrypoint()],
         )
         .0;
         let mut entrypoint = default_test_entrypoint();
@@ -3239,9 +3224,9 @@ mod tests {
     #[test]
     fn protected_entrypoint_reads_the_authorization_scheduler_epoch() {
         let program = test_contract_artifact(
-            crate::ivm_test_support::unit_return().to_vec(),
+            &crate::ivm_test_support::unit_return(),
             None,
-            vec![default_test_entrypoint()],
+            &[default_test_entrypoint()],
         )
         .0;
         let mut entrypoint = default_test_entrypoint();
@@ -3272,7 +3257,7 @@ mod tests {
         );
         let entrypoint = default_test_entrypoint();
         let code = crate::ivm_test_support::unit_return().to_vec();
-        let (artifact, _, _) = test_contract_artifact(code, None, vec![entrypoint]);
+        let (artifact, _, _) = test_contract_artifact(&code, None, &[entrypoint]);
         let mut metadata = Metadata::default();
         metadata.insert(
             "contract_entrypoint".parse().unwrap(),
@@ -3611,7 +3596,7 @@ seiyaku HelperStaticAccess { permission CanWrite;
             let mut entrypoint = default_test_entrypoint();
             entrypoint.write_keys = vec!["state:claimed".to_owned()];
             let (program, code_hash, manifest) =
-                test_contract_artifact_with_literals(&(code), None, &(vec![entrypoint]), &literals);
+                test_contract_artifact_with_literals(&(code), None, &[entrypoint], &literals);
             assert!(
                 manifest_access_set_from_bytecode(
                     &manifest,
@@ -3648,7 +3633,7 @@ seiyaku HelperStaticAccess { permission CanWrite;
             let mut entrypoint = default_test_entrypoint();
             entrypoint.write_keys = vec!["state:claimed".to_owned()];
             let (program, code_hash, manifest) =
-                test_contract_artifact_with_literals(&(code), None, &(vec![entrypoint]), &literals);
+                test_contract_artifact_with_literals(&(code), None, &[entrypoint], &literals);
             let (set, _) = manifest_access_set_from_bytecode(
                 &manifest,
                 code_hash,
@@ -4777,7 +4762,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         entrypoint.read_keys = hints.read_keys.clone();
         entrypoint.write_keys = hints.write_keys.clone();
         let (prog, code_hash, manifest) =
-            test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
+            test_contract_artifact(&code, Some(hints.clone()), &[entrypoint]);
         let manifest = manifest
             .try_signed(
                 manifest_signing.context(),
@@ -4855,7 +4840,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         entrypoint.read_keys = hints.read_keys.clone();
         entrypoint.write_keys = hints.write_keys.clone();
         let (prog, _code_hash, manifest) =
-            test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
+            test_contract_artifact(&code, Some(hints.clone()), &[entrypoint]);
         let manifest = manifest
             .try_signed(
                 manifest_signing.context(),
@@ -4886,9 +4871,9 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
     #[test]
     fn artifact_custody_is_checked_before_shared_preparation_cache() {
         let (program, hash, _) = test_contract_artifact(
-            crate::ivm_test_support::unit_return().to_vec(),
+            &crate::ivm_test_support::unit_return(),
             None,
-            vec![default_test_entrypoint()],
+            &[default_test_entrypoint()],
         );
         let owned = ContractArtifactId::new(DataSpaceId::new(17), hash);
         let foreign = ContractArtifactId::new(DataSpaceId::new(u64::MAX), hash);
@@ -4962,9 +4947,9 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             query,
         );
         let (prog, code_hash, _) = test_contract_artifact(
-            crate::ivm_test_support::unit_return().to_vec(),
+            &crate::ivm_test_support::unit_return(),
             None,
-            vec![default_test_entrypoint()],
+            &[default_test_entrypoint()],
         );
         let hints_a = AccessSetHints {
             read_keys: vec!["state:alpha".to_owned()],
@@ -5716,7 +5701,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             entrypoint.read_keys = hints.read_keys.clone();
             entrypoint.write_keys = hints.write_keys.clone();
             let (prog, code_hash, manifest) =
-                test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
+                test_contract_artifact(&code, Some(hints.clone()), &[entrypoint]);
             let manifest = manifest
                 .try_signed(
                     manifest_signing.context(),
@@ -5859,7 +5844,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             entrypoint.read_keys = hints.read_keys.clone();
             entrypoint.write_keys = hints.write_keys.clone();
             let (prog, code_hash, manifest) =
-                test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
+                test_contract_artifact(&code, Some(hints.clone()), &[entrypoint]);
             let manifest = manifest
                 .try_signed(
                     manifest_signing.context(),

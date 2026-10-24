@@ -367,6 +367,37 @@ pub(crate) fn current_control_state_v1(
     Ok(Some((record, control)))
 }
 
+fn decode_topology<T>(bytes: &[u8], maximum: usize) -> Result<T, TopologyRowErrorV1>
+where
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
+    if bytes.is_empty() || bytes.len() > maximum {
+        return Err(TopologyRowErrorV1::CorruptHistory);
+    }
+    norito::decode_canonical_with_limits(
+        bytes,
+        norito::DecodeLimits::new(16 * 1024, maximum, 8192, 512 * 1024, 24),
+    )
+    .map_err(|_| TopologyRowErrorV1::CorruptHistory)
+}
+
+fn topology_digest<T>(domain: &[u8], value: &T) -> Result<[u8; 32], TopologyRowErrorV1>
+where
+    T: NoritoSerialize,
+{
+    if norito::canonical_frame_len(value).map_err(|_| TopologyRowErrorV1::CorruptHistory)?
+        > TOPOLOGY_HISTORY_MAX_BYTES_V1
+    {
+        return Err(TopologyRowErrorV1::CorruptHistory);
+    }
+    let bytes = norito::encode_canonical(value).map_err(|_| TopologyRowErrorV1::CorruptHistory)?;
+    let mut hash = blake3::Hasher::new();
+    hash.update(domain);
+    hash.update(&(bytes.len() as u64).to_be_bytes());
+    hash.update(&bytes);
+    Ok(*hash.finalize().as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,7 +537,7 @@ mod tests {
         }
         let (operation_digest, history_one, history_two, history_digest) = {
             let view = world.view();
-            let rows = TopologyRowsV1::new(&view, "production-primary").unwrap();
+            TopologyRowsV1::new(&view, "production-primary").unwrap();
             let operation_digest =
                 topology_digest(b"iroha.sorafs.topology.operation.v1\0", &last).unwrap();
             let first = TopologyHistoryEntryV1 {
@@ -1267,35 +1298,4 @@ mod tests {
             );
         }
     }
-}
-
-fn decode_topology<T>(bytes: &[u8], maximum: usize) -> Result<T, TopologyRowErrorV1>
-where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
-{
-    if bytes.is_empty() || bytes.len() > maximum {
-        return Err(TopologyRowErrorV1::CorruptHistory);
-    }
-    norito::decode_canonical_with_limits(
-        bytes,
-        norito::DecodeLimits::new(16 * 1024, maximum, 8192, 512 * 1024, 24),
-    )
-    .map_err(|_| TopologyRowErrorV1::CorruptHistory)
-}
-
-fn topology_digest<T>(domain: &[u8], value: &T) -> Result<[u8; 32], TopologyRowErrorV1>
-where
-    T: NoritoSerialize,
-{
-    if norito::canonical_frame_len(value).map_err(|_| TopologyRowErrorV1::CorruptHistory)?
-        > TOPOLOGY_HISTORY_MAX_BYTES_V1
-    {
-        return Err(TopologyRowErrorV1::CorruptHistory);
-    }
-    let bytes = norito::encode_canonical(value).map_err(|_| TopologyRowErrorV1::CorruptHistory)?;
-    let mut hash = blake3::Hasher::new();
-    hash.update(domain);
-    hash.update(&(bytes.len() as u64).to_be_bytes());
-    hash.update(&bytes);
-    Ok(*hash.finalize().as_bytes())
 }

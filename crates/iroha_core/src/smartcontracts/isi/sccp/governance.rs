@@ -628,6 +628,9 @@ fn set_taira_paused(
 }
 
 #[cfg(test)]
+pub(crate) use registration::reference_pin_rows;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::smartcontracts::isi::sccp::test_support::{
@@ -702,7 +705,7 @@ mod tests {
         crate::smartcontracts::isi::sccp::test_support::install_generation(
             stx,
             1,
-            sample_generation_at(1, 1),
+            &(sample_generation_at(1, 1)),
         )
         .expect("generation");
         store::committee_current::set(stx, 1);
@@ -1182,6 +1185,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-pub(crate) use registration::reference_pin_rows;

@@ -192,7 +192,7 @@ fn queue_admission_and_proposer_selection_share_the_includable_bound() {
     for boundary in 0..3 {
         let queue = Arc::new(Queue::test(config_factory(), &time));
         let push = |transaction: AcceptedTransaction<'static>| match boundary {
-            0 => queue.push(transaction, state.view()).map(|()| ()),
+            0 => queue.push(transaction, state.view()),
             1 => queue
                 .push_with_lane_with_state(transaction, &state)
                 .map(|_| ()),

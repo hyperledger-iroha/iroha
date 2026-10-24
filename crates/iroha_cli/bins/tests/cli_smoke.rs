@@ -465,7 +465,7 @@ fn wait_for_exit(
         if elapsed >= timeout {
             return Ok(None);
         }
-        thread::sleep(CLI_COMMAND_POLL_INTERVAL.min(timeout - elapsed));
+        thread::sleep(CLI_COMMAND_POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
     }
 }
 fn command_timeout_error(command: &Command, timeout: Duration) -> io::Error {
@@ -2068,8 +2068,8 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
     let metrics_a_path = write_metrics_file(&temp_dir, &metrics_a);
     let metrics_b_path = write_metrics_file(&temp_dir, &metrics_b);
     let bond_path = write_bond_file(&temp_dir, &sample_bond_entry());
-    let beneficiary_a_literal = account_literal_for("beneficiary-a");
-    let beneficiary_b_literal = account_literal_for("beneficiary-b");
+    let initial_beneficiary_literal = account_literal_for("beneficiary-a");
+    let next_epoch_recipient = account_literal_for("beneficiary-b");
     let output = command()
         .args([
             "app",
@@ -2086,9 +2086,9 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
             "--bond",
             bond_path.to_str().unwrap(),
             "--beneficiary",
-            beneficiary_a_literal.as_str(),
+            initial_beneficiary_literal.as_str(),
             "--beneficiary",
-            beneficiary_b_literal.as_str(),
+            next_epoch_recipient.as_str(),
             "--pretty",
         ])
         .output()

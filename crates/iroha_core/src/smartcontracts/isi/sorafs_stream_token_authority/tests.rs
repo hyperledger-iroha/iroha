@@ -195,7 +195,7 @@ fn same_signed_transaction_cannot_stage_a_terminal_row_or_mutate_state() {
         total_admissions: 1,
     };
     assert_eq!(
-        stage_transition(&mut tx, provider, record, next, false),
+        stage_transition(&mut tx, provider, &(record), next, false),
         Err(Error::Invalid)
     );
     assert!(

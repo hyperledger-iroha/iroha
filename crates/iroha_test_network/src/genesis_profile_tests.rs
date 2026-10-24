@@ -65,10 +65,12 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
             &genesis_account,
             &topology,
             &genesis_key_pair,
-            None,
-            None,
-            None,
-            Some(&actual),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: None,
+                nexus_config: None,
+                zk_config: None,
+                runtime_config: Some(&actual),
+            },
         )
         .expect("selected-profile signed genesis must execute on a foreign-profile thread");
         assert!(
@@ -90,18 +92,22 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
                 topology_entries,
                 genesis_key_pair.clone(),
                 chain,
-                Some(config::manifest_crypto_from_actual(&actual.crypto)),
-                Some(iroha_core::da::proof_policy_bundle(
-                    &actual.nexus.lane_config,
-                )),
-                None,
-                Some(actual.nexus.clone()),
-                Some(actual.zk.clone()),
-                Some(actual.clone()),
-                Some(handshake),
-                None,
-                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-                None,
+                crate::config::GenesisPolicyConfig {
+                    genesis_crypto: Some(config::manifest_crypto_from_actual(&actual.crypto)),
+                    da_proof_policies: Some(iroha_core::da::proof_policy_bundle(
+                        &actual.nexus.lane_config,
+                    )),
+                    pipeline_config: None,
+                    nexus_config: Some(actual.nexus.clone()),
+                    zk_config: Some(actual.zk.clone()),
+                    runtime_config: Some(actual.clone()),
+                    consensus_handshake_meta: Some(handshake),
+                    consensus_mode_override: None,
+                    confidential_policy_hash: Some(
+                        iroha_core::state::default_genesis_confidential_policy_hash(),
+                    ),
+                    preview_cadence_ms: None,
+                },
             );
         assert!(
             generated
@@ -137,10 +143,12 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
             &genesis_account,
             &topology,
             &genesis_key_pair,
-            None,
-            None,
-            None,
-            Some(&wrong),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: None,
+                nexus_config: None,
+                zk_config: None,
+                runtime_config: Some(&wrong),
+            },
         )
         .expect_err("explicit foreign staking account must remain rejected");
         let diagnostic = format!("{error:#}");

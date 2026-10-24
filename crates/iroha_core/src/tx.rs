@@ -1073,7 +1073,10 @@ impl DecodedVersionedSignedTransaction {
     /// Returns the same versioning and Norito decode errors as the signed transaction
     /// versioned decoder.
     pub fn decode_versioned_owned(input: Vec<u8>) -> iroha_version::error::Result<Self> {
-        Self::decode_versioned(input.as_slice())
+        let result = Self::decode_versioned(input.as_slice());
+        // Owned transport bytes are released at this decode boundary.
+        drop(input);
+        result
     }
     /// Borrow the decoded signed transaction.
     #[must_use]
@@ -1242,14 +1245,13 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
         Executable::Instructions(instructions) => {
             instructions.iter().any(is_time_sensitive_instruction)
         }
-        Executable::ContractCall(_) => true,
+        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => true,
         Executable::Batch(items) => items.iter().any(|item| match item {
             ExecutableBatchItem::Instruction(instruction) => {
                 is_time_sensitive_instruction(instruction)
             }
             ExecutableBatchItem::ContractCall(_) => true,
         }),
-        Executable::Ivm(_) | Executable::IvmProved(_) => true,
     }
 }
 fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
@@ -1863,7 +1865,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> SignatureVerificationFail {
         SignatureVerificationFail::new(
             tx.signature().clone(),
-            Self::signature_rejection_code(&err),
+            Self::signature_rejection_code(err),
             err.to_string(),
         )
     }
@@ -2934,7 +2936,7 @@ impl StateBlock<'_> {
         tx: &SignedTransaction,
         state_transaction: &mut StateTransaction<'_, '_>,
         routing_decision: crate::queue::RoutingDecision,
-        policy_route: CapturedNetworkPolicyRoute,
+        policy_route: &CapturedNetworkPolicyRoute,
         genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     ) -> Result<StatefulAdmission, TransactionRejectionReason> {
         if let Some(genesis) = genesis {
@@ -3143,7 +3145,7 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
         routing_decision: crate::queue::RoutingDecision,
-        policy_route: CapturedNetworkPolicyRoute,
+        policy_route: &CapturedNetworkPolicyRoute,
         genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         state_transaction
@@ -3357,7 +3359,7 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
         routing_decision: crate::queue::RoutingDecision,
-        policy_route: CapturedNetworkPolicyRoute,
+        policy_route: &CapturedNetworkPolicyRoute,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         let key = sealed_commitment_state_key(&reveal.commitment);
         let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
@@ -5289,7 +5291,7 @@ pub fn execute_component_transaction_for_testing(
         &mut overlay,
         cache,
         route,
-        policy_route,
+        &policy_route,
         None,
     ) {
         Ok(sequence) => {
@@ -6692,7 +6694,7 @@ pub mod tests {
         let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, native)
             .expect("completed original physical policy capture");
         assert_not_permitted_contains(
-            StateBlock::validate_stateful_admission(&tx, &mut overlay, native, policy_route, None)
+            StateBlock::validate_stateful_admission(&tx, &mut overlay, native, &policy_route, None)
                 .map(|_| ()),
             "runtime upgrade hook prohibits runtime upgrade instructions",
         );
@@ -6728,7 +6730,7 @@ pub mod tests {
         let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, native)
             .expect("completed original physical policy capture");
         assert_not_permitted_contains(
-            StateBlock::validate_stateful_admission(&tx, &mut overlay, native, policy_route, None)
+            StateBlock::validate_stateful_admission(&tx, &mut overlay, native, &policy_route, None)
                 .map(|_| ()),
             "physical policy dataspace differs from authenticated native source",
         );
@@ -13909,7 +13911,7 @@ pub mod tests {
                 &mut overlay,
                 cache,
                 explicit_route,
-                captured,
+                &(captured),
                 None,
             )
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -14196,7 +14198,7 @@ pub mod tests {
             &mut overlay,
             &mut cache,
             route,
-            policy_route,
+            &policy_route,
             None,
         );
         result.expect("zero block gas limit must mean unlimited");

@@ -1745,15 +1745,15 @@ struct Fixture {
 }
 impl Fixture {
     fn new(quorum: u16) -> Self {
-        Self::new_with_policy(quorum, policy())
+        Self::new_with_policy(quorum, &(policy()))
     }
-    fn new_with_policy(quorum: u16, case_policy: ModerationLedgerPolicyV1) -> Self {
+    fn new_with_policy(quorum: u16, case_policy: &ModerationLedgerPolicyV1) -> Self {
         let manager = keypair(0x11);
         let jurors = [keypair(0x21), keypair(0x22), keypair(0x23)];
         let outsider = keypair(0x31);
         let manager_id = account(&manager);
         let juror_ids = jurors.iter().map(account).collect::<Vec<_>>();
-        let spec = spec_with_policy(juror_ids, quorum, &case_policy);
+        let spec = spec_with_policy(juror_ids, quorum, case_policy);
         let mut state = state(
             &[&manager, &jurors[0], &jurors[1], &jurors[2], &outsider],
             &manager_id,
@@ -2044,7 +2044,7 @@ fn challenge_funding_uses_case_pinned_custody_after_live_governance_rotation() {
     let pinned_escrow = account(&keypair(0x22));
     let pinned_slash_receiver = account(&keypair(0x23));
     let pinned_policy = policy_with_custody(pinned_escrow.clone(), pinned_slash_receiver.clone());
-    let mut fixture = Fixture::new_with_policy(1, pinned_policy.clone());
+    let mut fixture = Fixture::new_with_policy(1, &(pinned_policy));
     let challenger = account(&fixture.outsider);
     let rotated_escrow = fixture.juror_id(0);
     let rotated_slash_receiver = fixture.manager_id();

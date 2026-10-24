@@ -190,6 +190,7 @@ fn reject_reserved_native_escrow_id(escrow_id: &EscrowId) -> Result<(), Error> {
     reject_reserved_orderbook_escrow_id(escrow_id)?;
     reject_reserved_controlled_asset_lock_id(escrow_id)
 }
+#[derive(Clone, Copy)]
 enum AssetLockNamespace {
     Generic,
     Orderbook,
@@ -477,7 +478,7 @@ pub(crate) fn open_orderbook_order_asset_lock(
         Vec::new(),
     );
     execute_open_asset_lock(
-        &(instruction),
+        instruction,
         owner,
         state_transaction,
         AssetLockNamespace::Orderbook,
@@ -1634,7 +1635,7 @@ impl Execute for ResolveEscrowDispute {
     }
 }
 fn execute_open_asset_lock(
-    instruction: &OpenAssetLock,
+    instruction: OpenAssetLock,
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
     namespace: AssetLockNamespace,
@@ -1734,7 +1735,7 @@ impl Execute for OpenAssetLock {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         execute_open_asset_lock(
-            &(self),
+            self,
             authority,
             state_transaction,
             AssetLockNamespace::Generic,
@@ -3266,7 +3267,7 @@ mod tests {
         crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
             &mut state_transaction.world,
             custody_asset,
-            &amount,
+            amount,
         )
         .expect("deposit closed custody dust");
     }
@@ -4419,14 +4420,12 @@ mod tests {
         assert!(
             crate::state::range_bounds::index_members(&tx.world.asset_escrows_by_seller, &seller)
                 .copied()
-                .collect::<std::collections::BTreeSet<_>>()
-                .contains(&escrow_id)
+                .any(|x| x == escrow_id)
         );
         assert!(
             crate::state::range_bounds::index_members(&tx.world.asset_escrows_by_buyer, &buyer)
                 .copied()
-                .collect::<std::collections::BTreeSet<_>>()
-                .contains(&escrow_id)
+                .any(|x| x == escrow_id)
         );
         assert!(
             crate::state::range_bounds::index_members(

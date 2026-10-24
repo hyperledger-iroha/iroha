@@ -74,7 +74,7 @@ async fn storage_token_issues_signed_response() {
 async fn storage_token_runtime_signer_failures_are_payload_free_and_fail_closed() {
     async fn issue_with_mode(mode: ApiTestStreamTokenSignerMode) -> axum::response::Response {
         let context = token_test_context_with_payload_and_signer_mode(
-            b"runtime signer failure fixture".to_vec(),
+            b"runtime signer failure fixture",
             mode,
         );
         let mut headers = HeaderMap::new();

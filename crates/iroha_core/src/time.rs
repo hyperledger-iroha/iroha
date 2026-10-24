@@ -1036,7 +1036,7 @@ fn sample_measurement(
     Some((offset_ms, rtt_ms))
 }
 /// Handle incoming time messages from the network relay.
-pub fn handle_message(peer: Peer, msg: crate::NetworkMessage, network: &IrohaNetwork) {
+pub fn handle_message(peer: &Peer, msg: crate::NetworkMessage, network: &IrohaNetwork) {
     match msg {
         crate::NetworkMessage::TimePing(p) => {
             let arrival = local_clock_sample();

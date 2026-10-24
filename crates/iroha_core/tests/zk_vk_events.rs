@@ -2,8 +2,8 @@
 #![cfg(feature = "zk-tests")]
 //! Tests for `VerifyingKey` registry lifecycle events.
 #![allow(clippy::items_after_statements)]
-#[path = "common/zk_components.rs"]
-mod zk_components;
+use crate::test_world;
+use crate::zk_components;
 use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
 use iroha_data_model::{
     confidential::ConfidentialStatus,
@@ -14,8 +14,6 @@ use iroha_data_model::{
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 use zk_components::execute_isi_component;
-#[path = "common/world_fixture.rs"]
-mod test_world;
 #[test]
 fn vk_register_update_emit_events() {
     // Minimal node state and block context
@@ -60,7 +58,7 @@ fn vk_register_update_emit_events() {
         record: rec.clone(),
     }
     .into();
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_insn).expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(reg_insn)).expect("register vk");
     // Update to version 2
     let mut rec2 = iroha_data_model::proof::VerifyingKeyRecord::new(
         2,
@@ -79,7 +77,7 @@ fn vk_register_update_emit_events() {
         record: rec2.clone(),
     }
     .into();
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), upd).expect("update vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(upd)).expect("update vk");
     // Apply and extract events
     stx.apply();
     let mut events = block.world.take_external_events();

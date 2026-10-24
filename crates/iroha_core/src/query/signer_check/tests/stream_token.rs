@@ -139,8 +139,10 @@ fn role11_check_binding_rejects_substitutions_and_non_check_actions() {
             &state,
             &mut round,
             NativeCustodyCheckRefV1::StreamToken(&check),
-            state.view().chain_id().as_ref(),
-            *state.network_id_ref().as_bytes(),
+            (
+                state.view().chain_id().as_ref(),
+                *state.network_id_ref().as_bytes()
+            ),
             &AccountId::new(key(2).public_key().clone()),
             floor(),
             sign(&state, changed.into(), 2, 3_000),
@@ -158,8 +160,10 @@ fn role11_check_binding_rejects_substitutions_and_non_check_actions() {
             &state,
             &mut round,
             NativeCustodyCheckRefV1::StreamToken(&check),
-            state.view().chain_id().as_ref(),
-            *state.network_id_ref().as_bytes(),
+            (
+                state.view().chain_id().as_ref(),
+                *state.network_id_ref().as_bytes()
+            ),
             &AccountId::new(key(2).public_key().clone()),
             wrong_floor,
             sign(&state, check.clone().into(), 2, 3_000),

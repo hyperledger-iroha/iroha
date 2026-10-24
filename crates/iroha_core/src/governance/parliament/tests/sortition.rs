@@ -708,7 +708,7 @@ fn hidden_sortition_capacity_failure_is_typed_bounded_and_consumes_no_pulse() {
             id,
             sequence,
             ParliamentBody::PolicyJury,
-            snapshot.clone(),
+            &(snapshot.clone()),
             3,
             request_height,
             generation_slot(&state, request_height, beacon_session(116)),
@@ -769,7 +769,7 @@ fn hidden_sortition_capacity_restore_rejects_mutated_evidence() {
         id,
         0,
         ParliamentBody::PolicyJury,
-        snapshot.clone(),
+        &(snapshot.clone()),
         3,
         10,
         20,
@@ -1194,7 +1194,7 @@ fn retryable_singleton_capacity_failure_retains_only_its_live_candidate_bond() {
             id,
             sequence,
             ParliamentBody::PolicyJury,
-            snapshot.clone(),
+            &(snapshot.clone()),
             3,
             request_height,
             generation_slot(&state, request_height, beacon_session(141)),
@@ -1965,7 +1965,7 @@ fn sortition_generation_at(
                 governance_attempt_id,
                 sequence,
                 body,
-                candidate_snapshot.to_vec(),
+                candidate_snapshot,
                 3,
                 request_height,
                 pulse_height,
@@ -2007,11 +2007,11 @@ fn rules_and_policy_invitations_open(
     (state, elections)
 }
 
+type DrawnBodyRoster = (ParliamentBody, Vec<AccountId>, Vec<AccountId>, Option<u32>);
+
 /// Register and draw the Rules Committee and Policy Jury of the attempt for `proposal_tag`
 /// from one shared twelve-citizen snapshot and the pulse `pulse` of slot 20, returning each
 /// body's ranked primaries and alternates and the cross-body assignment cap.
-type DrawnBodyRoster = (ParliamentBody, Vec<AccountId>, Vec<AccountId>, Option<u32>);
-
 fn drawn_rules_and_policy_rosters(
     proposal_tag: u8,
     pulse: BeaconPulseId,
@@ -2487,7 +2487,7 @@ fn retry_capacity_evidence_may_cover_a_subset_with_mixed_sequences() {
                 id,
                 sequence,
                 body,
-                small.clone(),
+                &(small.clone()),
                 3,
                 33,
                 capacity_slot,

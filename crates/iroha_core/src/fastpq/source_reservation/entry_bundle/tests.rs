@@ -244,14 +244,14 @@ fn savepoints_restore_whole_frames_and_prevent_identity_or_checkpoint_aba() {
     let discarded = tx.open_entry(other).unwrap();
     tx.replace_bundle(&owner, &bundle).unwrap();
     let branch = tx.checkpoint();
-    assert_eq!(tx.rollback(ancestor).unwrap(), first);
+    assert_eq!(tx.rollback(&(ancestor)).unwrap(), first);
     assert_consistent(&tx);
     let recreated = tx.open_entry(other).unwrap();
     assert_ne!(recreated.inner.binding.id, discarded.inner.binding.id);
     tx.replace_bundle(&owner, &bundle).unwrap();
     let before = tx.usage();
     assert_eq!(
-        tx.rollback(branch),
+        tx.rollback(&(branch)),
         Err(ReservationError::Invariant(
             ReservationInvariant::StaleCheckpoint
         ))
@@ -430,7 +430,7 @@ fn foreign_owner_context_and_checkpoint_fail_before_source_preparation() {
         ))
     );
     assert_eq!(
-        other.rollback(checkpoint),
+        other.rollback(&(checkpoint)),
         Err(ReservationError::Invariant(
             ReservationInvariant::ForeignLedger
         ))
@@ -646,7 +646,7 @@ fn borrowed_committed_pending_and_candidate_replace_one_complete_entry() {
         assert_eq!(tx.usage().executed_entries, 1);
         assert_eq!(tx.usage().transcripts, 3);
         assert_consistent(&tx);
-        assert_eq!(tx.rollback(savepoint).unwrap(), before);
+        assert_eq!(tx.rollback(&(savepoint)).unwrap(), before);
         assert_eq!(tx.owner_usage(&owner).unwrap(), before);
         tx.commit();
     }

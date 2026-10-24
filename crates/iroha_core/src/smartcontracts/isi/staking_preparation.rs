@@ -47,9 +47,9 @@ fn check_deposit(
     let destination_after = if context.staker_asset == context.escrow_asset {
         source_balance
     } else {
-        let remaining = quantity_sub(source_balance, &(amount.clone()))?;
+        let remaining = quantity_sub(&(source_balance), &(amount.clone()))?;
         ensure_public_lane_reserves_after_debit(world, &context.staker_asset, &remaining)?;
-        quantity_add(balance(world, &context.escrow_asset), &(amount.clone()))?
+        quantity_add(&(balance(world, &context.escrow_asset)), &(amount.clone()))?
     };
     prepare_stake_custody_credit(
         world,

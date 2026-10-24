@@ -77,11 +77,11 @@ impl NativeValidationFixture {
             .into_iter()
             .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
             .collect::<Vec<_>>();
-        self.proposal_from_inputs(inputs, cadence)
+        self.proposal_from_inputs(&(inputs), cadence)
     }
     fn proposal_from_inputs(
         &self,
-        inputs: Vec<AcceptedTransaction<'static>>,
+        inputs: &[AcceptedTransaction<'static>],
         cadence: Duration,
     ) -> SignedBlock {
         let parent = self.chain.committed(self.chain.height());
@@ -93,7 +93,7 @@ impl NativeValidationFixture {
                 cadence,
                 proposed_time: std::time::Duration::ZERO,
             },
-            &inputs,
+            inputs,
         )
         .unwrap()
     }

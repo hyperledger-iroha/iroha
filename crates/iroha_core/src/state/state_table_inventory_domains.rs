@@ -95,6 +95,15 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
+        reason: "Schema identifiers for the closed iOS/Android FI context requests and nested iOS wallet binding. They select accepted JSON layouts; the request digest covers the complete original bytes and supplies no ledger-state authentication",
+        literals: &[
+            r"boi.wallet-fi-context-evidence.android.v1",
+            r"boi.wallet-fi-context-evidence.ios.v1",
+            r"boi.wallet-fi-context.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
         reason: "Snapshot validation error field labels for native FI, controlled-lock and asset UID policy/enrollment/reader records in world.smart_contract_state; these diagnostics name the failing record family and compute no digest",
         literals: &[
             r"world.smart_contract_state.asset_fi_v1",

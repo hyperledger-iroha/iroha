@@ -651,7 +651,7 @@ fn fee_registered_metadata_refusal_retains_original_json_attempt() {
             &original_metadata
         );
         assert_eq!(
-            validate_registered_account_state(&tx.world, native.account_id.clone(), native.clone())
+            validate_registered_account_state(&tx.world, &native.account_id, native.clone())
                 .unwrap(),
             *native
         );

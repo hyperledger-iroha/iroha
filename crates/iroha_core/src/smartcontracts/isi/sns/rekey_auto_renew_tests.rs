@@ -310,7 +310,7 @@ fn original_rekey_fixture_with_source_policy(
         (
             crate::sns::quote_resolved_name_registration(
                 view.world(),
-                selector,
+                &(selector),
                 &old_owner,
                 1,
                 None,
@@ -458,7 +458,7 @@ fn signed_rekey_current_owner_can_replace_stale_auto_renew_configuration() {
         let expiry = lease.expires_at_ms;
         let quote = crate::sns::quote_resolved_name_renewal(
             view.world(),
-            selector,
+            &(selector),
             expiry,
             expiry + iroha_data_model::alias_setup::ALIAS_LEASE_YEAR_MS,
             expiry - 1_000,

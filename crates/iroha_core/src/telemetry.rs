@@ -4761,12 +4761,12 @@ impl Telemetry {
         let _ = alert;
     }
     telemetry_enabled_metric_methods! {
-    /// Increment canonical active-request accounting for a SoraFS gateway route.
+    /// Increment canonical active-request accounting for a `SoraFS` gateway route.
     [start_sorafs_gateway_request(labels: SorafsGatewayRequestMetricLabels<'_>);]
     /// Complete canonical request accounting and record the response/TTFB metrics.
     [finish_sorafs_gateway_request(labels: SorafsGatewayResponseMetricLabels<'_>, ttfb: Duration) =>
         .finish_sorafs_gateway_request(labels, ttfb.as_secs_f64() * 1000.0);]
-    /// Record one canonical SoraFS gateway proof-verification outcome.
+    /// Record one canonical `SoraFS` gateway proof-verification outcome.
     [record_sorafs_gateway_proof_verification(
         profile_version: &str, result: &str, error_code: &str, duration: Duration,
     ) =>

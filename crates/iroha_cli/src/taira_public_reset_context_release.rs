@@ -130,24 +130,40 @@ fn validate_public_genesis(
 }
 
 #[cfg(unix)]
+#[derive(Clone, Copy)]
+struct ReleaseFingerprintInputs<'a> {
+    artifacts: &'a [ArtifactV1],
+    pins: &'a [PinnedInput],
+    public: &'a public_inputs::PublicInputsV1,
+    genesis_bytes: &'a [u8],
+    operator_public_key: &'a str,
+    build_identity: &'a iroha_core::release_identity::BuildIdentity,
+}
+
+#[cfg(unix)]
 fn derive_fingerprints(
     intent: &ResetTopologyIntentV1,
     validator: &ResetValidatorIntentV1,
     client: &ValidatorClientV1,
-    artifacts: &[ArtifactV1],
-    pins: &[PinnedInput],
-    public: &public_inputs::PublicInputsV1,
-    genesis_bytes: &[u8],
-    operator_public_key: &str,
-    build_identity: &iroha_core::release_identity::BuildIdentity,
+    inputs: ReleaseFingerprintInputs<'_>,
 ) -> Result<(String, String, String)> {
     use iroha_config::{
         base::toml::{MAX_TOML_SOURCE_BYTES, TomlSource},
         parameters::actual,
     };
+
+    let ReleaseFingerprintInputs {
+        artifacts,
+        pins,
+        public,
+        genesis_bytes,
+        operator_public_key,
+        build_identity,
+    } = inputs;
+
     let input = role_pin(artifacts, pins, "config")?;
     let path = input.path.clone();
-    let bytes = Zeroizing::new(pinned_bytes(input, MAX_TOML_SOURCE_BYTES as u64)?);
+    let bytes = Zeroizing::new(pinned_bytes(input, MAX_TOML_SOURCE_BYTES)?);
     validate_validator_genesis_config(
         &bytes,
         Path::new(&artifact(artifacts, "genesis")?.remote_path),
@@ -323,12 +339,14 @@ pub(super) fn derive_release(
             intent,
             validator,
             client,
-            &artifacts,
-            &artifact_pins,
-            public,
-            &genesis_bytes,
-            operator_public_key,
-            &build_identity,
+            ReleaseFingerprintInputs {
+                artifacts: &artifacts,
+                pins: &artifact_pins,
+                public,
+                genesis_bytes: &genesis_bytes,
+                operator_public_key,
+                build_identity: &build_identity,
+            },
         )?;
         revalidate_pinned(genesis, "signed genesis")?;
         let derived = ValidatorV1 {
@@ -467,8 +485,12 @@ mod tests {
             remote_path: "/native/release/bin/iroha".into(),
         };
         let revision = sample_inventory_fixture().revision;
-        let (artifacts, _) =
-            derive_artifacts(&[intent.clone()], &revision, host_pair::NATIVE_EDGE_TARGET).unwrap();
+        let (artifacts, _) = derive_artifacts(
+            std::slice::from_ref(&intent),
+            &revision,
+            host_pair::NATIVE_EDGE_TARGET,
+        )
+        .unwrap();
         assert_eq!(artifacts[0].target, host_pair::NATIVE_EDGE_TARGET);
         assert_eq!(artifacts[0].source_commit, revision.commit);
         assert!(derive_artifacts(&[intent], &revision, "x86_64-unknown-linux-gnu").is_err());

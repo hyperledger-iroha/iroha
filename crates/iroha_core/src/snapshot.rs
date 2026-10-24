@@ -638,7 +638,7 @@ impl SnapshotMerkleMetadata {
             "`{field}` must be an array of hex strings"
         )))
     }
-    fn from_json_value(value: norito::json::Value) -> Result<Self, SnapshotMerkleError> {
+    fn from_json_value(value: &norito::json::Value) -> Result<Self, SnapshotMerkleError> {
         let map = value
             .as_object()
             .ok_or_else(|| Self::parse_error("snapshot Merkle metadata must be a JSON object"))?;
@@ -820,7 +820,7 @@ impl SnapshotMerkleMetadata {
         };
         let value =
             json::from_slice::<norito::json::Value>(&bytes).map_err(SnapshotMerkleError::Parse)?;
-        let metadata = Self::from_json_value(value)?;
+        let metadata = Self::from_json_value(&(value))?;
         let canonical = json::to_json(&metadata).map_err(SnapshotMerkleError::Parse)?;
         if canonical.as_bytes() != bytes {
             return Err(Self::parse_error(
@@ -2308,10 +2308,10 @@ enum CanonicalWsvPath {
 #[derive(Clone, Copy, Default)]
 #[cfg(test)]
 struct CanonicalWsvOverrides<'a> {
-    committed_external_event_buf: Option<&'a str>,
-    committed_axt_replay_ledger: Option<&'a str>,
-    committed_smart_contract_state: Option<&'a str>,
-    committed_da_pin_indexes: [Option<&'a str>; 4],
+    external_event_buf: Option<&'a str>,
+    axt_replay_ledger: Option<&'a str>,
+    smart_contract_state: Option<&'a str>,
+    da_pin_indexes: [Option<&'a str>; 4],
 }
 #[cfg(test)]
 struct BorrowedJsonMember<'a> {
@@ -2483,7 +2483,7 @@ fn update_snapshot_wsv_object_hash<'a>(
         && !members
             .iter()
             .any(|member| member.key == "external_event_buf")
-        && let Some(value) = overrides.committed_external_event_buf
+        && let Some(value) = overrides.external_event_buf
     {
         // `WorldBlock` deliberately skips the process-owned event-buffer cell,
         // while committing the overlay leaves the live cell intact. Inject the
@@ -2517,13 +2517,13 @@ fn update_snapshot_wsv_object_hash<'a>(
         // omit them from the immutable pre-WSV recovery checkpoint.
         let serialized_value = if path == CanonicalWsvPath::World {
             match member.key.as_str() {
-                "external_event_buf" => overrides.committed_external_event_buf,
-                "axt_replay_ledger" => overrides.committed_axt_replay_ledger,
-                "smart_contract_state" => overrides.committed_smart_contract_state,
-                "da_pin_intents_by_ticket" => overrides.committed_da_pin_indexes[0],
-                "da_pin_intents_by_alias" => overrides.committed_da_pin_indexes[1],
-                "da_pin_intents_by_manifest" => overrides.committed_da_pin_indexes[2],
-                "da_pin_intents_by_lane_epoch" => overrides.committed_da_pin_indexes[3],
+                "external_event_buf" => overrides.external_event_buf,
+                "axt_replay_ledger" => overrides.axt_replay_ledger,
+                "smart_contract_state" => overrides.smart_contract_state,
+                "da_pin_intents_by_ticket" => overrides.da_pin_indexes[0],
+                "da_pin_intents_by_alias" => overrides.da_pin_indexes[1],
+                "da_pin_intents_by_manifest" => overrides.da_pin_indexes[2],
+                "da_pin_intents_by_lane_epoch" => overrides.da_pin_indexes[3],
 
                 _ => None,
             }
@@ -2928,7 +2928,7 @@ where
         .join(SNAPSHOT_MERKLE_FILE_NAME);
     let merkle_value = json::from_slice::<json::Value>(&generation.bytes.merkle)
         .map_err(TryReadError::MerkleMetadata)?;
-    let merkle = SnapshotMerkleMetadata::from_json_value(merkle_value)
+    let merkle = SnapshotMerkleMetadata::from_json_value(&(merkle_value))
         .map_err(|error| merkle_err_to_try_read(error, &merkle_path))?;
     let canonical_merkle = json::to_json(&merkle).map_err(TryReadError::MerkleMetadata)?;
     if canonical_merkle.as_bytes() != generation.bytes.merkle {
@@ -3416,7 +3416,7 @@ fn snapshot_generation_is_canonical_for_gc(
         verify_signature_hex(signature_hex, &bundle_digest, verification_key)?;
         let merkle_value =
             json::from_slice::<json::Value>(&merkle_bytes).map_err(TryReadError::MerkleMetadata)?;
-        let metadata = SnapshotMerkleMetadata::from_json_value(merkle_value)
+        let metadata = SnapshotMerkleMetadata::from_json_value(&(merkle_value))
             .map_err(|error| merkle_err_to_try_read(error, &merkle_file.path))?;
         let canonical_merkle = json::to_json(&metadata).map_err(TryReadError::MerkleMetadata)?;
         if canonical_merkle.as_bytes() != merkle_bytes {
@@ -4055,17 +4055,11 @@ fn bind_existing_snapshot_generation_for_write(
     published.verify_unchanged()?;
     Ok(published)
 }
+type SnapshotGenerationPayload<'a> = (&'a str, &'a [u8], &'a [u8], &'a [u8], &'a [u8], &'a [u8]);
 fn publish_immutable_snapshot_generation(
     store_dir: &Path,
     store_dir_identity: StableSnapshotFileIdentity,
-    (digest_hex, payload, digest, signature, fast_manifest, merkle): (
-        &str,
-        &[u8],
-        &[u8],
-        &[u8],
-        &[u8],
-        &[u8],
-    ),
+    (digest_hex, payload, digest, signature, fast_manifest, merkle): SnapshotGenerationPayload<'_>,
     merkle_limit: u64,
     verification_key: &PublicKey,
 ) -> Result<PublishedSnapshotGeneration, TryWriteError> {
@@ -4470,7 +4464,7 @@ fn try_write_snapshot_payload_with_limit(
     signing_key: &KeyPair,
     merkle_chunk_size: NonZeroUsize,
     max_payload_bytes: NonZeroUsize,
-    snapshot_bytes: Vec<u8>,
+    snapshot_bytes: &[u8],
 ) -> Result<(), TryWriteError> {
     let read_buffer_budget = &AllocationBudget::new(
         iroha_config::parameters::defaults::snapshot::MAX_READ_BUFFER_BYTES.get(),
@@ -4479,7 +4473,7 @@ fn try_write_snapshot_payload_with_limit(
         // This test-only seam accepts caller-supplied bytes, unlike the production writer whose
         // payload is emitted directly from the typed State. Keep the full restart dry run here so
         // adversarial fixture bytes cannot exercise post-publication geometry compaction.
-        validate_generated_snapshot_for_restart(state, &snapshot_bytes)
+        validate_generated_snapshot_for_restart(state, snapshot_bytes)
             .map_err(TryWriteError::RestartValidation)?;
         let captured = CapturedStateSnapshot::capture(state).map_err(TryWriteError::Capture)?;
         let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
@@ -4492,7 +4486,7 @@ fn try_write_snapshot_payload_with_limit(
                 max_payload_bytes,
                 SnapshotResourcePolicy::default(),
             ),
-            &(snapshot_bytes),
+            snapshot_bytes,
             captured.identity,
             read_buffer_budget,
         )
@@ -4512,7 +4506,7 @@ fn try_write_snapshot_payload_with_limit_locked(
     identity: CapturedSnapshotIdentity,
     read_buffer_budget: &AllocationBudget,
 ) -> Result<CapturedSnapshotIdentity, TryWriteError> {
-    identity.validate_bytes(&snapshot_bytes)?;
+    identity.validate_bytes(snapshot_bytes)?;
     ensure_snapshot_identity_is_backed_by_kura(state, &identity)?;
     if snapshot_bytes.len() > max_payload_bytes.get() {
         return Err(TryWriteError::PayloadTooLarge {
@@ -4520,7 +4514,7 @@ fn try_write_snapshot_payload_with_limit_locked(
             maximum: max_payload_bytes,
         });
     }
-    let summary = validate_snapshot_json_resources(&snapshot_bytes, resource_policy)
+    let summary = validate_snapshot_json_resources(snapshot_bytes, resource_policy)
         .map_err(TryWriteError::RestartValidation)?;
     if !summary.has_space_directory_manifests {
         return Err(TryWriteError::RestartValidation(
@@ -4529,7 +4523,7 @@ fn try_write_snapshot_payload_with_limit_locked(
             },
         ));
     }
-    let geometry_checkpoint = geometry_checkpoint_from_snapshot(&snapshot_bytes)?;
+    let geometry_checkpoint = geometry_checkpoint_from_snapshot(snapshot_bytes)?;
     let state_height = u64::try_from(identity.height).map_err(|_| {
         TryWriteError::PublicationIntegrity(
             "State height exceeds the u64 manifest domain".to_owned(),
@@ -4559,10 +4553,10 @@ fn try_write_snapshot_payload_with_limit_locked(
     let store_dir = store_dir.as_ref();
     let directory_identity = direct_snapshot_directory_identity(store_dir)
         .map_err(|error| snapshot_publication_error("bind snapshot directory", error))?;
-    let digest_bytes: [u8; 32] = Sha256::digest(&snapshot_bytes).into();
+    let digest_bytes: [u8; 32] = Sha256::digest(snapshot_bytes).into();
     let digest_vec = digest_bytes.to_vec();
     let digest_hex = hex::encode(&digest_vec);
-    let merkle = SnapshotMerkleMetadata::from_bytes(&snapshot_bytes, merkle_chunk_size);
+    let merkle = SnapshotMerkleMetadata::from_bytes(snapshot_bytes, merkle_chunk_size);
     let digest_line = format!("{digest_hex}\n").into_bytes();
     let fast_manifest = EmergencyFastSnapshotManifestV1 {
         version: SNAPSHOT_FAST_MANIFEST_VERSION,
@@ -4603,7 +4597,7 @@ fn try_write_snapshot_payload_with_limit_locked(
         directory_identity,
         (
             &digest_hex,
-            &snapshot_bytes,
+            snapshot_bytes,
             &digest_line,
             &signature_hex,
             &fast_manifest_bytes,
@@ -5006,21 +5000,18 @@ pub(crate) fn canonical_staged_state_snapshot_hash(
 ) -> iroha_crypto::Hash {
     let mut snapshot_json = String::new();
     serialize_staged_state_snapshot(state_block, &mut snapshot_json);
-    let mut committed_external_event_buf = String::new();
-    state_block.json_serialize_committed_external_event_buffer(&mut committed_external_event_buf);
-    let committed_axt_replay_ledger = state_block.json_serialize_committed_axt_replay_ledger();
-    let committed_smart_contract_state =
-        state_block.json_serialize_committed_smart_contract_state();
-    let committed_da_pin_indexes = state_block.json_serialize_committed_da_pin_indexes();
+    let mut external_event_buf = String::new();
+    state_block.json_serialize_committed_external_event_buffer(&mut external_event_buf);
+    let axt_replay_ledger = state_block.json_serialize_committed_axt_replay_ledger();
+    let smart_contract_state = state_block.json_serialize_committed_smart_contract_state();
+    let da_pin_indexes = state_block.json_serialize_committed_da_pin_indexes();
     canonical_snapshot_wsv_hash_with_overrides(
         snapshot_json.as_bytes(),
         CanonicalWsvOverrides {
-            committed_external_event_buf: Some(&committed_external_event_buf),
-            committed_axt_replay_ledger: committed_axt_replay_ledger.as_deref(),
-            committed_smart_contract_state: committed_smart_contract_state.as_deref(),
-            committed_da_pin_indexes: committed_da_pin_indexes
-                .each_ref()
-                .map(|value| value.as_deref()),
+            external_event_buf: Some(&external_event_buf),
+            axt_replay_ledger: axt_replay_ledger.as_deref(),
+            smart_contract_state: smart_contract_state.as_deref(),
+            da_pin_indexes: da_pin_indexes.each_ref().map(|value| value.as_deref()),
         },
     )
     .expect("typed staged State serialization must form a canonical WSV snapshot")

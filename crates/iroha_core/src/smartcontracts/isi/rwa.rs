@@ -53,7 +53,7 @@ pub mod isi {
             )
         })
     }
-    fn authoritative_rwa(entry: RwaEntry<'_>) -> Rwa {
+    fn authoritative_rwa(entry: &RwaEntry<'_>) -> Rwa {
         let value = entry.value().clone().into_inner();
         Rwa {
             id: entry.id().clone(),
@@ -70,7 +70,10 @@ pub mod isi {
         }
     }
     fn load_rwa(world: &impl WorldReadOnly, id: &RwaId) -> Result<Rwa, Error> {
-        world.rwa(id).map(authoritative_rwa).map_err(Error::from)
+        world
+            .rwa(id)
+            .map(|value| authoritative_rwa(&value))
+            .map_err(Error::from)
     }
     fn authority_is_controller(
         world: &impl WorldReadOnly,
@@ -1046,7 +1049,11 @@ pub mod isi {
                 .map(|(id, value)| (id.clone(), value.clone().into_inner()))
                 .collect();
             assert_eq!(lots.len(), 2, "partial transfer should create a child lot");
-            let source = stx.world.rwa(&source_id).map(authoritative_rwa).unwrap();
+            let source = stx
+                .world
+                .rwa(&source_id)
+                .map(|value| authoritative_rwa(&value))
+                .unwrap();
             assert_eq!(source.quantity, "6".parse::<Quantity>().unwrap());
             assert_eq!(source.owned_by, owner);
             let child = lots
@@ -1126,7 +1133,11 @@ pub mod isi {
             .execute(&owner, &mut stx)
             .unwrap();
             assert_eq!(stx.world.rwas.iter().count(), 1);
-            let rwa = stx.world.rwa(&rwa_id).map(authoritative_rwa).unwrap();
+            let rwa = stx
+                .world
+                .rwa(&rwa_id)
+                .map(|value| authoritative_rwa(&value))
+                .unwrap();
             assert_eq!(rwa.owned_by, recipient);
             assert_eq!(rwa.quantity, "3".parse::<Quantity>().unwrap());
             assert!(
@@ -1184,7 +1195,7 @@ pub mod isi {
             assert_eq!(
                 stx.world
                     .rwa(&parent_ids[0])
-                    .map(authoritative_rwa)
+                    .map(|value| authoritative_rwa(&value))
                     .unwrap()
                     .quantity,
                 "3".parse::<Quantity>().unwrap()
@@ -1192,7 +1203,7 @@ pub mod isi {
             assert_eq!(
                 stx.world
                     .rwa(&parent_ids[1])
-                    .map(authoritative_rwa)
+                    .map(|value| authoritative_rwa(&value))
                     .unwrap()
                     .quantity,
                 "4".parse::<Quantity>().unwrap()
@@ -1232,7 +1243,7 @@ pub mod isi {
             assert_eq!(
                 stx.world
                     .rwa(&merged_id)
-                    .map(authoritative_rwa)
+                    .map(|value| authoritative_rwa(&value))
                     .unwrap()
                     .quantity,
                 "4".parse::<Quantity>().unwrap()
@@ -1682,7 +1693,7 @@ pub mod query {
         }
         true
     }
-    fn entry_to_rwa(entry: RwaEntry<'_>) -> Rwa {
+    fn entry_to_rwa(entry: &RwaEntry<'_>) -> Rwa {
         let value = entry.value().clone().into_inner();
         Rwa {
             id: entry.id().clone(),
@@ -1712,13 +1723,11 @@ pub mod query {
             );
             let iter: Box<dyn Iterator<Item = Rwa> + '_> =
                 if let Some(candidate_ids) = predicate_view.indexed_candidate_ids(world) {
-                    Box::new(
-                        candidate_ids
-                            .into_iter()
-                            .filter_map(move |id| world.rwa(&id).ok().map(entry_to_rwa)),
-                    )
+                    Box::new(candidate_ids.into_iter().filter_map(move |id| {
+                        world.rwa(&id).ok().map(|value| entry_to_rwa(&value))
+                    }))
                 } else {
-                    Box::new(world.rwas_iter().map(entry_to_rwa))
+                    Box::new(world.rwas_iter().map(|value| entry_to_rwa(&value)))
                 };
             Ok(iter.filter(move |rwa| {
                 predicate_json.as_ref().map_or_else(

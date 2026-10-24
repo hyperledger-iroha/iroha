@@ -434,9 +434,9 @@ fn sorafs_component_fee_source_requires_a_retained_finite_producer() {
     assert_pin_fee_balances_unchanged(
         &stx,
         &alice(),
-        alice_balance_before,
+        &(alice_balance_before),
         &treasury_account,
-        treasury_balance_before,
+        &(treasury_balance_before),
     );
     drop(stx);
     drop(block);
@@ -621,17 +621,17 @@ fn pin_fee_balance(stx: &crate::state::StateTransaction<'_, '_>, account: &Accou
 fn assert_pin_fee_balances_unchanged(
     stx: &crate::state::StateTransaction<'_, '_>,
     account: &AccountId,
-    account_balance_before: Quantity,
+    account_balance_before: &Quantity,
     treasury: &AccountId,
-    treasury_balance_before: Quantity,
+    treasury_balance_before: &Quantity,
 ) {
     assert_eq!(
-        pin_fee_balance(stx, account),
+        &pin_fee_balance(stx, account),
         account_balance_before,
         "rejected pin registration must not charge the submitter"
     );
     assert_eq!(
-        pin_fee_balance(stx, treasury),
+        &pin_fee_balance(stx, treasury),
         treasury_balance_before,
         "rejected pin registration must not credit treasury"
     );
@@ -850,8 +850,6 @@ pub(super) fn default_chunk_digest() -> [u8; 32] {
 }
 pub(super) fn default_content_length() -> u64 {
     BYTES_PER_GIB
-        .try_into()
-        .expect("default GiB byte count fits u64")
 }
 pub(super) fn default_policy() -> PinPolicy {
     PinPolicy {
@@ -1139,9 +1137,9 @@ fn public_pin_resource_ceilings_reject_before_fee_or_state_mutation() {
     assert_pin_fee_balances_unchanged(
         &stx,
         &alice(),
-        alice_balance_before,
+        &(alice_balance_before),
         &treasury_account,
-        treasury_balance_before,
+        &(treasury_balance_before),
     );
     assert_eq!(
         read_pin_usage(stx.world(), pin_global_usage_key(), "global usage")
@@ -1215,9 +1213,9 @@ fn retired_pin_history_cannot_recycle_count_ceilings() {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
 }
@@ -1260,9 +1258,9 @@ fn public_pin_global_and_authority_byte_ceilings_reject_before_fee_or_state() {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
 }
@@ -1472,9 +1470,9 @@ fn public_pin_cannot_reserve_alias_without_alias_permission() {
     assert_pin_fee_balances_unchanged(
         &stx,
         &alice(),
-        alice_balance_before,
+        &(alice_balance_before),
         &treasury_account,
-        treasury_balance_before,
+        &(treasury_balance_before),
     );
 }
 #[test]
@@ -1539,9 +1537,9 @@ fn register_pin_manifest_rejects_insufficient_public_fee_without_side_effects() 
     assert_pin_fee_balances_unchanged(
         &stx,
         &alice(),
-        low_balance,
+        &(low_balance),
         &treasury_account,
-        treasury_balance_before,
+        &(treasury_balance_before),
     );
 }
 #[test]

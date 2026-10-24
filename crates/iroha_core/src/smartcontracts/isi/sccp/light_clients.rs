@@ -739,7 +739,7 @@ fn apply_delta(
 /// Fails when the guard does not match, or the advance does not verify (a conflict with stored
 /// data points to `ReportSccpLightClientEquivocationV1`).
 pub fn execute_advance(
-    instruction: AdvanceSccpLightClientV1,
+    instruction: &AdvanceSccpLightClientV1,
     _authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
@@ -781,7 +781,7 @@ pub fn execute_advance(
 ///
 /// Fails when the evidence does not prove an equivocation.
 pub fn execute_report_equivocation(
-    instruction: ReportSccpLightClientEquivocationV1,
+    instruction: &ReportSccpLightClientEquivocationV1,
     _authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
@@ -1042,7 +1042,7 @@ mod tests {
         let limit = budget.limit_bytes();
         let before = budget.reserved_bytes();
         budget.set_limit_bytes(before);
-        let result = execute_advance(advance_frame(false), &authority(1), &mut stx);
+        let result = execute_advance(&(advance_frame(false)), &authority(1), &mut stx);
         budget.set_limit_bytes(limit);
         assert!(result.is_err());
         assert!(
@@ -1133,11 +1133,15 @@ mod tests {
         let proof = SccpSourceProofBytesV1::new(vec![1, 2, 3]).expect("bounded proof");
         verify_source_proof(&mut stx, SccpNetworkV1::EthereumMainnet, &proof)
             .expect_err("not installed");
-        let error = execute_advance(SampleInstructions::advance(), &authority(1), &mut stx)
+        let error = execute_advance(&(SampleInstructions::advance()), &authority(1), &mut stx)
             .expect_err("not installed");
         assert!(error.to_string().contains("not installed"), "{error}");
-        execute_report_equivocation(SampleInstructions::equivocation(), &authority(1), &mut stx)
-            .expect_err("not installed");
+        execute_report_equivocation(
+            &(SampleInstructions::equivocation()),
+            &authority(1),
+            &mut stx,
+        )
+        .expect_err("not installed");
     }
 
     /// Return a decodable advance frame of `network`: an empty Ethereum update list, or an
@@ -1300,7 +1304,7 @@ mod tests {
             stx.reserve_sccp_verifier_work(&oversized),
             Err("max_proof_bytes_per_proof")
         );
-        let error = execute_advance(SampleInstructions::advance(), &authority(1), &mut stx)
+        let error = execute_advance(&(SampleInstructions::advance()), &authority(1), &mut stx)
             .expect_err("not installed");
         assert!(error.to_string().contains("not installed"), "{error}");
     }
@@ -1344,7 +1348,7 @@ mod tests {
         let mut advance = SampleInstructions::advance();
         store::light_clients::insert(&mut stx, advance.network, installed(100)).expect("lc");
         advance.expected_state_hash = Some([9; 32]);
-        let error = execute_advance(advance, &authority(1), &mut stx).expect_err("stale");
+        let error = execute_advance(&(advance), &authority(1), &mut stx).expect_err("stale");
         assert!(error.to_string().contains("moved"), "{error}");
     }
 

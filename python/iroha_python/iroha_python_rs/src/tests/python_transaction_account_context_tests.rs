@@ -1,23 +1,35 @@
 // Real native context tests included in the parent crypto boundary module.
 fn context_account(seed: u8, prefix: u16) -> String {
     AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
-        .to_i105_for_discriminant(prefix).unwrap()
+        .to_i105_for_discriminant(prefix)
+        .unwrap()
 }
 fn context_sponsor_fee(prefix: u16, seed: u8) -> String {
-    format!(r#"{{"payer":"sponsor","value":{{"program_id":{{"sponsor":"{}","name":"retail"}},"program_revision":1,"charge_limits":[],"gas_limit":100}}}}"#,
-        context_account(seed, prefix))
+    format!(
+        r#"{{"payer":"sponsor","value":{{"program_id":{{"sponsor":"{}","name":"retail"}},"program_revision":1,"charge_limits":[],"gas_limit":100}}}}"#,
+        context_account(seed, prefix)
+    )
 }
 fn context_typed_instruction(prefix: u16) -> String {
-    format!(r#"{{"name":"SetAssetHoldingLimit","params":{{"account_id":"{}","asset_definition_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","holding_limit":"100"}}}}"#,
-        context_account(0x51, prefix))
+    format!(
+        r#"{{"name":"SetAssetHoldingLimit","params":{{"account_id":"{}","asset_definition_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","holding_limit":"100"}}}}"#,
+        context_account(0x51, prefix)
+    )
 }
 fn context_builder(prefix: u16) -> TransactionBuilder {
-    let mut builder = TransactionBuilder::new(&python_test_network_id(),
-        &context_account(0x51, prefix), &context_sponsor_fee(prefix, 0x52), prefix).unwrap();
+    let mut builder = TransactionBuilder::new(
+        &python_test_network_id(),
+        &context_account(0x51, prefix),
+        &context_sponsor_fee(prefix, 0x52),
+        prefix,
+    )
+    .unwrap();
     builder.set_creation_time_ms(42).unwrap();
     builder.set_ttl_ms(30000).unwrap();
     builder.set_nonce(7).unwrap();
-    builder.add_instruction_json(&context_typed_instruction(prefix)).unwrap();
+    builder
+        .add_instruction_json(&context_typed_instruction(prefix))
+        .unwrap();
     builder
 }
 
@@ -271,33 +283,66 @@ fn transaction_account_context_matrix_preserves_wire_and_all_envelope_paths() {
         let mut quoted = builder.clone();
         let mut external = builder.clone();
         let ordinary = builder.sign(&[0x51; 32]).unwrap();
-        let quoted = quoted.sign_quoted_payload(&payload_json, &context_sponsor_fee(prefix, 0x52), &[0x51; 32]).unwrap();
+        let quoted = quoted
+            .sign_quoted_payload(
+                &payload_json,
+                &context_sponsor_fee(prefix, 0x52),
+                &[0x51; 32],
+            )
+            .unwrap();
         let external = external.build_with_signature(&ordinary.signature).unwrap();
         assert_eq!(ordinary.authority, context_account(0x51, prefix));
-        assert_eq!(ordinary.signed_transaction_versioned, quoted.signed_transaction_versioned);
-        assert_eq!(ordinary.signed_transaction_versioned, external.signed_transaction_versioned);
+        assert_eq!(
+            ordinary.signed_transaction_versioned,
+            quoted.signed_transaction_versioned
+        );
+        assert_eq!(
+            ordinary.signed_transaction_versioned,
+            external.signed_transaction_versioned
+        );
         let reconstructed = signed_transaction_envelope_from_versioned_v1_py(
-            &ordinary.signed_transaction_versioned, &python_test_network_id(), prefix).unwrap();
+            &ordinary.signed_transaction_versioned,
+            &python_test_network_id(),
+            prefix,
+        )
+        .unwrap();
         assert_eq!(ordinary.authority, reconstructed.authority);
-        let decoded = decode_canonical_signed_transaction_v1(&ordinary.signed_transaction_versioned).unwrap();
+        let decoded =
+            decode_canonical_signed_transaction_v1(&ordinary.signed_transaction_versioned).unwrap();
         // Privacy results use this identical authenticated renderer after proof admission.
         let shared = signed_transaction_envelope_from_model_v1(&decoded, prefix).unwrap();
         assert_eq!(ordinary.authority, shared.authority);
-        if let Some(wire) = &reference_wire { assert_eq!(wire, &ordinary.signed_transaction_versioned); }
-        else { reference_wire = Some(ordinary.signed_transaction_versioned.clone()); }
+        if let Some(wire) = &reference_wire {
+            assert_eq!(wire, &ordinary.signed_transaction_versioned);
+        } else {
+            reference_wire = Some(ordinary.signed_transaction_versioned.clone());
+        }
         Python::attach(|py| {
             let ty = py.get_type::<SignedTransactionEnvelope>();
             let json = ordinary.to_json().unwrap();
             let restored = SignedTransactionEnvelope::from_json(&ty, &json, prefix).unwrap();
-            assert_eq!(restored.signed_transaction_versioned, ordinary.signed_transaction_versioned);
+            assert_eq!(
+                restored.signed_transaction_versioned,
+                ordinary.signed_transaction_versioned
+            );
             for foreign in [117, 369, 753].into_iter().filter(|value| *value != prefix) {
                 assert!(SignedTransactionEnvelope::from_json(&ty, &json, foreign).is_err());
             }
         });
         assert_eq!(builder.chain_discriminant, prefix);
-        builder.add_instruction_json(&context_typed_instruction(prefix)).unwrap();
-        assert!(builder.payload_json().unwrap().contains(&context_account(0x52, prefix)));
-        assert_eq!(iroha_data_model::account::address::chain_discriminant(), ambient);
+        builder
+            .add_instruction_json(&context_typed_instruction(prefix))
+            .unwrap();
+        assert!(
+            builder
+                .payload_json()
+                .unwrap()
+                .contains(&context_account(0x52, prefix))
+        );
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            ambient
+        );
     }
 }
 #[test]
@@ -307,29 +352,75 @@ fn transaction_account_context_foreign_literals_and_quote_mutations_are_atomic()
         let mut builder = context_builder(prefix);
         let before = builder.payload_json().unwrap();
         for foreign in [117, 369, 753].into_iter().filter(|value| *value != prefix) {
-            assert!(TransactionBuilder::new(&python_test_network_id(), &context_account(0x51, foreign),
-                &context_sponsor_fee(prefix, 0x52), prefix).is_err());
-            assert!(builder.set_fee_payment_json(&context_sponsor_fee(foreign, 0x52)).is_err());
-            assert!(builder.add_instruction_json(&context_typed_instruction(foreign)).is_err());
-            assert!(builder.sign_quoted_payload(&before, &context_sponsor_fee(foreign, 0x52), &[0x51; 32]).is_err());
-            let foreign_draft = before.replace(&context_account(0x51, prefix), &context_account(0x51, foreign));
-            assert!(builder.sign_quoted_payload(&foreign_draft, &context_sponsor_fee(prefix, 0x52), &[0x51; 32]).is_err());
+            assert!(
+                TransactionBuilder::new(
+                    &python_test_network_id(),
+                    &context_account(0x51, foreign),
+                    &context_sponsor_fee(prefix, 0x52),
+                    prefix
+                )
+                .is_err()
+            );
+            assert!(
+                builder
+                    .set_fee_payment_json(&context_sponsor_fee(foreign, 0x52))
+                    .is_err()
+            );
+            assert!(
+                builder
+                    .add_instruction_json(&context_typed_instruction(foreign))
+                    .is_err()
+            );
+            assert!(
+                builder
+                    .sign_quoted_payload(&before, &context_sponsor_fee(foreign, 0x52), &[0x51; 32])
+                    .is_err()
+            );
+            let foreign_draft = before.replace(
+                &context_account(0x51, prefix),
+                &context_account(0x51, foreign),
+            );
+            assert!(
+                builder
+                    .sign_quoted_payload(
+                        &foreign_draft,
+                        &context_sponsor_fee(prefix, 0x52),
+                        &[0x51; 32]
+                    )
+                    .is_err()
+            );
             assert_eq!(builder.payload_json().unwrap(), before);
         }
         for changed in [
             context_sponsor_fee(prefix, 0x53),
-            context_sponsor_fee(prefix, 0x52).replace("\"program_revision\":1", "\"program_revision\":2"),
+            context_sponsor_fee(prefix, 0x52)
+                .replace("\"program_revision\":1", "\"program_revision\":2"),
             context_sponsor_fee(prefix, 0x52).replace("retail", "other"),
             context_sponsor_fee(prefix, 0x52).replace("\"gas_limit\":100", "\"gas_limit\":101"),
             authority_fee_payment_json().to_owned(),
         ] {
-            assert!(builder.sign_quoted_payload(&before, &changed, &[0x51; 32]).is_err());
+            assert!(
+                builder
+                    .sign_quoted_payload(&before, &changed, &[0x51; 32])
+                    .is_err()
+            );
             assert_eq!(builder.payload_json().unwrap(), before);
         }
         for field in ["creation_time_ms", "time_to_live_ms", "nonce"] {
             let mut altered: json::Value = json::from_str(&before).unwrap();
-            altered.as_object_mut().unwrap().insert(field.into(), json::Value::from(999_u64));
-            assert!(builder.sign_quoted_payload(&json::to_json(&altered).unwrap(), &context_sponsor_fee(prefix, 0x52), &[0x51; 32]).is_err());
+            altered
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), json::Value::from(999_u64));
+            assert!(
+                builder
+                    .sign_quoted_payload(
+                        &json::to_json(&altered).unwrap(),
+                        &context_sponsor_fee(prefix, 0x52),
+                        &[0x51; 32]
+                    )
+                    .is_err()
+            );
             assert_eq!(builder.payload_json().unwrap(), before);
         }
         builder.sign(&[0x51; 32]).unwrap();
@@ -344,8 +435,18 @@ fn transaction_account_context_scoped_guards_restore_errors_unwinds_and_threads(
         let mut first = context_builder(117);
         let second = context_builder(369);
         for _ in 0..3 {
-            assert!(first.payload_json().unwrap().contains(&context_account(0x51, 117)));
-            assert!(second.payload_json().unwrap().contains(&context_account(0x51, 369)));
+            assert!(
+                first
+                    .payload_json()
+                    .unwrap()
+                    .contains(&context_account(0x51, 117))
+            );
+            assert!(
+                second
+                    .payload_json()
+                    .unwrap()
+                    .contains(&context_account(0x51, 369))
+            );
             assert!(first.set_fee_payment_json("{}").is_err());
             assert_eq!(iroha_data_model::account::address::chain_discriminant(), 19);
         }
@@ -354,20 +455,40 @@ fn transaction_account_context_scoped_guards_restore_errors_unwinds_and_threads(
             panic!("controlled context unwinding");
         });
         assert_eq!(iroha_data_model::account::address::chain_discriminant(), 19);
-        let handles: Vec<_> = [117, 369, 753].into_iter().map(|prefix| std::thread::spawn(move || {
-            let own_ambient = iroha_data_model::account::address::chain_discriminant();
-            assert!(context_builder(prefix).payload_json().unwrap().contains(&context_account(0x51, prefix)));
-            assert_eq!(iroha_data_model::account::address::chain_discriminant(), own_ambient);
-        })).collect();
-        for handle in handles { handle.join().unwrap(); }
+        let handles: Vec<_> = [117, 369, 753]
+            .into_iter()
+            .map(|prefix| {
+                std::thread::spawn(move || {
+                    let own_ambient = iroha_data_model::account::address::chain_discriminant();
+                    assert!(
+                        context_builder(prefix)
+                            .payload_json()
+                            .unwrap()
+                            .contains(&context_account(0x51, prefix))
+                    );
+                    assert_eq!(
+                        iroha_data_model::account::address::chain_discriminant(),
+                        own_ambient
+                    );
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
     }
-    assert_eq!(iroha_data_model::account::address::chain_discriminant(), ambient);
+    assert_eq!(
+        iroha_data_model::account::address::chain_discriminant(),
+        ambient
+    );
 }
 #[test]
 fn transaction_account_context_fee_factories_and_neutral_instruction_boundaries() {
-    use iroha_data_model::nexus::{FeeSponsorEligibility, FeeSponsorRule, FeeSponsorRuleEffect,
-        FeeSponsorRuleSelector, FeeSponsorNativeInstructionSelector, FeeSponsorAssetBudget,
-        FeeSponsorMultisigSelector, FeeSponsorMultisigOperation};
+    use iroha_data_model::nexus::{
+        FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorMultisigOperation,
+        FeeSponsorMultisigSelector, FeeSponsorNativeInstructionSelector, FeeSponsorRule,
+        FeeSponsorRuleEffect, FeeSponsorRuleSelector,
+    };
     ensure_python();
     Python::attach(|py| {
         let ty = py.get_type::<Instruction>();
@@ -375,25 +496,51 @@ fn transaction_account_context_fee_factories_and_neutral_instruction_boundaries(
             let sponsor = context_account(0x52, prefix);
             let beneficiary = context_account(0x51, prefix);
             let id = format!("{sponsor}/retail");
-            let create = Instruction::create_fee_sponsor_program(&ty, &sponsor, &beneficiary, "retail", prefix).unwrap();
+            let create = Instruction::create_fee_sponsor_program(
+                &ty,
+                &sponsor,
+                &beneficiary,
+                "retail",
+                prefix,
+            )
+            .unwrap();
             let revision = FeeSponsorProgramRevision {
-                program_id: FeeSponsorProgramId::new(parse_account_id(&sponsor).unwrap(), "retail".parse().unwrap()),
-                revision: 1, eligibility: FeeSponsorEligibility::EnrolledOnly,
-                rules: vec![FeeSponsorRule { id: "transfer".parse().unwrap(), effect: FeeSponsorRuleEffect::Allow,
-                    selectors: vec![FeeSponsorRuleSelector::NativeInstruction(FeeSponsorNativeInstructionSelector {
-                        wire_id: "iroha.transfer".into(), asset_definition_id: None,
-                    }), FeeSponsorRuleSelector::Multisig(FeeSponsorMultisigSelector {
-                        operations: vec![FeeSponsorMultisigOperation::Approve],
-                        account_ids: vec![parse_account_id(&beneficiary).unwrap()],
-                    })] }],
+                program_id: FeeSponsorProgramId::new(
+                    parse_account_id(&sponsor).unwrap(),
+                    "retail".parse().unwrap(),
+                ),
+                revision: 1,
+                eligibility: FeeSponsorEligibility::EnrolledOnly,
+                rules: vec![FeeSponsorRule {
+                    id: "transfer".parse().unwrap(),
+                    effect: FeeSponsorRuleEffect::Allow,
+                    selectors: vec![
+                        FeeSponsorRuleSelector::NativeInstruction(
+                            FeeSponsorNativeInstructionSelector {
+                                wire_id: "iroha.transfer".into(),
+                                asset_definition_id: None,
+                            },
+                        ),
+                        FeeSponsorRuleSelector::Multisig(FeeSponsorMultisigSelector {
+                            operations: vec![FeeSponsorMultisigOperation::Approve],
+                            account_ids: vec![parse_account_id(&beneficiary).unwrap()],
+                        }),
+                    ],
+                }],
                 asset_budgets: vec![FeeSponsorAssetBudget {
                     asset_definition_id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa".parse().unwrap(),
-                    per_transaction: "1".parse().unwrap(), per_block: "10".parse().unwrap(),
-                    per_program_epoch: "100".parse().unwrap(), per_beneficiary_epoch: "5".parse().unwrap(),
-                    reserve_floor: "0".parse().unwrap(), epoch_length_blocks: NonZeroU64::new(100).unwrap(),
+                    per_transaction: "1".parse().unwrap(),
+                    per_block: "10".parse().unwrap(),
+                    per_program_epoch: "100".parse().unwrap(),
+                    per_beneficiary_epoch: "5".parse().unwrap(),
+                    reserve_floor: "0".parse().unwrap(),
+                    epoch_length_blocks: NonZeroU64::new(100).unwrap(),
                 }],
             };
-            let revision_json = { let _guard = ChainDiscriminantGuard::enter(prefix); json::to_json(&revision).unwrap() };
+            let revision_json = {
+                let _guard = ChainDiscriminantGuard::enter(prefix);
+                json::to_json(&revision).unwrap()
+            };
             Instruction::stage_fee_sponsor_program_revision(&ty, &revision_json, prefix).unwrap();
             Instruction::activate_fee_sponsor_program_revision(&ty, &id, 1, 10, prefix).unwrap();
             Instruction::pause_fee_sponsor_program(&ty, &id, prefix).unwrap();
@@ -401,34 +548,126 @@ fn transaction_account_context_fee_factories_and_neutral_instruction_boundaries(
             Instruction::close_fee_sponsor_program(&ty, &id, prefix).unwrap();
             Instruction::enroll_fee_sponsor_beneficiary(&ty, &id, &beneficiary, prefix).unwrap();
             Instruction::unenroll_fee_sponsor_beneficiary(&ty, &id, &beneficiary, prefix).unwrap();
-            Instruction::fund_fee_sponsor_program(&ty, &id, "66owaQmAQMuHxPzxUN3bqZ6FJfDa", "1", prefix).unwrap();
-            Instruction::withdraw_fee_sponsor_program(&ty, &id, "66owaQmAQMuHxPzxUN3bqZ6FJfDa", "1", prefix).unwrap();
+            Instruction::fund_fee_sponsor_program(
+                &ty,
+                &id,
+                "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+                "1",
+                prefix,
+            )
+            .unwrap();
+            Instruction::withdraw_fee_sponsor_program(
+                &ty,
+                &id,
+                "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+                "1",
+                prefix,
+            )
+            .unwrap();
             let framed = norito::to_bytes(&create.inner).unwrap();
             let neutral = Instruction::from_norito_bytes(&ty, &framed).unwrap();
             assert_eq!(norito::to_bytes(&neutral.inner).unwrap(), framed);
-            let mut appended = framed.clone(); appended.push(0);
+            let mut appended = framed.clone();
+            appended.push(0);
             assert!(Instruction::from_norito_bytes(&ty, &appended).is_err());
             // Canonical identity bytes have no original display prefix to validate.
             for foreign in [117, 369, 753].into_iter().filter(|value| *value != prefix) {
                 let account = context_account(0x52, foreign);
-                assert!(Instruction::create_fee_sponsor_program(&ty, &account, &beneficiary, "retail", prefix).is_err());
-                assert!(Instruction::create_fee_sponsor_program(&ty, &sponsor, &account, "retail", prefix).is_err());
-                assert!(Instruction::enroll_fee_sponsor_beneficiary(&ty, &id, &account, prefix).is_err());
-                assert!(Instruction::unenroll_fee_sponsor_beneficiary(&ty, &id, &account, prefix).is_err());
-                assert!(Instruction::pause_fee_sponsor_program(&ty, &format!("{account}/retail"), prefix).is_err());
+                assert!(
+                    Instruction::create_fee_sponsor_program(
+                        &ty,
+                        &account,
+                        &beneficiary,
+                        "retail",
+                        prefix
+                    )
+                    .is_err()
+                );
+                assert!(
+                    Instruction::create_fee_sponsor_program(
+                        &ty, &sponsor, &account, "retail", prefix
+                    )
+                    .is_err()
+                );
+                assert!(
+                    Instruction::enroll_fee_sponsor_beneficiary(&ty, &id, &account, prefix)
+                        .is_err()
+                );
+                assert!(
+                    Instruction::unenroll_fee_sponsor_beneficiary(&ty, &id, &account, prefix)
+                        .is_err()
+                );
+                assert!(
+                    Instruction::pause_fee_sponsor_program(
+                        &ty,
+                        &format!("{account}/retail"),
+                        prefix
+                    )
+                    .is_err()
+                );
                 let foreign_program = format!("{account}/retail");
-                assert!(Instruction::activate_fee_sponsor_program_revision(&ty, &foreign_program, 1, 10, prefix).is_err());
-                assert!(Instruction::begin_close_fee_sponsor_program(&ty, &foreign_program, prefix).is_err());
-                assert!(Instruction::close_fee_sponsor_program(&ty, &foreign_program, prefix).is_err());
-                assert!(Instruction::fund_fee_sponsor_program(&ty, &foreign_program, "66owaQmAQMuHxPzxUN3bqZ6FJfDa", "1", prefix).is_err());
-                assert!(Instruction::withdraw_fee_sponsor_program(&ty, &foreign_program, "66owaQmAQMuHxPzxUN3bqZ6FJfDa", "1", prefix).is_err());
-                assert!(Instruction::stage_fee_sponsor_program_revision(&ty, &revision_json.replace(&sponsor, &account), prefix).is_err());
-                assert!(Instruction::stage_fee_sponsor_program_revision(&ty, &revision_json.replace(&beneficiary, &context_account(0x51, foreign)), prefix).is_err());
-                assert!(Instruction::from_json(&ty, &context_typed_instruction(foreign), prefix).is_err());
+                assert!(
+                    Instruction::activate_fee_sponsor_program_revision(
+                        &ty,
+                        &foreign_program,
+                        1,
+                        10,
+                        prefix
+                    )
+                    .is_err()
+                );
+                assert!(
+                    Instruction::begin_close_fee_sponsor_program(&ty, &foreign_program, prefix)
+                        .is_err()
+                );
+                assert!(
+                    Instruction::close_fee_sponsor_program(&ty, &foreign_program, prefix).is_err()
+                );
+                assert!(
+                    Instruction::fund_fee_sponsor_program(
+                        &ty,
+                        &foreign_program,
+                        "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+                        "1",
+                        prefix
+                    )
+                    .is_err()
+                );
+                assert!(
+                    Instruction::withdraw_fee_sponsor_program(
+                        &ty,
+                        &foreign_program,
+                        "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+                        "1",
+                        prefix
+                    )
+                    .is_err()
+                );
+                assert!(
+                    Instruction::stage_fee_sponsor_program_revision(
+                        &ty,
+                        &revision_json.replace(&sponsor, &account),
+                        prefix
+                    )
+                    .is_err()
+                );
+                assert!(
+                    Instruction::stage_fee_sponsor_program_revision(
+                        &ty,
+                        &revision_json.replace(&beneficiary, &context_account(0x51, foreign)),
+                        prefix
+                    )
+                    .is_err()
+                );
+                assert!(
+                    Instruction::from_json(&ty, &context_typed_instruction(foreign), prefix)
+                        .is_err()
+                );
                 let mut other = context_builder(foreign);
                 other.add_instruction(&neutral).unwrap();
             }
-            let typed = Instruction::from_json(&ty, &context_typed_instruction(prefix), prefix).unwrap();
+            let typed =
+                Instruction::from_json(&ty, &context_typed_instruction(prefix), prefix).unwrap();
             assert!(typed.inner.as_any().is::<SetAssetHoldingLimit>());
         }
     });
@@ -543,7 +782,7 @@ impl IndependentlyPreparedContextFixture {
                 };
                 let ensure: InstructionBox = iroha_data_model::isi::alias_setup::EnsureAlias::new(
                     intent.clone(),
-                    acquisition.clone(),
+                    acquisition,
                     guard.clone(),
                 )
                 .into();

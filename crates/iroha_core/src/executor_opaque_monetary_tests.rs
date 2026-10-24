@@ -119,9 +119,9 @@ fn assert_claim_unchanged(
     assert_eq!(claim.expected_claim_sequence, 0);
 }
 
-fn assert_opaque_rejection(error: ValidationFail) {
+fn assert_opaque_rejection(error: &ValidationFail) {
     assert!(
-        matches!(error, ValidationFail::NotPermitted(ref message)
+        matches!(error, ValidationFail::NotPermitted(message)
         if message.contains("opaque deferred executable derived monetary staking operation `iroha.instruction.v1::staking::ClaimPublicLaneRewards`")
             && message.contains("the exact monetary plan must be a signed instruction")),
         "{error:?}"
@@ -225,9 +225,9 @@ fn raw_ivm_staking_trigger_requires_signed_monetary_plan() {
                 assert_claim_unchanged(&tx, authority, source, destination);
                 if monetary {
                     assert_opaque_rejection(
-                        result
+                        &(result
                             .map_err(crate::execution_attempt::expect_completed_rejection)
-                            .expect_err("opaque trigger must fail before registration"),
+                            .expect_err("opaque trigger must fail before registration")),
                     );
                     assert!(
                         tx.world
@@ -367,7 +367,7 @@ fn supplied_proved_staking_effects_require_signed_monetary_plan() {
                     },
                 )
                 .expect_err("supplied replay must not manufacture a signed monetary plan");
-            assert_opaque_rejection(error);
+            assert_opaque_rejection(&(error));
             assert_eq!(tx.last_tx_gas_used, replay_gas);
             tx.finish_execution_effect_budget().unwrap();
             assert!(

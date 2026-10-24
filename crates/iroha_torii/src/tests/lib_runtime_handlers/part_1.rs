@@ -293,12 +293,12 @@ impl ReadinessNode {
                 records_dir: directory.path().join("records"),
                 installation_log: directory.path().join("keys/installation.log"),
                 bodies_dir: directory.path().join("bodies"),
-                local: Default::default(),
+                local: iroha_config::parameters::actual::SumeragiLocalOverrides::default(),
                 assert_fresh_key: true,
                 retired_keys: Vec::new(),
             },
             observer: Arc::new(NoObserver),
-            driver: Default::default(),
+            driver: iroha_core::sumeragi::driver::DriverConfig::default(),
         })
         .expect("production driver startup");
         let app_mut = Arc::get_mut(&mut app).expect("exclusive app fixture");
@@ -319,23 +319,26 @@ impl ReadinessNode {
         }
     }
 
-    async fn response(&self) -> AxResponse {
-        axum::Router::new()
-            .route("/readyz", axum::routing::get(handler_readyz))
-            .layer(axum::middleware::from_fn(capture_response_format))
-            .layer(axum::middleware::from_fn(coalesce_accept_headers))
-            .layer(axum::middleware::from_fn(enforce_typed_error_contract))
-            .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
-            .with_state(Arc::clone(&self.app))
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/readyz")
-                    .header(axum::http::header::ACCEPT, "text/plain, application/json")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("HTTP readiness response")
+    fn response(&self) -> impl std::future::Future<Output = AxResponse> + Send + use<> {
+        let app = Arc::clone(&self.app);
+        async move {
+            axum::Router::new()
+                .route("/readyz", axum::routing::get(handler_readyz))
+                .layer(axum::middleware::from_fn(capture_response_format))
+                .layer(axum::middleware::from_fn(coalesce_accept_headers))
+                .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+                .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+                .with_state(app)
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri("/readyz")
+                        .header(axum::http::header::ACCEPT, "text/plain, application/json")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .expect("HTTP readiness response")
+        }
     }
 }
 
@@ -438,12 +441,12 @@ async fn readyz_tracks_live_consensus_without_gating_beacon_setup() {
 }
 
 pub fn mk_app_state_for_tests_with_iso_bridge(
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
 ) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(World::default(), iso, None, None, None)
 }
 pub fn mk_app_state_for_tests_with_options(
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -1273,9 +1276,11 @@ fn autoscale_fixture_declares_its_nominal_identity_and_core_frame_projection() {
     let header = norito::core::Header::read(bytes.as_slice()).unwrap();
     assert_eq!(header.schema, norito::core::schema_hash_for_name(frame));
 }
+type LaneManifestValidatorBinding<'a> = (AccountId, PeerId, Option<&'a str>);
+
 fn install_lane_manifest_registry_with_torii_urls_for_test(
     state: &IrohaState,
-    lanes: &[(LaneId, Vec<(AccountId, PeerId, Option<&str>)>)],
+    lanes: &[(LaneId, Vec<LaneManifestValidatorBinding<'_>>)],
 ) {
     static MANIFEST_ROOT_SEQ: AtomicUsize = AtomicUsize::new(0);
     let nexus = state.nexus_snapshot();
@@ -1295,8 +1300,10 @@ fn install_lane_manifest_registry_with_torii_urls_for_test(
             .lanes()
             .iter()
             .find(|lane| lane.id == *lane_id)
-            .map(|lane| lane.alias.clone())
-            .unwrap_or_else(|| format!("lane-{}", lane_id.as_u32()));
+            .map_or_else(
+                || format!("lane-{}", lane_id.as_u32()),
+                |lane| lane.alias.clone(),
+            );
         let validators_json = validator_bindings
             .iter()
             .map(|(validator, peer_id, torii_url)| {
@@ -1981,10 +1988,13 @@ fn signed_app_headers_for_network(
 ) -> HeaderMap {
     static TEST_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
         LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
-    let timestamp_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock")
-        .as_millis() as u64;
+    let timestamp_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_millis(),
+    )
+    .expect("fixture timestamp fits u64");
     let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nonce = format!("lib-test-{timestamp_ms}-{nonce_seq}");
     let message = crate::canonical_network_request_signature_message(
@@ -2116,7 +2126,7 @@ fn checked_torii_test_block_signature_verifies_and_rejects_wrong_key() {
 }
 fn mk_app_state_for_tests_with_world_and_options(
     world: World,
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -2133,7 +2143,7 @@ fn mk_app_state_for_tests_with_world_and_options(
 }
 fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     world: World,
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -2151,7 +2161,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
 }
 fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     world: World,
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -2170,7 +2180,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
 }
 fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     mut world: World,
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -2243,8 +2253,9 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     // Minimal Kiso and peers provider (mocked to avoid spawning the full actor in tests)
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let kiso = KisoHandle::mock(&cfg);
-    let (_tx, rx) =
-        tokio::sync::watch::channel::<std::collections::HashSet<Peer>>(Default::default());
+    let (_tx, rx) = tokio::sync::watch::channel::<std::collections::HashSet<Peer>>(
+        std::collections::HashSet::default(),
+    );
     let peers = OnlinePeersProvider::new(rx);
     #[cfg(feature = "connect")]
     let connect_cfg = iroha_config::parameters::actual::Connect {
@@ -2308,7 +2319,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     let sorafs_site_bindings = None;
     let telemetry = routing::MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let iso_bridge = iso
-        .as_ref()
         .and_then(|cfg| {
             crate::iso20022_bridge::Iso20022BridgeRuntime::from_config(cfg)
                 .expect("iso bridge config for tests should be valid")
@@ -2354,8 +2364,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     let api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
     let operator_auth = Arc::new(
         operator_auth::OperatorAuth::new(
-            iroha_config::parameters::actual::ToriiOperatorAuth::default(),
-            defaults::torii::data_dir(),
+            &(iroha_config::parameters::actual::ToriiOperatorAuth::default()),
+            &(defaults::torii::data_dir()),
             telemetry.clone(),
         )
         .expect("operator auth defaults should be valid"),
@@ -2585,7 +2595,9 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         #[cfg(feature = "app_api")]
         public_dataspace_upstreams: Arc::new(BTreeMap::new()),
         #[cfg(feature = "app_api")]
-        recipient_lookup: Arc::new(Default::default()),
+        recipient_lookup: Arc::new(
+            iroha_config::parameters::actual::ToriiRecipientLookup::default(),
+        ),
         #[cfg(feature = "app_api")]
         recipient_lookup_rate_limiter: limits::RateLimiter::new_per_minute(
             Some(defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE),

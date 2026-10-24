@@ -433,7 +433,7 @@ fn da_receipt_log_requires_zero_for_a_fresh_lane_epoch() {
             0xC0,
         );
         assert_eq!(
-            log.append(lane_epoch, sequence, receipt, test_fingerprint(0xC0))
+            log.append(lane_epoch, sequence, &receipt, test_fingerprint(0xC0))
                 .unwrap(),
             ReceiptInsertOutcome::SequenceGap {
                 expected_next: 0,
@@ -446,7 +446,7 @@ fn da_receipt_log_requires_zero_for_a_fresh_lane_epoch() {
 
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xC1);
     assert!(matches!(
-        log.append(lane_epoch, 0, receipt, test_fingerprint(0xC1))
+        log.append(lane_epoch, 0, &receipt, test_fingerprint(0xC1))
             .unwrap(),
         ReceiptInsertOutcome::Stored { .. }
     ));
@@ -460,7 +460,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 1);
     assert!(matches!(
-        log.append(lane_epoch, 0, receipt.clone(), test_fingerprint(1))
+        log.append(lane_epoch, 0, &receipt, test_fingerprint(1))
             .unwrap(),
         ReceiptInsertOutcome::Stored { .. }
     ));
@@ -470,7 +470,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
         "stored receipt should create one durable receipt file"
     );
     assert!(matches!(
-        log.append(lane_epoch, 0, receipt.clone(), test_fingerprint(1))
+        log.append(lane_epoch, 0, &receipt, test_fingerprint(1))
             .unwrap(),
         ReceiptInsertOutcome::Duplicate { .. }
     ));
@@ -481,7 +481,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     );
     let wrong_fingerprint = test_fingerprint(0xD0);
     let err = log
-        .append(lane_epoch, 0, receipt.clone(), wrong_fingerprint)
+        .append(lane_epoch, 0, &receipt, wrong_fingerprint)
         .expect_err("wrong-fingerprint duplicate must be rejected before durable lookup");
     assert!(
         format!("{err:?}").contains("does not match storage ticket"),
@@ -498,7 +498,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
         persistence::unsigned_receipt_bytes(&receipt_conflict, 0).expect("unsigned bytes");
     receipt_conflict.operator_signature = checked_signature(signer.private_key(), &unsigned);
     assert!(matches!(
-        log.append(lane_epoch, 0, receipt_conflict, test_fingerprint(0xD1))
+        log.append(lane_epoch, 0, &receipt_conflict, test_fingerprint(0xD1))
             .unwrap(),
         ReceiptInsertOutcome::ReceiptConflict { .. }
     ));
@@ -509,7 +509,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     );
     let conflict = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 2);
     assert!(matches!(
-        log.append(lane_epoch, 0, conflict, test_fingerprint(2))
+        log.append(lane_epoch, 0, &conflict, test_fingerprint(2))
             .unwrap(),
         ReceiptInsertOutcome::ManifestConflict { .. }
     ));
@@ -520,7 +520,8 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     );
     let gap = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 4);
     assert!(matches!(
-        log.append(lane_epoch, 2, gap, test_fingerprint(4)).unwrap(),
+        log.append(lane_epoch, 2, &gap, test_fingerprint(4))
+            .unwrap(),
         ReceiptInsertOutcome::SequenceGap {
             expected_next: 1,
             observed: 2
@@ -533,7 +534,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     );
     let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 5);
     assert!(matches!(
-        log.append(lane_epoch, 1, second, test_fingerprint(5))
+        log.append(lane_epoch, 1, &second, test_fingerprint(5))
             .unwrap(),
         ReceiptInsertOutcome::Stored { .. }
     ));
@@ -544,7 +545,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     );
     let stale = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 3);
     assert!(matches!(
-        log.append(lane_epoch, 0, stale, test_fingerprint(3))
+        log.append(lane_epoch, 0, &stale, test_fingerprint(3))
             .unwrap(),
         ReceiptInsertOutcome::StaleSequence { highest: 1 }
     ));
@@ -604,14 +605,14 @@ fn da_receipt_log_rejected_append_does_not_advance_replay_cursor() {
     let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
     let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xE1);
     assert!(matches!(
-        log.append(lane_epoch, 0, first, test_fingerprint(0xE1))
+        log.append(lane_epoch, 0, &first, test_fingerprint(0xE1))
             .unwrap(),
         ReceiptInsertOutcome::Stored { .. }
     ));
     assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 0)]);
     let gap = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 0xE3);
     assert!(matches!(
-        log.append(lane_epoch, 2, gap, test_fingerprint(0xE3))
+        log.append(lane_epoch, 2, &gap, test_fingerprint(0xE3))
             .unwrap(),
         ReceiptInsertOutcome::SequenceGap {
             expected_next: 1,
@@ -621,7 +622,7 @@ fn da_receipt_log_rejected_append_does_not_advance_replay_cursor() {
     assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 0)]);
     let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xE2);
     assert!(matches!(
-        log.append(lane_epoch, 1, second, test_fingerprint(0xE2))
+        log.append(lane_epoch, 1, &second, test_fingerprint(0xE2))
             .unwrap(),
         ReceiptInsertOutcome::Stored { .. }
     ));
@@ -652,7 +653,7 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
         initial_reservation.expect("fresh replay reservation"),
     );
     let err = log
-        .append(lane_epoch, 0, receipt.clone(), fingerprint)
+        .append(lane_epoch, 0, &receipt, fingerprint)
         .expect_err("blocked cursor persistence should fail append after file write");
     assert!(
         format!("{err:?}").contains("failed to persist receipt cursor"),
@@ -694,7 +695,7 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
     );
     assert!(matches!(next_outcome, ReplayInsertOutcome::Fresh { .. }));
     let next_receipt_outcome = log
-        .append(lane_epoch, 1, next, next_fingerprint)
+        .append(lane_epoch, 1, &next, next_fingerprint)
         .expect("the next ingest succeeds after duplicate recovery");
     assert!(matches!(
         next_receipt_outcome,
@@ -755,7 +756,7 @@ fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance
     let poisoned_path = canonical_receipt_spool_path(receipt_dir.path(), &receipt, 0);
     fs::write(&poisoned_path, b"poison-receipt").expect("seed poisoned receipt");
     let err = log
-        .append(lane_epoch, 0, receipt.clone(), fingerprint)
+        .append(lane_epoch, 0, &receipt, fingerprint)
         .expect_err("conflicting preexisting receipt file must reject append");
     assert!(
         format!("{err:?}").contains("DA receipt artifact already exists"),
@@ -774,7 +775,7 @@ fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance
     assert_replay_cursor_sequences(&cursor_store, &[]);
     fs::remove_file(&poisoned_path).expect("remove poisoned receipt");
     assert!(matches!(
-        log.append(lane_epoch, 0, receipt, fingerprint).unwrap(),
+        log.append(lane_epoch, 0, &receipt, fingerprint).unwrap(),
         ReceiptInsertOutcome::Stored {
             cursor_advanced: true
         }
@@ -792,7 +793,7 @@ fn da_receipt_log_in_memory_append_fails_closed() {
     let log = DaReceiptLog::in_memory(Arc::clone(&cursor_store), signer.public_key().clone());
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xA1);
     let err = log
-        .append(lane_epoch, 1, receipt, test_fingerprint(0xA1))
+        .append(lane_epoch, 1, &receipt, test_fingerprint(0xA1))
         .expect_err("in-memory receipt logs must not acknowledge DA ingest appends");
     assert!(
         format!("{err:?}").contains("not durable"),
@@ -827,7 +828,7 @@ fn da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement() {
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xA2);
     let fingerprint = test_fingerprint(0xA2);
     assert!(matches!(
-        log.append(lane_epoch, 0, receipt.clone(), fingerprint)
+        log.append(lane_epoch, 0, &receipt, fingerprint)
             .expect("append receipt"),
         ReceiptInsertOutcome::Stored { .. }
     ));
@@ -962,13 +963,8 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let log = open_receipt_log(spool_dir, &cursor_store, &signer).expect("open receipt log");
     assert!(matches!(
-        log.append(
-            lane_epoch,
-            request.sequence,
-            receipt.clone(),
-            manifest.fingerprint
-        )
-        .expect("append receipt"),
+        log.append(lane_epoch, request.sequence, &receipt, manifest.fingerprint)
+            .expect("append receipt"),
         ReceiptInsertOutcome::Stored { .. }
     ));
     let duplicate = load_duplicate_da_artifacts(
@@ -1210,7 +1206,7 @@ fn persist_completed_duplicate_fixture(
     let log = open_receipt_log(spool_dir, &cursor_store, &signer)
         .expect("open duplicate fixture receipt log");
     assert!(matches!(
-        log.append(lane_epoch, request.sequence, receipt, manifest.fingerprint)
+        log.append(lane_epoch, request.sequence, &receipt, manifest.fingerprint)
             .expect("append duplicate fixture receipt"),
         ReceiptInsertOutcome::Stored { .. }
     ));
@@ -1515,7 +1511,7 @@ fn da_receipt_log_rejects_invalid_signature() {
     let unsigned = persistence::unsigned_receipt_bytes(&receipt, 1).expect("unsigned bytes");
     let wrong_signer = checked_random_keypair();
     receipt.operator_signature = checked_signature(wrong_signer.private_key(), &unsigned);
-    let outcome = log.append(lane_epoch, 1, receipt, test_fingerprint(4));
+    let outcome = log.append(lane_epoch, 1, &receipt, test_fingerprint(4));
     assert!(
         outcome.is_err(),
         "receipt with mismatched signature must be rejected"
@@ -1529,7 +1525,7 @@ fn da_receipt_log_rejects_sequence_rebound_signature() {
     let signer = checked_random_keypair();
     let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).expect("open log");
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 5);
-    let outcome = log.append(lane_epoch, 2, receipt, test_fingerprint(5));
+    let outcome = log.append(lane_epoch, 2, &receipt, test_fingerprint(5));
     assert!(
         outcome.is_err(),
         "receipt signature must bind the append sequence"
@@ -1550,9 +1546,9 @@ fn da_receipt_log_reloads_from_disk() {
         let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
         let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 9);
         let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 10);
-        log.append(lane_epoch, 0, first.clone(), test_fingerprint(9))
+        log.append(lane_epoch, 0, &first, test_fingerprint(9))
             .unwrap();
-        log.append(lane_epoch, 1, second.clone(), test_fingerprint(10))
+        log.append(lane_epoch, 1, &second, test_fingerprint(10))
             .unwrap();
     }
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());

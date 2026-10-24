@@ -160,9 +160,7 @@ impl ExecWitnessOverlay {
             let frame = overlays
                 .pop()
                 .expect("execution-witness overlay stack must contain the active guard");
-            let Some(witness) = witness.as_deref() else {
-                return None;
-            };
+            let witness = witness.as_deref()?;
             if !witness.active || !same_recorder_generation(witness, &frame.witness) {
                 return None;
             }
@@ -1205,19 +1203,19 @@ mod tests {
     fn quantity_json_bytes(value: u32) -> Vec<u8> {
         Json::new(Quantity::from(value)).get().as_bytes().to_vec()
     }
-    fn assert_read_value(witness: &ExecWitness, key: Vec<u8>, expected: Vec<u8>) {
+    fn assert_read_value(witness: &ExecWitness, key: &[u8], expected: &[u8]) {
         let value = witness
             .reads
             .iter()
-            .find(|kv| kv.key == key)
+            .find(|kv| kv.key.as_slice() == key)
             .unwrap_or_else(|| panic!("expected read key {key:?}"))
             .value
-            .clone();
+            .as_slice();
         assert_eq!(value, expected);
     }
-    fn assert_no_read_key(witness: &ExecWitness, key: Vec<u8>) {
+    fn assert_no_read_key(witness: &ExecWitness, key: &[u8]) {
         assert!(
-            witness.reads.iter().all(|kv| kv.key != key),
+            witness.reads.iter().all(|kv| kv.key.as_slice() != key),
             "unexpected read key {key:?}"
         );
     }
@@ -1373,123 +1371,115 @@ mod tests {
         assert!(witness.writes.is_empty());
         assert_read_value(
             &witness,
-            key_account_kv(&fixture.account, &color),
-            bytes_from_json(&Json::new("red")),
+            &key_account_kv(&fixture.account, &color),
+            &bytes_from_json(&Json::new("red")),
         );
         assert_read_value(
             &witness,
-            key_account_kv(&fixture.missing_account, &color),
-            Vec::new(),
+            &key_account_kv(&fixture.missing_account, &color),
+            &[],
         );
         assert_read_value(
             &witness,
-            key_domain_kv(&fixture.domain, &region),
-            bytes_from_json(&Json::new("west")),
+            &key_domain_kv(&fixture.domain, &region),
+            &bytes_from_json(&Json::new("west")),
         );
         assert_read_value(
             &witness,
-            key_domain_kv(&fixture.missing_domain, &region),
-            Vec::new(),
+            &key_domain_kv(&fixture.missing_domain, &region),
+            &[],
         );
         assert_read_value(
             &witness,
-            key_asset_def_kv(&fixture.asset_definition, &issuer),
-            bytes_from_json(&Json::new("alice")),
+            &key_asset_def_kv(&fixture.asset_definition, &issuer),
+            &bytes_from_json(&Json::new("alice")),
         );
         assert_read_value(
             &witness,
-            key_asset_def_kv(&fixture.missing_asset_definition, &issuer),
-            Vec::new(),
+            &key_asset_def_kv(&fixture.missing_asset_definition, &issuer),
+            &[],
         );
         assert_read_value(
             &witness,
-            key_nft_kv(&fixture.nft, &artist),
-            bytes_from_json(&Json::new("carroll")),
+            &key_nft_kv(&fixture.nft, &artist),
+            &bytes_from_json(&Json::new("carroll")),
         );
+        assert_read_value(&witness, &key_nft_kv(&fixture.missing_nft, &artist), &[]);
         assert_read_value(
             &witness,
-            key_nft_kv(&fixture.missing_nft, &artist),
-            Vec::new(),
-        );
-        assert_read_value(
-            &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::AccountRoleBinding,
                 &fixture.account.to_string(),
                 &fixture.role.to_string(),
             ),
-            bool_json_bytes(true),
+            &bool_json_bytes(true),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::AccountRoleBinding,
                 &fixture.account.to_string(),
                 &missing_role.to_string(),
             ),
-            bool_json_bytes(false),
+            &bool_json_bytes(false),
         );
         let mut present_role_key = vec![0xC2];
         present_role_key.extend_from_slice(fixture.role.to_string().as_bytes());
-        assert_read_value(&witness, present_role_key, bool_json_bytes(true));
+        assert_read_value(&witness, &present_role_key, &bool_json_bytes(true));
         let mut missing_role_key = vec![0xC2];
         missing_role_key.extend_from_slice(missing_role.to_string().as_bytes());
-        assert_read_value(&witness, missing_role_key, bool_json_bytes(false));
+        assert_read_value(&witness, &missing_role_key, &bool_json_bytes(false));
         assert_read_value(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::AccountPermission,
                 &fixture.account.to_string(),
                 fixture.account_perm,
             ),
-            bool_json_bytes(true),
+            &bool_json_bytes(true),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::AccountPermission,
                 &fixture.account.to_string(),
                 "can_missing",
             ),
-            bool_json_bytes(false),
+            &bool_json_bytes(false),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::RolePermission,
                 &fixture.role.to_string(),
                 fixture.role_perm,
             ),
-            bool_json_bytes(true),
+            &bool_json_bytes(true),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::RolePermission,
                 &fixture.role.to_string(),
                 "can_missing",
             ),
-            bool_json_bytes(false),
+            &bool_json_bytes(false),
         );
         assert_read_value(
             &witness,
-            key_asset_balance(&fixture.asset),
-            quantity_json_bytes(11),
+            &key_asset_balance(&fixture.asset),
+            &quantity_json_bytes(11),
+        );
+        assert_read_value(&witness, &key_asset_balance(&fixture.missing_asset), &[]);
+        assert_read_value(
+            &witness,
+            &key_asset_def_total(&fixture.asset_definition),
+            &quantity_json_bytes(37),
         );
         assert_read_value(
             &witness,
-            key_asset_balance(&fixture.missing_asset),
-            Vec::new(),
-        );
-        assert_read_value(
-            &witness,
-            key_asset_def_total(&fixture.asset_definition),
-            quantity_json_bytes(37),
-        );
-        assert_read_value(
-            &witness,
-            key_asset_def_total(&fixture.missing_asset_definition),
-            Vec::new(),
+            &key_asset_def_total(&fixture.missing_asset_definition),
+            &[],
         );
     }
     #[test]
@@ -1582,12 +1572,12 @@ mod tests {
         assert_eq!(witness.reads.len(), 6);
         assert_read_value(
             &witness,
-            key_account_kv(&fixture.account, &color),
-            bytes_from_json(&Json::new("red")),
+            &key_account_kv(&fixture.account, &color),
+            &bytes_from_json(&Json::new("red")),
         );
         assert_no_read_key(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::AccountMetadata,
                 &format!(" {} ", fixture.account),
                 color.as_ref(),
@@ -1595,16 +1585,16 @@ mod tests {
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::AccountPermission,
                 &fixture.account.to_string(),
                 fixture.account_perm,
             ),
-            bool_json_bytes(true),
+            &bool_json_bytes(true),
         );
         assert_no_read_key(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::AccountPermission,
                 &format!(" {} ", fixture.account),
                 fixture.account_perm,
@@ -1612,40 +1602,40 @@ mod tests {
         );
         assert_read_value(
             &witness,
-            key_account_kv(&fixture.account, &shade),
-            bytes_from_json(&Json::new("maroon")),
+            &key_account_kv(&fixture.account, &shade),
+            &bytes_from_json(&Json::new("maroon")),
         );
         assert_read_value(
             &witness,
-            key_asset_def_kv(&fixture.asset_definition, &issuer),
-            bytes_from_json(&Json::new("alice")),
+            &key_asset_def_kv(&fixture.asset_definition, &issuer),
+            &bytes_from_json(&Json::new("alice")),
         );
-        assert_no_read_key(&witness, key_asset_def_total(&fixture.asset_definition));
+        assert_no_read_key(&witness, &key_asset_def_total(&fixture.asset_definition));
         assert_read_value(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::AccountRoleBinding,
                 &fixture.account.to_string(),
                 &fixture.role.to_string(),
             ),
-            bool_json_bytes(true),
+            &bool_json_bytes(true),
         );
         let mut role_fallthrough_key = vec![0xC2];
         role_fallthrough_key
             .extend_from_slice(format!("binding:{}:{}", fixture.account, fixture.role).as_bytes());
-        assert_no_read_key(&witness, role_fallthrough_key);
+        assert_no_read_key(&witness, &role_fallthrough_key);
         assert_read_value(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::RolePermission,
                 &fixture.unicode_role.to_string(),
                 fixture.role_perm,
             ),
-            bool_json_bytes(true),
+            &bool_json_bytes(true),
         );
         assert_no_read_key(
             &witness,
-            enc_key_prefix(
+            &enc_key_prefix(
                 ExecutionWitnessKeyTagV1::RolePermission,
                 &fixture.unicode_role_raw,
                 fixture.role_perm,
@@ -1792,7 +1782,7 @@ mod tests {
             record_fastpq_transcript(&rolled_back_transcript);
 
             let snapshot = snapshot_exec_witness();
-            assert_no_read_key(&snapshot, key_account_kv(&account, &rolled_back_key));
+            assert_no_read_key(&snapshot, &key_account_kv(&account, &rolled_back_key));
             assert!(
                 snapshot
                     .fastpq_transcripts
@@ -1807,8 +1797,8 @@ mod tests {
         assert_eq!(witness.writes.len(), 1);
         assert_read_value(
             &witness,
-            key_account_kv(&account, &retained_key),
-            bytes_from_json(&retained_value),
+            &key_account_kv(&account, &retained_key),
+            &bytes_from_json(&retained_value),
         );
         assert!(
             witness
@@ -1838,8 +1828,8 @@ mod tests {
         let witness = drain_exec_witness();
         assert_read_value(
             &witness,
-            key_account_kv(&account, &key),
-            bytes_from_json(&value),
+            &key_account_kv(&account, &key),
+            &bytes_from_json(&value),
         );
         assert_eq!(witness.writes.len(), 1);
         assert_eq!(witness.writes[0].key, key_account_kv(&account, &key));

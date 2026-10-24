@@ -44,14 +44,14 @@ pub fn transaction_account_has_permission(
 pub fn world_account_has_permission(
     world: &impl WorldReadOnly,
     account: &AccountId,
-    permission: Permission,
+    permission: &Permission,
 ) -> bool {
     world.accounts().get(account).is_some()
-        && (world.account_contains_inherent_permission(account, &permission)
+        && (world.account_contains_inherent_permission(account, permission)
             || world
                 .account_roles_iter(account)
                 .filter_map(|id| world.roles().get(id))
-                .any(|role| role.permissions().any(|token| token == &permission)))
+                .any(|role| role.permissions().any(|token| token == permission)))
 }
 
 /// Surface a query failure unchanged and report any other instruction error as a conversion

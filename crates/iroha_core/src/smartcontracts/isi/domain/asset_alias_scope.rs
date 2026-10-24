@@ -865,7 +865,7 @@ pub(crate) fn remove_account_associated_permissions(
             .world
             .account_permissions
             .get_mut(&holder)
-            .map_or(false, |permissions| {
+            .is_some_and(|permissions| {
                 permissions
                     .retain(|permission| !is_permission_account_associated(permission, account_id));
                 permissions.is_empty()
@@ -1041,7 +1041,7 @@ fn remove_asset_definition_associated_permissions(
             .world
             .account_permissions
             .get_mut(&holder)
-            .map_or(false, |permissions| {
+            .is_some_and(|permissions| {
                 permissions.retain(|permission| {
                     !is_permission_asset_definition_associated(permission, asset_definition_id)
                 });
@@ -1488,7 +1488,7 @@ impl Execute for Unregister<Account> {
             state_transaction.world(),
             &account_id,
         )
-        .map_err(crate::smartcontracts::isi::asset::isi::kagemusha_custody_error)?
+        .map_err(|value| crate::smartcontracts::isi::asset::isi::kagemusha_custody_error(&value))?
         {
             return Err(InstructionExecutionError::InvariantViolation(
                     format!("cannot unregister account {account_id}: it is permanent KAGEMUSHA reserve custody").into(),
@@ -2526,7 +2526,7 @@ impl Execute for Unregister<AssetDefinition> {
             state_transaction.world(),
             &asset_definition_id,
         )
-        .map_err(crate::smartcontracts::isi::asset::isi::kagemusha_custody_error)?
+        .map_err(|value| crate::smartcontracts::isi::asset::isi::kagemusha_custody_error(&value))?
         {
             return Err(InstructionExecutionError::InvariantViolation(
                     format!("cannot unregister asset definition {asset_definition_id}: it is permanent KAGEMUSHA reserve custody").into(),

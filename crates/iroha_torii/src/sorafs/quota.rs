@@ -1,4 +1,4 @@
-//! Per-token request and byte-rate quota tracking for SoraFS stream tokens.
+//! Per-token request and byte-rate quota tracking for `SoraFS` stream tokens.
 use std::{
     collections::BTreeMap,
     sync::atomic::{AtomicU64, Ordering},
@@ -253,7 +253,8 @@ impl TokenQuotaWindow {
                 .saturating_add(u64::from(remaining.subsec_nanos() != 0))
                 .clamp(1, u64::from(u32::MAX));
             return Err(StreamTokenQuotaError::Exceeded {
-                retry_after_secs: rounded_up as u32,
+                retry_after_secs: u32::try_from(rounded_up)
+                    .expect("retry delay was clamped to u32::MAX"),
             });
         }
         let byte_elapsed = now.saturating_duration_since(self.bytes_started_at);
@@ -266,10 +267,13 @@ impl TokenQuotaWindow {
         )?;
         if next_bytes > self.rate_limit_bytes {
             let remaining = BYTE_RATE_WINDOW.saturating_sub(byte_elapsed.min(BYTE_RATE_WINDOW));
-            let retry_after_secs = remaining
-                .as_secs()
-                .saturating_add(u64::from(remaining.subsec_nanos() != 0))
-                .clamp(1, u64::from(u32::MAX)) as u32;
+            let retry_after_secs = u32::try_from(
+                remaining
+                    .as_secs()
+                    .saturating_add(u64::from(remaining.subsec_nanos() != 0))
+                    .clamp(1, u64::from(u32::MAX)),
+            )
+            .expect("retry delay was clamped to u32::MAX");
             return Err(StreamTokenQuotaError::ByteRateExceeded { retry_after_secs });
         }
         self.used += 1;

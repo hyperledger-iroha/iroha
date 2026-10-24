@@ -59,7 +59,7 @@ async fn proofs_list_and_count_with_filters() {
         bridge: None,
     };
     iroha_core::query::insert_proof_record_for_test(&mut state, id3, rec3);
-    insert_proof_tags_for_test(&mut state, id1.clone(), vec![*b"PROF", *b"I10P"]);
+    insert_proof_tags_for_test(&mut state, &(id1), vec![*b"PROF", *b"I10P"]);
     let state = Arc::new(state);
     let limits = iroha_torii::ProofApiLimits::default();
     let telemetry = iroha_torii::MaybeTelemetry::disabled();

@@ -745,7 +745,7 @@ impl TieredStateBackend {
         diff: &TieredSnapshotDiff,
     ) -> Result<()> {
         for entry in &diff.entries {
-            let (id, key_encoded) = entry.entry_id()?;
+            let (id, key_encoded) = entry.entry_id();
             let Some((value_hash, value_size_bytes)) = entry.measure_value(world)? else {
                 self.entries.remove(&id);
                 self.entry_keys.remove(&id);
@@ -777,7 +777,7 @@ impl TieredStateBackend {
     ) -> Result<SnapshotPayloadCache> {
         let mut cache = SnapshotPayloadCache::default();
         for entry in &payload.entries {
-            let (id, key_encoded) = entry.key.entry_id()?;
+            let (id, key_encoded) = entry.key.entry_id();
             let Some(value) = entry.value.as_ref() else {
                 self.entries.remove(&id);
                 self.entry_keys.remove(&id);
@@ -4484,8 +4484,8 @@ impl TieredKeyHandle {
             | TieredKeyHandle::AccountRecoveryRequest(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::AssetDefinition(key)
             | TieredKeyHandle::AxtAssetIncarnation(key)
-            | TieredKeyHandle::ZkAsset(key) => norito::codec::Encode::encode(key),
-            TieredKeyHandle::AssetDefinitionAliasBinding(key)
+            | TieredKeyHandle::ZkAsset(key)
+            | TieredKeyHandle::AssetDefinitionAliasBinding(key)
             | TieredKeyHandle::AssetDefinitionDirectHome(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::Asset(key) | TieredKeyHandle::AssetMetadata(key) => {
                 norito::codec::Encode::encode(key)
@@ -4543,16 +4543,16 @@ impl TieredKeyHandle {
             | TieredKeyHandle::TleKeySessionRoster(key)
             | TieredKeyHandle::TleKeySessionLifecycle(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::TleActiveKeySession(key)
-            | TieredKeyHandle::GlobalBeaconLatestPulse(key) => norito::codec::Encode::encode(key),
-            TieredKeyHandle::TimedOvnEvidence(key) => norito::codec::Encode::encode(key),
-            TieredKeyHandle::ValidatorCommitteeTransition(key)
+            | TieredKeyHandle::GlobalBeaconLatestPulse(key)
+            | TieredKeyHandle::ValidatorCommitteeTransition(key)
             | TieredKeyHandle::GlobalBeaconActiveSession(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::TimedOvnEvidence(key) => norito::codec::Encode::encode(key),
         }
     }
-    fn entry_id(&self) -> Result<(TieredEntryId, Vec<u8>)> {
+    fn entry_id(&self) -> (TieredEntryId, Vec<u8>) {
         let key_encoded = self.encode_key();
         let key_hash = sha256(&key_encoded);
-        Ok((TieredEntryId::new(self.segment(), key_hash), key_encoded))
+        (TieredEntryId::new(self.segment(), key_hash), key_encoded)
     }
     #[cfg(test)]
     fn measure_value(&self, world: &World) -> Result<Option<([u8; 32], usize)>> {

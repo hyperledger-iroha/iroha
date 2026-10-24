@@ -84,7 +84,7 @@ impl PhysicalExecutionPolicyRoute {
             }
             error => PhysicalPolicyRouteRejection::Routing(error.as_label()).into(),
         })?;
-        Self::single(plan).map_err(Into::into)
+        Self::single(&plan).map_err(Into::into)
     }
 
     /// Genesis retains bootstrap routing against its authenticated in-progress World.
@@ -140,7 +140,7 @@ impl PhysicalExecutionPolicyRoute {
             return Ok(Self(route));
         }
         Self::single(
-            evaluate_policy_plan_with_nexus_and_world_at_block_height(
+            &evaluate_policy_plan_with_nexus_and_world_at_block_height(
                 nexus,
                 tx,
                 world,
@@ -157,7 +157,7 @@ impl PhysicalExecutionPolicyRoute {
         .map_err(Into::into)
     }
 
-    fn single(plan: RoutingPlan) -> Result<Self, PhysicalPolicyRouteRejection> {
+    fn single(plan: &RoutingPlan) -> Result<Self, PhysicalPolicyRouteRejection> {
         let RoutingPlan::Single(leg) = plan else {
             return Err(PhysicalPolicyRouteRejection::MultipleRoutes);
         };
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn physical_identity_requires_equal_dataspace_but_never_equal_lane_number() {
         let route =
-            PhysicalExecutionPolicyRoute::single(RoutingPlan::single(RoutingDecision::default()))
+            PhysicalExecutionPolicyRoute::single(&RoutingPlan::single(RoutingDecision::default()))
                 .unwrap();
         assert_eq!(
             route

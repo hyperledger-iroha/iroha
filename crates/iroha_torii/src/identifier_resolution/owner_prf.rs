@@ -507,7 +507,7 @@ mod owner_prf_current_tests {
         );
         let uaid = UniversalAccountId::from_hash(Hash::new(b"phone beneficiary"));
         let statement = iroha_data_model::identifier::PhoneRetailCanonicalityPayloadV1 {
-            network_id: network.clone(),
+            network_id: network,
             policy_id: policy.id.clone(),
             program_id: program.program_id.clone(),
             input_ciphertext_hash: execution.input_ciphertext_hash,

@@ -257,7 +257,7 @@ impl ParliamentAttemptStateV1 {
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.validate_sortition_registration_batch_v1(governance_attempt_id, &registrations)?;
         if hidden_ballot_population_meets_anonymity_floor_v1(candidate_snapshot.len())
-            || !candidate_snapshot_fits_resource_bounds_v1(&candidate_snapshot)
+            || !candidate_snapshot_fits_resource_bounds_v1(candidate_snapshot)
             || !candidate_snapshot.windows(2).all(|pair| pair[0] < pair[1])
             || !registrations.iter().any(|entry| {
                 self.required_bodies.iter().any(|required| {

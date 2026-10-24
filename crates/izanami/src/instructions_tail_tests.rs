@@ -3,9 +3,7 @@ fn revoke_manifest_without_entry_sets_failure() {
     let PreparedChaos { mut state, .. } =
         prepare_state(2, None, None, WorkloadProfile::Stable, false).expect("state prepared");
     let mut rng = StdRng::seed_from_u64(3);
-    let plan = state
-        .plan_revoke_space_manifest(&mut rng)
-        .expect("revoke plan builds");
+    let plan = state.plan_revoke_space_manifest(&mut rng);
     assert!(
         !plan.expect_success,
         "revocation without manifest should fail"

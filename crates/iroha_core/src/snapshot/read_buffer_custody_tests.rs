@@ -707,7 +707,7 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     let kura = Kura::blank_kura_for_testing();
     // Strict decoding admits height zero. Nonzero caches require original replay
     // before a typed State can be restored.
-    let state = state_factory_with_kura(Arc::clone(&kura));
+    let state = state_factory_with_kura(&kura);
     let key = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store, &key, TEST_CHUNK_SIZE).unwrap();
     let payload_path = current_generation_artifact(&store, SNAPSHOT_FILE_NAME);

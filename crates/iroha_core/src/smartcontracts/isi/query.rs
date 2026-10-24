@@ -1700,7 +1700,7 @@ fn scan_transaction_page(
 #[allow(clippy::too_many_arguments)]
 fn try_handle_find_transactions_stored(
     state: &impl StateReadOnly,
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     selector: SelectorTuple<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
@@ -1715,7 +1715,7 @@ fn try_handle_find_transactions_stored(
     if params.sorting.sort_by_metadata_key.is_some() {
         let values = materialize_sorted_transaction_window(
             state,
-            &filter,
+            filter,
             params,
             fixed_anchor,
             Some(
@@ -1745,7 +1745,7 @@ fn try_handle_find_transactions_stored(
     }
     let page = scan_transaction_page(
         state,
-        &filter,
+        filter,
         params,
         limits,
         (0, fixed_anchor, None, None),
@@ -1904,7 +1904,7 @@ fn try_handle_find_transactions_ephemeral(
 #[allow(clippy::too_many_arguments)]
 fn handle_find_transactions_stored(
     state: &impl StateReadOnly,
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     selector: SelectorTuple<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
@@ -1927,13 +1927,13 @@ fn handle_find_transactions_stored(
 }
 fn handle_find_transactions_ephemeral(
     state: &impl StateReadOnly,
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     selector: SelectorTuple<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
     budget: Option<QueryExecutionBudget>,
 ) -> Result<(QueryOutput, QueryExecutionStats), Error> {
-    try_handle_find_transactions_ephemeral(state, &filter, selector, params, limits, budget)
+    try_handle_find_transactions_ephemeral(state, filter, selector, params, limits, budget)
 }
 fn collect_ephemeral_sorted_prefix<I>(
     iter: I,
@@ -3375,7 +3375,7 @@ mod tests {
                 &iroha_data_model::query::transaction::prelude::FindTransactions,
             ),
             item: iroha_data_model::query::QueryItemKind::CommittedTransaction,
-            predicate_bytes: norito::codec::Encode::encode(&filter),
+            predicate_bytes: norito::codec::Encode::encode(filter),
             selector_bytes: norito::codec::Encode::encode(
                 &SelectorTuple::<CommittedTransaction>::default(),
             ),
@@ -7268,7 +7268,7 @@ mod tests {
         let num_blocks = 100;
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1);
         let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::PASS,
+            &(CompoundPredicate::PASS),
             &state.view(),
         )?
         .collect::<Vec<_>>();
@@ -7353,7 +7353,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
             )
             .expect("start bounded replay query")
         else {
@@ -7579,7 +7579,7 @@ mod tests {
                     &query_handle,
                     &state_view,
                     &ALICE_ID,
-                    Arc::downgrade(&state),
+                    &(Arc::downgrade(&state)),
                     Some(1),
                 )
                 .expect_err("stored start must enforce its projection budget");
@@ -7612,7 +7612,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
                 Some(2),
             )
             .expect("client budget above the server minimum covers one carrier")
@@ -7655,7 +7655,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
             )
             .expect("start budgeted stored transaction query")
         else {
@@ -7728,7 +7728,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
             )
             .expect("start exact stored transaction query")
         else {
@@ -7825,7 +7825,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
             )
             .expect("start sorted stored transaction query")
         else {
@@ -7867,7 +7867,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
             )
             .expect("start exact replay corruption query")
         else {
@@ -8052,9 +8052,9 @@ mod tests {
             .expect("block available");
         let block_hash = block.hash();
         let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("block_hash", block_hash.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8069,9 +8069,9 @@ mod tests {
                 Hash::new("missing block"),
             );
         let missing = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("block_hash", unknown_hash.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8101,9 +8101,9 @@ mod tests {
             std::collections::BTreeSet::from([nonzero!(4_usize)])
         );
         let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("entrypoint_hash", entrypoint_hash.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8116,9 +8116,9 @@ mod tests {
             "missing transaction entrypoint",
         ));
         let missing = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("entrypoint_hash", unknown_hash.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8131,7 +8131,7 @@ mod tests {
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1);
         let state_view = state.view();
         let all_txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::PASS,
+            &(CompoundPredicate::PASS),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8170,9 +8170,9 @@ mod tests {
             num_blocks - 1
         );
         let by_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("authority", authority.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8187,9 +8187,9 @@ mod tests {
                 .all(|tx| tx.entrypoint.authority_opt() == Some(&authority))
         );
         let by_timestamp = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("timestamp_ms", timestamp_ms)
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8204,27 +8204,27 @@ mod tests {
                 .all(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
         );
         let failed = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("result_ok", false)
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
         assert_eq!(failed.len() as u64, num_blocks - 1);
         assert!(failed.iter().all(|tx| tx.result().as_ref().is_err()));
         let missing_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("authority", BOB_ID.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
         assert!(missing_authority.is_empty());
         let contradictory_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("authority", authority.to_string())
                     .equals("authority", BOB_ID.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8237,7 +8237,7 @@ mod tests {
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1);
         let state_view = state.view();
         let all_txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::PASS,
+            &(CompoundPredicate::PASS),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8263,13 +8263,13 @@ mod tests {
             expected_heights
         );
         let by_timestamp_range = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
                 iroha_data_model::query::CommittedTxFilters {
                     ts_ge: Some(timestamp_ms),
                     ts_le: Some(timestamp_ms),
                     ..Default::default()
                 },
-            ),
+            )),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8284,14 +8284,14 @@ mod tests {
                 .all(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
         );
         let by_timestamp_and_result = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
                 iroha_data_model::query::CommittedTxFilters {
                     ts_ge: Some(timestamp_ms),
                     ts_le: Some(timestamp_ms),
                     result_ok: Some(result_ok),
                     ..Default::default()
                 },
-            ),
+            )),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8322,13 +8322,13 @@ mod tests {
                 .is_empty()
         );
         let impossible_range = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
                 iroha_data_model::query::CommittedTxFilters {
                     ts_ge: Some(impossible_lower_bound),
                     ts_le: Some(timestamp_ms),
                     ..Default::default()
                 },
-            ),
+            )),
             &state_view,
         )?
         .collect::<Vec<_>>();

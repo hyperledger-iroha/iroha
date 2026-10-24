@@ -114,7 +114,7 @@ pub fn execute_account_onboarding_current_state_local_read(
     request: &AccountOnboardingCurrentStateRequestV1,
     expected_route: Option<RoutingDecision>,
 ) -> Result<AxResponse, Error> {
-    super::json_ok(read_account_onboarding_current_state(
+    super::json_ok(&read_account_onboarding_current_state(
         app,
         request,
         expected_route,

@@ -142,12 +142,6 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Roots(&["execution_witness_roots", "fee_evidence_record_root"]),
     ),
     function(
-        "crates/iroha_core/src/query/topology_authority.rs",
-        "digest",
-        1,
-        UseOwner::Other(Use::Record, RECORD_IDENTITY),
-    ),
-    function(
         "crates/iroha_core/src/retail_fee/native_maintenance.rs",
         "into_entries",
         1,

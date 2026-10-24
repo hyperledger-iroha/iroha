@@ -50,20 +50,20 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
     }
     /// Register a permanent exact reserve bucket. Asset governance must delegate the
     /// dedicated permission to the consenting reserve account before this call.
-    pub(crate) fn register(&mut self, registration: Registration) -> Result<()> {
+    pub(crate) fn register(&mut self, registration: &Registration) -> Result<()> {
         use iroha_executor_data_model::permission::asset_definition::CanManageKagemushaWallet;
         let scheme = registration.scheme.scheme_id();
         let asset = registration.asset.asset_digest();
         registration.require(&scheme, &asset)?;
-        self.require_asset(&registration)?;
+        self.require_asset(registration)?;
         if self.authority != registration.reserve
             || !crate::smartcontracts::isi::helpers::world_account_has_permission(
                 self.state.world(),
                 &self.authority,
-                CanManageKagemushaWallet {
+                &(CanManageKagemushaWallet {
                     asset_definition: registration.asset.asset.clone(),
                 }
-                .into(),
+                .into()),
             )
         {
             return Err(Error::Execution(iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
@@ -71,7 +71,7 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
             )));
         }
         let registration_key = storage::key(storage::REGISTRATION, scheme, asset);
-        let row = Self::row(registration_key, &registration)?;
+        let row = Self::row(registration_key, registration)?;
         if let Some(prior) = self
             .state
             .world
@@ -84,7 +84,7 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
             }
             if custody::reserve_registration(
                 self.state.world(),
-                &custody::reserve_id(&registration),
+                &custody::reserve_id(registration),
             )?
             .is_none()
             {
@@ -93,7 +93,7 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
             self.registration(&scheme, &asset)?;
             return Ok(());
         }
-        let reserve = custody::reserve_id(&registration);
+        let reserve = custody::reserve_id(registration);
         crate::smartcontracts::isi::asset::isi::ensure_kagemusha_reserve_available(
             self.state, &reserve,
         )?;
@@ -148,10 +148,10 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
             || !crate::smartcontracts::isi::helpers::world_account_has_permission(
                 self.state.world(),
                 &self.authority,
-                CanManageKagemushaWallet {
+                &(CanManageKagemushaWallet {
                     asset_definition: registration.asset.asset.clone(),
                 }
-                .into(),
+                .into()),
             )
         {
             return Err(Error::Execution(iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
@@ -197,7 +197,7 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
             &certificate,
         )?])
     }
-    pub(crate) fn retain_credential(&mut self, value: CredentialRecord) -> Result<()> {
+    pub(crate) fn retain_credential(&mut self, value: &CredentialRecord) -> Result<()> {
         let body = &value.credential.body;
         let registration = self.registration(&body.scheme_id, &body.asset_digest)?;
         value.certificates.verify(&registration.scheme)?;
@@ -212,7 +212,7 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
                 body.scheme_id,
                 value.credential.credential_digest(),
             ),
-            &value,
+            value,
         )?];
         for certificate in &value.certificates.certificates {
             rows.push(Self::row(

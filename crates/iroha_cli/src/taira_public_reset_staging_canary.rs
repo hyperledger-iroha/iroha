@@ -436,6 +436,8 @@ fn read_stage_state(
             &marker.evidence_sha256,
         )?;
         if state == "applied" {
+            use base64::Engine as _;
+
             let (value, evidence) = read_private_json::<norito::json::Value>(
                 &directory
                     .path
@@ -447,7 +449,7 @@ fn read_stage_state(
                     "stage Applied evidence is missing, substituted, or noncanonical"
                 ));
             }
-            use base64::Engine as _;
+
             let envelope =
                 base64::engine::general_purpose::STANDARD.decode(&prepared.prepared_base64)?;
             let retained = RetainedPreparedMutation {
@@ -1260,6 +1262,8 @@ mod tests {
 
     #[test]
     fn stage_applied_marker_requires_retained_exact_evidence_and_semantic_hash() {
+        use base64::Engine as _;
+
         let _guard = ChainDiscriminantGuard::enter(0x02f1);
         let (identity, envelope, evidence, key) =
             host::tests::core_proof_required_store_fixture("http://127.0.0.1:28080");
@@ -1272,7 +1276,7 @@ mod tests {
             PreparedMutationLifetimeCheck::Structural,
         )
         .expect("authenticated fixture");
-        use base64::Engine as _;
+
         let prepared = StagePreparedV1 {
             schema: PREPARED_SCHEMA.into(),
             stage_identity_sha256: identity.authorization_sha256.clone(),
@@ -1333,6 +1337,13 @@ mod tests {
 
 #[cfg(not(target_os = "linux"))]
 impl StageCanary {
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "Linux custody uses the receiver; unsupported platforms preserve the same rejecting interface"
+        )
+    )]
     pub(super) fn run(&self, _output: &mut impl Write) -> Result<()> {
         Err(eyre!(
             "native stage-canary requires the held candidate CLI on the approved Linux guest"

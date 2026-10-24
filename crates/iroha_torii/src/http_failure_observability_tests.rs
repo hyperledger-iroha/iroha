@@ -56,7 +56,7 @@ fn failure_response(failure: Failure) -> Response {
         }
         Failure::HistoryRejected => StatusSnapshotError::HistoryRead(PRIVATE_STORAGE.to_owned()),
     };
-    routing::status_snapshot_failure_response(error)
+    routing::status_snapshot_failure_response(&error)
 }
 
 fn router(app: SharedAppState, failure: Failure) -> Router {
@@ -210,6 +210,7 @@ async fn http_failure_event_is_correlated_without_debug_span() {
                 response
                     .extensions()
                     .get::<utils::HttpStatusBusyCause>()
+                    .copied()
                     .map(utils::HttpStatusBusyCause::as_str),
                 Some(cause),
                 "canonical error normalization must retain internal provenance"

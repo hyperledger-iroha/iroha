@@ -91,7 +91,7 @@ fn assert_inactive_generation_removed() {
 
 fn assert_capture(expected: &ExecWitness) {
     let actual = drain_exec_witness_checked(|_| Ok(())).unwrap();
-    assert_eq!(actual, expected);
+    assert_eq!(&actual, expected);
     assert_inactive_generation_removed();
 }
 

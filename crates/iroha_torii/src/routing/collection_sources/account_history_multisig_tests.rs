@@ -197,9 +197,9 @@ impl MultisigHistoryFixture {
         } else {
             &self.first
         };
-        let signed = self.chain.sign(signer, instructions, next_time);
-        let entrypoint_hash = signed.hash_as_entrypoint().to_string();
-        let outcomes = self.chain.commit_at(next_time, vec![signed]);
+        let transaction = self.chain.sign(signer, instructions, next_time);
+        let entrypoint_hash = transaction.hash_as_entrypoint().to_string();
+        let outcomes = self.chain.commit_at(next_time, vec![transaction]);
         assert_eq!(outcomes.len(), 1);
         HistorySubmission {
             entrypoint_hash,

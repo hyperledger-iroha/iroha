@@ -1070,7 +1070,7 @@ seiyaku ProtectedPages { permission ReadState; permission WriteState;
         &reader,
         &target_contract,
         "first",
-        Json::new(()),
+        &(Json::new(())),
         1_000_000,
     );
     result.expect("authorized first page should produce a live continuation");
@@ -1119,7 +1119,7 @@ seiyaku ProtectedPages { permission ReadState; permission WriteState;
             caller,
             &target_contract,
             "resume",
-            payload.clone(),
+            &(payload),
             1_000_000,
         );
         result
@@ -1137,7 +1137,7 @@ seiyaku ProtectedPages { permission ReadState; permission WriteState;
             caller,
             &target_contract,
             "resume",
-            payload.clone(),
+            &(payload),
             1_000_000,
         );
         let error = result.expect_err("cursor possession cannot grant ReadState");

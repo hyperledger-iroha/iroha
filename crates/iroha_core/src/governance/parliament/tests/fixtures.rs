@@ -72,16 +72,18 @@ pub struct EnactedParliamentRestoreFixtureV1 {
     pub(crate) timed_ovn_evidence: Vec<(BallotAttemptId, TimedOvnLifecycleStateV1)>,
 }
 
+type EnactedTleSessionStores<'a> = (
+    &'a mut Vec<TleKeySessionPublicStateV1>,
+    &'a mut Vec<(TleKeySessionId, Vec<iroha_model_base::peer::PeerId>)>,
+    &'a mut Vec<(TleKeySessionId, TleKeySessionLifecycleV1)>,
+);
+
 fn complete_enacted_fixture_hidden_body_with_evidence(
     attempt: &mut ParliamentAttemptStateV1,
     requirement: RequiredParliamentBodyV1,
     election_attempt_id: BodyElectionAttemptId,
     network_id: &NetworkId,
-    (tle_key_sessions, tle_key_session_rosters, tle_key_session_lifecycles): (
-        &mut Vec<TleKeySessionPublicStateV1>,
-        &mut Vec<(TleKeySessionId, Vec<iroha_model_base::peer::PeerId>)>,
-        &mut Vec<(TleKeySessionId, TleKeySessionLifecycleV1)>,
-    ),
+    (tle_key_sessions, tle_key_session_rosters, tle_key_session_lifecycles): EnactedTleSessionStores<'_>,
     timed_ovn_evidence: &mut Vec<(BallotAttemptId, TimedOvnLifecycleStateV1)>,
 ) {
     assert_eq!(
@@ -595,7 +597,7 @@ fn sortition_request_intent(
     governance_attempt_id: GovernanceAttemptId,
     sequence: u32,
     body: ParliamentBody,
-    candidate_snapshot: Vec<AccountId>,
+    candidate_snapshot: &[AccountId],
     target_seats: u32,
     request_height: u64,
     pulse_height: u64,
@@ -615,7 +617,7 @@ fn sortition_request_intent(
         candidate_root: parliament_candidate_root_v1(
             governance_attempt_id,
             body,
-            &candidate_snapshot,
+            candidate_snapshot,
         ),
         candidate_count,
         target_seats,

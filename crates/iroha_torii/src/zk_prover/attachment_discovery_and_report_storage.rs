@@ -427,15 +427,15 @@ fn attachments_root_dir() -> PathBuf {
 fn attachment_meta_path(tenant_key: &str, id: &str) -> PathBuf {
     attachments_root_dir()
         .join(tenant_key)
-        .join(format!("{}.json", id))
+        .join(format!("{id}.json"))
 }
 fn attachment_bin_path(tenant_key: &str, id: &str) -> PathBuf {
     attachments_root_dir()
         .join(tenant_key)
-        .join(format!("{}.bin", id))
+        .join(format!("{id}.bin"))
 }
 fn report_path_from_sanitized(id: &str) -> PathBuf {
-    reports_dir().join(format!("{}.json", id))
+    reports_dir().join(format!("{id}.json"))
 }
 fn report_index_dir() -> PathBuf {
     prover_dir().join("report_index")

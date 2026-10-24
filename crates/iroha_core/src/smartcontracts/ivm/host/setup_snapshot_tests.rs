@@ -133,7 +133,7 @@ fn transaction_account_snapshot_stays_bounded_and_pinned_to_its_first_setup() {
     // An account that sorts into the observable prefix after the first host
     // setup of this transaction stays invisible to its later setups, exactly
     // as with the complete snapshot cache.
-    let late = (FIXTURE_ACCOUNTS..)
+    let late = (FIXTURE_ACCOUNTS..=u32::MAX)
         .map(seeded_account)
         .find(|candidate| candidate < pinned.last().expect("bounded prefix"))
         .expect("a fresh account sorts into the prefix");
@@ -195,7 +195,7 @@ fn zk_root_snapshot_reads_trees_in_place_like_the_owned_projection() {
         .expect("hydrate ZK snapshots");
     let mut owned = CoreHost::new(seeded_account(1));
     owned
-        .set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), zk_state.clone())]))
+        .set_zk_roots_snapshot(&(BTreeMap::from([(asset.clone(), zk_state.clone())])))
         .expect("owned root snapshot");
     assert_eq!(borrowed.zk_roots, owned.zk_roots);
     let snapshot = &borrowed.zk_roots[&asset];

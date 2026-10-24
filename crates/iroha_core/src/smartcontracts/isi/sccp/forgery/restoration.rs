@@ -606,6 +606,10 @@ impl SccpRestore {
         }
         Ok(())
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Installation consumes the original admitted record and its reserved offender keys"
+    )]
     fn install(&mut self, admission: Admission, h: u64) -> Result<(), Error> {
         if self.records.as_slice().len() == self.records.capacity() {
             return Err(invalid("snapshot permanent record set is incomplete"));

@@ -114,7 +114,7 @@ pub struct TransactionPlan {
     pub(crate) state_updates: Vec<PlanUpdate>,
 }
 #[derive(Clone, Debug)]
-pub(crate) enum PlanUpdate {
+pub enum PlanUpdate {
     TrackAccount(AccountRecord),
     RegisterTrigger(TriggerId),
     RegisterCallTrigger(TriggerId),
@@ -130,7 +130,7 @@ impl PlanUpdate {
     fn apply(&self, state: &mut ChaosState, succeeded: bool) {
         match self {
             PlanUpdate::TrackAccount(record) if succeeded => {
-                state.track_account(record.clone());
+                state.track_account(record);
             }
             PlanUpdate::RegisterTrigger(trigger_id) if succeeded => {
                 if !state.registered_triggers.contains(trigger_id) {
@@ -208,11 +208,13 @@ where
     JsonValue::Object(map)
 }
 fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
 }
 fn nexus_fee_seed_amount() -> Quantity {
     1_000_000_u64.into()
@@ -225,7 +227,7 @@ fn account_from_record(record: &AccountRecord, _domain: &DomainId) -> NewAccount
         builder
     }
 }
-pub(crate) fn peer_keypair(index: usize) -> Result<KeyPair> {
+pub fn peer_keypair(index: usize) -> Result<KeyPair> {
     let seed = format!("{IZANAMI_BASE_SEED}-peer-{index}");
     let mut seed_bytes = seed.into_bytes();
     seed_bytes.extend_from_slice(b":bls");
@@ -237,7 +239,7 @@ fn nexus_gas_keypair() -> Result<KeyPair> {
         .map_err(|err| eyre!("failed to derive Izanami Nexus gas account key pair: {err}"))
 }
 /// Deterministic gas/sink account used by Izanami Nexus profiles.
-pub(crate) fn nexus_gas_account_id() -> Result<AccountId> {
+pub fn nexus_gas_account_id() -> Result<AccountId> {
     Ok(AccountId::new(nexus_gas_keypair()?.public_key().clone()))
 }
 /// Prepared chaos state with pre-built genesis instructions.
@@ -249,7 +251,7 @@ pub struct PreparedChaos {
     /// Provider-owner bindings that the local network must load before genesis.
     pub sorafs_provider_owners: BTreeMap<String, String>,
 }
-/// Build post-topology NPoS bootstrap instructions using an explicit minimum self-bond.
+/// Build post-topology `NPoS` bootstrap instructions using an explicit minimum self-bond.
 pub fn npos_post_topology_instructions(
     peer_count: usize,
     bootstrap_public_lanes: &[LaneId],
@@ -328,8 +330,9 @@ pub fn prepare_state(
             .parse()
             .map_err(|_| eyre!("failed to parse nft asset name"))?,
     );
-    let dataspaces: Vec<DataSpaceId> = nexus
-        .map(|profile| {
+    let dataspaces: Vec<DataSpaceId> = nexus.map_or_else(
+        || vec![DataSpaceId::UNIVERSAL],
+        |profile| {
             let ids: Vec<DataSpaceId> = profile
                 .dataspace_catalog
                 .entries()
@@ -341,8 +344,8 @@ pub fn prepare_state(
             } else {
                 ids
             }
-        })
-        .unwrap_or_else(|| vec![DataSpaceId::UNIVERSAL]);
+        },
+    );
     let bootstrap_public_lanes: Vec<LaneId> = nexus
         .map(|profile| profile.bootstrap_public_lanes.clone())
         .unwrap_or_default();
@@ -400,10 +403,9 @@ pub fn prepare_state(
                 .map_err(|error| eyre!("failed to encode Izanami SoraFS owner: {error}"))?,
         );
     }
-    let effective_peers = peer_count.unwrap_or(account_count.max(1)).max(1);
+    let effective_peers = peer_count.unwrap_or_else(|| account_count.max(1)).max(1);
     let mut nexus_genesis = Vec::new();
-    let mut nexus_staking = None;
-    if nexus.is_some() {
+    let nexus_staking = if nexus.is_some() {
         let nexus_domain = DomainId::try_new("nexus", "universal")
             .map_err(|_| eyre!("failed to parse nexus domain id"))?;
         let ivm_domain = DomainId::try_new("ivm", "universal")
@@ -419,20 +421,22 @@ pub fn prepare_state(
             Some(AccountAliasDomain::new(ivm_domain.name().clone())),
             DataSpaceId::UNIVERSAL,
         )));
-        let stake_asset = nexus
-            .map(|profile| profile.stake_asset_id.clone())
-            .unwrap_or_else(|| {
+        let stake_asset = nexus.map_or_else(
+            || {
                 config_defaults::nexus::staking::stake_asset_id()
                     .parse()
                     .expect("default nexus stake asset id should parse")
-            });
-        let fee_asset = nexus
-            .map(|profile| profile.fee_asset_id.clone())
-            .unwrap_or_else(|| {
+            },
+            |profile| profile.stake_asset_id.clone(),
+        );
+        let fee_asset = nexus.map_or_else(
+            || {
                 config_defaults::nexus::fees::fee_asset_id()
                     .parse()
                     .expect("default nexus fee asset id should parse")
-            });
+            },
+            |profile| profile.fee_asset_id.clone(),
+        );
         let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let bootstrap_lane_count = u64::try_from(bootstrap_public_lanes.len()).unwrap_or(u64::MAX);
         let total_bootstrap_stake = stake_amount
@@ -501,7 +505,7 @@ pub fn prepare_state(
                 treasury.id.clone(),
             )));
         }
-        nexus_staking = Some(NexusStakingSetup {
+        Some(NexusStakingSetup {
             #[cfg(test)]
             stake_asset,
             fee_asset,
@@ -512,32 +516,32 @@ pub fn prepare_state(
             #[cfg(test)]
             slash_sink: gas_account_id,
             validator_accounts,
-        });
-    }
-    let mut genesis_tx = Vec::new();
-    genesis_tx.push(InstructionBox::from(Register::domain(Domain::new(
-        base_domain.clone(),
-    ))));
-    genesis_tx.push(InstructionBox::from(Register::asset_definition(
-        AssetDefinition::numeric(
+        })
+    } else {
+        None
+    };
+    let mut genesis_tx = vec![
+        InstructionBox::from(Register::domain(Domain::new(base_domain.clone()))),
+        InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
             asset_quantity_id.clone(),
             "Numeric Asset".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
-        ),
-    )));
-    genesis_tx.push(InstructionBox::from(Register::asset_definition(
-        AssetDefinition::numeric(
-            asset_nft_id.clone(),
-            "NFT Asset".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .mintable_once(),
-    )));
-    genesis_tx.push(InstructionBox::from(Register::account(
-        account_from_record(&treasury, &base_domain),
-    )));
+        ))),
+        InstructionBox::from(Register::asset_definition(
+            AssetDefinition::numeric(
+                asset_nft_id.clone(),
+                "NFT Asset".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .mintable_once(),
+        )),
+        InstructionBox::from(Register::account(account_from_record(
+            &treasury,
+            &base_domain,
+        ))),
+    ];
     for account in &users {
         genesis_tx.push(InstructionBox::from(Register::account(
             account_from_record(account, &base_domain),
@@ -757,7 +761,7 @@ impl WorkloadEngine {
     }
 }
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum RecipeKind {
+pub enum RecipeKind {
     DuplicateDomain,
     RegisterAccount,
     DuplicateAccount,
@@ -903,7 +907,7 @@ struct SorafsReplicationSeed {
     provider_id: ProviderId,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RepeatableTriggerState {
+pub enum RepeatableTriggerState {
     Unknown,
     Known { repetitions: u32 },
     Missing,
@@ -982,7 +986,7 @@ impl ChaosState {
             counters: ChaosCounters::default(),
         }
     }
-    fn track_account(&mut self, record: AccountRecord) {
+    fn track_account(&mut self, record: &AccountRecord) {
         if !self.users.iter().any(|existing| existing.id == record.id) {
             self.users.push(record.clone());
         }
@@ -1032,9 +1036,9 @@ impl ChaosState {
                     .get(*uaid)
                     .is_some_and(|spaces| spaces.contains(&dataspace))
             })
-            .cloned()
+            .copied()
             .collect();
-        eligible.choose(rng).cloned()
+        eligible.choose(rng).copied()
     }
     fn pick_manifest_for_dataspace(
         &self,
@@ -1099,8 +1103,8 @@ impl ChaosState {
             RecipeKind::DeployIvmContract => self.plan_deploy_ivm(rng),
             RecipeKind::DeployKotodamaContract => self.plan_deploy_kotodama(rng),
             RecipeKind::PublishSpaceDirectoryManifest => self.plan_publish_space_manifest(rng),
-            RecipeKind::RevokeSpaceDirectoryManifest => self.plan_revoke_space_manifest(rng),
-            RecipeKind::ExpireSpaceDirectoryManifest => self.plan_expire_space_manifest(rng),
+            RecipeKind::RevokeSpaceDirectoryManifest => Ok(self.plan_revoke_space_manifest(rng)),
+            RecipeKind::ExpireSpaceDirectoryManifest => Ok(self.plan_expire_space_manifest(rng)),
             RecipeKind::DvpSettlement => self.plan_dvp_settlement(rng),
             RecipeKind::IssueReplicationOrder => self.plan_issue_replication_order(rng),
         }
@@ -1115,7 +1119,7 @@ impl ChaosState {
         self.produce_plan(kind, rng)
     }
     #[cfg(test)]
-    fn plan_register_domain(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
+    fn plan_register_domain(_rng: &mut StdRng) -> Result<TransactionPlan> {
         Err(eyre!(
             "runtime domain registration requires an active SNS domain-name lease; Izanami does not synthesize leases"
         ))
@@ -2036,10 +2040,10 @@ impl ChaosState {
             instructions.push(InstructionBox::from(Register::account(account)));
             instructions.extend(self.maybe_prefund_nexus_fee_asset(&record.id));
             state_updates.push(PlanUpdate::TrackAccount(record.clone()));
-            let uaid = record
+
+            record
                 .uaid
-                .expect("allocated UAID record should carry uaid");
-            uaid
+                .expect("allocated UAID record should carry uaid")
         };
         let manifest = AssetPermissionManifest {
             version: ManifestVersion::V1,
@@ -2078,11 +2082,11 @@ impl ChaosState {
             expect_success: true,
         })
     }
-    fn plan_revoke_space_manifest(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
+    fn plan_revoke_space_manifest(&mut self, rng: &mut StdRng) -> TransactionPlan {
         let dataspace = self.random_dataspace(rng);
         let Some(uaid) = self.pick_manifest_for_dataspace(dataspace, rng) else {
             let missing = UniversalAccountId::from_hash(Hash::new(b"izanami-missing-manifest"));
-            return Ok(TransactionPlan {
+            return TransactionPlan {
                 state_updates: Vec::new(),
                 label: "revoke_space_directory_manifest",
                 instructions: vec![InstructionBox::from(RevokeSpaceDirectoryManifest {
@@ -2093,10 +2097,10 @@ impl ChaosState {
                 })],
                 signer: self.treasury.clone(),
                 expect_success: false,
-            });
+            };
         };
         self.mark_manifest_removed(uaid, dataspace);
-        Ok(TransactionPlan {
+        TransactionPlan {
             state_updates: Vec::new(),
             label: "revoke_space_directory_manifest",
             instructions: vec![InstructionBox::from(RevokeSpaceDirectoryManifest {
@@ -2107,13 +2111,13 @@ impl ChaosState {
             })],
             signer: self.treasury.clone(),
             expect_success: true,
-        })
+        }
     }
-    fn plan_expire_space_manifest(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
+    fn plan_expire_space_manifest(&mut self, rng: &mut StdRng) -> TransactionPlan {
         let dataspace = self.random_dataspace(rng);
         let Some(uaid) = self.pick_manifest_for_dataspace(dataspace, rng) else {
             let missing = UniversalAccountId::from_hash(Hash::new(b"izanami-missing-expiry"));
-            return Ok(TransactionPlan {
+            return TransactionPlan {
                 state_updates: Vec::new(),
                 label: "expire_space_directory_manifest",
                 instructions: vec![InstructionBox::from(ExpireSpaceDirectoryManifest {
@@ -2123,10 +2127,10 @@ impl ChaosState {
                 })],
                 signer: self.treasury.clone(),
                 expect_success: false,
-            });
+            };
         };
         self.mark_manifest_removed(uaid, dataspace);
-        Ok(TransactionPlan {
+        TransactionPlan {
             state_updates: Vec::new(),
             label: "expire_space_directory_manifest",
             instructions: vec![InstructionBox::from(ExpireSpaceDirectoryManifest {
@@ -2136,7 +2140,7 @@ impl ChaosState {
             })],
             signer: self.treasury.clone(),
             expect_success: true,
-        })
+        }
     }
     fn plan_dvp_settlement(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let seller = self.treasury.clone();
@@ -2362,9 +2366,7 @@ impl ChaosState {
             Some(RepeatableTriggerState::Known { repetitions }) => {
                 (*repetitions > 0).then_some(*repetitions)
             }
-            Some(RepeatableTriggerState::Unknown)
-            | Some(RepeatableTriggerState::Missing)
-            | None => None,
+            Some(RepeatableTriggerState::Unknown | RepeatableTriggerState::Missing) | None => None,
         }
     }
     fn sync_repeatable_trigger_repetitions(&mut self, trigger_id: TriggerId, repeats: Option<u32>) {
@@ -2587,11 +2589,11 @@ mod tests {
             let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
                 continue;
             };
-            if let RegisterBox::Account(account) = register {
-                if account.object.label() == Some(&expected_label) {
-                    found_fee_sink = true;
-                    break;
-                }
+            if let RegisterBox::Account(account) = register
+                && account.object.label() == Some(&expected_label)
+            {
+                found_fee_sink = true;
+                break;
             }
         }
         assert!(found_fee_sink, "fee sink account should be registered");
@@ -2726,15 +2728,11 @@ mod tests {
             for &lane_id in &bootstrap_public_lanes {
                 assert!(
                     registered_pairs.contains(&(lane_id, validator.clone())),
-                    "validator {} should be registered on lane {}",
-                    validator,
-                    lane_id
+                    "validator {validator} should be registered on lane {lane_id}"
                 );
                 assert!(
                     activated_pairs.contains(&(lane_id, validator.clone())),
-                    "validator {} should be activated on lane {}",
-                    validator,
-                    lane_id
+                    "validator {validator} should be activated on lane {lane_id}"
                 );
             }
         }
@@ -2896,10 +2894,9 @@ mod tests {
     }
     #[test]
     fn register_domain_plan_is_disabled_under_sns_domain_model() {
-        let PreparedChaos { mut state, .. } =
+        let PreparedChaos { state: _state, .. } =
             prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
-        let err = state
-            .plan_register_domain(&mut StdRng::seed_from_u64(7))
+        let err = ChaosState::plan_register_domain(&mut StdRng::seed_from_u64(7))
             .expect_err("runtime domain registration should require an external SNS lease");
         assert!(
             err.to_string().contains("SNS domain-name lease"),

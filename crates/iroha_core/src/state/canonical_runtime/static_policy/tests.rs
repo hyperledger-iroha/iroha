@@ -21,12 +21,12 @@ fn transactions_borrow_exact_original_policy_across_rollback_and_apply() {
     let original_crypto = state.crypto();
     let mut block = state.block(proposal.header());
     let original = addresses(block.runtime_policy.static_inputs());
-    assert_eq!(addresses(&**&*block), original);
+    assert_eq!(addresses(&block), original);
     assert!(Arc::ptr_eq(&block.crypto, &original_crypto));
     let key: StatePath = "policy/rollback".parse().unwrap();
     {
         let mut transaction = block.transaction();
-        assert_eq!(addresses(&**&transaction), original);
+        assert_eq!(addresses(&transaction), original);
         assert_eq!(addresses(transaction.static_execution_policy()), original);
         let retained = transaction.static_execution_policy();
         transaction
@@ -43,7 +43,7 @@ fn transactions_borrow_exact_original_policy_across_rollback_and_apply() {
     assert!(block.world.smart_contract_state.get(&key).is_none());
     {
         let mut transaction = block.transaction();
-        assert_eq!(addresses(&**&transaction), original);
+        assert_eq!(addresses(&transaction), original);
         transaction
             .world
             .smart_contract_state
@@ -52,7 +52,7 @@ fn transactions_borrow_exact_original_policy_across_rollback_and_apply() {
     }
     assert_eq!(block.world.smart_contract_state.get(&key), Some(&vec![9]));
     assert_eq!(addresses(block.runtime_policy.static_inputs()), original);
-    assert_eq!(addresses(&**&block.transaction()), original);
+    assert_eq!(addresses(&block.transaction()), original);
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn equal_and_different_live_crypto_replacements_cannot_rebind_original_input() {
     state.install_crypto_snapshot_for_isolated_replay((*captured).clone());
     assert!(!Arc::ptr_eq(&state.crypto(), &captured));
     assert!(Arc::ptr_eq(&block.crypto, &captured));
-    assert_eq!(addresses(&**&block.transaction()), original);
+    assert_eq!(addresses(&block.transaction()), original);
     let mut foreign = (*captured).clone();
     foreign.sm2_distid_default.push_str("-foreign");
     state.install_crypto_snapshot_for_isolated_replay(foreign);
@@ -74,6 +74,6 @@ fn equal_and_different_live_crypto_replacements_cannot_rebind_original_input() {
         captured.sm2_distid_default
     );
     assert_eq!(block.crypto.sm2_distid_default, captured.sm2_distid_default);
-    assert_eq!(addresses(&**&block.transaction()), original);
+    assert_eq!(addresses(&block.transaction()), original);
     assert_eq!(addresses(block.runtime_policy.static_inputs()), original);
 }

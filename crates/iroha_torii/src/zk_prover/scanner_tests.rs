@@ -121,18 +121,20 @@ fn report_capacity_eviction_does_not_requeue_completed_attachment() {
 
 #[test]
 fn report_persistence_failure_leaves_a_retryable_provisional_receipt() {
-    let _env = TestDataDirGuard::new();
-    configure_test_cfg(Vec::new());
-    let tenant_key = anon_tenant_key();
-    let body = fixture_attachment_bytes();
-    let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
-    super::init_persistence().expect("initialize production report persistence");
     struct ResetSaveFailure;
     impl Drop for ResetSaveFailure {
         fn drop(&mut self) {
             super::TEST_REPORT_SAVE_FAILURE.store(false, AtomicOrdering::SeqCst);
         }
     }
+
+    let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
+    let tenant_key = anon_tenant_key();
+    let body = fixture_attachment_bytes();
+    let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
+    super::init_persistence().expect("initialize production report persistence");
+
     let _reset = ResetSaveFailure;
     super::TEST_REPORT_SAVE_FAILURE.store(true, AtomicOrdering::SeqCst);
     let error =
@@ -513,7 +515,11 @@ fn attachment_file_loading_is_bounded_and_metadata_size_is_not_trusted() {
     let oversized_path = attachment_bin_path(&tenant_key, &oversized_id);
     fs::write(
         &oversized_path,
-        vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize + 1],
+        vec![
+            0_u8;
+            usize::try_from(PROOF_ATTACHMENT_BODY_MAX_BYTES_V1).expect("fixture bound fits usize")
+                + 1
+        ],
     )
     .expect("write oversized body fixture");
     let oversized = load_attachment_body(&AttachmentLocation {
@@ -707,7 +713,10 @@ fn attachment_body_loader_accepts_the_closed_eight_mib_boundary() {
     let id = format!("{:064x}", 0xBAD3u64);
     fs::write(
         attachment_bin_path(&tenant_key, &id),
-        vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize],
+        vec![
+            0_u8;
+            usize::try_from(PROOF_ATTACHMENT_BODY_MAX_BYTES_V1).expect("fixture bound fits usize")
+        ],
     )
     .expect("write exact-cap body fixture");
     let loaded = load_attachment_body(&AttachmentLocation { tenant_key, id })
@@ -766,7 +775,11 @@ fn immutable_snapshot_survives_path_replacement_without_reread() {
     assert_eq!(snapshot.body_load.bytes_read, body.len() as u64);
     fs::write(
         attachment_bin_path(&tenant_key, &id),
-        vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize + 1],
+        vec![
+            0_u8;
+            usize::try_from(PROOF_ATTACHMENT_BODY_MAX_BYTES_V1).expect("fixture bound fits usize")
+                + 1
+        ],
     )
     .expect("replace path after immutable snapshot acquisition");
     let report = process_attachment_snapshot_at(&loc, *snapshot)
@@ -1011,7 +1024,7 @@ fn attachment_discovery_geometry_has_exact_boundaries_and_saturates() {
     let saturated = AttachmentDiscoveryGeometry::from_scan_bytes(u64::MAX);
     assert_eq!(
         saturated.max_locations,
-        ATTACHMENT_DISCOVERY_MAX_LOCATIONS as usize
+        usize::try_from(ATTACHMENT_DISCOVERY_MAX_LOCATIONS).expect("fixture bound fits usize")
     );
     assert_eq!(
         saturated.max_work_items,
@@ -1059,7 +1072,8 @@ fn complete_attachment_discovery_window_is_canonically_ordered() {
 fn attachment_discovery_retry_queue_is_canonical_and_hard_bounded() {
     let _env = TestDataDirGuard::new();
     fs::create_dir_all(attachments_root_dir()).expect("create attachment root");
-    let hard_cap = ATTACHMENT_DISCOVERY_MAX_LOCATIONS as usize;
+    let hard_cap =
+        usize::try_from(ATTACHMENT_DISCOVERY_MAX_LOCATIONS).expect("fixture bound fits usize");
     let tenant_key = format!("{:064x}", 5_u8);
     let locations: Vec<_> = (0..=hard_cap)
         .rev()
@@ -1232,7 +1246,12 @@ fn oversized_first_attachment_cannot_starve_later_valid_work() {
     configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
-    let oversized_body = vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize + 1];
+    let oversized_body = vec![
+        0_u8;
+        usize::try_from(PROOF_ATTACHMENT_BODY_MAX_BYTES_V1)
+            .expect("fixture bound fits usize")
+            + 1
+    ];
     let oversized_id = attachment_body_id(&oversized_body);
     let oversized_meta = super::super::zk_attachments::AttachmentMeta {
         id: oversized_id.clone(),
@@ -1305,7 +1324,12 @@ fn attachment_metadata_loading_rejects_oversized_files_before_parsing() {
     let id = format!("{:064x}", 0xBAD2u64);
     fs::write(
         attachment_meta_path(&tenant_key, &id),
-        vec![b' '; crate::zk_attachments::ATTACHMENT_META_FILE_MAX_BYTES as usize + 1],
+        vec![
+            b' ';
+            usize::try_from(crate::zk_attachments::ATTACHMENT_META_FILE_MAX_BYTES)
+                .expect("fixture bound fits usize")
+                + 1
+        ],
     )
     .expect("write oversized metadata fixture");
     let error = load_attachment_meta(&AttachmentLocation { tenant_key, id })
@@ -1359,6 +1383,8 @@ fn scan_respects_byte_budget() {
 }
 #[test]
 fn deferred_attachment_cannot_head_of_line_block_later_fitting_work() {
+    const JSON_ALPHABET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
     let _env = TestDataDirGuard::new();
     init_test_cfg();
     let budget = cfg_max_scan_bytes();
@@ -1379,13 +1405,13 @@ fn deferred_attachment_cannot_head_of_line_block_later_fitting_work() {
             (id.as_bytes()[0] <= b'7').then_some(id)
         })
         .expect("find a lower-half content id for the leading body");
-    const JSON_ALPHABET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
     let (second_id, second_body, third_id, third_body) = (0_u32..=u32::MAX)
         .find_map(|nonce| {
             let alphabet_len =
                 u32::try_from(JSON_ALPHABET.len()).expect("alphabet length fits u32");
             let index = |shift: u32| {
-                usize::try_from((nonce.rotate_left(shift) % alphabet_len) as u64)
+                usize::try_from(nonce.rotate_left(shift) % alphabet_len)
                     .expect("alphabet index fits usize")
             };
             let second_body = vec![
@@ -1553,8 +1579,7 @@ fn scan_bounds_concurrency() {
     assert!(observed > 1, "the fixture must exercise overlapping work");
     assert!(
         observed <= super::cfg_max_inflight(),
-        "observed inflight {} exceeds cap",
-        observed
+        "observed inflight {observed} exceeds cap"
     );
     super::TEST_PROCESSING_DELAY_MS.store(0, AtomicOrdering::SeqCst);
 }
@@ -1602,6 +1627,8 @@ fn zk1_tlv_count_is_bounded_and_duplicate_tags_are_compacted() {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn background_worker_processes_pending_attachments() {
+    use tokio::time::{Duration, Instant, sleep};
+
     let _env = TestDataDirGuard::new();
     configure_test_cfg(Vec::new());
     // Prepare attachment directory with one valid proof attachment and one malformed ZK1 payload.
@@ -1651,7 +1678,7 @@ async fn background_worker_processes_pending_attachments() {
     .expect("write err meta");
     let shutdown = ShutdownSignal::new();
     let worker = super::start_worker(shutdown.clone()).expect("start prover worker");
-    use tokio::time::{Duration, Instant, sleep};
+
     // The mandatory STARK fixture does real cryptographic work even in debug builds.
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut ok_report_ready = false;
@@ -1661,9 +1688,7 @@ async fn background_worker_processes_pending_attachments() {
             ok_report_ready = super::load_report(&ok_id).is_some();
         }
         if !err_ready {
-            err_ready = super::load_report(&err_id)
-                .map(|rep| !rep.ok)
-                .unwrap_or(false);
+            err_ready = super::load_report(&err_id).is_some_and(|rep| !rep.ok);
         }
         if ok_report_ready && err_ready {
             break;
@@ -1692,18 +1717,20 @@ async fn background_worker_processes_pending_attachments() {
 
 #[test]
 fn original_verification_refusal_keeps_worker_receipt_retryable_without_report() {
-    let _env = TestDataDirGuard::new();
-    configure_test_cfg(Vec::new());
-    let tenant = anon_tenant_key();
-    let body = fixture_attachment_bytes();
-    let id = store_scanner_attachment(&tenant, &body, "application/x-norito");
-    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
             TEST_VERIFICATION_DECODE_LIMITS.with(|value| value.set(None));
         }
     }
+
+    let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
+    let tenant = anon_tenant_key();
+    let body = fixture_attachment_bytes();
+    let id = store_scanner_attachment(&tenant, &body, "application/x-norito");
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+
     let reset = Reset;
     TEST_VERIFICATION_DECODE_LIMITS.with(|value| value.set(Some(limits)));
     let failure = process_attachment_once(&id).expect_err("actual worker verification must defer");
@@ -1768,13 +1795,15 @@ async fn parallel_scan_retains_all_worker_originals_in_both_arrival_orders() {
                 io_id.clone()
             };
             tasks.spawn(crate::panic_recovery::catch_async_recoverable(async move {
-                receive.await.expect("controlled arrival order");
                 struct Reset;
                 impl Drop for Reset {
                     fn drop(&mut self) {
                         TEST_VERIFICATION_DECODE_LIMITS.with(|value| value.set(None));
                     }
                 }
+
+                receive.await.expect("controlled arrival order");
+
                 let _reset = Reset;
                 if local {
                     TEST_VERIFICATION_DECODE_LIMITS.with(|value| value.set(Some(limits)));

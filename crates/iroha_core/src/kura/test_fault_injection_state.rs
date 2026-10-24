@@ -12,9 +12,6 @@ struct ProgressIntentDirectorySyncFault {
     target_index: usize,
 }
 #[cfg(test)]
-type NativeAmxPreMutationHook = Box<dyn FnOnce(&Path)>;
-
-#[cfg(test)]
 std::thread_local! {
     static FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_SIDECAR_TEMP_MARKER_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -39,7 +36,6 @@ std::thread_local! {
     static FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_APPEND_DATA_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_AFTER_NEXT_AUTONOMOUS_MERGE_BUNDLE_PAIR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-    static NATIVE_AMX_LATEST_INDEX_PRE_MUTATION_HOOK: std::cell::RefCell<Option<NativeAmxPreMutationHook>> = const { std::cell::RefCell::new(None) };
 }
 #[cfg(test)]
 fn should_fail_after_bound_progress_append_build_for_tests() -> bool {

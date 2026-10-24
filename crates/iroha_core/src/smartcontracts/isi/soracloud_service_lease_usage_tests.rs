@@ -173,7 +173,7 @@ pub(super) fn verify_reporter_usage_and_replays(
     .execute(&ALICE_ID, &mut stx)
     .expect_err("a zero lease incarnation must fail closed");
     assert_invalid_parameter_contains(
-        zero_incarnation_error,
+        &(zero_incarnation_error),
         "lease_started_height must be greater than zero",
     );
 
@@ -212,7 +212,7 @@ pub(super) fn verify_reporter_usage_and_replays(
     .expect_err(
         "a report for an old lease must be rejected even when epoch, revision, and slot match",
     );
-    assert_invalid_parameter_contains(stale_incarnation_error, "lease-incarnation CAS expected");
+    assert_invalid_parameter_contains(&(stale_incarnation_error), "lease-incarnation CAS expected");
     assert_eq!(
         stx.world
             .soracloud_service_deployments
@@ -544,7 +544,7 @@ pub(super) fn verify_reporter_finalization_and_reopening(
     }
     .execute(&ALICE_ID, &mut stx)
     .expect_err("a finalized checkpoint must reopen at its exact terminal byte value");
-    assert_invalid_parameter_contains(reopen_with_increase_error, "exact terminal byte value");
+    assert_invalid_parameter_contains(&(reopen_with_increase_error), "exact terminal byte value");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
         lease_started_height,
@@ -877,7 +877,7 @@ pub(super) fn verify_reporter_rollover_and_placement_incarnation(
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("rollover must fail atomically when no unique audit sequence remains");
-    assert_invariant_contains(audit_exhaustion_error, "audit sequence is exhausted");
+    assert_invariant_contains(&(audit_exhaustion_error), "audit sequence is exhausted");
     assert_eq!(
         stx.world
             .soracloud_service_deployments
@@ -1030,7 +1030,7 @@ pub(super) fn verify_reporter_rollover_and_placement_incarnation(
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("a returned placement must not serve using its predecessor's checkpoint");
-    assert_invariant_contains(missing_checkpoint, "must open its zero usage checkpoint");
+    assert_invariant_contains(&(missing_checkpoint), "must open its zero usage checkpoint");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
         lease_started_height: capped_lease_started_height,

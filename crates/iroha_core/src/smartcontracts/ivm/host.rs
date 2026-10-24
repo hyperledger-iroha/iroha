@@ -3970,9 +3970,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         );
         let marker = crate::smartcontracts::code::contract_lifecycle_state_key(contract_address);
         if self.access_log_enabled {
-            self.insert_access_read_key(format!("lifecycle:{contract_address}"));
-            self.insert_access_write_key(format!("lifecycle:{contract_address}"));
-            self.insert_access_durable_read_path(marker.to_string());
+            self.insert_access_read_key(&(format!("lifecycle:{contract_address}")));
+            self.insert_access_write_key(&(format!("lifecycle:{contract_address}")));
+            self.insert_access_durable_read_path(marker.as_ref());
         }
         self.stage_durable_state_update(marker, None);
     }
@@ -4902,9 +4902,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// snapshots when any tree state is inconsistent with its persisted profile.
     pub fn set_zk_roots_snapshot(
         &mut self,
-        map: BTreeMap<AssetDefinitionId, crate::state::ZkAssetState>,
+        map: &BTreeMap<AssetDefinitionId, crate::state::ZkAssetState>,
     ) -> Result<(), ivm::VMError> {
-        self.zk_roots = Self::validated_zk_roots_snapshot(&map)?;
+        self.zk_roots = Self::validated_zk_roots_snapshot(map)?;
         Ok(())
     }
     /// Validate confidential trees in place and copy only what `ZK_ROOTS_GET` reads.
@@ -5062,9 +5062,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// non-canonical, or when a stored commitment does not match the key bytes.
     pub fn set_verifying_keys(
         &mut self,
-        map: BTreeMap<VerifyingKeyId, VerifyingKeyRecord>,
+        map: &BTreeMap<VerifyingKeyId, VerifyingKeyRecord>,
     ) -> Result<(), ivm::VMError> {
-        self.prepared_verifying_keys = Self::prepared_verifying_key_index(&map)?;
+        self.prepared_verifying_keys = Self::prepared_verifying_key_index(map)?;
         Ok(())
     }
     /// Validate a verifying-key registry and index its prepared keys by commitment.
@@ -5955,28 +5955,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.durable_state_authorizations
             .insert(key, self.current_entrypoint_authorization.clone());
     }
-    fn insert_access_read_key(&mut self, key: String) {
-        if self.state_access_log.read_keys.insert(key.clone()) {
+    fn insert_access_read_key(&mut self, key: &str) {
+        if self.state_access_log.read_keys.insert(key.to_owned()) {
             for journal in &mut self.nested_contract_call_journals {
-                journal.new_read_keys.insert(key.clone());
+                journal.new_read_keys.insert(key.to_owned());
             }
         }
     }
-    fn insert_access_write_key(&mut self, key: String) {
-        if self.state_access_log.write_keys.insert(key.clone()) {
+    fn insert_access_write_key(&mut self, key: &str) {
+        if self.state_access_log.write_keys.insert(key.to_owned()) {
             for journal in &mut self.nested_contract_call_journals {
-                journal.new_write_keys.insert(key.clone());
+                journal.new_write_keys.insert(key.to_owned());
             }
         }
     }
-    fn insert_access_durable_read_path(&mut self, path: String) {
+    fn insert_access_durable_read_path(&mut self, path: &str) {
         if self
             .state_access_log
             .durable_read_paths
-            .insert(path.clone())
+            .insert(path.to_owned())
         {
             for journal in &mut self.nested_contract_call_journals {
-                journal.new_durable_read_paths.insert(path.clone());
+                journal.new_durable_read_paths.insert(path.to_owned());
             }
         }
     }
@@ -6008,8 +6008,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             self.state_access_log.durable_read_paths_complete = false;
             return;
         }
-        self.insert_access_read_key(key.to_string());
-        self.insert_access_durable_read_path(physical_path);
+        self.insert_access_read_key(key);
+        self.insert_access_durable_read_path(&(physical_path));
     }
     fn log_state_write_key(&mut self, key: &str) {
         if !self.access_log_enabled {
@@ -6025,7 +6025,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if !self.try_reserve_output(items, bytes) {
             return;
         }
-        self.insert_access_write_key(key.to_string());
+        self.insert_access_write_key(key);
         self.state_access_log
             .state_writes
             .push(ivm::parallel::StateUpdate {
@@ -6941,7 +6941,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
     fn map_axt_fastpq_error(
         &mut self,
-        error: fastpq_prover::Error,
+        error: &fastpq_prover::Error,
         context: &str,
         dsid: DataSpaceId,
         lane: LaneId,
@@ -6980,7 +6980,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         fastpq_prover::validate_axt_transfer_claim_binding(binding).map_err(|err| {
             self.map_axt_fastpq_error(
-                err,
+                &(err),
                 "generic AXT proof admission requires a witnessed transfer claim",
                 dsid,
                 policy.target_lane,
@@ -6998,7 +6998,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         fastpq_prover::verify_axt_proof_envelope_with_outer_metadata(envelope, expiry_slot)
             .map_err(|err| {
                 self.map_axt_fastpq_error(
-                    err,
+                    &(err),
                     "FASTPQ verification failed",
                     dsid,
                     policy.target_lane,
@@ -8331,44 +8331,45 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         value: Option<&str>,
     ) -> Result<PreparedCoreQueryWord, ivm::VMError> {
         let tlv = value
-            .as_deref()
             .map(|value| Self::encode_tlv_payload(PointerType::Blob, value.as_bytes()))
             .transpose()?;
         Ok(PreparedCoreQueryWord::OptionalTlv(tlv))
     }
-    fn prepare_account_view(view: AccountView) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError> {
+    fn prepare_account_view(
+        view: &AccountView,
+    ) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError> {
         Ok(vec![
             Self::prepare_typed_query_leaf(PointerType::AccountId, &view.id)?,
             Self::prepare_typed_query_leaf(PointerType::Json, &view.metadata)?,
         ])
     }
-    fn prepare_asset_view(view: AssetView) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError> {
+    fn prepare_asset_view(view: &AssetView) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError> {
         Ok(vec![
             Self::prepare_typed_query_leaf(PointerType::AssetId, &view.id)?,
             Self::prepare_quantity_query_leaf(&view.amount)?,
         ])
     }
     fn prepare_asset_definition_view(
-        view: AssetDefinitionView,
+        view: &AssetDefinitionView,
     ) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError> {
         Ok(vec![
             Self::prepare_typed_query_leaf(PointerType::AssetDefinitionId, &view.id)?,
             Self::prepare_query_blob(view.name.as_bytes())?,
-            Self::prepare_optional_query_blob(view.description)?,
+            Self::prepare_optional_query_blob(view.description.as_deref())?,
             Self::prepare_typed_query_leaf(PointerType::AccountId, &view.owned_by)?,
             Self::prepare_quantity_query_leaf(&view.total_quantity)?,
             Self::prepare_optional_int_query_leaf(view.numeric_scale)?,
             Self::prepare_typed_query_leaf(PointerType::Json, &view.metadata)?,
         ])
     }
-    fn prepare_domain_view(view: DomainView) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError> {
+    fn prepare_domain_view(view: &DomainView) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError> {
         Ok(vec![
             Self::prepare_typed_query_leaf(PointerType::DomainId, &view.id)?,
             Self::prepare_typed_query_leaf(PointerType::AccountId, &view.owned_by)?,
             Self::prepare_typed_query_leaf(PointerType::Json, &view.metadata)?,
         ])
     }
-    fn prepare_nft_view(view: NftView) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError> {
+    fn prepare_nft_view(view: &NftView) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError> {
         Ok(vec![
             Self::prepare_typed_query_leaf(PointerType::NftId, &view.id)?,
             Self::prepare_typed_query_leaf(PointerType::AccountId, &view.owned_by)?,
@@ -8663,7 +8664,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         _ => Err(ivm::VMError::DecodeError),
                     },
                     Self::ACCOUNT_VIEW_WORDS,
-                    Self::prepare_account_view,
+                    |value| Self::prepare_account_view(&value),
                 )
             }
             CoreQueryEntityTagV1::Asset => {
@@ -8679,7 +8680,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         _ => Err(ivm::VMError::DecodeError),
                     },
                     Self::ASSET_VIEW_WORDS,
-                    Self::prepare_asset_view,
+                    |value| Self::prepare_asset_view(&value),
                 )
             }
             CoreQueryEntityTagV1::AssetDefinition => {
@@ -8699,7 +8700,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         _ => Err(ivm::VMError::DecodeError),
                     },
                     Self::ASSET_DEFINITION_VIEW_WORDS,
-                    Self::prepare_asset_definition_view,
+                    |value| Self::prepare_asset_definition_view(&value),
                 )
             }
             CoreQueryEntityTagV1::Domain => {
@@ -8715,7 +8716,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         _ => Err(ivm::VMError::DecodeError),
                     },
                     Self::DOMAIN_VIEW_WORDS,
-                    Self::prepare_domain_view,
+                    |value| Self::prepare_domain_view(&value),
                 )
             }
             CoreQueryEntityTagV1::Nft => {
@@ -8731,7 +8732,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         _ => Err(ivm::VMError::DecodeError),
                     },
                     Self::NFT_VIEW_WORDS,
-                    Self::prepare_nft_view,
+                    |value| Self::prepare_nft_view(&value),
                 )
             }
         }
@@ -8809,7 +8810,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     &gas_ctx,
                     (query_result.processed_items, query_result.processed_bytes),
                     (&payload, Self::ACCOUNT_VIEW_WORDS),
-                    Self::prepare_account_view,
+                    |value| Self::prepare_account_view(&value),
                 )
             }
             (CoreQueryEntityTagV1::Asset, QueryOutputBatchBox::Asset(assets)) => {
@@ -8826,7 +8827,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     &gas_ctx,
                     (query_result.processed_items, query_result.processed_bytes),
                     (&payload, Self::ASSET_VIEW_WORDS),
-                    Self::prepare_asset_view,
+                    |value| Self::prepare_asset_view(&value),
                 )
             }
             (
@@ -8846,7 +8847,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     &gas_ctx,
                     (query_result.processed_items, query_result.processed_bytes),
                     (&payload, Self::ASSET_DEFINITION_VIEW_WORDS),
-                    Self::prepare_asset_definition_view,
+                    |value| Self::prepare_asset_definition_view(&value),
                 )
             }
             (CoreQueryEntityTagV1::Domain, QueryOutputBatchBox::Domain(domains)) => {
@@ -8860,7 +8861,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     &gas_ctx,
                     (query_result.processed_items, query_result.processed_bytes),
                     (&payload, Self::DOMAIN_VIEW_WORDS),
-                    Self::prepare_domain_view,
+                    |value| Self::prepare_domain_view(&value),
                 )
             }
             (CoreQueryEntityTagV1::Nft, QueryOutputBatchBox::Nft(nfts)) => {
@@ -8874,7 +8875,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     &gas_ctx,
                     (query_result.processed_items, query_result.processed_bytes),
                     (&payload, Self::NFT_VIEW_WORDS),
-                    Self::prepare_nft_view,
+                    |value| Self::prepare_nft_view(&value),
                 )
             }
             _ => Err(ivm::VMError::DecodeError),
@@ -8948,7 +8949,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if gas > gas_remaining {
             return Err(ivm::VMError::OutOfGas);
         }
-        let ptr = Self::alloc_norito_bytes(vm, &payload)?;
+        let ptr = Self::alloc_norito_bytes(vm, payload)?;
         vm.set_register(10, ptr);
         Ok(gas)
     }
@@ -9885,18 +9886,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             return Err(ivm::VMError::PermissionDenied);
         }
         let state_quote = match number {
-            ivm::syscalls::SYSCALL_STATE_GET => {
-                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
-                Some(ivm::host::reserve_available_syscall_gas_at_least(
-                    vm,
-                    ivm::host::state_path_gas(path_len),
-                )?)
-            }
-            ivm::syscalls::SYSCALL_STATE_LEN => {
+            ivm::syscalls::SYSCALL_STATE_LEN
+            | ivm::syscalls::SYSCALL_STATE_DEL
+            | ivm::syscalls::SYSCALL_STATE_HAS => {
                 let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
                 Some(ivm::host::state_path_gas(path_len))
             }
-            ivm::syscalls::SYSCALL_STATE_COUNT => {
+            ivm::syscalls::SYSCALL_STATE_GET | ivm::syscalls::SYSCALL_STATE_COUNT => {
                 let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
                 Some(ivm::host::reserve_available_syscall_gas_at_least(
                     vm,
@@ -9915,10 +9911,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
                 ivm::host::validate_state_value_payload_len(value_len)?;
                 Some(ivm::host::state_value_gas(path_len, value_len))
-            }
-            ivm::syscalls::SYSCALL_STATE_DEL | ivm::syscalls::SYSCALL_STATE_HAS => {
-                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
-                Some(ivm::host::state_path_gas(path_len))
             }
             _ => None,
         };
@@ -9995,7 +9987,23 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     .as_ref()
                     .map_or(0, |context| context.entrypoint.len()),
             )),
-            ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
+            ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT
+            | ivm::syscalls::SYSCALL_ZK_ROOTS_GET
+            | ivm::syscalls::SYSCALL_ZK_VOTE_GET_TALLY
+            | ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS
+            | ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
+            | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY
+            | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
+            | ivm::syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE
+            | ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH
+            | ivm::syscalls::SYSCALL_AXT_TOUCH
+            | ivm::syscalls::SYSCALL_VERIFY_DS_PROOF
+            | ivm::syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND
+            | ivm::syscalls::SYSCALL_AXT_COMMIT => {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
             ivm::syscalls::SYSCALL_EMIT_CONTRACT_EVENT => Some(self.quote_contract_event(vm)?),
@@ -10016,24 +10024,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Some(ivm::vrf::epoch_seed_gas(
                     self.vrf_epoch_seed(vm.register(10)).is_some(),
                 ))
-            }
-            ivm::syscalls::SYSCALL_ZK_ROOTS_GET
-            | ivm::syscalls::SYSCALL_ZK_VOTE_GET_TALLY
-            | ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS => {
-                Some(ivm::host::reserve_available_syscall_gas(vm)?)
-            }
-            ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
-            | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY
-            | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
-            | ivm::syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT
-            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
-            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
-            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
-            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => {
-                Some(ivm::host::reserve_available_syscall_gas(vm)?)
-            }
-            ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => {
-                Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
             ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                 if self.fastpq_batch_entries.is_some() {
@@ -10065,12 +10055,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let payload_len =
                     quote_tlv_payload_len_at(vm, vm.register(10), PointerType::AxtDescriptor)?;
                 Some(Self::axt_gas(payload_len))
-            }
-            ivm::syscalls::SYSCALL_AXT_TOUCH
-            | ivm::syscalls::SYSCALL_VERIFY_DS_PROOF
-            | ivm::syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND
-            | ivm::syscalls::SYSCALL_AXT_COMMIT => {
-                Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
             ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
             | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION
@@ -15790,7 +15774,7 @@ seiyaku StaleRuntimeBinding { permission CanUpdateContract;
             0,
         ));
         let mut tx = block.transaction();
-        if tx.world.account(&account_id).is_err() {
+        if tx.world.account(account_id).is_err() {
             Register::account(Account::new(account_id.clone()))
                 .execute(authority, &mut tx)
                 .expect("register permission holder account");
@@ -15799,7 +15783,7 @@ seiyaku StaleRuntimeBinding { permission CanUpdateContract;
             if !tx
                 .world
                 .account_permissions
-                .get(&account_id)
+                .get(account_id)
                 .is_some_and(|held| held.contains(&permission))
             {
                 Grant::account_permission(permission, account_id.clone())
@@ -15904,8 +15888,8 @@ seiyaku StaleRuntimeBinding { permission CanUpdateContract;
             .commit_world_overlay_for_testing()
             .expect("commit exact deployed contract entrypoint permission grant");
     }
-    fn grant_asset_ops_to_account(state: &State, authority: &AccountId, account_id: AccountId) {
-        grant_named_permission_to_account(state, authority, &(account_id), "AssetOps");
+    fn grant_asset_ops_to_account(state: &State, authority: &AccountId, account_id: &AccountId) {
+        grant_named_permission_to_account(state, authority, account_id, "AssetOps");
     }
     fn grant_test_asset_transfer(state: &State, account_id: AccountId, asset: AssetId) {
         let owner = asset.account().clone();
@@ -16215,7 +16199,7 @@ seiyaku AliasPayout {{ permission AssetOps;
 "#
         );
         let contract = install_contract(state, authority, &source, nonce);
-        grant_asset_ops_to_account(state, authority, authority.clone());
+        grant_asset_ops_to_account(state, authority, authority);
         contract
     }
     fn bind_nested_caller<QS: Default + QueryStateAccess>(
@@ -16396,7 +16380,7 @@ seiyaku AliasPayout {{ permission AssetOps;
         caller_contract: &ContractAddress,
         nested_contract: &ContractAddress,
         entrypoint: &str,
-        payload: Json,
+        payload: &Json,
     ) -> SyscallOutcome {
         call_contract_syscall_with_prepared_cache(
             state,
@@ -16404,7 +16388,7 @@ seiyaku AliasPayout {{ permission AssetOps;
             caller_contract,
             nested_contract,
             entrypoint,
-            &(payload),
+            payload,
             PreparedContractCache::default(),
         )
     }
@@ -16425,7 +16409,7 @@ seiyaku AliasPayout {{ permission AssetOps;
         let mut vm = IVM::new(1_000_000);
         bind_nested_caller(&mut host, &mut vm, &view, outer_authority, caller_contract);
         let registers =
-            store_typed_contract_call(&mut vm, state, nested_contract, entrypoint, &payload);
+            store_typed_contract_call(&mut vm, state, nested_contract, entrypoint, payload);
         let result = host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm);
         assert_eq!(
             (10..16).map(|index| vm.register(index)).collect::<Vec<_>>(),
@@ -16451,7 +16435,7 @@ seiyaku AliasPayout {{ permission AssetOps;
             .unwrap();
         let mut vm = IVM::new(1_000_000);
         bind_nested_caller(&mut host, &mut vm, &view, outer_authority, caller_contract);
-        store_typed_contract_call(&mut vm, state, nested_contract, entrypoint, &payload);
+        store_typed_contract_call(&mut vm, state, nested_contract, entrypoint, payload);
         let result = host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm);
         let access_log = host.finish_tx().expect("finish nested access log");
         (result, access_log)
@@ -16462,7 +16446,7 @@ seiyaku AliasPayout {{ permission AssetOps;
         caller_contract: &ContractAddress,
         nested_contract: &ContractAddress,
         entrypoint: &str,
-        payload: Json,
+        payload: &Json,
         gas_limit: u64,
     ) -> ContractCallOutcome {
         dispatch_call_contract_syscall_with_cycle_budget(
@@ -16471,7 +16455,7 @@ seiyaku AliasPayout {{ permission AssetOps;
             caller_contract,
             nested_contract,
             entrypoint,
-            &(payload),
+            payload,
             (gas_limit, None),
         )
     }
@@ -16560,7 +16544,7 @@ seiyaku AliasPayout {{ permission AssetOps;
         let mut vm = IVM::new(gas_limit.max(1_000_000));
         bind_nested_caller(&mut host, &mut vm, &view, outer_authority, caller_contract);
         let registers =
-            store_typed_contract_call(&mut vm, state, nested_contract, entrypoint, &payload);
+            store_typed_contract_call(&mut vm, state, nested_contract, entrypoint, payload);
         for (index, value) in registers.iter().enumerate() {
             vm.set_register(18 + index, *value);
         }
@@ -16619,8 +16603,8 @@ seiyaku OuterCaller {
 ",
             1,
         );
-        grant_asset_ops_to_account(state, authority, authority.clone());
-        grant_asset_ops_to_account(state, authority, outer_caller.subject_id());
+        grant_asset_ops_to_account(state, authority, authority);
+        grant_asset_ops_to_account(state, authority, &(outer_caller.subject_id()));
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let pool_bind_payload = Json::from_str_norito(&format!(
             r#"{{"bound_pool_account":"{actual_account}","bound_quote_asset":"{actual_asset}"}}"#
@@ -20054,7 +20038,7 @@ seiyaku Callee {
             &caller_contract,
             &nested_contract,
             "value",
-            Json::new(()),
+            &(Json::new(())),
         );
         let gas = result.expect("call_contract syscall should succeed");
         assert!(gas > 0);
@@ -20109,7 +20093,7 @@ seiyaku Callee {
             &caller,
             &target_contract,
             "quote",
-            Json::from(norito::json!({"amount_in":"10", "min_out":"7"})),
+            &(Json::from(norito::json!({"amount_in":"10", "min_out":"7"}))),
         );
         assert!(result.unwrap() > 0);
         assert!(effects.is_empty());
@@ -20320,7 +20304,7 @@ seiyaku Callee {
             &caller,
             &target_contract,
             "main",
-            Json::new(()),
+            &(Json::new(())),
         );
         assert!(matches!(
             result.unwrap_err().as_unmetered(),
@@ -20352,7 +20336,7 @@ seiyaku Callee {
             &caller,
             &target_contract,
             "read",
-            Json::new(()),
+            &(Json::new(())),
         );
         read.expect("a view may call another authenticated view");
         assert_eq!(
@@ -20369,7 +20353,7 @@ seiyaku Callee {
             &caller,
             &target_contract,
             "write",
-            Json::new(()),
+            &(Json::new(())),
         );
         assert!(matches!(
             result.unwrap_err().as_unmetered(),
@@ -20705,7 +20689,7 @@ seiyaku Callee {
             &caller_contract,
             &nested_contract,
             "value",
-            payload,
+            &(payload),
             gas_limit,
         );
         result.expect("dispatched nested call should succeed");
@@ -20752,7 +20736,7 @@ seiyaku Callee {
     ",
             1,
         );
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+        grant_asset_ops_to_account(&state, &authority, &(caller_contract.subject_id()));
         let payload = Json::new(());
         let request_gas = ivm::gas::syscall_byte_gas(
             ivm::gas::G_CALL_CONTRACT,
@@ -20770,7 +20754,7 @@ seiyaku Callee {
             &caller_contract,
             &nested_contract,
             "write",
-            payload,
+            &(payload),
             gas_limit,
         );
         assert!(matches!(result, Err(ivm::VMError::OutOfGas)));
@@ -20831,7 +20815,7 @@ seiyaku Callee { permission AssetOps;
             .find(|error| error.identity.ends_with("::CalleeError"))
             .expect("callee nominal error");
         let nested_contract = install_contract(&state, &authority, callee_source, 1);
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+        grant_asset_ops_to_account(&state, &authority, &(caller_contract.subject_id()));
         let payload = Json::new(());
         let request_gas = ivm::gas::syscall_byte_gas(
             ivm::gas::G_CALL_CONTRACT,
@@ -20845,7 +20829,7 @@ seiyaku Callee { permission AssetOps;
             &caller_contract,
             &nested_contract,
             "fail_after_write",
-            payload,
+            &(payload),
             gas_limit,
         );
         let error = result.expect_err("nested assertion should fail the syscall");
@@ -20927,18 +20911,18 @@ seiyaku Callee { permission AssetOps;
             &caller_contract,
             &nested_contract,
             "value",
-            Json::new(()),
+            &(Json::new(())),
         );
         let err = denied.expect_err("protected nested entrypoint should require AssetOps");
         assert!(matches!(err.as_unmetered(), ivm::VMError::PermissionDenied));
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+        grant_asset_ops_to_account(&state, &authority, &(caller_contract.subject_id()));
         let (result, vm, durable_state_overlay) = call_contract_syscall(
             &state,
             &authority,
             &caller_contract,
             &nested_contract,
             "value",
-            Json::new(()),
+            &(Json::new(())),
         );
         result.expect("protected nested entrypoint should run after grant");
         assert!(durable_state_overlay.is_empty());
@@ -20981,7 +20965,7 @@ seiyaku Lifecycle {
                 &caller_contract,
                 &nested_contract,
                 selector,
-                Json::new(()),
+                &(Json::new(())),
             );
             let error = result.expect_err("nested calls must not invoke lifecycle hooks");
             assert!(matches!(
@@ -21025,7 +21009,7 @@ seiyaku AwaitingHajimari {
             &caller_contract,
             &nested_contract,
             "value",
-            Json::new(()),
+            &(Json::new(())),
         );
         let error = result.expect_err("nested calls must wait for hajimari/始まり");
         assert!(matches!(
@@ -21177,7 +21161,7 @@ seiyaku Callee {
             &caller_contract,
             &nested_contract,
             "who_called",
-            Json::new(()),
+            &(Json::new(())),
         );
         result.expect("call_contract syscall should succeed");
         let returned = render_nested_result(
@@ -21205,7 +21189,7 @@ seiyaku Callee {
             &outer_caller,
             &pool_contract,
             "quote_asset",
-            Json::new(()),
+            &(Json::new(())),
         );
         asset_result.expect("typed asset view should execute");
         assert_eq!(
@@ -21221,7 +21205,7 @@ seiyaku Callee {
             &outer_caller,
             &pool_contract,
             "pool_account",
-            Json::new(()),
+            &(Json::new(())),
         );
         account_result.expect("typed account view should execute");
         assert_eq!(
@@ -21253,7 +21237,7 @@ seiyaku Callee {
             &outer_caller,
             &pool_contract,
             "pool_account",
-            Json::new(()),
+            &(Json::new(())),
         );
         result.expect("typed account view should execute");
         let account = render_nested_result(
@@ -21387,7 +21371,7 @@ seiyaku EffectfulView { permission NestedView;
                 &caller,
                 &target_contract,
                 "increment_then_return",
-                Json::new(()),
+                &(Json::new(())),
             );
             result.expect("the embedded kotoage entrypoint remains transaction-capable");
             assert_eq!(
@@ -21425,7 +21409,7 @@ seiyaku StoredAccountView { permission AssetOps;
 }
 ";
         let contract = install_contract(&state, &authority, source, 0);
-        grant_asset_ops_to_account(&state, &authority, authority.clone());
+        grant_asset_ops_to_account(&state, &authority, &(authority));
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let bind_payload = Json::from_str_norito(&format!(r#"{{"account_id":"{authority}"}}"#))
             .expect("bind payload");
@@ -21516,7 +21500,7 @@ seiyaku Callee { permission AssetOps;
 ",
             1,
         );
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+        grant_asset_ops_to_account(&state, &authority, &(caller_contract.subject_id()));
         let payload = Json::from(norito::json!({
             "backlog_value": "3",
             "safe_mode_value": "1"
@@ -21527,7 +21511,7 @@ seiyaku Callee { permission AssetOps;
             &caller_contract,
             &nested_contract,
             "report",
-            payload,
+            &(payload),
         );
         result.expect("unit nested contract call should succeed");
         assert_eq!(
@@ -21594,7 +21578,7 @@ seiyaku Callee { permission AssetOps;
 }
 ";
         let nested_contract = install_contract(&state, &authority, source, 1);
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+        grant_asset_ops_to_account(&state, &authority, &(caller_contract.subject_id()));
         let expected = norito::json!({
             "marker": null,
             "sequence": "42",
@@ -21611,7 +21595,7 @@ seiyaku Callee { permission AssetOps;
             &caller_contract,
             &nested_contract,
             "roundtrip",
-            payload,
+            &(payload),
         );
         result.expect("nested products must retain Unit words and nominal error identities");
         let code = kotodama_lang::compiler::Compiler::new()
@@ -21678,14 +21662,14 @@ seiyaku Callee { permission AssetOps;
 ",
             1,
         );
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+        grant_asset_ops_to_account(&state, &authority, &(caller_contract.subject_id()));
         let (result, _vm, durable_state_overlay) = call_contract_syscall(
             &state,
             &authority,
             &caller_contract,
             &nested_contract,
             "fail_after_write",
-            Json::new(()),
+            &(Json::new(())),
         );
         assert!(result.is_err(), "nested contract call should fail");
         assert!(
@@ -21769,7 +21753,7 @@ seiyaku Callee { permission AssetOps;
                 );
             },
         );
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+        grant_asset_ops_to_account(&state, &authority, &(caller_contract.subject_id()));
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
@@ -22140,7 +22124,7 @@ seiyaku Callee { permission AssetOps;
 "#,
             1,
         );
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+        grant_asset_ops_to_account(&state, &authority, &(caller_contract.subject_id()));
         // The source argument follows context::authority(), while emitted ledger
         // effects are authorized by the contract subject of each active frame.
         grant_test_asset_transfer(
@@ -22714,7 +22698,7 @@ seiyaku Callee { permission AssetOps;
                 grant_asset_ops_to_account(
                     &fixture.state,
                     &fixture.authority,
-                    fixture.authority.clone(),
+                    &(fixture.authority),
                 );
                 contract
             },
@@ -22894,7 +22878,7 @@ seiyaku Callee { permission AssetOps;
             );
             let view = fixture.state.view();
             let identity =
-                crate::smartcontracts::code::fetch_bound_contract_identity(&view, &contract)
+                crate::smartcontracts::code::fetch_bound_contract_identity(&view, contract)
                     .expect("read exact alias fixture binding")
                     .expect("alias fixture remains installed");
             let artifact = ContractArtifactId::new(
@@ -23475,7 +23459,7 @@ seiyaku DurableOwner {
             VerifyingKeyId::new("pipa-r/pasta", "ivm-execution-keyless"),
             rec,
         );
-        host.set_verifying_keys(map)
+        host.set_verifying_keys(&(map))
             .expect("keyless record should use the registry backend label");
     }
     #[test]
@@ -23498,7 +23482,7 @@ seiyaku DurableOwner {
             VerifyingKeyId::new("pipa-r/pasta", "ivm-execution-keyless"),
             rec,
         );
-        host.set_verifying_keys(map)
+        host.set_verifying_keys(&(map))
             .expect("keyless record should be accepted");
         let prepared = host
             .load_vk_record_any_namespace(commitment)
@@ -23523,10 +23507,9 @@ seiyaku DurableOwner {
         );
         let mut host = CoreHost::new(fixture_account("alice"));
         assert!(
-            host.set_verifying_keys(BTreeMap::from([(
-                VerifyingKeyId::new(backend, "malformed-halo2"),
-                record,
-            )]))
+            host.set_verifying_keys(
+                &(BTreeMap::from([(VerifyingKeyId::new(backend, "malformed-halo2"), record,)]))
+            )
             .is_err(),
             "state hydration must run the strict native registration validator"
         );
@@ -23560,10 +23543,9 @@ seiyaku DurableOwner {
         );
         let mut host = CoreHost::new(fixture_account("alice"));
         assert!(
-            host.set_verifying_keys(BTreeMap::from([(
-                VerifyingKeyId::new(backend, "weak-stark"),
-                record,
-            )]))
+            host.set_verifying_keys(
+                &(BTreeMap::from([(VerifyingKeyId::new(backend, "weak-stark"), record,)]))
+            )
             .is_err(),
             "state hydration must enforce the STARK consensus parameter floor"
         );
@@ -23586,7 +23568,7 @@ seiyaku DurableOwner {
             "core",
             vk_bytes,
         );
-        host.set_verifying_keys(BTreeMap::from([(id.clone(), rec.clone())]))
+        host.set_verifying_keys(&(BTreeMap::from([(id.clone(), rec.clone())])))
             .expect("install prepared verifier key");
         let prepared = host
             .prepared_verifying_keys
@@ -23605,7 +23587,7 @@ seiyaku DurableOwner {
         // Rehydrating the identical registry pair reproduces the prepared entry.
         let mut rehydrated = CoreHost::new(fixture_account("alice"));
         rehydrated
-            .set_verifying_keys(BTreeMap::from([(id.clone(), rec.clone())]))
+            .set_verifying_keys(&(BTreeMap::from([(id.clone(), rec.clone())])))
             .expect("rehydrate the identical verifier key");
         assert_eq!(
             rehydrated.prepared_verifying_keys.get(&commitment),
@@ -23617,7 +23599,7 @@ seiyaku DurableOwner {
         tampered.key.as_mut().expect("inline verifier key").bytes[0] ^= 1;
         assert!(
             rehydrated
-                .set_verifying_keys(BTreeMap::from([(id, tampered)]))
+                .set_verifying_keys(&(BTreeMap::from([(id, tampered)])))
                 .is_err()
         );
         assert_eq!(
@@ -23644,7 +23626,7 @@ seiyaku DurableOwner {
             "core",
             vk_bytes.clone(),
         );
-        host.set_verifying_keys(BTreeMap::from([(id.clone(), original)]))
+        host.set_verifying_keys(&(BTreeMap::from([(id.clone(), original)])))
             .expect("install original verifier key");
         let original_record = Arc::clone(
             &host
@@ -23665,10 +23647,12 @@ seiyaku DurableOwner {
         );
         missing_schedule.gas_schedule_id = None;
         assert!(
-            host.set_verifying_keys(BTreeMap::from([(
-                VerifyingKeyId::new(backend, "missing-schedule"),
-                missing_schedule,
-            )]))
+            host.set_verifying_keys(
+                &(BTreeMap::from([(
+                    VerifyingKeyId::new(backend, "missing-schedule"),
+                    missing_schedule,
+                )]))
+            )
             .is_err()
         );
         assert!(Arc::ptr_eq(
@@ -23701,10 +23685,12 @@ seiyaku DurableOwner {
             vk_bytes,
         );
         assert!(
-            host.set_verifying_keys(BTreeMap::from([
-                (VerifyingKeyId::new(backend, "first"), first),
-                (VerifyingKeyId::new(backend, "second"), second),
-            ]))
+            host.set_verifying_keys(
+                &(BTreeMap::from([
+                    (VerifyingKeyId::new(backend, "first"), first),
+                    (VerifyingKeyId::new(backend, "second"), second),
+                ]))
+            )
             .is_err()
         );
         assert!(Arc::ptr_eq(
@@ -23744,7 +23730,7 @@ seiyaku DurableOwner {
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(backend, "vk"), rec);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {label} must reject malformed circuit id `{circuit_id}`"
             );
         }
@@ -23765,7 +23751,7 @@ seiyaku DurableOwner {
         let mut map = BTreeMap::new();
         map.insert(VerifyingKeyId::new(backend, "vk"), rec);
         assert!(
-            host.set_verifying_keys(map).is_err(),
+            host.set_verifying_keys(&(map)).is_err(),
             "oversized circuit id must be rejected"
         );
     }
@@ -23781,7 +23767,7 @@ seiyaku DurableOwner {
             );
             let map = BTreeMap::from([(VerifyingKeyId::new(backend, "vk"), record)]);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "Exact12 privacy circuit id {circuit_id:?} must not rehydrate"
             );
             assert!(host.prepared_verifying_keys.is_empty());
@@ -23806,7 +23792,7 @@ seiyaku DurableOwner {
             );
             let map = BTreeMap::from([(VerifyingKeyId::new(backend, "vk"), record)]);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "{case} non-portable privacy alias {circuit_id:?} must not rehydrate"
             );
             assert!(host.prepared_verifying_keys.is_empty());
@@ -23820,10 +23806,9 @@ seiyaku DurableOwner {
             commitment, [0x42; 32], backend, &near_miss, "core", vk_bytes,
         );
         assert!(
-            host.set_verifying_keys(BTreeMap::from([(
-                VerifyingKeyId::new(backend, "vk"),
-                record,
-            )]))
+            host.set_verifying_keys(
+                &(BTreeMap::from([(VerifyingKeyId::new(backend, "vk"), record,)]))
+            )
             .is_err(),
             "a portable but unregistered circuit must not bypass the production circuit registry"
         );
@@ -23871,7 +23856,7 @@ seiyaku DurableOwner {
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(id_backend, id_name), rec);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {label} must reject verifier-key registry id `{id_backend}` / `{id_name}`"
             );
         }
@@ -23905,7 +23890,7 @@ seiyaku DurableOwner {
                 rec,
             );
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {label} must reject oversized verifier-key registry id"
             );
         }
@@ -23940,7 +23925,7 @@ seiyaku DurableOwner {
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(registry_backend, "vk"), rec);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {label} must reject registry backend tag mismatch"
             );
         }
@@ -23978,7 +23963,7 @@ seiyaku DurableOwner {
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(backend, "vk"), rec);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {label} must reject zero verifier-key binding material"
             );
         }
@@ -24084,7 +24069,7 @@ seiyaku DurableOwner {
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(backend, "vk"), rec);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {label} must reject malformed verifier-key metadata `{value}`"
             );
         }
@@ -24109,7 +24094,7 @@ seiyaku DurableOwner {
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(backend, "vk"), rec);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {label} must reject invalid verifier-key activation window"
             );
         }
@@ -24137,7 +24122,7 @@ seiyaku DurableOwner {
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(backend, "vk"), rec);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {backend} must be rejected"
             );
         }
@@ -24167,7 +24152,7 @@ seiyaku DurableOwner {
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(backend, "vk"), rec);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {backend} must be rejected"
             );
         }
@@ -24200,7 +24185,7 @@ seiyaku DurableOwner {
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(backend, "vk"), rec);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {backend} must be rejected"
             );
         }
@@ -24234,7 +24219,7 @@ seiyaku DurableOwner {
             let mut map = BTreeMap::new();
             map.insert(VerifyingKeyId::new(backend, "vk"), rec);
             assert!(
-                host.set_verifying_keys(map).is_err(),
+                host.set_verifying_keys(&(map)).is_err(),
                 "case {backend} must be rejected before reaching IVM verification"
             );
         }
@@ -25954,7 +25939,7 @@ seiyaku DurableOwner {
                 NonZeroUsize::new(8).expect("non-zero root history cap"),
             )
             .expect("canonical prior confidential tree roots");
-        host.set_zk_roots_snapshot(BTreeMap::from([(prior_asset, prior_zk_state)]))
+        host.set_zk_roots_snapshot(&(BTreeMap::from([(prior_asset, prior_zk_state)])))
             .expect("seed prior root snapshot");
 
         host.set_zk_elections_snapshot(BTreeMap::from([(
@@ -25974,10 +25959,12 @@ seiyaku DurableOwner {
             Vec::new(),
         );
         prior_vk.key = None;
-        host.set_verifying_keys(BTreeMap::from([(
-            VerifyingKeyId::new("pipa-r/pasta", "prior-snapshot-vk"),
-            prior_vk,
-        )]))
+        host.set_verifying_keys(
+            &(BTreeMap::from([(
+                VerifyingKeyId::new("pipa-r/pasta", "prior-snapshot-vk"),
+                prior_vk,
+            )])),
+        )
         .expect("seed prior verifying-key snapshot");
         host.set_zk_tree_roots_history_len(
             NonZeroUsize::new(7).expect("non-zero prior root history limit"),
@@ -26262,7 +26249,7 @@ seiyaku DurableOwner {
         );
         let mut host = CoreHost::new(fixture_account("alice"));
         let empty_state = ZkAssetState::default();
-        host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), empty_state.clone())]))
+        host.set_zk_roots_snapshot(&(BTreeMap::from([(asset.clone(), empty_state.clone())])))
             .expect("canonical empty tree snapshot");
         let response = host
             .roots_get_response(&ivm::zk_verify::RootsGetRequest {
@@ -26278,13 +26265,13 @@ seiyaku DurableOwner {
         drifted.commitments.push([0x25; 32]);
         drifted.root_history.push([0x66; 32]);
         assert!(matches!(
-            host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), drifted)])),
+            host.set_zk_roots_snapshot(&(BTreeMap::from([(asset.clone(), drifted)]))),
             Err(ivm::VMError::NoritoInvalid)
         ));
         let mut missing_current_root = ZkAssetState::default();
         missing_current_root.commitments.push([0x25; 32]);
         assert!(matches!(
-            host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), missing_current_root)])),
+            host.set_zk_roots_snapshot(&(BTreeMap::from([(asset.clone(), missing_current_root)]))),
             Err(ivm::VMError::NoritoInvalid)
         ));
         let mut drifted_checkpoint = ZkAssetState::default();
@@ -26296,7 +26283,7 @@ seiyaku DurableOwner {
                 root: [0x66; 32],
             });
         assert!(matches!(
-            host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), drifted_checkpoint)])),
+            host.set_zk_roots_snapshot(&(BTreeMap::from([(asset.clone(), drifted_checkpoint)]))),
             Err(ivm::VMError::NoritoInvalid)
         ));
         let retained = host
@@ -26526,7 +26513,7 @@ seiyaku DurableOwner {
         );
         let mut map = BTreeMap::new();
         map.insert(VerifyingKeyId::new(backend, "vk_stark_batch"), rec);
-        host.set_verifying_keys(map).expect("set registry");
+        host.set_verifying_keys(&(map)).expect("set registry");
         envelope
     }
     include!("host/zk_verification_tests.rs");

@@ -1863,11 +1863,8 @@ pub mod query {
                 let subjects = nonzero_asset_holders_for_definition(world, &asset_definition_id);
                 let iter: Box<dyn Iterator<Item = Account> + '_> =
                     Box::new(subjects.into_iter().filter_map(move |subject| {
-                        let Some((account_id, account_value)) =
-                            world.accounts().get_key_value(&subject)
-                        else {
-                            return None;
-                        };
+                        let (account_id, account_value) =
+                            world.accounts().get_key_value(&subject)?;
                         Some(account_from_entry(world, account_id, account_value))
                     }));
                 return Ok(iter);
@@ -1894,11 +1891,8 @@ pub mod query {
                 };
                 let iter: Box<dyn Iterator<Item = Account> + '_> =
                     Box::new(subjects.into_iter().filter_map(move |subject| {
-                        let Some((account_id, account_value)) =
-                            world.accounts().get_key_value(&subject)
-                        else {
-                            return None;
-                        };
+                        let (account_id, account_value) =
+                            world.accounts().get_key_value(&subject)?;
                         Some(account_from_entry(world, account_id, account_value))
                     }));
                 return Ok(iter);

@@ -1597,12 +1597,11 @@ fn parse_bearer_v1(
     // a valid secret prefix is explicitly erased instead of being dropped in
     // an opaque base64-owned temporary.
     let mut decoded = vec![0_u8; BOOTLE_LANTERN_ISSUANCE_AUTHENTICATION_MAX_BYTES_V1];
-    let written = match URL_SAFE_NO_PAD.decode_slice(encoded, &mut decoded) {
-        Ok(written) => written,
-        Err(_) => {
-            erase_bytes_v1(&mut decoded);
-            return Err(BootleLanternIssuanceApiErrorV1::Unauthorized);
-        }
+    let written = if let Ok(written) = URL_SAFE_NO_PAD.decode_slice(encoded, &mut decoded) {
+        written
+    } else {
+        erase_bytes_v1(&mut decoded);
+        return Err(BootleLanternIssuanceApiErrorV1::Unauthorized);
     };
     decoded.truncate(written);
     if decoded.is_empty() {
@@ -1613,12 +1612,11 @@ fn parse_bearer_v1(
     // round trip below rejects alternate trailing-bit representations. The
     // re-encoded credential is secret too, so erase its scratch allocation on
     // both success and failure.
-    let canonical_len = match encoded_len(decoded.len(), false) {
-        Some(canonical_len) => canonical_len,
-        None => {
-            erase_bytes_v1(&mut decoded);
-            return Err(BootleLanternIssuanceApiErrorV1::Unauthorized);
-        }
+    let canonical_len = if let Some(canonical_len) = encoded_len(decoded.len(), false) {
+        canonical_len
+    } else {
+        erase_bytes_v1(&mut decoded);
+        return Err(BootleLanternIssuanceApiErrorV1::Unauthorized);
     };
     let mut canonical = vec![0_u8; canonical_len];
     let canonical_matches = URL_SAFE_NO_PAD
@@ -1794,7 +1792,7 @@ fn error_response_v1(error: BootleLanternIssuanceApiErrorV1) -> Response {
     };
     let envelope = iroha_torii_shared::ErrorEnvelope::new(code, code);
     let mut response =
-        crate::utils::respond_with_status_and_format(status, envelope, response_format);
+        crate::utils::respond_with_status_and_format(status, &(envelope), response_format);
     if status == StatusCode::UNAUTHORIZED {
         response.headers_mut().insert(
             WWW_AUTHENTICATE,
@@ -1968,7 +1966,7 @@ mod tests {
                 self.0 ^= self.0 << 13;
                 self.0 ^= self.0 >> 7;
                 self.0 ^= self.0 << 17;
-                *byte = self.0 as u8;
+                *byte = self.0.to_le_bytes()[0];
             }
             Ok(())
         }
@@ -2814,6 +2812,7 @@ iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuan
     }
     #[test]
     fn cross_sdk_fixture_bodies_bind_exact_lengths_magics_and_hashes() {
+        type FixtureBodyCase<'a> = (&'a str, &'a str, usize, &'a [(usize, &'a [u8])]);
         let fixture: norito::json::Value = norito::json::from_str(include_str!(
             "../../../fixtures/privacy/bootle_lantern_issuance_client_v1.json"
         ))
@@ -2826,7 +2825,7 @@ iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuan
             bodies.get("pattern").and_then(norito::json::Value::as_str),
             Some("byte-at-index-equals-index-modulo-256-with-canonical-wire-magics"),
         );
-        let cases: [(&str, &str, usize, &[(usize, &[u8])]); 3] = [
+        let cases: [FixtureBodyCase<'_>; 3] = [
             (
                 "authorization_response",
                 "ILA1",
@@ -3386,7 +3385,7 @@ iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuan
         let expired_snapshot = CommittedIssuanceSnapshotV1 {
             committed_height: fixture.authorization.expires_at_height() + 100,
             canonical_genesis_hash: fixture.snapshot.canonical_genesis_hash,
-            context: fixture.snapshot.context.clone(),
+            context: fixture.snapshot.context,
             policy: fixture.snapshot.policy.clone(),
         };
         let retry = issue_registered_request_v1(

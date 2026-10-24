@@ -250,7 +250,7 @@ mod tests {
             },
             Action::RecoverProposalAdmission {
                 req: 2,
-                body: block(1, Hash32::ZERO, Hash32::ZERO, &vec![1]),
+                body: block(1, Hash32::ZERO, Hash32::ZERO, &[1]),
             },
             Action::PayloadRejected {
                 height: 1,

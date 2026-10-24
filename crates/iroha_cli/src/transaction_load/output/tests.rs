@@ -10,7 +10,7 @@ mod tests {
     };
 
     struct Fixture {
-        _directory: tempfile::TempDir,
+        directory: tempfile::TempDir,
         ancestor: PathBuf,
         parent: PathBuf,
         target: PathBuf,
@@ -31,7 +31,7 @@ mod tests {
             std::fs::create_dir_all(&parent).unwrap();
             let target = parent.join("trace.json");
             Self {
-                _directory: directory,
+                directory,
                 ancestor,
                 parent,
                 target,
@@ -520,7 +520,7 @@ mod tests {
         // The short unique directory protects the chosen sibling spelling from
         // another test's namespace without changing process CWD or umask.
         let fixture = Fixture::new();
-        let canonical = fixture._directory.path().canonicalize().unwrap();
+        let canonical = fixture.directory.path().canonicalize().unwrap();
         let target = canonical.with_extension("journal");
         let parent = target.parent().unwrap();
         let before = std::fs::metadata(parent).unwrap();

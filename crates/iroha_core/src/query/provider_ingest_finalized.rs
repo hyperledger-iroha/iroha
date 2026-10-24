@@ -1777,7 +1777,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         };
         validate_retention_approval_record(&approval, binding, network_id)?;
         validate_retention_checkpoint_candidate_inventory(
-            &checkpoint_candidates,
+            checkpoint_candidates,
             &approval,
             network_id,
         )?;
@@ -1789,7 +1789,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         self.verify_storage_boundaries()?;
         if let Some(candidate) = approved_candidate {
             validate_approval_checkpoint(&approval, &candidate.checkpoint, self.bounds)?;
-            install_virtual_bases(&mut index, &checkpoint_candidates, self.bounds)?;
+            install_virtual_bases(&mut index, checkpoint_candidates, self.bounds)?;
             if index
                 .virtual_bases
                 .get(network_id)
@@ -1804,7 +1804,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 self.records_identity,
                 &self.checkpoints,
                 self.checkpoints_identity,
-                &checkpoint_candidates,
+                checkpoint_candidates,
                 &mut index,
             )?;
             refresh_archive_accounting(&mut index, self.bounds)?;
@@ -1818,7 +1818,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             refresh_archive_accounting(&mut index, self.bounds)?;
             validate_index_coverage(&index, self.bounds)?;
         } else {
-            install_virtual_bases(&mut index, &checkpoint_candidates, self.bounds)?;
+            install_virtual_bases(&mut index, checkpoint_candidates, self.bounds)?;
             if index
                 .virtual_bases
                 .get(network_id)
@@ -1833,7 +1833,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 self.records_identity,
                 &self.checkpoints,
                 self.checkpoints_identity,
-                &checkpoint_candidates,
+                checkpoint_candidates,
                 &mut index,
             )?;
             refresh_archive_accounting(&mut index, self.bounds)?;
@@ -2191,10 +2191,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             .by_height
             .range(network_range)
             .next_back()
-            .map_or_else(
-                || activation_floor.clone(),
-                |(_, entry)| entry.record.material.key.clone(),
-            );
+            .map_or_else(|| activation_floor, |(_, entry)| entry.record.material.key);
         if archive_tip.height > certified.tip_height() {
             return Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveAheadOfKura {
                 archive_height: archive_tip.height,
@@ -2522,6 +2519,10 @@ impl ProviderIngestFinalizedArchiveV1 {
     /// Returns a typed validation, coverage, conflict, bounds, or durability
     /// failure.
     /// Existing records are never overwritten.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Finalized insertion consumes the captured projection through its durable publication attempt"
+    )]
     pub fn insert(
         &self,
         projection: ProviderIngestFinalizedProjectionV1,
@@ -3761,9 +3762,8 @@ fn validate_provider_authority_transition(
         previous.expected_authority.as_ref(),
         current.expected_authority.as_ref(),
     ) {
-        (_, None) => Ok(()),
         // Full-chain history distinguishes first activation from reactivation.
-        (None, Some(_)) => Ok(()),
+        (_, None) | (None, Some(_)) => Ok(()),
         (Some(previous), Some(next)) if previous == next => Ok(()),
         (Some(previous), Some(next)) => {
             let previous = previous.signer_policy;
@@ -5149,7 +5149,7 @@ fn validate_index_coverage_with_successor(
                 None => {}
             }
             let before = ProviderIngestFinalizedProjectionV1 {
-                key: previous_key.unwrap_or_else(|| entry.record.material.key),
+                key: previous_key.unwrap_or(entry.record.material.key),
                 providers: providers.values().cloned().collect(),
             };
             validate_delta_minimality(&providers, &entry.record.material.deltas)?;

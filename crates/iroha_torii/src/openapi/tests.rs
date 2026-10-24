@@ -1,4 +1,4 @@
-//! OpenAPI schema construction and package authority tests.
+//! `OpenAPI` schema construction and package authority tests.
 
 use super::*;
 use crate::utils;
@@ -246,7 +246,6 @@ impl ComponentRefContext {
     fn child(self, key: &str) -> Self {
         match self {
             Self::Schema | Self::SchemaMap => Self::Schema,
-            Self::HeaderMap => Self::Header,
             Self::Components => match key {
                 "schemas" => Self::SchemaMap,
                 "headers" => Self::HeaderMap,
@@ -258,7 +257,7 @@ impl ComponentRefContext {
                 Self::Schema
             }
             Self::Document => Self::Document,
-            Self::Header => Self::Header,
+            Self::HeaderMap | Self::Header => Self::Header,
         }
     }
     fn expected_component(self) -> Option<&'static str> {

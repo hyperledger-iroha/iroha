@@ -308,9 +308,7 @@ impl FastpqSourceCaptureAccumulator {
     pub(crate) fn sources(
         &self,
     ) -> Result<&BTreeMap<Hash, FastpqCapturedTranscriptSource>, &FastpqSourceCaptureError> {
-        self.error
-            .as_ref()
-            .map_or(Ok(&self.entries), |error| Err(error))
+        self.error.as_ref().map_or(Ok(&self.entries), Err)
     }
 }
 

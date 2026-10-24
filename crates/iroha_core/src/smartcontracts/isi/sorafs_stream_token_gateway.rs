@@ -42,14 +42,14 @@ fn rejected(error: TransitionError) -> InstructionExecutionError {
 fn has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
-    permission: Permission,
+    permission: &Permission,
 ) -> bool {
     world.accounts().get(authority).is_some()
-        && (world.account_contains_inherent_permission(authority, &permission)
+        && (world.account_contains_inherent_permission(authority, permission)
             || world
                 .account_roles_iter(authority)
                 .filter_map(|id| world.roles().get(id))
-                .any(|role| role.permissions().any(|token| token == &permission)))
+                .any(|role| role.permissions().any(|token| token == permission)))
 }
 
 fn apply(
@@ -80,7 +80,7 @@ fn apply(
         }
         .into()
     };
-    if !has_permission(tx.world(), authority, required) {
+    if !has_permission(tx.world(), authority, &(required)) {
         return Err(TransitionError::BindingMismatch);
     }
     let digest = instruction_digest(instruction, authority)?;

@@ -446,17 +446,13 @@ mod tests {
 
     fn check(
         instructions: &[InstructionBox],
-        proposal: Option<Vec<InstructionBox>>,
+        proposal: Option<&[InstructionBox]>,
     ) -> Result<(), Attempt<OpaqueDeferredAuthorityError>> {
         reject_opaque_committee_operations_with(
             instructions,
             &mut std::collections::BTreeSet::new(),
             0,
-            &mut |_| {
-                Ok(proposal
-                    .clone()
-                    .map(|body| (iroha_test_samples::ALICE_ID.clone(), body)))
-            },
+            &mut |_| Ok(proposal.map(|body| (iroha_test_samples::ALICE_ID.clone(), body.to_vec()))),
         )
     }
 
@@ -506,14 +502,14 @@ mod tests {
         )
         .into();
         assert_eq!(
-            (check(core::slice::from_ref(&approval), Some(vec![sccp_record()])))
+            (check(core::slice::from_ref(&approval), Some(&[sccp_record()])))
                 .map_err(crate::execution_attempt::expect_completed_rejection),
             refused(0)
         );
         // This static outbound-value scan accepts other SCCP instructions. Public
         // panel operations separately require their exact direct signed execution frame.
         assert!(matches!(
-            check(&[approval], Some(vec![log("ordinary")])),
+            check(&[approval], Some(&[log("ordinary")])),
             Ok(())
         ));
         let others: Vec<InstructionBox> =

@@ -278,13 +278,15 @@ seiyaku DeferredArguments { permission Admin;
             tx.current_tx_hash = Some(signed.hash());
             tx.tx_call_hash = Some(Hash::from(signed.hash_as_entrypoint()));
             tx.begin_execution_effect_budget(&signed).unwrap();
-            let executor = tx.world.executor.clone();
             let cache = tx.ivm_cache;
             let resolved = {
                 let mut guard = cache.lock();
-                executor
-                    .resolve_contract_invocation(&mut tx, &invocation, &mut guard)
-                    .unwrap()
+                crate::executor::Executor::resolve_contract_invocation(
+                    &mut tx,
+                    &invocation,
+                    &mut guard,
+                )
+                .unwrap()
             };
             // Measure the real admitted prefix of execute_resolved_contract_invocation.
             // Its earlier root/permission JSON decoders have separate owner follow-ons.
@@ -342,7 +344,7 @@ seiyaku DeferredArguments { permission Admin;
                 .collect::<Vec<_>>();
             ivm::reset_argument_record_decode_count();
             let run = || {
-                executor.execute_resolved_contract_invocation(
+                crate::executor::Executor::execute_resolved_contract_invocation(
                     &mut tx,
                     &authority,
                     &invocation,

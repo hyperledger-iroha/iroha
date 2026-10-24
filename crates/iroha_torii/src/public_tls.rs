@@ -61,8 +61,8 @@ impl PreparedHttps {
     }
 
     /// Bind only after identity admission, before Torii starts its service workers.
-    pub(super) async fn bind(self) -> io::Result<BoundHttpsListener> {
-        let listener = super::bind_torii_tcp_listener(self.address).await?;
+    pub(super) fn bind(self) -> io::Result<BoundHttpsListener> {
+        let listener = super::bind_torii_tcp_listener(self.address)?;
         Ok(BoundHttpsListener {
             listener,
             identity: HttpsIdentity {

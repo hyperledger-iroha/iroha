@@ -48,13 +48,13 @@ mod doctor_accounts;
 #[path = "taira_onboarding.rs"]
 mod onboarding;
 #[path = "taira_parliament_seating.rs"]
-pub(crate) mod parliament_seating;
+pub mod parliament_seating;
 use iroha_wallet::faucet_pow::{solve_account_faucet_claim, validate_puzzle_identity};
 const DEFAULT_PUBLIC_ROOT: &str = "https://taira.sora.org";
 const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
 /// Canonical first-release Taira fee/faucet asset definition.
-pub(crate) const DEFAULT_GAS_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+pub const DEFAULT_GAS_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const CANARY_ALIAS_PREFIX: &str = "tairarolloutcanary";
 const DEFAULT_WRITE_TTL_MS: u64 = 120_000;
 const DEFAULT_WRITE_STATUS_TIMEOUT_MS: u64 = 120_000;
@@ -174,7 +174,7 @@ pub enum Command {
     RetireValidatorConfig(crate::taira_public_reset::RetireValidatorConfig),
     /// Prepare, submit, or recover exactly one authorized public-reset child.
     WriteCanary(WriteCanary),
-    /// Generate the canonical deploy-mode Inrou canary workspace from AArch64 guest assets.
+    /// Generate the canonical deploy-mode Inrou canary workspace from `AArch64` guest assets.
     InrouWorkspace(InrouWorkspace),
     /// Build the canonical offline artifact stage that operators preseed into all validators.
     InrouStage(InrouStage),
@@ -208,7 +208,7 @@ impl Run for Command {
 }
 /// Read-only Taira public endpoint diagnostics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
-pub(super) enum DoctorScope {
+pub enum DoctorScope {
     /// Basic admission readiness, account, asset, transaction and consensus connectivity.
     #[default]
     Basic,
@@ -291,7 +291,7 @@ impl Doctor {
 /// Native operator custody binding; never sent as public customer authorization.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(super) struct PreparedMutationBindingV1 {
+pub struct PreparedMutationBindingV1 {
     /// Exact immutable binding schema.
     pub schema: String,
     /// SHA-256 of the admitted reset authorization.
@@ -745,8 +745,9 @@ impl WriteCanary {
                 WriteCanaryOperation::Faucet | WriteCanaryOperation::FinalCanary,
                 Some(_),
             )
-            | (PreparedEnvelopeAction::Submit(_), _, None)
-            | (PreparedEnvelopeAction::Recover(_), _, None) => Ok(()),
+            | (PreparedEnvelopeAction::Submit(_) | PreparedEnvelopeAction::Recover(_), _, None) => {
+                Ok(())
+            }
             (PreparedEnvelopeAction::Prepare(_), WriteCanaryOperation::Onboarding, Some(_)) => {
                 eyre::bail!("onboarding preparation has no predecessor envelope")
             }
@@ -806,7 +807,7 @@ impl WriteCanary {
     }
 }
 
-pub(super) fn parse_write_canary_faucet_policy(
+pub fn parse_write_canary_faucet_policy(
     authority_raw: Option<&str>,
     asset_raw: Option<&str>,
     amount_raw: Option<&str>,
@@ -876,7 +877,7 @@ impl PreparedOperationPolicyContext<'_> {
 
 #[cfg(test)]
 /// Exercise the production action and policy validation with actual parent-produced arguments.
-pub(crate) fn validate_parent_write_canary_for_test(
+pub fn validate_parent_write_canary_for_test(
     args: &WriteCanary,
 ) -> Result<(Option<AccountFaucetPolicyV1>, Option<AccountFaucetPolicyV1>)> {
     args.binding()?;
@@ -899,7 +900,7 @@ fn validate_sha256_argument(value: &str) -> Result<String, String> {
     validate_lower_hex_argument(value, "SHA-256", 64)
 }
 
-pub(super) fn validate_authorization_nonce_argument(value: &str) -> Result<String, String> {
+pub fn validate_authorization_nonce_argument(value: &str) -> Result<String, String> {
     if value.len() != 32
         || !value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
@@ -963,13 +964,13 @@ fn write_canary_child_idempotency_key(
 /// Canonical deploy-mode Taira Inrou canary workspace generator.
 #[derive(clap::Args, Debug)]
 pub struct InrouWorkspace {
-    /// Direct regular AArch64 kernel image prepared for PortableVM.
+    /// Direct regular `AArch64` kernel image prepared for `PortableVM`.
     #[arg(long, value_name = "PATH")]
     pub kernel: PathBuf,
-    /// Direct regular AArch64 ext4 root filesystem image prepared for PortableVM.
+    /// Direct regular `AArch64` ext4 root filesystem image prepared for `PortableVM`.
     #[arg(long, value_name = "PATH")]
     pub rootfs: PathBuf,
-    /// Direct regular AArch64 initrd image prepared for PortableVM.
+    /// Direct regular `AArch64` initrd image prepared for `PortableVM`.
     #[arg(long, value_name = "PATH")]
     pub initrd: PathBuf,
     /// Fresh owner-only directory to create with the exact canonical workspace layout.
@@ -1001,7 +1002,7 @@ impl Run for InrouWorkspace {
             Vec::new(),
             Vec::new(),
             extra,
-        )?;
+        );
         render_report(context, self.json, &report)
     }
 }
@@ -1051,13 +1052,13 @@ pub struct InrouStage {
     /// Path to the canonical strict-null, unpublished four-replica Inrou source manifest.
     #[arg(long, value_name = "PATH")]
     pub container: PathBuf,
-    /// Path to the matching public HttpService manifest.
+    /// Path to the matching public `HttpService` manifest.
     #[arg(long, value_name = "PATH")]
     pub service: PathBuf,
     /// Canonical service bundle bytes to preseed.
     #[arg(long, value_name = "PATH")]
     pub bundle_file: PathBuf,
-    /// Exact Unix-second SoraFS retention boundary embedded in both staged manifests.
+    /// Exact Unix-second `SoraFS` retention boundary embedded in both staged manifests.
     /// Retain and reuse this value when reproducing the same release stage.
     #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
     pub sorafs_retention_epoch: NonZeroU64,
@@ -1122,7 +1123,7 @@ impl Run for InrouStage {
             Vec::new(),
             Vec::new(),
             extra,
-        )?;
+        );
         render_report(context, self.json, &report)
     }
 }
@@ -1133,7 +1134,7 @@ const PREPARED_INROU_OPERATION_SCHEMA_V1: &str = "iroha.taira.prepared-soracloud
 pub enum InrouCanaryOperation {
     /// Register the canonical service-bundle manifest.
     BundlePin,
-    /// Register the canonical AArch64 guest-image manifest.
+    /// Register the canonical `AArch64` guest-image manifest.
     GuestPin,
     /// Register the canonical public-discovery manifest.
     DiscoveryPin,
@@ -1211,6 +1212,10 @@ struct PreparedInrouTransactionV1 {
     content = "envelope",
     rename_all = "snake_case",
     deny_unknown_fields
+)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "Variant names are the signed Norito operation tags and match the public canary operation names"
 )]
 enum PreparedInrouOperationV1 {
     InrouBundlePin(PreparedInrouTransactionV1),
@@ -1877,7 +1882,7 @@ fn submit_prepared_inrou_until(
 
 /// Only transport unavailability may retain a pending observation. Authorization,
 /// compatibility, decoding, and proof errors are immediately returned to the caller.
-pub(crate) fn observation_transport_unavailable(error: &eyre::Report) -> bool {
+pub fn observation_transport_unavailable(error: &eyre::Report) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<reqwest::Error>()
@@ -2086,7 +2091,7 @@ fn prepared_inrou_report(
             Vec::new(),
             Vec::new(),
             Map::new(),
-        )?
+        )
     };
     let object = report
         .as_object_mut()
@@ -2147,11 +2152,11 @@ fn prepared_inrou_report(
     );
     object.insert(
         "applied_block_height".to_owned(),
-        applied_block_height.map(Value::from).unwrap_or(Value::Null),
+        applied_block_height.map_or(Value::Null, Value::from),
     );
     object.insert(
         "evidence".to_owned(),
-        evidence.map(Value::String).unwrap_or(Value::Null),
+        evidence.map_or(Value::Null, Value::String),
     );
     object.insert(
         "execution_expires_at_unix_ms".to_owned(),
@@ -2406,7 +2411,7 @@ fn prove_inrou_predecessor_applied(
         if !prepared_recovery_status_is_final_applied(&status) {
             return Ok(false);
         }
-        if !status.status.block_height.is_some_and(|height| height > 0) {
+        if status.status.block_height.is_none_or(|height| height == 0) {
             eyre::bail!("Applied Inrou predecessor omits its positive block height");
         }
         match verify_exact_committed_transaction(&client, &transaction, &wire) {
@@ -2717,7 +2722,7 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
         mcp_url.as_str(),
         1,
         "server/discover",
-        norito::json!({}),
+        &norito::json!({}),
     )?;
     let discovery_error = (discovery.status == 200)
         .then(|| validate_mcp_discovery_response(discovery.body.as_ref()).err())
@@ -2747,11 +2752,7 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
         tools_ok,
         tools_error.clone(),
     );
-    if !tools_ok {
-        failures.push(
-            tools_error.unwrap_or_else(|| format!("mcp_tools_list returned HTTP {tools_status}")),
-        );
-    } else {
+    if tools_ok {
         let tool_names = parsed_tool_names.expect("successful MCP tool parsing has one result");
         let missing: Vec<String> = REQUIRED_MCP_TOOLS
             .iter()
@@ -2780,11 +2781,15 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
                 Some(format!("missing=[{}]", missing.join(", "))),
             );
         }
+    } else {
+        failures.push(
+            tools_error.unwrap_or_else(|| format!("mcp_tools_list returned HTTP {tools_status}")),
+        );
     }
     let status = if failures.is_empty() { "ok" } else { "fail" };
     let mut extra = Map::new();
     extra.insert("scope".into(), Value::from(scope.as_str()));
-    report_value(
+    Ok(report_value(
         "taira_doctor",
         status,
         &public_root,
@@ -2792,14 +2797,12 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
         warnings,
         failures,
         extra,
-    )
+    ))
 }
 
 /// Expected scoped producer checks for doctor report contract fixtures.
 #[cfg(test)]
-pub(super) fn doctor_expected_checks(
-    scope: DoctorScope,
-) -> Vec<(&'static str, u64, Option<String>)> {
+pub fn doctor_expected_checks(scope: DoctorScope) -> Vec<(&'static str, u64, Option<String>)> {
     let mut checks = ROUTE_CHECKS
         .iter()
         .filter(|(name, _, _, _)| scope.includes_route(name))
@@ -3102,7 +3105,7 @@ fn exact_inrou_local_placement(
         || !replica.host_availability.is_available()
         || replica.health_status != iroha::data_model::soracloud::SoraServiceHealthStatusV1::Healthy
         || replica.peer_id != local_peer_id
-        || !replica.pid.is_some_and(|pid| pid > 0)
+        || replica.pid.is_none_or(|pid| pid == 0)
         || replica.listen_base_url.is_none()
         || replica.last_error.is_some()
     {
@@ -3461,7 +3464,7 @@ fn inrou_public_discovery_authority_url(
     let mut url = join_url(public_root, "/v1/soracloud/services/")?;
     let mut segments = url
         .path_segments_mut()
-        .map_err(|_| eyre!("public root cannot carry encoded discovery identity segments"))?;
+        .map_err(|()| eyre!("public root cannot carry encoded discovery identity segments"))?;
     segments.pop_if_empty().push(service_name);
     if let Some(service_version) = service_version {
         segments.push("revisions").push(service_version);
@@ -3515,7 +3518,7 @@ fn inrou_request_budget(deadline: Instant) -> Result<Duration> {
 }
 fn fetch_inrou_public_discovery_authority(
     http: &HttpClient,
-    url: Url,
+    url: &Url,
     expected: &InrouPublicDiscoveryResponseV1,
     context: &str,
     deadline: Instant,
@@ -3544,17 +3547,30 @@ fn fetch_inrou_public_discovery_authority(
     }
     Ok(bytes)
 }
+
+#[derive(Clone, Copy)]
+struct DiscoveryDocumentExpectation<'a> {
+    host: &'a str,
+    content_cid: &'a str,
+    document_hash: &'a Hash,
+    bytes: &'a [u8],
+}
+
 fn fetch_exact_inrou_public_discovery_document(
     http: &HttpClient,
     public_root: &str,
     published_url: &str,
-    expected_host: &str,
-    expected_content_cid: &str,
-    expected_document_hash: &Hash,
-    expected_bytes: &[u8],
+    expected: DiscoveryDocumentExpectation<'_>,
     context: &str,
     deadline: Instant,
 ) -> Result<()> {
+    let DiscoveryDocumentExpectation {
+        host: expected_host,
+        content_cid: expected_content_cid,
+        document_hash: expected_document_hash,
+        bytes: expected_bytes,
+    } = expected;
+
     let published = Url::parse(published_url)
         .wrap_err_with(|| format!("{context} has an invalid published URL"))?;
     if published.scheme() != "https"
@@ -3646,14 +3662,14 @@ fn verify_inrou_public_discovery(
     )?;
     let current_bytes = fetch_inrou_public_discovery_authority(
         http,
-        current_url,
+        &current_url,
         &expected.response,
         "current Taira Inrou public-discovery authority",
         deadline,
     )?;
     let revision_bytes = fetch_inrou_public_discovery_authority(
         http,
-        revision_url,
+        &revision_url,
         &expected.response,
         "revision Taira Inrou public-discovery authority",
         deadline,
@@ -3665,10 +3681,12 @@ fn verify_inrou_public_discovery(
         http,
         public_root,
         &deployment.public_discovery_url,
-        &deployment.route_host,
-        &deployment.discovery_content_cid,
-        &expected.response.discovery.document_hash,
-        &expected.document_bytes,
+        DiscoveryDocumentExpectation {
+            host: &deployment.route_host,
+            content_cid: &deployment.discovery_content_cid,
+            document_hash: &expected.response.discovery.document_hash,
+            bytes: &expected.document_bytes,
+        },
         "Taira Inrou path-gateway discovery document",
         deadline,
     )?;
@@ -3676,10 +3694,12 @@ fn verify_inrou_public_discovery(
         http,
         public_root,
         &deployment.public_discovery_cid_host_url,
-        &expected_cid_host,
-        &deployment.discovery_content_cid,
-        &expected.response.discovery.document_hash,
-        &expected.document_bytes,
+        DiscoveryDocumentExpectation {
+            host: &expected_cid_host,
+            content_cid: &deployment.discovery_content_cid,
+            document_hash: &expected.response.discovery.document_hash,
+            bytes: &expected.document_bytes,
+        },
         "Taira Inrou CID-host discovery document",
         deadline,
     )?;
@@ -3821,8 +3841,8 @@ fn probe_inrou_service(
                         }
                     }
                 } else {
-                    last_route_error =
-                        "health response violated the canary identity contract".to_owned();
+                    "health response violated the canary identity contract"
+                        .clone_into(&mut last_route_error);
                 }
             }
             Err(error) => last_route_error = format!("{error:#}"),
@@ -4082,7 +4102,7 @@ fn verify_inrou_check_until(
         "replica_identities".to_owned(),
         observation.replica_identities,
     );
-    report_value(
+    Ok(report_value(
         "taira_inrou_check",
         if observation.failures.is_empty() {
             "ok"
@@ -4094,7 +4114,7 @@ fn verify_inrou_check_until(
         Vec::new(),
         observation.failures,
         extra,
-    )
+    ))
 }
 fn validate_inrou_canary_timeout(timeout_secs: u64) -> Result<()> {
     if timeout_secs == 0 {
@@ -4132,7 +4152,7 @@ macro_rules! prepared_write_pending_reasons {
     ($($reason:ident),+ $(,)?) => {
         /// Closed nonterminal reasons shared by the core write producer and host consumer.
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub(super) enum PreparedWritePendingReason {
+        pub enum PreparedWritePendingReason {
             $($reason),+
         }
 
@@ -4172,17 +4192,17 @@ prepared_write_pending_reasons! {
 }
 
 #[cfg(test)]
-pub(crate) fn core_pending_report_cases_for_test(
+pub fn core_pending_report_cases_for_test(
     reason: PreparedWritePendingReason,
 ) -> Result<Vec<(String, Vec<u8>, Value)>> {
-    tests::core_report_cases(PreparedRecoveryClassification::Pending { reason })
+    tests::core_report_cases(&PreparedRecoveryClassification::Pending { reason })
 }
 
 #[cfg(test)]
-pub(crate) fn core_rejected_report_cases_for_test(
+pub fn core_rejected_report_cases_for_test(
     evidence: &str,
 ) -> Result<Vec<(String, Vec<u8>, Value)>> {
-    tests::core_report_cases(PreparedRecoveryClassification::Rejected {
+    tests::core_report_cases(&PreparedRecoveryClassification::Rejected {
         terminal_kind: evidence.to_owned(),
     })
 }
@@ -4231,7 +4251,7 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
                 args,
                 &public_root,
                 &binding,
-                expected_fee_payment.clone(),
+                &expected_fee_payment,
                 deadline,
             )?;
             remaining_prepared_budget(deadline)?;
@@ -4317,10 +4337,9 @@ fn initial_prepared_report_state(
 fn initial_prepared_report_state_from_evidence(
     proof_required_evidence: Option<&str>,
 ) -> (&'static str, Option<String>) {
-    match proof_required_evidence {
-        Some(evidence) => ("ProofRequired", Some(evidence.to_owned())),
-        None => ("Prepared", None),
-    }
+    proof_required_evidence.map_or(("Prepared", None), |evidence| {
+        ("ProofRequired", Some(evidence.to_owned()))
+    })
 }
 
 fn prepare_one_write_canary_operation(
@@ -4328,15 +4347,15 @@ fn prepare_one_write_canary_operation(
     args: &WriteCanary,
     public_root: &str,
     binding: &PreparedMutationBindingV1,
-    fee_payment: FeePaymentIntent,
+    fee_payment: &FeePaymentIntent,
     deadline: Instant,
 ) -> Result<PreparedMutationEnvelopeV1> {
     match args.operation {
         WriteCanaryOperation::Onboarding => {
-            prepare_onboarding_operation(config, args, public_root, binding, &fee_payment, deadline)
+            prepare_onboarding_operation(config, args, public_root, binding, fee_payment, deadline)
         }
         WriteCanaryOperation::Faucet => {
-            prepare_faucet_operation(config, args, public_root, binding, &fee_payment, deadline)
+            prepare_faucet_operation(config, args, public_root, binding, fee_payment, deadline)
         }
         WriteCanaryOperation::FinalCanary => prepare_final_canary_operation(
             config,
@@ -4367,7 +4386,9 @@ fn prove_predecessor_applied(
         .ok_or_else(|| eyre!("the next operation requires its exact predecessor envelope"))?;
     let (envelope, envelope_bytes) = read_prepared_envelope(fd)?;
     let mut predecessor_binding = current_binding.clone();
-    predecessor_binding.kind = predecessor.mutation_kind().to_owned();
+    predecessor
+        .mutation_kind()
+        .clone_into(&mut predecessor_binding.kind);
     predecessor_binding.idempotency_key = write_canary_child_idempotency_key(
         &predecessor_binding.authorization_nonce,
         &predecessor_binding.phase,
@@ -4383,8 +4404,10 @@ fn prove_predecessor_applied(
         policy_context,
         &predecessor_binding,
         public_root,
-        envelope,
-        wire,
+        PreparedOperationPayload {
+            envelope,
+            supplied_wire: wire,
+        },
         expected_fee_payment,
         PreparedLifetimeCheck::Structural,
     )?;
@@ -4414,7 +4437,7 @@ fn prepare_final_canary_operation(
     args: &WriteCanary,
     public_root: &str,
     binding: &PreparedMutationBindingV1,
-    fee_payment: FeePaymentIntent,
+    fee_payment: &FeePaymentIntent,
     deadline: Instant,
 ) -> Result<PreparedMutationEnvelopeV1> {
     let signer = resolve_canary_signer(config)?;
@@ -4491,9 +4514,11 @@ fn prepare_final_canary_operation(
         PreparedOperationPolicyContext::Current(args),
         binding,
         public_root,
-        envelope.clone(),
-        Some(wire),
-        &fee_payment,
+        PreparedOperationPayload {
+            envelope: envelope.clone(),
+            supplied_wire: Some(wire),
+        },
+        fee_payment,
         PreparedLifetimeCheck::LiveForward,
     )?;
     Ok(envelope)
@@ -4583,7 +4608,7 @@ fn canonical_prepared_envelope_bytes(envelope: &PreparedMutationEnvelopeV1) -> R
 
 #[cfg(test)]
 /// Exercise the actual typed write-envelope producer from authenticated host fixtures.
-pub(crate) fn typed_write_envelope_bytes_for_test(value: Value) -> Result<Vec<u8>> {
+pub fn typed_write_envelope_bytes_for_test(value: Value) -> Result<Vec<u8>> {
     let envelope: PreparedMutationEnvelopeV1 = json::from_value(value)?;
     canonical_prepared_envelope_bytes(&envelope)
 }
@@ -4655,8 +4680,10 @@ fn load_and_validate_prepared_operation(
         PreparedOperationPolicyContext::Current(args),
         &binding,
         public_root,
-        envelope,
-        wire,
+        PreparedOperationPayload {
+            envelope,
+            supplied_wire: wire,
+        },
         expected_fee_payment,
         lifetime_check,
     )?;
@@ -4664,16 +4691,25 @@ fn load_and_validate_prepared_operation(
     Ok(validated)
 }
 
+struct PreparedOperationPayload {
+    envelope: PreparedMutationEnvelopeV1,
+    supplied_wire: Option<Vec<u8>>,
+}
+
 fn validate_prepared_operation(
     config: &Config,
     policy_context: PreparedOperationPolicyContext<'_>,
     expected_binding: &PreparedMutationBindingV1,
     public_root: &str,
-    envelope: PreparedMutationEnvelopeV1,
-    supplied_wire: Option<Vec<u8>>,
+    payload: PreparedOperationPayload,
     expected_fee_payment: &FeePaymentIntent,
     lifetime_check: PreparedLifetimeCheck,
 ) -> Result<ValidatedPreparedOperation> {
+    let PreparedOperationPayload {
+        envelope,
+        supplied_wire,
+    } = payload;
+
     expected_fee_payment
         .validate()
         .map_err(|error| eyre!("invalid requested prepared-operation fee payment: {error}"))?;
@@ -4973,7 +5009,7 @@ fn prepared_faucet_metadata_closure_is_exact(metadata: &Metadata) -> bool {
 /// # Errors
 /// Returns an error for noncanonical JSON, a substituted binding, wire, signature, network,
 /// authority, fee closure, metadata, semantic message, instruction sequence, or lifetime.
-pub(crate) fn verify_final_canary_prepared_operation_v1(
+pub fn verify_final_canary_prepared_operation_v1(
     operation_value: &Value,
     expected_network_id: &NetworkId,
     expected_authority: &AccountId,
@@ -5148,7 +5184,7 @@ fn classify_exact_prepared_operation(
 }
 
 /// Only a typed absence from the exact details endpoint permits proof-visibility retry.
-pub(crate) fn exact_transaction_details_not_found(error: &eyre::Report) -> bool {
+pub fn exact_transaction_details_not_found(error: &eyre::Report) -> bool {
     error.chain().any(|cause| {
         matches!(
             cause.downcast_ref::<iroha::query::QueryError>(),
@@ -5401,8 +5437,7 @@ fn prepared_operation_report(
         "transaction_hash_hex".to_owned(),
         operation
             .transaction_hash_hex()
-            .map(|hash| Value::String(hash.to_owned()))
-            .unwrap_or(Value::Null),
+            .map_or(Value::Null, |hash| Value::String(hash.to_owned())),
     );
     extra.insert(
         "prepared_envelope_sha256".to_owned(),
@@ -5418,11 +5453,11 @@ fn prepared_operation_report(
     );
     extra.insert(
         "applied_block_height".to_owned(),
-        applied_block_height.map(Value::from).unwrap_or(Value::Null),
+        applied_block_height.map_or(Value::Null, Value::from),
     );
     extra.insert(
         "evidence".to_owned(),
-        evidence.map(Value::String).unwrap_or(Value::Null),
+        evidence.map_or(Value::Null, Value::String),
     );
     extra.insert(
         "execution_expires_at_unix_ms".to_owned(),
@@ -5444,7 +5479,7 @@ fn prepared_operation_report(
             json::to_value(fee_quote).wrap_err("serialize exact fee quote")?,
         );
     }
-    report_value(
+    Ok(report_value(
         "taira_write_canary",
         "ok",
         public_root,
@@ -5452,7 +5487,7 @@ fn prepared_operation_report(
         Vec::new(),
         Vec::new(),
         extra,
-    )
+    ))
 }
 
 fn prepare_onboarding_operation(
@@ -5517,8 +5552,10 @@ fn prepare_onboarding_operation(
         PreparedOperationPolicyContext::Current(args),
         binding,
         public_root,
-        envelope.clone(),
-        wire,
+        PreparedOperationPayload {
+            envelope: envelope.clone(),
+            supplied_wire: wire,
+        },
         fee_payment,
         PreparedLifetimeCheck::LiveForward,
     )?;
@@ -5566,8 +5603,10 @@ fn prepare_faucet_operation(
         PreparedOperationPolicyContext::Current(args),
         binding,
         public_root,
-        envelope.clone(),
-        Some(wire),
+        PreparedOperationPayload {
+            envelope: envelope.clone(),
+            supplied_wire: Some(wire),
+        },
         fee_payment,
         PreparedLifetimeCheck::LiveForward,
     )?;
@@ -5945,7 +5984,7 @@ fn report_value(
     warnings: Vec<String>,
     failures: Vec<String>,
     extra: Map,
-) -> Result<Value> {
+) -> Value {
     let mut root = Map::new();
     root.insert("command".into(), Value::String(command.to_owned()));
     root.insert("status".into(), Value::String(status.to_owned()));
@@ -5962,7 +6001,7 @@ fn report_value(
     for (key, value) in extra {
         root.insert(key, value);
     }
-    Ok(Value::Object(root))
+    Value::Object(root)
 }
 fn push_check(
     checks: &mut Vec<Value>,
@@ -6190,7 +6229,7 @@ fn http_mcp_json(
     url: &str,
     request_id: u64,
     method: &str,
-    params: Value,
+    params: &Value,
 ) -> Result<HttpJson> {
     http_mcp_json_with_timeout(
         http,
@@ -6207,7 +6246,7 @@ fn http_mcp_json_with_timeout(
     url: &str,
     request_id: u64,
     method: &str,
-    params: Value,
+    params: &Value,
     timeout: Duration,
 ) -> Result<HttpJson> {
     let mut params = params
@@ -6282,7 +6321,7 @@ fn account_signed_soracloud_status(client: &IrohaClient) -> Result<HttpJson> {
         .get_soracloud_status_response()
         .wrap_err("canonical account-signed Soracloud status request failed")?;
     let status = response.status().as_u16();
-    let text = String::from_utf8(response.body().to_vec())
+    let text = String::from_utf8(response.body().clone())
         .wrap_err("canonical account-signed Soracloud status response is not UTF-8")?;
     let body = if text.trim().is_empty() {
         None
@@ -7730,7 +7769,7 @@ fn read_mcp_tool_catalog(
         } else {
             norito::json!({ "cursor": (cursor.to_string()) })
         };
-        let response = http_mcp_json_with_timeout(http, url, 2, "tools/list", params, remaining)?;
+        let response = http_mcp_json_with_timeout(http, url, 2, "tools/list", &params, remaining)?;
         if response.status != 200 {
             return Ok((response.status, Ok(Vec::new())));
         }
@@ -7819,11 +7858,11 @@ fn resolve_canary_signer(config: &Config) -> Result<CanarySigner> {
     }
     let account_id = AccountId::new(key_pair.public_key().clone());
     Ok(CanarySigner {
-        account_id,
         key_pair,
+        account_id,
     })
 }
-pub(super) fn canary_alias(public_key: &iroha_crypto::PublicKey) -> String {
+pub fn canary_alias(public_key: &iroha_crypto::PublicKey) -> String {
     let digest = Sha256::digest(public_key.to_string().as_bytes());
     let suffix = hex::encode(&digest[..8]);
     format!("{CANARY_ALIAS_PREFIX}{suffix}@universal")
@@ -8426,7 +8465,7 @@ mod tests {
     ) -> MockResponse {
         MockResponse::json(
             200,
-            json::to_value(&PipelineTransactionStatusResponse::new(
+            &json::to_value(&PipelineTransactionStatusResponse::new(
                 hex::encode(transaction.hash().as_ref()),
                 iroha_torii_shared::PipelineTransactionStatus {
                     kind: kind.to_owned(),
@@ -8559,7 +8598,7 @@ mod tests {
             }
             "/v1/node/capabilities" => MockResponse::json(
                 200,
-                norito::json!({
+                &norito::json!({
                     "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
                 }),
             ),
@@ -8674,7 +8713,7 @@ mod tests {
             }
             "/v1/node/capabilities" => MockResponse::json(
                 200,
-                norito::json!({
+                &norito::json!({
                     "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
                 }),
             ),
@@ -8784,7 +8823,7 @@ mod tests {
             }
             "/v1/node/capabilities" => MockResponse::json(
                 200,
-                norito::json!({
+                &norito::json!({
                     "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
                 }),
             ),
@@ -8838,7 +8877,7 @@ mod tests {
                 }
                 "/v1/node/capabilities" => MockResponse::json(
                     200,
-                    norito::json!({
+                    &norito::json!({
                         "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
                     }),
                 ),
@@ -9058,7 +9097,7 @@ mod tests {
         let server = spawn_mock_http(1, |_| {
             MockResponse::json(
                 200,
-                norito::json!({
+                &norito::json!({
                     "hash": "substituted", "scope": "global", "resolved_from": "state",
                     "status": {"kind": "Applied", "block_height": 2}
                 }),
@@ -9129,7 +9168,7 @@ mod tests {
     }
 
     pub(super) fn core_report_cases(
-        classification: PreparedRecoveryClassification,
+        classification: &PreparedRecoveryClassification,
     ) -> Result<Vec<(String, Vec<u8>, Value)>> {
         let _chain = ChainDiscriminantGuard::enter(0x02f1);
         let fixture: Value = json::from_str(include_str!(
@@ -9792,7 +9831,7 @@ mod tests {
         }
     }
     impl MockResponse {
-        fn json(status: u16, value: Value) -> Self {
+        fn json(status: u16, value: &Value) -> Self {
             Self {
                 status,
                 content_type: "application/json",
@@ -9816,7 +9855,7 @@ mod tests {
     }
     thread_local! {
         static MOCK_HTTP_FIXTURE_OWNER: std::cell::RefCell<std::rc::Weak<MockHttpFixturePermit>> =
-            std::cell::RefCell::new(std::rc::Weak::new());
+            const { std::cell::RefCell::new(std::rc::Weak::new()) };
     }
     fn mock_http_fixture_guard() -> std::rc::Rc<MockHttpFixturePermit> {
         // Independent blocking clients otherwise multiply worker threads and consume the
@@ -9983,7 +10022,6 @@ mod tests {
         response: MockResponse,
     ) -> std::io::Result<()> {
         let reason = match response.status {
-            200 => "OK",
             202 => "Accepted",
             307 => "Temporary Redirect",
             400 => "Bad Request",
@@ -10279,7 +10317,7 @@ mod tests {
             ("GET", "/v1/accounts/faucet/policy") => doctor_account_tests::faucet_response(),
             ("GET", "/status") => MockResponse::json(
                 200,
-                norito::json!({
+                &norito::json!({
                     "txs_rejected_recent_5m": 0,
                     "queue_size": 0,
                     "sumeragi": { "tx_queue_saturated": false }
@@ -10287,7 +10325,7 @@ mod tests {
             ),
             ("GET", "/v1/time/now") => MockResponse::json(
                 200,
-                norito::json!({
+                &norito::json!({
                     "now": 1_785_168_000_000_u64,
                     "offset_ms": 0,
                     "confidence_ms": 1,
@@ -10303,39 +10341,27 @@ mod tests {
                     }
                 }),
             ),
-            ("GET", "/v1/sumeragi/status") => MockResponse::json(
+            ("GET", "/v1/sumeragi/status" | "/v1/soracloud/status")
+            | ("POST", "/v1/musubi/queries/ordered-prefix") => MockResponse::json(
                 401,
-                norito::json!({
+                &norito::json!({
                     "code": "canonical_authentication_required",
                     "message": "canonical account request authentication is required"
                 }),
             ),
             ("GET", "/v1/contracts/state") => {
-                MockResponse::json(400, norito::json!({"error": "missing selector"}))
+                MockResponse::json(400, &norito::json!({"error": "missing selector"}))
             }
             ("GET", "/v1/pipeline/transactions/status") => {
-                MockResponse::json(400, norito::json!({"error": "missing transaction hash"}))
+                MockResponse::json(400, &norito::json!({"error": "missing transaction hash"}))
             }
-            ("POST", "/v1/musubi/queries/ordered-prefix") => MockResponse::json(
-                401,
-                norito::json!({
-                    "code": "canonical_authentication_required",
-                    "message": "canonical account request authentication is required"
-                }),
-            ),
-            ("GET", "/v1/soracloud/status") => MockResponse::json(
-                401,
-                norito::json!({
-                    "code": "canonical_authentication_required",
-                    "message": "canonical account request authentication is required"
-                }),
-            ),
+
             ("GET", "/v1/mcp") => MockResponse::text(405, "method not allowed"),
             ("POST", "/v1/mcp") if request.body.contains("server/discover") => {
                 assert_modern_mcp_request(request, 1, "server/discover");
                 MockResponse::json(
                     200,
-                    norito::json!({
+                    &norito::json!({
                         "jsonrpc": "2.0",
                         "id": 1,
                         "result": {
@@ -10370,7 +10396,7 @@ mod tests {
                 tools.push(norito::json!({ "name": "torii.get_v1_accounts", "description": "projected route" }));
                 MockResponse::json(
                     200,
-                    norito::json!({
+                    &norito::json!({
                         "jsonrpc": "2.0",
                         "id": 2,
                         "result": {
@@ -10388,7 +10414,7 @@ mod tests {
                     }),
                 )
             }
-            ("GET", _) => MockResponse::json(200, norito::json!({"ok": true})),
+            ("GET", _) => MockResponse::json(200, &norito::json!({"ok": true})),
             _ => MockResponse::text(404, "not found"),
         }
     }
@@ -10533,7 +10559,7 @@ mod tests {
         if path == current_path || path == revision_path {
             return Some(MockResponse::json(
                 200,
-                exact_inrou_discovery_authority(deployment),
+                &exact_inrou_discovery_authority(deployment),
             ));
         }
         let path_gateway = format!(
@@ -10556,7 +10582,7 @@ mod tests {
         None
     }
     fn inrou_canary_artifact_version(seed: u8) -> String {
-        format!("artifact-{}", Hash::new(&[seed; 32]))
+        format!("artifact-{}", Hash::new([seed; 32]))
     }
 
     #[test]
@@ -10617,10 +10643,12 @@ mod tests {
                 &inrou_public_discovery_http_client(),
                 &server.base_url,
                 &deployment.public_discovery_url,
-                &deployment.route_host,
-                &deployment.discovery_content_cid,
-                &expected.response.discovery.document_hash,
-                &expected.document_bytes,
+                DiscoveryDocumentExpectation {
+                    host: &deployment.route_host,
+                    content_cid: &deployment.discovery_content_cid,
+                    document_hash: &expected.response.discovery.document_hash,
+                    bytes: &expected.document_bytes,
+                },
                 "test Taira Inrou discovery document",
                 Instant::now() + Duration::from_secs(12),
             )
@@ -10652,10 +10680,12 @@ mod tests {
             &inrou_public_discovery_http_client(),
             &server.base_url,
             &deployment.public_discovery_url,
-            &deployment.route_host,
-            &deployment.discovery_content_cid,
-            &expected.response.discovery.document_hash,
-            &expected.document_bytes,
+            DiscoveryDocumentExpectation {
+                host: &deployment.route_host,
+                content_cid: &deployment.discovery_content_cid,
+                document_hash: &expected.response.discovery.document_hash,
+                bytes: &expected.document_bytes,
+            },
             "test Taira Inrou discovery document",
             Instant::now() + Duration::from_secs(12),
         )
@@ -10681,7 +10711,7 @@ mod tests {
                 .unwrap();
         let error = fetch_inrou_public_discovery_authority(
             &http,
-            authority_url,
+            &authority_url,
             &expected.response,
             "expired authority",
             deadline,
@@ -10692,10 +10722,12 @@ mod tests {
             &http,
             &server.base_url,
             &deployment.public_discovery_url,
-            &deployment.route_host,
-            &deployment.discovery_content_cid,
-            &expected.response.discovery.document_hash,
-            &expected.document_bytes,
+            DiscoveryDocumentExpectation {
+                host: &deployment.route_host,
+                content_cid: &deployment.discovery_content_cid,
+                document_hash: &expected.response.discovery.document_hash,
+                bytes: &expected.document_bytes,
+            },
             "expired document",
             deadline,
         )
@@ -11111,8 +11143,8 @@ mod tests {
                         "allow_state_writes": false,
                         "network": { "mode": "Open", "value": null },
                         "cpu_millis": 1000,
-                        "memory_bytes": 1073741824,
-                        "ephemeral_storage_bytes": 1073741824,
+                        "memory_bytes": 1_073_741_824,
+                        "ephemeral_storage_bytes": 1_073_741_824,
                         "max_open_files_per_process": 1024,
                         "max_tasks": 64,
                         "start_grace_secs": 30,
@@ -11354,6 +11386,8 @@ mod tests {
     }
     #[test]
     fn exact_inrou_status_requires_one_canonical_local_placement() {
+        use iroha::data_model::account::{MultisigMember, MultisigPolicy};
+
         let version = inrou_canary_artifact_version(0x31);
         let deployment = inrou_canary_deployment("deploy", &version);
         let status = exact_inrou_status(&version, "Deploy", 1);
@@ -11399,7 +11433,6 @@ mod tests {
             "mismatched validator identity reported the wrong error: {error}"
         );
 
-        use iroha::data_model::account::{MultisigMember, MultisigPolicy};
         let multisig_validator = AccountId::new_multisig(
             MultisigPolicy::new(
                 2,
@@ -12368,19 +12401,19 @@ mod tests {
         let server = spawn_mock_http(16, move |request| match path_only(&request.path) {
             "/v1/soracloud/status" => {
                 let call = server_status_calls.fetch_add(1, Ordering::AcqRel);
-                MockResponse::json(if call < 4 { 503 } else { 200 }, status.clone())
+                MockResponse::json(if call < 4 { 503 } else { 200 }, &status)
             }
             "/api/v1/inrou-canary/health" => {
                 let call = server_route_calls.fetch_add(1, Ordering::AcqRel);
                 if call == 4 {
-                    MockResponse::json(503, norito::json!({"error": "transient"}))
+                    MockResponse::json(503, &norito::json!({"error": "transient"}))
                 } else {
                     let slot = if call < 4 {
                         u64::try_from(call + 1).expect("bounded slot")
                     } else {
                         1
                     };
-                    MockResponse::json(200, exact_inrou_health_response(&server_version, slot))
+                    MockResponse::json(200, &exact_inrou_health_response(&server_version, slot))
                 }
             }
             path => inrou_discovery_mock_response(request, &server_deployment)
@@ -12434,7 +12467,7 @@ mod tests {
         let status_server = spawn_mock_http(4, move |request| {
             assert_eq!(request.method, "GET");
             assert_eq!(path_only(&request.path), "/v1/soracloud/status");
-            MockResponse::json(200, status.clone())
+            MockResponse::json(200, &status)
         });
         let route_index = Arc::new(AtomicUsize::new(0));
         let server_route_index = Arc::clone(&route_index);
@@ -12449,7 +12482,7 @@ mod tests {
                         .expect("bounded replica slot");
                 MockResponse::json(
                     200,
-                    exact_inrou_health_response(&route_version, replica_slot),
+                    &exact_inrou_health_response(&route_version, replica_slot),
                 )
             } else {
                 inrou_discovery_mock_response(request, &server_deployment)
@@ -12518,16 +12551,19 @@ mod tests {
                             !request.header_values("x-iroha-signature").is_empty(),
                             "authoritative status must retain account authentication"
                         );
-                        MockResponse::json(200, status.clone())
+                        MockResponse::json(200, &status)
                     }
                     "/api/v1/inrou-canary/health" => {
                         let slot = u64::try_from(
                             server_route_index.fetch_add(1, Ordering::AcqRel) % 4 + 1,
                         )
                         .expect("bounded replica slot");
-                        MockResponse::json(200, exact_inrou_health_response(&service_version, slot))
+                        MockResponse::json(
+                            200,
+                            &exact_inrou_health_response(&service_version, slot),
+                        )
                     }
-                    _ => MockResponse::json(404, norito::json!({"error": "edge not installed"})),
+                    _ => MockResponse::json(404, &norito::json!({"error": "edge not installed"})),
                 }
             });
             let key_pair = fixture_key_pair(0x44);
@@ -12765,10 +12801,10 @@ mod tests {
                 let body = body.clone();
                 let server = spawn_mock_http(16, move |request| {
                     if path_only(&request.path) == "/v1/accounts/faucet/policy" {
-                        match &body {
-                            Some(body) => MockResponse::json(status, body.clone()),
-                            None => MockResponse::text(status, "not JSON"),
-                        }
+                        body.as_ref().map_or_else(
+                            || MockResponse::text(status, "not JSON"),
+                            |body| MockResponse::json(status, body),
+                        )
                     } else {
                         doctor_mock_response(request, None)
                     }
@@ -12977,7 +13013,7 @@ mod tests {
                     if path_only(&request.path) == "/readyz" {
                         MockResponse::json(
                             503,
-                            norito::json!({
+                            &norito::json!({
                                 "code": (code.clone()),
                                 "message": "do-not-forward-server-message",
                                 "details": { "private": "do-not-forward-server-data" }
@@ -13022,7 +13058,7 @@ mod tests {
         let server = spawn_mock_http(1, |request| {
             assert_eq!(request.method, "GET");
             assert_eq!(path_only(&request.path), "/v1/soracloud/status");
-            MockResponse::json(200, norito::json!({ "schema_version": 1 }))
+            MockResponse::json(200, &norito::json!({ "schema_version": 1 }))
         });
         let key_pair = fixture_key_pair(0x41);
         let mut config = crate::fallback_config();
@@ -13070,8 +13106,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Map::new(),
-        )
-        .expect("report");
+        );
         let mut context = TextContext::new();
         render_report(&mut context, false, &report).expect("render report");
         let output = context.lines.join("\n");
@@ -13090,8 +13125,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Map::new(),
-        )
-        .expect("report");
+        );
 
         let mut json_output = WriterReportOutput {
             write: Vec::new(),
@@ -13636,7 +13670,7 @@ mod tests {
                         "wrong_status" => MockResponse::text(202, ""),
                         "legacy_result" => MockResponse::json(
                             200,
-                            norito::json!({
+                            &norito::json!({
                                 "jsonrpc": "2.0",
                                 "id": 1,
                                 "result": {
@@ -13647,7 +13681,7 @@ mod tests {
                         ),
                         "mixed_versions" => MockResponse::json(
                             200,
-                            norito::json!({
+                            &norito::json!({
                                 "jsonrpc": "2.0",
                                 "id": 1,
                                 "result": {
@@ -13695,7 +13729,7 @@ mod tests {
             if request.method == "GET" && path_only(&request.path) == "/v1/mcp" {
                 MockResponse::json(
                     200,
-                    norito::json!({
+                    &norito::json!({
                         "protocolVersion": (mcp_wire::MODERN_PROTOCOL_VERSION)
                     }),
                 )

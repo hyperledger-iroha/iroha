@@ -21,13 +21,16 @@ fn index_resource_kind(path: &Path) -> Option<(ResourceFamily, IndexResourceForm
     let prepend = file_name.ends_with(".prepend.tmp");
     let (name, temporary) = file_name.strip_suffix(".prepend.tmp").map_or_else(
         || {
-            if let Some(main) = file_name.strip_suffix(".tmp") {
-                (main, true)
-            } else if file_name == EVICTION_COMPACTION_INDEX_FILE_NAME {
-                (INDEX_FILE_NAME, true)
-            } else {
-                (file_name, false)
-            }
+            file_name.strip_suffix(".tmp").map_or_else(
+                || {
+                    if file_name == EVICTION_COMPACTION_INDEX_FILE_NAME {
+                        (INDEX_FILE_NAME, true)
+                    } else {
+                        (file_name, false)
+                    }
+                },
+                |main| (main, true),
+            )
         },
         |main| (main, true),
     );

@@ -393,7 +393,7 @@ async fn bounded_snapshot_reader_rejects_symlink_and_hardlink() {
 #[tokio::test]
 async fn snapshot_publication_rejects_body_without_original_execution() {
     let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(&kura);
     let block = signed_block_with_transaction(accepted_log_transaction("unexecuted body"));
     store_block_and_mark_state_height(&mut state, &kura, &(block));
     let root = tempdir().unwrap();
@@ -668,7 +668,7 @@ fn state_factory_with_kura_and_chain(kura: &Arc<Kura>, chain_id: ChainId) -> Sta
     let mut state = State::try_new_with_chain(
         budget,
         world,
-        Arc::clone(&kura),
+        Arc::clone(kura),
         query_handle,
         chain_id,
         #[cfg(feature = "telemetry")]
@@ -696,11 +696,11 @@ fn state_factory_with_kura_and_chain(kura: &Arc<Kura>, chain_id: ChainId) -> Sta
     state.configure_test_runtime_defaults();
     state
 }
-fn state_factory_with_kura(kura: Arc<Kura>) -> State {
-    state_factory_with_kura_and_chain(&(kura), ChainId::from(TEST_CHAIN_ID))
+fn state_factory_with_kura(kura: &Arc<Kura>) -> State {
+    state_factory_with_kura_and_chain(kura, ChainId::from(TEST_CHAIN_ID))
 }
 fn state_factory() -> State {
-    state_factory_with_kura(Kura::blank_kura_for_testing())
+    state_factory_with_kura(&Kura::blank_kura_for_testing())
 }
 fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsize) -> KuraConfig {
     KuraConfig {
@@ -1034,7 +1034,7 @@ async fn staged_snapshot_wsv_hash_injects_committed_event_buffer() {
         canonical_snapshot_wsv_hash_with_overrides(
             staged,
             CanonicalWsvOverrides {
-                committed_external_event_buf: Some(committed_event_buffer),
+                external_event_buf: Some(committed_event_buffer),
                 ..CanonicalWsvOverrides::default()
             },
         )
@@ -1054,8 +1054,8 @@ async fn staged_snapshot_wsv_hash_projects_deferred_storage_and_undo_history() {
     let actual = canonical_snapshot_wsv_hash_with_overrides(
         staged,
         CanonicalWsvOverrides {
-            committed_axt_replay_ledger: Some(replay),
-            committed_smart_contract_state: Some(quota),
+            axt_replay_ledger: Some(replay),
+            smart_contract_state: Some(quota),
             ..CanonicalWsvOverrides::default()
         },
     )
@@ -1070,8 +1070,8 @@ async fn staged_snapshot_wsv_hash_projects_deferred_storage_and_undo_history() {
         canonical_snapshot_wsv_hash_with_overrides(
             staged,
             CanonicalWsvOverrides {
-                committed_axt_replay_ledger: Some(r#"{"blocks":{},"revert":{}}"#),
-                committed_smart_contract_state: Some(quota),
+                axt_replay_ledger: Some(r#"{"blocks":{},"revert":{}}"#),
+                smart_contract_state: Some(quota),
                 ..CanonicalWsvOverrides::default()
             },
         )

@@ -311,7 +311,7 @@ fn actual_penalty_refusal_and_fresh_retry(fee_phase: bool) {
         let result = execute(&mut block, &source);
         let (calls, original) = penalty_probe.as_ref().map_or_else(
             || fee_probe.as_ref().unwrap().observe(),
-            |probe| probe.observe(),
+            penalty_decode_test_scope::Guard::observe,
         );
         assert_eq!(
             calls, 1,

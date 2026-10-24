@@ -174,7 +174,11 @@ fn proof_tag_fixture_deduplicates_both_indexes_without_finality() {
     let mut state = state();
     let id = proof_id(0x41);
     for _ in 0..2 {
-        insert_proof_tags_for_test(&mut state, id.clone(), vec![*b"ZZZZ", *b"AAAA", *b"ZZZZ"]);
+        insert_proof_tags_for_test(
+            &mut state,
+            &(id.clone()),
+            vec![*b"ZZZZ", *b"AAAA", *b"ZZZZ"],
+        );
         assert_no_finality(&state);
     }
     let view = state.view();

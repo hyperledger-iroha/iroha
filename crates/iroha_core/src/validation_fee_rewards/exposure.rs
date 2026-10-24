@@ -283,7 +283,7 @@ fn persist_tail(
     archive: &ValidationFeeExposureArchive,
     service_start: u64,
 ) -> Result<(), Error> {
-    iroha_data_model::validation_fee_rewards::validate_exposure_archive(&archive).map_err(fail)?;
+    iroha_data_model::validation_fee_rewards::validate_exposure_archive(archive).map_err(fail)?;
     if archive
         .previous
         .as_ref()
@@ -297,7 +297,7 @@ fn persist_tail(
     let service_total = service_start
         .checked_add(service_count(page)?)
         .ok_or_else(|| fail("reward exposure total service overflow"))?;
-    let bytes = norito::to_bytes(&archive).map_err(|error| fail(error.to_string()))?;
+    let bytes = norito::to_bytes(archive).map_err(|error| fail(error.to_string()))?;
     let latest = ValidationFeeExposureArchiveRef {
         recorded_at_height: stx.block_height(),
         page_index: page.page_index,
@@ -748,7 +748,7 @@ mod tests {
                 },
                 previous: Some(original.latest),
             };
-            assert!(persist_tail(stx, &binding, archive, original.service_total).is_err());
+            assert!(persist_tail(stx, &binding, &archive, original.service_total).is_err());
             assert_eq!(
                 head(stx, &binding, period, &ALICE_ID).unwrap(),
                 Some(original)

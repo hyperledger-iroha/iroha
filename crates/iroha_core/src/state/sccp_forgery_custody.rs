@@ -31,7 +31,7 @@ pub enum ForgeryStorageError {
     #[error("invalid SCCP offence storage claim")]
     Invalid,
 }
-fn codec(e: norito::core::Error) -> ForgeryStorageError {
+fn codec(e: &norito::core::Error) -> ForgeryStorageError {
     e.decode_resource_error()
         .map_or(ForgeryStorageError::Invalid, ForgeryStorageError::Codec)
 }
@@ -157,7 +157,7 @@ impl OffenceKey {
                     _ => overflowed = true,
                 }
             })
-            .map_err(codec)?;
+            .map_err(|error| codec(&error))?;
         if overflowed {
             return Err(overflow());
         }
@@ -182,14 +182,16 @@ impl OffenceKey {
                 Ok(c) => ledger.push_reserved(c),
                 Err(_) => mismatch = true,
             })
-            .map_err(codec)?;
+            .map_err(|error| codec(&error))?;
         if mismatch {
             return Err(ForgeryStorageError::Invalid);
         }
         let key = (
             generation,
             lane,
-            account.try_clone_for_admission().map_err(codec)?,
+            account
+                .try_clone_for_admission()
+                .map_err(|error| codec(&error))?,
         );
         // SAFETY: exact immutable account graph and all its original charges move together.
         #[allow(unsafe_code)]
@@ -242,12 +244,13 @@ impl OffenceKey {
             .map_err(shared)?;
         let key = context
             .with(|| CanonicalOffenceKey::decode_all(&mut bytes.as_slice()))
-            .map_err(codec)?;
+            .map_err(|error| codec(&error))?;
         let mut key = DecodedKey {
             key: ManuallyDrop::new(key),
             allowance: ManuallyDrop::new(allowance),
         };
-        norito::codec::verify_exact_payload(&*key.key, bytes.as_slice()).map_err(codec)?;
+        norito::codec::verify_exact_payload(&*key.key, bytes.as_slice())
+            .map_err(|error| codec(&error))?;
         if key.key.0 == 0 {
             return Err(ForgeryStorageError::Invalid);
         }

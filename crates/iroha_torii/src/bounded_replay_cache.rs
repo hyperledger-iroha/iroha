@@ -171,7 +171,7 @@ impl ReplayCache {
     }
     /// Admit a new nonce, rejecting replay and saturated live state.
     #[cfg(test)]
-    pub(crate) fn check_and_insert(&self, key: String) -> Result<(), InsertError> {
+    pub(crate) fn check_and_insert(&self, key: &str) -> Result<(), InsertError> {
         self.check_and_insert_at(key, Instant::now())
     }
     /// Admit a caller-domain-separated fixed-size replay digest.
@@ -196,7 +196,7 @@ impl ReplayCache {
         self.check_and_insert_digest_at_with_minimum_ttl(key, Instant::now(), minimum_ttl)
     }
     #[cfg(test)]
-    fn check_and_insert_at(&self, key: String, now: Instant) -> Result<(), InsertError> {
+    fn check_and_insert_at(&self, key: &str, now: Instant) -> Result<(), InsertError> {
         // Callers may include an attacker-sized authority representation in
         // this key. Retain only a domain-separated fixed-size digest; keeping
         // the original String in both indices would turn the count cap into a
@@ -253,22 +253,18 @@ mod tests {
             Duration::from_secs(300),
             NonZeroUsize::new(2).expect("non-zero"),
         );
-        cache
-            .check_and_insert("protected-a".to_owned())
-            .expect("first nonce");
-        cache
-            .check_and_insert("protected-b".to_owned())
-            .expect("second nonce");
+        cache.check_and_insert("protected-a").expect("first nonce");
+        cache.check_and_insert("protected-b").expect("second nonce");
         assert_eq!(
-            cache.check_and_insert("overflow".to_owned()),
+            cache.check_and_insert("overflow"),
             Err(InsertError::Capacity)
         );
         assert_eq!(
-            cache.check_and_insert("protected-a".to_owned()),
+            cache.check_and_insert("protected-a"),
             Err(InsertError::Replay)
         );
         assert_eq!(
-            cache.check_and_insert("protected-b".to_owned()),
+            cache.check_and_insert("protected-b"),
             Err(InsertError::Replay)
         );
     }
@@ -280,13 +276,13 @@ mod tests {
         );
         let start = Instant::now();
         cache
-            .check_and_insert_at("expired".to_owned(), start)
+            .check_and_insert_at("expired", start)
             .expect("first nonce");
         cache
-            .check_and_insert_at("replacement".to_owned(), start + Duration::from_secs(1))
+            .check_and_insert_at("replacement", start + Duration::from_secs(1))
             .expect("expired nonce must release its slot");
         assert_eq!(
-            cache.check_and_insert_at("expired".to_owned(), start + Duration::from_secs(1)),
+            cache.check_and_insert_at("expired", start + Duration::from_secs(1)),
             Err(InsertError::Capacity)
         );
     }
@@ -296,28 +292,21 @@ mod tests {
             Duration::from_secs(300),
             NonZeroUsize::new(2).expect("non-zero"),
         );
-        cache
-            .check_and_insert("protected-a".to_owned())
-            .expect("first nonce");
-        cache
-            .check_and_insert("protected-b".to_owned())
-            .expect("second nonce");
+        cache.check_and_insert("protected-a").expect("first nonce");
+        cache.check_and_insert("protected-b").expect("second nonce");
         cache.configure(
             Duration::from_secs(300),
             NonZeroUsize::new(1).expect("non-zero"),
         );
         assert_eq!(
-            cache.check_and_insert("protected-a".to_owned()),
+            cache.check_and_insert("protected-a"),
             Err(InsertError::Replay)
         );
         assert_eq!(
-            cache.check_and_insert("protected-b".to_owned()),
+            cache.check_and_insert("protected-b"),
             Err(InsertError::Replay)
         );
-        assert_eq!(
-            cache.check_and_insert("new".to_owned()),
-            Err(InsertError::Capacity)
-        );
+        assert_eq!(cache.check_and_insert("new"), Err(InsertError::Capacity));
     }
 
     #[test]
@@ -339,7 +328,7 @@ mod tests {
             assert!(inner.expirations.is_empty());
         }
         cache
-            .check_and_insert("admitted-after-reservation-failure".to_owned())
+            .check_and_insert("admitted-after-reservation-failure")
             .expect("a failed reservation must not poison cache state");
     }
 
@@ -351,7 +340,7 @@ mod tests {
         );
         let start = Instant::now();
         cache
-            .check_and_insert_at("protected".to_owned(), start)
+            .check_and_insert_at("protected", start)
             .expect("first nonce");
 
         cache.configure_at(
@@ -361,17 +350,17 @@ mod tests {
         );
 
         assert_eq!(
-            cache.check_and_insert_at("protected".to_owned(), start + Duration::from_secs(10)),
+            cache.check_and_insert_at("protected", start + Duration::from_secs(10)),
             Err(InsertError::Replay),
             "the old deadline must not discard evidence after widening"
         );
         assert_eq!(
-            cache.check_and_insert_at("protected".to_owned(), start + Duration::from_secs(29)),
+            cache.check_and_insert_at("protected", start + Duration::from_secs(29)),
             Err(InsertError::Replay),
             "evidence must remain live until the widened deadline"
         );
         cache
-            .check_and_insert_at("protected".to_owned(), start + Duration::from_secs(31))
+            .check_and_insert_at("protected", start + Duration::from_secs(31))
             .expect("the nonce may be admitted again after the widened deadline");
     }
 
@@ -383,7 +372,7 @@ mod tests {
         );
         let start = Instant::now();
         cache
-            .check_and_insert_at("already-pruned".to_owned(), start)
+            .check_and_insert_at("already-pruned", start)
             .expect("first nonce");
         {
             let mut inner = cache
@@ -401,17 +390,17 @@ mod tests {
         );
 
         assert_eq!(
-            cache.check_and_insert_at("already-pruned".to_owned(), start + Duration::from_secs(12)),
+            cache.check_and_insert_at("already-pruned", start + Duration::from_secs(12)),
             Err(InsertError::Capacity),
             "widening must fail closed while pruned history could become fresh again"
         );
         assert_eq!(
-            cache.check_and_insert_at("new".to_owned(), start + Duration::from_secs(30)),
+            cache.check_and_insert_at("new", start + Duration::from_secs(30)),
             Err(InsertError::Capacity),
             "the widening quarantine applies to every unknown nonce"
         );
         cache
-            .check_and_insert_at("new".to_owned(), start + Duration::from_secs(32))
+            .check_and_insert_at("new", start + Duration::from_secs(32))
             .expect("admission resumes after the TTL-delta quarantine");
     }
 
@@ -423,7 +412,7 @@ mod tests {
         );
         let start = Instant::now();
         cache
-            .check_and_insert_at("protected".to_owned(), start)
+            .check_and_insert_at("protected", start)
             .expect("first nonce");
 
         cache.configure_at(
@@ -433,7 +422,7 @@ mod tests {
         );
 
         assert_eq!(
-            cache.check_and_insert_at("protected".to_owned(), start + Duration::from_secs(29)),
+            cache.check_and_insert_at("protected", start + Duration::from_secs(29)),
             Err(InsertError::Replay),
             "shrinking the TTL must not shorten existing evidence"
         );
@@ -479,7 +468,7 @@ mod tests {
             NonZeroUsize::new(1).expect("non-zero"),
         );
         cache
-            .check_and_insert("x".repeat(1024 * 1024))
+            .check_and_insert(&("x".repeat(1024 * 1024)))
             .expect("large transient key should hash into one cache slot");
         let inner = cache
             .inner
@@ -502,7 +491,7 @@ mod tests {
         let first = Hash::new(b"structured-a");
         let second = Hash::new(b"structured-b");
         cache
-            .check_and_insert_digest(first.clone())
+            .check_and_insert_digest(first)
             .expect("first structured digest");
         assert_eq!(
             cache.check_and_insert_digest(first),

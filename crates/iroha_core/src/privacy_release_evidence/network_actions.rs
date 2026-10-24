@@ -437,7 +437,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     let mut statement = orchard_statement_v1(
-        statement_context_v1(&transaction_context, profile),
+        statement_context_v1(transaction_context, profile),
         prepared.public_draft(),
         asset_definition_id.clone(),
         pool_id,
@@ -451,7 +451,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
     if !profile.matches_envelope_v1(&draft_envelope) {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let intent = transaction_payload_v1(&transaction_context, draft_envelope)?
+    let intent = transaction_payload_v1(transaction_context, draft_envelope)?
         .privacy_transaction_intent_digest_v1()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     if intent.is_zero() {
@@ -483,7 +483,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
     if !profile.matches_envelope_v1(&envelope) {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let payload = transaction_payload_v1(&transaction_context, envelope)?;
+    let payload = transaction_payload_v1(transaction_context, envelope)?;
     if payload
         .validate_privacy_transaction_intent_binding_v1()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
@@ -623,7 +623,7 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
         .validate()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let (preactivation_transaction, preactivation_statement) = build_pq_masp_transaction_v1(
-        &preactivation_context,
+        preactivation_context,
         fixture.statement.clone(),
         &fixture.witness,
         fixture.authorization_secret_key.as_slice(),
@@ -631,7 +631,7 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
         private_key,
     )?;
     let (canonical_transaction, canonical_statement) = build_pq_masp_transaction_v1(
-        &canonical_context,
+        canonical_context,
         fixture.statement.clone(),
         &fixture.witness,
         fixture.authorization_secret_key.as_slice(),
@@ -639,7 +639,7 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
         private_key,
     )?;
     let (replay_transaction, replay_statement) = build_pq_masp_transaction_v1(
-        &replay_context,
+        replay_context,
         successor_replay_statement.clone(),
         &successor_replay_witness,
         fixture.authorization_secret_key.as_slice(),
@@ -648,7 +648,7 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
     )?;
     let (post_restart_replay_transaction, post_restart_replay_statement) =
         build_pq_masp_transaction_v1(
-            &post_restart_replay_context,
+            post_restart_replay_context,
             successor_replay_statement,
             &successor_replay_witness,
             fixture.authorization_secret_key.as_slice(),

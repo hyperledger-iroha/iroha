@@ -618,7 +618,7 @@ pub fn prepare_cancellation(
 pub fn execute_append(
     tx: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
-    entry: ReputationJournalEntryV1,
+    entry: &ReputationJournalEntryV1,
 ) -> Result<(), InstructionExecutionError> {
     let payload: TransactionPayload = tx
         .current_direct_stream_token_reputation_payload
@@ -647,7 +647,7 @@ pub fn execute_append(
         .intent
         .as_ref()
         .ok_or_else(|| invalid_parameter("excluded native source cannot append"))?;
-    if expected_entry(&source)?.as_ref() != Some(&entry)
+    if expected_entry(&source)?.as_ref() != Some(entry)
         || payload != intent.payload
         || &payload.authority != authority
     {
@@ -692,7 +692,7 @@ pub fn execute_append(
     validate_new_entry(
         tx,
         authority,
-        &entry,
+        entry,
         ReputationJournalSourceKindV1::StreamToken,
     )?;
     let journal = prepare_validated_entry(tx, &(entry.clone()))?;

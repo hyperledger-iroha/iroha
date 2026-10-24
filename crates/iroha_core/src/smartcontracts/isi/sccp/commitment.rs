@@ -16,7 +16,7 @@ use iroha_data_model::sccp::{
 use iroha_sccp::v1::{history::HistoryAccumulatorV1, merkle::block_root};
 
 /// Build the execution-invariant error of a malformed block outbox.
-fn invariant(message: String) -> BlockValidationError {
+fn invariant(message: &str) -> BlockValidationError {
     BlockValidationError::ExecutionContextInvalid(format!("SCCP: {message}"))
 }
 
@@ -35,9 +35,7 @@ fn leaf_hash(
             store::outbound_messages::get(&*state_transaction.world, &transfer.message_id)
                 .map(|record| record.leaf)
                 .ok_or_else(|| {
-                    invariant(format!(
-                        "block {height} references an unknown outbound message"
-                    ))
+                    invariant(&(format!("block {height} references an unknown outbound message")))
                 })
         }
         SccpLeafRefV1::Control(control) => store::control_messages::get(
@@ -46,9 +44,7 @@ fn leaf_hash(
         )
         .map(|record| record.leaf)
         .ok_or_else(|| {
-            invariant(format!(
-                "block {height} references an unknown control record"
-            ))
+            invariant(&(format!("block {height} references an unknown control record")))
         }),
     }
 }
@@ -81,32 +77,38 @@ pub fn commit_block(
     }
     for (expected, (index, _)) in refs.iter().enumerate() {
         if usize::try_from(*index).ok() != Some(expected) {
-            return Err(invariant(format!(
-                "leaf indices of block {height} are not exactly 0..{}",
-                refs.len()
-            )));
+            return Err(invariant(
+                &(format!(
+                    "leaf indices of block {height} are not exactly 0..{}",
+                    refs.len()
+                )),
+            ));
         }
     }
     if refs.len() > usize::try_from(leaves::MAX_LEAVES_PER_BLOCK).unwrap_or(usize::MAX) {
-        return Err(invariant(format!("block {height} exceeds the leaf limit")));
+        return Err(invariant(
+            &(format!("block {height} exceeds the leaf limit")),
+        ));
     }
     let hashes = refs
         .iter()
         .map(|(_, leaf)| leaf_hash(state_transaction, height, leaf))
         .collect::<Result<Vec<_>, _>>()?;
     let root = block_root(&hashes)
-        .map_err(|error| invariant(format!("block root of {height}: {error}")))?;
+        .map_err(|error| invariant(&(format!("block root of {height}: {error}"))))?;
     let count = u32::try_from(hashes.len())
-        .map_err(|_| invariant(format!("block {height} leaf count overflows")))?;
+        .map_err(|_| invariant(&(format!("block {height} leaf count overflows"))))?;
 
     let stored = store::history::get(&*state_transaction.world).clone();
-    let mut accumulator = HistoryAccumulatorV1::from_parts(stored.size, stored.peaks)
-        .map_err(|error| invariant(format!("stored history accumulator is malformed: {error}")))?;
+    let mut accumulator =
+        HistoryAccumulatorV1::from_parts(stored.size, stored.peaks).map_err(|error| {
+            invariant(&(format!("stored history accumulator is malformed: {error}")))
+        })?;
     let history_index = accumulator.size();
     let history_leaf = iroha_sccp::v1::hashes::history_leaf(height, &root, count);
     accumulator
         .append(&history_leaf)
-        .map_err(|error| invariant(format!("history accumulator cannot grow: {error}")))?;
+        .map_err(|error| invariant(&(format!("history accumulator cannot grow: {error}"))))?;
     let history = SccpHistoryStateV1 {
         size: accumulator.size(),
         peaks: accumulator.peaks().to_vec(),
@@ -114,14 +116,14 @@ pub fn commit_block(
     let history_size = history.size;
     store::history::set(state_transaction, history);
     store::history_leaves::insert(state_transaction, history_index, (height, history_leaf))
-        .map_err(|error| invariant(format!("history leaf of {height}: {error}")))?;
+        .map_err(|error| invariant(&(format!("history leaf of {height}: {error}"))))?;
     let commitment = SccpBlockCommitmentV1 {
         root,
         message_count: count,
         history_index,
     };
     store::block_commitments::insert(state_transaction, height, commitment)
-        .map_err(|error| invariant(format!("commitment of {height}: {error}")))?;
+        .map_err(|error| invariant(&(format!("commitment of {height}: {error}"))))?;
     state_transaction
         .world
         .emit_events(Some(SccpEvent::BlockCommitted(SccpBlockCommittedV1 {

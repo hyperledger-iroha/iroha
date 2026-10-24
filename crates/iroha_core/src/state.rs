@@ -2993,10 +2993,9 @@ impl EvidencePreparationError {
     /// Invalid bytes, protocol/default limits and stale or copied diagnostics are
     /// preparation invariants; numeric fields cannot grant retry or construct custody.
     pub(crate) fn from_decode_attempt(error: norito::core::DecodeAttemptError) -> Self {
-        error.into_local_refusal().map_or_else(
-            |_| Self::Invariant,
-            |original| Self::DecodeResource(original),
-        )
+        error
+            .into_local_refusal()
+            .map_or_else(|_| Self::Invariant, Self::DecodeResource)
     }
 
     /// Original pool release observation, available only for temporary contention.
@@ -8727,7 +8726,7 @@ impl<'block> WorldTransaction<'block, '_> {
     ) -> Result<Option<VpnLeaseRecordV1>, String> {
         Self::validate_vpn_lease_quote_projection(record)?;
         self.ensure_active_vpn_claims_available(record)?;
-        let previous = self.vpn_leases.get(record.lease_id).cloned();
+        let previous = self.vpn_leases.get(&record.lease_id).cloned();
         if let Some(previous) = previous.as_ref() {
             validate_vpn_lease_transition(previous, record)?;
         }
@@ -11019,8 +11018,7 @@ fn update_oracle_change_pipeline(
             intake.started_at = Some(now_h);
             intake.deadline = oracle_stage_deadline(OracleChangeStage::Intake, cfg, now_h);
         }
-        let mut emit_update = false;
-        if let Some(stage) = rec.current_stage_mut()
+        let emit_update = if let Some(stage) = rec.current_stage_mut()
             && stage.failure.is_none()
             && stage.is_pending()
             && let Some(deadline) = stage.deadline
@@ -11033,8 +11031,10 @@ fn update_oracle_change_pipeline(
                     reason: OracleChangeStageFailure::DeadlineMissed,
                     at: now_h,
                 });
-            emit_update = true;
-        }
+            true
+        } else {
+            false
+        };
         if emit_update {
             let (stage_id, approvals, rejections, evidence_hashes) = rec.current_stage().map_or(
                 (OracleChangeStage::Enactment, 0, 0, Vec::new()),
@@ -19854,6 +19854,10 @@ impl World {
         fn derive<'a>(
             definitions: impl Iterator<Item = (&'a AssetDefinitionId, &'a AssetDefinition)>,
         ) -> core::result::Result<ConfidentialPolicySchedule, String> {
+            #[expect(
+                clippy::zero_sized_map_values,
+                reason = "Reconstruct the existing Storage<K, ()> current and undo map representation"
+            )]
             let mut transitions = BTreeMap::new();
             let mut counts = BTreeMap::<u64, u32>::new();
             for (definition_id, definition) in definitions {
@@ -20596,9 +20600,7 @@ fn derive_account_scope_directory_entry(
     world: &(impl WorldReadOnly + ?Sized),
     account_id: &AccountId,
 ) -> Option<AccountScopeDirectoryEntry> {
-    let Some(account) = world.accounts().get(account_id) else {
-        return None;
-    };
+    let account = world.accounts().get(account_id)?;
     let aliases = world.bound_account_aliases(account_id);
     let bindings = account
         .as_ref()
@@ -21972,11 +21974,10 @@ pub trait WorldReadOnly {
             Some(binding) if binding.alias == *alias && !binding.is_grace_expired_at(now_ms) => {
                 Some(definition_id)
             }
-            Some(_) => None,
             // First-release asset aliases are valid only together with their
             // consensus-persisted lease record. Treat an index-only entry as
             // corrupt state instead of silently reviving a legacy binding.
-            None => None,
+            Some(_) | None => None,
         }
     }
     #[cfg(test)]
@@ -22001,11 +22002,10 @@ pub trait WorldReadOnly {
             Some(binding) if binding.alias == *alias && !binding.is_grace_expired_at(now_ms) => {
                 Some(contract_address)
             }
-            Some(_) => None,
             // First-release contract aliases are valid only together with their
             // consensus-persisted lease record.  Treat an index-only entry as
             // corrupt state instead of silently reviving a legacy binding.
-            None => None,
+            Some(_) | None => None,
         }
     }
     /// Iterate concrete asset identifiers tracked for an asset definition.
@@ -22976,11 +22976,13 @@ impl WorldTransaction<'_, '_> {
         account_id: &AccountId,
         label: &AccountAlias,
     ) {
-        let mut remove_entry = false;
-        if let Some(labels) = self.account_aliases_by_account.get_mut(account_id) {
-            labels.remove(label);
-            remove_entry = labels.is_empty();
-        }
+        let remove_entry = self
+            .account_aliases_by_account
+            .get_mut(account_id)
+            .is_some_and(|labels| {
+                labels.remove(label);
+                labels.is_empty()
+            });
         if remove_entry {
             self.account_aliases_by_account.remove(account_id.clone());
         }
@@ -25443,9 +25445,8 @@ impl WorldTransaction<'_, '_> {
         }
         let ambient_dataspace = self.current_dataspace_id;
         let compatible_requested_dataspace = requested_dataspace.filter(|requested| {
-            ambient_dataspace.map_or(true, |ambient| {
-                ambient == DataSpaceId::UNIVERSAL || ambient == *requested
-            })
+            ambient_dataspace
+                .is_none_or(|ambient| ambient == DataSpaceId::UNIVERSAL || ambient == *requested)
         });
         let expected_scope = match definition.balance_scope_policy() {
             AssetBalancePolicy::Global => AssetBalanceScope::Global,
@@ -27532,7 +27533,7 @@ impl State {
     #[inline(never)]
     #[allow(clippy::too_many_lines)]
     fn new_inner(
-        execution_budget: &AllocationBudget,
+        execution_budget: AllocationBudget,
         mut world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
@@ -27812,7 +27813,6 @@ impl State {
             )),
             finality_prefix_checkpoints:
                 crate::sumeragi::certified_chain::FinalityPrefixCheckpoints::new(),
-            ivm_execution_budget: execution_budget.clone(),
             pipeline_ivm_prepared_cache: PublicationRwLock::try_new(
                 PreparedContractCache::with_execution_budget(pipeline_cache_size, execution_budget.clone()),
                 &execution_budget,
@@ -28100,6 +28100,7 @@ impl State {
             publication_notify: tokio::sync::Notify::new(),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
             native_pending_evidence: parking_lot::Mutex::new(crate::sumeragi::evidence::NativeEvidencePool::default()),
+            ivm_execution_budget: execution_budget,
         };
         #[cfg(feature = "telemetry")]
         {
@@ -28421,7 +28422,7 @@ impl State {
     ) -> Result<Self, MergeLedgerCommitError> {
         let exact_durable_height = kura.exact_durable_blocks_count()?;
         let s = Self::new_inner(
-            &(execution_budget),
+            execution_budget,
             world,
             kura,
             query_handle,
@@ -28521,7 +28522,7 @@ impl State {
             .exact_durable_blocks_count()
             .map_err(MergeLedgerCommitError::from)?;
         let mut state = Self::new_inner(
-            &(execution_budget),
+            execution_budget,
             world,
             kura,
             query_handle,
@@ -30046,14 +30047,14 @@ impl State {
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Insert or replace a native VPN lease directly for deterministic test setup.
-    pub fn insert_vpn_lease_for_testing(&self, record: VpnLeaseRecordV1) {
-        validate_vpn_lease_network(&record, &self.network_id)
+    pub fn insert_vpn_lease_for_testing(&self, record: &VpnLeaseRecordV1) {
+        validate_vpn_lease_network(record, &self.network_id)
             .expect("test VPN lease must belong to this exact network");
         let mut world = self.world.block();
         {
             let mut transaction = world.transaction_without_telemetry(LaneConfig::default(), 0);
             transaction
-                .put_vpn_lease(&(record))
+                .put_vpn_lease(record)
                 .expect("test VPN lease must preserve active-claim indexes");
             transaction.apply();
         }
@@ -31904,9 +31905,8 @@ impl State {
         nexus_staking_authority_lane_at_height(lane_id, &nexus, self.lane_authority_height())
     }
     fn lane_authority_height(&self) -> u64 {
-        self.latest_block_header_fast()
-            .map(|header| header.height().get())
-            .unwrap_or_else(|| {
+        self.latest_block_header_fast().map_or_else(
+            || {
                 self.world
                     .view()
                     .consensus_keys()
@@ -31914,7 +31914,9 @@ impl State {
                     .map(|(_, record)| record.activation_height)
                     .max()
                     .unwrap_or(0)
-            })
+            },
+            |header| header.height().get(),
+        )
     }
     /// Return live explicit manifest validator bindings configured for a lane, if any.
     pub fn manifest_lane_validator_bindings(
@@ -33443,7 +33445,7 @@ impl State {
         if !stale_permission_holders.is_empty() {
             let mut tx = self.world.account_permissions.block();
             for holder in stale_permission_holders {
-                let remove_entry = tx.get_mut(&holder).map_or(false, |permissions| {
+                let remove_entry = tx.get_mut(&holder).is_some_and(|permissions| {
                     permissions.retain(|permission| !is_stale_dataspace_permission(permission));
                     permissions.is_empty()
                 });
@@ -33886,9 +33888,9 @@ impl State {
         previous: &iroha_config::parameters::actual::LaneConfig,
         current: &iroha_config::parameters::actual::LaneConfig,
         (previous_incarnations, previous_activation_heights, previous_lineage): (
-            &BTreeMap<LaneId, Hash>,
-            &BTreeMap<LaneId, u64>,
-            &BTreeMap<LaneId, LaneIncarnationLineage>,
+            &LaneIncarnations,
+            &LaneActivationHeights,
+            &LaneLineage,
         ),
         replaced_lane_ids: &BTreeSet<LaneId>,
         transition_height: u64,
@@ -34520,6 +34522,10 @@ impl State {
         self.world.validate_plain_governance_tally_capacity()
     }
 }
+type LaneIncarnations = BTreeMap<LaneId, Hash>;
+type LaneActivationHeights = BTreeMap<LaneId, u64>;
+type LaneLineage = BTreeMap<LaneId, LaneIncarnationLineage>;
+
 include!("state/lane_lifecycle_support.rs");
 include!("state/geometry_publication.rs");
 include!("state/runtime_catalog.rs");
@@ -34531,11 +34537,7 @@ fn prepare_lane_lifecycle_update(
         previous_lane_incarnations,
         previous_lane_incarnation_lineage,
         previous_lane_incarnation_activation_heights,
-    ): (
-        &BTreeMap<LaneId, Hash>,
-        &BTreeMap<LaneId, LaneIncarnationLineage>,
-        &BTreeMap<LaneId, u64>,
-    ),
+    ): (&LaneIncarnations, &LaneLineage, &LaneActivationHeights),
     network_id: &iroha_data_model::NetworkId,
     committing_header_hash: HashOf<BlockHeader>,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
@@ -37628,11 +37630,11 @@ fn autoscale_ratio_permille(value: f64) -> u64 {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(test)]
-struct AutoscaleThresholds {
-    out_latency_permille: u64,
-    in_latency_permille: u64,
-    out_utilization_permille: u64,
-    in_utilization_permille: u64,
+struct AutoscaleThresholdsPermille {
+    out_latency: u64,
+    in_latency: u64,
+    out_utilization: u64,
+    in_utilization: u64,
 }
 #[cfg(test)]
 fn autoscale_threshold_permille(value: f64) -> Option<u64> {
@@ -37645,7 +37647,7 @@ fn autoscale_threshold_permille(value: f64) -> Option<u64> {
 #[cfg(test)]
 fn autoscale_thresholds_permille(
     autoscale: &iroha_config::parameters::actual::Autoscale,
-) -> Option<AutoscaleThresholds> {
+) -> Option<AutoscaleThresholdsPermille> {
     let out_latency_permille = autoscale_threshold_permille(autoscale.scale_out_latency_ratio)?;
     let in_latency_permille = autoscale_threshold_permille(autoscale.scale_in_latency_ratio)?;
     let out_utilization_permille =
@@ -37657,11 +37659,11 @@ fn autoscale_thresholds_permille(
     {
         return None;
     }
-    Some(AutoscaleThresholds {
-        out_latency_permille,
-        in_latency_permille,
-        out_utilization_permille,
-        in_utilization_permille,
+    Some(AutoscaleThresholdsPermille {
+        out_latency: out_latency_permille,
+        in_latency: in_latency_permille,
+        out_utilization: out_utilization_permille,
+        in_utilization: in_utilization_permille,
     })
 }
 #[cfg(test)]
@@ -41637,7 +41639,7 @@ impl StateTransaction<'_, '_> {
             self.ensure_private_settlement_route_active_v1(leg.route)?;
             let authority = barrier
                 .authority_catalog
-                .authority_for_leg(barrier.manifest, index)
+                .authority_for_leg(&barrier.manifest, index)
                 .map_err(|_| PrivateSettlementGlobalStateErrorV1::PrepareBarrier)?;
             validate_private_settlement_committee_authority_v1(
                 self,
@@ -42683,10 +42685,9 @@ impl StateTransaction<'_, '_> {
     pub(crate) fn next_lifecycle_transition_seed(
         &mut self,
     ) -> Result<(iroha_crypto::Hash, u64), &'static str> {
-        let execution_identity = match self.tx_call_hash {
-            Some(call_hash) => call_hash,
-            None => self.direct_execution_identity(),
-        };
+        let execution_identity = self
+            .tx_call_hash
+            .unwrap_or_else(|| self.direct_execution_identity());
         let ordinal = self.lifecycle_transition_ordinal;
         self.lifecycle_transition_ordinal = ordinal
             .checked_add(1)
@@ -44033,14 +44034,15 @@ impl StateTransaction<'_, '_> {
                                 let ivm_cache = self.ivm_cache;
                                 let resolved = {
                                     let mut cache = ivm_cache.lock();
-                                    executor
-                                        .resolve_contract_invocation(self, invocation, &mut cache)?
+                                    crate::executor::Executor::resolve_contract_invocation(
+                                        self, invocation, &mut cache,
+                                    )?
                                 };
                                 debug_assert!(
                                     ivm_cache.try_lock().is_some(),
                                     "trigger IVM cache must be released before guest effects apply"
                                 );
-                                let outcome = executor.execute_resolved_contract_invocation(
+                                let outcome = crate::executor::Executor::execute_resolved_contract_invocation(
                                     self,
                                     authority,
                                     invocation,

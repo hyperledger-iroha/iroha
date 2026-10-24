@@ -1354,9 +1354,9 @@ impl PreparedReputationAppend {
 }
 fn append_validated_entry(
     tx: &mut StateTransaction<'_, '_>,
-    entry: ReputationJournalEntryV1,
+    entry: &ReputationJournalEntryV1,
 ) -> Result<u64, InstructionExecutionError> {
-    let prepared = prepare_validated_entry(tx, &(entry))?;
+    let prepared = prepare_validated_entry(tx, entry)?;
     let sequence = prepared.sequence;
     prepared.publish(tx);
     Ok(sequence)
@@ -1366,8 +1366,8 @@ fn prepare_validated_entry(
     entry: &ReputationJournalEntryV1,
 ) -> Result<PreparedReputationAppend, InstructionExecutionError> {
     let recorded_at_unix_ms = block_time_ms(state_transaction)?;
-    validate_entry_commit_context(state_transaction.world(), &entry, recorded_at_unix_ms)?;
-    validate_new_source_revision(state_transaction.world(), &entry)?;
+    validate_entry_commit_context(state_transaction.world(), entry, recorded_at_unix_ms)?;
+    validate_new_source_revision(state_transaction.world(), entry)?;
     let head = validate_journal_head(state_transaction.world())?;
     let committed_parent_height = u64::try_from(state_transaction.block_hashes().len())
         .map_err(|_| corrupt_state("committed reputation parent height does not fit into u64"))?;
@@ -1496,7 +1496,7 @@ fn validate_new_entry(
 fn execute_standalone_append(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
-    entry: ReputationJournalEntryV1,
+    entry: &ReputationJournalEntryV1,
     expected_kind: ReputationJournalSourceKindV1,
 ) -> Result<(), InstructionExecutionError> {
     if expected_kind == ReputationJournalSourceKindV1::StreamToken {
@@ -1513,7 +1513,7 @@ fn execute_standalone_append(
             "reputation instruction accepts only {expected_kind:?} entries"
         )));
     }
-    if exact_entry_replay(state_transaction.world(), &entry)?.is_some() {
+    if exact_entry_replay(state_transaction.world(), entry)?.is_some() {
         if &entry.recorded_by != authority {
             return Err(invalid_parameter(
                 "idempotent reputation replay authority differs from recorded_by",
@@ -1521,7 +1521,7 @@ fn execute_standalone_append(
         }
         return Ok(());
     }
-    validate_new_entry(state_transaction, authority, &entry, expected_kind)?;
+    validate_new_entry(state_transaction, authority, entry, expected_kind)?;
     append_validated_entry(state_transaction, entry)?;
     Ok(())
 }
@@ -1699,7 +1699,7 @@ pub(super) fn append_capacity_dispute_opened(
             "capacity dispute cannot form a canonical reputation entry: {error}"
         ))
     })?;
-    append_validated_entry(state_transaction, entry)?;
+    append_validated_entry(state_transaction, &(entry))?;
     Ok(())
 }
 fn resolved_dispute_replay_matches(
@@ -1895,7 +1895,7 @@ impl Execute for AppendSorafsPorReputationJournalEntry {
         execute_standalone_append(
             state_transaction,
             authority,
-            self.entry,
+            &(self.entry),
             ReputationJournalSourceKindV1::Por,
         )
     }
@@ -1906,7 +1906,7 @@ impl Execute for AppendSorafsStreamTokenReputationJournalEntry {
         authority: &AccountId,
         tx: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        stream_token_delivery::execute_append(tx, authority, self.entry)
+        stream_token_delivery::execute_append(tx, authority, &(self.entry))
     }
 }
 
@@ -2012,7 +2012,7 @@ impl Execute for ResolveSorafsCapacityDispute {
             outcome: self.outcome,
             notes: self.rationale,
         });
-        append_validated_entry(state_transaction, terminal_entry)?;
+        append_validated_entry(state_transaction, &(terminal_entry))?;
         state_transaction
             .world
             .capacity_disputes

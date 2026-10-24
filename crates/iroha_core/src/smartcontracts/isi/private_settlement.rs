@@ -228,7 +228,7 @@ mod tests {
         let (outsider, _) = gen_account_in("private-settlement-abort-outsider");
         assert!(
             private_settlement_abort_receipt_v1(
-                AbortAtomicPrivateSettlementV1::new(
+                &AbortAtomicPrivateSettlementV1::new(
                     manifest.clone(),
                     PrivateSettlementAbortReasonV1::ParticipantRejected,
                 ),
@@ -239,7 +239,7 @@ mod tests {
         );
         assert!(
             private_settlement_abort_receipt_v1(
-                AbortAtomicPrivateSettlementV1::new(
+                &AbortAtomicPrivateSettlementV1::new(
                     manifest.clone(),
                     PrivateSettlementAbortReasonV1::ParticipantRejected,
                 ),
@@ -250,7 +250,7 @@ mod tests {
         );
         assert!(
             private_settlement_abort_receipt_v1(
-                AbortAtomicPrivateSettlementV1::new(
+                &AbortAtomicPrivateSettlementV1::new(
                     manifest.clone(),
                     PrivateSettlementAbortReasonV1::Expired,
                 ),

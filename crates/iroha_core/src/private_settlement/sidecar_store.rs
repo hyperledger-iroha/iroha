@@ -4845,7 +4845,7 @@ pub(crate) mod tests {
         .expect("prepared bundle digest");
         let barrier = private_settlement_prepare_barrier_v1(
             fixture.sidecar.manifest.clone(),
-            vec![fixture.sidecar.authority.clone(), second_authority.clone()],
+            &[fixture.sidecar.authority.clone(), second_authority.clone()],
             vec![fixture.sidecar.payload.delta.clone(), second_delta.clone()],
             vec![local_prepare.clone(), second_prepare.clone()],
         )

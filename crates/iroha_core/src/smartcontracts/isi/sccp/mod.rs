@@ -109,14 +109,14 @@ pub fn is_sccp_instruction(instruction: &dyn Instruction) -> bool {
 
 /// Implement [`Execute`] for each instruction by delegating to its single entry point.
 macro_rules! delegate_execute {
-    ($($instruction:ty => $entry:path),+ $(,)?) => {$(
+    ($($instruction:ty => $entry:expr),+ $(,)?) => {$(
         impl Execute for $instruction {
             fn execute(
                 self,
                 authority: &AccountId,
                 state_transaction: &mut StateTransaction<'_, '_>,
             ) -> Result<(), Error> {
-                $entry(self, authority, state_transaction)
+                ($entry)(self, authority, state_transaction)
             }
         }
     )+};
@@ -130,10 +130,10 @@ delegate_execute! {
     RecordSccpMessage => outbound::execute_record,
     SubmitSccpInboundMessageV1 => inbound::execute_submit_inbound,
     SettleSccpV1 => settle::execute_settle,
-    SubmitSccpOutboundVoidV1 => voids::execute_submit_void,
-    ProveSccpForgedMintV1 => reconciliation::execute_prove,
-    AdvanceSccpLightClientV1 => light_clients::execute_advance,
-    ReportSccpLightClientEquivocationV1 => light_clients::execute_report_equivocation,
+    SubmitSccpOutboundVoidV1 => |instruction, authority, state| voids::execute_submit_void(&instruction, authority, state),
+    ProveSccpForgedMintV1 => |instruction, authority, state| reconciliation::execute_prove(&instruction, authority, state),
+    AdvanceSccpLightClientV1 => |instruction, authority, state| light_clients::execute_advance(&instruction, authority, state),
+    ReportSccpLightClientEquivocationV1 => |instruction, authority, state| light_clients::execute_report_equivocation(&instruction, authority, state),
 }
 
 #[cfg(test)]

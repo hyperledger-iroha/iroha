@@ -57,7 +57,7 @@ pub mod isi {
                 .world
                 .account_permissions
                 .get_mut(&holder)
-                .map_or(false, |permissions| {
+                .is_some_and(|permissions| {
                     permissions
                         .retain(|permission| !is_permission_nft_associated(permission, nft_id));
                     permissions.is_empty()
@@ -622,7 +622,7 @@ pub mod query {
         Domains(Vec<DomainId>),
         Full,
     }
-    fn nft_from_entry(entry: NftEntry<'_>) -> Nft {
+    fn nft_from_entry(entry: &NftEntry<'_>) -> Nft {
         let details = entry.value().clone().into_inner();
         Nft {
             id: entry.id().clone(),
@@ -669,9 +669,11 @@ pub mod query {
                 iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
             );
             let iter: Box<dyn Iterator<Item = Nft> + '_> = match predicate_view.plan() {
-                NftQueryPlan::Ids(ids) => {
-                    Box::new(world.nft_entries_by_ids_iter(ids).map(nft_from_entry))
-                }
+                NftQueryPlan::Ids(ids) => Box::new(
+                    world
+                        .nft_entries_by_ids_iter(ids)
+                        .map(|value| nft_from_entry(&value)),
+                ),
                 NftQueryPlan::Owners(owners) => {
                     Box::new(owners.into_iter().flat_map(move |owner| {
                         let nft_ids = crate::state::range_bounds::index_members(
@@ -679,7 +681,9 @@ pub mod query {
                             &owner,
                         )
                         .cloned();
-                        world.nft_entries_by_ids_iter(nft_ids).map(nft_from_entry)
+                        world
+                            .nft_entries_by_ids_iter(nft_ids)
+                            .map(|value| nft_from_entry(&value))
                     }))
                 }
                 NftQueryPlan::Domains(domains) => {
@@ -688,10 +692,14 @@ pub mod query {
                             .nfts_in_domain_iter(&domain)
                             .map(|entry| entry.id().clone())
                             .collect::<Vec<_>>();
-                        world.nft_entries_by_ids_iter(nft_ids).map(nft_from_entry)
+                        world
+                            .nft_entries_by_ids_iter(nft_ids)
+                            .map(|value| nft_from_entry(&value))
                     }))
                 }
-                NftQueryPlan::Full => Box::new(world.nfts_iter().map(nft_from_entry)),
+                NftQueryPlan::Full => {
+                    Box::new(world.nfts_iter().map(|value| nft_from_entry(&value)))
+                }
             };
             Ok(iter.filter(move |nft| {
                 predicate_json.as_ref().map_or_else(

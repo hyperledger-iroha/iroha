@@ -202,7 +202,7 @@ impl Fixture {
             .enumerate()
             .map(|(index, (peer, key))| {
                 let height = tip_heights[index];
-                let tip = &proofs[height as usize - 1];
+                let tip = &proofs[usize::try_from(height).expect("fixture value fits usize") - 1];
                 let body = SumeragiFinalityAttestationBody {
                     observed_at_unix_ms: 1_000_000,
                     challenge,

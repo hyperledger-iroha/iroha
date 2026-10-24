@@ -340,9 +340,9 @@ impl EntryBundleReservationTransaction<'_> {
     /// Undo a retained boundary; invalid checkpoints leave both ledgers intact.
     pub(crate) fn rollback(
         &mut self,
-        checkpoint: EntryBundleReservationCheckpoint,
+        checkpoint: &EntryBundleReservationCheckpoint,
     ) -> Result<SourceUsage, ReservationError> {
-        let usage = self.inner.rollback(checkpoint.inner)?;
+        let usage = self.inner.rollback(&checkpoint.inner)?;
         self.bindings.rollback_to(checkpoint.created_entries);
         Ok(usage)
     }

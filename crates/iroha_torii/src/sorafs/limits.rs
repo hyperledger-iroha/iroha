@@ -1,4 +1,4 @@
-//! Quota enforcement for SoraFS control-plane endpoints.
+//! Quota enforcement for `SoraFS` control-plane endpoints.
 use dashmap::DashMap;
 use iroha_logger::warn;
 use parking_lot::Mutex;
@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 const MAX_QUOTA_SUBJECTS: usize = 4_096;
-/// Categories of SoraFS operations subject to quotas.
+/// Categories of `SoraFS` operations subject to quotas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SorafsAction {
     /// Capacity declaration submission.
@@ -139,7 +139,10 @@ impl ActionLimiter {
                 break;
             }
         }
-        if window.events.len() as u32 >= self.max_events {
+        if u32::try_from(window.events.len())
+            .expect("the event window cannot exceed its u32 request budget")
+            >= self.max_events
+        {
             return false;
         }
         window.events.push_back(now);
@@ -163,7 +166,7 @@ impl ActionLimiter {
         }
     }
 }
-/// Quota enforcement covering SoraFS control-plane write endpoints.
+/// Quota enforcement covering `SoraFS` control-plane write endpoints.
 #[derive(Clone, Copy, Debug)]
 pub struct SorafsQuotaWindow {
     /// Maximum events permitted within the configured window. `None` disables the quota.
@@ -171,7 +174,7 @@ pub struct SorafsQuotaWindow {
     /// Rolling window length for quota accounting.
     pub window: Duration,
 }
-/// Consolidated quota configuration for all SoraFS control-plane actions.
+/// Consolidated quota configuration for all `SoraFS` control-plane actions.
 #[derive(Clone, Copy, Debug)]
 pub struct SorafsQuotaConfig {
     /// Quota applied to capacity declaration submissions.
@@ -232,7 +235,7 @@ impl Default for SorafsQuotaConfig {
         }
     }
 }
-/// Quota enforcement covering SoraFS control-plane write endpoints.
+/// Quota enforcement covering `SoraFS` control-plane write endpoints.
 #[derive(Clone)]
 pub struct SorafsQuotaEnforcer {
     declaration: Option<Arc<ActionLimiter>>,

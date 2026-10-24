@@ -465,7 +465,7 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
         );
         let owned = norito::to_bytes(&(
             "torii:proxy:v1",
-            process_session.clone(),
+            process_session,
             ingress_peer.clone(),
             7_u64,
             request.clone(),
@@ -613,10 +613,10 @@ async fn certified_transaction_batch_invalid_later_signature_does_not_admit_pref
         State(app.clone()),
         HeaderMap::new(),
         transaction_batch_body_for_test(
-            [&tx1, &tx2]
+            &([&tx1, &tx2]
                 .into_iter()
                 .map(iroha_version::codec::EncodeVersioned::encode_versioned)
-                .collect(),
+                .collect()),
         ),
     )
     .await

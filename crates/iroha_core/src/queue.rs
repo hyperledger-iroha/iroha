@@ -4555,7 +4555,10 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state_view: StateView,
     ) -> Result<RoutingDecision, Failure> {
-        self.push_with_lane_in_view(tx, &state_view)
+        let result = self.push_with_lane_in_view(tx, &state_view);
+        // This owned admission API releases the snapshot guards before returning.
+        drop(state_view);
+        result
     }
     /// Push transaction into queue with a shared [`StateView`] snapshot.
     ///
@@ -4602,7 +4605,10 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state_view: StateView,
     ) -> Result<(), Failure> {
-        self.push_in_view(tx, &state_view)
+        let result = self.push_in_view(tx, &state_view);
+        // This owned admission API releases the snapshot guards before returning.
+        drop(state_view);
+        result
     }
     /// Pushes an accepted transaction into the queue with a shared [`StateView`] snapshot.
     ///

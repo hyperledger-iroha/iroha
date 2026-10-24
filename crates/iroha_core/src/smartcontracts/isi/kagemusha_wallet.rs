@@ -92,13 +92,15 @@ pub(crate) fn execute_with_verifier(
             balance_scope,
         } => {
             let scheme = KagemushaWalletSchemeV1::decode_canonical(&scheme, &scheme_id)?;
-            ledger.register(wallet::Registration {
-                scheme,
-                // AssetScope consists only of a version, UUID, digest and fixed-width scale.
-                asset: decode(&asset, KAGEMUSHA_WALLET_SCHEME_MAX_BYTES_V1)?,
-                reserve,
-                balance_scope,
-            })
+            ledger.register(
+                &(wallet::Registration {
+                    scheme,
+                    // AssetScope consists only of a version, UUID, digest and fixed-width scale.
+                    asset: decode(&asset, KAGEMUSHA_WALLET_SCHEME_MAX_BYTES_V1)?,
+                    reserve,
+                    balance_scope,
+                }),
+            )
         }
         Action::InstallVerifierPack {
             asset,
@@ -178,10 +180,12 @@ pub(crate) fn execute_with_verifier(
                 KAGEMUSHA_WALLET_CERTIFICATE_SET_MAX_V1 * KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1
                     + 128,
             )?;
-            ledger.retain_credential(wallet::CredentialRecord {
-                credential,
-                certificates,
-            })
+            ledger.retain_credential(
+                &(wallet::CredentialRecord {
+                    credential,
+                    certificates,
+                }),
+            )
         }
         Action::RetainRequest(bytes) => {
             let request: KagemushaWalletRequestV1 =

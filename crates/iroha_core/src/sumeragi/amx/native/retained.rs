@@ -46,10 +46,8 @@ pub enum GraphError {
 }
 impl From<iroha_data_model::sumeragi_amx::AmxError> for GraphError {
     fn from(error: iroha_data_model::sumeragi_amx::AmxError) -> Self {
-        crate::sumeragi::amx::classified_decode_refusal(&error).map_or_else(
-            || Self::Invalid(error.to_string()),
-            |resource| Self::Codec(resource),
-        )
+        crate::sumeragi::amx::classified_decode_refusal(&error)
+            .map_or_else(|| Self::Invalid(error.to_string()), Self::Codec)
     }
 }
 fn codec_clone_error(error: norito::core::DecodeAttemptError) -> GraphError {

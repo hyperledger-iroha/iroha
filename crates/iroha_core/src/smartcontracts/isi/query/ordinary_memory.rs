@@ -1401,7 +1401,8 @@ pub(super) fn preflight_server_singular_source_materialization(
                 charge(manifest, &mut remaining)?;
             }
         }
-        SingularQueryBox::FindAbiVersion(_) => {}
+        SingularQueryBox::FindAbiVersion(_) | SingularQueryBox::FindOracleProviderStatsByKey(_) => {
+        }
         SingularQueryBox::FindAssetById(query) => {
             if let Ok(asset) = world.asset(query.asset_id()) {
                 charge(asset.id(), &mut remaining)?;
@@ -1467,7 +1468,6 @@ pub(super) fn preflight_server_singular_source_materialization(
                 charge(record, &mut remaining)?;
             }
         }
-        SingularQueryBox::FindOracleProviderStatsByKey(_) => {}
         SingularQueryBox::FindLatestDefiOracleAttestation(query) => {
             if let Some(record) = world
                 .defi_oracle_attestations()

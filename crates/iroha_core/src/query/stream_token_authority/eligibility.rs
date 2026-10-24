@@ -26,14 +26,14 @@ use sorafs_manifest::signer::stream_token::stream_token_binding_digest_v1;
 fn has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
-    permission: Permission,
+    permission: &Permission,
 ) -> bool {
     world.accounts().get(authority).is_some()
-        && (world.account_contains_inherent_permission(authority, &permission)
+        && (world.account_contains_inherent_permission(authority, permission)
             || world
                 .account_roles_iter(authority)
                 .filter_map(|id| world.roles().get(id))
-                .any(|role| role.permissions().any(|token| token == &permission)))
+                .any(|role| role.permissions().any(|token| token == permission)))
 }
 
 pub fn authorized(
@@ -47,10 +47,10 @@ pub fn authorized(
     let can_operate = has_permission(
         world,
         authority,
-        CanOperateSorafsStreamToken {
+        &(CanOperateSorafsStreamToken {
             provider_id: provider,
         }
-        .into(),
+        .into()),
     );
     match action {
         Action::Reserve(_) | Action::Complete(_) => is_owner && can_operate,
@@ -59,10 +59,10 @@ pub fn authorized(
                 || has_permission(
                     world,
                     authority,
-                    CanManageSorafsStreamTokenCustody {
+                    &(CanManageSorafsStreamTokenCustody {
                         provider_id: provider,
                     }
-                    .into(),
+                    .into()),
                 )
         }
         Action::Check(check) => {
@@ -72,18 +72,18 @@ pub fn authorized(
                 && has_permission(
                     world,
                     &check.expected_operator,
-                    CanOperateSorafsStreamToken {
+                    &(CanOperateSorafsStreamToken {
                         provider_id: provider,
                     }
-                    .into(),
+                    .into()),
                 )
                 && has_permission(
                     world,
                     authority,
-                    CanCheckSorafsStreamToken {
+                    &(CanCheckSorafsStreamToken {
                         provider_id: provider,
                     }
-                    .into(),
+                    .into()),
                 )
         }
     }

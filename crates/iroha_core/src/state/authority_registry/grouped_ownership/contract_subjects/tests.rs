@@ -173,7 +173,7 @@ fn exact_reverse_rejects_missing_foreign_and_wrong_addresses_in_both_images() {
                 block.commit();
             }
             assert!(
-                matches!(check(&world, 100_000), Err(GroupedOwnershipError::Corrupt { image, .. }) if *image == if prior {GroupImage::Predecessor} else {GroupImage::Current})
+                matches!(check(&world, 100_000), Err(GroupedOwnershipError::Corrupt { image, .. }) if image == if prior {GroupImage::Predecessor} else {GroupImage::Current})
             );
         }
     }

@@ -1442,7 +1442,7 @@ fn prepare_owned_test_mint(
             &ALICE_ID,
             call,
             Hash::new(b"quantity-write-owner-regression"),
-            &(vec![FastpqExecutionEffectKindV1::Mint(change)]),
+            &[FastpqExecutionEffectKindV1::Mint(change)],
         )
         .expect("retained original source admits exact next mint")
 }

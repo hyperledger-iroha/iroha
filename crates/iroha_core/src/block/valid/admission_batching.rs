@@ -133,10 +133,10 @@ fn validate_admission(
         metrics,
     )
 }
-fn assert_invalid_signature(result: Result<(), BlockValidationError>) {
+fn assert_invalid_signature(result: &Result<(), BlockValidationError>) {
     assert!(
         matches!(result, Err(BlockValidationError::TransactionAccept(
-            AcceptTransactionFail::SignatureVerification(ref fail)
+            AcceptTransactionFail::SignatureVerification(fail)
         )) if fail.code() == SignatureRejectionCode::InvalidSignature),
         "admission must reject the invalid transaction signature, got {result:?}"
     );
@@ -481,7 +481,7 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
         .expect_err("second altered transaction signature must fail independently");
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx1, tx2]);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
 }
 /// BLS multi-message verification: one of two distinct payloads is signed by a wrong key
 /// and should trigger an exact-verification failure plus telemetry bookkeeping.
@@ -497,7 +497,7 @@ fn bls_multi_message_verification_fails_and_counts() {
     let tx_bad = mk_tx_with_creation_time(&network_id, &authority, "m2", ct + 1, &bad, &good);
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx_valid, tx_bad]);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
     #[cfg(feature = "telemetry")]
     {
         let ((same_success, same_failure), (multi_success, multi_failure)) = state
@@ -528,7 +528,7 @@ fn bls_batch_bisection_finds_bad_sig() {
     let leader = good.clone();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
 }
 #[test]
 fn mldsa_batch_bisection_finds_bad_sig() {
@@ -538,7 +538,7 @@ fn mldsa_batch_bisection_finds_bad_sig() {
     let leader = checked_random_keypair();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
 }
 #[test]
 fn ed25519_batch_bisection_finds_bad_sig() {
@@ -547,7 +547,7 @@ fn ed25519_batch_bisection_finds_bad_sig() {
     let leader = checked_random_keypair();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
 }
 #[test]
 fn secp256k1_batch_bisection_finds_bad_sig() {
@@ -556,7 +556,7 @@ fn secp256k1_batch_bisection_finds_bad_sig() {
     let leader = checked_random_keypair();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
 }
 #[test]
 fn rejects_transaction_signed_with_disallowed_algorithm() {
@@ -596,7 +596,7 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
         &crypto_cfg,
         &time_source,
     ) {
-        Err(AcceptTransactionFail::SignatureVerification(fail)) => {
+        Err(AcceptTransactionFail::SignatureVerification(ref fail)) => {
             assert_eq!(fail.code(), SignatureRejectionCode::AlgorithmNotPermitted);
             assert!(
                 fail.detail.contains("not permitted"),

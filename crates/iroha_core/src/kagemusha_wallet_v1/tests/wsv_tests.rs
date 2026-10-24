@@ -117,7 +117,7 @@ fn transact<T>(
 }
 fn register(state: &mut State, memory: &Memory, height: u64) -> Result<()> {
     transact(state, height, |tx| {
-        wsv::WsvLedger::new(tx, &memory.registration.reserve)?.register(memory.registration.clone())
+        wsv::WsvLedger::new(tx, &memory.registration.reserve)?.register(&memory.registration)
     })
 }
 fn balance(state: &State, memory: &Memory, owner: &AccountId) -> Quantity {
@@ -151,7 +151,7 @@ fn registration_requires_dedicated_asset_permission_and_reserve_consent() {
             tx,
             &memory.authority
         )?
-        .register(memory.registration.clone()))
+        .register(&memory.registration))
         .is_err()
     );
     transact(&mut state, 1, |tx| {
@@ -1301,10 +1301,12 @@ fn real_fee_payout_requires_retained_history_and_never_requires_receive() {
     let history = memory.fee_inputs(&claim).unwrap();
     transact(&mut state, 2, |tx| {
         let mut ledger = wsv::WsvLedger::new(tx, &memory.authority)?;
-        ledger.retain_credential(CredentialRecord {
-            credential: history.payer,
-            certificates: history.certificates.clone(),
-        })?;
+        ledger.retain_credential(
+            &(CredentialRecord {
+                credential: history.payer,
+                certificates: history.certificates.clone(),
+            }),
+        )?;
         ledger.retain_request(history.request.clone())
     })
     .unwrap();
@@ -1356,7 +1358,7 @@ fn corrupted_reserve_owner_and_mutated_registration_are_rejected() {
             tx,
             &memory.registration.reserve
         )?
-        .register(changed))
+        .register(&changed))
         .is_err()
     );
     transact(&mut state, 2, |tx| {
@@ -1603,7 +1605,7 @@ fn private_root_load_rejects_before_debit_or_receipt_creation() {
         )));
         wsv::WsvLedger::new(tx, &memory.registration.reserve)
             .unwrap()
-            .register(memory.registration.clone())
+            .register(&memory.registration)
             .unwrap();
         tx.world.kagemusha_wallet_ledger.insert(
             storage::key(storage::WALLET, scheme, wallet),
@@ -1718,7 +1720,7 @@ fn ordinary_load_receipt_is_recovered_after_growth_and_local_qc_loss() {
         )));
         wsv::WsvLedger::new(tx, &memory.registration.reserve)
             .unwrap()
-            .register(memory.registration.clone())
+            .register(&memory.registration)
             .unwrap();
         tx.world.kagemusha_wallet_ledger.insert(
             storage::key(storage::WALLET, scheme, wallet),

@@ -84,7 +84,7 @@ fn atomic_state_in_scope(
         u32::try_from(count)
             .expect("bounded movement count")
             .max(16),
-        Quantity::from(10_u32),
+        &(Quantity::from(10_u32)),
     )
 }
 fn atomic_state_in_scope_with_source_delta_limit(
@@ -92,7 +92,7 @@ fn atomic_state_in_scope_with_source_delta_limit(
     scope: AssetBalanceScope,
     policy: AssetBalancePolicy,
     max_deltas: u32,
-    source_balance: Quantity,
+    source_balance: &Quantity,
 ) -> (State, Vec<AtomicSettlementMovement>, AssetDefinitionId) {
     let domain_id = DomainId::try_new("atomic", "universal").expect("domain");
     let definition =
@@ -335,7 +335,7 @@ fn atomic_settlement_single_global_payment_credits_250000_units_once() {
         AssetBalanceScope::Global,
         AssetBalancePolicy::Global,
         16,
-        Quantity::from(500_000_u32),
+        &(Quantity::from(500_000_u32)),
     );
     movements[0].quantity = Quantity::from(250_000_u32);
     let source = movements[0].source.clone();
@@ -695,7 +695,7 @@ fn atomic_settlement_source_delta_refusal_preserves_every_observable_effect() {
         AssetBalanceScope::Global,
         AssetBalancePolicy::Global,
         254,
-        Quantity::from(10_u32),
+        &(Quantity::from(10_u32)),
     );
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));

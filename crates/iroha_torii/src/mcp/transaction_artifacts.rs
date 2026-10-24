@@ -149,8 +149,7 @@ impl TransactionStructuralSummary {
             authority: payload.authority().to_string(),
             network_id: payload
                 .network_id()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "genesis".to_owned()),
+                .map_or_else(|| "genesis".to_owned(), ToString::to_string),
             creation_time_ms: payload.creation_time_ms,
             time_to_live_ms: payload.time_to_live_ms.map(Into::into),
             has_nonce: payload.nonce.is_some(),
@@ -339,7 +338,7 @@ pub struct PreparedTransactionArtifact {
 impl PreparedTransactionArtifact {
     fn from_builder(
         expected_network_id: &NetworkId,
-        builder: TransactionBuilder,
+        builder: &TransactionBuilder,
     ) -> Result<Self, TransactionArtifactError> {
         ensure_expected_network(expected_network_id, builder.payload())?;
         let canonical_payload_bytes = builder.encode_payload();
@@ -519,7 +518,7 @@ pub fn prepare_transaction_payload(
     ensure_expected_network(expected_network_id, &payload)?;
     let builder = TransactionBuilder::from_payload(payload)
         .map_err(|error| TransactionArtifactError::InvalidTransactionPayload(error.to_string()))?;
-    PreparedTransactionArtifact::from_builder(expected_network_id, builder)
+    PreparedTransactionArtifact::from_builder(expected_network_id, &(builder))
 }
 
 /// Decode and canonicalize exact bytes previously emitted by
@@ -529,7 +528,7 @@ pub fn prepare_transaction_payload_bytes(
     payload_bytes: &[u8],
 ) -> Result<PreparedTransactionArtifact, TransactionArtifactError> {
     let builder = decode_canonical_payload_builder(payload_bytes)?;
-    PreparedTransactionArtifact::from_builder(expected_network_id, builder)
+    PreparedTransactionArtifact::from_builder(expected_network_id, &(builder))
 }
 
 fn decode_canonical_payload_builder(

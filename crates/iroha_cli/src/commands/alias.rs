@@ -349,7 +349,7 @@ fn reject_secret_fields(value: &norito::json::Value, label: &str) -> Result<()> 
             for (key, value) in fields {
                 let normalized: String = key
                     .chars()
-                    .filter(|character| character.is_ascii_alphanumeric())
+                    .filter(char::is_ascii_alphanumeric)
                     .flat_map(char::to_lowercase)
                     .collect();
                 let forbidden = normalized.contains("privatekey")
@@ -473,7 +473,7 @@ fn read_onboarding_token_file(path: &Path) -> Result<String> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read onboarding token file `{}`", path.display()))?;
     let raw = String::from_utf8(bytes).wrap_err("onboarding token file must contain UTF-8")?;
-    let token = raw.trim_end_matches(|character| matches!(character, '\r' | '\n'));
+    let token = raw.trim_end_matches(['\r', '\n']);
     if token.is_empty() {
         return Err(eyre!("onboarding token file must not be empty"));
     }

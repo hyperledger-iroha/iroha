@@ -20,7 +20,7 @@ mod owner_prf_mounted_tests {
             EnabledFeatures::new(&["app_api"]),
         )
         .expect("current application compute route catalog");
-        add_authenticated_application_compute_routes(&mut builder, app.clone(), body_limit);
+        add_authenticated_application_compute_routes(&mut builder, &(app), body_limit);
         let (router, _) = builder
             .finish()
             .expect("all compute routes retain declared authentication");

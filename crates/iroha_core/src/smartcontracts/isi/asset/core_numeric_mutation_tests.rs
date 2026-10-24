@@ -1760,10 +1760,10 @@ fn prepared_numeric_transfer_rejects_stale_balance_without_applying() {
     let error = super::super::isi::apply_prepared_numeric_transfer_after_source_credit_for_test(
         &mut stx,
         &ALICE_ID,
-        source_asset_id.clone(),
+        &(source_asset_id),
         destination_asset_id.clone(),
         Quantity::from(3_u32),
-        Quantity::one(),
+        &(Quantity::one()),
     )
     .expect_err("stale prepared movement must fail closed");
     assert!(error.to_string().contains("source balance changed"));

@@ -248,11 +248,11 @@ pub fn encode_usage(key: &RetailDailyUsageKeyV1, amount: &Quantity) -> Result<Ve
 
 pub fn put_usage(
     world: &mut WorldTransaction<'_, '_>,
-    key: RetailDailyUsageKeyV1,
-    amount: Quantity,
+    key: &RetailDailyUsageKeyV1,
+    amount: &Quantity,
 ) -> Result<(), String> {
-    let bytes = encode_usage(&key, &amount)?;
-    world.smart_contract_state.insert(usage_key(&key), bytes);
+    let bytes = encode_usage(key, amount)?;
+    world.smart_contract_state.insert(usage_key(key), bytes);
     Ok(())
 }
 

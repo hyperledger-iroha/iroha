@@ -1678,7 +1678,7 @@ mod tests {
             fetch_size: FetchSize::new(NonZeroU64::new(1)),
             ..QueryParams::default()
         };
-        let limits = trigger_test_limits(16_384);
+        let limits = fi_context_test_limits(16_384);
         let (mut rows, execution_stats) = asset_fi_receipt::collect(
             &query,
             &params,
@@ -1990,15 +1990,16 @@ mod tests {
         };
         let owner = iroha_test_samples::ALICE_ID.clone();
         let definition: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().unwrap();
+        let domain = iroha_model_base::domain::DomainId::try_new("receipt", "universal").unwrap();
         let state = State::new_for_testing(
             World::with(
-                [],
+                [Domain::new(domain.clone()).build(&owner)],
                 [Account::new(owner.clone()).build(&owner)],
                 [AssetDefinition::numeric(
                     definition.clone(),
                     "DS",
                     AssetBalancePolicy::DataspaceRestricted,
-                    None,
+                    Some(domain),
                 )
                 .build(&owner)],
             ),
@@ -2019,15 +2020,34 @@ mod tests {
             fetch_size: FetchSize::new(std::num::NonZeroU64::new(1)),
             ..QueryParams::default()
         };
+        // A valid restricted definition must be refused before its private row is read.
+        let key = crate::state::asset_fi::receipt::key(
+            &query.asset_definition_id,
+            &query.account_id,
+            &query.execution_call_hash,
+            query.transcript_index,
+        );
+        {
+            let mut world = state.world.block();
+            world.smart_contract_state.insert(key, vec![0; 16_385]);
+            world.commit();
+        }
+        let refused = asset_fi_receipt::collect(
+            &query,
+            &params,
+            OrdinaryCursorMode::Ephemeral,
+            fi_context_test_limits(16_384),
+            &state.view(),
+        );
+        assert!(refused.is_err());
         assert!(
-            asset_fi_receipt::collect(
-                &query,
-                &params,
-                OrdinaryCursorMode::Ephemeral,
-                trigger_test_limits(16_384),
-                &state.view()
-            )
-            .is_err()
+            matches!(
+                refused,
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    Error::Conversion(message)
+                )) if message == "FI receipt lookup requires a Global asset definition"
+            ),
+            "non-Global definition is refused before the oversized private receipt is read"
         );
     }
 

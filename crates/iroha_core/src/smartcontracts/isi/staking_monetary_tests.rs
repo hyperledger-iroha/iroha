@@ -619,13 +619,13 @@ fn final_unbond_rejects_mismatched_share_identity_and_rolls_back_transaction() {
     );
     assert_eq!(
         stx.world.public_lane_stake_reserves.get(&plan.source_asset),
-        Some(&quantity_sub(reserve_before.unwrap(), request.amount.clone()).unwrap()),
+        Some(&quantity_sub(&(reserve_before.unwrap()), &(request.amount.clone())).unwrap()),
     );
     assert_eq!(
         stx.world.assets.get(&plan.source_asset).unwrap().as_ref(),
         &quantity_sub(
-            balances_before.0.unwrap().as_ref().clone(),
-            request.amount.clone()
+            &(balances_before.0.unwrap().as_ref().clone()),
+            &(request.amount.clone())
         )
         .unwrap(),
     );
@@ -635,7 +635,11 @@ fn final_unbond_rejects_mismatched_share_identity_and_rolls_back_transaction() {
             .get(&plan.destination_asset)
             .unwrap()
             .as_ref(),
-        &quantity_add(balances_before.1.unwrap().as_ref().clone(), request.amount).unwrap(),
+        &quantity_add(
+            &(balances_before.1.unwrap().as_ref().clone()),
+            &(request.amount)
+        )
+        .unwrap(),
     );
 }
 

@@ -95,11 +95,11 @@ fn onboarding_readiness_defers_original_policy_read_without_publishing_blocked_r
 fn onboarding_permission_target_matches_canonical_tokens_and_defers_local_construction() {
     use iroha_executor_data_model::permission::dpn::DpnAdmin;
     let unit = Permission::from(DpnAdmin);
-    assert_eq!(torii_permission_target(DpnAdmin).unwrap(), unit);
+    assert_eq!(torii_permission_target(&(DpnAdmin)).unwrap(), unit);
     // Even the unit token retains a four-byte canonical output before its Arc owner.
     let refused = norito::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
-        || torii_permission_target(DpnAdmin),
+        || torii_permission_target(&(DpnAdmin)),
     );
     assert!(
         matches!(
@@ -110,18 +110,18 @@ fn onboarding_permission_target_matches_canonical_tokens_and_defers_local_constr
         ),
         "{refused:?}"
     );
-    assert_eq!(torii_permission_target(DpnAdmin).unwrap(), unit);
+    assert_eq!(torii_permission_target(&(DpnAdmin)).unwrap(), unit);
     let key_pair = checked_torii_test_ed25519_keypair(0x97, "derive onboarding token fixture key");
     let authority = AccountId::new(key_pair.public_key().clone());
     let token = CanEnrollFeeSponsorProgram {
         program_id: FeeSponsorProgramId::new(authority, "original".parse().unwrap()),
     };
     let expected = Permission::from(token.clone());
-    assert_eq!(torii_permission_target(token.clone()).unwrap(), expected);
+    assert_eq!(torii_permission_target(&(token)).unwrap(), expected);
     let original = token.clone();
     let refused = norito::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
-        || torii_permission_target(original),
+        || torii_permission_target(&(original)),
     );
     assert!(
         matches!(
@@ -132,7 +132,7 @@ fn onboarding_permission_target_matches_canonical_tokens_and_defers_local_constr
         ),
         "{refused:?}"
     );
-    assert_eq!(torii_permission_target(token).unwrap(), expected);
+    assert_eq!(torii_permission_target(&(token)).unwrap(), expected);
 }
 #[test]
 fn onboarding_account_diagnostic_borrows_retained_keys_without_decode_admission() {
@@ -402,7 +402,7 @@ fn onboarding_alias_credential_domains_accept_exact_direct_permissions() {
     let hbl = DomainId::try_new("hbl", "sbp").expect("HBL domain");
     let ubl = DomainId::try_new("ubl", "sbp").expect("UBL domain");
     let fee_sponsor_program_id = onboarding_fee_sponsor_program_for_test(&authority);
-    register_fee_sponsor_program_for_test(&app, fee_sponsor_program_id.clone());
+    register_fee_sponsor_program_for_test(&app, &(fee_sponsor_program_id));
     grant_account_permissions_for_test(
         &app,
         &authority,
@@ -448,7 +448,7 @@ fn onboarding_alias_credential_domains_accept_exact_role_permissions() {
                 &fee_sponsor_program_id,
             )]),
     );
-    register_fee_sponsor_program_for_test(&app, fee_sponsor_program_id.clone());
+    register_fee_sponsor_program_for_test(&app, &(fee_sponsor_program_id));
     let mut signer = onboarding_alias_signer_for_test(&key_pair);
     signer.fee_sponsor_program_id = Some(fee_sponsor_program_id);
     signer
@@ -496,7 +496,7 @@ fn onboarding_alias_fee_sponsor_rejects_missing_or_mismatched_enrollment_permiss
     ];
     for (label, enrollment) in cases {
         let app = onboarding_alias_test_app(&authority, &sponsor_account);
-        register_fee_sponsor_program_for_test(&app, fee_sponsor_program_id.clone());
+        register_fee_sponsor_program_for_test(&app, &(fee_sponsor_program_id));
         let mut permissions = onboarding_credential_domain_permissions(&hbl).to_vec();
         permissions.extend(enrollment);
         grant_account_permissions_for_test(&app, &authority, permissions);
@@ -1288,7 +1288,7 @@ async fn fee_sponsor_program_by_id_returns_the_exact_on_chain_program() {
         FeeSponsorProgramId::new(sponsor.clone(), "wallet_fx".parse().expect("program name"));
     let program = FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&sponsor));
-    register_fee_sponsor_program_for_test(&app, program_id.clone());
+    register_fee_sponsor_program_for_test(&app, &(program_id));
     let body = norito::json::to_vec(&FeeSponsorProgramByIdRequest::new(&program_id))
         .expect("encode sponsor program request");
     let method = axum::http::Method::POST;
@@ -3454,7 +3454,7 @@ async fn alias_lookup_by_account_rejects_noncanonical_account_or_scope() {
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     let account_body = norito::json::to_vec(&routing::AliasLookupByAccountRequestDto {
-        account_id: format!(" {}", authority),
+        account_id: format!(" {authority}"),
         dataspace: None,
         domain: None,
     })

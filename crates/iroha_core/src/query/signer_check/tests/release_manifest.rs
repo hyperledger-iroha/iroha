@@ -131,8 +131,10 @@ fn role13_check_binding_rejects_purpose_floor_signed_body_and_non_check_substitu
             &state,
             &mut round,
             NativeCustodyCheckRefV1::ReleaseManifest(&instruction),
-            state.view().chain_id().as_ref(),
-            *state.network_id_ref().as_bytes(),
+            (
+                state.view().chain_id().as_ref(),
+                *state.network_id_ref().as_bytes()
+            ),
             &AccountId::new(key(2).public_key().clone()),
             floor,
             sign(&state, substituted.into(), 2, 3_000),

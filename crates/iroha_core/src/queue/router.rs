@@ -3714,9 +3714,7 @@ enum AccountPermissionHolderTarget<'account> {
     Abort,
 }
 fn account_permission_holder_routing_target(tx: &dyn TransactionRoutingView) -> Option<&AccountId> {
-    let Some(executable) = transaction_executable(tx) else {
-        return None;
-    };
+    let executable = transaction_executable(tx)?;
     match executable {
         Executable::Instructions(instructions) => account_permission_holder_from_instructions(
             instructions.iter().map(|instruction| &**instruction),
@@ -7948,7 +7946,7 @@ fn resolve_optional_dataspace_target<T>(
     value: Option<T>,
     resolve: impl FnOnce(T) -> Result<Option<DataSpaceId>, RoutingResolveError>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
-    value.map_or_else(|| Ok(None), |value| resolve(value))
+    value.map_or_else(|| Ok(None), resolve)
 }
 fn dataspace_scoped_permission_target(
     permission: &Permission,
@@ -13503,7 +13501,7 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-        bind_asset_definition_alias(&mut state, &(&asset_definition), "pkr#paynet");
+        bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         let state_view = state.view();
         assert_eq!(
             router
@@ -13562,7 +13560,7 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-        bind_asset_definition_alias(&mut state, &(&asset_definition), "pkr#paynet");
+        bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         let state_view = state.view();
         assert_eq!(
             router
@@ -13630,7 +13628,7 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-        bind_asset_definition_alias(&mut state, &(&asset_definition), "pkr#paynet");
+        bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         let state_view = state.view();
         assert_eq!(
             router
@@ -13868,8 +13866,8 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-        bind_asset_definition_alias(&mut state, &(&delivery_definition), "bond#paynet");
-        bind_asset_definition_alias(&mut state, &(&payment_definition), "cash#paynet");
+        bind_asset_definition_alias(&mut state, &delivery_definition, "bond#paynet");
+        bind_asset_definition_alias(&mut state, &payment_definition, "cash#paynet");
         let state_view = state.view();
         assert_eq!(
             router
@@ -14968,7 +14966,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog,
         );
-        bind_asset_definition_alias(&mut state, &(&opaque_asset_definition), "pkr#sbp");
+        bind_asset_definition_alias(&mut state, &opaque_asset_definition, "pkr#sbp");
         add_unlabeled_account_with_alias(
             &mut state,
             &sender_id,
@@ -15641,7 +15639,7 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-        bind_asset_definition_alias(&mut state, &(&asset_definition), "pkr#paynet");
+        bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
         assert_eq!(
             router
@@ -16091,7 +16089,7 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-        bind_asset_definition_alias(&mut state, &(&asset_definition), "pkr#paynet");
+        bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
         let view = state.view();
         assert_eq!(
@@ -16142,7 +16140,7 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-        bind_asset_definition_alias(&mut state, &(&asset_definition), "pkr#paynet");
+        bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
         let view = state.view();
         assert_eq!(

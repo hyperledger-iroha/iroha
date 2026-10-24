@@ -516,6 +516,25 @@ fn validate_borrowed_source(source: &LaneManifestSourceSnapshot) -> Result<(), n
     use crate::state::authority_registry::policy_borrowed::{
         Raw, Ref, Seq, hash_json, hash_payload, record,
     };
+    fn check<T: norito::json::JsonSerialize>(
+        valid: bool,
+        digest: &[u8; 32],
+        parsed: Result<&T, &String>,
+    ) -> Result<(), norito::Error> {
+        if valid != parsed.is_ok() {
+            return Err(norito::Error::Message(
+                "lane manifest source validity differs from its retained body".into(),
+            ));
+        }
+        if let Ok(parsed) = parsed
+            && hash_json(parsed)? != *digest
+        {
+            return Err(norito::Error::Message(
+                "lane manifest source digest differs from its retained canonical JSON".into(),
+            ));
+        }
+        Ok(())
+    }
     if source.pending_registry.is_some() {
         return Err(norito::Error::Message(
             "lane manifest source has not been materialized for a catalog".into(),
@@ -545,25 +564,6 @@ fn validate_borrowed_source(source: &LaneManifestSourceSnapshot) -> Result<(), n
         return Err(norito::Error::Message(
             "lane manifest source digest does not match its contents".into(),
         ));
-    }
-    fn check<T: norito::json::JsonSerialize>(
-        valid: bool,
-        digest: &[u8; 32],
-        parsed: Result<&T, &String>,
-    ) -> Result<(), norito::Error> {
-        if valid != parsed.is_ok() {
-            return Err(norito::Error::Message(
-                "lane manifest source validity differs from its retained body".into(),
-            ));
-        }
-        if let Ok(parsed) = parsed
-            && hash_json(parsed)? != *digest
-        {
-            return Err(norito::Error::Message(
-                "lane manifest source digest differs from its retained canonical JSON".into(),
-            ));
-        }
-        Ok(())
     }
     for value in source.manifests_by_alias.values() {
         check(

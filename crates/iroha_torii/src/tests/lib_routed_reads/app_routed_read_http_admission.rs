@@ -188,8 +188,7 @@ mod app_routed_read_http_admission_tests {
                 entry.decoder,
                 AppRoutedReadHttpDecoder::None
                     | AppRoutedReadHttpDecoder::Query("ListQuery")
-                    | AppRoutedReadHttpDecoder::Json("ListQuery")
-                    | AppRoutedReadHttpDecoder::Json("AccountInspectionRequest")
+                    | AppRoutedReadHttpDecoder::Json("ListQuery" | "AccountInspectionRequest")
             ));
             assert!(
                 APP_ROUTED_READ_HTTP_ENDPOINTS_V1
@@ -563,14 +562,14 @@ mod app_routed_read_http_admission_tests {
 
         let response_only = tokio::sync::Semaphore::new(1);
         let response_only = Arc::new(response_only).acquire_owned().await.unwrap();
-        admission._fanout_memory = Some(QueryFanoutMemoryReservation::new(response_only));
+        admission.fanout_memory = Some(QueryFanoutMemoryReservation::new(response_only));
         assert!(matches!(
             admission.response_body_budget(),
             Err(Error::Query(
                 iroha_data_model::ValidationFail::InternalError(_)
             ))
         ));
-        admission._fanout_memory = None;
+        admission.fanout_memory = None;
         assert!(admission.response_body_budget().is_err());
     }
 

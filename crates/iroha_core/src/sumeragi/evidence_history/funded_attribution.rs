@@ -136,7 +136,7 @@ impl FundedOffenders {
     }
 
     #[allow(unsafe_code)]
-    pub(super) fn into_attribution(self, fields: AttributionFields) -> FundedEvidenceAttribution {
+    pub(super) fn into_attribution(self, fields: &AttributionFields) -> FundedEvidenceAttribution {
         // SAFETY: the closed mapping only moves this exact vector into its canonical
         // field. Scalar metadata copies create no storage, replacement or escape.
         FundedEvidenceAttribution(unsafe {

@@ -28,7 +28,7 @@ impl Default for FilesystemConfig {
 }
 
 /// Return the CLI default Connect queue root.
-pub(crate) fn default_connect_queue_root() -> PathBuf {
+pub fn default_connect_queue_root() -> PathBuf {
     let mut base = if cfg!(windows) {
         env::var_os("USERPROFILE").map(PathBuf::from)
     } else {
@@ -69,14 +69,14 @@ impl FilesystemConfig {
         if let Some(mut connect) = take_section(table, "connect")? {
             if let Some(value) = connect.remove("queue_root") {
                 config.connect_queue_root =
-                    take_nonempty_path(value, "connect.queue_root", source_path)?;
+                    take_nonempty_path(&value, "connect.queue_root", source_path)?;
             }
             reject_unknown_keys("connect", &connect)?;
         }
         if let Some(mut soracloud) = take_section(table, "soracloud")? {
             if let Some(value) = soracloud.remove("http_witness_file") {
                 config.soracloud_http_witness_file = Some(take_nonempty_path(
-                    value,
+                    &value,
                     "soracloud.http_witness_file",
                     source_path,
                 )?);
@@ -88,7 +88,7 @@ impl FilesystemConfig {
 }
 
 /// Load an explicitly inherited configuration without reopening its provenance path or using SDK environment overrides.
-pub(crate) fn load_inherited(
+pub fn load_inherited(
     fd: u32,
     source_path: &Path,
 ) -> Result<(iroha::config::Config, FilesystemConfig)> {
@@ -139,7 +139,7 @@ pub(crate) fn load_inherited(
 
 /// Read a bounded owner-private regular inherited descriptor without following a filesystem path.
 #[cfg(unix)]
-pub(crate) fn read_inherited_private_file(
+pub fn read_inherited_private_file(
     fd: u32,
     maximum: u64,
     label: &str,
@@ -205,11 +205,7 @@ pub(crate) fn read_inherited_private_file(
 
 /// Descriptor input is a Unix-only CLI capability.
 #[cfg(not(unix))]
-pub(crate) fn read_inherited_private_file(
-    _: u32,
-    _: u64,
-    _: &str,
-) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+pub fn read_inherited_private_file(_: u32, _: u64, _: &str) -> Result<zeroize::Zeroizing<Vec<u8>>> {
     Err(eyre!("inherited client inputs require Unix descriptors"))
 }
 
@@ -219,7 +215,7 @@ pub(crate) fn read_inherited_private_file(
     unsafe_code,
     reason = "fcntl F_DUPFD_CLOEXEC validates an untrusted raw descriptor and atomically duplicates it before constructing an owned File"
 )]
-pub(crate) fn duplicate_inherited_descriptor(fd: u32) -> Result<std::fs::File> {
+pub fn duplicate_inherited_descriptor(fd: u32) -> Result<std::fs::File> {
     use std::os::fd::FromRawFd as _;
     // Native ABI constants from Linux fcntl.h and the Darwin SDK sys/fcntl.h.
     #[cfg(target_os = "linux")]
@@ -277,7 +273,7 @@ fn take_section(table: &mut toml::Table, name: &str) -> Result<Option<toml::Tabl
         .transpose()
 }
 
-fn take_nonempty_path(value: toml::Value, parameter: &str, source_path: &Path) -> Result<PathBuf> {
+fn take_nonempty_path(value: &toml::Value, parameter: &str, source_path: &Path) -> Result<PathBuf> {
     let raw = value
         .as_str()
         .ok_or_else(|| eyre!("`{parameter}` must be a string path"))?;

@@ -345,7 +345,11 @@ fn derive_lifecycle_lane_incarnations(
     committing_header_hash: HashOf<BlockHeader>,
     previous_catalog: &LaneCatalog,
     updated_catalog: &LaneCatalog,
-    (previous_incarnations, previous_activation_heights, previous_lineage): (&BTreeMap<LaneId, Hash>, &BTreeMap<LaneId, u64>, &BTreeMap<LaneId, LaneIncarnationLineage>),
+    (previous_incarnations, previous_activation_heights, previous_lineage): (
+        &LaneIncarnations,
+        &LaneActivationHeights,
+        &LaneLineage,
+    ),
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
 ) -> Result<BTreeMap<LaneId, Hash>, LaneLifecycleError> {
     validate_lane_incarnation_lineage(

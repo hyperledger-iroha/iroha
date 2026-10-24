@@ -8,8 +8,8 @@ use iroha_core::{
 };
 use iroha_data_model::prelude::AccountId;
 
-/// Apply original signed genesis before any StateExecutor retains the fixture State.
-pub(crate) fn certified_state(world: World) -> State {
+/// Apply original signed genesis before any `StateExecutor` retains the fixture State.
+pub fn certified_state(world: World) -> State {
     let config = TestChainConfig::new(world, 0);
     let account = AccountId::new(config.genesis_key.public_key().clone());
     let mode = config.consensus_mode;

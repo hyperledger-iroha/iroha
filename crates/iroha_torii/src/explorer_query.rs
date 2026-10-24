@@ -186,6 +186,18 @@ fn extract_selectors(
     names: &[&str],
     selectors: &mut BTreeMap<String, String>,
 ) -> Result<Option<FilterExpr>, Error> {
+    fn contains(expr: &FilterExpr, names: &[&str]) -> bool {
+        match expr {
+            FilterExpr::And(children) | FilterExpr::Or(children) => {
+                children.iter().any(|expr| contains(expr, names))
+            }
+            FilterExpr::Not(expr) => contains(expr, names),
+            expr => expr
+                .field()
+                .is_some_and(|field| names.contains(&field.as_str())),
+        }
+    }
+
     if let FilterExpr::And(children) = expr {
         let children = children
             .into_iter()
@@ -207,17 +219,7 @@ fn extract_selectors(
         }
         return Ok(None);
     }
-    fn contains(expr: &FilterExpr, names: &[&str]) -> bool {
-        match expr {
-            FilterExpr::And(children) | FilterExpr::Or(children) => {
-                children.iter().any(|expr| contains(expr, names))
-            }
-            FilterExpr::Not(expr) => contains(expr, names),
-            expr => expr
-                .field()
-                .is_some_and(|field| names.contains(&field.as_str())),
-        }
-    }
+
     if contains(&expr, names) {
         return Err(invalid(
             "filter",

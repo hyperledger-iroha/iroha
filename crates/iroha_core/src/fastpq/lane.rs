@@ -186,9 +186,12 @@ impl FastpqWitnessJob {
 /// Production output is the original successful facade owner. Component-only
 /// test outputs cannot manufacture its private verification receipt.
 #[derive(Debug)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Production proof output keeps its original verified owner; the small variant exists only for component tests"
+#[cfg_attr(
+    test,
+    expect(
+        clippy::large_enum_variant,
+        reason = "Production proof output keeps its original verified owner; the small variant exists only for component tests"
+    )
 )]
 enum FastpqProofOutput {
     Produced(offline_compact::ProducedExecutionEffectArtifact),
@@ -620,6 +623,14 @@ fn spawn_worker(
     build_engine: impl FnOnce() -> Option<Arc<dyn FastpqProofEngine>> + Send + 'static,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        #[expect(
+            clippy::large_enum_variant,
+            reason = "The worker moves the already admitted request inline without adding a work-queue allocation"
+        )]
+        enum Turn {
+            Request(WorkRequest),
+            Produce,
+        }
         let engine_generation_lease = Arc::clone(&generation_lease);
         let mut engine_task = tokio::task::spawn_blocking(move || {
             let _generation_lease = engine_generation_lease;
@@ -662,14 +673,6 @@ fn spawn_worker(
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval
         });
-        #[expect(
-            clippy::large_enum_variant,
-            reason = "The worker moves the already admitted request inline without adding a work-queue allocation"
-        )]
-        enum Turn {
-            Request(WorkRequest),
-            Produce,
-        }
         loop {
             let turn = tokio::select! {
                 request = rx.recv() => request.map(Turn::Request),

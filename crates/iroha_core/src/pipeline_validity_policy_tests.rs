@@ -687,9 +687,9 @@ fn alice_chain(
     CertifiedTestChain::from_prepared(prepared).expect("genesis applies")
 }
 
-/// What consensus certifies for every committed height.
 type CertifiedHistoryRow = (Vec<u8>, Vec<u8>, String, Vec<u8>);
 
+/// What consensus certifies for every committed height.
 fn certified_history(chain: &CertifiedTestChain) -> Vec<CertifiedHistoryRow> {
     (1..=chain.height())
         .map(|height| {

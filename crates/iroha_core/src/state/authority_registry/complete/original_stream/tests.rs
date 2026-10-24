@@ -12,7 +12,7 @@ use iroha_data_model::{block::BlockHeader, prelude::TransactionEntrypoint};
 use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly as _;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     num::{NonZeroU64, NonZeroUsize},
 };
 
@@ -428,7 +428,7 @@ fn empty_membership_replacement_clears_every_old_row_and_keeps_pair_separate() {
     let mut block = state.block(header(1));
     block
         .transactions
-        .insert_block(Default::default(), NonZeroUsize::MIN);
+        .insert_block(BTreeSet::default(), NonZeroUsize::MIN);
     block.transactions.try_prepare_publication().unwrap();
     freeze(&mut block);
     let mut output = Collector::new(
@@ -518,7 +518,7 @@ fn validated_original<'state>(
     state: &'state State,
     header: &BlockHeader,
 ) -> Box<StateBlock<'state>> {
-    validated_original_with_crypto_source(state, &(header), false)
+    validated_original_with_crypto_source(state, header, false)
 }
 
 fn validated_original_with_crypto_source<'state>(

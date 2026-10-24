@@ -318,7 +318,7 @@ fn copy_slice<T: Copy>(values: &[T]) -> Result<Vec<T>> {
 fn frame_error(error: norito::Error) -> SccpNativeReadError {
     error.decode_resource_error().map_or_else(
         || SccpNativeReadError::Frame(error),
-        |resource| SccpNativeReadError::DecodeResource(resource),
+        SccpNativeReadError::DecodeResource,
     )
 }
 

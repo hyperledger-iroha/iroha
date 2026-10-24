@@ -1,4 +1,4 @@
-//! OpenAPI catalog, capability, and transport contract tests.
+//! `OpenAPI` catalog, capability, and transport contract tests.
 
 use super::*;
 
@@ -1042,10 +1042,10 @@ fn account_capabilities_document_exact_public_bootstrap_policy() {
 #[test]
 fn generated_spec_includes_documented_paths() {
     let doc = generate_spec();
-    if std::env::var("PRINT_TORII_SPEC").is_ok() {
-        if let Ok(json) = norito::json::to_string_pretty(&doc) {
-            println!("{json}");
-        }
+    if std::env::var("PRINT_TORII_SPEC").is_ok()
+        && let Ok(json) = norito::json::to_string_pretty(&doc)
+    {
+        println!("{json}");
     }
     let paths = doc
         .get("paths")

@@ -22,9 +22,9 @@ pub struct PrefixLengthLimits {
     /// Maximum original deltas in this single occurrence.
     pub(crate) max_deltas: usize,
     /// Maximum complete canonical original transcript frame, including paths.
-    pub(crate) max_input_frame_bytes: usize,
+    pub(crate) input_frame_ceiling_bytes: usize,
     /// Maximum complete canonical quantity public-statement frame.
-    pub(crate) max_public_statement_frame_bytes: usize,
+    pub(crate) public_statement_ceiling_bytes: usize,
 }
 
 /// Sizes of the supplied prefix, without a semantic or authority certificate.
@@ -240,10 +240,10 @@ impl SourcePrefixFrameSizer {
             self.input_fixed[digest_index],
             field_span(next.private_deltas.len(), self.flags)?,
         )?;
-        if input_frame_bytes > self.limits.max_input_frame_bytes {
+        if input_frame_bytes > self.limits.input_frame_ceiling_bytes {
             return Err(PrefixLengthError::Input {
                 actual: input_frame_bytes,
-                maximum: self.limits.max_input_frame_bytes,
+                maximum: self.limits.input_frame_ceiling_bytes,
             });
         }
         next.public_deltas
@@ -274,10 +274,10 @@ impl SourcePrefixFrameSizer {
             )?,
             field_span(transcript_sequence, self.flags)?,
         )?;
-        if public_statement_frame_bytes > self.limits.max_public_statement_frame_bytes {
+        if public_statement_frame_bytes > self.limits.public_statement_ceiling_bytes {
             return Err(PrefixLengthError::Public {
                 actual: public_statement_frame_bytes,
-                maximum: self.limits.max_public_statement_frame_bytes,
+                maximum: self.limits.public_statement_ceiling_bytes,
             });
         }
         let result = PrefixFrameLengths {

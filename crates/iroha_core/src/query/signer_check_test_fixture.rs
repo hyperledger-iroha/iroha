@@ -54,13 +54,13 @@ impl NativeCheckTestFixtureV1 {
         };
         assert!(manager != operator && manager != observer && operator != observer);
         let mut world = World::new();
-        for id in [&manager, &operator, &observer] {
-            let (id, account) = Account::new(id.clone()).build(&manager).into_key_value();
+        for id in [manager, operator, observer] {
+            let (id, account) = Account::new(id.clone()).build(manager).into_key_value();
             world.accounts.insert(id, account);
         }
         let grants: [(&iroha_data_model::account::AccountId, Vec<Permission>); 3] = [
             (
-                &manager,
+                manager,
                 vec![
                     CanManageSorafsFinalPromotionCustody {
                         deployment_id: deployment.into(),
@@ -73,7 +73,7 @@ impl NativeCheckTestFixtureV1 {
                 ],
             ),
             (
-                &operator,
+                operator,
                 vec![
                     CanOperateSorafsFinalPromotion {
                         deployment_id: deployment.into(),
@@ -82,7 +82,7 @@ impl NativeCheckTestFixtureV1 {
                 ],
             ),
             (
-                &observer,
+                observer,
                 vec![
                     CanCheckSorafsFinalPromotion {
                         deployment_id: deployment.into(),

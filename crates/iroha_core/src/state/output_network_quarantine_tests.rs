@@ -338,7 +338,7 @@ fn stateless_invalid_lower_hash_does_not_consume_a_quarantine_slot() {
     );
     let invalid = earlier_ranked(
         &state,
-        &(vec![write_quarantine("invalid_quota", 1)]),
+        &[write_quarantine("invalid_quota", 1)],
         &healthy,
         true,
     );
@@ -387,10 +387,10 @@ fn actual_business_failure_does_not_refill_the_frozen_quarantine_selection() {
     );
     let rejected = earlier_ranked(
         &state,
-        &(vec![
+        &[
             write_quarantine("failed_quota_write", 1),
             Unregister::trigger("missing_quarantine_trigger".parse().unwrap()).into(),
-        ]),
+        ],
         &later,
         false,
     );
@@ -435,7 +435,7 @@ fn healthy_callback_output_overflow_does_not_refill_quarantine_or_apply_effects(
     );
     let oversized = earlier_ranked(
         &state,
-        &(vec![ExecuteTrigger::new("network_callback".parse().unwrap()).into()]),
+        &[ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
         &later,
         false,
     );

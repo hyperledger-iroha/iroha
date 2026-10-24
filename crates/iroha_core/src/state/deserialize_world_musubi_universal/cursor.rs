@@ -14,6 +14,10 @@ use iroha_data_model::musubi::{
 use std::cmp::Ordering;
 
 type IdentifiedRow<'a, Identity, K, V, E> = Result<(Identity, &'a K, &'a V), E>;
+type PackageRow<'a, Identity, E> =
+    IdentifiedRow<'a, Identity, MusubiPackageIdV1, MusubiPackageRecordV1, E>;
+type ResolverRow<'a, Identity, E> =
+    IdentifiedRow<'a, Identity, MusubiReleaseIdV1, MusubiResolverReleaseRowV1, E>;
 
 /// Access to original row identities without imposing a borrow on retained scratch.
 pub(in crate::state) trait UniversalSource {
@@ -31,30 +35,14 @@ pub(in crate::state) trait UniversalSource {
     fn packages(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<
-            Item = IdentifiedRow<
-                '_,
-                Self::Package,
-                MusubiPackageIdV1,
-                MusubiPackageRecordV1,
-                Self::Error,
-            >,
-        >,
+        impl ExactSizeIterator<Item = PackageRow<'_, Self::Package, Self::Error>>,
         Self::Error,
     >;
     /// Original resolver identities and rows in canonical order.
     fn resolvers(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<
-            Item = IdentifiedRow<
-                '_,
-                Self::Version,
-                MusubiReleaseIdV1,
-                MusubiResolverReleaseRowV1,
-                Self::Error,
-            >,
-        >,
+        impl ExactSizeIterator<Item = ResolverRow<'_, Self::Version, Self::Error>>,
         Self::Error,
     >;
     /// Compare the original package key without cloning or replacing it.
@@ -104,15 +92,7 @@ impl<'cut, W: MusubiRead> UniversalSource for BorrowedUniversalSource<'cut, W> {
     fn packages(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<
-            Item = IdentifiedRow<
-                '_,
-                Self::Package,
-                MusubiPackageIdV1,
-                MusubiPackageRecordV1,
-                Self::Error,
-            >,
-        >,
+        impl ExactSizeIterator<Item = PackageRow<'_, Self::Package, Self::Error>>,
         Self::Error,
     > {
         let world: &'cut W = self.0;
@@ -123,15 +103,7 @@ impl<'cut, W: MusubiRead> UniversalSource for BorrowedUniversalSource<'cut, W> {
     fn resolvers(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<
-            Item = IdentifiedRow<
-                '_,
-                Self::Version,
-                MusubiReleaseIdV1,
-                MusubiResolverReleaseRowV1,
-                Self::Error,
-            >,
-        >,
+        impl ExactSizeIterator<Item = ResolverRow<'_, Self::Version, Self::Error>>,
         Self::Error,
     > {
         let world: &'cut W = self.0;

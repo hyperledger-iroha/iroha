@@ -130,14 +130,12 @@ pub fn message<'a>(
     let world = view.world();
     let data = store::outbound_messages::get(world, &id).map_or_else(
         || {
-            if let Some(row) = store::inbound_messages::get(world, &id) {
+            store::inbound_messages::get(world, &id).map_or(MessageDetail::Unknown, |row| {
                 MessageDetail::Inbound(Inbound {
                     message_id: id,
                     record: PayloadRef(row),
                 })
-            } else {
-                MessageDetail::Unknown
-            }
+            })
         },
         |row| MessageDetail::Outbound(outbound(id, row, views::committed_height(view))),
     );

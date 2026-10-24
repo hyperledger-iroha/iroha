@@ -140,10 +140,10 @@ async fn handler_post_transaction_honors_prefer_return_minimal() {
     );
 }
 fn transaction_batch_body_for_test(
-    payloads: Vec<Vec<u8>>,
+    payloads: &Vec<Vec<u8>>,
 ) -> crate::utils::extractors::NoritoBytes {
     crate::utils::extractors::NoritoBytes(Bytes::from(
-        norito::to_bytes(&payloads).expect("encode transaction batch envelope"),
+        norito::to_bytes(payloads).expect("encode transaction batch envelope"),
     ))
 }
 #[test]
@@ -206,7 +206,7 @@ async fn cancelled_transaction_ingress_worker_retains_physical_capacity() {
 }
 #[test]
 fn transaction_batch_body_limit_rejects_before_decode() {
-    let body = transaction_batch_body_for_test(vec![vec![0_u8; 16]]).0;
+    let body = transaction_batch_body_for_test(&(vec![vec![0_u8; 16]])).0;
     let error = validate_transaction_batch_body_size(&body, body.len() - 1)
         .expect_err("wire bytes over the configured limit must be rejected");
     assert!(matches!(
@@ -246,7 +246,7 @@ async fn transaction_batch_count_limit_rejects_before_transaction_decode() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .transaction_batch_max_transactions = 1;
-    let body = transaction_batch_body_for_test(vec![vec![0xff], vec![0xff]]);
+    let body = transaction_batch_body_for_test(&(vec![vec![0xff], vec![0xff]]));
     let error =
         match super::handler_post_transactions_batch(State(app.clone()), HeaderMap::new(), body)
             .await
@@ -282,9 +282,11 @@ async fn transaction_batch_authenticates_before_fresh_capacity_and_preserves_cus
     let response = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
-        transaction_batch_body_for_test(vec![
-            iroha_version::codec::EncodeVersioned::encode_versioned(&transaction),
-        ]),
+        transaction_batch_body_for_test(
+            &(vec![iroha_version::codec::EncodeVersioned::encode_versioned(
+                &transaction,
+            )]),
+        ),
     )
     .await
     .expect("native batch admission");
@@ -293,7 +295,7 @@ async fn transaction_batch_authenticates_before_fresh_capacity_and_preserves_cus
     let error = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
-        transaction_batch_body_for_test(vec![vec![0xff]]),
+        transaction_batch_body_for_test(&(vec![vec![0xff]])),
     )
     .await
     .expect_err("bad canonical bytes");
@@ -326,10 +328,10 @@ async fn handler_post_transactions_batch_accepts_multiple_payloads() {
         State(app.clone()),
         HeaderMap::new(),
         transaction_batch_body_for_test(
-            [&tx1, &tx2]
+            &([&tx1, &tx2]
                 .into_iter()
                 .map(iroha_version::codec::EncodeVersioned::encode_versioned)
-                .collect(),
+                .collect()),
         ),
     )
     .await
@@ -364,7 +366,7 @@ async fn transaction_batch_duplicate_reuses_custody_at_full_capacity_without_cha
     let response = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
-        transaction_batch_body_for_test(vec![payload.clone(), payload]),
+        transaction_batch_body_for_test(&(vec![payload.clone(), payload])),
     )
     .await
     .expect("duplicate entries retain the first pending entry");
@@ -411,10 +413,10 @@ async fn transaction_batch_partial_admission_preserves_exact_ordered_outcomes() 
         State(app.clone()),
         HeaderMap::new(),
         transaction_batch_body_for_test(
-            [&tx1, &tx2]
+            &([&tx1, &tx2]
                 .into_iter()
                 .map(iroha_version::codec::EncodeVersioned::encode_versioned)
-                .collect(),
+                .collect()),
         ),
     )
     .await
@@ -454,9 +456,9 @@ async fn transaction_batch_cannot_bypass_ordinary_economic_admission() {
     let response = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
-        transaction_batch_body_for_test(vec![
-            iroha_version::codec::EncodeVersioned::encode_versioned(&tx),
-        ]),
+        transaction_batch_body_for_test(
+            &(vec![iroha_version::codec::EncodeVersioned::encode_versioned(&tx)]),
+        ),
     )
     .await
     .expect("ordinary batch returns one classified economic outcome");
@@ -505,7 +507,7 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
     let err = match super::handler_post_transactions_batch(
         State(app.clone()),
         headers,
-        transaction_batch_body_for_test(payloads),
+        transaction_batch_body_for_test(&(payloads)),
     )
     .await
     {
@@ -571,7 +573,7 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
     let err = match super::handler_post_transactions_batch(
         State(app.clone()),
         headers,
-        transaction_batch_body_for_test(payloads),
+        transaction_batch_body_for_test(&(payloads)),
     )
     .await
     {
@@ -620,7 +622,7 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
     let err = match super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
-        transaction_batch_body_for_test(payloads),
+        transaction_batch_body_for_test(&(payloads)),
     )
     .await
     {

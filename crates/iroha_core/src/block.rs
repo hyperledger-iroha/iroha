@@ -1656,6 +1656,10 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 #[derive(Debug, displaydoc::Display, Error)]
 pub enum BlockValidationError {
     /// Native source publication changed; reacquire and authenticate before retrying ({authenticated_generation} -> {observed_generation})
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc field placeholders must retain their exact format syntax"
+    )]
     NativeSourceChanged {
         /// State generation authenticated by the original acquisition.
         authenticated_generation: u64,
@@ -1737,6 +1741,10 @@ pub enum BlockValidationError {
     /// Invalid genesis block: {0}
     InvalidGenesis(#[from] InvalidGenesisError),
     /// Signed genesis policy mismatch: execution {expected_execution} != {actual_execution}, Nexus {expected_nexus} != {actual_nexus}
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc field placeholders must retain their exact format syntax"
+    )]
     GenesisPolicyMismatch {
         /// Execution policy committed by the signed genesis body.
         expected_execution: Hash,
@@ -1752,6 +1760,10 @@ pub enum BlockValidationError {
     /// Block's creation time is later than the current node local time
     BlockInTheFuture,
     /// Sumeragi block creation time is below its required floor. Minimum: {minimum_ms} ms, actual: {actual_ms} ms
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc field placeholders must retain their exact format syntax"
+    )]
     BlockTimeBeforeRequiredFloor {
         /// Deterministic minimum derived from the parent, cadence, and authenticated inputs.
         minimum_ms: u64,
@@ -3319,7 +3331,7 @@ pub(crate) mod valid {
         AXT_FASTPQ_PROOF_VERIFICATION_COUNT.with(std::cell::Cell::get)
     }
     pub(super) fn map_axt_fastpq_error(
-        error: fastpq_prover::Error,
+        error: &fastpq_prover::Error,
         context: &str,
         snapshot_version: u64,
         dataspace: DataSpaceId,
@@ -3601,7 +3613,7 @@ pub(crate) mod valid {
                 })?;
                 fastpq_prover::validate_axt_transfer_claim_binding(binding).map_err(|err| {
                     map_axt_fastpq_error(
-                        err,
+                        &(err),
                         "generic AXT proof admission requires a witnessed transfer claim",
                         snapshot_version,
                         dsid,
@@ -3618,7 +3630,7 @@ pub(crate) mod valid {
                 )
                 .map_err(|err| {
                     map_axt_fastpq_error(
-                        err,
+                        &(err),
                         "FASTPQ verification failed",
                         snapshot_version,
                         dsid,
@@ -5543,9 +5555,9 @@ pub(crate) mod valid {
             }
         }
         fn amx_deadline_error(
-            error: iroha_data_model::sumeragi_amx::AmxError,
+            error: &iroha_data_model::sumeragi_amx::AmxError,
         ) -> BlockValidationError {
-            match crate::sumeragi::amx::classified_decode_refusal(&error) {
+            match crate::sumeragi::amx::classified_decode_refusal(error) {
                 Some(original) if !cfg!(all(test, sumeragi_core_mutation = "HC162")) => {
                     BlockValidationError::StateStorageAdmission(
                         crate::state::StateStorageAdmissionError::AmxDecode(original),
@@ -6719,7 +6731,7 @@ pub(crate) mod valid {
                 // AMX deadline decisions (`specs/sumeragi.md` §11.5) are World writes too.
                 state
                     .advance_sumeragi_amx()
-                    .map_err(Self::amx_deadline_error)?;
+                    .map_err(|error| Self::amx_deadline_error(&error))?;
                 Self::validate_native_genesis_policy(source, state)?;
                 Self::finalize_owned_execution_metadata(
                     source,
@@ -7215,7 +7227,7 @@ pub(crate) mod valid {
                 .unwrap_err(),
             ] {
                 let expected = original.local_refusal().unwrap();
-                let mapped = ValidBlock::amx_deadline_error(AmxError::Resource(original));
+                let mapped = ValidBlock::amx_deadline_error(&(AmxError::Resource(original)));
                 assert!(matches!(
                     &mapped,
                     BlockValidationError::StateStorageAdmission(
@@ -7233,7 +7245,7 @@ pub(crate) mod valid {
                 AmxError::Record("malformed decision"),
             ] {
                 let expected = semantic.to_string();
-                let mapped = ValidBlock::amx_deadline_error(semantic);
+                let mapped = ValidBlock::amx_deadline_error(&(semantic));
                 assert!(matches!(
                     &mapped,
                     BlockValidationError::ExecutionContextInvalid(retained) if *retained == expected

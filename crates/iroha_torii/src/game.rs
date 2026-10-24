@@ -89,7 +89,7 @@ pub fn capabilities(app: &SharedAppState) -> Response {
         "enabled":true,"native_game_sessions":true,"profiles":profiles,
         "execution_transport_ready":transport_ready,
         "max_participants":32,"max_input_bytes":4096,"max_participant_data_bytes":4096,
-        "max_application_parameter_bytes":65536,"max_batch_ticks":256,"max_ticks":1000000,"max_batches":4096,"max_retained_input_bytes":4194304,
+        "max_application_parameter_bytes":65536,"max_batch_ticks":256,"max_ticks":1_000_000,"max_batches":4096,"max_retained_input_bytes":4_194_304,
         "wallet_funds_required_only_for_entry":true,"stake_balance_scope":"Global","payout_claims":true,"max_item_stakes_per_slot":1,"item_tie_policy":"return_to_original_owners",
         "max_resources_per_slot":(iroha_data_model::game_resources::GAME_MAX_RESOURCES_PER_PARTICIPANT_V1),
         "max_resource_records":(iroha_data_model::game_resources::GAME_MAX_RESOURCE_RECORDS_V1),

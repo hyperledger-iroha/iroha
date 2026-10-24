@@ -225,6 +225,10 @@ impl GetBlobArgs {
 #[derive(Args, Debug, Default)]
 pub struct ProofPoliciesArgs {}
 impl ProofPoliciesArgs {
+    #[expect(
+        clippy::unused_self,
+        reason = "The parsed command participates in uniform consuming CLI dispatch."
+    )]
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = iroha::blocking::Client::from_client(context.client_from_config()?)?;
         let bundle = client.da().proof_policies()?;
@@ -267,7 +271,7 @@ impl CommitmentQueryArgs {
             context.client_from_config()?.account_client()?,
         )?;
         let response = client.da().prove_commitment(&request)?;
-        let text = render_da_commitment_prove_text(&response);
+        let text = render_da_commitment_prove_text(response.as_ref());
         print_with_optional_text(context, Some(text), &response)
     }
     fn to_list_request(&self) -> Result<DaCommitmentListRequest> {
@@ -375,7 +379,7 @@ impl PinIntentQueryArgs {
             context.client_from_config()?.account_client()?,
         )?;
         let response = client.da().prove_pin_intent(&request)?;
-        let text = render_da_pin_intent_prove_text(&response);
+        let text = render_da_pin_intent_prove_text(response.as_ref());
         print_with_optional_text(context, Some(text), &response)
     }
     fn to_list_request(&self) -> Result<DaPinIntentListRequest> {
@@ -955,7 +959,7 @@ impl RentLedgerArgs {
             potr_bonus: &potr_bonus,
         };
         let plan =
-            build_rent_ledger_plan(&self.quote_path, projection, accounts, &asset_definition)?;
+            build_rent_ledger_plan(&self.quote_path, &projection, accounts, &asset_definition)?;
         context.print_data(&plan)
     }
 }
@@ -1126,7 +1130,7 @@ fn render_submit_text(output: &SubmitOutput) -> String {
         let _ = writeln!(out, "receipt: {}", receipt.receipt_path);
         let _ = writeln!(out, "receipt_json: {}", receipt.receipt_json_path);
         if let Some(header) = receipt.pdp_commitment_header.as_deref() {
-            let _ = writeln!(out, "pdp_commitment_header: {}", header);
+            let _ = writeln!(out, "pdp_commitment_header: {header}");
         }
     }
     out
@@ -1158,7 +1162,7 @@ fn render_da_commitments_list_text(response: &iroha::da::DaCommitmentListRespons
     out
 }
 fn render_da_commitment_prove_text(
-    response: &Option<iroha::da::DaCommitmentProofResponse>,
+    response: Option<&iroha::da::DaCommitmentProofResponse>,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "DA commitment proof");
@@ -1185,7 +1189,7 @@ fn render_da_pin_intents_list_text(response: &iroha::da::DaPinIntentListResponse
     let _ = writeln!(out, "has_next_cursor: {}", response.next_cursor.is_some());
     out
 }
-fn render_da_pin_intent_prove_text(response: &Option<DaPinIntentProof>) -> String {
+fn render_da_pin_intent_prove_text(response: Option<&DaPinIntentProof>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "DA pin intent proof");
     match response {
@@ -1473,7 +1477,7 @@ fn render_rent_quote_text(
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{}", format_rent_quote_summary(quote));
-    let _ = writeln!(out, "policy_source: {}", source_label);
+    let _ = writeln!(out, "policy_source: {source_label}");
     if let Some(path) = quote_out {
         let _ = writeln!(out, "quote_out: {}", path.display());
     }
@@ -1522,11 +1526,11 @@ fn extract_rent_ledger_projection(value: &Value) -> Result<DaRentLedgerProjectio
 }
 fn build_rent_ledger_plan(
     quote_path: &Path,
-    projection: DaRentLedgerProjection,
+    projection: &DaRentLedgerProjection,
     accounts: da::DaRentLedgerAccounts<'_>,
     asset_definition: &AssetDefinitionId,
 ) -> Result<Value> {
-    let plan = da::build_da_rent_ledger_plan(&projection, &accounts, asset_definition);
+    let plan = da::build_da_rent_ledger_plan(projection, &accounts, asset_definition);
     render_rent_ledger_plan(quote_path, &plan)
 }
 fn render_rent_ledger_plan(quote_path: &Path, plan: &DaRentLedgerPlan) -> Result<Value> {
@@ -2330,7 +2334,7 @@ mod tests {
         };
         let plan = build_rent_ledger_plan(
             Path::new("quote.json"),
-            projection,
+            &projection,
             accounts,
             &asset_definition,
         )

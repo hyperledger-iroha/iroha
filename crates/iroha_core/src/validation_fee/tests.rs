@@ -427,6 +427,7 @@ pub fn with_validation_fee_payout_block_at_time(
     test(&mut block, &deployer, &code, code_hash);
 }
 
+#[derive(Clone, Copy)]
 enum PayoutComponentSource {
     Unowned,
     Invocation(Hash),
@@ -1004,7 +1005,7 @@ pub fn policy_registry(
 
 fn seed_authorized_proposal(
     kind: iroha_data_model::governance::types::ProposalKind,
-    authorization: ValidationFeeParliamentAuthorizationV1,
+    authorization: &ValidationFeeParliamentAuthorizationV1,
     state_tx: &mut StateTransaction<'_, '_>,
 ) {
     let proposal_id = authorization.proposal_fingerprint;
@@ -1054,7 +1055,7 @@ pub fn install_policy_registry_fixture(
                 proposal_operator: entry.parliament_authorization.proposal_operator.clone(),
                 payout_binding: entry.payout_binding.clone(),
             }),
-            entry.parliament_authorization.clone(),
+            &entry.parliament_authorization,
             state_tx,
         );
     }
@@ -1064,7 +1065,7 @@ pub fn install_policy_registry_fixture(
                 proposal_operator: entry.parliament_authorization.proposal_operator.clone(),
                 policy: entry.policy.clone(),
             }),
-            entry.parliament_authorization.clone(),
+            &entry.parliament_authorization,
             state_tx,
         );
     }

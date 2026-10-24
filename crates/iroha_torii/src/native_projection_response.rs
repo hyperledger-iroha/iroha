@@ -86,6 +86,10 @@ impl From<NativeProjectionError> for Error {
 }
 
 // One current-cut acquisition under the request's unchanged decode and source allowance.
+#[expect(
+    clippy::result_large_err,
+    reason = "The original producer refusal remains inline until the HTTP boundary without an extra allocation."
+)]
 pub fn current_global_tip(
     view: &impl StateReadOnly,
     height: u64,
@@ -102,6 +106,10 @@ pub fn current_global_tip(
 }
 
 /// Authenticate the current cut of the independently selected native root.
+#[expect(
+    clippy::result_large_err,
+    reason = "The original producer refusal remains inline until the HTTP boundary without an extra allocation."
+)]
 pub fn current_root_tip(
     view: &impl StateReadOnly,
     height: u64,
@@ -224,6 +232,10 @@ impl JsonWriteSink for CountJson {
         self.depth = self.depth.saturating_sub(1);
     }
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "The original producer refusal remains inline until the HTTP boundary without an extra allocation."
+)]
 pub fn encode_canonical<T: norito::core::NoritoSerialize>(
     payload: &T,
     limit: usize,
@@ -251,6 +263,10 @@ pub fn encode_canonical<T: norito::core::NoritoSerialize>(
     Ok(writer.0)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "The original producer refusal remains inline until the HTTP boundary without an extra allocation."
+)]
 pub fn encode<T: norito::core::NoritoSerialize + norito::json::JsonSerialize>(
     payload: &T,
     format: ResponseFormat,
@@ -296,6 +312,10 @@ pub fn encode<T: norito::core::NoritoSerialize + norito::json::JsonSerialize>(
 }
 
 /// Prepay both committee vector layouts and their original key/PoP backing.
+#[expect(
+    clippy::result_large_err,
+    reason = "The original producer refusal remains inline until the HTTP boundary without an extra allocation."
+)]
 pub fn native_committee_original_bytes<'a>(
     expected: usize,
     members: impl IntoIterator<Item = (&'a iroha_crypto::PublicKey, &'a [u8])>,

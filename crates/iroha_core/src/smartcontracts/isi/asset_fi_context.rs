@@ -497,6 +497,25 @@ impl Execute for AssertAssetFiTransferReceiptV1 {
     }
 }
 
+impl crate::smartcontracts::ValidQuery
+    for iroha_data_model::query::asset_fi_context::FindAssetFiContextV1
+{
+    fn execute(
+        self,
+        _filter: iroha_data_model::query::dsl::CompoundPredicate<AssetFiContextSnapshotV1>,
+        _state: &impl crate::state::StateReadOnly,
+    ) -> Result<
+        impl Iterator<Item = AssetFiContextSnapshotV1>,
+        iroha_data_model::query::error::QueryExecutionFail,
+    > {
+        Err::<core::iter::Empty<AssetFiContextSnapshotV1>, _>(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "FI context requires bounded ordinary native query admission".into(),
+            ),
+        )
+    }
+}
+
 #[cfg(test)]
 mod bounds_tests {
     use super::*;
@@ -548,24 +567,5 @@ mod bounds_tests {
             tx.world().smart_contract_state().get(&key).unwrap(),
             &vec![0; exact + 1]
         );
-    }
-}
-
-impl crate::smartcontracts::ValidQuery
-    for iroha_data_model::query::asset_fi_context::FindAssetFiContextV1
-{
-    fn execute(
-        self,
-        _filter: iroha_data_model::query::dsl::CompoundPredicate<AssetFiContextSnapshotV1>,
-        _state: &impl crate::state::StateReadOnly,
-    ) -> Result<
-        impl Iterator<Item = AssetFiContextSnapshotV1>,
-        iroha_data_model::query::error::QueryExecutionFail,
-    > {
-        Err::<core::iter::Empty<AssetFiContextSnapshotV1>, _>(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "FI context requires bounded ordinary native query admission".into(),
-            ),
-        )
     }
 }

@@ -3,13 +3,13 @@
 pub mod account;
 mod account_admission;
 pub mod asset;
-/// Aggregate UID holding and activity policy handlers.
-pub mod asset_uid;
-pub mod asset_uid_reader;
-pub mod asset_uid_enrollment;
+pub mod asset_escrow_scope;
 pub mod asset_fi;
 pub mod asset_fi_context;
-pub mod asset_escrow_scope;
+/// Aggregate UID holding and activity policy handlers.
+pub mod asset_uid;
+pub mod asset_uid_enrollment;
+pub mod asset_uid_reader;
 pub mod block;
 /// Native bond-servicing kernel handlers.
 pub mod bond;
@@ -970,7 +970,7 @@ mod registry_dispatch_tests {
         assert!(table.get_type(core::any::TypeId::of::<u32>()).is_none());
     }
     fn assert_native_registration<T: NativeInstructionRegistered>() {}
-    fn assert_reviewed_initial_family(family: &str, expected_closed: BTreeSet<&str>) {
+    fn assert_reviewed_initial_family(family: &str, expected_closed: &BTreeSet<&str>) {
         let wire_types: BTreeSet<_> = iroha_data_model::isi::registry::default()
             .names()
             .filter(|name| name.starts_with(family))
@@ -1008,14 +1008,14 @@ mod registry_dispatch_tests {
             })
             .collect();
         assert_eq!(
-            closed_types, expected_closed,
+            &closed_types, expected_closed,
             "closed native operations must not acquire admission"
         );
     }
     fn assert_reviewed_asset_effect_family(
         family: &str,
         expected_count: usize,
-        expected_ds_capable: BTreeSet<&str>,
+        expected_ds_capable: &BTreeSet<&str>,
     ) {
         let wire_types: BTreeSet<_> = iroha_data_model::isi::registry::default()
             .names()
@@ -1048,39 +1048,39 @@ mod registry_dispatch_tests {
             })
             .collect();
         assert_eq!(
-            ds_capable, expected_ds_capable,
+            &ds_capable, expected_ds_capable,
             "authority does not imply balance neutrality"
         );
     }
     #[test]
     fn kagemusha_ledger_has_reviewed_authority_and_numeric_effects() {
         let family = "iroha_data_model::isi::kagemusha_wallet::";
-        assert_reviewed_initial_family(family, BTreeSet::new());
+        assert_reviewed_initial_family(family, &(BTreeSet::new()));
         assert_reviewed_asset_effect_family(
             family,
             1,
-            BTreeSet::from([core::any::type_name::<
+            &(BTreeSet::from([core::any::type_name::<
                 iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
-            >()]),
+            >()])),
         );
     }
     #[test]
     fn every_soracloud_wire_instruction_has_a_reviewed_initial_disposition() {
         assert_reviewed_initial_family(
             "iroha_data_model::isi::soracloud::",
-            BTreeSet::from([
+            &(BTreeSet::from([
                 core::any::type_name::<
                     iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage,
                 >(),
                 core::any::type_name::<
                     iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult,
                 >(),
-            ]),
+            ])),
         );
     }
     #[test]
     fn every_sccp_wire_instruction_has_a_reviewed_initial_disposition() {
-        assert_reviewed_initial_family("iroha_data_model::isi::sccp::", BTreeSet::new());
+        assert_reviewed_initial_family("iroha_data_model::isi::sccp::", &(BTreeSet::new()));
         for instruction in crate::smartcontracts::isi::sccp::test_support::SampleInstructions::all()
         {
             assert_eq!(
@@ -1092,13 +1092,16 @@ mod registry_dispatch_tests {
     }
     #[test]
     fn every_space_directory_wire_instruction_has_a_reviewed_initial_disposition() {
-        assert_reviewed_initial_family("iroha_data_model::isi::space_directory::", BTreeSet::new());
+        assert_reviewed_initial_family(
+            "iroha_data_model::isi::space_directory::",
+            &(BTreeSet::new()),
+        );
     }
     #[test]
     fn every_sorafs_wire_instruction_has_a_reviewed_initial_disposition() {
         assert_reviewed_initial_family(
             "iroha_data_model::isi::sorafs::",
-            BTreeSet::from([
+            &(BTreeSet::from([
                 core::any::type_name::<iroha_data_model::isi::sorafs::RegisterProviderOwner>(),
                 core::any::type_name::<iroha_data_model::isi::sorafs::UnregisterProviderOwner>(),
                 core::any::type_name::<
@@ -1106,7 +1109,7 @@ mod registry_dispatch_tests {
                 >(),
                 core::any::type_name::<iroha_data_model::isi::sorafs::MutateSorafsTopologyAuthority>(
                 ),
-            ]),
+            ])),
         );
     }
     #[test]
@@ -1171,20 +1174,20 @@ mod registry_dispatch_tests {
         assert_native_registration::<privacy::RotatePrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::RevokePrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::SubmitPrivacyProofV1>();
-        assert_reviewed_initial_family("iroha_data_model::isi::privacy::", BTreeSet::new());
+        assert_reviewed_initial_family("iroha_data_model::isi::privacy::", &(BTreeSet::new()));
         assert_reviewed_asset_effect_family(
             "iroha_data_model::isi::privacy::",
             29,
-            BTreeSet::from([core::any::type_name::<privacy::SubmitPrivacyProofV1>()]),
+            &(BTreeSet::from([core::any::type_name::<privacy::SubmitPrivacyProofV1>()])),
         );
         assert_reviewed_asset_effect_family(
             "iroha_data_model::isi::private_settlement::",
             5,
-            BTreeSet::new(),
+            &(BTreeSet::new()),
         );
         assert_reviewed_initial_family(
             "iroha_data_model::isi::private_settlement::",
-            BTreeSet::new(),
+            &(BTreeSet::new()),
         );
     }
     #[test]
@@ -1898,7 +1901,7 @@ mod tests {
             metadata
         }
 
-        fn assert_metadata_limit(error: Error, entity: &str) {
+        fn assert_metadata_limit(error: &Error, entity: &str) {
             assert!(
                 matches!(error, Error::InvalidParameter(_)),
                 "oversized {entity} registration returned {error:?}"
@@ -1927,11 +1930,11 @@ mod tests {
             .execute(&ALICE_ID, &mut state_transaction)?;
         let oversized_account = AccountId::new(checked_keypair().public_key().clone());
         assert_metadata_limit(
-            Register::account(
+            &(Register::account(
                 Account::new(oversized_account.clone()).with_metadata(oversized.clone()),
             )
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("oversized account metadata must fail"),
+            .expect_err("oversized account metadata must fail")),
             "account",
         );
         assert!(state_transaction.world.account(&oversized_account).is_err());
@@ -1941,11 +1944,11 @@ mod tests {
             .execute(&ALICE_ID, &mut state_transaction)?;
         let oversized_domain = DomainId::try_new("metadata-oversized", "universal")?;
         assert_metadata_limit(
-            Register::domain(
+            &(Register::domain(
                 Domain::new(oversized_domain.clone()).with_metadata(oversized.clone()),
             )
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("oversized domain metadata must fail"),
+            .expect_err("oversized domain metadata must fail")),
             "domain",
         );
         assert!(state_transaction.world.domain(&oversized_domain).is_err());
@@ -1970,7 +1973,7 @@ mod tests {
             "metadata_oversized".parse()?,
         );
         assert_metadata_limit(
-            Register::asset_definition(
+            &(Register::asset_definition(
                 AssetDefinition::numeric(
                     oversized_definition.clone(),
                     "metadata oversized",
@@ -1980,7 +1983,7 @@ mod tests {
                 .with_metadata(oversized.clone()),
             )
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("oversized asset-definition metadata must fail"),
+            .expect_err("oversized asset-definition metadata must fail")),
             "asset definition",
         );
         assert!(
@@ -1995,9 +1998,9 @@ mod tests {
             .execute(&ALICE_ID, &mut state_transaction)?;
         let oversized_nft: NftId = "metadata_oversized$wonderland.universal".parse()?;
         assert_metadata_limit(
-            Register::nft(Nft::new(oversized_nft.clone(), oversized.clone()))
+            &(Register::nft(Nft::new(oversized_nft.clone(), oversized.clone()))
                 .execute(&ALICE_ID, &mut state_transaction)
-                .expect_err("oversized NFT metadata must fail"),
+                .expect_err("oversized NFT metadata must fail")),
             "NFT",
         );
         assert!(state_transaction.world.nft(&oversized_nft).is_err());
@@ -2018,7 +2021,7 @@ mod tests {
         .execute(&ALICE_ID, &mut state_transaction)?;
         let rwa_count = state_transaction.world.rwas.len();
         assert_metadata_limit(
-            RegisterRwa {
+            &(RegisterRwa {
                 rwa: NewRwa::new(
                     wonderland,
                     "1".parse::<Quantity>()?,
@@ -2031,7 +2034,7 @@ mod tests {
                 ),
             }
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("oversized RWA metadata must fail"),
+            .expect_err("oversized RWA metadata must fail")),
             "RWA",
         );
         assert_eq!(state_transaction.world.rwas.len(), rwa_count);

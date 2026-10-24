@@ -58,7 +58,7 @@ fn clearance_rows() -> Vec<Value> {
         ("l5_at_deadline",true,false,deadline),("l5_past_deadline",true,false,deadline+1),
         ("l5_frozen_light_client",true,true,deadline+1)].into_iter().map(|(label,present,frozen,source)| {
             let state=blank_state();let mut block=state.block(header(4));let mut tx=block.transaction();
-            install_generation(&mut tx,7,fixture::ended(7,2)).unwrap();
+            install_generation(&mut tx,7,&(fixture::ended(7,2))).unwrap();
             store::liability_clock::set(&mut tx,UNTIL);
             let network=SccpNetworkV1::EthereumMainnet;
             store::routes::insert(&mut tx,network,sample_route(network)).unwrap();

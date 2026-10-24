@@ -180,7 +180,7 @@ mod tests {
     }
     #[test]
     fn render_suites_text_includes_header() {
-        let text = render_suites_text(&vec!["mlkem512".into()]);
+        let text = render_suites_text(&["mlkem512".into()]);
         assert!(text.starts_with("Supported ML-KEM suites:"));
         assert!(text.contains("- mlkem512"));
     }

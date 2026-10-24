@@ -3179,7 +3179,7 @@ impl ReputationFinalizedArchive {
         let mut budget = ProjectionCaptureBudget::new(self.bounds.max_total_bytes);
         let authority_policy = FindSorafsReputationJournalAuthorityPolicy
             .execute(state_ro)
-            .map_err(|error| projection_query_error("reputation authority policy", error))?;
+            .map_err(|error| projection_query_error("reputation authority policy", &(error)))?;
         budget.charge("reputation authority policy", &authority_policy)?;
         let authority_policy_history =
             crate::smartcontracts::isi::sorafs_reputation::read_reputation_authority_policy_history(
@@ -3229,7 +3229,7 @@ impl ReputationFinalizedArchive {
                         .expect("proof-outcome query maximum fits u32"),
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("proof-outcome events", error))?;
+                .map_err(|error| projection_query_error("proof-outcome events", &(error)))?;
                 if page.finalized_cursor != proof_cursor {
                     return Err(projection_anchor_error("proof-outcome events"));
                 }
@@ -3272,7 +3272,7 @@ impl ReputationFinalizedArchive {
                         .expect("reputation journal query maximum fits u32"),
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("reputation journal events", error))?;
+                .map_err(|error| projection_query_error("reputation journal events", &(error)))?;
                 if page.finalized_cursor != journal_cursor {
                     return Err(projection_anchor_error("reputation journal events"));
                 }
@@ -3313,7 +3313,7 @@ impl ReputationFinalizedArchive {
                     limit: REPAIR_QUERY_MAX_ITEMS_V1,
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("repair events", error))?;
+                .map_err(|error| projection_query_error("repair events", &(error)))?;
                 if page.finalized_cursor != repair_cursor {
                     return Err(projection_anchor_error("repair events"));
                 }
@@ -3352,7 +3352,7 @@ impl ReputationFinalizedArchive {
                     limit: ORDERBOOK_QUERY_MAX_ITEMS_V1,
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("orderbook events", error))?;
+                .map_err(|error| projection_query_error("orderbook events", &(error)))?;
                 if page.finalized_cursor != orderbook_cursor {
                     return Err(projection_anchor_error("orderbook events"));
                 }
@@ -3391,7 +3391,7 @@ impl ReputationFinalizedArchive {
                     limit: RESERVE_QUERY_MAX_ITEMS_V1,
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("reserve events", error))?;
+                .map_err(|error| projection_query_error("reserve events", &(error)))?;
                 if page.finalized_cursor != reserve_cursor {
                     return Err(projection_anchor_error("reserve events"));
                 }
@@ -3414,7 +3414,7 @@ impl ReputationFinalizedArchive {
                     limit: RESERVE_QUERY_MAX_ITEMS_V1,
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("reserve providers", error))?;
+                .map_err(|error| projection_query_error("reserve providers", &(error)))?;
                 if page.finalized_cursor != reserve_cursor {
                     return Err(projection_anchor_error("reserve providers"));
                 }
@@ -3726,6 +3726,10 @@ impl ReputationFinalizedArchive {
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
         self.prepare_insert(projection)?.persist()
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The insertion attempt consumes its captured projection while transferring prepared durable state"
+    )]
     fn prepare_insert(
         &self,
         projection: ReputationFinalizedProjectionV1,
@@ -3790,7 +3794,7 @@ impl ReputationFinalizedArchive {
             index,
             predecessor.as_ref(),
             next_state,
-            authority_policy_history,
+            &(authority_policy_history),
             delta,
         )
     }
@@ -3798,7 +3802,7 @@ impl ReputationFinalizedArchive {
     fn insert_captured_state(
         &self,
         next_state: ReputationReconstructionStateV1,
-        authority_policy_history: Vec<ReputationJournalAuthorityPolicyRecordV1>,
+        authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
         self.prepare_captured_state(next_state, authority_policy_history)?
             .persist()
@@ -3807,11 +3811,11 @@ impl ReputationFinalizedArchive {
     fn prepare_captured_state(
         &self,
         next_state: ReputationReconstructionStateV1,
-        authority_policy_history: Vec<ReputationJournalAuthorityPolicyRecordV1>,
+        authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
     ) -> Result<PreparedReputationInsertion<'_>, ReputationFinalizedArchiveError> {
         let index = self.write_index()?;
         let material =
-            self.prepare_captured_material(&index, &next_state, &authority_policy_history)?;
+            self.prepare_captured_material(&index, &next_state, authority_policy_history)?;
         Ok(PreparedReputationInsertion {
             archive: self,
             index,
@@ -3888,14 +3892,14 @@ impl ReputationFinalizedArchive {
         index: ArchiveIndexWriteGuard<'archive, ArchiveIndex>,
         predecessor: Option<&ReputationReconstructionStateV1>,
         next_state: ReputationReconstructionStateV1,
-        authority_policy_history: Vec<ReputationJournalAuthorityPolicyRecordV1>,
+        authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
         delta: ReputationFinalizedAnchorDeltaV1,
     ) -> Result<PreparedReputationInsertion<'archive>, ReputationFinalizedArchiveError> {
         let material = self.prepare_new_state_material(
             &index,
             predecessor,
             &next_state,
-            &authority_policy_history,
+            authority_policy_history,
             delta,
         )?;
         Ok(PreparedReputationInsertion {
@@ -4511,6 +4515,10 @@ impl ReputationFinalizedArchive {
             expected_archive_generation,
         })
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Compaction consumes its prepared publication owner exactly once through publication and cleanup"
+    )]
     fn publish_prepared_compaction<BeforeCleanup>(
         &self,
         index: &mut ArchiveIndex,
@@ -6461,7 +6469,7 @@ fn candidate_capture_key(
 }
 fn projection_query_error(
     source: &'static str,
-    error: iroha_data_model::query::error::QueryExecutionFail,
+    error: &iroha_data_model::query::error::QueryExecutionFail,
 ) -> ReputationFinalizedArchiveError {
     ReputationFinalizedArchiveError::ProjectionCaptureQuery {
         projection: source,
@@ -11683,7 +11691,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let authority_policy_history = vec![next.authority_policy.clone()];
         assert_eq!(
             archive
-                .insert_captured_state(next, authority_policy_history)
+                .insert_captured_state(next, &(authority_policy_history))
                 .expect("insert empty captured successor"),
             ReputationFinalizedArchiveInsertOutcome::Inserted
         );
@@ -11730,7 +11738,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             assert_eq!(next.reserve_events.retained_suffix.len(), 1);
             let authority_policy_history = vec![next.authority_policy.clone()];
             archive
-                .insert_captured_state(next.clone(), authority_policy_history)
+                .insert_captured_state(next.clone(), &(authority_policy_history))
                 .expect("insert retained capture");
             let index = archive.read_index().expect("read capture index");
             let checkpoint = index
@@ -11772,7 +11780,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let authority_policy_history = vec![replay.authority_policy.clone()];
         assert_eq!(
             reopened
-                .insert_captured_state(replay, authority_policy_history)
+                .insert_captured_state(replay, &(authority_policy_history))
                 .expect("replay retained capture"),
             ReputationFinalizedArchiveInsertOutcome::ExactReplay
         );
@@ -12161,10 +12169,10 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         {
             let archive = open_archive(&directory, bounds());
             archive
-                .insert_captured_state(first.clone(), vec![first.authority_policy.clone()])
+                .insert_captured_state(first.clone(), std::slice::from_ref(&first.authority_policy))
                 .expect("insert revision-one capture");
             archive
-                .insert_captured_state(next.clone(), authority_policy_history.clone())
+                .insert_captured_state(next.clone(), &(authority_policy_history))
                 .expect("insert revision-three capture");
         }
         let reopened = open_archive(&directory, bounds());
@@ -12199,7 +12207,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let canonical_history = vec![revision_one.authority_policy.clone(), canonical_second];
         let archive = open_archive(&directory, bounds());
         archive
-            .insert_captured_state(previous.clone(), canonical_history)
+            .insert_captured_state(previous.clone(), &(canonical_history))
             .expect("insert canonical revision-two capture");
         let divergent_second =
             rotated_policy_record(&revision_one.authority_policy, 0x71, activation_time);

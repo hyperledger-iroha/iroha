@@ -245,7 +245,7 @@ impl ExecutionFeeSettlement {
             state,
             transaction.authority(),
             transaction,
-            &(sponsor),
+            sponsor.as_ref(),
             meter.tx_bytes_len,
             work.instructions,
             work.gas,

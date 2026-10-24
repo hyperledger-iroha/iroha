@@ -294,7 +294,7 @@ mod tests {
         seed_world_with_scoped_assets(
             &mut state,
             &domain_id,
-            account.clone(),
+            &(account.clone()),
             uaid,
             &[
                 (
@@ -401,7 +401,7 @@ mod tests {
     fn seed_world_with_scoped_assets(
         state: &mut State,
         domain_id: &DomainId,
-        account_id: AccountId,
+        account_id: &AccountId,
         uaid: UniversalAccountId,
         assets: &[(AssetDefinitionId, &str, AssetBalanceScope, u64)],
         bindings: Option<&[(AccountId, UniversalAccountId, DataSpaceId)]>,

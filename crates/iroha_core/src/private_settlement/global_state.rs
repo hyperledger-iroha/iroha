@@ -1379,7 +1379,7 @@ impl PrivateSettlementGlobalStateV1 {
     /// Explicitly bootstrap one restricted pool through governance.
     pub(crate) fn bootstrap_pool(
         &mut self,
-        governance: PrivateSettlementPoolGovernanceV1,
+        governance: &PrivateSettlementPoolGovernanceV1,
         initial_commitments: &[PrivacyCommitmentV1],
         admitted_at_height: u64,
     ) -> Result<PrivateSettlementGlobalStateOutcomeV1, PrivateSettlementGlobalStateErrorV1> {
@@ -1391,7 +1391,7 @@ impl PrivateSettlementGlobalStateV1 {
         }
         let key = PrivateSettlementPoolKeyV1::new(governance.body.route, governance.body.pool_id)?;
         let governance_projection =
-            PrivateSettlementPoolGovernanceProjectionV1::from_restricted(&governance)
+            PrivateSettlementPoolGovernanceProjectionV1::from_restricted(governance)
                 .map_err(PrivateSettlementGlobalStateErrorV1::from_pool)?;
         let pool = PrivateSettlementPoolStateV1::bootstrap(
             governance.body.route,
@@ -1467,7 +1467,7 @@ impl PrivateSettlementGlobalStateV1 {
     /// Register one exact complete all-Prepare barrier before Commit voting.
     pub(crate) fn register_prepare(
         &mut self,
-        barrier: PrivateSettlementPrepareBarrierV1,
+        barrier: &PrivateSettlementPrepareBarrierV1,
         current_height: u64,
     ) -> Result<PrivateSettlementGlobalStateOutcomeV1, PrivateSettlementGlobalStateErrorV1> {
         let governance = mv::storage::Storage::from_iter(self.governance.clone());
@@ -1489,7 +1489,7 @@ impl PrivateSettlementGlobalStateV1 {
             &staged_locks.view(),
             &receipts.view(),
             &aborts.view(),
-            &barrier,
+            barrier,
             current_height,
         )?;
         let Some(plan) = plan else {
@@ -1941,17 +1941,17 @@ pub mod tests {
 
     #[test]
     fn private_settlement_json_keys_require_the_exact_owner_and_uppercase_frame() {
-        fn check<T>(value: T)
+        fn check<T>(value: &T)
         where
             T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + PartialEq,
         {
-            let bytes = norito::to_bytes(&value).expect("key frame");
+            let bytes = norito::to_bytes(value).expect("key frame");
             let uppercase = hex::encode_upper(&bytes);
             let decoded: T =
                 decode_private_settlement_storage_key_v1(&uppercase).expect("exact key");
-            assert!(decoded == value);
+            assert!(&decoded == value);
             let mut encoded = String::new();
-            encode_private_settlement_storage_key_v1(&value, &mut encoded);
+            encode_private_settlement_storage_key_v1(value, &mut encoded);
             assert_eq!(encoded, format!("\"{uppercase}\""));
             assert!(
                 decode_private_settlement_storage_key_v1::<T>(&uppercase.to_lowercase()).is_err()
@@ -1970,17 +1970,17 @@ pub mod tests {
         let pool = *state.pools.keys().next().expect("governed pool");
         let root = *state.roots.keys().next().expect("governed root");
         let delta = &receipt.legs[0].delta;
-        check(pool);
-        check(root);
-        check(PrivateSettlementNullifierKeyV1 {
+        check(&pool);
+        check(&root);
+        check(&PrivateSettlementNullifierKeyV1 {
             pool,
             nullifier: delta.nullifiers[0],
         });
-        check(PrivateSettlementOutputKeyV1 {
+        check(&PrivateSettlementOutputKeyV1 {
             pool,
             commitment: delta.output_commitments[0],
         });
-        check(PrivateSettlementStagedLockKeyV1::Bundle(
+        check(&PrivateSettlementStagedLockKeyV1::Bundle(
             receipt.manifest.bundle_id,
         ));
     }
@@ -2385,10 +2385,10 @@ pub mod tests {
         verify_private_settlement_receipt_v1(&receipt).expect("receipt");
         let mut state = PrivateSettlementGlobalStateV1::default();
         state
-            .bootstrap_pool(first_governance, &initial_commitments, 5)
+            .bootstrap_pool(&first_governance, &initial_commitments, 5)
             .expect("first bootstrap");
         state
-            .bootstrap_pool(second_governance, &initial_commitments, 5)
+            .bootstrap_pool(&second_governance, &initial_commitments, 5)
             .expect("second bootstrap");
         (state, receipt, fixture)
     }
@@ -2398,7 +2398,7 @@ pub mod tests {
         receipt: &PrivateSettlementReceiptV1,
     ) -> Result<PrivateSettlementGlobalStateOutcomeV1, PrivateSettlementGlobalStateErrorV1> {
         state.register_prepare(
-            prepare_barrier_from_receipt_v1(receipt)?,
+            &prepare_barrier_from_receipt_v1(receipt)?,
             receipt.manifest.authority_context_height,
         )
     }
@@ -2464,12 +2464,15 @@ pub mod tests {
         alternate_barrier.prepare_certificates[0] = alternate_prepare.clone();
         assert!(barrier.quorum_equivalent_to(&alternate_barrier));
         assert_eq!(
-            state.register_prepare(barrier.clone(), receipt.manifest.authority_context_height,),
+            state.register_prepare(&barrier, receipt.manifest.authority_context_height,),
             Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
         );
         let registered_bytes = norito::encode_canonical(&state).expect("registered state bytes");
         assert_eq!(
-            state.register_prepare(alternate_barrier, receipt.manifest.authority_context_height),
+            state.register_prepare(
+                &alternate_barrier,
+                receipt.manifest.authority_context_height
+            ),
             Ok(PrivateSettlementGlobalStateOutcomeV1::Idempotent)
         );
         assert_eq!(
@@ -2515,7 +2518,7 @@ pub mod tests {
         );
         let before = norito::encode_canonical(&state).expect("conflicted state bytes");
         assert_eq!(
-            state.register_prepare(barrier.clone(), receipt.manifest.authority_context_height),
+            state.register_prepare(&barrier, receipt.manifest.authority_context_height),
             Err(PrivateSettlementGlobalStateErrorV1::Substitution)
         );
         assert_eq!(
@@ -2549,7 +2552,7 @@ pub mod tests {
         let barrier = prepare_barrier_from_receipt_v1(&receipt).expect("fixture Prepare barrier");
         let before = norito::encode_canonical(&state).expect("pre-registration state bytes");
         assert_eq!(
-            state.register_prepare(barrier, receipt.manifest.expiry_height),
+            state.register_prepare(&barrier, receipt.manifest.expiry_height),
             Err(PrivateSettlementGlobalStateErrorV1::Height),
             "a registration at expiry leaves no successor block for finalization"
         );
@@ -2588,7 +2591,7 @@ pub mod tests {
 
         assert_eq!(
             state.register_prepare(
-                competing_barrier,
+                &competing_barrier,
                 competing.manifest.authority_context_height,
             ),
             Err(PrivateSettlementGlobalStateErrorV1::Conflict)

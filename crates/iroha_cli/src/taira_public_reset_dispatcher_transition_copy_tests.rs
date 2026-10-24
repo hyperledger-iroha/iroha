@@ -73,8 +73,8 @@ fn dispatcher_transition_private_copy_modes_survive_restrictive_umask() {
         ),
     ] {
         let f = fixture();
-        let target = f._temp.path().join(case);
-        let partial = f._temp.path().join(format!(".{case}.partial"));
+        let target = f.temp.path().join(case);
+        let partial = f.temp.path().join(format!(".{case}.partial"));
         file(&partial, content, mode);
         let before = fs::metadata(&partial).unwrap();
         let result = storage::copy::copy_exact(

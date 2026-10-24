@@ -351,10 +351,10 @@ pub fn write_planned(
 /// See [`plan`] and [`write_planned`].
 pub fn record_outbound_message(
     state_transaction: &mut StateTransaction<'_, '_>,
-    args: OutboundRecordArgsV1,
+    args: &OutboundRecordArgsV1,
 ) -> Result<[u8; 32], Error> {
-    let planned = plan(state_transaction, &args)?;
-    write_planned(state_transaction, &args, planned)
+    let planned = plan(state_transaction, args)?;
+    write_planned(state_transaction, args, planned)
 }
 
 #[cfg(test)]
@@ -418,7 +418,7 @@ mod tests {
         crate::smartcontracts::isi::sccp::test_support::install_generation(
             stx,
             1,
-            sample_generation_at(1, 1),
+            &(sample_generation_at(1, 1)),
         )
         .expect("generation");
         store::committee_current::set(stx, 1);
@@ -771,13 +771,13 @@ mod tests {
             .clone();
         let id = record_outbound_message(
             &mut stx,
-            OutboundRecordArgsV1 {
+            &(OutboundRecordArgsV1 {
                 network: SccpNetworkV1::EthereumMainnet,
                 revision: 1,
                 amount: ONE_XOR,
                 sender: escrow,
                 recipient: vec![0x22; 20],
-            },
+            }),
         )
         .expect("bounce");
         let route =

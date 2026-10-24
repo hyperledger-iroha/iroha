@@ -475,7 +475,7 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
                 &mut failed,
                 &mut cache,
                 route,
-                policy_route,
+                &(policy_route),
                 None,
             )
             .is_err()

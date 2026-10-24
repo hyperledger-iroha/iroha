@@ -34,7 +34,7 @@ impl TokenTestContext {
 }
 
 fn token_test_context() -> TokenTestContext {
-    token_test_context_with_payload(b"stream token payload fixture".to_vec())
+    token_test_context_with_payload(b"stream token payload fixture")
 }
 #[cfg(feature = "telemetry")]
 fn isolated_test_telemetry() -> crate::routing::MaybeTelemetry {
@@ -45,11 +45,11 @@ fn isolated_test_telemetry() -> crate::routing::MaybeTelemetry {
         iroha_config::parameters::actual::TelemetryProfile::Full,
     )
 }
-fn token_test_context_with_payload(payload: Vec<u8>) -> TokenTestContext {
+fn token_test_context_with_payload(payload: &[u8]) -> TokenTestContext {
     token_test_context_with_payload_and_signer_mode(payload, ApiTestStreamTokenSignerMode::Sign)
 }
 fn token_test_context_with_payload_and_signer_mode(
-    payload: Vec<u8>,
+    payload: &[u8],
     signer_mode: ApiTestStreamTokenSignerMode,
 ) -> TokenTestContext {
     let provider_id = [0xAB; 32];
@@ -63,9 +63,9 @@ fn token_test_context_with_payload_and_signer_mode(
         app.telemetry = isolated_test_telemetry();
     }
     let (node, storage_dir) = sorafs_node_with_temp_storage();
-    let manifest = manifest_for_payload(0x42, &payload);
-    let plan = CarBuildPlan::single_file(&payload).expect("plan");
-    let mut reader = payload.as_slice();
+    let manifest = manifest_for_payload(0x42, payload);
+    let plan = CarBuildPlan::single_file(payload).expect("plan");
+    let mut reader = payload;
     let manifest_id_hex = node
         .ingest_manifest(&manifest, &plan, &mut reader)
         .expect("ingest manifest");

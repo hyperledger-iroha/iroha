@@ -237,10 +237,7 @@ impl<I: AppendIo> ReplayStore<I> {
                     Ok(count) if count <= FRAME_BYTES - written => written += count,
                     Ok(_) => return Err(io::Error::from(io::ErrorKind::InvalidData).into()),
                     Err(MembershipAppendStoreError::Io(error))
-                        if error.kind() == io::ErrorKind::Interrupted =>
-                    {
-                        continue;
-                    }
+                        if error.kind() == io::ErrorKind::Interrupted => {}
                     Err(error) => return Err(error),
                 }
             }

@@ -5966,7 +5966,7 @@ mod tests {
             seed_kaigi_account_dependency_for_testing(
                 stx,
                 &relay_id,
-                &((KAIGI_DEPENDENCY_RELAY_FEEDBACK, home.clone(), key)),
+                &(KAIGI_DEPENDENCY_RELAY_FEEDBACK, home.clone(), key),
             );
 
             let error = ensure_kaigi_relay_home_change_allowed(stx, &relay_id, &home, Some(&other))
@@ -6085,11 +6085,11 @@ mod tests {
                 seed_kaigi_account_dependency_for_testing(
                     stx,
                     &key_relay,
-                    &((
+                    &(
                         KAIGI_DEPENDENCY_RELAY_FEEDBACK,
                         home.clone(),
                         correct_feedback_key,
-                    )),
+                    ),
                 );
                 for error in [
                     ensure_kaigi_relay_home_change_allowed(stx, &key_relay, &home, Some(&other))
@@ -6121,11 +6121,11 @@ mod tests {
             seed_kaigi_account_dependency_for_testing(
                 stx,
                 &relay_id,
-                &((
+                &(
                     KAIGI_DEPENDENCY_RELAY_FEEDBACK,
                     unrelated.clone(),
                     missing_key,
-                )),
+                ),
             );
 
             let error = ensure_kaigi_relay_home_change_allowed(stx, &relay_id, &home, None)
@@ -6556,11 +6556,11 @@ mod tests {
                     seed_kaigi_account_dependency_for_testing(
                         stx,
                         &relay_id,
-                        &((
+                        &(
                             KAIGI_DEPENDENCY_RELAY_REGISTRATION,
                             domain_id.clone(),
                             registration_key,
-                        )),
+                        ),
                     );
                 }
                 relay_ids.push(relay_id);
@@ -6617,11 +6617,11 @@ mod tests {
             seed_kaigi_account_dependency_for_testing(
                 stx,
                 &new_relay,
-                &((
+                &(
                     KAIGI_DEPENDENCY_RELAY_REGISTRATION,
                     domain_id.clone(),
                     rejected_key,
-                )),
+                ),
             );
             let error = collect_kaigi_relay_registry(&stx.world)
                 .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -9053,7 +9053,7 @@ mod tests {
     ) {
         apply_kaigi_account_dependency_replacement(
             stx,
-            &dependency,
+            dependency,
             &BTreeSet::new(),
             &BTreeSet::from([account.clone()]),
         );

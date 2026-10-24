@@ -42,7 +42,7 @@ fn policy_slot_registration(
             state.attempt.id,
             sequence,
             ParliamentBody::PolicyJury,
-            snapshot.to_vec(),
+            snapshot,
             3,
             request_height,
             pulse_height,

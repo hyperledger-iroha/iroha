@@ -1012,7 +1012,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     .execute(&ALICE_ID, &mut stx)
     .expect_err("ordered mailbox admission remains disabled even for a manager");
     assert_invariant_contains(
-        closed_mailbox,
+        &(closed_mailbox),
         "disabled until consensus can re-execute the exact admitted IVM bundle",
     );
     assert!(stx.world.soracloud_mailbox_messages.is_empty());
@@ -1095,7 +1095,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         .execute(&ALICE_ID, &mut stx)
         .expect_err("Core must independently keep ordered mailbox execution disabled");
     assert_invariant_contains(
-        core_error,
+        &(core_error),
         "disabled until consensus can re-execute the exact admitted IVM bundle",
     );
     assert!(stx.world.soracloud_mailbox_messages.is_empty());
@@ -1316,8 +1316,7 @@ fn sample_bundle_with_state_binding(
     key_prefix: &str,
     encryption: SoraStateEncryptionV1,
     mutability: SoraStateMutabilityV1,
-    max_item_bytes: u64,
-    max_total_bytes: u64,
+    (max_item_bytes, max_total_bytes): (u64, u64),
 ) -> SoraDeploymentBundleV1 {
     let mut bundle = sample_bundle(service_name, service_version, canary_percent);
     bundle.container.capabilities.allow_state_writes = true;

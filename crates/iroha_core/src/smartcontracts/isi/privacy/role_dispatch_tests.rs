@@ -281,9 +281,11 @@ fn unsupported_operation_and_foreign_effect_map_to_distinct_instruction_errors()
         let PrivacyRoleVerificationV1::Unsupported(limitation) = row.verification else {
             continue;
         };
-        let error = privacy_verification_error(PrivacyVerificationErrorV1::UnsupportedOperation(
-            Box::new(PrivacyUnsupportedOperationV1::new(row.role, limitation)),
-        ));
+        let error = privacy_verification_error(
+            &(PrivacyVerificationErrorV1::UnsupportedOperation(Box::new(
+                PrivacyUnsupportedOperationV1::new(row.role, limitation),
+            ))),
+        );
         let message = smart_contract_parameter_message(&error);
         assert!(
             message.starts_with("privacy proof admission rejected"),
@@ -305,9 +307,11 @@ fn unsupported_operation_and_foreign_effect_map_to_distinct_instruction_errors()
         ]
     );
     for role in PrivacyActionRoleV1::ALL {
-        let error = privacy_verification_error(PrivacyVerificationErrorV1::EffectRoleMismatch(
-            Box::new(PrivacyEffectRoleMismatchFailureV1 { role }),
-        ));
+        let error = privacy_verification_error(
+            &(PrivacyVerificationErrorV1::EffectRoleMismatch(Box::new(
+                PrivacyEffectRoleMismatchFailureV1 { role },
+            ))),
+        );
         let Error::InvariantViolation(message) = &error else {
             panic!("{role}: a foreign effect must be an invariant violation, got {error:?}");
         };

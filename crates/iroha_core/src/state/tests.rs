@@ -523,7 +523,12 @@ fn fixture_manual_lifecycle_storage_identity(
 ) -> crate::kura::LaneStorageIdentity {
     let height = state.block_hashes.view().len() as u64;
     let update = prepare_lane_lifecycle_update(
-        &state.nexus_snapshot(),(&state.lane_incarnations_snapshot(), &state.lane_incarnation_lineage_snapshot(), &state.lane_incarnation_activation_heights_snapshot()),
+        &state.nexus_snapshot(),
+        (
+            &state.lane_incarnations_snapshot(),
+            &state.lane_incarnation_lineage_snapshot(),
+            &state.lane_incarnation_activation_heights_snapshot(),
+        ),
         state.network_id_ref(),
         synthetic_lane_lifecycle_header_hash(state.network_id_ref(), height, plan),
         plan,
@@ -2775,7 +2780,8 @@ state_test! { sync axt_handle_counters_reject_zero_or_cross_store_rollback
     );
 }
 state_test! { sync axt_handle_counters_are_required_by_replay_and_budget_records
-    let fixtures: [(&str, fn() -> State); 2] = [
+    type StateFixture = (&'static str, fn() -> State);
+    let fixtures: [StateFixture; 2] = [
         ("replay", || state_with_axt_replay_record().0),
         ("budget", || state_with_axt_handle_budget_record(5).0),
     ];
@@ -5079,7 +5085,15 @@ fn install_existing_nexus_geometry_for_test(
         })
         .collect();
     state
-        .apply_lane_geometry_updates((&previous_lane_config, &nexus.lane_config),(&previous_incarnations, &incarnations),(&previous_activations, &activation_heights),(&previous_lineage, &lineage),(&replaced, u64::try_from(state.block_hashes.view().len()).expect("fixture height")),
+        .apply_lane_geometry_updates(
+            (&previous_lane_config, &nexus.lane_config),
+            (&previous_incarnations, &incarnations),
+            (&previous_activations, &activation_heights),
+            (&previous_lineage, &lineage),
+            (
+                &replaced,
+                u64::try_from(state.block_hashes.view().len()).expect("fixture height"),
+            ),
             &mut LaneLifecycleReleases::new(state),
         )
         .expect("journal the exact structural fixture reference transition");
@@ -6467,11 +6481,11 @@ state_test! { sync autoscale_thresholds_permille_rejects_runtime_invalid_ratios
     let_row! { mut autoscale = iroha_config::parameters::actual::Autoscale { scale_out_latency_ratio: 1.2, scale_in_latency_ratio: 0.8, scale_out_utilization_ratio: 0.7, scale_in_utilization_ratio: 0.3, ..Default::default() } };
     assert_eq!(
         autoscale_thresholds_permille(&autoscale),
-        Some(AutoscaleThresholds {
-            out_latency_permille: 1_200,
-            in_latency_permille: 800,
-            out_utilization_permille: 700,
-            in_utilization_permille: 300,
+        Some(AutoscaleThresholdsPermille {
+            out_latency: 1_200,
+            in_latency: 800,
+            out_utilization: 700,
+            in_utilization: 300,
         })
     );
     autoscale.scale_out_latency_ratio = f64::NAN;
@@ -6509,8 +6523,8 @@ state_test! { sync autoscale_thresholds_permille_rejects_sub_permille_runtime_ra
     assert_eq!(
         autoscale_thresholds_permille(&autoscale).map(|thresholds| {
             (
-                thresholds.in_latency_permille,
-                thresholds.out_latency_permille,
+                thresholds.in_latency,
+                thresholds.out_latency,
             )
         }),
         Some((1, 1_200)),
@@ -20227,14 +20241,12 @@ state_test! { sync direct_execution_identity_is_unchanged_by_canonical_output_at
     let mut resultless_block = state.block(resultless.header());
     let resultless_identity = resultless_block
         .transaction()
-        .direct_execution_identity()
-        .expect("resultless proposal has a deterministic direct execution identity");
+        .direct_execution_identity();
     drop(resultless_block);
     let mut executed_block = state.block(with_results.header());
     let executed_identity = executed_block
         .transaction()
-        .direct_execution_identity()
-        .expect("executed block has a deterministic direct execution identity");
+        .direct_execution_identity();
     assert_eq!(
         resultless_identity, executed_identity,
         "proposal execution and validation/Kura replay must derive the same identity"

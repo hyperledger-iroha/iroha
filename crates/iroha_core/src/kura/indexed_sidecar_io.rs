@@ -3323,7 +3323,7 @@ impl Kura {
             return false;
         }
         let Some(intent_file) =
-            Self::publish_bound_progress_append_intent(namespace, index_path, &intent, kind)
+            Self::publish_bound_progress_append_intent(namespace, index_path, intent, kind)
         else {
             return false;
         };

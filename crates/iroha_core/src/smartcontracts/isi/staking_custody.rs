@@ -93,13 +93,13 @@ fn prepare_change(
     }
     let (custody_after, reserve_after) = if credit {
         (
-            quantity_add(held, &(amount.clone()))?,
-            quantity_add(reserved, &(amount.clone()))?,
+            quantity_add(&(held), &(amount.clone()))?,
+            quantity_add(&(reserved), &(amount.clone()))?,
         )
     } else {
         (
-            quantity_sub(held, &(amount.clone()))?,
-            quantity_sub(reserved, &(amount.clone()))?,
+            quantity_sub(&(held), &(amount.clone()))?,
+            quantity_sub(&(reserved), &(amount.clone()))?,
         )
     };
     Ok(StakeCustodyChange {
@@ -123,7 +123,7 @@ pub fn prepare_stake_custody_credit(
 ) -> Result<StakeCustodyChange, Attempt<Error>> {
     let change = prepare_change(world, lane_id, validator, asset, amount, true)?;
     let fees = crate::validation_fee_rewards::reserved_fee_custody(world, asset)?;
-    if balance_after < &quantity_add(change.reserve_after.clone(), &(fees))? {
+    if balance_after < &quantity_add(&(change.reserve_after.clone()), &(fees))? {
         return Err(Error::InvariantViolation(
             "staking deposit is not backed by unreserved custody funds".into(),
         )

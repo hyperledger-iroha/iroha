@@ -1,4 +1,4 @@
-//! Supervised Torii runtime for durable native SoraFS orderbook transactions.
+//! Supervised Torii runtime for durable native `SoraFS` orderbook transactions.
 //!
 //! The durable `sorafs_node` forwarder is the only local delivery state. Policy, book status,
 //! channels, receipts, and transaction outcomes are read from one immutable finalized ledger view.
@@ -1022,7 +1022,7 @@ fn generated_orderbook_operation_in_one_finalized_view(
         finalized_cursor,
         finalized_at_unix,
         policy_record: policy_record.clone(),
-        status: status.clone(),
+        status,
         maintenance_due,
     };
     let operation = plan_orderbook_generation(
@@ -1330,15 +1330,14 @@ pub async fn run_sorafs_orderbook_transaction_forwarder_scan(
         }
     }
     let scan_limit = ORDERBOOK_TRANSACTION_FORWARDER_MAX_SCAN_ITEMS_V1;
-    let pending = match state
+    let pending = if let Ok(pending) = state
         .sorafs_node
         .pending_orderbook_transactions_after(cursor.after_sequence, scan_limit)
     {
-        Ok(pending) => pending,
-        Err(_) => {
-            warn!("failed to load durable native SoraFS orderbook transactions");
-            return scan;
-        }
+        pending
+    } else {
+        warn!("failed to load durable native SoraFS orderbook transactions");
+        return scan;
     };
     for delivery in pending {
         cursor.after_sequence = Some(delivery.sequence);
@@ -1392,7 +1391,7 @@ pub async fn run_sorafs_orderbook_transaction_forwarder_scan(
         let exact_transaction_hash = exact_transaction.as_ref().map(SignedTransaction::hash);
         let delivery_evidence_before = exact_transaction_hash.as_ref().is_some_and(|hash| {
             let queue_pending = state.queue.contains_pending_hash(
-                iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone()),
+                iroha_core::tx::external_entrypoint_hash_from_signed_hash(*hash),
                 &state.state,
             );
             let cache_kind = state
@@ -1419,7 +1418,7 @@ pub async fn run_sorafs_orderbook_transaction_forwarder_scan(
         );
         let delivery_evidence_after = exact_transaction_hash.as_ref().is_some_and(|hash| {
             let queue_pending = state.queue.contains_pending_hash(
-                iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone()),
+                iroha_core::tx::external_entrypoint_hash_from_signed_hash(*hash),
                 &state.state,
             );
             let cache_kind = state
@@ -1708,35 +1707,34 @@ async fn submit_sorafs_orderbook_transaction(
     if transaction.network_id() != Some(state.state.network_id_ref()) {
         return OrderbookTransactionSubmissionResultV1::Deferred;
     }
-    let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.state.clone(),
+    let accepted = if let Ok(accepted) = crate::routing::accept_transaction_for_ingress(
+        &(state.state),
         transaction.clone(),
         &state.telemetry,
     ) {
-        Ok(accepted) => accepted,
-        Err(_) => {
-            let exact = state
-                .sorafs_node
-                .begin_orderbook_transaction_submission(operation_id);
-            if !exact
-                .as_ref()
-                .is_ok_and(|bytes| bytes == &transaction_bytes)
-            {
-                return OrderbookTransactionSubmissionResultV1::Deferred;
-            }
-            let Some(finalized_cursor) = current_orderbook_finalized_cursor(state) else {
-                return OrderbookTransactionSubmissionResultV1::Deferred;
-            };
-            return if state
-                .sorafs_node
-                .mark_orderbook_transaction_rejected(operation_id, finalized_cursor)
-                .is_ok()
-            {
-                OrderbookTransactionSubmissionResultV1::Rejected
-            } else {
-                OrderbookTransactionSubmissionResultV1::Deferred
-            };
+        accepted
+    } else {
+        let exact = state
+            .sorafs_node
+            .begin_orderbook_transaction_submission(operation_id);
+        if !exact
+            .as_ref()
+            .is_ok_and(|bytes| bytes == &transaction_bytes)
+        {
+            return OrderbookTransactionSubmissionResultV1::Deferred;
         }
+        let Some(finalized_cursor) = current_orderbook_finalized_cursor(state) else {
+            return OrderbookTransactionSubmissionResultV1::Deferred;
+        };
+        return if state
+            .sorafs_node
+            .mark_orderbook_transaction_rejected(operation_id, finalized_cursor)
+            .is_ok()
+        {
+            OrderbookTransactionSubmissionResultV1::Rejected
+        } else {
+            OrderbookTransactionSubmissionResultV1::Deferred
+        };
     };
     let routing_plan = match state
         .queue
@@ -1758,8 +1756,8 @@ async fn submit_sorafs_orderbook_transaction(
     }
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
         match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
-            state.queue.clone(),
-            state.state.clone(),
+            &(state.queue),
+            &(state.state),
             accepted,
             Some(routing_plan),
         ) {
@@ -1967,10 +1965,7 @@ mod tests {
                 &expected,
                 true,
                 [
-                    (
-                        expected.clone(),
-                        OrderbookCommittedExternalOutcomeV1::Applied,
-                    ),
+                    (expected, OrderbookCommittedExternalOutcomeV1::Applied,),
                     (expected, OrderbookCommittedExternalOutcomeV1::Applied),
                 ],
             ),

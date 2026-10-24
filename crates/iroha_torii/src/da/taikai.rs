@@ -798,9 +798,8 @@ pub(crate) mod taikai_ingest {
         component
             .chars()
             .map(|ch| match ch {
-                'a'..='z' => ch,
                 'A'..='Z' => ch.to_ascii_lowercase(),
-                '0'..='9' => ch,
+                'a'..='z' | '0'..='9' => ch,
                 _ => '-',
             })
             .collect()
@@ -989,13 +988,10 @@ pub(crate) mod taikai_ingest {
             "Taikai routing manifest lineage record",
             TAIKAI_ANCHOR_LINEAGE_MAX_BYTES,
         )?;
-        let value: Value = json::from_slice(&bytes)
-            .map_err(|err| io::Error::new(ErrorKind::Other, err.to_string()))?;
+        let value: Value =
+            json::from_slice(&bytes).map_err(|err| io::Error::other(err.to_string()))?;
         let map = value.as_object().ok_or_else(|| {
-            io::Error::new(
-                ErrorKind::Other,
-                "Taikai routing manifest lineage record must be a JSON object",
-            )
+            io::Error::other("Taikai routing manifest lineage record must be a JSON object")
         })?;
         let version = map.get("version").and_then(Value::as_u64).ok_or_else(|| {
             invalid_lineage_record("Taikai routing manifest lineage record missing version")
@@ -1009,28 +1005,21 @@ pub(crate) mod taikai_ingest {
             .get("alias_namespace")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                io::Error::new(
-                    ErrorKind::Other,
-                    "Taikai routing manifest lineage record missing alias_namespace",
-                )
+                io::Error::other("Taikai routing manifest lineage record missing alias_namespace")
             })?
             .to_owned();
         let alias_name = map
             .get("alias_name")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                io::Error::new(
-                    ErrorKind::Other,
-                    "Taikai routing manifest lineage record missing alias_name",
-                )
+                io::Error::other("Taikai routing manifest lineage record missing alias_name")
             })?
             .to_owned();
         let manifest_digest_hex = map
             .get("manifest_digest_hex")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                io::Error::new(
-                    ErrorKind::Other,
+                io::Error::other(
                     "Taikai routing manifest lineage record missing manifest_digest_hex",
                 )
             })?
@@ -1040,8 +1029,7 @@ pub(crate) mod taikai_ingest {
             .get("window_start_sequence")
             .and_then(Value::as_u64)
             .ok_or_else(|| {
-                io::Error::new(
-                    ErrorKind::Other,
+                io::Error::other(
                     "Taikai routing manifest lineage record missing window_start_sequence",
                 )
             })?;
@@ -1049,8 +1037,7 @@ pub(crate) mod taikai_ingest {
             .get("window_end_sequence")
             .and_then(Value::as_u64)
             .ok_or_else(|| {
-                io::Error::new(
-                    ErrorKind::Other,
+                io::Error::other(
                     "Taikai routing manifest lineage record missing window_end_sequence",
                 )
             })?;
@@ -1124,7 +1111,7 @@ pub(crate) mod taikai_ingest {
         }
         map.insert("updated_unix".into(), Value::from(record.updated_unix));
         let rendered = json::to_json_pretty(&Value::Object(map))
-            .map_err(|err| io::Error::new(ErrorKind::Other, err.to_string()))?;
+            .map_err(|err| io::Error::other(err.to_string()))?;
         let tmp_path = path.with_extension(format!("tmp-{}", artifact_temp_suffix()?));
         match open_new_private_artifact(&tmp_path) {
             Ok(mut file) => {
@@ -1141,10 +1128,10 @@ pub(crate) mod taikai_ingest {
             remove_temp_artifact(&tmp_path)?;
             return Err(err);
         }
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                sync_dir(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            sync_dir(parent)?;
         }
         Ok(())
     }
@@ -1366,7 +1353,7 @@ pub(crate) mod taikai_ingest {
             map.insert("previous_updated_unix".into(), Value::Null);
         }
         let rendered = json::to_json_pretty(&Value::Object(map))
-            .map_err(|err| io::Error::new(ErrorKind::Other, err.to_string()))?;
+            .map_err(|err| io::Error::other(err.to_string()))?;
         Ok(rendered.into_bytes())
     }
     pub(crate) fn build_envelope(
@@ -1380,9 +1367,9 @@ pub(crate) mod taikai_ingest {
         let stream_id = TaikaiStreamId::new(parse_name(metadata, META_TAIKAI_STREAM_ID)?);
         let rendition_id = TaikaiRenditionId::new(parse_name(metadata, META_TAIKAI_RENDITION_ID)?);
         let track_kind = TaikaiTrackKind::from_str(require_utf8(metadata, META_TAIKAI_TRACK_KIND)?)
-            .map_err(|err| parse_error(META_TAIKAI_TRACK_KIND, err))?;
+            .map_err(|err| parse_error(META_TAIKAI_TRACK_KIND, &(err)))?;
         let codec = TaikaiCodec::from_str(require_utf8(metadata, META_TAIKAI_TRACK_CODEC)?)
-            .map_err(|err| parse_error(META_TAIKAI_TRACK_CODEC, err))?;
+            .map_err(|err| parse_error(META_TAIKAI_TRACK_CODEC, &(err)))?;
         let bitrate = parse_u32(
             require_utf8(metadata, META_TAIKAI_TRACK_BITRATE)?,
             META_TAIKAI_TRACK_BITRATE,
@@ -1397,7 +1384,7 @@ pub(crate) mod taikai_ingest {
             TaikaiTrackKind::Video => {
                 let resolution_str = require_utf8(metadata, META_TAIKAI_TRACK_RESOLUTION)?;
                 let resolution = TaikaiResolution::from_str(resolution_str)
-                    .map_err(|err| parse_error(META_TAIKAI_TRACK_RESOLUTION, err))?;
+                    .map_err(|err| parse_error(META_TAIKAI_TRACK_RESOLUTION, &(err)))?;
                 if !matches!(
                     codec,
                     TaikaiCodec::AvcHigh
@@ -1415,7 +1402,7 @@ pub(crate) mod taikai_ingest {
             TaikaiTrackKind::Audio => {
                 let layout_str = require_utf8(metadata, META_TAIKAI_TRACK_AUDIO_LAYOUT)?;
                 let layout = TaikaiAudioLayout::from_str(layout_str)
-                    .map_err(|err| parse_error(META_TAIKAI_TRACK_AUDIO_LAYOUT, err))?;
+                    .map_err(|err| parse_error(META_TAIKAI_TRACK_AUDIO_LAYOUT, &(err)))?;
                 if !matches!(
                     codec,
                     TaikaiCodec::AacLc | TaikaiCodec::Opus | TaikaiCodec::Custom(_)
@@ -1523,10 +1510,10 @@ pub(crate) mod taikai_ingest {
         if let Some(drift) = live_edge_drift_ms {
             envelope.instrumentation.live_edge_drift_ms = Some(drift);
         }
-        if let Some(node_id) = optional_utf8(metadata, META_TAIKAI_INGEST_NODE_ID)? {
-            if !node_id.trim().is_empty() {
-                envelope.instrumentation.ingest_node_id = Some(node_id.trim().to_owned());
-            }
+        if let Some(node_id) = optional_utf8(metadata, META_TAIKAI_INGEST_NODE_ID)?
+            && !node_id.trim().is_empty()
+        {
+            envelope.instrumentation.ingest_node_id = Some(node_id.trim().to_owned());
         }
         let indexes = envelope.indexes();
         let envelope_bytes = norito::to_bytes(&envelope)
@@ -1745,12 +1732,7 @@ pub(crate) mod taikai_ingest {
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
-            .map_err(|_| {
-                io::Error::new(
-                    ErrorKind::Other,
-                    "Taikai artifact temp suffix counter exhausted",
-                )
-            })
+            .map_err(|_| io::Error::other("Taikai artifact temp suffix counter exhausted"))
     }
     fn artifact_temp_suffix() -> io::Result<String> {
         let counter = allocate_artifact_temp_counter(&ARTIFACT_TEMP_COUNTER)?;
@@ -2319,7 +2301,7 @@ pub(crate) mod taikai_ingest {
             format!("invalid Taikai metadata `{key}`: {}", message.into()),
         )
     }
-    fn parse_error(key: &str, err: TaikaiParseError) -> (StatusCode, String) {
+    fn parse_error(key: &str, err: &TaikaiParseError) -> (StatusCode, String) {
         bad_request(key, err.to_string())
     }
     pub(crate) fn internal_error(message: String) -> (StatusCode, String) {
@@ -2736,7 +2718,7 @@ pub(crate) mod taikai_ingest {
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             tokio::select! {
-                _ = shutdown.receive() => break,
+                () = shutdown.receive() => break,
                 _ = ticker.tick() => {
                     if let Err(err) = process_batch(&spool_dir, &anchor_cfg, &sender).await {
                         iroha_logger::error!(?err, "failed to process Taikai anchor batch");
@@ -4423,8 +4405,7 @@ pub(crate) fn record_taikai_ingest_error(
     }
     let reason = status
         .canonical_reason()
-        .map(Cow::Borrowed)
-        .unwrap_or_else(|| Cow::Owned(status.as_u16().to_string()));
+        .map_or_else(|| Cow::Owned(status.as_u16().to_string()), Cow::Borrowed);
     telemetry.with_metrics(|handle| {
         handle.inc_taikai_ingest_error(cluster_label, stream_label, &reason);
     });

@@ -8202,8 +8202,8 @@ impl BlockStore {
     fn decode_da_block_rewrite_stage_bytes(&self, bytes: &[u8]) -> Result<DaBlockRewriteStageV1> {
         let decode_limits = recovery_control_decode_limits_v1(MAX_DA_BLOCK_REWRITE_STAGE_BYTES)?;
         let stage =
-            norito::decode_canonical_with_limits::<DaBlockRewriteStageV1>(&bytes, decode_limits)
-                .map_err(|error| Error::NoritoFrame(error))?;
+            norito::decode_canonical_with_limits::<DaBlockRewriteStageV1>(bytes, decode_limits)
+                .map_err(Error::NoritoFrame)?;
         self.validate_da_block_rewrite_stage(&stage)?;
         Ok(stage)
     }

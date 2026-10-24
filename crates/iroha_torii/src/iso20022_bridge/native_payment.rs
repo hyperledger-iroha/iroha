@@ -40,7 +40,10 @@ pub struct IsoNativeBusinessSettlement {
 fn encode_frame<T: norito::core::NoritoSerialize>(value: &T) -> Result<String, MsgError> {
     let frame = norito::encode_canonical(value).map_err(|_| MsgError::ValidationFailed)?;
     let frame = BASE64_STANDARD.encode(frame);
-    if frame.len() > ISO_PERSISTED_RECORD_MAX_BYTES as usize {
+    if frame.len()
+        > usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES)
+            .expect("one-megabyte record cap fits usize")
+    {
         return Err(MsgError::ValidationFailed);
     }
     Ok(frame)
@@ -50,7 +53,10 @@ where
     T: norito::core::NoritoSerialize,
     for<'de> T: norito::core::NoritoDeserialize<'de>,
 {
-    if value.len() > ISO_PERSISTED_RECORD_MAX_BYTES as usize {
+    if value.len()
+        > usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES)
+            .expect("one-megabyte record cap fits usize")
+    {
         return None;
     }
     let bytes = BASE64_STANDARD.decode(value).ok()?;

@@ -16,9 +16,9 @@ fn signatory(seed: u8) -> AccountId {
     new_account_id(&KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519))
 }
 
-fn assert_opaque_record_rejection(result: Result<(), ExecutionAttemptError<ValidationFail>>) {
+fn assert_opaque_record_rejection(result: &Result<(), ExecutionAttemptError<ValidationFail>>) {
     assert!(
-        matches!(&result, Err(ExecutionAttemptError::Rejected(ValidationFail::NotPermitted(message)))
+        matches!(result, Err(ExecutionAttemptError::Rejected(ValidationFail::NotPermitted(message)))
             if message.contains("derived `RecordSccpMessage`")),
         "{result:?}"
     );
@@ -112,10 +112,10 @@ fn record_through_signed_multisig(block: &mut crate::state::StateBlock<'_>, sign
     // A trigger body or contract output may not create the proposal.
     let opaque_proposal: InstructionBox = proposal.clone().into();
     assert_opaque_record_rejection(
-        crate::deferred_authority::reject_opaque_instruction_authority(
+        &(crate::deferred_authority::reject_opaque_instruction_authority(
             core::iter::once(&opaque_proposal),
             &tx,
-        ),
+        )),
     );
     // Signed path: signer 1 proposes.
     tx.tx_call_hash = Some(proposal_call);
@@ -129,10 +129,10 @@ fn record_through_signed_multisig(block: &mut crate::state::StateBlock<'_>, sign
     );
     let opaque_approval: InstructionBox = approval.clone().into();
     assert_opaque_record_rejection(
-        crate::deferred_authority::reject_opaque_instruction_authority(
+        &(crate::deferred_authority::reject_opaque_instruction_authority(
             core::iter::once(&opaque_approval),
             &tx,
-        ),
+        )),
     );
     // Signed path: signer 2's approval reaches quorum and records from the multisig account.
     tx.tx_call_hash = Some(approval_call);

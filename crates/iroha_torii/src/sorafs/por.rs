@@ -1,6 +1,6 @@
 //! Rebuildable Proof-of-Retrievability projection used by Torii.
 //!
-//! The storage node checkpoint is the sole authority for PoR challenge lifecycle state. Torii
+//! The storage node checkpoint is the sole authority for `PoR` challenge lifecycle state. Torii
 //! installs that projection at startup, then advances its maps and indexes in place with exact
 //! node-authoritative generation updates. Coordinator persistence retains only exact report
 //! publication state once the projection has been installed.
@@ -64,7 +64,7 @@ use thiserror::Error;
 use time::{Date, Duration, OffsetDateTime, Weekday};
 #[cfg(feature = "app_api")]
 use tokio::time::{MissedTickBehavior, interval};
-/// Maximum sum of canonical status-record bytes returned by one PoR page.
+/// Maximum sum of canonical status-record bytes returned by one `PoR` page.
 pub(crate) const POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1: usize =
     POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1;
 /// Maximum status records materialized and filter-evaluated by one status query.
@@ -157,7 +157,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordedVerdictSnapshot {
         norito::core::decode_field_canonical::<RecordedVerdictSnapshot>(bytes)
     }
 }
-/// Validated record and canonical-byte ceilings for one PoR status page.
+/// Validated record and canonical-byte ceilings for one `PoR` status page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PorStatusPageLimits {
     records: usize,
@@ -193,7 +193,7 @@ impl PorStatusPageLimits {
         })
     }
 }
-/// Opaque, versioned cursor for a PoR status or export page.
+/// Opaque, versioned cursor for a `PoR` status or export page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PorStatusPageCursor {
     /// Start a new snapshot traversal.
@@ -336,7 +336,7 @@ impl PorStatusIndexes {
             generation,
             ..Self::default()
         };
-        for entry in records.iter() {
+        for entry in records {
             indexes.insert_status(&entry.value().to_status());
         }
         indexes
@@ -547,7 +547,7 @@ fn insert_forced_status(
             .expect("bounded PoR status retention leaves forced-provenance count headroom");
     }
 }
-/// Rebuildable PoR read projection and durable weekly-report publisher state.
+/// Rebuildable `PoR` read projection and durable weekly-report publisher state.
 #[derive(Debug, Clone)]
 pub struct PorCoordinator {
     record_limit: usize,
@@ -695,7 +695,7 @@ impl PorStatusPageAccumulator {
 }
 include!("por/persistence_randomness.rs");
 #[cfg(feature = "app_api")]
-/// Errors collecting VRF materials required for PoR challenge planning.
+/// Errors collecting VRF materials required for `PoR` challenge planning.
 #[derive(Debug, Error)]
 pub enum VrfError {
     /// Submission fields are structurally invalid.
@@ -747,7 +747,7 @@ pub enum VrfError {
     Persistence(String),
 }
 #[cfg(feature = "app_api")]
-/// Supplies VRF bundles required to plan PoR challenges.
+/// Supplies VRF bundles required to plan `PoR` challenges.
 pub trait VrfProvider: Send + Sync {
     /// Return verified VRF bundles matching the exact drand randomness record.
     ///
@@ -1185,7 +1185,7 @@ fn load_vrf_state(
     Ok(state)
 }
 #[cfg(feature = "app_api")]
-/// Narrow boundary for durable PoR Governance DAG publication.
+/// Narrow boundary for durable `PoR` Governance DAG publication.
 trait PorGovernancePublisher: Send + Sync {
     /// Return whether a durable signed Governance DAG publisher is bound.
     fn is_ready(&self) -> bool;
@@ -1229,7 +1229,7 @@ impl PorGovernancePublisher for sorafs_node::NodeHandle {
     }
 }
 #[cfg(feature = "app_api")]
-/// Errors that can surface while running the PoR automation workflow.
+/// Errors that can surface while running the `PoR` automation workflow.
 #[derive(Debug, Error)]
 pub enum PorAutomationError {
     /// Randomness provider failed to produce a value.
@@ -1261,7 +1261,7 @@ pub enum PorAutomationError {
     BlockingWorker(String),
 }
 #[cfg(feature = "app_api")]
-/// Runtime wiring PoR challenge scheduling, proof ingestion, and reporting automation.
+/// Runtime wiring `PoR` challenge scheduling, proof ingestion, and reporting automation.
 pub struct PorCoordinatorRuntime {
     /// Storage backend responsible for persisting PoR-related records.
     storage: Arc<dyn PorStorage>,
@@ -1277,7 +1277,7 @@ pub struct PorCoordinatorRuntime {
     publisher: Arc<dyn PorGovernancePublisher>,
     /// Torii telemetry handle used for scheduler metrics.
     telemetry: crate::routing::MaybeTelemetry,
-    /// Interval between PoR epochs in seconds.
+    /// Interval between `PoR` epochs in seconds.
     epoch_interval_secs: u64,
     /// Response window duration granted to providers (seconds).
     response_window_secs: u64,
@@ -1294,7 +1294,7 @@ pub struct PorCoordinatorRuntime {
 impl PorCoordinatorRuntime {
     #[must_use]
     #[allow(clippy::too_many_arguments)]
-    /// Create a new runtime harness for PoR automation.
+    /// Create a new runtime harness for `PoR` automation.
     pub fn new(
         storage: Arc<dyn PorStorage>,
         coordinator: Arc<PorCoordinator>,
@@ -1489,7 +1489,7 @@ impl PorCoordinatorRuntime {
                     let _pipeline = pipeline;
                     match storage.record_challenge(&challenge_for_worker) {
                         Ok(update) => coordinator
-                            .apply_authoritative_update(update)
+                            .apply_authoritative_update(&(update))
                             .map_err(PorAutomationError::Coordinator),
                         Err(error) => {
                             if error.disposition().invalidates_projection() {
@@ -1569,7 +1569,7 @@ impl PorCoordinatorRuntime {
             loop {
                 tokio::select! {
                     biased;
-                    _ = shutdown.receive() => {
+                    () = shutdown.receive() => {
                         return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
                     }
                     _ = ticker.tick() => {
@@ -1587,7 +1587,7 @@ impl PorCoordinatorRuntime {
     }
 }
 #[cfg(feature = "app_api")]
-/// Storage abstraction required by the PoR automation runtime.
+/// Storage abstraction required by the `PoR` automation runtime.
 pub trait PorStorage: Send + Sync {
     /// Produce challenge plans for the supplied randomness and VRF dataset.
     ///
@@ -1666,7 +1666,7 @@ struct ProviderStats {
     first_failure_at: Option<u64>,
 }
 /// Parameters used for filtering status queries.
-/// Filter parameters for querying recorded PoR status information.
+/// Filter parameters for querying recorded `PoR` status information.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PorStatusFilter {
     /// Restrict results to challenges involving this manifest digest.
@@ -1680,30 +1680,30 @@ pub struct PorStatusFilter {
 }
 impl PorStatusFilter {
     fn matches(&self, status: &PorChallengeStatusV1) -> bool {
-        if let Some(manifest) = self.manifest {
-            if status.manifest_digest != manifest {
-                return false;
-            }
+        if let Some(manifest) = self.manifest
+            && status.manifest_digest != manifest
+        {
+            return false;
         }
-        if let Some(provider) = self.provider {
-            if status.provider_id != provider {
-                return false;
-            }
+        if let Some(provider) = self.provider
+            && status.provider_id != provider
+        {
+            return false;
         }
-        if let Some(epoch) = self.epoch {
-            if status.epoch_id != epoch {
-                return false;
-            }
+        if let Some(epoch) = self.epoch
+            && status.epoch_id != epoch
+        {
+            return false;
         }
-        if let Some(outcome) = self.status {
-            if status.status != outcome {
-                return false;
-            }
+        if let Some(outcome) = self.status
+            && status.status != outcome
+        {
+            return false;
         }
         true
     }
 }
-/// Errors returned by the PoR coordinator while processing challenges, proofs, or reports.
+/// Errors returned by the `PoR` coordinator while processing challenges, proofs, or reports.
 #[derive(Debug, Error)]
 pub enum PorCoordinatorError {
     /// The node-authoritative lifecycle projection has not been installed.
@@ -1989,8 +1989,7 @@ pub enum PorCoordinatorError {
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |duration| duration.as_secs())
 }
 fn iso_week_bounds(
     cycle: PorReportIsoWeek,
@@ -2417,9 +2416,9 @@ mod tests {
         ));
     }
     #[cfg(all(unix, feature = "app_api"))]
-    fn drand_test_provider(state_path: PathBuf) -> DrandHttpRandomnessProvider {
+    fn drand_test_provider(state_path: &std::path::Path) -> DrandHttpRandomnessProvider {
         let state_owner_lock =
-            SecureStateOwnerLock::acquire(&state_path, "drand").expect("state owner lock");
+            SecureStateOwnerLock::acquire(state_path, "drand").expect("state owner lock");
         DrandHttpRandomnessProvider {
             public_key: [0; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES],
             genesis_time: 1,
@@ -2430,7 +2429,7 @@ mod tests {
             max_beacon_age_secs: 1,
             max_future_skew_secs: 0,
             endpoints: Vec::new(),
-            state_path: state_path.clone(),
+            state_path: state_path.to_path_buf(),
             state_owner_lock,
             state: Mutex::new(None),
             commit_lock: tokio::sync::Mutex::new(()),
@@ -2444,7 +2443,7 @@ mod tests {
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private state root");
         let state_path = root.join("drand-state.to");
-        let provider = StdArc::new(drand_test_provider(state_path.clone()));
+        let provider = StdArc::new(drand_test_provider(&(state_path)));
         let lower = VerifiedDrandBeacon {
             round: 10,
             randomness: [0x10; 32],
@@ -2514,7 +2513,7 @@ mod tests {
         use std::os::unix::fs::symlink;
         let dir = tempdir().expect("temp dir");
         let state_path = canonical_temp_root(&dir).join("drand-state.to");
-        let provider = drand_test_provider(state_path.clone());
+        let provider = drand_test_provider(&(state_path));
         let beacon = VerifiedDrandBeacon {
             round: 10,
             randomness: [0x41; 32],
@@ -2541,7 +2540,7 @@ mod tests {
     async fn drand_same_round_equivocation_never_overwrites_high_water() {
         let dir = tempdir().expect("temp dir");
         let state_path = canonical_temp_root(&dir).join("drand-state.to");
-        let provider = drand_test_provider(state_path.clone());
+        let provider = drand_test_provider(&(state_path));
         let accepted = VerifiedDrandBeacon {
             round: 10,
             randomness: [0x51; 32],
@@ -2804,10 +2803,10 @@ mod tests {
             removed_challenge_ids: Vec::new(),
         };
         coordinator
-            .apply_authoritative_update(pending_update.clone())
+            .apply_authoritative_update(&(pending_update))
             .expect("insert one authoritative status in place");
         coordinator
-            .apply_authoritative_update(pending_update)
+            .apply_authoritative_update(&(pending_update))
             .expect("same-generation exact update is idempotent");
         let proof = sample_proof(&challenge);
         let mut proof_record = ChallengeRecord::from_challenge(challenge);
@@ -2816,11 +2815,13 @@ mod tests {
         proof_record.responded_at = Some(proof.submitted_at);
         let proof_status = proof_record.to_status();
         coordinator
-            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
-                generation: 3,
-                status: proof_status.clone(),
-                removed_challenge_ids: Vec::new(),
-            })
+            .apply_authoritative_update(
+                &(PorStatusAuthorityUpdateV1 {
+                    generation: 3,
+                    status: proof_status.clone(),
+                    removed_challenge_ids: Vec::new(),
+                }),
+            )
             .expect("replace one status and its indexes in place");
         let projection = coordinator.authoritative_projection.read();
         assert_eq!(
@@ -2838,11 +2839,13 @@ mod tests {
         );
         drop(projection);
         let gap = coordinator
-            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
-                generation: 5,
-                status: proof_status.clone(),
-                removed_challenge_ids: Vec::new(),
-            })
+            .apply_authoritative_update(
+                &(PorStatusAuthorityUpdateV1 {
+                    generation: 5,
+                    status: proof_status.clone(),
+                    removed_challenge_ids: Vec::new(),
+                }),
+            )
             .expect_err("a skipped authoritative generation must fail closed");
         assert!(matches!(
             gap,
@@ -2863,11 +2866,13 @@ mod tests {
         let conflicting_status =
             ChallengeRecord::from_challenge(sample_challenge(true)).to_status();
         let conflict = coordinator
-            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
-                generation: 3,
-                status: conflicting_status,
-                removed_challenge_ids: Vec::new(),
-            })
+            .apply_authoritative_update(
+                &(PorStatusAuthorityUpdateV1 {
+                    generation: 3,
+                    status: conflicting_status,
+                    removed_challenge_ids: Vec::new(),
+                }),
+            )
             .expect_err("only an identical same-generation replay is valid");
         assert!(matches!(
             conflict,
@@ -2881,11 +2886,13 @@ mod tests {
             })
             .expect("reinstall authoritative projection after conflict");
         let rollback = coordinator
-            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
-                generation: 2,
-                status: proof_status,
-                removed_challenge_ids: Vec::new(),
-            })
+            .apply_authoritative_update(
+                &(PorStatusAuthorityUpdateV1 {
+                    generation: 2,
+                    status: proof_status,
+                    removed_challenge_ids: Vec::new(),
+                }),
+            )
             .expect_err("an authoritative generation rollback must fail closed");
         assert!(matches!(
             rollback,
@@ -2911,11 +2918,13 @@ mod tests {
         skipped.failure_reason = Some("invalid proof".to_owned());
         skipped.validate().expect("locally valid terminal status");
         assert!(matches!(
-            coordinator.apply_authoritative_update(PorStatusAuthorityUpdateV1 {
-                generation: 3,
-                status: skipped,
-                removed_challenge_ids: Vec::new(),
-            }),
+            coordinator.apply_authoritative_update(
+                &(PorStatusAuthorityUpdateV1 {
+                    generation: 3,
+                    status: skipped,
+                    removed_challenge_ids: Vec::new(),
+                })
+            ),
             Err(PorCoordinatorError::InvalidAuthoritativeProjection(_))
         ));
         assert!(coordinator.authoritative_projection.read().is_none());
@@ -2933,11 +2942,13 @@ mod tests {
             .validate()
             .expect("deadline failure without proof material is valid");
         coordinator
-            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
-                generation: 3,
-                status: deadline_failure,
-                removed_challenge_ids: Vec::new(),
-            })
+            .apply_authoritative_update(
+                &(PorStatusAuthorityUpdateV1 {
+                    generation: 3,
+                    status: deadline_failure,
+                    removed_challenge_ids: Vec::new(),
+                }),
+            )
             .expect("direct deadline failure is the admitted no-proof transition");
     }
     #[test]
@@ -2980,11 +2991,13 @@ mod tests {
         }
         let replacement = authoritative_status_snapshot(0x56, 11).statuses.remove(0);
         coordinator
-            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
-                generation: 11,
-                status: replacement,
-                removed_challenge_ids: vec![first.challenge_id],
-            })
+            .apply_authoritative_update(
+                &(PorStatusAuthorityUpdateV1 {
+                    generation: 11,
+                    status: replacement,
+                    removed_challenge_ids: vec![first.challenge_id],
+                }),
+            )
             .expect("retire only one same-epoch forced challenge");
         {
             let projection = coordinator.authoritative_projection.read();
@@ -3001,11 +3014,13 @@ mod tests {
         }
         let replacement = authoritative_status_snapshot(0x58, 12).statuses.remove(0);
         coordinator
-            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
-                generation: 12,
-                status: replacement,
-                removed_challenge_ids: vec![second.challenge_id],
-            })
+            .apply_authoritative_update(
+                &(PorStatusAuthorityUpdateV1 {
+                    generation: 12,
+                    status: replacement,
+                    removed_challenge_ids: vec![second.challenge_id],
+                }),
+            )
             .expect("retire the final same-epoch forced challenge");
         assert!(
             !coordinator
@@ -3034,18 +3049,22 @@ mod tests {
             .expect("install full bounded projection");
         let replacement = authoritative_status_snapshot(0x62, 5).statuses.remove(0);
         coordinator
-            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
-                generation: 5,
-                status: replacement.clone(),
-                removed_challenge_ids: vec![terminal.challenge_id],
-            })
+            .apply_authoritative_update(
+                &(PorStatusAuthorityUpdateV1 {
+                    generation: 5,
+                    status: replacement.clone(),
+                    removed_challenge_ids: vec![terminal.challenge_id],
+                }),
+            )
             .expect("remove archived terminal and insert replacement atomically");
         coordinator
-            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
-                generation: 5,
-                status: terminal,
-                removed_challenge_ids: Vec::new(),
-            })
+            .apply_authoritative_update(
+                &(PorStatusAuthorityUpdateV1 {
+                    generation: 5,
+                    status: terminal,
+                    removed_challenge_ids: Vec::new(),
+                }),
+            )
             .expect("authenticated archived exact replay is a projection no-op");
         let projection = coordinator.authoritative_projection.read();
         let projection = projection.as_ref().expect("projection remains installed");

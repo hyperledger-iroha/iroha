@@ -414,6 +414,10 @@ impl VerifiedFeeSponsorProofFixtures {
         }
     }
 
+    #[expect(
+        clippy::map_unwrap_or,
+        reason = "Clone the cached owner before the fallback mutably inserts into the same locked entries vector."
+    )]
     fn get_or_produce(
         &self,
         batch: &fastpq_prover::TransitionBatch,
@@ -422,20 +426,19 @@ impl VerifiedFeeSponsorProofFixtures {
     ) -> Vec<u8> {
         let proof = {
             let mut entries = self.entries.lock().expect("fee-sponsor fixture lookup");
-            if let Some(entry) = entries
+            entries
                 .iter()
                 .find(|entry| &entry.batch == batch && &entry.binding == binding)
-            {
-                std::sync::Arc::clone(&entry.proof)
-            } else {
-                let proof = std::sync::Arc::new(std::sync::OnceLock::new());
-                entries.push(VerifiedFeeSponsorProofFixture {
-                    batch: batch.clone(),
-                    binding: binding.clone(),
-                    proof: std::sync::Arc::clone(&proof),
-                });
-                proof
-            }
+                .map(|entry| std::sync::Arc::clone(&entry.proof))
+                .unwrap_or_else(|| {
+                    let proof = std::sync::Arc::new(std::sync::OnceLock::new());
+                    entries.push(VerifiedFeeSponsorProofFixture {
+                        batch: batch.clone(),
+                        binding: binding.clone(),
+                        proof: std::sync::Arc::clone(&proof),
+                    });
+                    proof
+                })
         };
         // OnceLock retains only a successful initialization. A genuine producer
         // panic propagates to its test and leaves this exact request retryable.

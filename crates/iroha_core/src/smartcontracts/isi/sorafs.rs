@@ -173,7 +173,7 @@ fn quantity_arithmetic_error(
 }
 fn pricing_computation_error(
     context: &str,
-    error: PricingComputationError,
+    error: &PricingComputationError,
 ) -> InstructionExecutionError {
     InstructionExecutionError::InvariantViolation(
         format!("SoraFS {context} calculation failed: {error}").into(),
@@ -1108,7 +1108,7 @@ pub(super) fn apply_governed_provider_owner_action(
     })?;
     match action {
         SorafsProviderGovernanceActionV1::Admission(action) => {
-            return super::sorafs_provider_admission::apply(action, state_transaction);
+            return super::sorafs_provider_admission::apply(&(action), state_transaction);
         }
         SorafsProviderGovernanceActionV1::Establish(action) => {
             if state_transaction
@@ -2742,7 +2742,7 @@ fn collect_public_pin_fee(
             submitted_epoch,
             policy.retention_epoch,
         )
-        .map_err(|error| pricing_computation_error("public pin fee", error))?;
+        .map_err(|error| pricing_computation_error("public pin fee", &(error)))?;
     let fee_asset_id = state_transaction.gov.sorafs_pin_fee_asset_id.clone();
     let treasury_account_id = state_transaction
         .gov
@@ -3524,13 +3524,13 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
         let storage_class = storage_class_from_declaration_record(declaration_record)?;
         let storage_fee = pricing_schedule
             .storage_charge(storage_class, record.utilised_gib, window_secs)
-            .map_err(|error| pricing_computation_error("storage fee", error))?;
+            .map_err(|error| pricing_computation_error("storage fee", &(error)))?;
         let uptime_bps = u128::from(record.uptime_bps.min(10_000));
         let por_bps = u128::from(record.por_success_bps.min(10_000));
         let health_multiplier = uptime_bps.checked_mul(por_bps).ok_or_else(|| {
             pricing_computation_error(
                 "health multiplier",
-                PricingComputationError::ArithmeticOverflow("health multiplier"),
+                &(PricingComputationError::ArithmeticOverflow("health multiplier")),
             )
         })?;
         let storage_fee =
@@ -3538,10 +3538,10 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                 .map_err(|error| quantity_arithmetic_error("health-adjusted storage fee", error))?;
         let egress_fee = pricing_schedule
             .egress_charge_bytes(storage_class, record.egress_bytes)
-            .map_err(|error| pricing_computation_error("egress fee", error))?;
+            .map_err(|error| pricing_computation_error("egress fee", &(error)))?;
         let expected_storage = pricing_schedule
             .expected_settlement_storage_charge(storage_class, record.utilised_gib)
-            .map_err(|error| pricing_computation_error("expected settlement", error))?;
+            .map_err(|error| pricing_computation_error("expected settlement", &(error)))?;
         let expected_settlement = expected_storage
             .checked_add(&egress_fee)
             .map_err(|error| quantity_arithmetic_error("expected settlement", error))?;
@@ -3585,11 +3585,11 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                     credit_record.onboarding_epoch,
                     record.window_end_epoch,
                 )
-                .map_err(|error| pricing_computation_error("required collateral", error))?;
+                .map_err(|error| pricing_computation_error("required collateral", &(error)))?;
             credit_record.expected_settlement = expected_settlement.clone();
             let low_balance_threshold = pricing_schedule
                 .low_balance_threshold(&expected_settlement)
-                .map_err(|error| pricing_computation_error("low-balance threshold", error))?;
+                .map_err(|error| pricing_computation_error("low-balance threshold", &(error)))?;
             credit_record.track_low_balance(&low_balance_threshold, record.window_end_epoch);
             let penalty_policy = &state_transaction.gov.sorafs_penalty;
             // Treat failure counters as authoritative even when challenge/window counters are
@@ -3608,7 +3608,7 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                         10_000,
                         u128::from(record.declared_gib),
                     )
-                    .map_err(|error| pricing_computation_error("utilisation ratio", error))?
+                    .map_err(|error| pricing_computation_error("utilisation ratio", &(error)))?
                 };
                 let utilisation_floor =
                     u128::from(penalty_policy.utilisation_floor_bps.min(10_000));
@@ -7972,9 +7972,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     pub(super) fn replication_order_struct(
@@ -9207,9 +9207,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -9279,9 +9279,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -9345,9 +9345,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -9377,9 +9377,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -9766,9 +9766,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10142,9 +10142,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10184,9 +10184,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10222,9 +10222,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10283,9 +10283,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10321,9 +10321,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10368,9 +10368,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10408,9 +10408,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10449,9 +10449,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10498,9 +10498,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10554,9 +10554,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10597,9 +10597,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]

@@ -746,7 +746,7 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
                 &(context),
                 asset_definition_id,
                 PrivacyPolicyIdV1::new(policy_seed),
-                &(VERANGE_RELEASE_VALUES.to_vec()),
+                VERANGE_RELEASE_VALUES.as_ref(),
                 *fixture_seed,
                 &private_key,
             )

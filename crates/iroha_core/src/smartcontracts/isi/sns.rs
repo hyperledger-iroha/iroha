@@ -106,7 +106,7 @@ fn account_controller_for(
 }
 fn charge_sns_quote(
     quote: &crate::sns::LeaseQuote,
-    payer: AccountId,
+    payer: &AccountId,
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<LeasePayment, Error> {
@@ -304,7 +304,7 @@ impl Execute for EnsureAlias {
         let owner = crate::alias_setup::alias_intent_owner(&intent).clone();
         let quote = crate::sns::quote_resolved_name_registration(
             state_transaction.world(),
-            selector,
+            &(selector),
             &owner,
             acquisition.term_years,
             acquisition.pricing_class_hint,
@@ -321,7 +321,7 @@ impl Execute for EnsureAlias {
         let controllers = vec![account_controller_for(&owner)?];
         let metadata = crate::alias_setup::alias_registration_metadata(&target)
             .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
-        let payment = charge_sns_quote(&quote, authority.clone(), authority, state_transaction)?;
+        let payment = charge_sns_quote(&quote, &(authority.clone()), authority, state_transaction)?;
         crate::sns::register_resolved_name(
             state_transaction,
             RegisterNameInput {
@@ -369,7 +369,7 @@ impl Execute for RenewAliasLease {
         let now_ms = state_transaction.block_unix_timestamp_ms();
         let quote = crate::sns::quote_resolved_name_renewal(
             state_transaction.world(),
-            selector.clone(),
+            &(selector.clone()),
             expected_current_expiry_ms,
             target_expiry_ms,
             now_ms,
@@ -382,10 +382,10 @@ impl Execute for RenewAliasLease {
             now_ms,
         )
         .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
-        let payment = charge_sns_quote(&quote, authority.clone(), authority, state_transaction)?;
+        let payment = charge_sns_quote(&quote, &(authority.clone()), authority, state_transaction)?;
         crate::sns::renew_resolved_name(
             state_transaction,
-            selector,
+            &(selector),
             expected_current_expiry_ms,
             target_expiry_ms,
             &payment,
@@ -2130,7 +2130,7 @@ mod tests {
         seed_test_call_hash(&mut transaction, 0xC1);
         let quote = crate::sns::quote_resolved_name_registration(
             transaction.world(),
-            selector.clone(),
+            &(selector.clone()),
             &authority,
             1,
             None,
@@ -2414,7 +2414,7 @@ mod tests {
             let view = state.view();
             let quote = crate::sns::quote_resolved_name_registration(
                 view.world(),
-                first_selector.clone(),
+                &(first_selector.clone()),
                 &authority,
                 1,
                 None,
@@ -2615,7 +2615,7 @@ mod tests {
                     .expect("resolved parent selector");
             let parent_quote = crate::sns::quote_resolved_name_registration(
                 view.world(),
-                parent_selector,
+                &(parent_selector),
                 &authority,
                 1,
                 None,
@@ -2626,7 +2626,7 @@ mod tests {
                 .expect("resolved alias selector");
             let quote = crate::sns::quote_resolved_name_registration(
                 view.world(),
-                selector,
+                &(selector),
                 &target_account,
                 1,
                 None,
@@ -3991,7 +3991,7 @@ mod tests {
         assert!(crate::sns::get_name_record_by_selector(&world.view(), &selector, 2_000).is_err());
         let quote = crate::sns::quote_resolved_name_registration(
             &world.view(),
-            selector.clone(),
+            &(selector.clone()),
             &wallet,
             1,
             None,
@@ -4277,7 +4277,7 @@ mod tests {
             .unwrap();
             crate::sns::quote_resolved_name_registration(
                 view.world(),
-                selector,
+                &(selector),
                 &second_wallet,
                 1,
                 None,

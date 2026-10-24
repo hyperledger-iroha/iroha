@@ -217,7 +217,7 @@ pub fn insert_proof_record_for_test(
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn insert_proof_tags_for_test(
     state: &mut crate::state::State,
-    id: iroha_data_model::proof::ProofId,
+    id: &iroha_data_model::proof::ProofId,
     mut tags: Vec<[u8; 4]>,
 ) {
     tags.sort_unstable();

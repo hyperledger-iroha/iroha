@@ -594,12 +594,13 @@ impl<T> SingularQueryRetainedVec<T> {
                 return;
             }
             let right = left + 1;
-            let mut larger = left;
-            if right < end
+            let larger = if right < end
                 && compare(&self.values[left], &self.values[right]) == core::cmp::Ordering::Less
             {
-                larger = right;
-            }
+                right
+            } else {
+                left
+            };
             if compare(&self.values[root], &self.values[larger]) != core::cmp::Ordering::Less {
                 return;
             }

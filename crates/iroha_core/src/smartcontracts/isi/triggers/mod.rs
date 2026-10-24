@@ -576,7 +576,7 @@ pub mod isi {
                 .world
                 .account_permissions
                 .get_mut(&holder)
-                .map_or(false, |permissions| {
+                .is_some_and(|permissions| {
                     permissions.retain(|permission| {
                         !is_permission_trigger_associated_with_any(permission, trigger_ids)
                     });

@@ -160,7 +160,7 @@ fn original_handle_recipe() -> bool {
 #[cfg(test)]
 fn after_record_copy() -> Result<()> {
     AFTER_RECORD_COPY
-        .with(|state| state.take())
+        .with(std::cell::RefCell::take)
         .map_or(Ok(()), |action| action())
 }
 

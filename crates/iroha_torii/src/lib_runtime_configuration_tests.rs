@@ -1989,6 +1989,11 @@ mod sorafs_native_transaction_signer_startup_tests {
     }
     #[test]
     fn native_signer_startup_qualifies_exact_configured_provider() {
+        use iroha_data_model::isi::sorafs::{
+            SorafsPdpProofOutcomeSubmissionV1, SorafsProofOutcomeSubmissionV1,
+            SubmitSorafsProofOutcome,
+        };
+
         let provider = Arc::new(ProofSigner::new(
             "provider://sorafs/proof-outcome/primary",
             0x21,
@@ -2013,10 +2018,6 @@ mod sorafs_native_transaction_signer_startup_tests {
         assert_eq!(qualified.authority(), configured.authority);
         assert_eq!(qualified.public_key(), Ok(configured.public_key));
         assert_eq!(qualified.qualification(), Ok(QUALIFICATION));
-        use iroha_data_model::isi::sorafs::{
-            SorafsPdpProofOutcomeSubmissionV1, SorafsProofOutcomeSubmissionV1,
-            SubmitSorafsProofOutcome,
-        };
         // The startup boundary owns the typed envelope; native execution validates its evidence.
         let payload = TransactionBuilder::new(
             network_id,

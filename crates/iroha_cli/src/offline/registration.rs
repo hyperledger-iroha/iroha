@@ -20,7 +20,7 @@ use std::{
 
 /// Package one successful Global registration under explicitly selected operator trust.
 #[derive(Args, Debug)]
-pub(crate) struct RegistrationPackageArgs {
+pub struct RegistrationPackageArgs {
     /// Canonical owner-private directory containing sealed scheme.norito, committed.norito
     /// and proof-00000000000000000001.norito through the selected registration height.
     #[arg(long, value_name = "DIR")]

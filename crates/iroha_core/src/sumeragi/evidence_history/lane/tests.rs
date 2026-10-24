@@ -2107,8 +2107,8 @@ fn local_proposer_keeps_earlier_selection_and_effects_when_later_report_retries(
     // keeps the earlier report and the proposal keeps its effects.
     let effects = derive(high).expect("the smallest admitting pool yields proposal effects");
     assert_eq!(
-        effects.evidence_admissions,
-        [root.clone()],
+        effects.evidence_admissions.as_slice(),
+        std::slice::from_ref(&root),
         "HC914 a retryable later report must not abort the proposal effects"
     );
     assert!(effects.penalty_actions.is_empty());

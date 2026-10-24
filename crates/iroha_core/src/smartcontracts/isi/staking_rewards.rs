@@ -18,7 +18,7 @@ pub fn ensure_public_lane_reserves_after_debit(
     } else {
         crate::validation_fee_rewards::reserved_fee_custody(world, asset)?
     };
-    if balance_after < &quantity_add(stake, &(fees))? {
+    if balance_after < &quantity_add(&(stake), &(fees))? {
         return Err(Error::InvariantViolation(
             "asset debit would spend reserved public-lane stake custody or funded fee obligations"
                 .into(),

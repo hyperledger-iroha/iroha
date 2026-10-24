@@ -132,6 +132,10 @@ enum SetPublicationPhase<'target, Admission> {
 /// Normal refusal recovers exact journals while keeping every original deferred release here.
 /// Caught unwind and terminal release allow cleanup only; this grants no State authority.
 #[must_use = "retain this slot until every enclosing physical writer releases"]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Publication, retry, recovery and release are independent custody obligations retained through unwind"
+)]
 pub struct DetachedSetPublicationSlot<'target, Admission, Installation> {
     target: &'target Set,
     phase: Option<SetPublicationPhase<'target, Admission>>,

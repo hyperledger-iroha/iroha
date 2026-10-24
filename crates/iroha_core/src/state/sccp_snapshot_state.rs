@@ -752,7 +752,7 @@ impl SnapshotSccpState {
             max_current,
             max_previous.map_or(
                 sccp_forgery_custody::MaxGenerationPredecessor::Unchanged,
-                |value| sccp_forgery_custody::MaxGenerationPredecessor::Value(value),
+                sccp_forgery_custody::MaxGenerationPredecessor::Value,
             ),
             budget,
         )?;

@@ -4,7 +4,7 @@ use super::*;
 use std::cell::Cell;
 
 /// Mutable journal's original descriptor, parent and independently admitted cap.
-pub(crate) struct JournalOutput {
+pub struct JournalOutput {
     parent: Parent,
     name: OsString,
     file: File,
@@ -59,7 +59,7 @@ impl JournalOutput {
 }
 
 /// Original completed output and its immutable full file state; no path is re-admitted.
-pub(crate) struct RetainedLoadFile {
+pub struct RetainedLoadFile {
     parent: Parent,
     name: OsString,
     file: File,
@@ -81,7 +81,7 @@ impl RetainedLoadFile {
         file: File,
         state: FileState,
         maximum: u64,
-        stage: Option<OsString>,
+        staging_name: Option<OsString>,
     ) -> Result<Self> {
         ensure!(
             state.size > 0 && state.size <= maximum,
@@ -102,7 +102,7 @@ impl RetainedLoadFile {
             state,
             identity,
             maximum,
-            stage,
+            stage: staging_name,
             poisoned: Cell::new(false),
         };
         owner.identity()?;

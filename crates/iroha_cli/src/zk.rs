@@ -119,6 +119,10 @@ impl Run for Command {
     }
 }
 impl Command {
+    #[expect(
+        clippy::unused_self,
+        reason = "Command instances expose the same fallback-config capability query across CLI modules."
+    )]
     pub(crate) fn allows_fallback_config(&self) -> bool {
         false
     }
@@ -434,6 +438,10 @@ impl Run for AttachmentDeleteArgs {
     }
 }
 #[derive(clap::Args, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Clap flags independently control confirmation, selection, and output."
+)]
 pub struct AttachmentCleanupArgs {
     /// Proceed without confirmation
     #[arg(long)]
@@ -465,10 +473,13 @@ pub struct AttachmentCleanupArgs {
 }
 fn now_ms_u64() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
 }
 fn select_attachment_ids(
     list: &norito::json::Value,
@@ -480,7 +491,7 @@ fn select_attachment_ids(
 ) -> Vec<(String, String, u64, u64)> {
     let mut out = Vec::new();
     let arr = list.as_array().cloned().unwrap_or_default();
-    for v in arr.into_iter() {
+    for v in arr {
         let id = v
             .get("id")
             .and_then(|x| x.as_str())
@@ -502,16 +513,22 @@ fn select_attachment_ids(
         {
             continue;
         }
-        let created_ms = v.get("created_ms").and_then(|x| x.as_u64()).unwrap_or(0);
-        let size = v.get("size").and_then(|x| x.as_u64()).unwrap_or(0);
+        let created_ms = v
+            .get("created_ms")
+            .and_then(norito::json::native::Value::as_u64)
+            .unwrap_or(0);
+        let size = v
+            .get("size")
+            .and_then(norito::json::native::Value::as_u64)
+            .unwrap_or(0);
         if let Some(ms) = before_ms
-            && !(created_ms < ms)
+            && (created_ms >= ms)
         {
             continue;
         }
         if let Some(secs) = older_than_secs {
             let threshold = now_ms.saturating_sub(secs.saturating_mul(1000));
-            if !(created_ms < threshold) {
+            if created_ms >= threshold {
                 continue;
             }
         }
@@ -596,11 +613,11 @@ impl Run for AttachmentCleanupArgs {
         let mut failed = 0usize;
         for (id, _ct, _size, _created) in &matches {
             match client.delete_zk_attachment(id) {
-                Ok(_) => ok += 1,
+                Ok(()) => ok += 1,
                 Err(_) => failed += 1,
             }
         }
-        context.println(format!("Deleted {} attachment(s), failed {}.", ok, failed))?;
+        context.println(format!("Deleted {ok} attachment(s), failed {failed}."))?;
         Ok(())
     }
 }
@@ -1429,11 +1446,12 @@ fn build_vk_record(
             }
         }
         commitment = actual_commitment;
-        let actual_len = vk.bytes.len() as u32;
-        if let Some(explicit_len) = payload.vk_len {
-            if explicit_len != actual_len {
-                eyre::bail!("vk_len mismatch with provided vk_bytes");
-            }
+        let actual_len =
+            u32::try_from(vk.bytes.len()).wrap_err("verifying key length exceeds u32")?;
+        if let Some(explicit_len) = payload.vk_len
+            && explicit_len != actual_len
+        {
+            eyre::bail!("vk_len mismatch with provided vk_bytes");
         }
         vk_len_value = actual_len;
         key_opt = Some(vk);
@@ -1467,10 +1485,9 @@ fn build_vk_record(
     }
     if let (Some(activation_height), Some(withdraw_height)) =
         (payload.activation_height, payload.withdraw_height)
+        && activation_height >= withdraw_height
     {
-        if activation_height >= withdraw_height {
-            eyre::bail!("withdraw_height must be greater than activation_height");
-        }
+        eyre::bail!("withdraw_height must be greater than activation_height");
     }
     let status = payload.status.unwrap_or(ConfidentialStatus::Active);
     if operation == VkSubmissionOperation::Register && status == ConfidentialStatus::Withdrawn {
@@ -1489,12 +1506,14 @@ fn build_vk_record(
     record.vk_len = vk_len_value;
     record.max_proof_bytes = payload.max_proof_bytes.unwrap_or(0);
     record.status = status;
-    record.metadata_uri_cid = payload.metadata_uri_cid.clone();
-    record.vk_bytes_cid = payload.vk_bytes_cid.clone();
+    record
+        .metadata_uri_cid
+        .clone_from(&payload.metadata_uri_cid);
+    record.vk_bytes_cid.clone_from(&payload.vk_bytes_cid);
     record.activation_height = payload.activation_height;
     record.withdraw_height = payload.withdraw_height;
     record.key = key_opt;
-    record.gas_schedule_id = payload.gas_schedule_id.clone();
+    record.gas_schedule_id.clone_from(&payload.gas_schedule_id);
     Ok(record)
 }
 fn load_vk_submission(

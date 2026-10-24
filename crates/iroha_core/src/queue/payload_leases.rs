@@ -85,17 +85,17 @@ impl Queue {
     /// Advance the non-reusable high-water under the original mutation fence.
     /// Overflow permanently refuses reuse and admission instead of reviving an old lease.
     pub(super) fn advance_pending_ownership_generation(&self, hash: EntrypointHash) -> Option<u64> {
-        if let Ok(_) = self.pending_ownership_generation.fetch_update(
-            Ordering::AcqRel,
-            Ordering::Acquire,
-            |prior| {
+        if self
+            .pending_ownership_generation
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |prior| {
                 if cfg!(all(test, sumeragi_core_mutation = "HC145")) {
                     Some(prior.wrapping_add(1))
                 } else {
                     prior.checked_add(1)
                 }
-            },
-        ) {
+            })
+            .is_ok()
+        {
             // Every writer holds the original Queue fence; this is the exact value
             // just assigned, including in the deliberate overflow mutation control.
             Some(self.pending_ownership_generation.load(Ordering::Acquire))

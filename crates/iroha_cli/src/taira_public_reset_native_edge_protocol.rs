@@ -283,13 +283,15 @@ impl NativeEdgeProgressV1 {
         authorization_sha256: &str,
     ) -> Result<()> {
         validate_operation_binding(
-            &self.operation_id,
-            &self.inventory_sha256,
-            &self.authorization_sha256,
-            &self.authorization_nonce,
-            &self.host_pair_sha256,
-            &self.host_identity_sha256,
-            &self.custody_root,
+            OperationBindingClaims {
+                operation_id: &self.operation_id,
+                admitted_inventory: &self.inventory_sha256,
+                admitted_authorization: &self.authorization_sha256,
+                nonce: &self.authorization_nonce,
+                hosts_sha: &self.host_pair_sha256,
+                identity: &self.host_identity_sha256,
+                custody_root: &self.custody_root,
+            },
             inventory,
             inventory_sha256,
             authorization_sha256,
@@ -373,13 +375,15 @@ impl NativeGlobalProofFenceV1 {
         predecessor: &NativeEdgeProgressV1,
     ) -> Result<()> {
         validate_operation_binding(
-            &self.operation_id,
-            &self.inventory_sha256,
-            &self.authorization_sha256,
-            &self.authorization_nonce,
-            &self.host_pair_sha256,
-            &self.host_identity_sha256,
-            &self.custody_root,
+            OperationBindingClaims {
+                operation_id: &self.operation_id,
+                admitted_inventory: &self.inventory_sha256,
+                admitted_authorization: &self.authorization_sha256,
+                nonce: &self.authorization_nonce,
+                hosts_sha: &self.host_pair_sha256,
+                identity: &self.host_identity_sha256,
+                custody_root: &self.custody_root,
+            },
             inventory,
             inventory_sha256,
             authorization_sha256,
@@ -418,18 +422,33 @@ impl NativeGlobalProofFenceV1 {
     }
 }
 
+#[derive(Clone, Copy)]
+struct OperationBindingClaims<'a> {
+    operation_id: &'a str,
+    admitted_inventory: &'a str,
+    admitted_authorization: &'a str,
+    nonce: &'a str,
+    hosts_sha: &'a str,
+    identity: &'a str,
+    custody_root: &'a str,
+}
+
 fn validate_operation_binding(
-    operation_id: &str,
-    admitted_inventory: &str,
-    admitted_authorization: &str,
-    nonce: &str,
-    hosts_sha: &str,
-    identity: &str,
-    custody_root: &str,
+    claims: OperationBindingClaims<'_>,
     inventory: &InventoryV1,
     inventory_sha256: &str,
     authorization_sha256: &str,
 ) -> Result<()> {
+    let OperationBindingClaims {
+        operation_id,
+        admitted_inventory,
+        admitted_authorization,
+        nonce,
+        hosts_sha,
+        identity,
+        custody_root,
+    } = claims;
+
     validate_lower_hex("native reset operation", operation_id, 32)?;
     validate_lower_hex("native inventory", admitted_inventory, 64)?;
     validate_lower_hex("native authorization", admitted_authorization, 64)?;
@@ -663,13 +682,15 @@ pub(super) fn validate_terminal_provenance(
     let receipt: NativeCompletionReceiptV1 =
         json::from_slice(&read_native_public(completion_receipt, owner, 64 * 1024)?)?;
     validate_operation_binding(
-        &receipt.operation_id,
-        &receipt.inventory_sha256,
-        &receipt.authorization_sha256,
-        &receipt.authorization_nonce,
-        &receipt.host_pair_sha256,
-        &receipt.host_identity_sha256,
-        &receipt.custody_root,
+        OperationBindingClaims {
+            operation_id: &receipt.operation_id,
+            admitted_inventory: &receipt.inventory_sha256,
+            admitted_authorization: &receipt.authorization_sha256,
+            nonce: &receipt.authorization_nonce,
+            hosts_sha: &receipt.host_pair_sha256,
+            identity: &receipt.host_identity_sha256,
+            custody_root: &receipt.custody_root,
+        },
         inventory,
         inventory_sha256,
         authorization_sha256,
@@ -726,9 +747,9 @@ pub(super) fn validate_terminal_provenance(
         let restored = receipt.restored_owned_publication.as_ref().ok_or_else(|| {
             eyre!("rolled-back native capture lacks its exact restored publisher custody")
         })?;
-        if restored != owned_publication
-            || restored.operation_id == receipt.publication_operation_id
-        {
+        let publication_reused_as_restoration =
+            restored.operation_id == receipt.publication_operation_id;
+        if restored != owned_publication || publication_reused_as_restoration {
             return Err(eyre!(
                 "native rollback terminal proof names another restored predecessor"
             ));
@@ -809,8 +830,9 @@ pub(super) fn validate_terminal_provenance(
             &chain,
             &ready,
         )?;
+        let publication_matches = fence.publication_operation_id == owned_publication.operation_id;
         if fence.operation_id != terminal.operation_id
-            || fence.publication_operation_id != owned_publication.operation_id
+            || !publication_matches
             || terminal.checkpoint_sha256.as_ref() != Some(&fence.final_checkpoint_sha256)
         {
             return Err(eyre!(

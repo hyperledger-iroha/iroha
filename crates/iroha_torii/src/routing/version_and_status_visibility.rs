@@ -10,15 +10,14 @@ pub async fn handle_version(state: Arc<CoreState>) -> Response {
         },
         None => None,
     };
-    let mut resp = match latest_block {
-        Some(_) => Response::new(Body::from(
+    let mut resp = if latest_block.is_some() {
+        Response::new(Body::from(
             iroha_data_model::block::SignedBlock::WIRE_VERSION.to_string(),
-        )),
-        None => {
-            let mut resp = Response::new(Body::from("genesis not applied"));
-            *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-            resp
-        }
+        ))
+    } else {
+        let mut resp = Response::new(Body::from("genesis not applied"));
+        *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        resp
     };
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -96,11 +95,11 @@ fn status_visibility_failure(error: Error) -> Error {
 }
 
 #[cfg(feature = "telemetry")]
-fn status_snapshot_failure(error: iroha_core::telemetry::StatusSnapshotError) -> Error {
+fn status_snapshot_failure(error: &iroha_core::telemetry::StatusSnapshotError) -> Error {
     use iroha_core::telemetry::StatusSnapshotError;
     use iroha_torii_shared::status::StatusFailureReason;
 
-    let reason = match &error {
+    let reason = match error {
         StatusSnapshotError::Disabled => StatusFailureReason::Disabled,
         StatusSnapshotError::MailboxUnavailable => StatusFailureReason::MailboxUnavailable,
         StatusSnapshotError::ActorClosed => StatusFailureReason::ActorClosed,
@@ -125,13 +124,13 @@ fn status_snapshot_failure(error: iroha_core::telemetry::StatusSnapshotError) ->
 
 /// Preserve internal busy provenance while retaining the existing public error.
 #[cfg(feature = "telemetry")]
-pub(crate) fn status_snapshot_failure_response(
-    error: iroha_core::telemetry::StatusSnapshotError,
+pub fn status_snapshot_failure_response(
+    error: &iroha_core::telemetry::StatusSnapshotError,
 ) -> Response {
     use crate::utils::HttpStatusBusyCause;
     use iroha_core::telemetry::StatusSnapshotError;
 
-    let cause = match &error {
+    let cause = match error {
         StatusSnapshotError::StateBusy => Some(HttpStatusBusyCause::StateSnapshotContention),
         StatusSnapshotError::HistoryReadDeferred(_) => {
             Some(HttpStatusBusyCause::HistoryReadDeferred)
@@ -297,7 +296,7 @@ mod status_failure_reason_tests {
             ),
         ];
         for (error, reason) in cases {
-            assert_wire_reason(status_snapshot_failure(error), reason).await;
+            assert_wire_reason(status_snapshot_failure(&(error)), reason).await;
         }
         drop(retained);
     }
@@ -328,11 +327,11 @@ mod status_failure_reason_tests {
                     }
                 };
                 let before = crate::utils::with_current_response_format(format, async {
-                    status_snapshot_failure(error()).into_response()
+                    status_snapshot_failure(&(error())).into_response()
                 })
                 .await;
                 let after = crate::utils::with_current_response_format(format, async {
-                    super::status_snapshot_failure_response(error())
+                    super::status_snapshot_failure_response(&error())
                 })
                 .await;
                 assert_eq!(after.status(), before.status());
@@ -364,7 +363,7 @@ mod status_failure_reason_tests {
             }
         }
         let terminal =
-            super::status_snapshot_failure_response(StatusSnapshotError::StateUnavailable);
+            super::status_snapshot_failure_response(&StatusSnapshotError::StateUnavailable);
         assert!(terminal.extensions().get::<HttpStatusBusyCause>().is_none());
         assert_eq!(
             terminal.headers()["x-iroha-reject-code"],

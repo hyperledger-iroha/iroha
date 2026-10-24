@@ -24,6 +24,10 @@ use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
 const ROOT_DATA: &[u8] = b"unadmitted worker root DATA";
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent fault axes exercise authentication, dependency, and reply-loss failures in combination"
+)]
 struct Runtime {
     config: Arc<KagemushaEnrollmentIssuer>,
     account: AccountId,
@@ -877,13 +881,14 @@ fn a_pre_issuance_eligibility_denial_is_a_terminal_refusal_across_approval_and_r
         } else {
             KagemushaEligibilityDecisionV1::NotApproved
         };
-        let mut request = None;
-        if boundary > 0 {
+        let request = if boundary > 0 {
             owner.pre_key_permit(&mut session).unwrap();
             let original = permit_tests::account_request(&dispatch, &session.attempt);
             owner.runtime.fixture_evidence = Some(original.clone());
-            request = Some(original.encode().unwrap());
-        }
+            Some(original.encode().unwrap())
+        } else {
+            None
+        };
         if boundary > 1 {
             owner
                 .verify_evidence(&mut session, request.as_deref().unwrap())

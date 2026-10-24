@@ -84,15 +84,19 @@ pub(in crate::smartcontracts::isi) fn execute_verified_controlled_waterfall_batc
             source.clone(),
             destination.clone(),
             amount,
-            NumericAssetTransferScopePolicy::Ambient,
-            NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
-            source_policy,
-            if source_policy == NumericAssetTransferSourcePolicy::NativeEscrowReturn {
-                NumericAssetTransferControlPolicy::RetainedPayerReturn
-            } else {
-                NumericAssetTransferControlPolicy::Enforce
+            NumericAssetTransferPolicy {
+                scope_policy: NumericAssetTransferScopePolicy::Ambient,
+                authority_policy: NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
+                source_policy,
+                control_policy: if source_policy
+                    == NumericAssetTransferSourcePolicy::NativeEscrowReturn
+                {
+                    NumericAssetTransferControlPolicy::RetainedPayerReturn
+                } else {
+                    NumericAssetTransferControlPolicy::Enforce
+                },
+                destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
             },
-            NumericAssetDestinationAdmissionPolicy::ExistingAccount,
         )?);
     }
     let authorization = NumericAssetMovementAuthorization {

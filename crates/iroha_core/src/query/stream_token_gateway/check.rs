@@ -71,14 +71,14 @@ pub struct GatewayCheckedReadV1 {
 fn has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
-    permission: Permission,
+    permission: &Permission,
 ) -> bool {
     world.accounts().get(authority).is_some()
-        && (world.account_contains_inherent_permission(authority, &permission)
+        && (world.account_contains_inherent_permission(authority, permission)
             || world
                 .account_roles_iter(authority)
                 .filter_map(|id| world.roles().get(id))
-                .any(|role| role.permissions().any(|token| token == &permission)))
+                .any(|role| role.permissions().any(|token| token == permission)))
 }
 
 fn current(
@@ -139,12 +139,12 @@ fn roles(
         || !has_permission(
             state.world(),
             &check.expected_observer,
-            CanCheckSorafsStreamTokenGateway { gateway_id }.into(),
+            &(CanCheckSorafsStreamTokenGateway { gateway_id }.into()),
         )
         || !has_permission(
             state.world(),
             &check.expected_operator,
-            CanOperateSorafsStreamTokenGateway { gateway_id }.into(),
+            &(CanOperateSorafsStreamTokenGateway { gateway_id }.into()),
         )
     {
         return Err(Error::BindingMismatch);

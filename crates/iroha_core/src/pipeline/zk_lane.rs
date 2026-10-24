@@ -578,16 +578,19 @@ fn set_retry_ring_depth(depth: usize) {
     });
 }
 fn enqueue_retry_task(retry_ring: &RetryRing, task: ZkTask, full_reason: &str) -> bool {
-    if let Ok(depth) = retry_ring.enqueue(task) {
-        with_metrics(|metrics| {
-            metrics.zk_lane_retry_enqueued_total.inc();
-        });
-        set_retry_ring_depth(depth);
-        true
-    } else {
-        record_lane_drop(full_reason);
-        false
-    }
+    retry_ring.enqueue(task).map_or_else(
+        |_| {
+            record_lane_drop(full_reason);
+            false
+        },
+        |depth| {
+            with_metrics(|metrics| {
+                metrics.zk_lane_retry_enqueued_total.inc();
+            });
+            set_retry_ring_depth(depth);
+            true
+        },
+    )
 }
 struct WorkerPool {
     work_txs: Vec<std_mpsc::SyncSender<ZkTask>>,
@@ -720,7 +723,8 @@ fn process_job(job: ZkTask) {
     if let Some(cache) = RESULT_CACHE.get() {
         cache.record(dig, Instant::now());
     }
-    emit_outcome(&(job), dig, outcome);
+    emit_outcome(&job, dig, outcome);
+    drop(job);
 }
 fn emit_outcome(job: &ZkTask, dig: [u8; 32], outcome: TraceCheckOutcome) {
     let transport_desc = job.transport_capabilities.as_ref().map(|caps| {

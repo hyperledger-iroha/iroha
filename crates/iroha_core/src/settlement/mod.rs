@@ -122,14 +122,14 @@ impl SettlementEngine {
         &self,
         source_id: [u8; 32],
         local_amount: Quantity,
-        twap_local_per_xor: Numeric,
+        twap_local_per_xor: &Numeric,
         liquidity: LiquidityProfile,
         volatility: VolatilityBucket,
         timestamp_ms: u64,
     ) -> Result<SettlementQuote, QuoteError> {
         let shadow = self.calculator.compute(
             &local_amount,
-            &twap_local_per_xor,
+            twap_local_per_xor,
             HaircutTier::new(liquidity),
             volatility,
         )?;
@@ -161,7 +161,7 @@ mod tests {
             .quote(
                 [0x11; 32],
                 Quantity::from(2_000_000_u64),
-                Numeric::from(50_u32),
+                &(Numeric::from(50_u32)),
                 LiquidityProfile::Tier2,
                 VolatilityBucket::Stable,
                 1,
@@ -180,7 +180,7 @@ mod tests {
                 engine.quote(
                     [0xFF; 32],
                     Quantity::from(1_000_u32),
-                    twap,
+                    &twap,
                     LiquidityProfile::Tier1,
                     VolatilityBucket::Stable,
                     1,

@@ -11,6 +11,7 @@ use crate::{exec_witness, state::State};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     asset::AssetId,
+    block::consensus::ExecWitness,
     fastpq::{TransferDeltaTranscript, TransferTranscript},
 };
 use iroha_model_base::state_path::StatePath;
@@ -688,7 +689,7 @@ fn interrupted_capture_restores_prior_lane_seal_and_latches_publication_failure(
                 let original = finalized_source(&mut block, &mut native_source);
                 if had_lane_seal {
                     block
-                        .capture_sumeragi_lane_state(&mut Default::default())
+                        .capture_sumeragi_lane_state(&mut ExecWitness::default())
                         .unwrap();
                 }
                 let prior = block.sumeragi_lane_state_seal;
@@ -696,7 +697,7 @@ fn interrupted_capture_restores_prior_lane_seal_and_latches_publication_failure(
                     let capture = WitnessCaptureGuard::new(&mut block);
                     capture
                         .state
-                        .capture_sumeragi_lane_state(&mut Default::default())
+                        .capture_sumeragi_lane_state(&mut ExecWitness::default())
                         .unwrap();
                     panic!("test-only capture interruption");
                 }));

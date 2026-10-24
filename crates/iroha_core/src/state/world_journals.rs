@@ -48,7 +48,7 @@ pub enum CaptureError<E> {
     Admission(E),
 }
 
-fn widen_error<E>(error: CaptureError<Infallible>) -> CaptureError<E> {
+fn widen_error<E>(error: &CaptureError<Infallible>) -> CaptureError<E> {
     match error {
         CaptureError::InconsistentMode {
             field,
@@ -56,14 +56,14 @@ fn widen_error<E>(error: CaptureError<Infallible>) -> CaptureError<E> {
             actual,
         } => CaptureError::InconsistentMode {
             field,
-            expected,
-            actual,
+            expected: *expected,
+            actual: *actual,
         },
-        CaptureError::Admission(impossible) => match impossible {},
+        CaptureError::Admission(impossible) => match *impossible {},
     }
 }
 
-fn trigger_error(error: DetachError<Infallible>) -> CaptureError<Infallible> {
+fn trigger_error(error: &DetachError<Infallible>) -> CaptureError<Infallible> {
     match error {
         DetachError::InconsistentMode {
             field,
@@ -71,10 +71,10 @@ fn trigger_error(error: DetachError<Infallible>) -> CaptureError<Infallible> {
             actual,
         } => CaptureError::InconsistentMode {
             field,
-            expected,
-            actual,
+            expected: *expected,
+            actual: *actual,
         },
-        DetachError::Admission(impossible) => match impossible {},
+        DetachError::Admission(impossible) => match *impossible {},
     }
 }
 
@@ -423,7 +423,7 @@ impl<'a> CaptureWorldField for TriggerSetBlock<'a> {
     type Retained = RetainedTriggers;
     type Capture = SetBlockCapture<'a, ()>;
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
-        TriggerSetBlock::capture_mode(self).map_err(trigger_error)
+        TriggerSetBlock::capture_mode(self).map_err(|error| trigger_error(&error))
     }
     fn into_capture(self) -> Self::Capture {
         self.capture_slot()
@@ -435,7 +435,7 @@ impl WorldCaptureSlot for SetBlockCapture<'_, ()> {
     type Retained = RetainedTriggers;
     fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
         self.try_capture(|_| Ok::<(), Infallible>(()))
-            .map_err(trigger_error)
+            .map_err(|error| trigger_error(&error))
     }
     fn release(&mut self) {
         Self::release(self);
@@ -626,7 +626,8 @@ macro_rules! capture_world_fields {
 
 macro_rules! check_mode {
     ($original:ident, $expected:ident, $field:ident) => {
-        let actual = CaptureWorldField::capture_mode(&$original.$field).map_err(widen_error)?;
+        let actual = CaptureWorldField::capture_mode(&$original.$field)
+            .map_err(|error| widen_error(&error))?;
         if actual != $expected {
             return Err(CaptureError::InconsistentMode {
                 field: stringify!($field),
@@ -663,10 +664,12 @@ impl<'world> WorldBlock<'world> {
         // including a normal admission refusal or an unwinding callback.
         let shells = shells;
         let original = self;
-        original.capture_mode().map_err(widen_error)?;
+        original
+            .capture_mode()
+            .map_err(|error| widen_error(&error))?;
         let admission = admit(&original).map_err(CaptureError::Admission)?;
         let mut pending = original.capture_slot(shells);
-        pending.capture().map_err(widen_error)?;
+        pending.capture().map_err(|error| widen_error(&error))?;
         Ok(pending.into_journals(admission))
     }
 

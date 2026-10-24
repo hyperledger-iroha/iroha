@@ -769,7 +769,7 @@ impl ReservationTransaction<'_> {
     /// Old live slots revive; undo needs no new generation and works even at exhaustion.
     pub(crate) fn rollback(
         &mut self,
-        checkpoint: ReservationCheckpoint,
+        checkpoint: &ReservationCheckpoint,
     ) -> Result<SourceUsage, ReservationError> {
         if !Arc::ptr_eq(&checkpoint.identity, &self.ledger.identity) {
             return Err(ReservationError::Invariant(

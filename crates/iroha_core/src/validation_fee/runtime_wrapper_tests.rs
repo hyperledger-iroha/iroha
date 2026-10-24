@@ -280,7 +280,7 @@ seiyaku FullFillPool { permission SwapQuotePublic;
             &pool_code,
             &key_pair(55),
             "hajimari",
-            Json::from(norito::json!({
+            &Json::from(norito::json!({
                 "base_asset": (xor.to_string()), "quote_asset": (sbd.to_string()),
                 "vault_account": (pool.subject_id().to_string()), "fee_pips": "3000",
                 "bin_step": "1", "active_bin": "1000", "impact_cap_bps": "10000",
@@ -295,7 +295,7 @@ seiyaku FullFillPool { permission SwapQuotePublic;
             &pool_code,
             &key_pair(55),
             "seed_bin",
-            Json::from(norito::json!({
+            &Json::from(norito::json!({
                 "position_id": "wrapper-liquidity", "bin_id": "1000",
                 "base_amount": "1000", "quote_amount": "1000",
             })),
@@ -554,10 +554,10 @@ fn compiled_fee_wrapper_preserves_nested_pool_authorities_and_actual_output() {
     }
 }
 
-// Compare complete ledger balances and every durable contract-state byte after
-// dropping the diagnostic's unapplied transaction, rather than assuming rollback.
 type WrapperLedgerSnapshot = (Vec<(AssetId, Quantity)>, Vec<(StatePath, Vec<u8>)>);
 
+// Compare complete ledger balances and every durable contract-state byte after
+// dropping the diagnostic's unapplied transaction, rather than assuming rollback.
 fn wrapper_ledger_snapshot(block: &crate::state::StateBlock<'_>) -> WrapperLedgerSnapshot {
     (
         block

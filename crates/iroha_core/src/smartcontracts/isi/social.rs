@@ -422,7 +422,7 @@ fn consume_budget(
     if delta.is_zero() {
         return Ok(budget);
     }
-    let spent = budget.spent.checked_add(&delta).map_err(|_| {
+    let spent = budget.spent.checked_add(delta).map_err(|_| {
         record_social_rejection(stx, REJECT_BUDGET_EXHAUSTED);
         validation_err("viral reward budget overflow")
     })?;
@@ -443,7 +443,7 @@ fn consume_campaign_budget(
     if delta.is_zero() {
         return Ok(campaign);
     }
-    let spent = campaign.spent.checked_add(&delta).map_err(|_| {
+    let spent = campaign.spent.checked_add(delta).map_err(|_| {
         record_social_rejection(stx, REJECT_CAMPAIGN_CAP);
         validation_err("viral campaign budget overflow")
     })?;

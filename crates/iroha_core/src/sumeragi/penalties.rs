@@ -863,8 +863,7 @@ impl<'a> PenaltyApplier<'a> {
                         let mut transaction = scratch.consensus_effects_transaction()?;
                         apply_indexed_slash_to_validator_without_observability(
                             &mut transaction,
-                            lane_id,
-                            validator,
+                            (lane_id, validator),
                             slash_id,
                             amount.get(),
                             block_header.creation_time_ms,
@@ -1162,8 +1161,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                 match mode {
                     EffectsApplicationMode::Commit => apply_indexed_consensus_slash_to_validator(
                         tx,
-                        action.lane_id,
-                        &action.validator,
+                        (action.lane_id, &action.validator),
                         action.slash_id,
                         &action.amount,
                         now_ms,
@@ -1174,8 +1172,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                     EffectsApplicationMode::ValidateOnly => {
                         apply_indexed_slash_to_validator_without_observability(
                             tx,
-                            action.lane_id,
-                            &action.validator,
+                            (action.lane_id, &action.validator),
                             action.slash_id,
                             &action.amount,
                             now_ms,

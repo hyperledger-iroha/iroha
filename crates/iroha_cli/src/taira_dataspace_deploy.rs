@@ -62,20 +62,17 @@ pub use authority::{
     dataspace_authority_original_inventory, verify_dataspace_authority_originals,
 };
 
-pub(crate) use finality::authenticated_height::{
+pub use finality::authenticated_height::{
     AuthenticatedHeightObserverV1, HeightObservationV1, VerifiedCommittedHeightV1,
 };
-pub(crate) use finality::{PeerV1 as DeploymentPeerV1, TrustV1 as DeploymentTrustV1};
+pub use finality::{PeerV1 as DeploymentPeerV1, TrustV1 as DeploymentTrustV1};
 
-pub(crate) fn validate_deployment_trust(
-    trust: &DeploymentTrustV1,
-    network: NetworkId,
-) -> Result<()> {
+pub fn validate_deployment_trust(trust: &DeploymentTrustV1, network: NetworkId) -> Result<()> {
     trust.validate(network)
 }
 
 /// Reject a new deployment profile that cannot address its four validators independently.
-pub(crate) fn validate_deployment_peer_routes(trust: &DeploymentTrustV1) -> Result<()> {
+pub fn validate_deployment_peer_routes(trust: &DeploymentTrustV1) -> Result<()> {
     finality::verification_origins(trust, &[]).map(|_| ())
 }
 
@@ -85,7 +82,7 @@ const DEFAULT_OPERATION_TIMEOUT_MS: u64 = 180_000;
 
 /// Plan, advance, or inspect one dataspace definition.
 #[derive(Debug, clap::Subcommand)]
-pub(crate) enum Command {
+pub enum Command {
     /// Export independently selected network trust once for all its dataspaces.
     ExportProfile(profile::ExportProfile),
     /// Replay completed allocation originals without loading credentials or contacting peers.
@@ -138,7 +135,7 @@ impl Command {
 }
 
 #[derive(Debug, clap::Args)]
-pub(crate) struct DefinitionArgs {
+pub struct DefinitionArgs {
     /// Dataspace TOML containing only owner decisions.
     pub(crate) definition: PathBuf,
     /// Independently retained public genesis, network context and validator pins.
@@ -190,9 +187,9 @@ struct ManifestInputs {
 #[path = "taira_dataspace_deploy_definition.rs"]
 mod definition;
 #[cfg(unix)]
-pub(crate) use profile::PublicInput;
+pub use profile::PublicInput;
 
-pub(crate) fn run_definition<C: RunContext>(
+pub fn run_definition<C: RunContext>(
     context: &mut C,
     command: &Command,
     definition: &iroha_deploy::definition::DataspaceDefinition,
@@ -268,7 +265,7 @@ fn complete_until(
 /// One first-release intent, expressed entirely in maintained native model types.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct ManifestV1 {
+pub struct ManifestV1 {
     pub(crate) schema_version: u8,
     #[norito(required)]
     pub(crate) operation_id: Option<String>,
@@ -284,7 +281,7 @@ pub(crate) struct ManifestV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct SpendingV1 {
+pub struct SpendingV1 {
     pub(crate) asset_definition_id: AssetDefinitionId,
     /// Total namespace rent and transaction fees across every deployment phase.
     pub(crate) max_fee: Quantity,
@@ -324,7 +321,7 @@ struct PreparedV1 {
 /// This is a request for verification, not evidence that those checks ran.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct VerificationRequestV1 {
+pub struct VerificationRequestV1 {
     pub(crate) schema_version: u8,
     pub(crate) operation_id: String,
     pub(crate) intent_sha256: String,
@@ -346,7 +343,7 @@ pub(crate) struct VerificationRequestV1 {
 
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct PhaseObservationV1 {
+pub struct PhaseObservationV1 {
     pub(crate) phase: String,
     pub(crate) state: String,
     #[norito(required)]
@@ -1156,15 +1153,16 @@ fn observe(
     };
     let applied_height = matching_applied_height(
         &prepared.transaction_hash,
-        &result.global_status,
-        &result.peer_status,
+        (result.global_status).as_ref(),
+        (result.peer_status).as_ref(),
     )?;
     let mut failed = false;
-    for value in [&result.global_status, &result.peer_status] {
-        if let Some(value) = value {
-            if matches!(value.status.kind.as_str(), "Rejected" | "Expired") {
-                failed = true;
-            }
+    for value in [&result.global_status, &result.peer_status]
+        .into_iter()
+        .flatten()
+    {
+        if matches!(value.status.kind.as_str(), "Rejected" | "Expired") {
+            failed = true;
         }
     }
     if failed {
@@ -1242,8 +1240,8 @@ fn retain_rejected_details(
 
 fn matching_applied_height(
     hash: &str,
-    global: &Option<PipelineTransactionStatusResponse>,
-    peer: &Option<PipelineTransactionStatusResponse>,
+    global: Option<&PipelineTransactionStatusResponse>,
+    peer: Option<&PipelineTransactionStatusResponse>,
 ) -> Result<Option<u64>> {
     let mut heights = Vec::new();
     let mut pending = false;
@@ -1500,16 +1498,14 @@ fn incomplete_report_detail(report: &ReportV1) -> String {
                 .map(|height| format!(", block {height}"))
                 .unwrap_or_default();
             let reason = if status.status.kind == "Rejected" {
-                match phase
+                phase
                     .committed
                     .as_ref()
                     .and_then(|details| details.transaction.result().as_ref().err())
-                {
-                    Some(reason) => {
-                        format!("; rejection reason: {}", rejection_error_chain(reason))
-                    }
-                    None => "; committed rejection details unavailable".into(),
-                }
+                    .map_or_else(
+                        || "; committed rejection details unavailable".into(),
+                        |reason| format!("; rejection reason: {}", rejection_error_chain(reason)),
+                    )
             } else {
                 String::new()
             };
@@ -1554,16 +1550,28 @@ fn rejection_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
     bounded
 }
 
+#[derive(Clone, Copy)]
+struct SavedRunOptions<'a> {
+    apply: bool,
+    deadline: Instant,
+    verification_origins: &'a [String],
+    runtime_update: Option<&'a runtime_update::Verified>,
+}
+
 fn run_saved_until<C: RunContext>(
     context: &C,
     journal: &Journal,
     plan: &PlanV1,
     mut preflight_proofs: Option<&mut finality::Preflight<'_>>,
-    apply: bool,
-    deadline: Instant,
-    verification_origins: &[String],
-    runtime_update: Option<&runtime_update::Verified>,
+    options: SavedRunOptions<'_>,
 ) -> Result<ReportV1> {
+    let SavedRunOptions {
+        apply,
+        deadline,
+        verification_origins,
+        runtime_update,
+    } = options;
+
     require(
         !apply || runtime_update.is_none(),
         "runtime verification cannot authorize an apply",
@@ -1831,7 +1839,7 @@ fn record_dispatch_claim(journal: &Journal, name: &str, prepared: &PreparedV1) -
 struct Journal {
     path: PathBuf,
     directory: File,
-    _lock: File,
+    lock: File,
     lock_snapshot: fs::Metadata,
 }
 
@@ -1840,7 +1848,7 @@ fn private_metadata(metadata: &fs::Metadata, directory: bool) -> Result<()> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     require(
         metadata.uid() == rustix::process::geteuid().as_raw()
-            && metadata.permissions().mode() & 0o077 == 0
+            && metadata.permissions().mode().trailing_zeros() >= 6
             && if directory {
                 metadata.is_dir()
             } else {
@@ -1992,7 +2000,7 @@ impl Journal {
             path: canonical_path,
             directory,
             lock_snapshot: lock.metadata()?,
-            _lock: lock,
+            lock,
         };
         value.revalidate()?;
         Ok(value)
@@ -2030,7 +2038,7 @@ impl Journal {
             actual.dev() == pinned.dev() && actual.ino() == pinned.ino(),
             "operation journal directory was replaced",
         )?;
-        self.revalidate_file("lock", &self._lock, &self.lock_snapshot, &[])
+        self.revalidate_file("lock", &self.lock, &self.lock_snapshot, &[])
     }
 
     #[cfg(unix)]
@@ -2073,7 +2081,7 @@ impl Journal {
         )?;
         // Metadata timestamps can collide. Recheck the bytes consumed by this
         // operation without disturbing offsets shared by cloned descriptors.
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
         let mut offset = 0_u64;
         for chunk in expected.chunks(buffer.len()) {
             let observed = &mut buffer[..chunk.len()];
@@ -2464,6 +2472,17 @@ mod tests {
 
     #[test]
     fn saved_apply_emits_report_before_rejecting_incomplete_success() {
+        use iroha_data_model::{
+            ValidationFail,
+            block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+            isi::error::InstructionExecutionError,
+            query::CommittedTransaction,
+            transaction::{
+                DataTriggerSequence, TransactionResult,
+                error::{InstructionExecutionFail, TransactionRejectionReason},
+            },
+        };
+
         let mut completed = phase_report(&fixture_plan(), Vec::new());
         completed.state = "completed".into();
         completed.deployment_complete = true;
@@ -2588,16 +2607,7 @@ mod tests {
                 }
             }
         }
-        use iroha_data_model::{
-            ValidationFail,
-            block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
-            isi::error::InstructionExecutionError,
-            query::CommittedTransaction,
-            transaction::{
-                DataTriggerSequence, TransactionResult,
-                error::{InstructionExecutionFail, TransactionRejectionReason},
-            },
-        };
+
         let plan = fixture_plan();
         let prepared = prepared(&plan);
         let transaction = prepared.verify(&plan, "catalog").unwrap();
@@ -2779,10 +2789,12 @@ mod tests {
                 &journal,
                 &plan,
                 None,
-                apply,
-                Instant::now(),
-                &[],
-                None,
+                SavedRunOptions {
+                    apply,
+                    deadline: Instant::now(),
+                    verification_origins: &[],
+                    runtime_update: None,
+                },
             )
             .unwrap_err();
             assert!(error.to_string().contains("deadline elapsed"));
@@ -2800,10 +2812,12 @@ mod tests {
             &journal,
             &plan,
             None,
-            true,
-            operation_deadline(60_000).unwrap(),
-            &[],
-            None,
+            SavedRunOptions {
+                apply: true,
+                deadline: operation_deadline(60_000).unwrap(),
+                verification_origins: &[],
+                runtime_update: None,
+            },
         )
         .unwrap_err();
         assert!(
@@ -3078,7 +3092,7 @@ mod tests {
                         grace_expires_at_ms: 200,
                         redemption_expires_at_ms: 300,
                     }),
-                    instruction_index: Some(index as u32),
+                    instruction_index: Some(u32::try_from(index).expect("fixture value fits u32")),
                 }
             })
             .collect();
@@ -3778,22 +3792,22 @@ mod tests {
         let global = status("global");
         let peer = status("local");
         assert_eq!(
-            matching_applied_height(&hash, &global, &peer).unwrap(),
+            matching_applied_height(&hash, (global).as_ref(), (peer).as_ref()).unwrap(),
             Some(3)
         );
         let mut cache = peer.clone();
         cache.as_mut().unwrap().resolved_from = "cache".into();
         assert_eq!(
-            matching_applied_height(&hash, &global, &cache).unwrap(),
+            matching_applied_height(&hash, (global).as_ref(), (cache).as_ref()).unwrap(),
             None
         );
-        assert!(matching_applied_height(&hash, &global, &global).is_err());
+        assert!(matching_applied_height(&hash, (global).as_ref(), (global).as_ref()).is_err());
         let mut other = peer.clone();
         other.as_mut().unwrap().status.block_height = Some(4);
-        assert!(matching_applied_height(&hash, &global, &other).is_err());
+        assert!(matching_applied_height(&hash, (global).as_ref(), (other).as_ref()).is_err());
         let mut zero = peer;
         zero.as_mut().unwrap().status.block_height = Some(0);
-        assert!(matching_applied_height(&hash, &global, &zero).is_err());
+        assert!(matching_applied_height(&hash, (global).as_ref(), (zero).as_ref()).is_err());
         let mut queued = global.clone();
         queued.as_mut().unwrap().status.kind = "Queued".into();
         queued.as_mut().unwrap().status.block_height = None;
@@ -3819,12 +3833,18 @@ mod tests {
                     _ => unreachable!(),
                 }
                 assert!(
-                    matching_applied_height(&hash, &global_pending, &malformed).is_err(),
+                    matching_applied_height(&hash, (global_pending).as_ref(), (malformed).as_ref())
+                        .is_err(),
                     "{field}"
                 );
             }
             assert_eq!(
-                matching_applied_height(&hash, &global_pending, &status("local")).unwrap(),
+                matching_applied_height(
+                    &hash,
+                    (global_pending).as_ref(),
+                    (status("local")).as_ref()
+                )
+                .unwrap(),
                 None
             );
         }
@@ -4032,8 +4052,8 @@ mod tests {
             .is_err()
         );
         for action in ["plan", "apply", "status"] {
-            let argv = ["test", action, "dpn.toml", "--trust", "trust.json"];
-            assert!(Wrapper::try_parse_from(argv).is_ok());
+            let arguments = ["test", action, "dpn.toml", "--trust", "trust.json"];
+            assert!(Wrapper::try_parse_from(arguments).is_ok());
             for retired in [
                 "--manifest",
                 "--request",
@@ -4043,11 +4063,11 @@ mod tests {
                 "--journal-dir",
                 "--operation-id",
             ] {
-                let mut input = argv.to_vec();
+                let mut input = arguments.to_vec();
                 input.extend([retired, "obsolete"]);
                 assert!(Wrapper::try_parse_from(input).is_err(), "{retired}");
             }
-            assert!(Wrapper::try_parse_from(&argv[..argv.len() - 2]).is_err());
+            assert!(Wrapper::try_parse_from(&arguments[..arguments.len() - 2]).is_err());
         }
         for retired in ["init", "ensure", "preflight"] {
             assert!(Wrapper::try_parse_from(["test", retired]).is_err());

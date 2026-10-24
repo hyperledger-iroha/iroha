@@ -103,11 +103,11 @@ impl SourceEntryFrameSizer {
             transcript.authority_digest,
             PrefixLengthLimits {
                 max_deltas: subtract(self.limits.max_deltas, self.usage.deltas)?,
-                max_input_frame_bytes: subtract(
+                input_frame_ceiling_bytes: subtract(
                     self.limits.max_input_transcript_bytes,
                     self.usage.input_transcript_bytes,
                 )?,
-                max_public_statement_frame_bytes: self
+                public_statement_ceiling_bytes: self
                     .limits
                     .max_statement_bytes
                     .min(self.limits.max_total_statement_bytes),

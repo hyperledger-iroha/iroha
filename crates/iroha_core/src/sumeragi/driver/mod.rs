@@ -1385,7 +1385,7 @@ impl DriverHandle {
             return false;
         }
         WireMessage::decode(frame, self.shared.frame_limit)
-            .map_or(false, |msg| self.deliver_message(from.clone(), msg))
+            .is_ok_and(|msg| self.deliver_message(from.clone(), msg))
     }
 
     /// Deliver a decoded message (in-process transports and tests).

@@ -582,6 +582,10 @@ fn privacy_release_rayon_pool_fresh_process_child_v1() {
     assert_eq!(PRIVACY_RELEASE_STAGE_STACK_BYTES_V1, 8 * 1024 * 1024);
     initialize_privacy_release_rayon_pool_v1().expect("initialize exact release Rayon pool");
     let worker_stack_probes = rayon::broadcast(|_| {
+        #[expect(
+            clippy::large_stack_arrays,
+            reason = "the worker probe must exceed the hostile one-MiB stack to verify the release stack override"
+        )]
         let stack_probe = [0xA5_u8; 2 * 1024 * 1024];
         assert_eq!(stack_probe[0], 0xA5);
         assert_eq!(stack_probe[stack_probe.len() - 1], 0xA5);

@@ -252,7 +252,7 @@ impl PrivateSettlementPoolGovernanceExtV1 for PrivateSettlementPoolGovernancePro
             || policy
                 .body
                 .retirement_height
-                .map_or(false, |policy_retirement| {
+                .is_some_and(|policy_retirement| {
                     self.lifecycle
                         .retirement_height
                         .is_none_or(|retirement| retirement > policy_retirement)

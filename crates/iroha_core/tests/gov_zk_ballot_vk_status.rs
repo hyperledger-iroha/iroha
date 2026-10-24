@@ -2,10 +2,8 @@
 //! Adversarial retained state does not represent a registered production election.
 #![cfg(feature = "zk-tests")]
 
-#[path = "common/governance_closed_registry.rs"]
-mod closed_registry;
-#[path = "common/governance_closed_state.rs"]
-mod closed_state;
+use crate::closed_registry;
+use crate::closed_state;
 
 use iroha_core::{
     smartcontracts::Execute,

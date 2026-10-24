@@ -1151,9 +1151,9 @@ async fn identifier_draft_preflight_rejects_bfv_before_input_or_runtime_work() {
 #[tokio::test]
 async fn identifier_execution_unsupported_backend_has_typed_availability_error() {
     let response = identifier_execution_error(
-        identifier_resolution::IdentifierResolutionError::UnsupportedBackend(
+        &(identifier_resolution::IdentifierResolutionError::UnsupportedBackend(
             RamLfeBackend::HkdfSha3_512PrfV1,
-        ),
+        )),
     )
     .into_response();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -1179,7 +1179,7 @@ async fn identifier_execution_unsupported_backend_has_typed_availability_error()
 #[tokio::test]
 async fn identifier_execution_internal_errors_remain_redacted() {
     let response = identifier_execution_error(
-        identifier_resolution::IdentifierResolutionError::Signing("private marker".to_owned()),
+        &(identifier_resolution::IdentifierResolutionError::Signing("private marker".to_owned())),
     )
     .into_response();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -3375,7 +3375,7 @@ async fn proof_retention_status_reports_the_committed_retention_policy() {
             .expect("policy block commit should succeed");
     }
     let status =
-        crate::routing::handle_proof_retention_status(app.state.clone()).expect("retention status");
+        crate::routing::handle_proof_retention_status(&(app.state)).expect("retention status");
     assert_eq!(
         u64::try_from(status.cap_per_backend).expect("fits u64"),
         policy.proofs.proof_history_cap

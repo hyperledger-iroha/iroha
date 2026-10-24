@@ -709,7 +709,7 @@ pub fn build_privacy_release_zk_x509_network_actions_v1(
         intent,
         transaction: canonical_transaction,
     } = prepare_zk_x509_network_action_v1(
-        &transaction_context,
+        transaction_context,
         trusted_block_timestamp_ms,
         proof_seed,
         resource_certificate,
@@ -734,7 +734,7 @@ pub fn build_privacy_release_zk_x509_network_actions_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
     }
     let malformed_payload = zk_x509_network_transaction_payload_v1(
-        &transaction_context,
+        transaction_context,
         zk_x509_network_envelope_v1(profile, &fixture.statement, malformed_proof)?,
     )?;
     let malformed_transaction =
@@ -782,7 +782,7 @@ pub fn build_privacy_release_zk_x509_semantic_replay_v1(
 ) -> Result<PrivacyReleaseZkX509SemanticReplayV1, PrivacyReleaseEvidenceErrorClassV1> {
     let build_started = Instant::now();
     let prepared = prepare_zk_x509_network_action_v1(
-        &transaction_context,
+        transaction_context,
         trusted_block_timestamp_ms,
         proof_seed,
         resource_certificate,
@@ -1403,7 +1403,7 @@ pub(super) fn zk_x509_release_public_statement_material_v1(
     );
     material.extend_from_slice(ZK_X509_RELEASE_PUBLIC_MATERIAL_DOMAIN_V1);
     material.extend_from_slice(&statement_len.to_be_bytes());
-    material.extend_from_slice(&statement_material);
+    material.extend_from_slice(statement_material);
     material.push(resource_shape.certificate_chain_depth);
     for certificate_der_length in resource_shape.certificate_der_lengths {
         material.extend_from_slice(&certificate_der_length.to_be_bytes());

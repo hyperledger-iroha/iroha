@@ -153,14 +153,33 @@ pub mod json_utils {
     /// Convert a key and serializable value into a `(String, Value)` pair for [`json_object`].
     #[inline]
     #[must_use]
-    pub fn json_entry<K, V>(key: K, value: V) -> (String, Value)
+    pub fn json_entry<K, V>(key: K, value: &V) -> (String, Value)
     where
         K: Into<String>,
-        V: JsonSerialize,
+        V: JsonSerialize + ?Sized,
     {
-        (key.into(), json_value(&value))
+        (key.into(), json_value(value))
     }
 }
+/// Completion retained by one supervised public connection worker.
+type ToriiConnectionCompletion =
+    Result<std::thread::Result<(std::net::SocketAddr, std::io::Result<()>)>, JoinError>;
+#[cfg(feature = "app_api")]
+type ResolvedContractAlias = (
+    iroha_data_model::smart_contract::ContractAlias,
+    iroha_data_model::smart_contract::ContractAddress,
+    AccountId,
+    iroha_core::state::ContractAliasBindingRecord,
+    String,
+);
+#[cfg(feature = "connect")]
+type PendingToriiProxyRequests =
+    Arc<parking_lot::Mutex<BTreeMap<(Hash, PeerId), Vec<PendingToriiProxyRequest>>>>;
+#[cfg(feature = "app_api")]
+type SorafsPotrFinalizedReaderInputs = (
+    Arc<sorafs::PotrRuntimeSignerRolesV1>,
+    Arc<sorafs::AdmissionRegistry>,
+);
 pub use crate::app_auth::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, HEADER_WITNESS, Method,
     Uri, canonical_network_request_hash, canonical_network_request_message,
@@ -382,7 +401,7 @@ where
         )
     }))
 }
-async fn bind_torii_tcp_listener(address: SocketAddr) -> std::io::Result<TcpListener> {
+fn bind_torii_tcp_listener(address: SocketAddr) -> std::io::Result<TcpListener> {
     match address {
         SocketAddr::Ipv4(v) => bind_reusable_tcp_listener(std::net::SocketAddr::V4(v.into())),
         SocketAddr::Ipv6(v) => bind_reusable_tcp_listener(std::net::SocketAddr::V6(v.into())),
@@ -479,6 +498,10 @@ where
         cx: &mut std::task::Context<'_>,
         mut buf: hyper::rt::ReadBufCursor<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "The fixed HTTP read chunk constant fits every supported target address space and must remain an inline array."
+        )]
         let mut scratch = [0_u8; defaults::torii::HTTP_READ_CHUNK_BYTES_V1 as usize];
         let read_len = scratch.len().min(buf.remaining());
         let mut tokio_buf = ReadBuf::new(&mut scratch[..read_len]);
@@ -821,7 +844,7 @@ async fn serve_torii_public_connection(
 }
 
 fn observe_torii_connection_completion(
-    completion: Result<std::thread::Result<(std::net::SocketAddr, std::io::Result<()>)>, JoinError>,
+    completion: ToriiConnectionCompletion,
 ) -> std::io::Result<()> {
     match completion {
         Ok(Ok((remote, Ok(())))) => {
@@ -849,22 +872,20 @@ async fn serve_torii_public_inner(
     transport: ValidatedToriiHttpTransport,
     shutdown_signal: ShutdownSignal,
 ) -> std::io::Result<()> {
-    let config = transport.config;
-    // There is exactly one pool and one task set, including incomplete TLS handshakes.
-    let admission = SocketAdmission::new(config.max_connections, config.max_connections_per_ip);
-    let mut connections = JoinSet::new();
     enum ServerEvent {
         Shutdown,
         Accepted(
             std::io::Result<(TcpStream, std::net::SocketAddr)>,
             Option<public_tls::HttpsIdentity>,
         ),
-        ConnectionFinished(
-            Option<
-                Result<std::thread::Result<(std::net::SocketAddr, std::io::Result<()>)>, JoinError>,
-            >,
-        ),
+        ConnectionFinished(Option<ToriiConnectionCompletion>),
     }
+
+    let config = transport.config;
+    // There is exactly one pool and one task set, including incomplete TLS handshakes.
+    let admission = SocketAdmission::new(config.max_connections, config.max_connections_per_ip);
+    let mut connections = JoinSet::new();
+
     loop {
         let has_connections = !connections.is_empty();
         let accept = async {
@@ -936,15 +957,14 @@ async fn serve_torii_public_inner(
         }
         Ok::<(), std::io::Error>(())
     };
-    match tokio::time::timeout(config.write_timeout, drain).await {
-        Ok(result) => result?,
-        Err(_) => {
-            iroha_logger::warn!(
-                timeout_ms = config.write_timeout.as_millis(),
-                "Torii graceful connection drain timed out; aborting remaining connections"
-            );
-            connections.shutdown().await;
-        }
+    if let Ok(result) = tokio::time::timeout(config.write_timeout, drain).await {
+        result?
+    } else {
+        iroha_logger::warn!(
+            timeout_ms = config.write_timeout.as_millis(),
+            "Torii graceful connection drain timed out; aborting remaining connections"
+        );
+        connections.shutdown().await;
     }
     Ok(())
 }
@@ -1099,10 +1119,7 @@ where
             let server_result = server.await;
             let first_failure = match result {
                 Ok(ToriiCriticalWorkerExit::StoppedByShutdown) if shutdown_was_sent => None,
-                Ok(ToriiCriticalWorkerExit::StoppedByShutdown) => {
-                    Some(ToriiCriticalWorkerFailure::ExitedUnexpectedly(name))
-                }
-                Ok(ToriiCriticalWorkerExit::UnexpectedExit) => {
+                Ok(ToriiCriticalWorkerExit::StoppedByShutdown | ToriiCriticalWorkerExit::UnexpectedExit) => {
                     Some(ToriiCriticalWorkerFailure::ExitedUnexpectedly(name))
                 }
                 Err(error) => Some(ToriiCriticalWorkerFailure::from_join_error(name, &error)),
@@ -1376,11 +1393,11 @@ const EXACT_ALIAS_READ_MAX_BODY_BYTES: usize = 4 * 1024;
 #[cfg(any(feature = "app_api", test))]
 const EXACT_ALIAS_LOOKUP_MAX_ITEMS: usize = 64;
 #[cfg(any(feature = "app_api", feature = "telemetry", test))]
-fn alias_json_response<T>(status: StatusCode, payload: T) -> Result<AxResponse, Error>
+fn alias_json_response<T>(status: StatusCode, payload: &T) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
 {
-    let body = norito::json::to_vec(&payload).map_err(|err| {
+    let body = norito::json::to_vec(payload).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             err.to_string(),
         ))
@@ -1394,7 +1411,7 @@ where
     Ok(resp)
 }
 #[cfg(any(feature = "app_api", feature = "telemetry", test))]
-fn json_ok<T>(payload: T) -> Result<AxResponse, Error>
+fn json_ok<T>(payload: &T) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
 {
@@ -1413,7 +1430,7 @@ fn alias_resolve_ok(
         index,
         source: Some(source.to_owned()),
     };
-    alias_json_response(StatusCode::OK, payload)
+    alias_json_response(StatusCode::OK, &(payload))
 }
 #[cfg(any(feature = "app_api", test))]
 fn alias_resolve_index_ok(
@@ -1428,7 +1445,7 @@ fn alias_resolve_index_ok(
         account_id: account_id.to_owned(),
         source: Some(source.to_owned()),
     };
-    alias_json_response(StatusCode::OK, payload)
+    alias_json_response(StatusCode::OK, &(payload))
 }
 #[cfg(any(feature = "app_api", test))]
 fn alias_lookup_by_account_ok(
@@ -1459,7 +1476,7 @@ fn alias_lookup_by_account_ok(
         items,
         source: Some(source.to_owned()),
     };
-    alias_json_response(StatusCode::OK, payload)
+    alias_json_response(StatusCode::OK, &(payload))
 }
 #[cfg(any(feature = "app_api", test))]
 fn asset_alias_resolve_ok(
@@ -1480,7 +1497,7 @@ fn asset_alias_resolve_ok(
         logo,
         source: Some(source.to_owned()),
     };
-    alias_json_response(StatusCode::OK, payload)
+    alias_json_response(StatusCode::OK, &(payload))
 }
 #[cfg(any(feature = "app_api", test))]
 fn contract_alias_resolve_ok(
@@ -1499,14 +1516,14 @@ fn contract_alias_resolve_ok(
         contract_alias_binding,
         source: source.to_owned(),
     };
-    alias_json_response(StatusCode::OK, payload)
+    alias_json_response(StatusCode::OK, &(payload))
 }
 #[cfg(test)]
 fn alias_error_response(status: StatusCode, message: &str) -> Result<AxResponse, Error> {
     let payload = routing::AliasErrorResponseDto {
         error: message.to_owned(),
     };
-    alias_json_response(status, payload)
+    alias_json_response(status, &(payload))
 }
 #[cfg(test)]
 fn alias_target_kind(target: &AliasTarget) -> &'static str {
@@ -1526,7 +1543,7 @@ fn alias_non_account_target_response(target: &AliasTarget) -> Result<AxResponse,
     alias_error_response(StatusCode::CONFLICT, &message)
 }
 #[cfg(test)]
-fn map_alias_error(err: AliasError) -> Error {
+fn map_alias_error(err: &AliasError) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
         err.to_string(),
     ))
@@ -1567,7 +1584,7 @@ fn resolve_alias_via_service(
             }
         }
         Ok(None) => Ok(StatusCode::NOT_FOUND.into_response()),
-        Err(err) => Err(map_alias_error(err)),
+        Err(err) => Err(map_alias_error(&(err))),
     }
 }
 #[cfg(any(feature = "app_api", test))]
@@ -1986,16 +2003,7 @@ fn resolve_alias_index_on_route(
 fn resolve_contract_alias_on_chain(
     app: &SharedAppState,
     alias_input: &str,
-) -> Result<
-    Option<(
-        iroha_data_model::smart_contract::ContractAlias,
-        iroha_data_model::smart_contract::ContractAddress,
-        AccountId,
-        iroha_core::state::ContractAliasBindingRecord,
-        String,
-    )>,
-    Error,
-> {
+) -> Result<Option<ResolvedContractAlias>, Error> {
     let trimmed = alias_input.trim();
     if trimmed.is_empty() {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -2027,10 +2035,13 @@ fn resolve_contract_alias_on_chain(
                 )),
             ))
         })?;
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
+    let now_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
     let state_view = app.state.view();
     let world = state_view.world();
     let Some(contract_address) = world.contract_address_by_alias_at(&contract_alias, now_ms) else {
@@ -2066,8 +2077,10 @@ fn resolve_contract_alias_on_chain(
     let dataspace_alias = nexus
         .dataspace_catalog
         .by_id(alias_dataspace_id)
-        .map(|entry| entry.alias.clone())
-        .unwrap_or_else(|| contract_alias.dataspace_segment().to_owned());
+        .map_or_else(
+            || contract_alias.dataspace_segment().to_owned(),
+            |entry| entry.alias.clone(),
+        );
     Ok(Some((
         contract_alias,
         contract_address,
@@ -2209,16 +2222,16 @@ fn execute_alias_resolve_local_read(
 #[cfg(any(feature = "app_api", test))]
 fn execute_alias_resolve_unrouted_local_read(
     app: &SharedAppState,
-    canonical: String,
+    canonical: &str,
     alias_label: &iroha_data_model::account::rekey::AccountAlias,
 ) -> Result<AxResponse, Error> {
     if let Some((alias, account_id, source)) =
-        resolve_alias_label_on_chain(app, canonical.clone(), alias_label)?
+        resolve_alias_label_on_chain(app, canonical.to_owned(), alias_label)?
     {
         let account_id_string = account_id.to_string();
         return alias_resolve_ok(&alias, &account_id_string, None, source);
     }
-    Ok(account_alias_not_found_response(&canonical))
+    Ok(account_alias_not_found_response(canonical))
 }
 #[cfg(any(feature = "app_api", test))]
 fn execute_alias_resolve_index_local_read(
@@ -2272,7 +2285,7 @@ fn resolve_alias_index_via_service(
             }
         }
         Ok(None) => Ok(StatusCode::NOT_FOUND.into_response()),
-        Err(err) => Err(map_alias_error(err)),
+        Err(err) => Err(map_alias_error(&(err))),
     }
 }
 #[cfg(feature = "app_api")]
@@ -2327,10 +2340,10 @@ fn load_public_dataspace_upstreams(
         if upstreams.insert(route.dataspace_id, canonical).is_some() {
             return Err(ToriiBuildError::invalid_configuration(
                 "public_dataspace_upstreams[].dataspace_id",
-                format!(
+                &(format!(
                     "dataspace {} has more than one configured upstream",
                     route.dataspace_id
-                ),
+                )),
             ));
         }
     }
@@ -2649,8 +2662,7 @@ struct AppState {
     vpn_state_lock: Arc<std::sync::Mutex<vpn::VpnRuntimeState>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     #[cfg(feature = "connect")]
-    torii_proxy_pending:
-        Arc<parking_lot::Mutex<BTreeMap<(Hash, PeerId), Vec<PendingToriiProxyRequest>>>>,
+    torii_proxy_pending: PendingToriiProxyRequests,
     #[cfg(feature = "connect")]
     torii_proxy_completed: Arc<tokio::sync::Mutex<CompletedToriiProxyRequests>>,
     #[cfg(feature = "connect")]
@@ -2745,7 +2757,7 @@ impl CompletedToriiProxyRequests {
         while self.entries.len() >= TORII_PROXY_COMPLETED_CAP && self.remove_oldest() {}
         let generation = self.next_generation();
         self.entries.insert(
-            request_id.clone(),
+            request_id,
             CompletedToriiProxyRequest {
                 completed_at,
                 late_response_logged: false,
@@ -2756,8 +2768,10 @@ impl CompletedToriiProxyRequests {
     }
 }
 fn json_string_or_null(opt: Option<String>) -> norito::json::native::Value {
-    opt.map(norito::json::native::Value::from)
-        .unwrap_or(norito::json::native::Value::Null)
+    opt.map_or(
+        norito::json::native::Value::Null,
+        norito::json::native::Value::from,
+    )
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelineStatusKind {
@@ -2904,12 +2918,11 @@ impl PipelineStatusCache {
             TransactionStatus::Expired if event.block_height().is_none() => {
                 (PipelineStatusKind::Expired, None)
             }
-            TransactionStatus::Expired => return,
+            TransactionStatus::Expired | TransactionStatus::Rejected(_) => return,
             TransactionStatus::Approved => (PipelineStatusKind::Approved, None),
             // Transaction rejection is emitted while executing a candidate
             // block. Only the later canonical block event/State+Kura evidence
             // may turn it into a terminal status.
-            TransactionStatus::Rejected(_) => return,
         };
         let now = Instant::now();
         let incoming = PipelineStatusEntry::at_time(kind, event.block_height(), rejection, now);
@@ -3328,15 +3341,14 @@ impl PipelineStatusCache {
         state: &CoreState,
         now: Instant,
     ) -> BlockRecordOutcome {
-        let height_usize = match usize::try_from(height.get()) {
-            Ok(value) => value,
-            Err(_) => {
-                iroha_logger::debug!(
-                    height = height.get(),
-                    "pipeline status cache skipped block: height exceeds usize"
-                );
-                return BlockRecordOutcome::MissingBlock;
-            }
+        let height_usize = if let Ok(value) = usize::try_from(height.get()) {
+            value
+        } else {
+            iroha_logger::debug!(
+                height = height.get(),
+                "pipeline status cache skipped block: height exceeds usize"
+            );
+            return BlockRecordOutcome::MissingBlock;
         };
         let Some(height_nz) = NonZeroUsize::new(height_usize) else {
             return BlockRecordOutcome::MissingBlock;
@@ -4005,10 +4017,13 @@ impl AppState {
     }
     #[cfg(test)]
     fn rpc_ping(&self) -> RpcPingResponse {
-        let timestamp_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let timestamp_ms = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
         RpcPingResponse {
             ok: true,
             unix_time_ms: timestamp_ms,
@@ -4034,12 +4049,12 @@ impl AppState {
     #[allow(clippy::result_large_err)]
     fn evaluate_gateway_policy(
         &self,
-        ctx: sorafs::gateway::RequestContext<'_>,
+        ctx: &sorafs::gateway::RequestContext<'_>,
     ) -> Result<(), sorafs::gateway::PolicyViolation> {
         let Some(policy) = &self.sorafs_gateway_policy else {
             return Ok(());
         };
-        match policy.evaluate(&ctx) {
+        match policy.evaluate(ctx) {
             sorafs::gateway::PolicyDecision::Allow => Ok(()),
             sorafs::gateway::PolicyDecision::Deny(violation) => {
                 #[cfg(feature = "telemetry")]
@@ -4049,7 +4064,7 @@ impl AppState {
                         metrics.record_sorafs_gar_violation(reason, detail);
                     });
                 }
-                self.publish_gar_violation_event(&ctx, &violation);
+                self.publish_gar_violation_event(ctx, &violation);
                 Err(violation)
             }
         }
@@ -4086,10 +4101,10 @@ impl AppState {
         provider_id: &[u8; 32],
         capability: CapabilityType,
     ) -> Option<bool> {
-        if let Some(override_entry) = self.sorafs_chunk_range_overrides.get(provider_id) {
-            if capability == CapabilityType::ChunkRangeFetch {
-                return Some(*override_entry);
-            }
+        if let Some(override_entry) = self.sorafs_chunk_range_overrides.get(provider_id)
+            && capability == CapabilityType::ChunkRangeFetch
+        {
+            return Some(*override_entry);
         }
         let cache = self.sorafs_cache.as_ref()?;
         let guard = cache.try_read().ok()?;
@@ -4098,7 +4113,7 @@ impl AppState {
         Some(supported)
     }
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NoritoRpcGateFailure {
     Disabled,
     CanaryDenied,
@@ -4273,10 +4288,10 @@ async fn inject_remote_addr_header(
         .map(|connect| connect.0.ip());
     let resolved = limits::ingress_remote_ip(req.headers(), remote_ip, &app.trusted_proxy_nets);
     req.headers_mut().remove(&header);
-    if let Some(ip) = resolved {
-        if let Ok(value) = ip.to_string().parse() {
-            req.headers_mut().insert(header, value);
-        }
+    if let Some(ip) = resolved
+        && let Ok(value) = ip.to_string().parse()
+    {
+        req.headers_mut().insert(header, value);
     }
     Ok(next.run(req).await)
 }
@@ -4321,8 +4336,7 @@ async fn attach_request_id(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     let request_id = single_valid_incoming_request_id(req.headers())
-        .map(str::to_owned)
-        .unwrap_or_else(generate_request_id);
+        .map_or_else(generate_request_id, str::to_owned);
     req.extensions_mut()
         .insert(RequestCorrelationId(request_id.clone()));
     let mut response = next.run(req).await;
@@ -4380,20 +4394,20 @@ async fn enforce_preauth(
                 drop(guard);
                 let mut response = utils::respond_with_status_and_format(
                     StatusCode::BAD_REQUEST,
-                    ErrorEnvelope::new(
+                    &(ErrorEnvelope::new(
                         "websocket_handshake_invalid",
                         "WebSocket routes require one canonical RFC 6455 version 13 upgrade handshake",
-                    ),
+                    )),
                     early_rejection_response_format(req.headers()),
                 );
                 append_vary_accept(response.headers_mut());
                 return Ok(response);
             }
-            if matches!(scheme, ConnScheme::NoritoRpc) {
-                if let Err(resp) = app.check_norito_rpc_allowed(req.headers(), remote_ip) {
-                    drop(guard);
-                    return Ok(*resp);
-                }
+            if matches!(scheme, ConnScheme::NoritoRpc)
+                && let Err(resp) = app.check_norito_rpc_allowed(req.headers(), remote_ip)
+            {
+                drop(guard);
+                return Ok(*resp);
             }
             let handoff = PreAuthGuardHandoff::new(guard);
             req.extensions_mut().insert(handoff.clone());
@@ -4439,7 +4453,7 @@ async fn enforce_preauth(
             });
             let mut response = utils::respond_with_status_and_format(
                 status,
-                payload,
+                &(payload),
                 early_rejection_response_format(req.headers()),
             );
             response.headers_mut().insert(
@@ -4525,7 +4539,7 @@ fn api_token_rejection_with_policy(
             });
             let mut response = utils::respond_with_status_and_format(
                 StatusCode::SERVICE_UNAVAILABLE,
-                payload,
+                &(payload),
                 format,
             );
             response.headers_mut().insert(
@@ -4539,10 +4553,10 @@ fn api_token_rejection_with_policy(
             let format = early_rejection_response_format(headers);
             let mut response = utils::respond_with_status_and_format(
                 StatusCode::UNAUTHORIZED,
-                ErrorEnvelope::new(
+                &(ErrorEnvelope::new(
                     "api_token_required",
                     "A valid Torii API token is required for this request.",
-                ),
+                )),
                 format,
             );
             response.headers_mut().insert(
@@ -4567,10 +4581,10 @@ fn authenticate_onboarding_api_token(
     let Some(signer) = app.account_onboarding.as_ref() else {
         let mut response = utils::respond_with_status_and_format(
             StatusCode::SERVICE_UNAVAILABLE,
-            ErrorEnvelope::new(
+            &(ErrorEnvelope::new(
                 "onboarding_auth_unavailable",
                 "Signer-backed account onboarding is unavailable because its scoped credential token digests are not configured.",
-            ),
+            )),
             format,
         );
         append_vary_accept(response.headers_mut());
@@ -4581,10 +4595,10 @@ fn authenticate_onboarding_api_token(
     {
         let mut response = utils::respond_with_status_and_format(
             StatusCode::SERVICE_UNAVAILABLE,
-            ErrorEnvelope::new(
+            &(ErrorEnvelope::new(
                 "onboarding_auth_unavailable",
                 "Signer-backed account onboarding is unavailable because its scoped credential token digests are not configured.",
-            ),
+            )),
             format,
         );
         append_vary_accept(response.headers_mut());
@@ -4604,30 +4618,22 @@ fn authenticate_onboarding_api_token(
         .map(|token| *blake3::hash(token.as_bytes()).as_bytes());
     let mut authenticated_scope = None;
     let mut match_count = 0_u8;
-    if one_value {
-        if let Some(actual_hash) = actual_hash {
-            for (domain, expected_hashes) in &signer.api_token_hashes_by_domain {
-                for expected_hash in expected_hashes {
-                    if iroha_torii_shared::connect_sdk::constant_time_eq(
-                        expected_hash,
-                        &actual_hash,
-                    ) {
-                        match_count = match_count.saturating_add(1);
-                        authenticated_scope =
-                            Some(AuthenticatedOnboardingScope::Domain(domain.clone()));
-                    }
+    if one_value && let Some(actual_hash) = actual_hash {
+        for (domain, expected_hashes) in &signer.api_token_hashes_by_domain {
+            for expected_hash in expected_hashes {
+                if iroha_torii_shared::connect_sdk::constant_time_eq(expected_hash, &actual_hash) {
+                    match_count = match_count.saturating_add(1);
+                    authenticated_scope =
+                        Some(AuthenticatedOnboardingScope::Domain(domain.clone()));
                 }
             }
-            for (dataspace, expected_hashes) in &signer.api_token_hashes_by_dataspace {
-                for expected_hash in expected_hashes {
-                    if iroha_torii_shared::connect_sdk::constant_time_eq(
-                        expected_hash,
-                        &actual_hash,
-                    ) {
-                        match_count = match_count.saturating_add(1);
-                        authenticated_scope =
-                            Some(AuthenticatedOnboardingScope::Dataspace(dataspace.clone()));
-                    }
+        }
+        for (dataspace, expected_hashes) in &signer.api_token_hashes_by_dataspace {
+            for expected_hash in expected_hashes {
+                if iroha_torii_shared::connect_sdk::constant_time_eq(expected_hash, &actual_hash) {
+                    match_count = match_count.saturating_add(1);
+                    authenticated_scope =
+                        Some(AuthenticatedOnboardingScope::Dataspace(dataspace.clone()));
                 }
             }
         }
@@ -4639,10 +4645,10 @@ fn authenticate_onboarding_api_token(
     }
     let mut response = utils::respond_with_status_and_format(
         StatusCode::UNAUTHORIZED,
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             "onboarding_auth_required",
             "A valid dedicated onboarding token is required.",
-        ),
+        )),
         format,
     );
     response.headers_mut().insert(
@@ -4768,7 +4774,7 @@ async fn enforce_api_token(
     Ok(response)
 }
 /// Prevent a shared intermediary from replaying responses protected by the
-/// deployment API token. The exact public SoraFS local-gateway allowlist keeps
+/// deployment API token. The exact public `SoraFS` local-gateway allowlist keeps
 /// its immutable content responses anonymously cacheable only on a global root.
 async fn enforce_required_api_token_private_no_store(
     State(app): State<SharedAppState>,
@@ -4872,7 +4878,7 @@ async fn enforce_soracloud_signed_mutation_request(
             return Ok(soracloud_body_limit_response(
                 body_limit,
                 &path,
-                error,
+                &(error),
                 response_format,
             ));
         }
@@ -4948,7 +4954,7 @@ fn soracloud_signed_mutation_body_limit(app: &AppState) -> usize {
 fn soracloud_body_limit_response(
     body_limit: usize,
     path: &str,
-    error: axum::Error,
+    error: &axum::Error,
     format: ResponseFormat,
 ) -> axum::response::Response {
     let route_group = if path.starts_with("/v1/soracloud/model/upload/") {
@@ -4959,7 +4965,7 @@ fn soracloud_body_limit_response(
     iroha_logger::warn!(%path, body_limit, ?error, "Soracloud mutation body exceeded limit");
     utils::respond_with_status_and_format(
         StatusCode::PAYLOAD_TOO_LARGE,
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             "request_payload_too_large",
             format!("Soracloud {route_group} request body exceeds the configured limit."),
         )
@@ -4967,7 +4973,7 @@ fn soracloud_body_limit_response(
             endpoint: Some(path.to_owned()),
             expected: Some(format!("at most {body_limit} bytes")),
             ..Default::default()
-        }),
+        })),
         format,
     )
 }
@@ -4994,14 +5000,14 @@ fn soracloud_rate_limit_response(
 ) -> axum::response::Response {
     let mut response = utils::respond_with_status_and_format(
         StatusCode::TOO_MANY_REQUESTS,
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             "request_rate_limited",
             format!("Soracloud {route_group} request rate limit exceeded."),
         )
         .with_details(ErrorDetails {
             retry_after_seconds: Some(1),
             ..Default::default()
-        }),
+        })),
         format,
     );
     response.headers_mut().insert(
@@ -5017,14 +5023,14 @@ fn soracloud_inflight_limit_response(
 ) -> axum::response::Response {
     let mut response = utils::respond_with_status_and_format(
         StatusCode::SERVICE_UNAVAILABLE,
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             "request_concurrency_limited",
             format!("Soracloud {route_group} request concurrency limit exceeded."),
         )
         .with_details(ErrorDetails {
             retry_after_seconds: Some(1),
             ..Default::default()
-        }),
+        })),
         format,
     );
     response.headers_mut().insert(
@@ -5059,9 +5065,9 @@ fn normalize_json_content_type(raw: &str) -> Option<String> {
         if parameter.is_empty() {
             continue;
         }
-        let is_charset = parameter.split_once('=').map_or(false, |(name, _)| {
-            name.trim().eq_ignore_ascii_case("charset")
-        });
+        let is_charset = parameter
+            .split_once('=')
+            .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case("charset"));
         if is_charset {
             continue;
         }
@@ -5167,10 +5173,10 @@ async fn enforce_emergency_fast_surface(
     let format = early_rejection_response_format(req.headers());
     Ok(utils::respond_with_status_and_format(
         StatusCode::SERVICE_UNAVAILABLE,
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             "emergency_fast_surface_unavailable",
             "This API needs persisted block data, derived state, or a mutable runtime that emergency Fast mode deliberately leaves offline. Use health, liveness, readiness, peer, or configuration diagnostics, or restart in Strict mode.",
-        ),
+        )),
         format,
     ))
 }
@@ -5183,7 +5189,7 @@ async fn coalesce_accept_headers(
         Err(message) => {
             let mut response = utils::respond_with_status_and_format(
                 StatusCode::NOT_ACCEPTABLE,
-                ErrorEnvelope::new("response_not_acceptable", message),
+                &(ErrorEnvelope::new("response_not_acceptable", message)),
                 ResponseFormat::Json,
             );
             append_vary_accept(response.headers_mut());
@@ -5205,7 +5211,7 @@ async fn coalesce_accept_headers(
             };
         let mut response = utils::respond_with_status_and_format(
             StatusCode::BAD_REQUEST,
-            ErrorEnvelope::new("request_content_type_invalid", message),
+            &(ErrorEnvelope::new("request_content_type_invalid", message)),
             format,
         );
         append_vary_accept(response.headers_mut());
@@ -5322,7 +5328,7 @@ async fn enforce_strict_request_target(
             }
         };
     let mut response =
-        utils::respond_with_status_and_format(status, ErrorEnvelope::new(code, message), format);
+        utils::respond_with_status_and_format(status, &(ErrorEnvelope::new(code, message)), format);
     append_vary_accept(response.headers_mut());
     Ok(response)
 }
@@ -5367,7 +5373,7 @@ async fn enforce_cataloged_cors_preflight(
             }
         };
     let mut response =
-        utils::respond_with_status_and_format(status, ErrorEnvelope::new(code, message), format);
+        utils::respond_with_status_and_format(status, &(ErrorEnvelope::new(code, message)), format);
     append_vary_accept(response.headers_mut());
     Ok(response)
 }
@@ -6144,7 +6150,7 @@ async fn enforce_typed_error_contract_with_body_timeout(
             .map_err(|message| {
                 utils::respond_with_status_and_format(
                     StatusCode::NOT_ACCEPTABLE,
-                    ErrorEnvelope::new("response_not_acceptable", *message),
+                    &(ErrorEnvelope::new("response_not_acceptable", *message)),
                     ResponseFormat::Json,
                 )
             })
@@ -6226,10 +6232,17 @@ fn append_vary_accept(headers: &mut HeaderMap) {
         headers.append(axum::http::header::VARY, HeaderValue::from_static("Accept"));
     }
 }
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::unused_async,
+        reason = "The fallback is also an Axum Handler in tests, requiring the shared asynchronous signature."
+    )
+)]
 async fn handler_route_not_found() -> Response {
     utils::respond_with_status_and_format(
         StatusCode::NOT_FOUND,
-        ErrorEnvelope::new("route_not_found", "The requested route does not exist."),
+        &(ErrorEnvelope::new("route_not_found", "The requested route does not exist.")),
         utils::current_response_format(),
     )
 }
@@ -6334,10 +6347,10 @@ async fn handler_route_not_found_or_sorafs_site(
 async fn handler_method_not_allowed() -> Response {
     utils::respond_with_status_and_format(
         StatusCode::METHOD_NOT_ALLOWED,
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             "method_not_allowed",
             "The requested HTTP method is not allowed for this route.",
-        ),
+        )),
         utils::current_response_format(),
     )
 }
@@ -6352,7 +6365,7 @@ fn route_timeout_for_path(path: &str) -> Duration {
 }
 fn private_no_store_error_response(
     status: StatusCode,
-    envelope: ErrorEnvelope,
+    envelope: &ErrorEnvelope,
     format: ResponseFormat,
 ) -> Response {
     let mut response = utils::respond_with_status_and_format(status, envelope, format);
@@ -6365,7 +6378,7 @@ fn private_no_store_error_response(
 fn route_timeout_error_response(format: ResponseFormat) -> Response {
     private_no_store_error_response(
         StatusCode::REQUEST_TIMEOUT,
-        ErrorEnvelope::new(
+        &ErrorEnvelope::new(
             "request_timeout",
             "The request exceeded the route execution deadline.",
         ),
@@ -6406,7 +6419,7 @@ async fn catch_handler_panics(
             iroha_logger::error!(%message, "Torii request handler panicked");
             Ok(private_no_store_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                ErrorEnvelope::new(
+                &ErrorEnvelope::new(
                     "internal_server_error",
                     "Torii could not complete the request.",
                 ),
@@ -6582,8 +6595,7 @@ async fn record_http_metrics(
     let request_id = req
         .extensions()
         .get::<RequestCorrelationId>()
-        .map(|id| id.0.clone())
-        .unwrap_or_else(|| "missing".to_owned());
+        .map_or_else(|| "missing".to_owned(), |id| id.0.clone());
     let route_metadata = req
         .extensions()
         .get::<MatchedRouteMetadata>()
@@ -6614,9 +6626,8 @@ async fn record_http_metrics(
         .headers()
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
-    let content_type_label = content_type_header
-        .map(normalise_content_type)
-        .unwrap_or_else(|| "unknown".to_string());
+    let content_type_label =
+        content_type_header.map_or_else(|| "unknown".to_string(), normalise_content_type);
     let response_bytes = response.body().size_hint().exact().or_else(|| {
         response
             .headers()
@@ -6643,6 +6654,7 @@ async fn record_http_metrics(
         let status_busy_cause = response
             .extensions()
             .get::<utils::HttpStatusBusyCause>()
+            .copied()
             .map_or("none", utils::HttpStatusBusyCause::as_str);
         #[cfg(not(feature = "telemetry"))]
         let status_busy_cause = "none";
@@ -6769,16 +6781,30 @@ async fn check_access_enforced_with_cost(
 pub(crate) struct QueryAdmissionPermit {
     // Retire this worker's native memory and specialized permits before waking
     // the next general-query worker. Rust drops fields in declaration order.
-    _fanout_memory: Option<QueryFanoutMemoryReservation>,
-    _body: Option<tokio::sync::OwnedSemaphorePermit>,
-    _heavy: Option<tokio::sync::OwnedSemaphorePermit>,
+    fanout_memory: Option<QueryFanoutMemoryReservation>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "The owned semaphore permit is retained for ordered release when physical query work finishes."
+        )
+    )]
+    body: Option<tokio::sync::OwnedSemaphorePermit>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "The owned semaphore permit is retained for ordered release when physical query work finishes."
+        )
+    )]
+    heavy: Option<tokio::sync::OwnedSemaphorePermit>,
     _query: tokio::sync::OwnedSemaphorePermit,
 }
 impl QueryAdmissionPermit {
     /// Use the response phase granted by this worker's retained query owner.
     /// Response custody alone cannot grant producer allocation authority.
     pub(crate) fn response_body_budget(&self) -> Result<usize, Error> {
-        self._fanout_memory
+        self.fanout_memory
             .as_ref()
             .and_then(|owner| owner.admission)
             .map(|admission| admission.envelope.route_body_bytes)
@@ -6791,7 +6817,7 @@ impl QueryAdmissionPermit {
 
     #[cfg(test)]
     fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
-        self._body = Some(permit);
+        self.body = Some(permit);
         self
     }
 }
@@ -6816,9 +6842,9 @@ async fn acquire_query_admission(
             .map_err(|_| capacity_limit())?;
         return Ok(QueryAdmissionPermit {
             _query: query,
-            _heavy: heavy,
-            _body: None,
-            _fanout_memory: current_query_fanout_memory_for_state(app),
+            heavy,
+            body: None,
+            fanout_memory: current_query_fanout_memory_for_state(app),
         });
     }
     let acquire = async {
@@ -6841,9 +6867,9 @@ async fn acquire_query_admission(
             .map_err(|_| capacity_limit())?;
         Ok(QueryAdmissionPermit {
             _query: query,
-            _heavy: heavy,
-            _body: None,
-            _fanout_memory: current_query_fanout_memory_for_state(app),
+            heavy,
+            body: None,
+            fanout_memory: current_query_fanout_memory_for_state(app),
         })
     };
     tokio::time::timeout(app.query_queue_timeout, acquire)
@@ -6982,18 +7008,17 @@ fn encode_server_owned_query_response(
     let (response, memory_lease) = response.into_parts();
     let cursor_query_id = query_response_cursor_query_id(&response).map(ToOwned::to_owned);
     let max_response_bytes =
-        match usize::try_from(app.ordinary_query_policy.limits.max_response_bytes()) {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                if let Some(query_id) = cursor_query_id.as_ref() {
-                    app.query_service.drop_query(query_id);
-                }
-                return torii_proxy_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "query_capacity_exceeded",
-                    "ordinary query response limit is not representable on this platform",
-                );
+        if let Ok(bytes) = usize::try_from(app.ordinary_query_policy.limits.max_response_bytes()) {
+            bytes
+        } else {
+            if let Some(query_id) = cursor_query_id.as_ref() {
+                app.query_service.drop_query(query_id);
             }
+            return torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "query_capacity_exceeded",
+                "ordinary query response limit is not representable on this platform",
+            );
         };
     encode_query_response_with_memory_lease_bounded(
         app,
@@ -7003,6 +7028,10 @@ fn encode_server_owned_query_response(
         max_response_bytes,
     )
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Encoding consumes the server-owned query response together with its memory lease before handing response-body custody to HTTP."
+)]
 fn encode_query_response_with_memory_lease_bounded(
     app: &AppState,
     response: iroha_data_model::query::QueryResponse,
@@ -7011,7 +7040,7 @@ fn encode_query_response_with_memory_lease_bounded(
     max_response_bytes: usize,
 ) -> Response {
     let cursor_query_id = query_response_cursor_query_id(&response).map(ToOwned::to_owned);
-    match crate::utils::respond_with_format_bounded(response, format, max_response_bytes) {
+    match crate::utils::respond_with_format_bounded(&(response), format, max_response_bytes) {
         Ok(response) => hold_ordinary_query_memory_in_response_body(
             response,
             OrdinaryQueryResponseMemory::new(memory_lease),
@@ -7302,8 +7331,7 @@ async fn handler_push_unregister_device(
     };
     req.account_id = account_id.to_string();
     let bridge = app.push.as_ref().expect("checked push presence");
-    match bridge.unregister_device(req) {
-        Ok(()) => StatusCode::ACCEPTED.into_response(),
+    match bridge.unregister_device(&(req)) {
         Err(push::PushError::Disabled) => push_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "push_disabled",
@@ -7334,7 +7362,8 @@ async fn handler_push_unregister_device(
             "push_storage_error",
             value,
         ),
-        Err(
+        Ok(())
+        | Err(
             push::PushError::MissingCredentials { .. }
             | push::PushError::TooManyTopics { .. }
             | push::PushError::InvalidTopic { .. }
@@ -7378,7 +7407,7 @@ fn push_authenticate_device_request(
             "push_auth_required",
             "signed account headers are required",
         )),
-        Err(error) => Err(push_auth_error_response(error)),
+        Err(error) => Err(push_auth_error_response(&(error))),
     }
 }
 #[cfg(all(feature = "app_api", feature = "push"))]
@@ -7432,7 +7461,7 @@ fn push_authorize_device_account(
     }
 }
 #[cfg(all(feature = "app_api", feature = "push"))]
-fn push_auth_error_response(error: Error) -> AxResponse {
+fn push_auth_error_response(error: &Error) -> AxResponse {
     push_error_response(
         StatusCode::UNAUTHORIZED,
         "push_auth_invalid",
@@ -7614,10 +7643,10 @@ fn canonical_account_body_limit_response() -> Response {
     const REJECT_CODE: &str = "request_payload_too_large";
     let mut response = utils::respond_with_status_and_format(
         StatusCode::PAYLOAD_TOO_LARGE,
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             REJECT_CODE,
             "The request body exceeds the configured route limit.",
-        ),
+        )),
         utils::current_response_format(),
     );
     response.headers_mut().insert(
@@ -7819,28 +7848,27 @@ async fn enforce_optional_canonical_account_body_authentication(
     };
     // A routed read retried with a larger owner keeps the visibility its first
     // attempt verified; verifying again would find its own nonce already published.
-    let (verified, _authentication_owner) = match routed_read_canonical_auth() {
-        Some(verified) => (verified, authentication_owner.0),
-        None => {
-            let (result, owner) = match authenticate_canonical_account_request(
-                &state.app,
-                &parts,
-                body.as_ref(),
-                authentication_owner,
-            )
-            .await
-            {
-                Ok(authenticated) => authenticated,
-                Err(response) => return response,
-            };
-            match result {
-                Ok(verified) => {
-                    remember_routed_read_canonical_auth(verified.as_ref());
-                    (verified, owner)
-                }
-                Err(error) => {
-                    return crate::app_auth::canonical_authentication_error(error).into_response();
-                }
+    let (verified, _authentication_owner) = if let Some(verified) = routed_read_canonical_auth() {
+        (verified, authentication_owner.0)
+    } else {
+        let (result, owner) = match authenticate_canonical_account_request(
+            &state.app,
+            &parts,
+            body.as_ref(),
+            authentication_owner,
+        )
+        .await
+        {
+            Ok(authenticated) => authenticated,
+            Err(response) => return response,
+        };
+        match result {
+            Ok(verified) => {
+                remember_routed_read_canonical_auth(verified.as_ref());
+                (verified, owner)
+            }
+            Err(error) => {
+                return crate::app_auth::canonical_authentication_error(error).into_response();
             }
         }
     };
@@ -10450,9 +10478,9 @@ fn identifier_internal_error(message: impl Into<String>) -> Error {
     ))
 }
 #[cfg(feature = "app_api")]
-fn identifier_execution_error(error: identifier_resolution::IdentifierResolutionError) -> Error {
+fn identifier_execution_error(error: &identifier_resolution::IdentifierResolutionError) -> Error {
     if matches!(
-        &error,
+        error,
         identifier_resolution::IdentifierResolutionError::Evaluation(
             iroha_crypto::RamLfeError::InsecureBfvProfile
         )
@@ -10463,7 +10491,7 @@ fn identifier_execution_error(error: identifier_resolution::IdentifierResolution
         };
     }
     if matches!(
-        &error,
+        error,
         identifier_resolution::IdentifierResolutionError::UnsupportedBackend(_)
     ) {
         return Error::AppServiceUnavailable {
@@ -10579,7 +10607,7 @@ fn derive_ram_lfe_request_draft(
     network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::RamLfeExecutionDraft, Error> {
     identifier_resolution::require_supported_program_policy(program_policy)
-        .map_err(identifier_execution_error)?;
+        .map_err(|value| identifier_execution_error(&value))?;
     let nonce = zeroize::Zeroizing::new(parse_identifier_input_nonce(&request.input_nonce)?);
     resolver
         .execute_owner_prf(
@@ -10588,7 +10616,7 @@ fn derive_ram_lfe_request_draft(
             &nonce,
             network_id,
         )
-        .map_err(identifier_execution_error)
+        .map_err(|value| identifier_execution_error(&value))
 }
 #[cfg(feature = "app_api")]
 fn derive_identifier_request_draft(
@@ -10604,7 +10632,7 @@ fn derive_identifier_request_draft(
         ));
     }
     identifier_resolution::require_supported_program_policy(program_policy)
-        .map_err(identifier_execution_error)?;
+        .map_err(|value| identifier_execution_error(&value))?;
     let nonce = zeroize::Zeroizing::new(parse_identifier_input_nonce(&request.input_nonce)?);
     let opening = request.output_opening.clone().ok_or_else(|| {
         identifier_conversion_error("claim requires the original signed native owner PRF opening")
@@ -10618,7 +10646,7 @@ fn derive_identifier_request_draft(
             request.phone_retail_canonicality.clone(),
             network_id,
         )
-        .map_err(identifier_execution_error)
+        .map_err(|value| identifier_execution_error(&value))
 }
 #[cfg(feature = "app_api")]
 fn ram_lfe_proof_verifier_metadata_dto(
@@ -10975,9 +11003,9 @@ async fn handler_explorer_metrics(
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/metrics").await?;
     }
     routing::handle_v1_explorer_metrics(
-        app.state.clone(),
-        app.telemetry.clone(),
-        visibility.current_visibility(),
+        &app.state,
+        &(app.telemetry),
+        &(visibility.current_visibility()),
     )
 }
 #[cfg(feature = "app_api")]
@@ -11011,7 +11039,7 @@ async fn handler_defi_oracle_attestation_latest(
             items.iter().rev().find(|item| {
                 query
                     .status
-                    .map_or(true, |status| item.status_flags == status)
+                    .is_none_or(|status| item.status_flags == status)
             })
         })
         .cloned()
@@ -11549,7 +11577,7 @@ async fn handler_explorer_transaction_detail(
     .await
     {
         Ok(response) => Ok(response),
-        Err(error) => Ok(explorer_json_error_response(error)),
+        Err(error) => Ok(explorer_json_error_response(&(error))),
     }
 }
 #[cfg(feature = "app_api")]
@@ -11577,12 +11605,12 @@ async fn handler_explorer_transaction_proof(
     .await
     {
         Ok(response) if visibility.authorization_is_current() => Ok(response),
-        Ok(_) => Ok(explorer_json_error_response(Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
+        Ok(_) => Ok(explorer_json_error_response(
+            &(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ),
-        ))),
-        Err(error) => Ok(explorer_json_error_response(error)),
+            ))),
+        )),
+        Err(error) => Ok(explorer_json_error_response(&(error))),
     }
 }
 #[cfg(feature = "app_api")]
@@ -11625,7 +11653,7 @@ async fn handler_explorer_instruction_detail(
     .await
     {
         Ok(response) => Ok(response),
-        Err(error) => Ok(explorer_json_error_response(error)),
+        Err(error) => Ok(explorer_json_error_response(&(error))),
     }
 }
 #[cfg(feature = "app_api")]
@@ -11667,23 +11695,23 @@ async fn handler_explorer_instruction_contract_view(
     )
     .await
     {
-        return Ok(explorer_json_error_response(error));
+        return Ok(explorer_json_error_response(&(error)));
     }
     match crate::contract_sources::handle_get_instruction_contract_view(app.clone(), hash, index)
         .await
     {
         Ok(response) => Ok(response.into_response()),
-        Err(error) => Ok(explorer_json_error_response(error)),
+        Err(error) => Ok(explorer_json_error_response(&(error))),
     }
 }
 #[cfg(feature = "app_api")]
-fn explorer_json_error_response(error: Error) -> AxResponse {
+fn explorer_json_error_response(error: &Error) -> AxResponse {
     let status = error.status_code();
     let message = error.to_string();
     let payload = json_object(vec![
         json_entry("error", "request_failed"),
-        json_entry("status", status.as_u16()),
-        json_entry("message", message),
+        json_entry("status", &(status.as_u16())),
+        json_entry("message", &(message)),
     ]);
     let mut response = JsonBody(payload).into_response();
     *response.status_mut() = status;
@@ -12441,7 +12469,7 @@ async fn handler_runtime_abi_active(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_abi_active(app.state.clone()).await?;
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
 /// GET /v1/runtime/abi/hash — wrapper that enforces Torii access policy, then delegates.
 async fn handler_runtime_abi_hash(
@@ -12456,7 +12484,7 @@ async fn handler_runtime_abi_hash(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_abi_hash(app.state.clone()).await?;
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
 // -------------- Core info (AppState-based) --------------
 #[cfg(feature = "connect")]
@@ -12558,7 +12586,7 @@ async fn handler_nft_offer_list(
     NoritoQuery(params): NoritoQuery<nft_market::NftOfferListParams>,
 ) -> Result<Response, Error> {
     check_access(&app, &headers, Some(remote.ip()), "v1/nft-offers").await?;
-    Ok(nft_market::list(&app, params))
+    Ok(nft_market::list(&app, &(params)))
 }
 /// Exact immutable seller terms and retained terminal decision.
 async fn handler_nft_offer_get(
@@ -12648,7 +12676,7 @@ async fn handler_create_vpn_session(
     check_access(&app, &headers, Some(remote.ip()), "v1/vpn/sessions").await?;
     vpn::handle_create_vpn_session(app, &method, &uri, &headers, body.as_ref()).await
 }
-/// GET /v1/vpn/sessions/{session_id} — signed active-session status for the wallet account.
+/// GET /`v1/vpn/sessions/{session_id`} — signed active-session status for the wallet account.
 async fn handler_get_vpn_session(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -12703,7 +12731,7 @@ async fn handler_get_nexus_lane_lifecycle(
         Err(response) => return Ok(response),
     };
     let status = routing::handle_get_nexus_lane_lifecycle(&app.state)?;
-    Ok(crate::utils::respond_with_format(status, format))
+    Ok(crate::utils::respond_with_format(&status, format))
 }
 /// GET /v1/peers — wrapper that enforces Torii access policy, then delegates.
 async fn handler_peers(
@@ -12938,7 +12966,7 @@ async fn handler_runtime_metrics(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_metrics(app.state.clone()).await?;
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
 /// GET /v1/node/capabilities — public compatibility metadata with listener access policy.
 async fn handler_node_capabilities(
@@ -12953,7 +12981,7 @@ async fn handler_node_capabilities(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_node_capabilities(app.state.clone()).await?;
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
 /// GET /v1/privacy/capabilities — authoritative committed privacy snapshot.
 async fn handler_privacy_capabilities(
@@ -12968,7 +12996,7 @@ async fn handler_privacy_capabilities(
         Err(response) => return Ok(response),
     };
     let payload = crate::runtime::handle_privacy_capabilities(app.state.clone()).await?;
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
 /// POST /v1/privacy/bootle-lantern/issuance/authorize — exact native ILA1 issuance.
 async fn handler_post_bootle_lantern_issuance_authorize(
@@ -13015,7 +13043,7 @@ async fn handler_node_query_projection_checkpoint(
     else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
 /// GET /v1/node/query/projection/catalog/{resource} — enumerate the canonical live shard set.
 #[cfg(feature = "app_api")]
@@ -13045,9 +13073,9 @@ async fn handler_node_query_projection_shard_catalog(
         query,
     )
     .await?;
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
-/// GET /v1/node/query/projection/shards/{resource}/{partition_id} — export one canonical shard archive.
+/// GET /``v1/node/query/projection/shards/{resource}/{partition_id``} — export one canonical shard archive.
 #[cfg(feature = "app_api")]
 async fn handler_node_query_projection_shard_export(
     State(app): State<SharedAppState>,
@@ -13098,7 +13126,7 @@ async fn handler_runtime_upgrades_list(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_upgrades_list(app.state.clone()).await?;
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_runtime_propose_upgrade(
     State(app): State<SharedAppState>,
@@ -13121,7 +13149,7 @@ async fn handler_runtime_propose_upgrade(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_propose_upgrade(body).await?;
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_runtime_activate_upgrade(
     State(app): State<SharedAppState>,
@@ -13144,7 +13172,7 @@ async fn handler_runtime_activate_upgrade(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_activate_upgrade(id).await?;
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_runtime_cancel_upgrade(
     State(app): State<SharedAppState>,
@@ -13167,7 +13195,7 @@ async fn handler_runtime_cancel_upgrade(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_cancel_upgrade(id).await?;
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_zk_roots(
     State(app): State<SharedAppState>,
@@ -13326,14 +13354,14 @@ fn zk_attachments_tenant(
 async fn handler_zk_attachments_disabled() -> Response {
     utils::respond_with_status_and_format(
         StatusCode::SERVICE_UNAVAILABLE,
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             "zk_attachments_disabled",
             "The zero-knowledge attachment service is disabled on this node.",
         )
         .with_details(ErrorDetails {
             hint: Some("enable torii.zk_attachments_enabled in node configuration".to_owned()),
             ..Default::default()
-        }),
+        })),
         utils::current_response_format(),
     )
 }
@@ -13568,8 +13596,8 @@ fn soracloud_runtime_status_sections(
                     "embedded Soracloud runtime manager is not attached to this Torii process",
                 ),
             ]),
-            json_object(vec![json_entry("enabled", false)]),
-            json_object(vec![json_entry("available", false)]),
+            json_object(vec![json_entry("enabled", &(false))]),
+            json_object(vec![json_entry("available", &(false))]),
         );
     };
     let snapshot = runtime.snapshot();
@@ -13647,38 +13675,38 @@ fn soracloud_runtime_status_sections(
     };
     let service_health = json_object(vec![
         json_entry("mode", "embedded_runtime_manager"),
-        json_entry("status", status),
-        json_entry("message", message),
-        json_entry("observed_height", snapshot.observed_height),
-        json_entry("observed_block_hash", snapshot.observed_block_hash.clone()),
-        json_entry("state_dir", state_dir.clone()),
-        json_entry("service_revisions", service_revisions),
-        json_entry("healthy_service_revisions", healthy_services),
-        json_entry("hydrating_service_revisions", hydrating_services),
-        json_entry("degraded_service_revisions", degraded_services),
-        json_entry("unavailable_service_revisions", unavailable_services),
-        json_entry("apartments", apartment_count),
-        json_entry("running_apartments", running_apartments),
-        json_entry("expired_apartments", expired_apartments),
+        json_entry("status", &(status)),
+        json_entry("message", &(message)),
+        json_entry("observed_height", &(snapshot.observed_height)),
+        json_entry("observed_block_hash", &(snapshot.observed_block_hash)),
+        json_entry("state_dir", &(state_dir)),
+        json_entry("service_revisions", &(service_revisions)),
+        json_entry("healthy_service_revisions", &(healthy_services)),
+        json_entry("hydrating_service_revisions", &(hydrating_services)),
+        json_entry("degraded_service_revisions", &(degraded_services)),
+        json_entry("unavailable_service_revisions", &(unavailable_services)),
+        json_entry("apartments", &(apartment_count)),
+        json_entry("running_apartments", &(running_apartments)),
+        json_entry("expired_apartments", &(expired_apartments)),
     ]);
     let runtime_pressure = json_object(vec![
-        json_entry("enabled", true),
-        json_entry("state_dir", state_dir.clone()),
-        json_entry("observed_height", snapshot.observed_height),
-        json_entry("service_revisions", service_revisions),
-        json_entry("apartments", apartment_count),
-        json_entry("max_load_factor_bps", max_load_factor_bps),
+        json_entry("enabled", &(true)),
+        json_entry("state_dir", &(state_dir)),
+        json_entry("observed_height", &(snapshot.observed_height)),
+        json_entry("service_revisions", &(service_revisions)),
+        json_entry("apartments", &(apartment_count)),
+        json_entry("max_load_factor_bps", &(max_load_factor_bps)),
         json_entry(
             "authoritative_pending_mailbox_messages",
-            authoritative_pending_mailbox_messages,
+            &(authoritative_pending_mailbox_messages),
         ),
-        json_entry("bundle_cache_misses", bundle_cache_misses),
-        json_entry("artifact_cache_misses", artifact_cache_misses),
+        json_entry("bundle_cache_misses", &(bundle_cache_misses)),
+        json_entry("artifact_cache_misses", &(artifact_cache_misses)),
     ]);
     let runtime_manager = json_object(vec![
-        json_entry("available", true),
-        json_entry("state_dir", state_dir),
-        json_entry("snapshot", snapshot),
+        json_entry("available", &(true)),
+        json_entry("state_dir", &(state_dir)),
+        json_entry("snapshot", &(snapshot)),
     ]);
     (service_health, runtime_pressure, runtime_manager)
 }
@@ -13737,23 +13765,23 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
         }
     }
     json_object(vec![
-        json_entry("active_capability_adverts", active_capability_adverts),
+        json_entry("active_capability_adverts", &(active_capability_adverts)),
         json_entry(
             "placed_host_count",
-            u64::try_from(hosting_peers.len()).unwrap_or(u64::MAX),
+            &(u64::try_from(hosting_peers.len()).unwrap_or(u64::MAX)),
         ),
-        json_entry("hosted_replica_count", hosted_replica_count),
-        json_entry("unavailable_replica_count", unavailable_replica_count),
+        json_entry("hosted_replica_count", &(hosted_replica_count)),
+        json_entry("unavailable_replica_count", &(unavailable_replica_count)),
     ])
 }
 #[cfg(feature = "telemetry")]
 fn soracloud_failed_admissions_section(telemetry: &routing::MaybeTelemetry) -> norito::json::Value {
     if !telemetry.allows_metrics() {
         return json_object(vec![
-            json_entry("available", false),
-            json_entry("total", 0_u64),
-            json_entry("governance_manifest_rejected", 0_u64),
-            json_entry("sorafs_provider_rejected", 0_u64),
+            json_entry("available", &(false)),
+            json_entry("total", &(0_u64)),
+            json_entry("governance_manifest_rejected", &(0_u64)),
+            json_entry("sorafs_provider_rejected", &(0_u64)),
         ]);
     }
     let metrics = telemetry.metrics();
@@ -13797,10 +13825,13 @@ fn soracloud_failed_admissions_section(telemetry: &routing::MaybeTelemetry) -> n
     let failed_admission_total =
         governance_manifest_rejected.saturating_add(sorafs_provider_rejected);
     json_object(vec![
-        json_entry("available", true),
-        json_entry("total", failed_admission_total),
-        json_entry("governance_manifest_rejected", governance_manifest_rejected),
-        json_entry("sorafs_provider_rejected", sorafs_provider_rejected),
+        json_entry("available", &(true)),
+        json_entry("total", &(failed_admission_total)),
+        json_entry(
+            "governance_manifest_rejected",
+            &(governance_manifest_rejected),
+        ),
+        json_entry("sorafs_provider_rejected", &(sorafs_provider_rejected)),
     ])
 }
 #[cfg(not(feature = "telemetry"))]
@@ -13808,10 +13839,10 @@ fn soracloud_failed_admissions_section(
     _telemetry: &routing::MaybeTelemetry,
 ) -> norito::json::Value {
     json_object(vec![
-        json_entry("available", false),
-        json_entry("total", 0_u64),
-        json_entry("governance_manifest_rejected", 0_u64),
-        json_entry("sorafs_provider_rejected", 0_u64),
+        json_entry("available", &(false)),
+        json_entry("total", &(0_u64)),
+        json_entry("governance_manifest_rejected", &(0_u64)),
+        json_entry("sorafs_provider_rejected", &(0_u64)),
     ])
 }
 #[cfg(feature = "app_api")]
@@ -13844,7 +13875,7 @@ fn sanitize_soracloud_public_runtime_headers(
     headers: &HeaderMap,
 ) -> Result<HeaderMap, SoracloudRuntimeExecutionError> {
     let mut connection_scoped = HashSet::new();
-    for value in headers.get_all(axum::http::header::CONNECTION).iter() {
+    for value in &headers.get_all(axum::http::header::CONNECTION) {
         for token in value.as_bytes().split(|byte| *byte == b',') {
             let token = token.trim_ascii();
             if token.is_empty() {
@@ -14150,18 +14181,18 @@ fn transaction_submission_receipt_response(
         let submitted_at_height = u64::try_from(app.state.committed_height()).unwrap_or(0);
         let submitted_at_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
             .unwrap_or(0);
         let payload = TransactionSubmissionReceiptPayload {
             entrypoint_hash,
-            signed_transaction_hash: signed_transaction_hash.clone(),
+            signed_transaction_hash,
             submitted_at_ms,
             submitted_at_height,
             signer: app.da_receipt_signer.public_key().clone(),
         };
         match TransactionSubmissionReceipt::try_sign(payload, &app.da_receipt_signer) {
             Ok(receipt) => {
-                utils::respond_with_status_and_format(StatusCode::ACCEPTED, receipt, format)
+                utils::respond_with_status_and_format(StatusCode::ACCEPTED, &(receipt), format)
             }
             Err(err) => {
                 let envelope = ErrorEnvelope::new(
@@ -14170,7 +14201,7 @@ fn transaction_submission_receipt_response(
                 );
                 utils::respond_with_status_and_format(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    envelope,
+                    &(envelope),
                     format,
                 )
             }
@@ -14556,7 +14587,7 @@ struct AuthoritativeLanePeers {
 #[cfg(feature = "connect")]
 fn authoritative_lane_peer_statuses_with_manifest_urls(
     authoritative_peer_ids: Vec<PeerId>,
-    manifest_torii_urls: BTreeMap<PeerId, String>,
+    manifest_torii_urls: &BTreeMap<PeerId, String>,
 ) -> Vec<AuthoritativeLanePeerStatus> {
     authoritative_peer_ids
         .into_iter()
@@ -14609,7 +14640,10 @@ fn authoritative_lane_peer_statuses(
                 .map(|torii_url| (binding.peer_id, torii_url))
         })
         .collect();
-    authoritative_lane_peer_statuses_with_manifest_urls(authoritative_peer_ids, manifest_torii_urls)
+    authoritative_lane_peer_statuses_with_manifest_urls(
+        authoritative_peer_ids,
+        &(manifest_torii_urls),
+    )
 }
 #[cfg(all(test, feature = "connect"))]
 fn authoritative_lane_peer_statuses_at_height(
@@ -14643,7 +14677,10 @@ fn authoritative_lane_peer_statuses_at_height(
                 .map(|torii_url| (binding.peer_id, torii_url))
         })
         .collect();
-    authoritative_lane_peer_statuses_with_manifest_urls(authoritative_peer_ids, manifest_torii_urls)
+    authoritative_lane_peer_statuses_with_manifest_urls(
+        authoritative_peer_ids,
+        &(manifest_torii_urls),
+    )
 }
 #[cfg(feature = "connect")]
 fn authoritative_lane_peers(
@@ -15527,11 +15564,11 @@ struct ToriiAliasLookupRouteAccess {
     filter_by_permission: bool,
 }
 fn torii_permission_target<T: iroha_executor_data_model::permission::Permission>(
-    token: T,
+    token: &T,
 ) -> Result<Permission, Error> {
     // The checked writer also visits nested account identities fallibly. The
     // ordinary value conversion uses their infallible display serializer.
-    let encoded = norito::json::to_json_bounded(&token, iroha_primitives::json::MAX_JSON_BYTES)
+    let encoded = norito::json::to_json_bounded(token, iroha_primitives::json::MAX_JSON_BYTES)
         .map_err(|error| match error {
             norito::json::BoundedJsonError::DecodeResource(_)
             | norito::json::BoundedJsonError::ScopedDecodeResource(_)
@@ -16142,7 +16179,7 @@ where
     rng.try_fill_bytes(&mut nonce).map_err(|error| {
         ToriiBuildError::component_initialization(
             "torii_proxy.session_entropy",
-            format!("operating-system randomness is unavailable: {error}"),
+            &(format!("operating-system randomness is unavailable: {error}")),
         )
     })?;
     Ok(Hash::new(nonce))
@@ -16283,7 +16320,7 @@ fn register_torii_proxy_pending_waiter(
 /// Owns exactly one response waiter, including when an attempt is cancelled.
 #[cfg(feature = "connect")]
 struct ToriiProxyPendingWaiter {
-    pending: Arc<parking_lot::Mutex<BTreeMap<(Hash, PeerId), Vec<PendingToriiProxyRequest>>>>,
+    pending: PendingToriiProxyRequests,
     pending_key: (Hash, PeerId),
     waiter_token: Arc<()>,
 }
@@ -16486,20 +16523,11 @@ fn torii_authorize_signed_query_routes(
         )),
         SignedQueryScope::PublicControlPlane => Ok(Vec::new()),
         SignedQueryScope::LocalReplicated => Ok(routes),
-        SignedQueryScope::CrossDataspaceFanout => {
-            let (allowed, denied) = torii_intersect_signed_query_routes(
-                routes,
-                torii_global_signed_query_read_routes(app, authority),
-            );
-            if denied == 0 {
-                Ok(allowed)
-            } else {
-                Err(torii_signed_query_permission_denied_response(
-                    authority, denied,
-                ))
-            }
-        }
-        SignedQueryScope::AuthorityRouted => {
+        SignedQueryScope::CrossDataspaceFanout
+        | SignedQueryScope::AuthorityRouted
+        | SignedQueryScope::TargetDomain(_)
+        | SignedQueryScope::UniversalAssetDefinition(_)
+        | SignedQueryScope::DataspaceAssetDefinition(_) => {
             let (allowed, denied) = torii_intersect_signed_query_routes(
                 routes,
                 torii_global_signed_query_read_routes(app, authority),
@@ -16578,21 +16606,6 @@ fn torii_authorize_signed_query_routes(
                 Err(torii_signed_query_permission_denied_response(
                     authority,
                     routes.len().max(1),
-                ))
-            }
-        }
-        SignedQueryScope::TargetDomain(_)
-        | SignedQueryScope::UniversalAssetDefinition(_)
-        | SignedQueryScope::DataspaceAssetDefinition(_) => {
-            let (allowed, denied) = torii_intersect_signed_query_routes(
-                routes,
-                torii_global_signed_query_read_routes(app, authority),
-            );
-            if denied == 0 {
-                Ok(allowed)
-            } else {
-                Err(torii_signed_query_permission_denied_response(
-                    authority, denied,
                 ))
             }
         }
@@ -17231,8 +17244,7 @@ fn torii_authorized_signed_query_routes(
                 "authoritative asset-definition home is invalid",
             ));
         }
-        SignedQueryScope::PublicControlPlane => Vec::new(),
-        SignedQueryScope::LocalReplicated => Vec::new(),
+        SignedQueryScope::PublicControlPlane | SignedQueryScope::LocalReplicated => Vec::new(),
         SignedQueryScope::AuthorityRouted => unreachable!("handled above"),
         SignedQueryScope::CrossDataspaceFanout => torii_all_dataspace_routes(app),
         SignedQueryScope::TargetAccount(account_id)
@@ -17476,12 +17488,12 @@ fn decode_verified_singular_fanout_request_bounded(
         })
 }
 fn bounded_singular_fanout_response(
-    query_response: iroha_data_model::query::QueryResponse,
+    query_response: &iroha_data_model::query::QueryResponse,
     format: ResponseFormat,
     max_body_bytes: usize,
 ) -> Response {
     if !matches!(
-        &query_response,
+        query_response,
         iroha_data_model::query::QueryResponse::Singular(_)
     ) {
         return incompatible_routed_query_response("a singular query output");
@@ -17490,21 +17502,21 @@ fn bounded_singular_fanout_response(
         ResponseFormat::Norito => {
             let _canonical_flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-            match crate::utils::encode_norito_bounded(&query_response, max_body_bytes) {
+            match crate::utils::encode_norito_bounded(query_response, max_body_bytes) {
                 Ok(bytes) => signed_query_fanout_response_from_norito_bytes(bytes),
-                Err(error) => bounded_signed_query_fanout_encode_error_response(error),
+                Err(error) => bounded_signed_query_fanout_encode_error_response(&(error)),
             }
         }
         ResponseFormat::Json => {
-            match crate::utils::encode_json_bounded(&query_response, max_body_bytes) {
+            match crate::utils::encode_json_bounded(query_response, max_body_bytes) {
                 Ok(json) => signed_query_fanout_response_from_json(json),
-                Err(error) => bounded_signed_query_fanout_json_encode_error_response(error),
+                Err(error) => bounded_signed_query_fanout_json_encode_error_response(&(error)),
             }
         }
     }
 }
 fn bounded_signed_query_fanout_json_encode_error_response(
-    error: norito::json::BoundedJsonError,
+    error: &norito::json::BoundedJsonError,
 ) -> Response {
     match error {
         norito::json::BoundedJsonError::BodyTooLarge => torii_proxy_error_response(
@@ -17524,7 +17536,7 @@ fn bounded_signed_query_fanout_json_encode_error_response(
     }
 }
 fn bounded_signed_query_fanout_encode_error_response(
-    error: crate::utils::BoundedResponseEncodeError,
+    error: &crate::utils::BoundedResponseEncodeError,
 ) -> Response {
     match error {
         crate::utils::BoundedResponseEncodeError::BodyTooLarge {
@@ -17754,7 +17766,7 @@ async fn execute_incoming_torii_signed_query_route_scan(
         Err(response) => return hold_query_fanout_memory_in_response_body(response, permit),
     };
     let mut response =
-        bounded_singular_fanout_response(query_response, format, envelope.route_body_bytes);
+        bounded_singular_fanout_response(&(query_response), format, envelope.route_body_bytes);
     insert_routing_headers(&mut response, routing_decision, "proxy");
     hold_query_fanout_memory_in_response_body(response, permit)
 }
@@ -17995,7 +18007,7 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
     drop(verified_request_frame);
     drop(query_bytes);
     let mut response = bounded_singular_fanout_response(
-        iroha_data_model::query::QueryResponse::Singular(first_output),
+        &(iroha_data_model::query::QueryResponse::Singular(first_output)),
         format,
         envelope.final_body_bytes,
     );
@@ -18295,7 +18307,7 @@ async fn execute_bounded_contract_view_work(
         match work {
             BoundedContractViewWork::Single(request) => {
                 let (status, body) =
-                    routing::handle_post_contract_view(state, NoritoJson(request))?;
+                    routing::handle_post_contract_view(&state, NoritoJson(request))?;
                 Ok(BoundedContractViewOutput::Single {
                     status,
                     body,
@@ -18303,7 +18315,7 @@ async fn execute_bounded_contract_view_work(
                 })
             }
             BoundedContractViewWork::Batch(request) => {
-                let body = routing::handle_post_contract_view_batch(state, NoritoJson(request))?;
+                let body = routing::handle_post_contract_view_batch(&(state), NoritoJson(request))?;
                 Ok(BoundedContractViewOutput::Batch { body, memory })
             }
         }
@@ -18347,7 +18359,7 @@ fn error_response_with_format(error: Error, format: ResponseFormat) -> Response 
         Error::Query(err) => public_validation_fail_envelope(&err, status),
         other => other.into_envelope(),
     };
-    crate::utils::respond_with_status_and_format(status, envelope, format)
+    crate::utils::respond_with_status_and_format(status, &envelope, format)
 }
 #[cfg(feature = "app_api")]
 fn torii_internal_json_error(message: impl Into<String>) -> Response {
@@ -18688,8 +18700,8 @@ fn torii_proxy_request_carries_one_shot_signed_query(request: &ToriiProxyRequest
 #[cfg(feature = "connect")]
 fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV1) -> Duration {
     match request {
-        ToriiProxyRequestKindV1::SubmitTransaction { .. } => DEFAULT_ROUTE_TIMEOUT,
-        ToriiProxyRequestKindV1::SignedQuery { .. }
+        ToriiProxyRequestKindV1::SubmitTransaction { .. }
+        | ToriiProxyRequestKindV1::SignedQuery { .. }
         | ToriiProxyRequestKindV1::SignedQueryRouteScan { .. }
         | ToriiProxyRequestKindV1::Read(_)
         | ToriiProxyRequestKindV1::HostedHttp(_) => DEFAULT_ROUTE_TIMEOUT,
@@ -18793,7 +18805,7 @@ async fn execute_torii_proxy_request_via_peer(
     };
     let remaining_budget = validate_torii_proxy_deadline(request.deadline_unix_ms)
         .map_err(ToriiProxyAttemptError::before_dispatch)?;
-    let request_id = request.request_id.clone();
+    let request_id = request.request_id;
     let pending_key = (request_id, target_peer_id.clone());
     let request_kind_name = torii_proxy_request_kind_name(&request.request);
     let attempt_timeout_cap = torii_proxy_attempt_timeout(&request.request)
@@ -18813,7 +18825,7 @@ async fn execute_torii_proxy_request_via_peer(
         max_hops = request.max_hops,
         visited_peer_count = request.visited_peer_ids.len(),
         request_kind = request_kind_name,
-        attempt_timeout_cap_ms = attempt_timeout_cap.as_millis() as u64,
+        attempt_timeout_cap_ms = u64::try_from(attempt_timeout_cap.as_millis()).unwrap_or(u64::MAX),
         "sending Torii proxy request to peer"
     );
     let deadline_unix_ms = request.deadline_unix_ms;
@@ -18873,7 +18885,7 @@ async fn execute_torii_proxy_request_via_peer(
                 request_id = %pending_key.0,
                 peer_id = %target_peer_id,
                 request_kind = request_kind_name,
-                attempt_timeout_ms = attempt_timeout.as_millis() as u64,
+                attempt_timeout_ms = u64::try_from(attempt_timeout.as_millis()).unwrap_or(u64::MAX),
                 "Torii proxy request timed out before any authoritative response"
             );
             Err(ToriiProxyAttemptError::after_dispatch(format!(
@@ -18939,7 +18951,7 @@ async fn execute_torii_proxy_request_via_http_bridge_shared(
         max_hops = request.max_hops,
         visited_peer_count = request.visited_peer_ids.len(),
         request_kind = request_kind_name,
-        attempt_timeout_cap_ms = attempt_timeout_cap.as_millis() as u64,
+        attempt_timeout_cap_ms = u64::try_from(attempt_timeout_cap.as_millis()).unwrap_or(u64::MAX),
         "sending Torii proxy request over authoritative HTTP bridge"
     );
 
@@ -19313,7 +19325,7 @@ where
     C: Fn(Hash) -> CFut,
     CFut: core::future::Future<Output = ()>,
 {
-    let request_id = request.request_id.clone();
+    let request_id = request.request_id;
     if let Err(error) = validate_torii_proxy_deadline(request.deadline_unix_ms) {
         return torii_proxy_error_response(
             StatusCode::REQUEST_TIMEOUT,
@@ -19413,19 +19425,16 @@ where
             Ok(snapshot) => {
                 if let ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. } =
                     &request.request
+                    && snapshot.status_code == StatusCode::ACCEPTED.as_u16()
+                    && let Err(error) =
+                        validate_native_transaction_submission_identity(&snapshot, transaction)
                 {
-                    if snapshot.status_code == StatusCode::ACCEPTED.as_u16() {
-                        if let Err(error) =
-                            validate_native_transaction_submission_identity(&snapshot, transaction)
-                        {
-                            complete_request(request_id).await;
-                            return transaction_dispatch_outcome_unknown_response(
-                                transaction.hash(),
-                                signed_transaction_hash_for_entrypoint(transaction),
-                                error,
-                            );
-                        }
-                    }
+                    complete_request(request_id).await;
+                    return transaction_dispatch_outcome_unknown_response(
+                        transaction.hash(),
+                        signed_transaction_hash_for_entrypoint(transaction),
+                        error,
+                    );
                 }
                 let retryable = should_retry_generic_torii_proxy_snapshot(&snapshot);
                 let snapshot = if retryable {
@@ -19439,21 +19448,20 @@ where
                     last_retryable = Some(response);
                     continue;
                 }
-                complete_request(request_id.clone()).await;
+                complete_request(request_id).await;
                 return response;
             }
             Err(error) => {
-                if error.may_have_reached_authority() {
-                    if let ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. } =
+                if error.may_have_reached_authority()
+                    && let ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. } =
                         &request.request
-                    {
-                        complete_request(request_id).await;
-                        return transaction_dispatch_outcome_unknown_response(
-                            transaction.hash(),
-                            signed_transaction_hash_for_entrypoint(transaction),
-                            error.to_string(),
-                        );
-                    }
+                {
+                    complete_request(request_id).await;
+                    return transaction_dispatch_outcome_unknown_response(
+                        transaction.hash(),
+                        signed_transaction_hash_for_entrypoint(transaction),
+                        error.to_string(),
+                    );
                 }
                 iroha_logger::warn!(
                     peer_id = %peer_id,
@@ -19497,8 +19505,8 @@ fn normalize_proxied_transaction_submission_response(
         .cloned();
     let mut response = transaction_submission_response(
         app,
-        entrypoint_hash.clone(),
-        signed_transaction_hash.clone(),
+        entrypoint_hash,
+        signed_transaction_hash,
         routing_decision,
         "proxy",
         minimal_response,
@@ -19958,7 +19966,7 @@ fn trusted_internal_read_error_response(
 ) -> Response {
     let mut response = crate::utils::respond_with_status_and_format(
         status,
-        ErrorEnvelope::new(code, message.into()),
+        &(ErrorEnvelope::new(code, message.into())),
         format,
     );
     response.headers_mut().insert(
@@ -20011,7 +20019,7 @@ fn execute_trusted_internal_account_transaction_local_read(
                 format,
             )
         },
-        |transaction| crate::utils::respond_with_format(transaction, format),
+        |transaction| crate::utils::respond_with_format(&transaction, format),
     )
 }
 #[cfg(feature = "app_api")]
@@ -20256,7 +20264,6 @@ async fn execute_torii_read_request_locally_admitted(
                 routing_decision,
                 routed_by,
             )
-            .await
         }
         ToriiReadEndpointV1::AccountsPortfolio => {
             let Ok(uaid_literal) = torii_proxy_path_arg(&request, 0, "uaid") else {
@@ -20743,7 +20750,7 @@ async fn execute_torii_read_for_route(
     }
 }
 #[cfg(feature = "app_api")]
-async fn execute_torii_proof_record_get_query(
+fn execute_torii_proof_record_get_query(
     app: &SharedAppState,
     proof_id: String,
     response_format: ToriiProxyResponseFormatV1,
@@ -21085,10 +21092,13 @@ async fn sanitize_exact_alias_route_response(
                         return invalid(format!("failed to verify routed contract alias: {error}"));
                     }
                 };
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
+            let now_ms = u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX);
             let expected_binding = routing::contract_alias_binding_dto(&binding, now_ms);
             if dto.contract_alias != contract_alias.as_ref()
                 || dto.contract_address != contract_address.as_ref()
@@ -21281,7 +21291,7 @@ async fn execute_incoming_torii_proxy_request_with_admission(
         }
     };
     let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);
-    let request_id = proxy_request.request_id.clone();
+    let request_id = proxy_request.request_id;
     let transaction_identity = match &proxy_request.request {
         ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. } => Some((
             transaction.hash(),
@@ -21496,7 +21506,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                 return error.into_response();
             }
             let accepted = match routing::accept_transaction_for_ingress(
-                app.state.clone(),
+                &(app.state),
                 transaction,
                 &app.telemetry,
             ) {
@@ -21569,21 +21579,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                             routing_decision,
                             expected_route.into(),
                         );
-                        if !should_execute_route_locally(app, routing_decision) {
-                            let request =
-                                request_head.with_request(ToriiProxyRequestKindV1::SignedQuery {
-                                    query_bytes,
-                                    expected_route,
-                                    response_format,
-                                });
-                            forward_incoming_torii_proxy_request_from_sender(
-                                app,
-                                immediate_sender_peer_id.as_ref(),
-                                routing_decision,
-                                request,
-                            )
-                            .await
-                        } else {
+                        if should_execute_route_locally(app, routing_decision) {
                             let format = response_format_from_torii_proxy(response_format);
                             // The enclosing proxy reservation remains live
                             // while ordinary P (+ optional R) is promoted.
@@ -21607,6 +21603,20 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                 }
                                 Err(error) => error.into_response(),
                             }
+                        } else {
+                            let request =
+                                request_head.with_request(ToriiProxyRequestKindV1::SignedQuery {
+                                    query_bytes,
+                                    expected_route,
+                                    response_format,
+                                });
+                            forward_incoming_torii_proxy_request_from_sender(
+                                app,
+                                immediate_sender_peer_id.as_ref(),
+                                routing_decision,
+                                request,
+                            )
+                            .await
                         }
                     }
                     Ok(routes) => torii_proxy_error_response(
@@ -21792,7 +21802,7 @@ fn reject_incoming_torii_proxy_request_capacity(
         priority: iroha_p2p::Priority::High,
         data: iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
             schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
-            request_id: request_id.clone(),
+            request_id,
             response: snapshot,
         })),
     }) {
@@ -21823,7 +21833,7 @@ async fn process_incoming_torii_proxy_request(
     proxy_request: Arc<ToriiProxyRequestV1>,
     proxy_memory: ToriiProxyMemoryReservation,
 ) {
-    let request_id = proxy_request.request_id.clone();
+    let request_id = proxy_request.request_id;
     let deadline_unix_ms = proxy_request.deadline_unix_ms;
     let sender_peer_id = peer.id().clone();
     let response_body_limit =
@@ -21836,27 +21846,24 @@ async fn process_incoming_torii_proxy_request(
         visited_peer_count = proxy_request.visited_peer_ids.len(),
         "received Torii proxy request"
     );
-    let response = match Arc::try_unwrap(proxy_request) {
-        Ok(proxy_request) => {
-            execute_incoming_torii_proxy_request_with_proxy_memory(
-                &app,
-                proxy_request,
-                Some(sender_peer_id),
-                Some(proxy_memory.clone()),
-            )
-            .await
-        }
-        Err(_) => {
-            iroha_logger::error!(
-                request_id = %request_id,
-                "Torii proxy request retained an unexpected extra owner before dispatch"
-            );
-            torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "proxy_capacity_exceeded",
-                "Torii proxy request ownership invariant failed before dispatch",
-            )
-        }
+    let response = if let Ok(proxy_request) = Arc::try_unwrap(proxy_request) {
+        execute_incoming_torii_proxy_request_with_proxy_memory(
+            &app,
+            proxy_request,
+            Some(sender_peer_id),
+            Some(proxy_memory.clone()),
+        )
+        .await
+    } else {
+        iroha_logger::error!(
+            request_id = %request_id,
+            "Torii proxy request retained an unexpected extra owner before dispatch"
+        );
+        torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "proxy_capacity_exceeded",
+            "Torii proxy request ownership invariant failed before dispatch",
+        )
     };
     let egress_budget = match validate_torii_proxy_deadline(deadline_unix_ms) {
         Ok(remaining) => remaining.min(TORII_PROXY_RESPONSE_EGRESS_RESERVE),
@@ -21871,21 +21878,20 @@ async fn process_incoming_torii_proxy_request(
         }
     };
     let egress_deadline = tokio::time::Instant::now() + egress_budget;
-    let admitted_snapshot = match tokio::time::timeout_at(
+    let admitted_snapshot = if let Ok(snapshot) = tokio::time::timeout_at(
         egress_deadline,
         response_to_admitted_torii_proxy_snapshot(response, response_body_limit),
     )
     .await
     {
-        Ok(snapshot) => snapshot,
-        Err(_) => {
-            iroha_logger::warn!(
-                %request_id,
-                peer_id = %peer.id(),
-                "dropping Torii proxy response that exhausted its bounded egress reserve"
-            );
-            return;
-        }
+        snapshot
+    } else {
+        iroha_logger::warn!(
+            %request_id,
+            peer_id = %peer.id(),
+            "dropping Torii proxy response that exhausted its bounded egress reserve"
+        );
+        return;
     };
     let AdmittedToriiProxySnapshot {
         snapshot,
@@ -21899,7 +21905,7 @@ async fn process_incoming_torii_proxy_request(
             priority: iroha_p2p::Priority::High,
             data: iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
                 schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
-                request_id: request_id.clone(),
+                request_id,
                 response: snapshot,
             })),
         },
@@ -22634,8 +22640,7 @@ fn resolve_exact_hosted_http_runtime_target(
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "hosted Soracloud replica {} for service `{service_name}` revision `{service_version}` has an unavailable assigned host",
-                replica_slot
+                "hosted Soracloud replica {replica_slot} for service `{service_name}` revision `{service_version}` has an unavailable assigned host"
             ),
         ));
     }
@@ -22655,8 +22660,7 @@ fn resolve_exact_hosted_http_runtime_target(
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "hosted Soracloud replica {} for service `{service_name}` revision `{service_version}` lacks a current lease and active exact validator-peer binding",
-                replica_slot
+                "hosted Soracloud replica {replica_slot} for service `{service_name}` revision `{service_version}` lacks a current lease and active exact validator-peer binding"
             ),
         ));
     }
@@ -22876,6 +22880,14 @@ async fn proxy_soracloud_public_hosted_http_locally(
     route_match: &soracloud::HostedHttpRouteMatch,
     listen_base_url: &str,
 ) -> Result<Response, SoracloudRuntimeExecutionError> {
+    use http_body_util::BodyExt as _;
+    struct AbortConnectionOnDrop(tokio::task::JoinHandle<std::thread::Result<()>>);
+    impl Drop for AbortConnectionOnDrop {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+
     // Re-sanitize at the final tenant boundary because authenticated peer proxy
     // envelopes are independently attacker-controlled inputs.
     let headers = sanitize_soracloud_public_runtime_headers(headers)?;
@@ -23004,14 +23016,9 @@ async fn proxy_soracloud_public_hosted_http_locally(
     let response = builder
         .body(response_body)
         .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
-    use http_body_util::BodyExt as _;
+
     let (parts, body) = response.into_parts();
-    struct AbortConnectionOnDrop(tokio::task::JoinHandle<std::thread::Result<()>>);
-    impl Drop for AbortConnectionOnDrop {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
+
     let connection_guard = AbortConnectionOnDrop(connection_task);
     let guarded_body = body.map_frame(move |frame| {
         let _connection_guard = &connection_guard;
@@ -23085,7 +23092,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
             ),
         ));
     }
-    let request_id = request.request_id.clone();
+    let request_id = request.request_id;
     let request = match SharedToriiProxyAttemptRequest::new(
         request,
         app.torii_proxy_http_ingress_envelope
@@ -23119,7 +23126,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
                     last_retryable = Some(response);
                     continue;
                 }
-                mark_torii_proxy_request_completed(app, request_id.clone()).await;
+                mark_torii_proxy_request_completed(app, request_id).await;
                 return Ok(Some(hold_torii_proxy_memory_in_response_body(
                     response,
                     proxy_memory,
@@ -23484,8 +23491,7 @@ async fn execute_soracloud_public_runtime_request(
                 .handler
                 .mailbox
                 .as_ref()
-                .map(|mailbox| u64::from(mailbox.retention_blocks.get()))
-                .unwrap_or(1);
+                .map_or(1, |mailbox| u64::from(mailbox.retention_blocks.get()));
             let request = iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest {
                 observed_height,
                 observed_block_hash,
@@ -23621,46 +23627,46 @@ async fn handler_soracloud_status(
     let autoscale_capacity_lane_count =
         u64::try_from(autoscale_capacity_lane_ids.len()).unwrap_or(u64::MAX);
     let routing = json_object(vec![
-        json_entry("configured_lane_count", configured_lane_count),
-        json_entry("declared_lane_count", declared_lane_count),
-        json_entry("active_lane_count", active_lane_count),
-        json_entry("active_lane_ids", json_value(&active_lane_ids)),
+        json_entry("configured_lane_count", &(configured_lane_count)),
+        json_entry("declared_lane_count", &(declared_lane_count)),
+        json_entry("active_lane_count", &(active_lane_count)),
+        json_entry("active_lane_ids", &(json_value(&active_lane_ids))),
         json_entry(
             "autoscale_capacity_lane_count",
-            autoscale_capacity_lane_count,
+            &(autoscale_capacity_lane_count),
         ),
         json_entry(
             "autoscale_capacity_lane_ids",
-            json_value(&autoscale_capacity_lane_ids),
+            &(json_value(&autoscale_capacity_lane_ids)),
         ),
         json_entry(
             "dataspace_count",
-            u64::try_from(nexus.dataspace_catalog.entries().len()).unwrap_or(u64::MAX),
+            &(u64::try_from(nexus.dataspace_catalog.entries().len()).unwrap_or(u64::MAX)),
         ),
         json_entry(
             "routing_rules",
-            u64::try_from(nexus.routing_policy.rules.len()).unwrap_or(u64::MAX),
+            &(u64::try_from(nexus.routing_policy.rules.len()).unwrap_or(u64::MAX)),
         ),
         json_entry(
             "default_lane_id",
-            nexus.routing_policy.default_lane.as_u32(),
+            &(nexus.routing_policy.default_lane.as_u32()),
         ),
         json_entry(
             "default_dataspace_id",
-            nexus.routing_policy.default_dataspace.as_u64(),
+            &(nexus.routing_policy.default_dataspace.as_u64()),
         ),
     ]);
     let (service_health, runtime_pressure, runtime_manager) =
         soracloud_runtime_status_sections(&app);
     let hosted_http_topology = soracloud_hosted_http_topology_section(&app);
     let resource_pressure = json_object(vec![
-        json_entry("queue_active", queue_active),
-        json_entry("queue_queued", queue_queued),
-        json_entry("queue_capacity", queue_capacity),
-        json_entry("queue_saturated", backpressure.is_saturated()),
-        json_entry("high_load_threshold", high_load_threshold),
-        json_entry("high_load", high_load),
-        json_entry("runtime", runtime_pressure),
+        json_entry("queue_active", &(queue_active)),
+        json_entry("queue_queued", &(queue_queued)),
+        json_entry("queue_capacity", &(queue_capacity)),
+        json_entry("queue_saturated", &(backpressure.is_saturated())),
+        json_entry("high_load_threshold", &(high_load_threshold)),
+        json_entry("high_load", &(high_load)),
+        json_entry("runtime", &(runtime_pressure)),
     ]);
     let control_plane = soracloud::control_plane_snapshot(&app, None, 10).map_err(|source| {
         Error::SerializationFailure {
@@ -23669,16 +23675,16 @@ async fn handler_soracloud_status(
         }
     })?;
     let payload = json_object(vec![
-        json_entry("schema_version", 1_u16),
-        json_entry("service_health", service_health),
-        json_entry("routing", routing),
-        json_entry("hosted_http_topology", hosted_http_topology),
-        json_entry("resource_pressure", resource_pressure),
-        json_entry("failed_admissions", failed_admissions),
-        json_entry("runtime_manager", runtime_manager),
-        json_entry("control_plane", json_value(&control_plane)),
+        json_entry("schema_version", &(1_u16)),
+        json_entry("service_health", &(service_health)),
+        json_entry("routing", &(routing)),
+        json_entry("hosted_http_topology", &(hosted_http_topology)),
+        json_entry("resource_pressure", &(resource_pressure)),
+        json_entry("failed_admissions", &(failed_admissions)),
+        json_entry("runtime_manager", &(runtime_manager)),
+        json_entry("control_plane", &(json_value(&control_plane))),
     ]);
-    Ok(crate::utils::respond_value_with_format(payload, format))
+    Ok(crate::utils::respond_value_with_format(&payload, format))
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn handler_kaigi_relays(
@@ -23778,7 +23784,7 @@ async fn handler_kaigi_call_events_sse(
     let call_id = parse_kaigi_call_id(&call_raw)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_kaigi_call_events_sse(
-            app.events.clone(),
+            &(app.events),
             call_id,
             AxQuery(params),
         )
@@ -23797,7 +23803,7 @@ async fn handler_kaigi_call_events_sse(
         )));
     }
     Ok(
-        routing::handle_v1_kaigi_call_events_sse(app.events.clone(), call_id, AxQuery(params))
+        routing::handle_v1_kaigi_call_events_sse(&(app.events), call_id, AxQuery(params))
             .into_response(),
     )
 }
@@ -23919,8 +23925,7 @@ async fn handler_kaigi_relays_sse(
     }
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(
-            routing::handle_v1_kaigi_relays_sse(app.events.clone(), AxQuery(params))
-                .into_response(),
+            routing::handle_v1_kaigi_relays_sse(&(app.events), AxQuery(params)).into_response(),
         );
     }
     validate_api_token(app.as_ref(), &headers)?;
@@ -23935,7 +23940,7 @@ async fn handler_kaigi_relays_sse(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(routing::handle_v1_kaigi_relays_sse(app.events.clone(), AxQuery(params)).into_response())
+    Ok(routing::handle_v1_kaigi_relays_sse(&(app.events), AxQuery(params)).into_response())
 }
 #[cfg(feature = "app_api")]
 async fn handler_soradns_directory_latest(
@@ -23955,7 +23960,7 @@ async fn handler_soradns_directory_latest(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    routing::handle_v1_soradns_directory_latest(app.state.clone())
+    routing::handle_v1_soradns_directory_latest(&(app.state))
         .map(axum::response::IntoResponse::into_response)
 }
 #[cfg(feature = "app_api")]
@@ -23966,9 +23971,7 @@ async fn handler_soradns_directory_events(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return Ok(
-            routing::handle_v1_soradns_directory_events_sse(app.events.clone()).into_response(),
-        );
+        return Ok(routing::handle_v1_soradns_directory_events_sse(&(app.events)).into_response());
     }
     validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
@@ -23982,7 +23985,7 @@ async fn handler_soradns_directory_events(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(routing::handle_v1_soradns_directory_events_sse(app.events.clone()).into_response())
+    Ok(routing::handle_v1_soradns_directory_events_sse(&(app.events)).into_response())
 }
 // -------------- Streaming: SSE / WS / P2P --------------
 #[cfg(feature = "app_api")]
@@ -24068,10 +24071,10 @@ async fn enforce_canonical_stream_admission(
             .into_response());
         }
     }
-    if canonical_stream_is_sse(admission.route) {
-        if let Some(response) = sse_resume_rejection(req.headers()) {
-            return Ok(response);
-        }
+    if canonical_stream_is_sse(admission.route)
+        && let Some(response) = sse_resume_rejection(req.headers())
+    {
+        return Ok(response);
     }
     Ok(next.run(req).await)
 }
@@ -24100,10 +24103,8 @@ fn validate_norito_websocket_handshake(
         });
     }
     let mut protocols = Vec::new();
-    for value in headers
-        .get_all(axum::http::header::SEC_WEBSOCKET_PROTOCOL)
-        .iter()
-    {
+    let protocol_headers = headers.get_all(axum::http::header::SEC_WEBSOCKET_PROTOCOL);
+    for value in &protocol_headers {
         let value = value.to_str().map_err(|_| Error::AppQueryValidation {
             code: "websocket_subprotocol_invalid",
             message: "Sec-WebSocket-Protocol must contain valid ASCII tokens.".to_owned(),
@@ -24146,13 +24147,10 @@ async fn handler_events_sse(
     }
     let visibility =
         torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/events/sse")?;
-    Ok(routing::handle_v1_events_sse(
-        app.events.clone(),
-        app.kura.clone(),
-        visibility,
-        AxQuery(params),
+    Ok(
+        routing::handle_v1_events_sse(&app.events, app.kura.clone(), visibility, AxQuery(params))
+            .into_response(),
     )
-    .into_response())
 }
 #[cfg(feature = "app_api")]
 async fn handler_contracts_events_sse(
@@ -24173,7 +24171,7 @@ async fn handler_contracts_events_sse(
         "v1/contracts/events/sse",
     )?;
     Ok(routing::handle_v1_contracts_events_sse(
-        app.events.clone(),
+        &(app.events),
         app.state.clone(),
         visibility,
         AxQuery(params),
@@ -24219,7 +24217,7 @@ async fn handler_gov_stream(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return Ok(routing::handle_v1_gov_stream(app.events.clone()).into_response());
+        return Ok(routing::handle_v1_gov_stream(&(app.events)).into_response());
     }
     validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
@@ -24233,7 +24231,7 @@ async fn handler_gov_stream(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(routing::handle_v1_gov_stream(app.events.clone()).into_response())
+    Ok(routing::handle_v1_gov_stream(&(app.events)).into_response())
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn handler_telemetry_live(
@@ -24247,7 +24245,7 @@ async fn handler_telemetry_live(
             app.state.clone(),
             app.telemetry.clone(),
             app.peer_telemetry.clone(),
-            app.events.clone(),
+            &(app.events),
             app.clone(),
         )?
         .into_response());
@@ -24268,7 +24266,7 @@ async fn handler_telemetry_live(
         app.state.clone(),
         app.telemetry.clone(),
         app.peer_telemetry.clone(),
-        app.events.clone(),
+        &(app.events),
         app.clone(),
     )?
     .into_response())
@@ -25075,6 +25073,14 @@ async fn handler_debug_axt_cache(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    fn encode_json<T: JsonSerialize>(value: &T) -> Result<norito::json::Value, Error> {
+        norito::json::to_value(value).map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                err.to_string(),
+            ))
+        })
+    }
+
     let remote_ip = remote.ip();
     validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
@@ -25095,20 +25101,13 @@ async fn handler_debug_axt_cache(
         ));
     }
     let cache_snapshot = app.state.metrics().axt_proof_cache_status_snapshot();
-    fn encode_json<T: JsonSerialize>(value: &T) -> Result<norito::json::Value, Error> {
-        norito::json::to_value(value).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                err.to_string(),
-            ))
-        })
-    }
+
     let entries: Vec<norito::json::Value> = cache_snapshot
         .into_iter()
         .map(|entry| {
             let manifest_root = entry
                 .manifest_root
-                .map(hex::encode)
-                .unwrap_or_else(|| "none".to_string());
+                .map_or_else(|| "none".to_string(), hex::encode);
             let mut map = norito::json::Map::new();
             map.insert(
                 "dataspace".to_string(),
@@ -25170,7 +25169,7 @@ async fn handler_debug_axt_cache(
         norito::json::Value::Array(reject_hints),
     );
     payload.insert("entries".to_string(), norito::json::Value::Array(entries));
-    json_ok(norito::json::Value::Object(payload))
+    json_ok(&norito::json::Value::Object(payload))
 }
 #[cfg(feature = "telemetry")]
 async fn handler_debug_witness(
@@ -25206,7 +25205,7 @@ async fn handler_debug_witness(
             ))
         })?;
     match format {
-        ResponseFormat::Json => json_ok(witness),
+        ResponseFormat::Json => json_ok(&witness),
         ResponseFormat::Norito => Ok(utils::NoritoBody(witness).into_response()),
     }
 }
@@ -25440,8 +25439,8 @@ async fn finite_finality_response(
     // These local GETs have no signed-query body. Account for that only when
     // acquiring their original reservation; an existing outer request keeps its
     // complete original geometry and is never replaced or enlarged.
-    if admission._fanout_memory.is_none() {
-        admission._fanout_memory = Some(match try_acquire_bodyless_finality_memory(&app) {
+    if admission.fanout_memory.is_none() {
+        admission.fanout_memory = Some(match try_acquire_bodyless_finality_memory(&app) {
             Ok(reservation) => reservation,
             Err(response) => return Ok(response),
         });
@@ -25502,8 +25501,7 @@ async fn handler_bridge_finality_attestation_inner(
     remote: std::net::SocketAddr,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let _api_token_principal =
-        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
+    let api_token_principal = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     let challenge = bridge_finality_challenge(&headers)?;
     let format = match negotiate_heavy_query_response_format(&headers) {
         Ok(format) => format,
@@ -25554,7 +25552,7 @@ async fn handler_bridge_finality_attestation_inner(
         app.build_status.git_commit_sha.as_bytes(),
     ]);
     #[cfg(feature = "telemetry")]
-    if _api_token_principal.is_some() {
+    if api_token_principal.is_some() {
         crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/bridge/finality/attestation");
     }
     let mut response = routing::handle_v1_bridge_finality_attestation(
@@ -25588,8 +25586,7 @@ async fn handler_bridge_finality_bundle(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let _api_token_principal =
-        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
+    let api_token_principal = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     let format = match negotiate_heavy_query_response_format(&headers) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -25603,7 +25600,7 @@ async fn handler_bridge_finality_bundle(
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if _api_token_principal.is_some() {
+    if api_token_principal.is_some() {
         crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/bridge/finality/bundle");
     }
     let response =
@@ -25765,8 +25762,8 @@ async fn handler_post_contract_call(
     .await?;
     let telemetry = app.telemetry.clone();
     let result = match crate::routing::prepare_contract_call_request(
-        app.queue.clone(),
-        app.state.clone(),
+        &(app.queue),
+        &(app.state),
         request.0,
     ) {
         Ok(prepared) => submit_prepared_contract_call(app, headers, prepared).await,
@@ -25843,7 +25840,7 @@ async fn handler_post_contract_call_batch_prepare(
         "call_batch_prepare",
     )
     .await?;
-    match crate::routing::handle_post_contract_call_batch_prepare(app.state.clone(), request) {
+    match crate::routing::handle_post_contract_call_batch_prepare(&(app.state), request) {
         Ok(response) => Ok(response.into_response()),
         Err(error) => {
             app.telemetry
@@ -25887,7 +25884,7 @@ async fn handler_post_contract_call_simulate(
         // Retain capacity until physical VM completion even if the awaiting
         // request future times out or is cancelled.
         let _tooling_permit = tooling_permit;
-        crate::routing::handle_post_contract_call_simulate(state, request)
+        crate::routing::handle_post_contract_call_simulate(&(state), request)
     });
     match tokio::time::timeout(
         app.ivm_tooling_timeout,
@@ -26037,19 +26034,18 @@ async fn handler_post_contract_view_batch(
             item.contract_address.as_ref(),
             item.contract_alias.as_ref(),
         )?;
-        match item_route {
-            Some(item_route) => match batch_route {
+        if let Some(item_route) = item_route {
+            match batch_route {
                 Some(existing) if existing != item_route => {
                     batch_route_conflict = true;
                     break;
                 }
                 Some(_) => {}
                 None => batch_route = Some(item_route),
-            },
-            None => {
-                all_items_routed = false;
-                break;
             }
+        } else {
+            all_items_routed = false;
+            break;
         }
     }
     if let Some(route) = batch_route
@@ -27143,8 +27139,8 @@ async fn handler_get_sorafs_por_status(
     let coordinator = app.por_coordinator.clone();
     let (result, _admission) =
         panic_recovery::join_recoverable(panic_recovery::spawn_blocking_recoverable(move || {
-            let result =
-                crate::routing::handle_get_sorafs_por_status(coordinator, query).and_then(|page| {
+            let result = crate::routing::handle_get_sorafs_por_status(&(coordinator), &(query))
+                .and_then(|page| {
                     norito::to_bytes(&page)
                         .map_err(|err| por_response_encoding_error("status response", err))
                 });
@@ -27172,8 +27168,8 @@ async fn handler_get_sorafs_por_export(
     let coordinator = app.por_coordinator.clone();
     let (result, _admission) =
         panic_recovery::join_recoverable(panic_recovery::spawn_blocking_recoverable(move || {
-            let result =
-                crate::routing::handle_get_sorafs_por_export(coordinator, query).and_then(|page| {
+            let result = crate::routing::handle_get_sorafs_por_export(&(coordinator), &(query))
+                .and_then(|page| {
                     norito::to_bytes(&page)
                         .map_err(|err| por_response_encoding_error("export payload", err))
                 });
@@ -27202,12 +27198,11 @@ async fn handler_get_sorafs_por_report(
     let coordinator = app.por_coordinator.clone();
     let (result, _admission) =
         panic_recovery::join_recoverable(panic_recovery::spawn_blocking_recoverable(move || {
-            let result = crate::routing::handle_get_sorafs_por_report(coordinator, cycle).and_then(
-                |report| {
+            let result = crate::routing::handle_get_sorafs_por_report(&(coordinator), cycle)
+                .and_then(|report| {
                     norito::to_bytes(&report)
                         .map_err(|err| por_response_encoding_error("weekly report", err))
-                },
-            );
+                });
             (result, admission)
         }))
         .await
@@ -27264,7 +27259,7 @@ macro_rules! iso_payment_submission_handlers {
                 let msg_id = Iso20022BridgeRuntime::payment_message_id($message_type, &parsed)
                     .map_err(|err| Error::Query(map_iso_error(err)))?;
                 runtime
-                    .admit_authenticated_inbound(&msg_id, metadata, parties)
+                    .admit_authenticated_inbound(&msg_id, &metadata, parties)
                     .map_err(map_iso_admission_error)?;
                 let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
                 let (mut transaction_payload, context) = {
@@ -27565,7 +27560,11 @@ async fn handler_iso_lifecycle_submit(
     };
     // A failed authenticated carrier read must leave this lifecycle identity retryable.
     runtime
-        .admit_authenticated_inbound(&msg_id, metadata, lifecycle_authorization.parties().clone())
+        .admit_authenticated_inbound(
+            &msg_id,
+            &metadata,
+            lifecycle_authorization.parties().clone(),
+        )
         .map_err(map_iso_admission_error)?;
     let (outcome, status_snapshot) = match runtime.apply_inbound_lifecycle_message_with_evidence(
         &msg_id,
@@ -27730,7 +27729,7 @@ async fn handler_iso_status(
     let updated_ms = status
         .updated_at()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0);
     let mut payload = norito::json::native::Map::new();
     payload.insert(
@@ -28521,10 +28520,10 @@ fn iso_sese024_status(status: &IsoMessageStatus) -> &'static str {
     }
 }
 fn iso_settlement_date(status: &IsoMessageStatus) -> String {
-    status
-        .settlement_date()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| xml_date(status.settled_at().unwrap_or_else(|| status.updated_at())))
+    status.settlement_date().map_or_else(
+        || xml_date(status.settled_at().unwrap_or_else(|| status.updated_at())),
+        ToOwned::to_owned,
+    )
 }
 fn iso_security_leg_xml(status: &IsoMessageStatus) -> String {
     let Some(instrument_id) = status.security_instrument_id() else {
@@ -28562,8 +28561,7 @@ fn xml_timestamp(time: SystemTime) -> String {
 fn xml_date(time: SystemTime) -> String {
     xml_timestamp(time)
         .split_once('T')
-        .map(|(date, _)| date.to_owned())
-        .unwrap_or_else(|| "1970-01-01".to_owned())
+        .map_or_else(|| "1970-01-01".to_owned(), |(date, _)| date.to_owned())
 }
 fn xml_escape(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
@@ -28658,7 +28656,7 @@ fn insert_iso_metadata_fields(
             let updated_at_ms = entry
                 .updated_at()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+                .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
                 .unwrap_or(0);
             item.insert(
                 "updated_at_ms".into(),
@@ -28987,7 +28985,7 @@ async fn admit_signed_transaction_for_ingress(
             }
 
             let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress(
-                state,
+                &state,
                 transaction,
                 &telemetry,
             )?;
@@ -29140,7 +29138,7 @@ async fn handler_post_transaction_entrypoint(
         compute_permit,
         "transaction_entrypoint_admission_worker_failed",
         move || {
-            routing::accept_transaction_for_ingress(state, transaction, &telemetry)
+            routing::accept_transaction_for_ingress(&(state), transaction, &telemetry)
                 .and_then(|accepted| prepare_fresh_transaction_ingress(&worker_app, accepted))
         },
     )
@@ -29171,7 +29169,7 @@ fn decode_transaction_batch_payloads(
         })
         .collect()
 }
-fn invalid_transaction_batch_envelope(error: norito::Error) -> Error {
+fn invalid_transaction_batch_envelope(error: &norito::Error) -> Error {
     Error::AppQueryValidation {
         code: "invalid_transaction_batch_envelope",
         message: format!("transaction batch envelope could not be decoded: {error}"),
@@ -29188,7 +29186,7 @@ fn validate_transaction_batch_body_size(body: &Bytes, max_bytes: usize) -> Resul
         });
     }
     let header = norito::core::Header::read(std::io::Cursor::new(body.as_ref()))
-        .map_err(invalid_transaction_batch_envelope)?;
+        .map_err(|value| invalid_transaction_batch_envelope(&value))?;
     let max_declared_bytes = u64::try_from(max_bytes).unwrap_or(u64::MAX);
     if header.length > max_declared_bytes {
         return Err(Error::AppQueryValidation {
@@ -29202,7 +29200,7 @@ fn validate_transaction_batch_body_size(body: &Bytes, max_bytes: usize) -> Resul
     Ok(())
 }
 fn decode_transaction_batch_request(
-    body: Bytes,
+    body: &Bytes,
     max_transactions: usize,
 ) -> Result<Vec<DecodedVersionedSignedTransaction>, Error> {
     let count = match norito::inspect_stream_vec_len_bounded_from_reader::<_, Vec<u8>>(
@@ -29218,7 +29216,7 @@ fn decode_transaction_batch_request(
                 ),
             });
         }
-        Err(error) => return Err(invalid_transaction_batch_envelope(error)),
+        Err(error) => return Err(invalid_transaction_batch_envelope(&(error))),
     };
     if count == 0 {
         return Err(Error::AppQueryValidation {
@@ -29231,7 +29229,7 @@ fn decode_transaction_batch_request(
     // lookup: an already admitted input must remain retryable when Queue is full.
     let payloads =
         norito::stream_vec_collect_from_reader::<_, Vec<u8>>(std::io::Cursor::new(body.as_ref()))
-            .map_err(invalid_transaction_batch_envelope)?;
+            .map_err(|value| invalid_transaction_batch_envelope(&value))?;
     if payloads.len() != count {
         return Err(Error::AppQueryValidation {
             code: "invalid_transaction_batch_envelope",
@@ -29269,15 +29267,6 @@ fn precheck_transaction_batch_ed25519(
     transactions: &[DecodedVersionedSignedTransaction],
     batch_cap: usize,
 ) -> Vec<TransactionBatchPrecheck> {
-    let mut prechecks = (0..transactions.len())
-        .map(|_| TransactionBatchPrecheck {
-            single_ed25519_prechecked: false,
-            precheck_rejection: None,
-        })
-        .collect::<Vec<_>>();
-    if batch_cap == 0 {
-        return prechecks;
-    }
     fn verify_ed25519_batch_slices<'a>(
         messages: &[&'a [u8]],
         signatures: &[&'a [u8]],
@@ -29301,14 +29290,6 @@ fn precheck_transaction_batch_ed25519(
             detail,
         ))
     }
-    let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
-    let scratch_cap = batch_cap.min(transactions.len());
-    let mut indices = Vec::with_capacity(scratch_cap);
-    let mut duplicate_groups: Vec<Vec<usize>> = Vec::with_capacity(scratch_cap);
-    let mut unique_positions = std::collections::HashMap::<Ed25519PrecheckKey, usize>::new();
-    let mut messages = Vec::with_capacity(scratch_cap);
-    let mut signatures = Vec::with_capacity(scratch_cap);
-    let mut public_keys = Vec::with_capacity(scratch_cap);
     fn flush_ed25519_precheck_batch<'a>(
         transactions: &[DecodedVersionedSignedTransaction],
         prechecks: &mut [TransactionBatchPrecheck],
@@ -29360,6 +29341,26 @@ fn precheck_transaction_batch_ed25519(
             }
         }
     }
+
+    let mut prechecks = (0..transactions.len())
+        .map(|_| TransactionBatchPrecheck {
+            single_ed25519_prechecked: false,
+            precheck_rejection: None,
+        })
+        .collect::<Vec<_>>();
+    if batch_cap == 0 {
+        return prechecks;
+    }
+
+    let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
+    let scratch_cap = batch_cap.min(transactions.len());
+    let mut indices = Vec::with_capacity(scratch_cap);
+    let mut duplicate_groups: Vec<Vec<usize>> = Vec::with_capacity(scratch_cap);
+    let mut unique_positions = std::collections::HashMap::<Ed25519PrecheckKey, usize>::new();
+    let mut messages = Vec::with_capacity(scratch_cap);
+    let mut signatures = Vec::with_capacity(scratch_cap);
+    let mut public_keys = Vec::with_capacity(scratch_cap);
+
     for (idx, tx) in transactions.iter().enumerate() {
         let Some((message, signature, public_key)) = tx.single_ed25519_precheck_parts() else {
             continue;
@@ -29730,12 +29731,11 @@ async fn handle_connect_ws_logic(
 ) -> axum::response::Response {
     let bus = app.connect_bus.clone();
     let send_timeout = app.ws_message_timeout;
-    let sid = match crate::connect::decode_sid(&q.sid) {
-        Ok(sid) => sid,
-        Err(_) => {
-            permit.release().await;
-            return (StatusCode::BAD_REQUEST, "connect: bad sid").into_response();
-        }
+    let sid = if let Ok(sid) = crate::connect::decode_sid(&q.sid) {
+        sid
+    } else {
+        permit.release().await;
+        return (StatusCode::BAD_REQUEST, "connect: bad sid").into_response();
     };
     let role = match q.role.as_str() {
         "app" => iroha_torii_shared::connect::Role::App,
@@ -29842,7 +29842,7 @@ fn connect_session_rejection_response(
         ..Default::default()
     });
     let mut response =
-        utils::respond_with_status_and_format(status, payload, utils::current_response_format());
+        utils::respond_with_status_and_format(status, &(payload), utils::current_response_format());
     response.headers_mut().insert(
         HeaderName::from_static("x-iroha-reject-code"),
         HeaderValue::from_static(code),
@@ -30706,7 +30706,7 @@ async fn handler_alias_setup_plan(
             let owner = iroha_core::alias_setup::alias_intent_owner(&ensure.intent);
             let quote = match iroha_core::sns::quote_resolved_name_registration(
                 world,
-                selector,
+                &(selector),
                 owner,
                 ensure.acquisition.term_years,
                 ensure.acquisition.pricing_class_hint,
@@ -31228,7 +31228,11 @@ async fn handler_alias_resolve(
             queue::RoutingResolveError::UnknownDataspace { .. }
             | queue::RoutingResolveError::NoLaneForDataspace { .. },
         ) => {
-            return execute_alias_resolve_unrouted_local_read(&app, alias.canonical, &alias.label);
+            return execute_alias_resolve_unrouted_local_read(
+                &app,
+                &(alias.canonical),
+                &alias.label,
+            );
         }
         Err(error) => {
             return Ok(torii_proxy_error_response(
@@ -31748,10 +31752,8 @@ fn recipient_lookup_response(
     object.insert("account_id".to_owned(), Value::String(account_id));
     object.insert("alias_fqn".to_owned(), Value::String(alias_fqn));
     object.insert("fi_id".to_owned(), Value::String(fi_id));
-    if resolved {
-        if let Some(full_name) = full_name {
-            object.insert("full_name".to_owned(), Value::String(full_name));
-        }
+    if resolved && let Some(full_name) = full_name {
+        object.insert("full_name".to_owned(), Value::String(full_name));
     }
     Value::Object(object)
 }
@@ -31763,13 +31765,13 @@ fn recipient_lookup_unresolved_response(
 ) -> Result<AxResponse, Error> {
     alias_json_response(
         StatusCode::OK,
-        recipient_lookup_response(
+        &(recipient_lookup_response(
             false,
             account_id.to_owned(),
             alias_fqn.to_owned(),
             fi_id.to_owned(),
             None,
-        ),
+        )),
     )
 }
 #[cfg(feature = "app_api")]
@@ -31788,8 +31790,10 @@ fn recipient_lookup_upstream_request_id(headers: &HeaderMap, body: &[u8]) -> Str
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty() && value.len() <= MAX_REQUEST_ID_LEN)
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("torii-recipient-lookup-{}", blake3_hash(body).to_hex()))
+        .map_or_else(
+            || format!("torii-recipient-lookup-{}", blake3_hash(body).to_hex()),
+            str::to_owned,
+        )
 }
 #[cfg(feature = "app_api")]
 async fn handler_retail_recipient_route(
@@ -31852,7 +31856,7 @@ async fn handler_retail_recipient_route(
         Ok(response) => response,
         Err(response) => return Ok(response),
     };
-    alias_json_response(StatusCode::OK, response)
+    alias_json_response(StatusCode::OK, &(response))
 }
 #[cfg(feature = "app_api")]
 async fn handler_fee_sponsor_program_by_id(
@@ -31918,7 +31922,7 @@ async fn handler_fee_sponsor_program_by_id(
             "the exact on-chain fee sponsor program was not found",
         ));
     };
-    alias_json_response(StatusCode::OK, program)
+    alias_json_response(StatusCode::OK, &(program))
 }
 
 #[cfg(feature = "app_api")]
@@ -31978,9 +31982,11 @@ async fn handler_fee_sponsor_enrollment_by_id(
         // Permission, program existence and the row share one native view.
         // Global ledger-read permissions do not authorize this registrar read.
         let world = app.state.world_view();
-        let permission = torii_permission_target(CanEnrollFeeSponsorProgram {
-            program_id: key.program_id.clone(),
-        })?;
+        let permission = torii_permission_target(
+            &(CanEnrollFeeSponsorProgram {
+                program_id: key.program_id.clone(),
+            }),
+        )?;
         if world.accounts().get(caller).is_none()
             || (caller != &key.program_id.sponsor
                 && !torii_account_has_permission(&world, caller, &permission))
@@ -32008,7 +32014,7 @@ async fn handler_fee_sponsor_enrollment_by_id(
         }
         FeeSponsorEnrollmentByIdResponse { key, enrollment }
     };
-    alias_json_response(StatusCode::OK, response)
+    alias_json_response(StatusCode::OK, &(response))
 }
 
 fn fee_quote_rejection_retryable(code: FeeRejectionCode) -> bool {
@@ -32401,7 +32407,7 @@ async fn handler_fee_quote(
             program_revision: quote.program_revision,
         },
     };
-    alias_json_response(StatusCode::OK, response)
+    alias_json_response(StatusCode::OK, &(response))
 }
 #[cfg(feature = "app_api")]
 /// Maximum decoded bank Core API response accepted for one fixed-field lookup.
@@ -32635,13 +32641,13 @@ async fn handler_retail_recipient_lookup(
         && full_name.is_some();
     alias_json_response(
         StatusCode::OK,
-        recipient_lookup_response(
+        &(recipient_lookup_response(
             confirmed,
             requested_account_id_literal,
             canonical_alias,
             fi_id.to_owned(),
             full_name,
-        ),
+        )),
     )
 }
 #[cfg(feature = "app_api")]
@@ -32698,10 +32704,13 @@ fn execute_contract_alias_resolve_local_read(
     else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
+    let now_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
     contract_alias_resolve_ok(
         contract_alias.as_ref(),
         contract_address.as_ref(),
@@ -32776,7 +32785,7 @@ async fn handler_ram_lfe_program_policies(
         .ram_lfe_program_policies_iter()
         .map(ram_lfe_program_policy_summary_dto)
         .collect::<Vec<_>>();
-    json_ok(routing::RamLfeProgramPolicyListDto {
+    json_ok(&routing::RamLfeProgramPolicyListDto {
         total: u64::try_from(items.len()).unwrap_or(u64::MAX),
         items,
     })
@@ -32821,7 +32830,7 @@ async fn handler_ram_lfe_execute(
     }
     require_identifier_program_owner(&caller, &program_policy)?;
     identifier_resolution::require_supported_program_policy(&program_policy)
-        .map_err(identifier_execution_error)?;
+        .map_err(|value| identifier_execution_error(&value))?;
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
@@ -32833,14 +32842,14 @@ async fn handler_ram_lfe_execute(
     )?;
     let receipt = resolver
         .issue_execution_receipt(&program_policy, &draft)
-        .map_err(identifier_execution_error)?;
+        .map_err(|value| identifier_execution_error(&value))?;
     let response = ram_lfe_execute_response(&receipt, &draft);
-    let response = json_ok(response)?;
+    let response = json_ok(&response)?;
     identifier_resolution::owner_prf::validate_owner_prf_lease(
         draft.executed_at_ms,
         draft.expires_at_ms,
     )
-    .map_err(identifier_execution_error)?;
+    .map_err(|value| identifier_execution_error(&value))?;
     Ok(response)
 }
 #[cfg(feature = "app_api")]
@@ -32864,7 +32873,7 @@ async fn handler_ram_lfe_receipt_verify(
                 iroha_crypto::ram_lfe_output_hash(&output) == request.receipt.payload.output_hash,
             ),
             Err(err) => {
-                return json_ok(ram_lfe_receipt_verify_response(
+                return json_ok(&ram_lfe_receipt_verify_response(
                     &request.receipt,
                     None,
                     Some(err.to_string()),
@@ -32879,7 +32888,7 @@ async fn handler_ram_lfe_receipt_verify(
         .get(&request.receipt.payload.program_id)
         .cloned()
     else {
-        return json_ok(ram_lfe_receipt_verify_response(
+        return json_ok(&ram_lfe_receipt_verify_response(
             &request.receipt,
             output_hash_matches,
             Some(format!(
@@ -32898,7 +32907,7 @@ async fn handler_ram_lfe_receipt_verify(
                 .map_err(Into::into)
         })
     {
-        return json_ok(ram_lfe_receipt_verify_response(
+        return json_ok(&ram_lfe_receipt_verify_response(
             &request.receipt,
             output_hash_matches,
             Some(error.to_string()),
@@ -32925,7 +32934,7 @@ async fn handler_ram_lfe_receipt_verify(
         }
         (result, _) => result,
     };
-    json_ok(ram_lfe_receipt_verify_response(
+    json_ok(&ram_lfe_receipt_verify_response(
         &request.receipt,
         output_hash_matches,
         validation,
@@ -32948,7 +32957,7 @@ async fn handler_identifier_policies(
             )
         })
         .collect::<Vec<_>>();
-    json_ok(routing::IdentifierPolicyListDto {
+    json_ok(&routing::IdentifierPolicyListDto {
         total: u64::try_from(items.len()).unwrap_or(u64::MAX),
         items,
     })
@@ -33017,23 +33026,23 @@ async fn handler_identifier_resolve(
     {
         return Ok(StatusCode::CONFLICT.into_response());
     }
-    let now_ms =
-        identifier_resolution::owner_prf::owner_prf_now_ms().map_err(identifier_execution_error)?;
+    let now_ms = identifier_resolution::owner_prf::owner_prf_now_ms()
+        .map_err(|value| identifier_execution_error(&value))?;
     if !identifier_claim_is_live_at(&claim, now_ms) {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
     let receipt = resolver
         .sign_receipt(&policy, &program_policy, &draft, &claim)
-        .map_err(identifier_execution_error)?;
-    let response = json_ok(identifier_receipt_response(&receipt))?;
-    let delivery_now_ms =
-        identifier_resolution::owner_prf::owner_prf_now_ms().map_err(identifier_execution_error)?;
+        .map_err(|value| identifier_execution_error(&value))?;
+    let response = json_ok(&identifier_receipt_response(&receipt))?;
+    let delivery_now_ms = identifier_resolution::owner_prf::owner_prf_now_ms()
+        .map_err(|value| identifier_execution_error(&value))?;
     identifier_resolution::owner_prf::validate_owner_prf_lease_at(
         receipt.payload.opening.payload.opened_at_ms,
         receipt.payload.opening.payload.expires_at_ms,
         delivery_now_ms,
     )
-    .map_err(identifier_execution_error)?;
+    .map_err(|value| identifier_execution_error(&value))?;
     if !identifier_claim_is_live_at(&claim, delivery_now_ms) {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
@@ -33106,7 +33115,7 @@ async fn handler_identifier_claim_receipt(
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-    let network_id = app.state.network_id_ref().clone();
+    let network_id = *app.state.network_id_ref();
     if request.phase == "prepare" {
         if request.output_opening.is_some() || request.phone_retail_canonicality.is_some() {
             return Err(identifier_conversion_error(
@@ -33135,10 +33144,10 @@ async fn handler_identifier_claim_receipt(
                 &nonce,
                 &network_id,
             )
-            .map_err(identifier_execution_error)?;
+            .map_err(|value| identifier_execution_error(&value))?;
         let output_opening = resolver
             .owner_prf_opening(&program_policy, &execution)
-            .map_err(identifier_execution_error)?;
+            .map_err(|value| identifier_execution_error(&value))?;
         let phone_like = policy.id.kind.as_ref() == "phone"
             || policy.normalization
                 == iroha_data_model::identifier::IdentifierNormalization::PhoneE164
@@ -33190,7 +33199,7 @@ async fn handler_identifier_claim_receipt(
         };
         let original_opened_at_ms = output_opening.payload.opened_at_ms;
         let original_expires_at_ms = output_opening.payload.expires_at_ms;
-        let response = json_ok(routing::IdentifierPrfPrepareResponseDto {
+        let response = json_ok(&routing::IdentifierPrfPrepareResponseDto {
             network_id: hex::encode(network_id.as_bytes()),
             policy_id: policy.id.to_string(),
             account_id: account_id.to_string(),
@@ -33202,7 +33211,7 @@ async fn handler_identifier_claim_receipt(
             original_opened_at_ms,
             original_expires_at_ms,
         )
-        .map_err(identifier_execution_error)?;
+        .map_err(|value| identifier_execution_error(&value))?;
         return Ok(response);
     }
     let draft = derive_identifier_request_draft(
@@ -33214,13 +33223,13 @@ async fn handler_identifier_claim_receipt(
     )?;
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, account_id)
-        .map_err(identifier_execution_error)?;
-    let response = json_ok(identifier_receipt_response(&receipt))?;
+        .map_err(|value| identifier_execution_error(&value))?;
+    let response = json_ok(&identifier_receipt_response(&receipt))?;
     identifier_resolution::owner_prf::validate_owner_prf_lease(
         receipt.payload.opening.payload.opened_at_ms,
         receipt.payload.opening.payload.expires_at_ms,
     )
-    .map_err(identifier_execution_error)?;
+    .map_err(|value| identifier_execution_error(&value))?;
     Ok(response)
 }
 #[cfg(feature = "app_api")]
@@ -33245,7 +33254,7 @@ async fn handler_identifier_receipt_lookup(
     let Some(claim) = world.resolve_identifier_claim_by_receipt_hash(&receipt_hash) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    json_ok(identifier_claim_lookup_response(&claim))
+    json_ok(&identifier_claim_lookup_response(&claim))
 }
 /// Parse a bond path parameter as the canonical address literal of its asset definition.
 #[cfg(feature = "app_api")]
@@ -33303,7 +33312,7 @@ async fn handler_bond_get(
     let Some(record) = world.bonds().get(&bond).cloned() else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    json_ok(record)
+    json_ok(&record)
 }
 /// Page the record-date entitlements of one bond with the collection query language,
 /// in cash-flow then holder order; 404 when the bond is not registered.
@@ -33375,7 +33384,7 @@ async fn handler_ledger_headers(
                 "block height exceeds host pointer width".to_owned(),
             ));
         }
-        let Some(nz_height) = NonZeroUsize::new(height as usize) else {
+        let Some(nz_height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
             break;
         };
         let block = state_view
@@ -33435,19 +33444,19 @@ fn block_proof_capacity_response(
         } else {
             StatusCode::PAYLOAD_TOO_LARGE
         },
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             "block_proof_capacity_exceeded",
             format!(
                 "The finalized block proof exceeds its {resource:?} serving limit (at least {actual} required, {limit} admitted)."
             ),
-        ),
+        )),
         utils::current_response_format(),
     )
 }
 fn executed_block_wire_too_large_response(height: NonZeroU64) -> Response {
     utils::respond_with_status_and_format(
         StatusCode::PAYLOAD_TOO_LARGE,
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             "executed_block_wire_too_large",
             "The finalized block exceeds the authenticated block-proof carrier limit.",
         )
@@ -33458,7 +33467,7 @@ fn executed_block_wire_too_large_response(height: NonZeroU64) -> Response {
                 iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1
             )),
             ..Default::default()
-        }),
+        })),
         utils::current_response_format(),
     )
 }
@@ -33552,6 +33561,10 @@ async fn handler_block_proof(
     Ok(response)
 }
 
+#[expect(
+    clippy::unused_async,
+    reason = "Axum Handler requires an asynchronous endpoint for this synchronous retained-ledger response."
+)]
 async fn ledger_executed_block_wire_response(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -33594,6 +33607,10 @@ async fn ledger_executed_block_wire_response(
     );
     Ok(response)
 }
+#[expect(
+    clippy::unused_async,
+    reason = "Axum Handler requires an asynchronous endpoint for this synchronous retained-proof response."
+)]
 async fn block_proof_response(
     State(app): State<SharedAppState>,
     axum::extract::Path((height, entry_hex)): axum::extract::Path<(u64, String)>,
@@ -33623,7 +33640,7 @@ async fn block_proof_response(
     let maximum = usize::try_from(limits.max_response_bytes).map_err(|_| {
         finalized_block_wire_internal_error("proof response limit exceeds host width")
     })?;
-    utils::respond_with_format_bounded(proofs, ResponseFormat::Norito, maximum)
+    utils::respond_with_format_bounded(&(proofs), ResponseFormat::Norito, maximum)
         .map_err(|error| finalized_block_wire_internal_error(error.to_string()))
 }
 
@@ -33876,8 +33893,7 @@ fn validate_account_onboarding_readiness(
                 let payer_balance = world
                     .asset(&payer_asset)
                     .ok()
-                    .map(|asset| asset.value().as_ref().clone())
-                    .unwrap_or_else(Quantity::zero);
+                    .map_or_else(Quantity::zero, |asset| asset.value().as_ref().clone());
                 if payer_balance <= Quantity::zero() {
                     blocked(
                         "alias.onboarding.payer_unfunded",
@@ -33909,7 +33925,8 @@ fn validate_account_onboarding_readiness(
         }
     }
     if signer.allowed_permissions.contains("DpnUser") {
-        let admin = torii_permission_target(iroha_executor_data_model::permission::dpn::DpnAdmin)?;
+        let admin =
+            torii_permission_target(&(iroha_executor_data_model::permission::dpn::DpnAdmin))?;
         // Native DPN grants require the exact direct unit token; role-derived or
         // differently scoped permissions do not authorize this lifecycle.
         if !world.account_contains_inherent_permission(&signer.authority, &admin) {
@@ -33934,9 +33951,11 @@ fn validate_account_onboarding_readiness(
                 "register the configured fee sponsor program or remove it from onboarding configuration",
             );
         }
-        let enrollment_permission = torii_permission_target(CanEnrollFeeSponsorProgram {
-            program_id: program_id.clone(),
-        })?;
+        let enrollment_permission = torii_permission_target(
+            &(CanEnrollFeeSponsorProgram {
+                program_id: program_id.clone(),
+            }),
+        )?;
         if !torii_account_has_permission(world, &signer.authority, &enrollment_permission) {
             blocked(
                 "alias.onboarding.sponsor_permission_missing",
@@ -34155,7 +34174,7 @@ impl SoraFsAppealSettlementSubmitter {
         .map_err(|error| {
             ToriiBuildError::invalid_runtime_dependency(
                 "sorafs.appeal_finance.submitter_signers",
-                format!("{error:?}"),
+                &(format!("{error:?}")),
             )
         })?;
         let checkpoint_binding = config.checkpoint_provider.as_ref().ok_or_else(|| {
@@ -34203,13 +34222,13 @@ impl SoraFsAppealSettlementSubmitter {
         authentication_policy.validate().map_err(|error| {
             ToriiBuildError::invalid_configuration(
                 "sorafs.appeal_finance.checkpoint_provider",
-                error,
+                &(error),
             )
         })?;
         let checkpoint_identity = checkpoint_runtime.identity().map_err(|error| {
             ToriiBuildError::invalid_runtime_dependency(
                 "sorafs.appeal_finance.checkpoint_provider",
-                format!("checkpoint identity is unavailable: {error:?}"),
+                &(format!("checkpoint identity is unavailable: {error:?}")),
             )
         })?;
         if checkpoint_identity.provider_handle != checkpoint_binding.handle
@@ -34239,10 +34258,10 @@ impl SoraFsAppealSettlementSubmitter {
         .map_err(|error| {
             ToriiBuildError::component_initialization(
                 "sorafs.appeal_finance.transaction_forwarder",
-                format!(
+                &(format!(
                     "failed to open durable state at {}: {error}",
                     state_dir.display()
-                ),
+                )),
             )
         })?;
         Ok(Self {
@@ -34655,11 +34674,11 @@ fn sorafs_evidence_viewer_dependency_error(
             .then_some(SORAFS_EVIDENCE_VIEWER_UNEXPECTED_RUNTIME_DEPENDENCIES)
     }
 }
-const fn iso_bridge_body_limit(configured: u64, transaction_limit: usize) -> usize {
+fn iso_bridge_body_limit(configured: u64, transaction_limit: usize) -> usize {
     let configured = if configured > usize::MAX as u64 {
         usize::MAX
     } else {
-        configured as usize
+        usize::try_from(configured).unwrap_or(usize::MAX)
     };
     let configured = if configured == 0 { 1 } else { configured };
     if configured < transaction_limit {
@@ -34777,21 +34796,27 @@ pub enum ToriiBuildError {
 }
 
 impl ToriiBuildError {
-    fn invalid_configuration(component: &'static str, reason: impl ToString) -> Self {
+    fn invalid_configuration(component: &'static str, reason: &(impl ToString + ?Sized)) -> Self {
         Self::InvalidConfiguration {
             component,
             reason: reason.to_string(),
         }
     }
 
-    fn invalid_runtime_dependency(component: &'static str, reason: impl ToString) -> Self {
+    fn invalid_runtime_dependency(
+        component: &'static str,
+        reason: &(impl ToString + ?Sized),
+    ) -> Self {
         Self::InvalidRuntimeDependency {
             component,
             reason: reason.to_string(),
         }
     }
 
-    fn component_initialization(component: &'static str, reason: impl ToString) -> Self {
+    fn component_initialization(
+        component: &'static str,
+        reason: &(impl ToString + ?Sized),
+    ) -> Self {
         Self::ComponentInitialization {
             component,
             reason: reason.to_string(),
@@ -34806,10 +34831,10 @@ fn validate_semaphore_permits(
     if permits > tokio::sync::Semaphore::MAX_PERMITS {
         return Err(ToriiBuildError::invalid_configuration(
             component,
-            format!(
+            &(format!(
                 "configured concurrency {permits} exceeds Tokio's semaphore limit {}",
                 tokio::sync::Semaphore::MAX_PERMITS
-            ),
+            )),
         ));
     }
     Ok(permits)
@@ -35085,10 +35110,10 @@ pub struct Torii {
 /// Optional runtime-owned Torii dependencies that are not present in all embeddings.
 ///
 /// Fused privacy publication has exactly two valid ownership modes. A standalone
-/// Torii-built SoraFS node receives both the raw target writer and authenticated
+/// Torii-built `SoraFS` node receives both the raw target writer and authenticated
 /// authoritative-head reader, pinned to one configured public binding, plus the
 /// exact runtime-only signer and sealed producer checkpoint store for its signed
-/// Governance root. A prebuilt SoraFS node retains and revalidates those roles
+/// Governance root. A prebuilt `SoraFS` node retains and revalidates those roles
 /// itself and is mutually exclusive with every corresponding raw role in this
 /// container.
 #[derive(Clone)]
@@ -35367,7 +35392,7 @@ impl ToriiRuntimeDeps {
         self.soracloud_runtime = Some(runtime);
         self
     }
-    /// Attach a prebuilt embedded SoraFS node handle.
+    /// Attach a prebuilt embedded `SoraFS` node handle.
     ///
     /// The node must retain its complete fused privacy writer/reader pair and
     /// matching configured binding. Torii live-revalidates those retained roles,
@@ -35389,7 +35414,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_provider_attestation_inventory = Some(inventory);
         self
     }
-    /// Attach the runtime-only signer used for authoritative SoraFS proof outcomes.
+    /// Attach the runtime-only signer used for authoritative `SoraFS` proof outcomes.
     ///
     /// Construction qualifies the provider against the exact configured public
     /// binding and rejects missing, unexpected, substituted, or stale roles.
@@ -35402,7 +35427,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_proof_outcome_signer = Some(signer);
         self
     }
-    /// Attach the runtime-only signer used for native SoraFS repair transactions.
+    /// Attach the runtime-only signer used for native `SoraFS` repair transactions.
     ///
     /// Construction qualifies the provider against the exact configured public
     /// binding and rejects missing, unexpected, substituted, or stale roles.
@@ -35415,7 +35440,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_repair_transaction_signer = Some(signer);
         self
     }
-    /// Attach the runtime-only signer used for native SoraFS reserve/rent transactions.
+    /// Attach the runtime-only signer used for native `SoraFS` reserve/rent transactions.
     ///
     /// Construction qualifies the provider against the exact configured public
     /// binding and rejects missing, unexpected, substituted, or stale roles.
@@ -35428,7 +35453,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_reserve_transaction_signer = Some(signer);
         self
     }
-    /// Attach the runtime-only signer used for native SoraFS orderbook transactions.
+    /// Attach the runtime-only signer used for native `SoraFS` orderbook transactions.
     ///
     /// Construction qualifies the provider against the exact configured public
     /// binding and rejects missing, unexpected, substituted, or stale roles.
@@ -35492,7 +35517,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_appeal_finance_checkpoint_runtime = Some(runtime);
         self
     }
-    /// Attach independently administered PoTR gateway/provider signer roles.
+    /// Attach independently administered ``PoTR`` gateway/provider signer roles.
     ///
     /// Torii constructs the admission reader itself after its authoritative
     /// finalized state and council-verified admission material are available.
@@ -35571,7 +35596,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_moderation_checkpoint_store = Some(checkpoint_store);
         self
     }
-    /// Attach the runtime-only WebAuthn challenge and verification boundary
+    /// Attach the runtime-only `WebAuthn` challenge and verification boundary
     /// used by the case-bound evidence viewer.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -35651,7 +35676,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_evidence_viewer_transparency_publisher = Some(publisher);
         self
     }
-    /// Attach the fully constructed runtime-only SoraFS PoP credential service.
+    /// Attach the fully constructed runtime-only `SoraFS` `PoP` credential service.
     #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_pop_credentials(
@@ -35661,7 +35686,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_pop_credentials = Some(runtime);
         self
     }
-    /// Attach the runtime-only deployment-owned wrapper used for SoraFS moderation
+    /// Attach the runtime-only deployment-owned wrapper used for `SoraFS` moderation
     /// quarantine object data keys.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -35672,7 +35697,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_moderation_quarantine_key_wrapper = Some(key_wrapper);
         self
     }
-    /// Attach the runtime-only threshold-PRF provider used for SoraFS
+    /// Attach the runtime-only threshold-PRF provider used for `SoraFS`
     /// differential-privacy publication cycles.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -35706,7 +35731,7 @@ impl ToriiRuntimeDeps {
     /// Attach the deployment-owned fused privacy Governance target writer.
     ///
     /// Standalone node construction requires the authenticated-head reader too.
-    /// This raw role is mutually exclusive with a prebuilt SoraFS node.
+    /// This raw role is mutually exclusive with a prebuilt `SoraFS` node.
     #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_fenced_transparency_publisher(
@@ -35735,7 +35760,7 @@ impl ToriiRuntimeDeps {
     /// Standalone node construction requires this role whenever
     /// `governance_dag_dir` is configured. It must match the exact peer,
     /// handle, qualification, and Ed25519 public key in storage configuration,
-    /// and is mutually exclusive with a prebuilt SoraFS node.
+    /// and is mutually exclusive with a prebuilt `SoraFS` node.
     #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_governance_dag_signer(
@@ -35761,7 +35786,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_governance_dag_checkpoint_store = Some(checkpoint_store);
         self
     }
-    /// Attach the runtime-only audited ACME client used by SoraFS gateway TLS
+    /// Attach the runtime-only audited ACME client used by `SoraFS` gateway TLS
     /// automation. The client owns no configuration fallback.
     #[must_use]
     pub fn with_sorafs_gateway_acme_client(
@@ -35772,7 +35797,7 @@ impl ToriiRuntimeDeps {
         self
     }
     /// Attach the runtime-only authenticated DNS/HTTPS transport used to fetch
-    /// configured SoraFS gateway compliance feeds.
+    /// configured `SoraFS` gateway compliance feeds.
     #[must_use]
     pub fn with_sorafs_gateway_compliance_feed_transport(
         mut self,
@@ -35781,7 +35806,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_gateway_compliance_feed_transport = Some(transport);
         self
     }
-    /// Attach a shared SoraFS provider-discovery cache.
+    /// Attach a shared `SoraFS` provider-discovery cache.
     #[must_use]
     pub fn with_sorafs_cache(
         mut self,
@@ -36324,7 +36349,7 @@ async fn wait_for_evidence_viewer_compaction_tick(
 ) -> bool {
     tokio::select! {
         biased;
-        _ = shutdown_signal.receive() => false,
+        () = shutdown_signal.receive() => false,
         _ = ticker.tick() => !shutdown_signal.is_sent(),
     }
 }
@@ -36957,7 +36982,7 @@ impl Torii {
             loop {
                 tokio::select! {
                     biased;
-                    _ = shutdown_signal.receive() => {
+                    () = shutdown_signal.receive() => {
                         return ToriiCriticalWorkerExit::StoppedByShutdown;
                     }
                     _ = ticker.tick() => {
@@ -37026,7 +37051,7 @@ impl Torii {
             loop {
                 tokio::select! {
                     biased;
-                    _ = shutdown_signal.receive() => {
+                    () = shutdown_signal.receive() => {
                         return ToriiCriticalWorkerExit::StoppedByShutdown;
                     }
                     _ = ticker.tick() => {
@@ -37081,22 +37106,21 @@ impl Torii {
                         }
                     }
                 }
-                let now_unix_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                    Ok(duration) => match u64::try_from(duration.as_millis()) {
-                        Ok(timestamp) => timestamp,
-                        Err(_) => {
-                            iroha_logger::error!(
-                                "evidence-viewer compaction clock exceeded the supported range"
-                            );
-                            continue;
-                        }
-                    },
-                    Err(_) => {
+                let now_unix_ms = if let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH)
+                {
+                    if let Ok(timestamp) = u64::try_from(duration.as_millis()) {
+                        timestamp
+                    } else {
                         iroha_logger::error!(
-                            "evidence-viewer compaction clock preceded the Unix epoch"
+                            "evidence-viewer compaction clock exceeded the supported range"
                         );
                         continue;
                     }
+                } else {
+                    iroha_logger::error!(
+                        "evidence-viewer compaction clock preceded the Unix epoch"
+                    );
+                    continue;
                 };
                 if let Err(error) = service.compact_expired_tick(now_unix_ms) {
                     iroha_logger::warn!(
@@ -37931,7 +37955,7 @@ impl Torii {
         );
         add_authenticated_application_compute_routes(
             builder,
-            app_state.clone(),
+            &(app_state),
             transaction_max_content_len,
         );
         mount_catalog_route_rows!(
@@ -38705,7 +38729,7 @@ impl Torii {
             events,
             query_service,
             kura,
-            state.clone(),
+            state,
             da_receipt_signer,
             online_peers,
             None,
@@ -38800,7 +38824,7 @@ impl Torii {
             .map_err(|error| {
                 ToriiBuildError::invalid_runtime_dependency(
                     "sorafs.native_transaction_signers",
-                    error,
+                    &(error),
                 )
             })?;
         #[cfg(feature = "app_api")]
@@ -38810,19 +38834,21 @@ impl Torii {
             &runtime_deps,
         )
         .map_err(|error| {
-            ToriiBuildError::invalid_runtime_dependency("sorafs.stream_tokens", error)
+            ToriiBuildError::invalid_runtime_dependency("sorafs.stream_tokens", &(error))
         })?;
         #[cfg(feature = "app_api")]
         preflight_sorafs_fenced_privacy_runtime(
             &sorafs_node::config::StorageConfig::from(&config.sorafs_storage),
             &runtime_deps,
         )
-        .map_err(|error| ToriiBuildError::invalid_runtime_dependency("sorafs.storage", error))?;
+        .map_err(|error| ToriiBuildError::invalid_runtime_dependency("sorafs.storage", &(error)))?;
         let bootle_lantern_issuance_provider_registry = runtime_deps
             .bootle_lantern_issuance_provider_registry
             .clone();
-        let bootle_lantern_issuance_runtime = match config.privacy_bootle_lantern_issuer.as_ref() {
-            Some(issuer_config) => Some(Arc::new(
+        let bootle_lantern_issuance_runtime = if let Some(issuer_config) =
+            config.privacy_bootle_lantern_issuer.as_ref()
+        {
+            Some(Arc::new(
                 privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1::open(
                     privacy_issuance_api::BootleLanternIssuanceRuntimeConfigV1::from(issuer_config),
                     Arc::clone(&state),
@@ -38831,19 +38857,18 @@ impl Torii {
                 .map_err(|error| {
                     ToriiBuildError::component_initialization(
                         "privacy_bootle_lantern_issuer",
-                        error,
+                        &(error),
                     )
                 })?,
-            )),
-            None => {
-                if bootle_lantern_issuance_provider_registry.is_some() {
-                    return Err(ToriiBuildError::invalid_runtime_dependency(
-                        "privacy_bootle_lantern_issuer",
-                        "provider registry supplied while the runtime is disabled",
-                    ));
-                }
-                None
+            ))
+        } else {
+            if bootle_lantern_issuance_provider_registry.is_some() {
+                return Err(ToriiBuildError::invalid_runtime_dependency(
+                    "privacy_bootle_lantern_issuer",
+                    "provider registry supplied while the runtime is disabled",
+                ));
             }
+            None
         };
         let build_identity = runtime_deps.build_identity;
         let telemetry = runtime_deps.telemetry.clone();
@@ -38973,7 +38998,7 @@ impl Torii {
         let sorafs_site_bindings =
             sorafs::site::load_configured_site_bindings(&config.sorafs_gateway.site_bindings)
                 .map_err(|error| {
-                    ToriiBuildError::invalid_configuration("sorafs.gateway.site_bindings", error)
+                    ToriiBuildError::invalid_configuration("sorafs.gateway.site_bindings", &(error))
                 })?
                 .map(Arc::new);
         let vpn_relay_trust = runtime_deps.vpn_relay_trust;
@@ -38989,7 +39014,7 @@ impl Torii {
         );
         let app_auth_config = crate::app_auth::CanonicalRequestAuthConfig::from(&config.app_api);
         app_auth_config.validate().map_err(|error| {
-            ToriiBuildError::invalid_configuration("app_api.request_auth", error)
+            ToriiBuildError::invalid_configuration("app_api.request_auth", &(error))
         })?;
         let signed_query_admission = Arc::new(
             routing::SignedQueryAdmission::new(
@@ -38999,17 +39024,21 @@ impl Torii {
                 config.app_api.request_signature_replay_cache_capacity,
             )
             .map_err(|error| {
-                ToriiBuildError::invalid_configuration("app_api.signed_query_admission", error)
+                ToriiBuildError::invalid_configuration("app_api.signed_query_admission", &(error))
             })?,
         );
         #[cfg(feature = "push")]
         let (push_bridge, push_rate_limiter) = {
             let bridge = if config.push.enabled {
                 Some(
-                    push::PushBridge::new_in(config.push.clone(), config.data_dir.clone())
-                        .map_err(|error| {
-                            ToriiBuildError::component_initialization("push", format!("{error:?}"))
-                        })?,
+                    push::PushBridge::new_in(config.push.clone(), &config.data_dir).map_err(
+                        |error| {
+                            ToriiBuildError::component_initialization(
+                                "push",
+                                &(format!("{error:?}")),
+                            )
+                        },
+                    )?,
                 )
             } else {
                 None
@@ -39141,28 +39170,28 @@ impl Torii {
             .preauth_max_connections
             .map(std::num::NonZeroUsize::get);
         let max_total = limits::clamp_preauth_max_total(configured_max_total, nofile_soft);
-        if let (Some(configured), Some(clamped)) = (configured_max_total, max_total) {
-            if clamped < configured {
-                iroha_logger::warn!(
-                    configured,
-                    clamped,
-                    ?nofile_soft,
-                    "clamping torii pre-auth global connection cap to fit RLIMIT_NOFILE"
-                );
-            }
+        if let (Some(configured), Some(clamped)) = (configured_max_total, max_total)
+            && clamped < configured
+        {
+            iroha_logger::warn!(
+                configured,
+                clamped,
+                ?nofile_soft,
+                "clamping torii pre-auth global connection cap to fit RLIMIT_NOFILE"
+            );
         }
         let configured_max_per_ip = config
             .preauth_max_connections_per_ip
             .map(std::num::NonZeroUsize::get);
         let max_per_ip = limits::clamp_preauth_max_per_ip(configured_max_per_ip, max_total);
-        if let (Some(configured), Some(clamped)) = (configured_max_per_ip, max_per_ip) {
-            if clamped < configured {
-                iroha_logger::warn!(
-                    configured,
-                    clamped,
-                    "clamping torii pre-auth per-ip connection cap to global limit"
-                );
-            }
+        if let (Some(configured), Some(clamped)) = (configured_max_per_ip, max_per_ip)
+            && clamped < configured
+        {
+            iroha_logger::warn!(
+                configured,
+                clamped,
+                "clamping torii pre-auth per-ip connection cap to global limit"
+            );
         }
         let preauth_gate = Arc::new(limits::PreAuthGate::new(limits::PreAuthConfig {
             max_total,
@@ -39185,7 +39214,7 @@ impl Torii {
         }));
         let iso_bridge_runtime = Iso20022BridgeRuntime::from_config(&config.iso_bridge)
             .map_err(|error| {
-                ToriiBuildError::invalid_configuration("iso_bridge", format!("{error:?}"))
+                ToriiBuildError::invalid_configuration("iso_bridge", &(format!("{error:?}")))
             })?
             .map(Arc::new);
         let fee_policy = match (
@@ -39237,11 +39266,11 @@ impl Torii {
         ));
         let operator_auth = Arc::new(
             operator_auth::OperatorAuth::new(
-                config.operator_auth.clone(),
-                config.data_dir.clone(),
+                &(config.operator_auth),
+                &(config.data_dir),
                 telemetry.clone(),
             )
-            .map_err(|error| ToriiBuildError::invalid_configuration("operator_auth", error))?,
+            .map_err(|error| ToriiBuildError::invalid_configuration("operator_auth", &(error)))?,
         );
         let operator_signatures = Arc::new(
             operator_signatures::OperatorSignatures::new(
@@ -39252,7 +39281,7 @@ impl Torii {
                 telemetry.clone(),
             )
             .map_err(|error| {
-                ToriiBuildError::invalid_configuration("operator_signatures", error)
+                ToriiBuildError::invalid_configuration("operator_signatures", &(error))
             })?,
         );
         #[cfg(feature = "app_api")]
@@ -39269,9 +39298,9 @@ impl Torii {
             if threshold > trusted_auditors {
                 return Err(ToriiBuildError::invalid_configuration(
                     "sorafs.por.auditor_signature_threshold",
-                    format!(
+                    &(format!(
                         "threshold {threshold} exceeds the configured trusted Ed25519 operator/auditor set of {trusted_auditors}"
-                    ),
+                    )),
                 ));
             }
         }
@@ -39283,7 +39312,7 @@ impl Torii {
             .map(telemetry::peers::ToriiUrl::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
-                ToriiBuildError::invalid_configuration("peer_telemetry_urls", error)
+                ToriiBuildError::invalid_configuration("peer_telemetry_urls", &(error))
             })?;
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_geo = telemetry::peers::GeoLookupConfig::from(&config.peer_geo);
@@ -39296,7 +39325,7 @@ impl Torii {
             sorafs_admission.clone(),
         )
         .map_err(|error| {
-            ToriiBuildError::invalid_runtime_dependency("sorafs.por.potr_runtime", error)
+            ToriiBuildError::invalid_runtime_dependency("sorafs.por.potr_runtime", &(error))
         })?
         .map(|(roles, admission_registry)| {
             roles
@@ -39305,7 +39334,7 @@ impl Torii {
                 .map_err(|error| {
                     ToriiBuildError::component_initialization(
                         "sorafs.por.potr_runtime.finalized_reader",
-                        format!("{error:?}"),
+                        &(format!("{error:?}")),
                     )
                 })
         })
@@ -39324,7 +39353,10 @@ impl Torii {
                 .data_dir()
                 .clone();
             sorafs_node::NodeHandle::try_new_emergency_disabled(data_dir).map_err(|error| {
-                ToriiBuildError::component_initialization("sorafs.storage.emergency_facade", error)
+                ToriiBuildError::component_initialization(
+                    "sorafs.storage.emergency_facade",
+                    &(error),
+                )
             })?
         } else {
             let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
@@ -39338,148 +39370,134 @@ impl Torii {
                 .governance_dag_checkpoint_store_handle()
                 .cloned()
                 .zip(storage_config.governance_dag_checkpoint_store_qualification());
-            match shared_sorafs_node {
-                Some(node) => {
-                    validate_prebuilt_sorafs_quarantine_key_provider_binding(
-                        &node,
-                        &storage_config,
-                    )
+            if let Some(node) = shared_sorafs_node {
+                validate_prebuilt_sorafs_quarantine_key_provider_binding(&node, &storage_config)
                     .map_err(|error| {
-                        ToriiBuildError::invalid_runtime_dependency("sorafs.storage", error)
+                        ToriiBuildError::invalid_runtime_dependency("sorafs.storage", &(error))
                     })?;
-                    if node.moderation_screening_enabled()
-                        != storage_config.moderation_screening_enabled()
-                    {
-                        return Err(ToriiBuildError::invalid_runtime_dependency(
-                            "sorafs.storage.moderation_screening",
-                            "injected node enablement does not match configuration",
-                        ));
-                    }
-                    if node.moderation_screening_authority_bundle_digest()
-                        != storage_config.moderation_screening_authority_bundle_digest()
-                    {
-                        return Err(ToriiBuildError::invalid_runtime_dependency(
-                            "sorafs.storage.moderation_screening",
-                            "injected node authority bundle digest does not match configuration",
-                        ));
-                    }
-                    if node.privacy_cycle_prf_required() != privacy_cycle_prf_required {
-                        return Err(ToriiBuildError::invalid_runtime_dependency(
-                            "sorafs.storage.privacy_cycle_prf",
-                            "injected node requirement does not match configuration",
-                        ));
-                    }
-                    validate_prebuilt_sorafs_privacy_provider_bindings(
-                        &node,
-                        &storage_config,
-                        shared_sorafs_privacy_cycle_prf_provider.is_some(),
-                        shared_sorafs_privacy_release_anchor.is_some(),
-                        shared_sorafs_transparency_leader_lease_provider.is_some(),
-                        shared_sorafs_fenced_transparency_publisher.is_some(),
-                        shared_sorafs_fenced_transparency_head_reader.is_some(),
-                    )
-                    .map_err(|error| {
-                        ToriiBuildError::invalid_runtime_dependency("sorafs.storage.privacy", error)
-                    })?;
-                    if storage_config.moderation_screening_enabled()
-                        && shared_sorafs_moderation_quarantine_key_wrapper.is_none()
-                    {
-                        return Err(ToriiBuildError::invalid_runtime_dependency(
-                            "sorafs.storage.moderation_screening",
-                            "enabled moderation screening requires a runtime-only quarantine key wrapper",
-                        ));
-                    }
-                    if let Some(key_wrapper) =
-                        shared_sorafs_moderation_quarantine_key_wrapper.as_ref()
-                    {
-                        if !node.uses_moderation_quarantine_key_wrapper(key_wrapper)
-                            || node.moderation_quarantine_key_id()
-                                != Some(key_wrapper.active_key_id())
-                        {
-                            return Err(ToriiBuildError::invalid_runtime_dependency(
-                                "sorafs.storage.moderation_screening",
-                                "injected node does not retain the exact quarantine key wrapper",
-                            ));
-                        }
-                    }
-                    node
+                if node.moderation_screening_enabled()
+                    != storage_config.moderation_screening_enabled()
+                {
+                    return Err(ToriiBuildError::invalid_runtime_dependency(
+                        "sorafs.storage.moderation_screening",
+                        "injected node enablement does not match configuration",
+                    ));
                 }
-                None => {
-                    let node_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
-                    let node_runtime_deps = if let Some(key_wrapper) =
-                        shared_sorafs_moderation_quarantine_key_wrapper
-                    {
+                if node.moderation_screening_authority_bundle_digest()
+                    != storage_config.moderation_screening_authority_bundle_digest()
+                {
+                    return Err(ToriiBuildError::invalid_runtime_dependency(
+                        "sorafs.storage.moderation_screening",
+                        "injected node authority bundle digest does not match configuration",
+                    ));
+                }
+                if node.privacy_cycle_prf_required() != privacy_cycle_prf_required {
+                    return Err(ToriiBuildError::invalid_runtime_dependency(
+                        "sorafs.storage.privacy_cycle_prf",
+                        "injected node requirement does not match configuration",
+                    ));
+                }
+                validate_prebuilt_sorafs_privacy_provider_bindings(
+                    &node,
+                    &storage_config,
+                    shared_sorafs_privacy_cycle_prf_provider.is_some(),
+                    shared_sorafs_privacy_release_anchor.is_some(),
+                    shared_sorafs_transparency_leader_lease_provider.is_some(),
+                    shared_sorafs_fenced_transparency_publisher.is_some(),
+                    shared_sorafs_fenced_transparency_head_reader.is_some(),
+                )
+                .map_err(|error| {
+                    ToriiBuildError::invalid_runtime_dependency("sorafs.storage.privacy", &(error))
+                })?;
+                if storage_config.moderation_screening_enabled()
+                    && shared_sorafs_moderation_quarantine_key_wrapper.is_none()
+                {
+                    return Err(ToriiBuildError::invalid_runtime_dependency(
+                        "sorafs.storage.moderation_screening",
+                        "enabled moderation screening requires a runtime-only quarantine key wrapper",
+                    ));
+                }
+                if let Some(key_wrapper) = shared_sorafs_moderation_quarantine_key_wrapper.as_ref()
+                    && (!node.uses_moderation_quarantine_key_wrapper(key_wrapper)
+                        || node.moderation_quarantine_key_id() != Some(key_wrapper.active_key_id()))
+                {
+                    return Err(ToriiBuildError::invalid_runtime_dependency(
+                        "sorafs.storage.moderation_screening",
+                        "injected node does not retain the exact quarantine key wrapper",
+                    ));
+                }
+                node
+            } else {
+                let node_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
+                let node_runtime_deps =
+                    if let Some(key_wrapper) = shared_sorafs_moderation_quarantine_key_wrapper {
                         node_runtime_deps.with_moderation_quarantine_key_wrapper(key_wrapper)
                     } else {
                         node_runtime_deps
                     };
-                    let node_runtime_deps =
-                        if let Some(provider) = shared_sorafs_privacy_cycle_prf_provider {
-                            node_runtime_deps.with_privacy_cycle_prf_provider(provider)
-                        } else {
-                            node_runtime_deps
-                        };
-                    let node_runtime_deps =
-                        if let Some(anchor) = shared_sorafs_privacy_release_anchor {
-                            node_runtime_deps.with_privacy_release_anchor(anchor)
-                        } else {
-                            node_runtime_deps
-                        };
-                    let node_runtime_deps =
-                        if let Some(provider) = shared_sorafs_transparency_leader_lease_provider {
-                            node_runtime_deps.with_transparency_leader_lease_provider(provider)
-                        } else {
-                            node_runtime_deps
-                        };
-                    let node_runtime_deps =
-                        if let Some(publisher) = shared_sorafs_fenced_transparency_publisher {
-                            node_runtime_deps.with_fenced_transparency_publisher(publisher)
-                        } else {
-                            node_runtime_deps
-                        };
-                    let node_runtime_deps =
-                        if let Some(reader) = shared_sorafs_fenced_transparency_head_reader {
-                            node_runtime_deps.with_fenced_transparency_head_reader(reader)
-                        } else {
-                            node_runtime_deps
-                        };
-                    let node_runtime_deps =
-                        if let Some(signer) = shared_sorafs_governance_dag_signer {
-                            node_runtime_deps.with_governance_dag_signer(signer)
-                        } else {
-                            node_runtime_deps
-                        };
-                    let node_runtime_deps = if let Some(checkpoint_store) =
-                        shared_sorafs_governance_dag_checkpoint_store
-                    {
+                let node_runtime_deps =
+                    if let Some(provider) = shared_sorafs_privacy_cycle_prf_provider {
+                        node_runtime_deps.with_privacy_cycle_prf_provider(provider)
+                    } else {
+                        node_runtime_deps
+                    };
+                let node_runtime_deps = if let Some(anchor) = shared_sorafs_privacy_release_anchor {
+                    node_runtime_deps.with_privacy_release_anchor(anchor)
+                } else {
+                    node_runtime_deps
+                };
+                let node_runtime_deps =
+                    if let Some(provider) = shared_sorafs_transparency_leader_lease_provider {
+                        node_runtime_deps.with_transparency_leader_lease_provider(provider)
+                    } else {
+                        node_runtime_deps
+                    };
+                let node_runtime_deps =
+                    if let Some(publisher) = shared_sorafs_fenced_transparency_publisher {
+                        node_runtime_deps.with_fenced_transparency_publisher(publisher)
+                    } else {
+                        node_runtime_deps
+                    };
+                let node_runtime_deps =
+                    if let Some(reader) = shared_sorafs_fenced_transparency_head_reader {
+                        node_runtime_deps.with_fenced_transparency_head_reader(reader)
+                    } else {
+                        node_runtime_deps
+                    };
+                let node_runtime_deps = if let Some(signer) = shared_sorafs_governance_dag_signer {
+                    node_runtime_deps.with_governance_dag_signer(signer)
+                } else {
+                    node_runtime_deps
+                };
+                let node_runtime_deps =
+                    if let Some(checkpoint_store) = shared_sorafs_governance_dag_checkpoint_store {
                         node_runtime_deps.with_governance_dag_checkpoint_store(checkpoint_store)
                     } else {
                         node_runtime_deps
                     };
-                    let node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
-                        storage_config,
-                        repair_config,
-                        gc_config,
-                        node_runtime_deps,
-                    )
-                    .map_err(|error| {
-                        ToriiBuildError::component_initialization("sorafs.storage", error)
-                    })?;
-                    if node.governance_dag_checkpoint_store_binding()
-                        != expected_governance_checkpoint_store_binding
-                            .as_ref()
-                            .map(|(handle, qualification)| (handle.as_str(), *qualification))
-                    {
-                        return Err(ToriiBuildError::invalid_runtime_dependency(
-                            "sorafs.storage.governance_dag_checkpoint_store",
-                            "constructed node did not retain the exact configured binding",
-                        ));
-                    }
-                    node.revalidate_fenced_privacy_runtime().map_err(|error| {
-                        ToriiBuildError::component_initialization("sorafs.storage.privacy", error)
-                    })?;
-                    node
+                let node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
+                    storage_config,
+                    repair_config,
+                    gc_config,
+                    node_runtime_deps,
+                )
+                .map_err(|error| {
+                    ToriiBuildError::component_initialization("sorafs.storage", &(error))
+                })?;
+                if node.governance_dag_checkpoint_store_binding()
+                    != expected_governance_checkpoint_store_binding
+                        .as_ref()
+                        .map(|(handle, qualification)| (handle.as_str(), *qualification))
+                {
+                    return Err(ToriiBuildError::invalid_runtime_dependency(
+                        "sorafs.storage.governance_dag_checkpoint_store",
+                        "constructed node did not retain the exact configured binding",
+                    ));
                 }
+                node.revalidate_fenced_privacy_runtime().map_err(|error| {
+                    ToriiBuildError::component_initialization("sorafs.storage.privacy", &(error))
+                })?;
+                node
             }
         };
         #[cfg(not(feature = "app_api"))]
@@ -39488,7 +39506,10 @@ impl Torii {
                 .data_dir()
                 .clone();
             sorafs_node::NodeHandle::try_new_emergency_disabled(data_dir).map_err(|error| {
-                ToriiBuildError::component_initialization("sorafs.storage.emergency_facade", error)
+                ToriiBuildError::component_initialization(
+                    "sorafs.storage.emergency_facade",
+                    &(error),
+                )
             })?
         } else {
             let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
@@ -39508,7 +39529,7 @@ impl Torii {
                     sorafs_node::config::GcConfig::from(&config.sorafs_gc),
                 )
                 .map_err(|error| {
-                    ToriiBuildError::component_initialization("sorafs.storage", error)
+                    ToriiBuildError::component_initialization("sorafs.storage", &(error))
                 })?,
             }
         };
@@ -39657,7 +39678,7 @@ impl Torii {
                 .map_err(|error| {
                     ToriiBuildError::component_initialization(
                         "sorafs.storage.evidence_viewer",
-                        error,
+                        &(error),
                     )
                 })?;
                 let producer = sorafs_node::evidence_viewer::transparency_producer::
@@ -39668,13 +39689,13 @@ impl Torii {
                     .map_err(|error| {
                         ToriiBuildError::component_initialization(
                             "sorafs.storage.evidence_viewer.transparency_producer",
-                            error,
+                            &(error),
                         )
                     })?;
                 producer.reconcile().map_err(|error| {
                     ToriiBuildError::component_initialization(
                         "sorafs.storage.evidence_viewer.transparency_producer",
-                        error,
+                        &(error),
                     )
                 })?;
                 (Some(Arc::new(service)), Some(Arc::new(producer)))
@@ -39682,8 +39703,8 @@ impl Torii {
             _ => {
                 return Err(ToriiBuildError::invalid_runtime_dependency(
                     "sorafs.storage.evidence_viewer",
-                    sorafs_evidence_viewer_dependency_error
-                        .unwrap_or("inconsistent runtime dependency set"),
+                    &(sorafs_evidence_viewer_dependency_error
+                        .unwrap_or("inconsistent runtime dependency set")),
                 ));
             }
         };
@@ -39979,7 +40000,10 @@ ingress,
                 Arc::clone(&state),
             )
             .map_err(|error| {
-                ToriiBuildError::invalid_runtime_dependency("sorafs.storage.stream_tokens", error)
+                ToriiBuildError::invalid_runtime_dependency(
+                    "sorafs.storage.stream_tokens",
+                    &(error),
+                )
             })?
             .map(Arc::new)
         };
@@ -40068,7 +40092,7 @@ ingress,
                 &config.sorafs_appeal_finance_settlement,
             )
             .map_err(|error| {
-                ToriiBuildError::invalid_configuration("sorafs.appeal_finance", error)
+                ToriiBuildError::invalid_configuration("sorafs.appeal_finance", &(error))
             })?,
         );
         #[cfg(feature = "app_api")]
@@ -40116,7 +40140,7 @@ ingress,
                         .map_err(|error| {
                             ToriiBuildError::invalid_configuration(
                                 "ram_lfe.programs[].signer_private_key",
-                                format!("program at index {index}: {error}"),
+                                &(format!("program at index {index}: {error}")),
                             )
                         })?;
                     service.register_program_runtime(
@@ -40165,12 +40189,14 @@ ingress,
         #[cfg(feature = "app_api")]
         let private_settlement_runtime = private_settlement::PrivateSettlementToriiRuntimeV1::open(
             state.as_ref(),
-            kura.store_root(),
+            &(kura.store_root()),
             emergency_fast,
             runtime_deps.private_settlement_availability_signer.clone(),
             runtime_deps.private_settlement_phase_signer.clone(),
         )
-        .map_err(|error| ToriiBuildError::component_initialization("private_settlement", error))?;
+        .map_err(|error| {
+            ToriiBuildError::component_initialization("private_settlement", &(error))
+        })?;
         let query_fanout_max_retained_bytes =
             usize::try_from(config.query_fanout_max_retained_bytes.get()).map_err(|_| {
                 ToriiBuildError::invalid_configuration(
@@ -40223,7 +40249,7 @@ ingress,
             .map(|selected| kagemusha_enrollment::EnrollmentService::open(state.clone(), selected))
             .transpose()
             .map_err(|error| {
-                ToriiBuildError::component_initialization("kagemusha_enrollment", error)
+                ToriiBuildError::component_initialization("kagemusha_enrollment", &(error))
             })?
             .map(Arc::new);
         let torii = Self {
@@ -40236,7 +40262,7 @@ ingress,
             events,
             query_service,
             kura,
-            state: state.clone(),
+            state,
             #[cfg(feature = "app_api")]
             musubi_search,
             #[cfg(feature = "app_api")]
@@ -40432,7 +40458,9 @@ ingress,
         torii.validate_startup_configuration()?;
 
         #[cfg(feature = "app_api")]
-        let prepared_prover = if !emergency_fast {
+        let prepared_prover = if emergency_fast {
+            None
+        } else {
             Some(
                 crate::zk_prover::prepare_configuration(
                     build_identity,
@@ -40447,21 +40475,19 @@ ingress,
                     config.zk_prover_keys_dir.clone(),
                     config.zk_prover_allowed_backends.clone(),
                     config.zk_prover_allowed_circuits.clone(),
-                    Some(state.clone()),
+                    Some(Arc::clone(&torii.state)),
                     telemetry.clone(),
                 )
                 .map_err(|error| {
-                    ToriiBuildError::invalid_configuration("zk_prover.build_identity", error)
+                    ToriiBuildError::invalid_configuration("zk_prover.build_identity", &(error))
                 })?,
             )
-        } else {
-            None
         };
 
         // Commit process-wide Torii policy only after every configuration value and durable
         // component above has been validated successfully.
         crate::app_auth::configure(app_auth_config).map_err(|error| {
-            ToriiBuildError::invalid_configuration("app_api.request_auth", error)
+            ToriiBuildError::invalid_configuration("app_api.request_auth", &(error))
         })?;
         routing::debug_match_flag::set_from_config(config.debug_match_filters);
         routing::set_app_query_limits(app_query_limits);
@@ -40528,6 +40554,7 @@ ingress,
     /// HTTP listener and router have been prepared; this builder method never
     /// starts a detached task.
     #[cfg(any(feature = "app_api", feature = "connect"))]
+    #[must_use]
     pub fn with_p2p(mut self, p2p: iroha_core::IrohaNetwork) -> Self {
         if self.kura.emergency_fast_startup_enabled() {
             iroha_logger::warn!(
@@ -40540,20 +40567,22 @@ ingress,
     }
     /// No-op when application and Connect P2P services are disabled.
     #[cfg(not(any(feature = "app_api", feature = "connect")))]
+    #[must_use]
     pub fn with_p2p(self, _p2p: iroha_core::IrohaNetwork) -> Self {
         self
     }
     /// Advertise the local peer id so Torii can decide when ingress requests must be proxied.
+    #[must_use]
     pub fn with_local_peer_id(mut self, peer_id: PeerId) -> Self {
         self.local_peer_id = Some(peer_id);
         self
     }
     fn validate_startup_configuration(&self) -> core::result::Result<(), ToriiBuildError> {
         ValidatedToriiHttpTransport::new(self.http_transport)
-            .map_err(|error| ToriiBuildError::invalid_configuration("transport.http", error))?;
+            .map_err(|error| ToriiBuildError::invalid_configuration("transport.http", &(error)))?;
         if let Some(https) = &self.https_transport {
             public_tls::validate(https).map_err(|error| {
-                ToriiBuildError::invalid_configuration("transport.https", error)
+                ToriiBuildError::invalid_configuration("transport.https", &(error))
             })?;
         }
         let _ = self.build_cors_layer()?;
@@ -40691,7 +40720,7 @@ ingress,
             if !seen.insert(origin) {
                 return Err(ToriiBuildError::invalid_configuration(
                     "cors.allowed_origins",
-                    format!("duplicate origin `{origin}`"),
+                    &(format!("duplicate origin `{origin}`")),
                 ));
             }
             if origin == "*" {
@@ -40703,27 +40732,27 @@ ingress,
             let url = url::Url::parse(origin).map_err(|error| {
                 ToriiBuildError::invalid_configuration(
                     "cors.allowed_origins",
-                    format!("invalid origin `{origin}`: {error}"),
+                    &(format!("invalid origin `{origin}`: {error}")),
                 )
             })?;
             if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
                 return Err(ToriiBuildError::invalid_configuration(
                     "cors.allowed_origins",
-                    format!("origin `{origin}` must use http(s) and include a host"),
+                    &(format!("origin `{origin}` must use http(s) and include a host")),
                 ));
             }
             if url.origin().ascii_serialization() != origin {
                 return Err(ToriiBuildError::invalid_configuration(
                     "cors.allowed_origins",
-                    format!(
+                    &(format!(
                         "origin `{origin}` is not canonical; configure only scheme, host, and optional non-default port"
-                    ),
+                    )),
                 ));
             }
             parsed_origins.push(HeaderValue::from_str(origin).map_err(|error| {
                 ToriiBuildError::invalid_configuration(
                     "cors.allowed_origins",
-                    format!("invalid origin `{origin}`: {error}"),
+                    &(format!("invalid origin `{origin}`: {error}")),
                 )
             })?);
         }
@@ -40747,19 +40776,19 @@ ingress,
             ) {
                 return Err(ToriiBuildError::invalid_configuration(
                     "cors.allowed_methods",
-                    format!("unsupported or non-canonical HTTP method `{method}`"),
+                    &(format!("unsupported or non-canonical HTTP method `{method}`")),
                 ));
             }
             if !seen.insert(method) {
                 return Err(ToriiBuildError::invalid_configuration(
                     "cors.allowed_methods",
-                    format!("duplicate HTTP method `{method}`"),
+                    &(format!("duplicate HTTP method `{method}`")),
                 ));
             }
             parsed_methods.push(HttpMethod::from_bytes(method.as_bytes()).map_err(|error| {
                 ToriiBuildError::invalid_configuration(
                     "cors.allowed_methods",
-                    format!("invalid HTTP method `{method}`: {error}"),
+                    &(format!("invalid HTTP method `{method}`: {error}")),
                 )
             })?);
         }
@@ -40781,19 +40810,19 @@ ingress,
             if !seen.insert(header) {
                 return Err(ToriiBuildError::invalid_configuration(
                     config_path,
-                    format!("duplicate HTTP header name `{header}`"),
+                    &(format!("duplicate HTTP header name `{header}`")),
                 ));
             }
             let parsed = HeaderName::from_bytes(header.as_bytes()).map_err(|error| {
                 ToriiBuildError::invalid_configuration(
                     config_path,
-                    format!("invalid HTTP header name `{header}`: {error}"),
+                    &(format!("invalid HTTP header name `{header}`: {error}")),
                 )
             })?;
             if parsed.as_str() != header {
                 return Err(ToriiBuildError::invalid_configuration(
                     config_path,
-                    format!("HTTP header name `{header}` must use canonical lowercase spelling"),
+                    &(format!("HTTP header name `{header}` must use canonical lowercase spelling")),
                 ));
             }
             parsed_headers.push(parsed);
@@ -40871,16 +40900,16 @@ ingress,
         .map_err(|error| {
             ToriiBuildError::component_initialization(
                 "da.replay_cursor_store",
-                format!(
+                &(format!(
                     "failed to open bounded store at {}: {error:?}",
                     replay_store_dir.display()
-                ),
+                )),
             )
         })?;
         let replay_store = Arc::new(replay_cursor_store);
         let admission_snapshot =
             da::committed_da_ingest_admission_snapshot(&self.state).map_err(|error| {
-                ToriiBuildError::component_initialization("da.admission_policy", error)
+                ToriiBuildError::component_initialization("da.admission_policy", &(error))
             })?;
         let receipt_log = Arc::new(if admission_snapshot.is_configured() {
             da::DaReceiptLog::open_with_lane_epoch_filter(
@@ -40892,10 +40921,10 @@ ingress,
             .map_err(|error| {
                 ToriiBuildError::component_initialization(
                     "da.receipt_log",
-                    format!(
+                    &(format!(
                         "failed to open durable log at {}: {error:?}",
                         self.da_ingest.manifest_store_dir.display()
-                    ),
+                    )),
                 )
             })?
         } else {
@@ -40907,10 +40936,10 @@ ingress,
             .map_err(|error| {
                 ToriiBuildError::component_initialization(
                     "da.receipt_log",
-                    format!(
+                    &(format!(
                         "failed to open durable log at {}: {error:?}",
                         self.da_ingest.manifest_store_dir.display()
-                    ),
+                    )),
                 )
             })?
         });
@@ -40922,10 +40951,10 @@ ingress,
         .map_err(|(_, error)| {
             ToriiBuildError::component_initialization(
                 "da.taikai_lineage",
-                format!(
+                &(format!(
                     "failed to recover pending routing lineage at {}: {error}",
                     self.da_ingest.manifest_store_dir.display()
-                ),
+                )),
             )
         })?;
         let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
@@ -40935,7 +40964,7 @@ ingress,
                 .map_err(|error| {
                     ToriiBuildError::component_initialization(
                         "da.replay_cache",
-                        format!("durable cursor does not fit the configured cache: {error:?}"),
+                        &(format!("durable cursor does not fit the configured cache: {error:?}")),
                     )
                 })?;
         }
@@ -41318,7 +41347,7 @@ ingress,
             #[cfg(feature = "app_api")]
             por_auditor_signature_threshold: self.por_auditor_signature_threshold,
             #[cfg(feature = "app_api")]
-            sorafs_alias_cache_policy: self.sorafs_alias_cache.clone(),
+            sorafs_alias_cache_policy: self.sorafs_alias_cache,
             #[cfg(feature = "app_api")]
             sorafs_alias_enforcement: self.sorafs_alias_enforcement,
             #[cfg(feature = "app_api")]
@@ -41424,13 +41453,13 @@ ingress,
             &app_state.soracloud_runtime,
         );
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
-        if let Some(tls_state) = &app_state.sorafs_gateway_tls_state {
-            if let Ok(snapshot) = tls_state.try_read() {
-                let now = SystemTime::now();
-                app_state
-                    .telemetry
-                    .with_metrics(|metrics| snapshot.apply_metrics(metrics, now));
-            }
+        if let Some(tls_state) = &app_state.sorafs_gateway_tls_state
+            && let Ok(snapshot) = tls_state.try_read()
+        {
+            let now = SystemTime::now();
+            app_state
+                .telemetry
+                .with_metrics(|metrics| snapshot.apply_metrics(metrics, now));
         }
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         {
@@ -41444,11 +41473,11 @@ ingress,
                 )
             });
         }
-        let router = self.compose_api_router(app_state.clone(), cors_layer)?;
+        let router = self.compose_api_router(&(app_state), cors_layer)?;
         if let Some(spooler) = app_state.da_spooler.as_ref() {
             spooler
                 .start(app_state.shutdown_signal.clone())
-                .map_err(|error| ToriiBuildError::component_initialization("da.spool", error))?;
+                .map_err(|error| ToriiBuildError::component_initialization("da.spool", &(error)))?;
         }
         Ok((router, app_state))
     }
@@ -41456,7 +41485,7 @@ ingress,
     #[allow(clippy::too_many_lines)]
     fn compose_api_router(
         &self,
-        app_state: SharedAppState,
+        app_state: &SharedAppState,
         cors_layer: Option<CorsLayer>,
     ) -> core::result::Result<axum::Router, ToriiBuildError> {
         let mut builder = RouterBuilder::new(
@@ -41467,7 +41496,7 @@ ingress,
         .map_err(|error| {
             ToriiBuildError::component_initialization(
                 "route_catalog",
-                format!("invalid catalog: {error:?}"),
+                &(format!("invalid catalog: {error:?}")),
             )
         })?;
         self.add_sumeragi_routes(&mut builder);
@@ -41518,7 +41547,7 @@ ingress,
         let (router, mounted_manifest) = builder.finish().map_err(|errors| {
             ToriiBuildError::component_initialization(
                 "route_catalog",
-                format!("route assembly failed: {errors:?}"),
+                &(format!("route assembly failed: {errors:?}")),
             )
         })?;
         let route_index = mounted_manifest.route_index();
@@ -41759,7 +41788,6 @@ ingress,
         // Bind before launching any background service. A bind failure must leave no detached
         // Torii workers behind in the caller's runtime.
         let listener = bind_torii_tcp_listener(torii_address.clone())
-            .await
             .change_context(Error::StartServer)
             .attach("failed to bind to the specified address")
             .attach_with(|| self.address.clone().into_attachment())?;
@@ -41767,7 +41795,6 @@ ingress,
             Some(prepared) => Some(
                 prepared
                     .bind()
-                    .await
                     .change_context(Error::StartServer)
                     .attach("failed to bind Torii HTTPS listener")?,
             ),
@@ -41878,16 +41905,14 @@ ingress,
             });
         }
         #[cfg(feature = "connect")]
-        if connect_runtime_enabled {
-            if let Some(network) = self.p2p.as_ref() {
-                critical_workers.push(ToriiCriticalWorker {
-                    name: "connect_network",
-                    task: self
-                        .connect_bus
-                        .attach_network(network.clone(), shutdown_signal.clone())
-                        .await,
-                });
-            }
+        if connect_runtime_enabled && let Some(network) = self.p2p.as_ref() {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "connect_network",
+                task: self
+                    .connect_bus
+                    .attach_network(network.clone(), shutdown_signal.clone())
+                    .await,
+            });
         }
         #[cfg(feature = "connect")]
         if !emergency_fast && let Some(network) = self.p2p.clone() {
@@ -41907,7 +41932,7 @@ ingress,
         if let Some(bridge) = self.push.as_ref() {
             match bridge.start_event_worker(
                 self.state.clone(),
-                self.events.clone(),
+                &(self.events),
                 shutdown_signal.clone(),
             ) {
                 Ok(Some(task)) => critical_workers.push(ToriiCriticalWorker {
@@ -42071,7 +42096,7 @@ ingress,
             }
             if let Some(task) =
                 private_settlement::spawn_private_settlement_finality_reconciliation_v1(
-                    self.private_settlement_runtime.clone(),
+                    &(self.private_settlement_runtime),
                     Arc::clone(&self.state),
                     shutdown_signal.clone(),
                 )
@@ -42103,13 +42128,14 @@ ingress,
                 task: runtime.clone().spawn(shutdown_signal.clone()),
             });
         }
-        if !emergency_fast && let Some(components) = &self.sorafs_gateway_security {
-            if let Some(automation) = &components.tls_automation {
-                critical_workers.push(ToriiCriticalWorker {
-                    name: "sorafs_tls_automation",
-                    task: automation.spawn(self.telemetry.clone(), shutdown_signal.clone()),
-                });
-            }
+        if !emergency_fast
+            && let Some(components) = &self.sorafs_gateway_security
+            && let Some(automation) = &components.tls_automation
+        {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "sorafs_tls_automation",
+                task: automation.spawn(self.telemetry.clone(), shutdown_signal.clone()),
+            });
         }
         #[cfg(feature = "app_api")]
         if !emergency_fast {
@@ -42186,7 +42212,7 @@ ingress,
                 });
             }
             let moderation_worker = match sorafs::api::spawn_sorafs_moderation_orchestrator_worker(
-                app_state.clone(),
+                &(app_state),
                 shutdown_signal.clone(),
             ) {
                 Ok(worker) => worker,
@@ -42379,7 +42405,7 @@ async fn handle_rate_limited_mcp_request(
     mcp::handle_cancelled_notification(app, headers, &payload);
     mcp::private_no_store_response(StatusCode::ACCEPTED)
 }
-/// GET /openapi.json — expose the OpenAPI descriptor subject to Torii access policy.
+/// GET /openapi.json — expose the ``OpenAPI`` descriptor subject to Torii access policy.
 async fn handler_openapi(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -42409,7 +42435,7 @@ async fn handler_mcp_jsonrpc(
     if !app.mcp.enabled {
         return mcp::private_no_store_response(utils::respond_with_status_and_format(
             StatusCode::SERVICE_UNAVAILABLE,
-            ErrorEnvelope::new("mcp_disabled", "MCP is disabled by node configuration"),
+            &(ErrorEnvelope::new("mcp_disabled", "MCP is disabled by node configuration")),
             ResponseFormat::Json,
         ));
     }
@@ -42589,7 +42615,7 @@ fn build_sorafs_cache(
             None => {
                 return Err(ToriiBuildError::invalid_configuration(
                     "sorafs.discovery.known_capabilities",
-                    format!("unknown capability at index {}", capabilities.len()),
+                    &(format!("unknown capability at index {}", capabilities.len())),
                 ));
             }
         }
@@ -42665,13 +42691,7 @@ fn require_sorafs_potr_finalized_reader_inputs(
     configured: Option<&iroha_config::parameters::actual::SorafsPotrRuntimeBinding>,
     roles: Option<Arc<sorafs::PotrRuntimeSignerRolesV1>>,
     admission: Option<Arc<sorafs::AdmissionRegistry>>,
-) -> Result<
-    Option<(
-        Arc<sorafs::PotrRuntimeSignerRolesV1>,
-        Arc<sorafs::AdmissionRegistry>,
-    )>,
-    sorafs::PotrRuntimeSignerConfigError,
-> {
+) -> Result<Option<SorafsPotrFinalizedReaderInputs>, sorafs::PotrRuntimeSignerConfigError> {
     match (enabled, configured, roles, admission) {
         (false, None, None, _) => Ok(None),
         (false, Some(_), _, _) => {
@@ -42747,7 +42767,7 @@ fn gateway_runtime_provider_binding(
     .map_err(|error| {
         ToriiBuildError::invalid_configuration(
             "sorafs.gateway.runtime_provider",
-            format!("invalid provider binding: {error:?}"),
+            &(format!("invalid provider binding: {error:?}")),
         )
     })
 }
@@ -42874,7 +42894,7 @@ fn build_sorafs_gateway_security(
                 .map_err(|error| {
                     ToriiBuildError::invalid_runtime_dependency(
                         "sorafs.gateway.acme",
-                        format!("client failed exact startup qualification: {error:?}"),
+                        &(format!("client failed exact startup qualification: {error:?}")),
                     )
                 })?,
             ))
@@ -42900,7 +42920,7 @@ fn build_sorafs_gateway_security(
                     .map_err(|error| {
                         ToriiBuildError::component_initialization(
                             "sorafs.gateway.compliance.checkpoint",
-                            error,
+                            &(error),
                         )
                     })?;
                 let controller = GatewayComplianceController::new_with_feed_transport(
@@ -42909,7 +42929,10 @@ fn build_sorafs_gateway_security(
                     transport.as_ref(),
                 )
                 .map_err(|error| {
-                    ToriiBuildError::invalid_runtime_dependency("sorafs.gateway.compliance", error)
+                    ToriiBuildError::invalid_runtime_dependency(
+                        "sorafs.gateway.compliance",
+                        &(error),
+                    )
                 })?;
                 (Some(Arc::new(controller)), Some(transport))
             }
@@ -42934,7 +42957,10 @@ fn build_sorafs_gateway_security(
             sorafs::SaltSchedule::load_from_dir(dir)
                 .map(|schedule| Arc::new(sorafs::BlindedCidResolver::new(Arc::new(schedule))))
                 .map_err(|error| {
-                    ToriiBuildError::component_initialization("sorafs.gateway.salt_schedule", error)
+                    ToriiBuildError::component_initialization(
+                        "sorafs.gateway.salt_schedule",
+                        &(error),
+                    )
                 })
         })
         .transpose()?;
@@ -43011,9 +43037,9 @@ fn validate_por_runtime_ready(
     if let Some(detail) = por_runtime_readiness_error(config) {
         return Err(ToriiBuildError::invalid_configuration(
             "sorafs.por",
-            format!(
+            &(format!(
                 "{detail}; configure complete pinned drand trust, quorum, persistence, and provider VRF policy"
-            ),
+            )),
         ));
     }
     Ok(())
@@ -43056,7 +43082,7 @@ fn build_por_components(
         Err(error) => {
             return Err(ToriiBuildError::component_initialization(
                 "sorafs.por.coordinator_state",
-                format!("failed to load {}: {error}", snapshot_path.display()),
+                &(format!("failed to load {}: {error}", snapshot_path.display())),
             ));
         }
     };
@@ -43074,7 +43100,7 @@ fn build_por_components(
         .map_err(|error| {
             ToriiBuildError::component_initialization(
                 "sorafs.por.authoritative_projection",
-                format!("failed to load checkpoint projection: {error}"),
+                &(format!("failed to load checkpoint projection: {error}")),
             )
         })?;
     coordinator
@@ -43082,7 +43108,7 @@ fn build_por_components(
         .map_err(|error| {
             ToriiBuildError::component_initialization(
                 "sorafs.por.authoritative_projection",
-                format!("failed to install checkpoint projection: {error}"),
+                &(format!("failed to install checkpoint projection: {error}")),
             )
         })?;
     coordinator
@@ -43090,7 +43116,7 @@ fn build_por_components(
         .map_err(|error| {
             ToriiBuildError::component_initialization(
                 "sorafs.por.coordinator_state",
-                format!("failed to retire duplicate lifecycle state: {error}"),
+                &(format!("failed to retire duplicate lifecycle state: {error}")),
             )
         })?;
     let admission = admission.ok_or_else(|| {
@@ -43110,7 +43136,7 @@ fn build_por_components(
             &por_cfg.drand,
             por_cfg.epoch_interval_secs,
         )
-        .map_err(|error| ToriiBuildError::component_initialization("sorafs.por.drand", error))?,
+        .map_err(|error| ToriiBuildError::component_initialization("sorafs.por.drand", &(error)))?,
     );
     let vrf_provider = Arc::new(
         sorafs::VerifiedVrfProvider::with_persistence(
@@ -43122,7 +43148,7 @@ fn build_por_components(
             por_cfg.vrf_max_clock_skew_secs,
         )
         .map_err(|error| {
-            ToriiBuildError::component_initialization("sorafs.por.vrf_state", error)
+            ToriiBuildError::component_initialization("sorafs.por.vrf_state", &(error))
         })?,
     );
     let runtime = sorafs::PorCoordinatorRuntime::new(
@@ -43235,7 +43261,7 @@ pub enum Error {
         /// The request's own finite limit for that resource.
         limit: u64,
     },
-    /// Proof endpoint `{endpoint}` throttled the request; retry after {retry_after_secs}s
+    /// Proof endpoint `{endpoint}` throttled the request; retry after `{retry_after_secs}s`
     ProofRateLimited {
         /// Logical endpoint label.
         endpoint: &'static str,
@@ -43246,13 +43272,13 @@ pub enum Error {
     AcceptTransaction(#[from] iroha_core::tx::AcceptTransactionFail),
     /// Failed to get or set configuration
     Config(#[source] eyre::Report),
-    /// SoraFS moderation runtime startup failed `{code}`
+    /// `SoraFS` moderation runtime startup failed `{code}`
     #[cfg(feature = "app_api")]
     SorafsModerationStartup {
         /// Stable payload-free startup failure code.
         code: &'static str,
     },
-    /// SoraFS evidence-viewer runtime startup failed `{code}`
+    /// `SoraFS` evidence-viewer runtime startup failed `{code}`
     #[cfg(feature = "app_api")]
     SorafsEvidenceViewerStartup {
         /// Stable payload-free startup failure code.
@@ -43377,7 +43403,7 @@ impl IntoResponse for Error {
                 if status.is_server_error() {
                     return utils::respond_with_status_and_format(
                         status,
-                        public_validation_fail_envelope(&err, status),
+                        &(public_validation_fail_envelope(&err, status)),
                         format,
                     );
                 }
@@ -43401,7 +43427,7 @@ impl IntoResponse for Error {
                 if !details.is_empty() {
                     envelope = envelope.with_details(details);
                 }
-                let mut response = utils::respond_with_status_and_format(status, envelope, format);
+                let mut response = utils::respond_with_status_and_format(status, &envelope, format);
                 let headers = response.headers_mut();
                 if let Some(ctx) = axt {
                     headers.insert(
@@ -43412,39 +43438,39 @@ impl IntoResponse for Error {
                         HeaderName::from_static("x-iroha-axt-reason"),
                         HeaderValue::from_static(ctx.reason.label()),
                     );
-                    if let Some(snapshot_version) = ctx.snapshot_version {
-                        if let Ok(value) = HeaderValue::from_str(&snapshot_version.to_string()) {
-                            headers.insert(
-                                HeaderName::from_static("x-iroha-axt-snapshot-version"),
-                                value,
-                            );
-                        }
+                    if let Some(snapshot_version) = ctx.snapshot_version
+                        && let Ok(value) = HeaderValue::from_str(&snapshot_version.to_string())
+                    {
+                        headers.insert(
+                            HeaderName::from_static("x-iroha-axt-snapshot-version"),
+                            value,
+                        );
                     }
-                    if let Some(dsid) = ctx.dataspace {
-                        if let Ok(value) = HeaderValue::from_str(&dsid.as_u64().to_string()) {
-                            headers.insert(HeaderName::from_static("x-iroha-axt-dataspace"), value);
-                        }
+                    if let Some(dsid) = ctx.dataspace
+                        && let Ok(value) = HeaderValue::from_str(&dsid.as_u64().to_string())
+                    {
+                        headers.insert(HeaderName::from_static("x-iroha-axt-dataspace"), value);
                     }
-                    if let Some(lane) = ctx.lane {
-                        if let Ok(value) = HeaderValue::from_str(&lane.as_u32().to_string()) {
-                            headers.insert(HeaderName::from_static("x-iroha-axt-lane"), value);
-                        }
+                    if let Some(lane) = ctx.lane
+                        && let Ok(value) = HeaderValue::from_str(&lane.as_u32().to_string())
+                    {
+                        headers.insert(HeaderName::from_static("x-iroha-axt-lane"), value);
                     }
-                    if let Some(hint) = ctx.active_handle_era {
-                        if let Ok(value) = HeaderValue::from_str(&hint.to_string()) {
-                            headers.insert(
-                                HeaderName::from_static("x-iroha-axt-active-handle-era"),
-                                value,
-                            );
-                        }
+                    if let Some(hint) = ctx.active_handle_era
+                        && let Ok(value) = HeaderValue::from_str(&hint.to_string())
+                    {
+                        headers.insert(
+                            HeaderName::from_static("x-iroha-axt-active-handle-era"),
+                            value,
+                        );
                     }
-                    if let Some(hint) = ctx.next_handle_counter {
-                        if let Ok(value) = HeaderValue::from_str(&hint.to_string()) {
-                            headers.insert(
-                                HeaderName::from_static("x-iroha-axt-next-handle-counter"),
-                                value,
-                            );
-                        }
+                    if let Some(hint) = ctx.next_handle_counter
+                        && let Ok(value) = HeaderValue::from_str(&hint.to_string())
+                    {
+                        headers.insert(
+                            HeaderName::from_static("x-iroha-axt-next-handle-counter"),
+                            value,
+                        );
                     }
                 }
                 response
@@ -43453,7 +43479,7 @@ impl IntoResponse for Error {
             Self::CollectionQuery(err) => {
                 let mut response = utils::respond_with_status_and_format(
                     StatusCode::BAD_REQUEST,
-                    err.envelope(),
+                    &(err.envelope()),
                     format,
                 );
                 response.headers_mut().insert(
@@ -43469,7 +43495,8 @@ impl IntoResponse for Error {
                 } else {
                     StatusCode::BAD_REQUEST
                 };
-                let mut response = utils::respond_with_status_and_format(status, payload, format);
+                let mut response =
+                    utils::respond_with_status_and_format(status, &(payload), format);
                 if let Ok(header) = HeaderValue::from_str(code) {
                     response
                         .headers_mut()
@@ -43487,13 +43514,13 @@ impl IntoResponse for Error {
                     hint: hint.map(str::to_owned),
                     ..Default::default()
                 });
-                utils::respond_with_status_and_format(StatusCode::BAD_REQUEST, payload, format)
+                utils::respond_with_status_and_format(StatusCode::BAD_REQUEST, &(payload), format)
             }
             Self::AppUnauthorized { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
                 let mut response = utils::respond_with_status_and_format(
                     StatusCode::UNAUTHORIZED,
-                    payload,
+                    &(payload),
                     format,
                 );
                 response.headers_mut().insert(
@@ -43509,8 +43536,11 @@ impl IntoResponse for Error {
             }
             Self::AppForbidden { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                let mut response =
-                    utils::respond_with_status_and_format(StatusCode::FORBIDDEN, payload, format);
+                let mut response = utils::respond_with_status_and_format(
+                    StatusCode::FORBIDDEN,
+                    &(payload),
+                    format,
+                );
                 if let Ok(header) = HeaderValue::from_str(code) {
                     response
                         .headers_mut()
@@ -43520,8 +43550,11 @@ impl IntoResponse for Error {
             }
             Self::AppNotFound { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                let mut response =
-                    utils::respond_with_status_and_format(StatusCode::NOT_FOUND, payload, format);
+                let mut response = utils::respond_with_status_and_format(
+                    StatusCode::NOT_FOUND,
+                    &(payload),
+                    format,
+                );
                 if let Ok(header) = HeaderValue::from_str(code) {
                     response
                         .headers_mut()
@@ -43532,7 +43565,7 @@ impl IntoResponse for Error {
             Self::AppConflict { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
                 let mut response =
-                    utils::respond_with_status_and_format(StatusCode::CONFLICT, payload, format);
+                    utils::respond_with_status_and_format(StatusCode::CONFLICT, &(payload), format);
                 if let Ok(header) = HeaderValue::from_str(code) {
                     response
                         .headers_mut()
@@ -43544,7 +43577,7 @@ impl IntoResponse for Error {
                 let payload = ErrorEnvelope::new(code, message);
                 let mut response = utils::respond_with_status_and_format(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    payload,
+                    &(payload),
                     format,
                 );
                 if let Ok(header) = HeaderValue::from_str(code) {
@@ -43571,7 +43604,7 @@ impl IntoResponse for Error {
                 });
                 let mut resp = utils::respond_with_status_and_format(
                     StatusCode::TOO_MANY_REQUESTS,
-                    payload,
+                    &(payload),
                     format,
                 );
                 if let Ok(header) = HeaderValue::from_str(&retry_after_secs.to_string()) {
@@ -43582,7 +43615,7 @@ impl IntoResponse for Error {
             }
             Self::LaneLifecycle { reason } => utils::respond_with_status_and_format(
                 StatusCode::BAD_REQUEST,
-                ErrorEnvelope::new("lane_lifecycle_error", reason),
+                &(ErrorEnvelope::new("lane_lifecycle_error", reason)),
                 format,
             ),
             Self::PushIntoQueue {
@@ -43591,13 +43624,13 @@ impl IntoResponse for Error {
             } => {
                 let status = Self::status_code_for_queue_error(source.as_ref());
                 let envelope = Self::queue_error_envelope(source.as_ref(), Some(backpressure));
-                let mut response = utils::respond_with_status_and_format(status, envelope, format);
+                let mut response = utils::respond_with_status_and_format(status, &envelope, format);
                 let headers = response.headers_mut();
                 let (reject_code, _detail) = queue_rejection_metadata(source.as_ref());
-                if queue_error_has_rejection_code(source.as_ref()) {
-                    if let Ok(header) = HeaderValue::from_str(reject_code) {
-                        headers.insert(HeaderName::from_static("x-iroha-reject-code"), header);
-                    }
+                if queue_error_has_rejection_code(source.as_ref())
+                    && let Ok(header) = HeaderValue::from_str(reject_code)
+                {
+                    headers.insert(HeaderName::from_static("x-iroha-reject-code"), header);
                 }
                 if let Ok(depth) = HeaderValue::from_str(&backpressure.queued().to_string()) {
                     headers.insert("X-Iroha-Queue-Depth", depth);
@@ -43629,7 +43662,7 @@ impl IntoResponse for Error {
                 let (code, detail) = accept_transaction_metadata(&err);
                 utils::respond_with_status_and_format(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    ErrorEnvelope::new(code, detail),
+                    &(ErrorEnvelope::new(code, detail)),
                     format,
                 )
             }
@@ -43641,7 +43674,7 @@ impl IntoResponse for Error {
                 };
                 let mut response = utils::respond_with_status_and_format(
                     StatusCode::BAD_REQUEST,
-                    ErrorEnvelope::new(code, detail).with_details(details),
+                    &(ErrorEnvelope::new(code, detail).with_details(details)),
                     format,
                 );
                 if let Ok(header) = HeaderValue::from_str(code) {
@@ -43654,7 +43687,7 @@ impl IntoResponse for Error {
             other => {
                 let status = other.status_code();
                 let payload = other.into_envelope();
-                utils::respond_with_status_and_format(status, payload, format)
+                utils::respond_with_status_and_format(status, &(payload), format)
             }
         }
     }
@@ -43882,16 +43915,14 @@ impl Error {
         };
         match validation_error {
             NotPermitted(_) => StatusCode::FORBIDDEN,
-            IvmAdmission(_) => StatusCode::BAD_REQUEST,
-            ContractRejected(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            IvmAdmission(_) | AxtReject(_) => StatusCode::BAD_REQUEST,
             IvmFault(fault)
                 if fault.kind
                     == iroha_data_model::executor::fault::IvmFaultKindV1::PermissionDenied =>
             {
                 StatusCode::FORBIDDEN
             }
-            IvmFault(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            AxtReject(_) => StatusCode::BAD_REQUEST,
+            ContractRejected(_) | IvmFault(_) | TooComplex => StatusCode::UNPROCESSABLE_ENTITY,
             SettlementReplay(_) => StatusCode::CONFLICT,
             QueryFailed(query_error)
             | InstructionFailed(InstructionExecutionError::Query(query_error)) => match query_error
@@ -43907,11 +43938,10 @@ impl Error {
                 | InvalidSingularParameters => StatusCode::BAD_REQUEST,
                 Find(_) | NotFound => StatusCode::NOT_FOUND,
                 Expired => StatusCode::GONE,
-                AuthorityQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
-                CapacityLimit => StatusCode::TOO_MANY_REQUESTS,
-                GasBudgetExceeded => StatusCode::TOO_MANY_REQUESTS,
+                AuthorityQuotaExceeded | CapacityLimit | GasBudgetExceeded => {
+                    StatusCode::TOO_MANY_REQUESTS
+                }
             },
-            TooComplex => StatusCode::UNPROCESSABLE_ENTITY,
             InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             InstructionFailed(error) => {
                 iroha_logger::error!(
@@ -43956,7 +43986,7 @@ fn transaction_dispatch_outcome_unknown_response(
         });
     let mut response = utils::respond_with_status_and_format(
         StatusCode::SERVICE_UNAVAILABLE,
-        envelope,
+        &(envelope),
         utils::current_response_format(),
     );
     response.headers_mut().insert(

@@ -432,12 +432,14 @@ fn rejected_row(
             )
         },
         |diagnostic| {
-            let root = match returned {
-                Some(step) => TriggerFailureRootV1::ReturnedBeforeRollback(step),
-                None => TriggerFailureRootV1::DeclaredInstructionProjection(
-                    StateTransaction::execution_step_from_executable(executable),
-                ),
-            };
+            let root = returned.map_or_else(
+                || {
+                    TriggerFailureRootV1::DeclaredInstructionProjection(
+                        StateTransaction::execution_step_from_executable(executable),
+                    )
+                },
+                TriggerFailureRootV1::ReturnedBeforeRollback,
+            );
             (reason, root, diagnostic)
         },
     );

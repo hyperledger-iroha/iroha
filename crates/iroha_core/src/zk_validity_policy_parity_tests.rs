@@ -137,11 +137,11 @@ fn chain(node: Option<Zk>, policy: Option<ZkValidityPolicyV1>) -> CertifiedTestC
     CertifiedTestChain::from_prepared(prepared).expect("genesis applies")
 }
 
+type CertifiedHistoryRow = (Vec<u8>, Vec<u8>, String, Vec<u8>);
+
 /// What consensus certifies for every committed height: the result `R`, the
 /// core block hash, the complete execution commitment and the canonical
 /// result-bearing block wire.
-type CertifiedHistoryRow = (Vec<u8>, Vec<u8>, String, Vec<u8>);
-
 fn certified_history(chain: &CertifiedTestChain) -> Vec<CertifiedHistoryRow> {
     (1..=chain.height())
         .map(|height| {

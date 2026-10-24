@@ -290,10 +290,10 @@ pub fn authority_can_resolve_resolved_account_alias(
     })? {
         return Ok(true);
     }
-    let scope = match alias.canonical_name.domain_id() {
-        Some(domain_id) => AccountAliasPermissionScope::Domain(domain_id),
-        None => AccountAliasPermissionScope::Dataspace(alias.dataspace_id),
-    };
+    let scope = alias.canonical_name.domain_id().map_or(
+        AccountAliasPermissionScope::Dataspace(alias.dataspace_id),
+        AccountAliasPermissionScope::Domain,
+    );
     let target = permission_target(&(CanResolveAccountAlias { scope }))?;
     Ok(authority_has_permission(world, authority, &target))
 }
@@ -341,10 +341,10 @@ pub fn authority_can_manage_resolved_account_alias(
     })? {
         return Ok(true);
     }
-    let scope = match alias.canonical_name.domain_id() {
-        Some(domain_id) => AccountAliasPermissionScope::Domain(domain_id),
-        None => AccountAliasPermissionScope::Dataspace(alias.dataspace_id),
-    };
+    let scope = alias.canonical_name.domain_id().map_or(
+        AccountAliasPermissionScope::Dataspace(alias.dataspace_id),
+        AccountAliasPermissionScope::Domain,
+    );
     let target = permission_target(&(CanManageAccountAlias { scope }))?;
     Ok(authority_has_permission(world, authority, &target))
 }

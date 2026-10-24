@@ -36,6 +36,7 @@ fn routed_read_source_accepts_only_canonical_uaid_literals() {
 }
 #[test]
 fn routed_read_borrowed_struct_is_wire_equivalent_to_owned_target() {
+    type Source = ToriiBorrowedRoutedReadStruct<'static, RoutedReadSourceFixture, 3>;
     let owned = RoutedReadSourceFixture {
         id: "alice".to_owned(),
         metadata: vec!["one".to_owned(), "two".to_owned()],
@@ -51,7 +52,6 @@ fn routed_read_borrowed_struct_is_wire_equivalent_to_owned_target() {
         &owned,
         "iroha_torii::RoutedReadSourceFixture",
     );
-    type Source = ToriiBorrowedRoutedReadStruct<'static, RoutedReadSourceFixture, 3>;
     assert_eq!(
         <Source as norito::NoritoSchema>::nominal_name(),
         "iroha_torii::ToriiBorrowedRoutedReadStruct<'_, iroha_torii::RoutedReadSourceFixture, 3>",
@@ -98,6 +98,9 @@ fn routed_read_source_payload_owns_only_after_bounded_decode() {
 }
 #[test]
 fn asset_definition_borrowed_json_matches_owned_projection_at_exact_cap() {
+    use iroha_data_model::asset::definition::{
+        AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+    };
     let authority = crate::tests_runtime_handlers::checked_torii_test_account_id(
         0x71,
         "derive routed asset-definition source fixture",
@@ -123,9 +126,6 @@ fn asset_definition_borrowed_json_matches_owned_projection_at_exact_cap() {
         bound_at_ms: 10,
     };
     let observation_time_ms = 60;
-    use iroha_data_model::asset::definition::{
-        AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
-    };
     let transition = ConfidentialPolicyTransition {
         new_mode: ConfidentialPolicyMode::ShieldedOnly,
         effective_height: 80,

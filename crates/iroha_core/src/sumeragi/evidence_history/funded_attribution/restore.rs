@@ -207,5 +207,5 @@ pub fn restore_attribution(
         authority_generation: generation,
         safety_violation: required(safety, "safety_violation")?,
     };
-    Ok(graph.into_attribution(fields))
+    Ok(graph.into_attribution(&fields))
 }

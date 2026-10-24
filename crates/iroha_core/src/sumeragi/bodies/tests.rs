@@ -90,7 +90,7 @@ fn read_refusal_keeps_source_and_foreign_pool_is_rejected_before_allocation() {
         read.poll(&budget).unwrap(),
         BodyReadPoll::Pending(_)
     ));
-    assert_eq!(read.source(), source);
+    assert_eq!(read.source(), &source);
     assert_eq!(budget.reserved_bytes(), reserved);
     budget.set_limit_bytes(1 << 25);
     let BodyReadPoll::Ready(job) = read.poll(&budget).unwrap() else {
@@ -433,7 +433,7 @@ fn retained_body_reader_refuses_replaced_root_and_same_byte_foreign_file_then_re
     let BodyReadPoll::Ready(restoration) = read.poll(&budget).unwrap() else {
         panic!("original read must resume")
     };
-    assert_eq!(read.source(), source);
+    assert_eq!(read.source(), &source);
     assert_eq!(
         restoration
             .complete(&budget, &BlsCrypto::new())
@@ -464,7 +464,7 @@ fn original_body_read_can_be_pruned_and_reports_only_actual_missing_source() {
     assert!(
         matches!(read.poll(&budget), Err(BodyReadError::Io(error)) if error.kind()==io::ErrorKind::NotFound)
     );
-    assert_eq!(read.source(), source);
+    assert_eq!(read.source(), &source);
     drop(read);
     assert_eq!(budget.reserved_bytes(), charged);
 }
@@ -523,7 +523,7 @@ fn body_read_open_serializes_child_validation_with_cooperative_prune() {
         });
     let mut read = result.unwrap_or_else(|error| panic!("original open failed: {error}"));
     assert!(prune_waited, "retirement crossed original file admission");
-    assert_eq!(read.source(), source);
+    assert_eq!(read.source(), &source);
     assert!(store.retirement_authorized(source.height()));
     assert_eq!(store.bytes().unwrap(), 0);
     assert!(
@@ -548,7 +548,7 @@ fn body_read_poll_serializes_child_validation_with_cooperative_prune() {
         panic!("the original body must finish before cooperating retirement")
     };
     assert!(prune_waited, "retirement crossed held-file validation");
-    assert_eq!(read.source(), source);
+    assert_eq!(read.source(), &source);
     assert!(store.retirement_authorized(source.height()));
     assert_eq!(store.bytes().unwrap(), 0);
     assert_eq!(

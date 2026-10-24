@@ -824,16 +824,8 @@ mod tests {
         tx.tx_call_hash = Some(Hash::from(transaction.hash_as_entrypoint()));
         tx.current_lane_id = Some(iroha_model_base::topology::LaneId::SINGLE);
         let tx_bytes_len = norito::canonical_frame_len(transaction.payload()).unwrap();
-        Executor::charge_nexus_fees(
-            &mut tx,
-            &ALICE_ID,
-            &transaction,
-            &(None),
-            tx_bytes_len,
-            1,
-            1,
-        )
-        .unwrap();
+        Executor::charge_nexus_fees(&mut tx, &ALICE_ID, &transaction, None, tx_bytes_len, 1, 1)
+            .unwrap();
         let scoped = AssetId::with_scope(
             asset.clone(),
             ALICE_ID.clone(),

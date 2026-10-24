@@ -697,10 +697,10 @@ pub mod isi {
     pub(super) fn apply_prepared_numeric_transfer_after_source_credit_for_test(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        source_id: AssetId,
+        source_id: &AssetId,
         destination_id: AssetId,
         amount: Quantity,
-        intervening_credit: Quantity,
+        intervening_credit: &Quantity,
     ) -> Result<(), Error> {
         let plan = PreparedNumericTransferPlan::prepare_user(
             state_transaction,
@@ -711,7 +711,7 @@ pub mod isi {
         )?;
         state_transaction
             .world
-            .deposit_numeric_asset(&source_id, &intervening_credit)?;
+            .deposit_numeric_asset(source_id, intervening_credit)?;
         plan.apply(state_transaction).map(|_| ())
     }
     /// Exercise the consumed movement boundary after a controlled prepare/apply interleave.
@@ -2149,7 +2149,7 @@ pub mod isi {
         }
         Ok(())
     }
-    pub(crate) fn kagemusha_custody_error(error: crate::kagemusha_wallet_v1::Error) -> Error {
+    pub(crate) fn kagemusha_custody_error(error: &crate::kagemusha_wallet_v1::Error) -> Error {
         InstructionExecutionError::InvariantViolation(
             format!("KAGEMUSHA reserve custody: {error}").into(),
         )
@@ -2159,7 +2159,7 @@ pub mod isi {
         source: &AssetId,
     ) -> Result<(), Error> {
         if crate::kagemusha_wallet_v1::custody::reserve_registration(world, source)
-            .map_err(kagemusha_custody_error)?
+            .map_err(|value| kagemusha_custody_error(&value))?
             .is_some()
         {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -3239,11 +3239,13 @@ pub mod isi {
                 source_id,
                 destination_id,
                 amount,
-                scope_policy,
-                authority_policy,
-                authorization.source_policy,
-                authorization.control_policy,
-                authorization.destination_admission,
+                NumericAssetTransferPolicy {
+                    scope_policy,
+                    authority_policy,
+                    source_policy: authorization.source_policy,
+                    control_policy: authorization.control_policy,
+                    destination_admission: authorization.destination_admission,
+                },
             )?;
             Ok(Self {
                 plan,
@@ -3674,7 +3676,7 @@ pub mod isi {
         )?;
         let source_id = state_transaction
             .world
-            .resolve_asset_id_for_current_scope(&source_id)?;
+            .resolve_asset_id_for_current_scope(source_id)?;
         reject_uncovered_retail_asset_mutation(state_transaction, &source_id, "burn")?;
         crate::retail_fee::settle_balance(&mut state_transaction.world, &source_id)?;
         crate::validation_fee_rewards::ensure_reward_custody_debit(
@@ -3978,13 +3980,13 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         _created_account: &AccountId,
-        source_id: AssetId,
+        source_id: &AssetId,
         amount: Quantity,
     ) -> Result<(), Error> {
         execute_checked_numeric_asset_burn(
             state_transaction,
             Some(authority),
-            &(source_id),
+            source_id,
             amount,
             NumericAssetBurnSourcePolicy::AccountAdmissionFee,
             None,
@@ -4539,7 +4541,7 @@ pub mod isi {
         genesis: bool,
         source_id: AssetId,
         destination_id: AssetId,
-        amount: Quantity,
+        amount: &Quantity,
     ) -> Result<(), Error> {
         if source_id.account() != staker {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -4573,7 +4575,7 @@ pub mod isi {
             lane_id,
             validator,
             &movement.plan.destination_id,
-            &amount,
+            amount,
             &movement.plan.prechecked_delta.to_balance_after,
         )
         .map_err(|error| {
@@ -6631,7 +6633,7 @@ pub mod isi {
                 update_control_record(state_transaction, self.source_id.account(), record)?;
             }
             if let Some(update) = self.retail_usage_update {
-                retail_state::put_usage(&mut state_transaction.world, update.key, update.after)
+                retail_state::put_usage(&mut state_transaction.world, &update.key, &update.after)
                     .map_err(|reason| {
                         InstructionExecutionError::InvariantViolation(reason.into())
                     })?;
@@ -6809,11 +6811,13 @@ pub mod isi {
                     source.clone(),
                     destination.clone(),
                     amount.clone(),
-                    NumericAssetTransferScopePolicy::Ambient,
-                    authority_policy,
-                    authorization.source_policy,
-                    authorization.control_policy,
-                    authorization.destination_admission,
+                    NumericAssetTransferPolicy {
+                        scope_policy: NumericAssetTransferScopePolicy::Ambient,
+                        authority_policy,
+                        source_policy: authorization.source_policy,
+                        control_policy: authorization.control_policy,
+                        destination_admission: authorization.destination_admission,
+                    },
                 )?);
             }
             Self::aggregate(state_transaction, plans, authorization)
@@ -7138,8 +7142,8 @@ pub mod isi {
                             for update in self.retail_usage_updates {
                                 retail_state::put_usage(
                                     &mut state_transaction.world,
-                                    update.key,
-                                    update.after,
+                                    &update.key,
+                                    &update.after,
                                 )
                                 .map_err(|reason| {
                                     InstructionExecutionError::InvariantViolation(reason.into())
@@ -7242,11 +7246,13 @@ pub mod isi {
                 source.clone(),
                 custody.clone(),
                 amount,
-                NumericAssetTransferScopePolicy::ExplicitBilateral,
-                NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
-                NumericAssetTransferSourcePolicy::NativeEscrowFunding,
-                NumericAssetTransferControlPolicy::Enforce,
-                NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+                NumericAssetTransferPolicy {
+                    scope_policy: NumericAssetTransferScopePolicy::ExplicitBilateral,
+                    authority_policy: NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
+                    source_policy: NumericAssetTransferSourcePolicy::NativeEscrowFunding,
+                    control_policy: NumericAssetTransferControlPolicy::Enforce,
+                    destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+                },
             )?;
             if plan.source_id != source || plan.destination_id != custody {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -7495,11 +7501,13 @@ pub mod isi {
             source_id,
             source_destination_id,
             source_amount,
-            NumericAssetTransferScopePolicy::ExplicitBilateral,
-            NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
-            NumericAssetTransferSourcePolicy::User,
-            NumericAssetTransferControlPolicy::Enforce,
-            NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            NumericAssetTransferPolicy {
+                scope_policy: NumericAssetTransferScopePolicy::ExplicitBilateral,
+                authority_policy: NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
+                source_policy: NumericAssetTransferSourcePolicy::User,
+                control_policy: NumericAssetTransferControlPolicy::Enforce,
+                destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            },
         )?;
         let destination = PreparedNumericTransferPlan::prepare(
             state_transaction,
@@ -7507,11 +7515,13 @@ pub mod isi {
             destination_source_id,
             destination_id,
             destination_amount,
-            NumericAssetTransferScopePolicy::ExplicitBilateral,
-            NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
-            NumericAssetTransferSourcePolicy::FxEscrowRelease,
-            NumericAssetTransferControlPolicy::Enforce,
-            NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            NumericAssetTransferPolicy {
+                scope_policy: NumericAssetTransferScopePolicy::ExplicitBilateral,
+                authority_policy: NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
+                source_policy: NumericAssetTransferSourcePolicy::FxEscrowRelease,
+                control_policy: NumericAssetTransferControlPolicy::Enforce,
+                destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            },
         )?;
         let quantity_authorization_context =
             quantity_authorization::fx_context(&quantity_authorization::FxFrame {
@@ -8105,7 +8115,7 @@ pub mod isi {
                     state_transaction.world(),
                     source_id,
                 )
-                .map_err(kagemusha_custody_error)?
+                .map_err(|value| kagemusha_custody_error(&value))?
                 .is_none()
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -8873,7 +8883,7 @@ pub mod isi {
             ));
         }
         let authorized_policy =
-            exact_retail_reserve_policy(state_transaction, authority, &asset_id)?;
+            exact_retail_reserve_policy(state_transaction, authority, asset_id)?;
         ensure_global_asset_write_on_authoritative_route(
             state_transaction,
             asset_id.definition(),
@@ -8885,16 +8895,16 @@ pub mod isi {
         )?;
         let resolved = state_transaction
             .world
-            .resolve_asset_id_for_current_scope(&asset_id)?;
-        if resolved != asset_id {
+            .resolve_asset_id_for_current_scope(asset_id)?;
+        if resolved != *asset_id {
             return Err(InstructionExecutionError::InvariantViolation(
                 "retail monetary mint resolved a different reserve balance".into(),
             ));
         }
         state_transaction.world.account(asset_id.account())?;
-        ensure_not_fx_corridor_escrow_destination(state_transaction, &asset_id)?;
-        ensure_not_sccp_escrow_destination(state_transaction, &asset_id)?;
-        ensure_not_bond_vault_destination(state_transaction, &asset_id)?;
+        ensure_not_fx_corridor_escrow_destination(state_transaction, asset_id)?;
+        ensure_not_sccp_escrow_destination(state_transaction, asset_id)?;
+        ensure_not_bond_vault_destination(state_transaction, asset_id)?;
         let spec = state_transaction
             .numeric_spec_for(asset_id.definition())
             .map_err(Error::from)?;
@@ -8909,7 +8919,7 @@ pub mod isi {
             asset_id.definition(),
             [(
                 asset_id.account(),
-                asset_id_dataspace_hint(state_transaction, &asset_id),
+                asset_id_dataspace_hint(state_transaction, asset_id),
             )],
             Some(&quantity),
         )?;
@@ -9116,7 +9126,7 @@ pub mod isi {
                 })?;
         let quote = crate::sns::quote_resolved_name_renewal(
             &state_transaction.world,
-            selector.clone(),
+            &(selector.clone()),
             current_expiry_ms,
             target_expiry_ms,
             now_ms,
@@ -10618,7 +10628,7 @@ pub mod query {
             impl Iterator<Item = Asset>,
             crate::execution_attempt::ExecutionAttemptError<Error>,
         > {
-            fn entry_to_asset(entry: AssetEntry<'_>) -> Asset {
+            fn entry_to_asset(entry: &AssetEntry<'_>) -> Asset {
                 Asset {
                     id: entry.id().clone(),
                     value: entry.value().clone().into_inner(),
@@ -10628,7 +10638,7 @@ pub mod query {
             let filter_payload = filter.json_payload();
             if filter_payload.is_none() {
                 let iter: Box<dyn Iterator<Item = Asset> + '_> =
-                    Box::new(world.assets_iter().map(entry_to_asset));
+                    Box::new(world.assets_iter().map(|value| entry_to_asset(&value)));
                 return project_asset_balances(iter, world, state_ro.query_ledger_time_ms());
             }
             let predicate_view = AssetPredicateView::from_predicate(&filter);
@@ -10653,13 +10663,13 @@ pub mod query {
                                     .filter(move |entry| {
                                         definitions.contains(entry.id().definition())
                                     })
-                                    .map(entry_to_asset),
+                                    .map(|value| entry_to_asset(&value)),
                             )
                         } else {
                             Box::new(
                                 world
                                     .asset_entries_by_definition_ids_iter(definitions)
-                                    .map(entry_to_asset),
+                                    .map(|value| entry_to_asset(&value)),
                             )
                         }
                     }
@@ -10676,7 +10686,7 @@ pub mod query {
                                         asset_definition_domain(world, entry.id().definition())
                                             .is_some_and(|domain| domains.contains(&domain))
                                     })
-                                    .map(entry_to_asset),
+                                    .map(|value| entry_to_asset(&value)),
                             )
                         } else {
                             let mut definitions = BTreeSet::<AssetDefinitionId>::new();
@@ -10692,14 +10702,14 @@ pub mod query {
                             Box::new(
                                 world
                                     .asset_entries_by_definition_ids_iter(definitions)
-                                    .map(entry_to_asset),
+                                    .map(|value| entry_to_asset(&value)),
                             )
                         }
                     }
                     AssetSimplePath::Ids(asset_ids) => Box::new(
                         world
                             .asset_entries_by_ids_iter(asset_ids)
-                            .map(entry_to_asset),
+                            .map(|value| entry_to_asset(&value)),
                     ),
                 };
                 return project_asset_balances(iter, world, state_ro.query_ledger_time_ms());
@@ -10708,7 +10718,7 @@ pub mod query {
                 AssetQueryPlan::Ids(asset_ids) => Box::new(
                     world
                         .asset_entries_by_ids_iter(asset_ids)
-                        .map(entry_to_asset),
+                        .map(|value| entry_to_asset(&value)),
                 ),
                 AssetQueryPlan::Subjects {
                     subjects,
@@ -10751,7 +10761,7 @@ pub mod query {
                             }
                             world
                                 .asset_entries_by_ids_iter(asset_ids)
-                                .map(entry_to_asset)
+                                .map(|value| entry_to_asset(&value))
                         }))
                     } else {
                         Box::new(subjects.into_iter().flat_map(move |subject| {
@@ -10768,7 +10778,7 @@ pub mod query {
                                 .collect::<Vec<_>>();
                             world
                                 .asset_entries_by_ids_iter(asset_ids)
-                                .map(entry_to_asset)
+                                .map(|value| entry_to_asset(&value))
                         }))
                     }
                 }
@@ -10777,31 +10787,34 @@ pub mod query {
                     definitions,
                 } => {
                     let domains: BTreeSet<_> = domains.into_iter().collect();
-                    let definitions: BTreeSet<_> = if let Some(definitions) = definitions {
-                        definitions
-                            .into_iter()
-                            .filter(|definition| {
-                                asset_definition_domain(world, definition)
-                                    .is_some_and(|domain| domains.contains(&domain))
-                            })
-                            .collect()
-                    } else {
-                        let mut definitions = BTreeSet::<AssetDefinitionId>::new();
-                        for domain in &domains {
-                            definitions.extend(
-                                crate::state::range_bounds::index_members(
-                                    world.domain_asset_definitions(),
-                                    domain,
-                                )
-                                .cloned(),
-                            );
-                        }
-                        definitions
-                    };
+                    let definitions: BTreeSet<_> = definitions.map_or_else(
+                        || {
+                            let mut definitions = BTreeSet::<AssetDefinitionId>::new();
+                            for domain in &domains {
+                                definitions.extend(
+                                    crate::state::range_bounds::index_members(
+                                        world.domain_asset_definitions(),
+                                        domain,
+                                    )
+                                    .cloned(),
+                                );
+                            }
+                            definitions
+                        },
+                        |definitions| {
+                            definitions
+                                .into_iter()
+                                .filter(|definition| {
+                                    asset_definition_domain(world, definition)
+                                        .is_some_and(|domain| domains.contains(&domain))
+                                })
+                                .collect()
+                        },
+                    );
                     Box::new(
                         world
                             .asset_entries_by_definition_ids_iter(definitions)
-                            .map(entry_to_asset),
+                            .map(|value| entry_to_asset(&value)),
                     )
                 }
                 AssetQueryPlan::Definitions(definitions) => {
@@ -10809,10 +10822,12 @@ pub mod query {
                     Box::new(
                         world
                             .asset_entries_by_definition_ids_iter(definitions)
-                            .map(entry_to_asset),
+                            .map(|value| entry_to_asset(&value)),
                     )
                 }
-                AssetQueryPlan::Full => Box::new(world.assets_iter().map(entry_to_asset)),
+                AssetQueryPlan::Full => {
+                    Box::new(world.assets_iter().map(|value| entry_to_asset(&value)))
+                }
             };
             let assets =
                 collect_projected_asset_balances(iter, world, state_ro.query_ledger_time_ms())?;
@@ -10839,7 +10854,7 @@ pub mod query {
             impl Iterator<Item = Asset>,
             crate::execution_attempt::ExecutionAttemptError<Error>,
         > {
-            fn entry_to_asset(entry: AssetEntry<'_>) -> Asset {
+            fn entry_to_asset(entry: &AssetEntry<'_>) -> Asset {
                 Asset {
                     id: entry.id().clone(),
                     value: entry.value().clone().into_inner(),
@@ -10854,7 +10869,7 @@ pub mod query {
             let assets = collect_projected_asset_balances(
                 world
                     .assets_in_account_iter(&account_id)
-                    .map(entry_to_asset),
+                    .map(|value| entry_to_asset(&value)),
                 world,
                 state_ro.query_ledger_time_ms(),
             )?;

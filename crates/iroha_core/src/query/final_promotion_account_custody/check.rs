@@ -39,7 +39,7 @@ pub fn authorized(
             .into()
         }
     };
-    has_permission(world, authority, permission)
+    has_permission(world, authority, &(permission))
 }
 
 pub fn check_floor(
@@ -89,10 +89,10 @@ pub fn accounts_eligible(
         || !has_permission(
             world,
             &target,
-            CanOperateSorafsFinalPromotion {
+            &(CanOperateSorafsFinalPromotion {
                 deployment_id: instruction.deployment_id.clone(),
             }
-            .into(),
+            .into()),
         )
     {
         return Err(HistoryError::BindingMismatch);

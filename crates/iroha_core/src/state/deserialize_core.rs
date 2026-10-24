@@ -435,8 +435,6 @@ impl<'a> SnapshotJsonMap<'a> {
         let substituted = iroha_allocation::AllocationBudget::new(budget.limit_bytes());
         #[cfg(all(test, sumeragi_core_mutation = "HC926"))]
         let budget = &substituted;
-        #[cfg(not(all(test, sumeragi_core_mutation = "HC926")))]
-        let budget = budget;
         let layout =
             std::alloc::Layout::array::<SnapshotJsonEntry<'a>>(capacity).map_err(|_| {
                 mv::storage::AdmittedStorageError::Allocation(
@@ -1231,7 +1229,7 @@ impl KuraSeed {
         self,
         value: json::Value,
         allow_durable_recovery: bool,
-        configured_nexus: Option<iroha_config::parameters::actual::Nexus>,
+        configured_nexus: Option<&iroha_config::parameters::actual::Nexus>,
     ) -> Result<Box<State>, StateRestoreError> {
         let json::Value::Object(map) = value else {
             return Err((json::Error::InvalidField {
@@ -1243,7 +1241,7 @@ impl KuraSeed {
         self.into_state_from_snapshot_map(
             SnapshotJsonMap::from_owned(map),
             allow_durable_recovery,
-            configured_nexus.as_ref(),
+            configured_nexus,
         )
     }
     fn into_state_from_snapshot_map(

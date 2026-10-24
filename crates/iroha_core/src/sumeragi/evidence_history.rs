@@ -83,7 +83,7 @@ impl VerifiedNativeEvidence {
             offenders,
             safety_violation,
         } = self;
-        offenders.into_attribution(AttributionFields {
+        offenders.into_attribution(&AttributionFields {
             scope,
             instance: instance.0,
             height,

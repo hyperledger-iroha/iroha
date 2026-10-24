@@ -267,7 +267,7 @@ struct BlockInfoInput {
 
 fn admit_tip(
     budget: &AllocationBudget,
-    transactions: &BTreeSet<Key>,
+    transactions: impl ExactSizeIterator<Item = Key>,
     height: Value,
 ) -> Result<Tip, MembershipAdmissionError> {
     let backing = Layout::array::<Key>(transactions.len()).map_err(|_| {
@@ -300,7 +300,7 @@ fn admit_tip(
         },
     )?;
     for key in transactions {
-        keys.append(std::slice::from_ref(key))
+        keys.append(std::slice::from_ref(&key))
             .expect("admitted exact tip key count");
     }
     keys.as_mut_slice().sort_unstable();
@@ -530,7 +530,10 @@ impl TransactionsStorage {
                 Some(block) if block.height == height => {
                     let mut updated = block.transactions.iter().copied().collect::<BTreeSet<_>>();
                     updated.extend(entrypoints);
-                    Some(admit_tip(&self.budget, &updated, height).expect("fixture tip admission"))
+                    Some(
+                        admit_tip(&self.budget, updated.iter().copied(), height)
+                            .expect("fixture tip admission"),
+                    )
                 }
                 Some(block) => {
                     for key in &block.transactions {
@@ -541,12 +544,13 @@ impl TransactionsStorage {
                             .expect("fixture history promotion");
                     }
                     Some(
-                        admit_tip(&self.budget, &entrypoints, height)
+                        admit_tip(&self.budget, entrypoints.iter().copied(), height)
                             .expect("fixture tip admission"),
                     )
                 }
                 None => Some(
-                    admit_tip(&self.budget, &entrypoints, height).expect("fixture tip admission"),
+                    admit_tip(&self.budget, entrypoints.iter().copied(), height)
+                        .expect("fixture tip admission"),
                 ),
             };
             let sequence = self.publication_sequence.load(Ordering::Relaxed);
@@ -609,7 +613,7 @@ impl TransactionsStorage {
             self.publication_sequence
                 .store(sequence + 1, Ordering::Release);
             let retirement = writer.prepare_commit().publish().release();
-            let replacement = admit_tip(&self.budget, &updated, latest.height)
+            let replacement = admit_tip(&self.budget, updated.iter().copied(), latest.height)
                 .expect("fixture replacement tip admission");
             let old_tip = self.latest_block.swap(Some(replacement));
             let old_identity = std::mem::replace(&mut **guard, next_identity);
@@ -1032,7 +1036,11 @@ mod block {
                 );
                 return Ok(());
             }
-            self.current_block = Some(admit_tip(self.budget_ref, &transactions, height)?);
+            self.current_block = Some(admit_tip(
+                self.budget_ref,
+                transactions.into_iter(),
+                height,
+            )?);
             Ok(())
         }
         /// Infallible finite-pool fixture staging; runtime calls the typed path.
@@ -2075,16 +2083,23 @@ mod serialization {
                 }
                 .into());
             };
-            budget.with_deferred_refund_notifications(|_| {
-                let owner = Self::try_new(budget.clone())?;
+            budget.clone().with_deferred_refund_notifications(|_| {
+                let owner = Self::try_new(budget)?;
                 let mut physical_releases = owner.history_released.deferred_batch();
                 let latest = latest
                     .as_ref()
-                    .map(|input| admit_tip(&budget, &input.transactions, input.height))
+                    .map(|input| {
+                        admit_tip(
+                            &owner.budget,
+                            input.transactions.iter().copied(),
+                            input.height,
+                        )
+                    })
                     .transpose()?;
                 let mut writer =
                     owner.try_history_writer(&mut physical_releases, |_, demand| {
-                        history::admit(&budget, demand).map_err(MembershipAdmissionError::Capacity)
+                        history::admit(&owner.budget, demand)
+                            .map_err(MembershipAdmissionError::Capacity)
                     })?;
                 for (key_str, value) in entries {
                     let key = Key::decode_json_key(&key_str).map_err(|e| {
@@ -2093,7 +2108,7 @@ mod serialization {
                     let value: Value = json::value::from_value(value)?;
                     if latest.as_ref().is_some_and(|tip| value < tip.height) {
                         writer
-                            .try_insert_admitted(key, value, |d| history::admit(&budget, d))
+                            .try_insert_admitted(key, value, |d| history::admit(&owner.budget, d))
                             .map_err(|(_, e)| {
                                 history::edit_error(e, owner.history_release_wait())
                             })?;

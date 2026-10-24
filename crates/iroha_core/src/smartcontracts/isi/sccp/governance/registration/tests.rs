@@ -44,7 +44,7 @@ fn install(stx: &mut StateTransaction<'_, '_>, records: &[SccpCommitteeGeneratio
         crate::smartcontracts::isi::sccp::test_support::install_generation(
             stx,
             record.generation,
-            record.clone(),
+            record,
         )
         .unwrap();
     }

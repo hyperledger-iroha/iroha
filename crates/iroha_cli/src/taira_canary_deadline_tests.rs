@@ -2,7 +2,6 @@
 // The server only simulates ledger responses; no daemon or deployment is used.
 
 fn exercise_final_canary_deadline(applied: bool) {
-    let _fixture = mock_http_fixture_guard();
     use iroha::data_model::{
         query::CommittedTransaction,
         transaction::{DataTriggerSequence, TransactionPayload, TransactionResult},
@@ -11,6 +10,9 @@ fn exercise_final_canary_deadline(applied: bool) {
         ErrorDetails, ErrorEnvelope, PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
         PipelineTransactionStatusNotFoundV1,
     };
+
+    let _fixture = mock_http_fixture_guard();
+
     let _chain = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let retained = Arc::new(Mutex::new(None::<SignedTransaction>));
     let server_transaction = Arc::clone(&retained);
@@ -42,11 +44,11 @@ fn exercise_final_canary_deadline(applied: bool) {
                 },
             };
             quote.validate_for_draft(&payload).unwrap();
-            MockResponse::json(200, json::to_value(&quote).unwrap())
+            MockResponse::json(200, &json::to_value(&quote).unwrap())
         }
         "/v1/node/capabilities" => MockResponse::json(
             200,
-            norito::json!({
+            &norito::json!({
                 "data_model_version": (iroha::data_model::DATA_MODEL_VERSION),
                 "signed_transaction_schema_hash_hex": (hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>()))
             }),
@@ -74,7 +76,7 @@ fn exercise_final_canary_deadline(applied: bool) {
                     ),
                     ..ErrorDetails::default()
                 });
-                MockResponse::json(404, json::to_value(&absence).unwrap())
+                MockResponse::json(404, &json::to_value(&absence).unwrap())
             } else {
                 prepared_status_response(
                     &transaction,
@@ -149,7 +151,7 @@ fn exercise_final_canary_deadline(applied: bool) {
         &args,
         &server.base_url,
         &binding,
-        fee.clone(),
+        &fee,
         Instant::now() + Duration::from_secs(10),
     )
     .unwrap();
@@ -159,8 +161,10 @@ fn exercise_final_canary_deadline(applied: bool) {
         PreparedOperationPolicyContext::Current(&args),
         &binding,
         &server.base_url,
-        envelope,
-        Some(wire),
+        PreparedOperationPayload {
+            envelope,
+            supplied_wire: Some(wire),
+        },
         &fee,
         PreparedLifetimeCheck::LiveForward,
     )
@@ -282,11 +286,10 @@ fn final_canary_expired_window_rejects_before_fee_quote_or_dispatch() {
         &args,
         &server.base_url,
         &binding,
-        FeePaymentIntent::authority(Vec::new(), None),
+        &FeePaymentIntent::authority(Vec::new(), None),
         Instant::now() + Duration::from_secs(10),
     )
-    .err()
-    .expect("expired signed window must reject preparation");
+    .expect_err("expired signed window must reject preparation");
     assert!(format!("{error:#}").contains("no remaining signed execution window"));
     assert!(finish_mock(server).is_empty());
 }

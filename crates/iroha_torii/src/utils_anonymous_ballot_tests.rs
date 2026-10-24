@@ -170,11 +170,13 @@ async fn anonymous_transport_binary_distinguishes_allocator_caps_and_invalid_inp
     for response in [
         norito_decode_rejection::<TransactionEntrypoint>(&allocation()),
         versioned_decode_rejection::<TransactionEntrypoint>(
-            iroha_version::error::Error::NoritoCodec(allocation()),
+            &(iroha_version::error::Error::NoritoCodec(allocation())),
         ),
-        versioned_decode_rejection::<SignedTransaction>(iroha_version::error::Error::from(
-            norito::core::classify_decode_attempt(|| Err::<(), _>(allocation())).unwrap_err(),
-        )),
+        versioned_decode_rejection::<SignedTransaction>(
+            &(iroha_version::error::Error::from(
+                norito::core::classify_decode_attempt(|| Err::<(), _>(allocation())).unwrap_err(),
+            )),
+        ),
         norito_decode_rejection::<TransactionEntrypoint>(&norito::Error::Json(
             json::Error::AllocationFailed,
         )),
@@ -197,7 +199,7 @@ async fn anonymous_transport_binary_distinguishes_allocator_caps_and_invalid_inp
     .await;
     assert_resource_response(
         versioned_decode_rejection::<TransactionEntrypoint>(
-            iroha_version::error::Error::NoritoCodec(wrapped_cap),
+            &(iroha_version::error::Error::NoritoCodec(wrapped_cap)),
         ),
         StatusCode::PAYLOAD_TOO_LARGE,
         "request_payload_too_large",
@@ -212,7 +214,7 @@ async fn anonymous_transport_binary_distinguishes_allocator_caps_and_invalid_inp
     )
     .await;
     assert_resource_response(
-        versioned_decode_rejection::<TransactionEntrypoint>(enclosing_refusal().into()),
+        versioned_decode_rejection::<TransactionEntrypoint>(&(enclosing_refusal().into())),
         StatusCode::PAYLOAD_TOO_LARGE,
         "request_payload_too_large",
     )
@@ -220,7 +222,7 @@ async fn anonymous_transport_binary_distinguishes_allocator_caps_and_invalid_inp
     for response in [
         norito_decode_rejection::<TransactionEntrypoint>(&norito::Error::InvalidMagic),
         versioned_decode_rejection::<TransactionEntrypoint>(
-            iroha_version::error::Error::NoritoCodec(norito::Error::InvalidMagic),
+            &(iroha_version::error::Error::NoritoCodec(norito::Error::InvalidMagic)),
         ),
     ] {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -234,7 +236,7 @@ async fn anonymous_transport_json_distinguishes_allocator_caps_and_invalid_input
         json::Error::from_decode_resource(norito::Error::AllocationFailed { bytes: 4096 }),
     ] {
         assert_resource_response(
-            versioned_json_decode_rejection(error, "TransactionEntrypoint"),
+            versioned_json_decode_rejection(&(error), "TransactionEntrypoint"),
             StatusCode::SERVICE_UNAVAILABLE,
             "request_decode_unavailable",
         )
@@ -243,7 +245,7 @@ async fn anonymous_transport_json_distinguishes_allocator_caps_and_invalid_input
     let original = json::Error::from_decode_resource(enclosing_refusal().into_error());
     assert!(matches!(original, json::Error::ScopedDecodeResource(_)));
     assert_resource_response(
-        versioned_json_decode_rejection(original, "TransactionEntrypoint"),
+        versioned_json_decode_rejection(&(original), "TransactionEntrypoint"),
         StatusCode::PAYLOAD_TOO_LARGE,
         "request_payload_too_large",
     )
@@ -255,7 +257,8 @@ async fn anonymous_transport_json_distinguishes_allocator_caps_and_invalid_input
     )
     .await;
     assert_eq!(
-        versioned_json_decode_rejection(json::Error::InvalidUtf8, "TransactionEntrypoint").status(),
+        versioned_json_decode_rejection(&(json::Error::InvalidUtf8), "TransactionEntrypoint")
+            .status(),
         StatusCode::BAD_REQUEST
     );
     assert!(

@@ -75,7 +75,7 @@ impl PrivateSettlementBundleCoordinatorV1 {
     /// Construct one coordinator for the exact canonical manifest and authority catalog.
     pub(crate) fn new(
         manifest: AtomicPrivateSettlementV1,
-        authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+        authority_catalog: &[PrivateSettlementCommitteeAuthorityV1],
     ) -> Result<Self, PrivateSettlementCoordinatorErrorV1> {
         manifest
             .validate()
@@ -83,18 +83,16 @@ impl PrivateSettlementBundleCoordinatorV1 {
         if authority_catalog.len() != manifest.legs.len() {
             return Err(PrivateSettlementCoordinatorErrorV1::Authority);
         }
-        for (leg, authority) in manifest.legs.iter().zip(&authority_catalog) {
+        for (leg, authority) in manifest.legs.iter().zip(authority_catalog) {
             validate_authority_cryptography_v1(authority)
                 .map_err(|_| PrivateSettlementCoordinatorErrorV1::Authority)?;
             if authority.route != leg.route {
                 return Err(PrivateSettlementCoordinatorErrorV1::Authority);
             }
         }
-        let authority_catalog = PrivateSettlementAuthorityCatalogV1::from_leg_authorities(
-            &manifest,
-            &authority_catalog,
-        )
-        .map_err(|_| PrivateSettlementCoordinatorErrorV1::Authority)?;
+        let authority_catalog =
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, authority_catalog)
+                .map_err(|_| PrivateSettlementCoordinatorErrorV1::Authority)?;
         let leg_count = manifest.legs.len();
         Ok(Self {
             manifest,
@@ -629,7 +627,7 @@ pub mod tests {
         let (fixture, deltas, authorities) = fixture_parts();
         let manifest = fixture.sidecar.manifest.clone();
         let mut coordinator =
-            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities.clone())
+            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), &authorities)
                 .expect("coordinator fixture");
         for index in 0..deltas.len() {
             let ordinal = u8::try_from(index).expect("fixture ordinal fits u8");
@@ -701,7 +699,7 @@ pub mod tests {
         let (fixture, deltas, authorities) = fixture_parts();
         let manifest = fixture.sidecar.manifest.clone();
         let mut coordinator =
-            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities.clone())
+            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), &authorities)
                 .expect("coordinator");
         assert_eq!(coordinator.manifest(), &manifest);
         assert_eq!(
@@ -822,7 +820,7 @@ pub mod tests {
         let (fixture, deltas, authorities) = fixture_parts();
         let manifest = fixture.sidecar.manifest.clone();
         let mut coordinator =
-            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities.clone())
+            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), &authorities)
                 .expect("coordinator");
         coordinator
             .record_audited(0, Hash::new(b"audit-0"), 12)
@@ -866,8 +864,9 @@ pub mod tests {
             Err(PrivateSettlementCoordinatorErrorV1::CarrierTooLarge)
         );
 
-        let mut expiring = PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities)
-            .expect("coordinator");
+        let mut expiring =
+            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), &authorities)
+                .expect("coordinator");
         let abort = expiring
             .terminate(
                 manifest.expiry_height + 1,

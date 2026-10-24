@@ -17,7 +17,7 @@ pub use disposable_rotation_ceremony::{
     DisposableGenesisConfigSeat, DisposableGenesisDkgOutput, DisposablePendingCustodyInput,
     DisposablePreparedBeaconCustody, DisposableRetainedBeaconCredential,
     DisposableRotationDkgOutput, DisposableRotationProofInput, DisposableRotationSeatOutput,
-    prepare_disposable_pending_custody, run_disposable_genesis_dkg,
+    GenesisDkgRunConfig, prepare_disposable_pending_custody, run_disposable_genesis_dkg,
     run_disposable_genesis_dkg_from_configs, run_disposable_rotation_dkg,
 };
 pub mod fslock_ports;
@@ -434,7 +434,7 @@ pub fn ensure_domain_setup(client: &Client, domain: &DomainId) -> Result<()> {
 /// in a test network.
 pub fn ensure_domain_setup_for_network(network: &Network, domain: &DomainId) -> Result<()> {
     let mut peers = network.peers().iter().collect::<Vec<_>>();
-    peers.sort_by(|left, right| left.id().cmp(&right.id()));
+    peers.sort_by_key(|left| left.id());
     let clients = peers
         .into_iter()
         .map(NetworkPeer::client)
@@ -1632,13 +1632,13 @@ fn parse_release_prebuilt_manifest(
             "release prebuilt manifest Cargo.lock digest does not match the current workspace"
         ));
     }
-    if let Some(inherited_lock) = exact_env_value(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV)? {
-        if !is_lowercase_sha256(&inherited_lock) || values[2] != inherited_lock {
-            return Err(eyre!(
-                "release prebuilt manifest Cargo.lock digest does not match \
+    if let Some(inherited_lock) = exact_env_value(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV)?
+        && (!is_lowercase_sha256(&inherited_lock) || values[2] != inherited_lock)
+    {
+        return Err(eyre!(
+            "release prebuilt manifest Cargo.lock digest does not match \
                  {IROHA_RELEASE_CARGO_LOCK_SHA256_ENV}"
-            ));
-        }
+        ));
     }
     validate_target_triple(values[5], "release manifest host triple")?;
     validate_target_triple(values[6], "release manifest target triple")?;
@@ -2890,36 +2890,37 @@ impl Program {
         let allow_child_build =
             child_build_allowed(running_under_cargo, release_contract.is_some());
         let validate_freshness = must_validate_binary_freshness(skip_build, allow_child_build);
-        if !skip_build && !validate_freshness {
-            if let Some(found) = prebuild_candidate.clone() {
-                warn!(
-                    %name,
-                    %pkg,
-                    ?found,
-                    "child build forbidden under Cargo; using existing binary"
-                );
-                match self {
-                    Program::Irohad => {
-                        let _ = IROHAD_BIN.set(found.clone());
-                    }
-                    Program::IrohadPrivateSettlementRoutes => {
-                        let _ = IROHAD_PRIVATE_SETTLEMENT_ROUTES_BIN.set(found.clone());
-                    }
-                    Program::IrohadTaira => {
-                        let _ = IROHAD_TAIRA_BIN.set(found.clone());
-                    }
-                    Program::IrohadParliamentSigners => {
-                        let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
-                    }
-                    Program::IrohadDisposableBroker => {
-                        let _ = IROHAD_DISPOSABLE_BROKER_BIN.set(found.clone());
-                    }
-                    Program::Iroha => {
-                        let _ = IROHA_BIN.set(found.clone());
-                    }
+        if !skip_build
+            && !validate_freshness
+            && let Some(found) = prebuild_candidate.clone()
+        {
+            warn!(
+                %name,
+                %pkg,
+                ?found,
+                "child build forbidden under Cargo; using existing binary"
+            );
+            match self {
+                Program::Irohad => {
+                    let _ = IROHAD_BIN.set(found.clone());
                 }
-                return Ok(found);
+                Program::IrohadPrivateSettlementRoutes => {
+                    let _ = IROHAD_PRIVATE_SETTLEMENT_ROUTES_BIN.set(found.clone());
+                }
+                Program::IrohadTaira => {
+                    let _ = IROHAD_TAIRA_BIN.set(found.clone());
+                }
+                Program::IrohadParliamentSigners => {
+                    let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
+                }
+                Program::IrohadDisposableBroker => {
+                    let _ = IROHAD_DISPOSABLE_BROKER_BIN.set(found.clone());
+                }
+                Program::Iroha => {
+                    let _ = IROHA_BIN.set(found.clone());
+                }
             }
+            return Ok(found);
         }
         if validate_freshness {
             ensure_binary_fresh(
@@ -3104,7 +3105,7 @@ fn try_acquire_file_permit_in(dir: &Path, limit: usize) -> Option<FilePermit> {
     if limit == 0 {
         return None;
     }
-    fs::create_dir_all(&dir).expect("failed to create network permit directory");
+    fs::create_dir_all(dir).expect("failed to create network permit directory");
     let pid = std::process::id();
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3137,7 +3138,7 @@ fn try_acquire_file_permit_in(dir: &Path, limit: usize) -> Option<FilePermit> {
                 }
             }
             Err(err) if err.kind() == ErrorKind::NotFound => {
-                let _ = fs::create_dir_all(&dir);
+                let _ = fs::create_dir_all(dir);
             }
             Err(_) => {}
         }
@@ -4364,12 +4365,14 @@ impl Network {
             config::staged_genesis_policy_hashes(
                 block,
                 &genesis_account_id,
-                &peer_topology,
+                peer_topology,
                 genesis_key_pair,
-                pipeline_config.as_ref(),
-                nexus_config.as_ref(),
-                zk_config.as_ref(),
-                actual_config.as_ref(),
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: pipeline_config.as_ref(),
+                    nexus_config: nexus_config.as_ref(),
+                    zk_config: zk_config.as_ref(),
+                    runtime_config: actual_config.as_ref(),
+                },
             )
             .expect("signed test-network genesis must stage without synthetic results")
         };
@@ -4404,12 +4407,14 @@ impl Network {
             ensure_genesis_results_with_runtime_config(
                 &mut augmented,
                 &genesis_account_id,
-                &peer_topology,
+                peer_topology,
                 genesis_key_pair,
-                pipeline_config.as_ref(),
-                nexus_config.as_ref(),
-                zk_config.as_ref(),
-                actual_config.as_ref(),
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: pipeline_config.as_ref(),
+                    nexus_config: nexus_config.as_ref(),
+                    zk_config: zk_config.as_ref(),
+                    runtime_config: actual_config.as_ref(),
+                },
             );
             let staged_hashes = recompute_staged_hashes(&augmented);
             let validated = ValidatedNetworkGenesis::new(
@@ -4429,16 +4434,18 @@ impl Network {
                 self.topology_entries.clone(),
                 genesis_key_pair.clone(),
                 self.chain_id(),
-                genesis_crypto,
-                da_proof_policies,
-                pipeline_config.clone(),
-                nexus_config.clone(),
-                zk_config.clone(),
-                actual_config.clone(),
-                Some(consensus_handshake_meta),
-                None,
-                confidential_policy_hash,
-                None,
+                crate::config::GenesisPolicyConfig {
+                    genesis_crypto,
+                    da_proof_policies,
+                    pipeline_config: pipeline_config.clone(),
+                    nexus_config: nexus_config.clone(),
+                    zk_config: zk_config.clone(),
+                    runtime_config: actual_config.clone(),
+                    consensus_handshake_meta: Some(consensus_handshake_meta),
+                    consensus_mode_override: None,
+                    confidential_policy_hash,
+                    preview_cadence_ms: None,
+                },
             );
         let validated = ValidatedNetworkGenesis::new(
             genesis,
@@ -5629,8 +5636,10 @@ impl ObserverSlowReaderRelays {
                     run_observer_slow_reader_listener(
                         listener,
                         peer_id,
-                        published_address,
-                        upstream_address,
+                        ObserverSlowReaderAddresses {
+                            published_address,
+                            upstream_address,
+                        },
                         config,
                         counters,
                         shutdown_rx,
@@ -5673,11 +5682,18 @@ impl Drop for ObserverSlowReaderRelays {
         self.abort();
     }
 }
+struct ObserverSlowReaderAddresses {
+    published_address: SocketAddr,
+    upstream_address: SocketAddr,
+}
+
 async fn run_observer_slow_reader_listener(
     listener: TokioTcpListener,
     peer_id: PeerId,
-    published_address: SocketAddr,
-    upstream_address: SocketAddr,
+    ObserverSlowReaderAddresses {
+        published_address,
+        upstream_address,
+    }: ObserverSlowReaderAddresses,
     config: ObserverSlowReaderRelayConfig,
     counters: Arc<ObserverSlowReaderRelayCounters>,
     mut shutdown: watch::Receiver<bool>,
@@ -6534,7 +6550,7 @@ fn get_nested_value<'a>(table: &'a Table, path: &[&str]) -> Option<&'a Value> {
 fn read_bool(table: &Table, path: &[&str]) -> Option<bool> {
     get_nested_value(table, path).and_then(Value::as_bool)
 }
-fn replace_consensus_handshake_meta(genesis_isi: &mut Vec<Vec<InstructionBox>>) -> bool {
+fn replace_consensus_handshake_meta(genesis_isi: &mut [Vec<InstructionBox>]) -> bool {
     let mut was_replaced = false;
     genesis_isi.iter_mut().for_each(|instructions| {
         let original_len = instructions.len();
@@ -6683,7 +6699,7 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
         block_cadence_ms: consensus_profile.params.block_cadence_ms,
         wire_protocol_version: consensus_profile.wire_protocol_version,
         consensus_fingerprint: ConsensusFingerprint::new(consensus_profile.fingerprint()),
-        sumeragi_context: consensus_profile.params.sumeragi_context.clone(),
+        sumeragi_context: consensus_profile.params.sumeragi_context,
     };
     metadata
         .validate()
@@ -7842,8 +7858,10 @@ impl NetworkBuilder {
                 // configuration or implicit defaults.
                 let chain_hash =
                     CryptoHash::new(consensus_chain_id.clone().into_inner().as_bytes());
-                let mut npos = SumeragiNposParameters::default();
-                npos.epoch_seed = chain_hash.into();
+                let npos = SumeragiNposParameters {
+                    epoch_seed: chain_hash.into(),
+                    ..SumeragiNposParameters::default()
+                };
                 npos.validate()
                     .expect("test-network NPoS genesis snapshot must be valid");
                 parameter_prefix.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
@@ -8218,25 +8236,27 @@ impl NetworkBuilder {
                         topology_entries.clone(),
                         genesis_key_pair.clone(),
                         consensus_chain_id.clone(),
-                        genesis_crypto.clone(),
-                        da_proof_policies.clone(),
-                        pipeline_config.clone(),
-                        nexus_config.clone(),
-                        zk_config.clone(),
-                        resolved_genesis_config.clone(),
-                        None,
-                        Some(match consensus_mode {
-                            ConsensusMode::Permissioned => SumeragiConsensusMode::Permissioned,
-                            ConsensusMode::Npos => SumeragiConsensusMode::Npos,
-                        }),
-                        confidential_policy_hash,
-                        Some(
-                            std::num::NonZeroU64::new(
-                                u64::try_from(block_cadence.as_millis())
-                                    .expect("signed cadence fits u64 milliseconds"),
-                            )
-                            .expect("signed cadence is nonzero"),
-                        ),
+                        crate::config::GenesisPolicyConfig {
+                            genesis_crypto: genesis_crypto.clone(),
+                            da_proof_policies: da_proof_policies.clone(),
+                            pipeline_config: pipeline_config.clone(),
+                            nexus_config: nexus_config.clone(),
+                            zk_config: zk_config.clone(),
+                            runtime_config: resolved_genesis_config.clone(),
+                            consensus_handshake_meta: None,
+                            consensus_mode_override: Some(match consensus_mode {
+                                ConsensusMode::Permissioned => SumeragiConsensusMode::Permissioned,
+                                ConsensusMode::Npos => SumeragiConsensusMode::Npos,
+                            }),
+                            confidential_policy_hash,
+                            preview_cadence_ms: Some(
+                                std::num::NonZeroU64::new(
+                                    u64::try_from(block_cadence.as_millis())
+                                        .expect("signed cadence fits u64 milliseconds"),
+                                )
+                                .expect("signed cadence is nonzero"),
+                            ),
+                        },
                     );
                     assert_genesis_voting_roster_matches_network(&preview_genesis, &peer_topology);
                     (
@@ -8270,7 +8290,7 @@ impl NetworkBuilder {
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
                 &parameter_state,
-                provisional_sumeragi_context.clone(),
+                provisional_sumeragi_context,
             )
             .expect("test-network genesis parameters must form a canonical carrier");
         let provisional_profile = ConsensusBootstrapProfile {
@@ -8296,10 +8316,12 @@ impl NetworkBuilder {
                     &AccountId::new(genesis_key_pair.public_key().clone()),
                     &peer_topology,
                     &genesis_key_pair,
-                    pipeline_config.as_ref(),
-                    nexus_config.as_ref(),
-                    zk_config.as_ref(),
-                    resolved_genesis_config.as_ref(),
+                    crate::config::GenesisRuntimeConfig {
+                        pipeline_config: pipeline_config.as_ref(),
+                        nexus_config: nexus_config.as_ref(),
+                        zk_config: zk_config.as_ref(),
+                        runtime_config: resolved_genesis_config.as_ref(),
+                    },
                 ))
                 .expect("normalized custom genesis must derive its staged Sumeragi context")
             }
@@ -8374,10 +8396,12 @@ impl NetworkBuilder {
                 &AccountId::new(genesis_key_pair.public_key().clone()),
                 &peer_topology,
                 &genesis_key_pair,
-                pipeline_config.as_ref(),
-                nexus_config.as_ref(),
-                zk_config.as_ref(),
-                resolved_genesis_config.as_ref(),
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: pipeline_config.as_ref(),
+                    nexus_config: nexus_config.as_ref(),
+                    zk_config: zk_config.as_ref(),
+                    runtime_config: resolved_genesis_config.as_ref(),
+                },
             )
             .expect("final custom genesis must pre-execute without synthetic results");
             assert_eq!(
@@ -8784,8 +8808,7 @@ impl NetworkPeer {
         span.in_scope(|| info!(has_genesis, "Starting"));
         let (storage_dir, storage_dir_key, storage_dir_value) =
             resolve_kura_store_dir(self, &storage_layers)?;
-        let reset_for_bootstrap =
-            Self::should_reset_kura_for_bootstrap(has_genesis, run_num as usize);
+        let reset_for_bootstrap = Self::should_reset_kura_for_bootstrap(has_genesis, run_num);
         self.prepare_kura_storage_dir(&storage_dir, reset_for_bootstrap)?;
         let existing_genesis_path = self.restart_genesis_file(has_genesis);
         {
@@ -9300,8 +9323,7 @@ impl NetworkPeer {
                                         if !http_gate.http_seen()
                                             && let Some(deadline) = http_deadline
                                             && Instant::now() >= deadline
-                                        {
-                                            if !http_unreachable_warned {
+                                            && !http_unreachable_warned {
                                                 warn!(
                                                     torii_addr = %torii_addr.as_str(),
                                                     ?status_timeout,
@@ -9309,7 +9331,6 @@ impl NetworkPeer {
                                                 );
                                                 http_unreachable_warned = true;
                                             }
-                                        }
                                         if status_timeout != Duration::ZERO
                                             && last_progress.elapsed() >= status_timeout
                                         {
@@ -9703,10 +9724,10 @@ impl NetworkPeer {
     /// By default tests configure Kura with `store_dir = "./storage"` relative to the peer run dir.
     /// This helper returns `<peer_dir>/storage` matching that configuration.
     pub fn kura_store_dir(&self) -> PathBuf {
-        if let Ok(context) = self.start_context.lock() {
-            if let Some(context) = context.as_ref() {
-                return context.kura_store_dir.clone();
-            }
+        if let Ok(context) = self.start_context.lock()
+            && let Some(context) = context.as_ref()
+        {
+            return context.kura_store_dir.clone();
         }
         self.dir.join("storage")
     }
@@ -12842,10 +12863,12 @@ mod tests {
             ),
             &topology,
             network.genesis_key_pair.as_ref().unwrap(),
-            Some(&actual.pipeline),
-            Some(&actual.nexus),
-            Some(&actual.zk),
-            Some(&actual),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: Some(&actual.pipeline),
+                nexus_config: Some(&actual.nexus),
+                zk_config: Some(&actual.zk),
+                runtime_config: Some(&actual),
+            },
         )
         .expect("signed genesis must independently pre-execute");
         let metadata = consensus_handshake_metadata(genesis)

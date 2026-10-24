@@ -2197,7 +2197,7 @@ fn verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
     backend: &str,
     envelope: &OpenVerifyEnvelope,
     statement_hash: Hash,
-    public_padding_context: Option<BfvFullBootstrapNativeAirPublicPaddingContext>,
+    public_padding_context: Option<&BfvFullBootstrapNativeAirPublicPaddingContext>,
     guardrails: crate::zk::ZkVerifyGuardrails,
     outer_proof_bytes_len: usize,
 ) -> Result<bool, crate::zk::VerificationAttemptError<InstructionExecutionError>> {
@@ -2263,10 +2263,10 @@ fn verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
         label,
         statement_hash,
         &native,
-        public_padding_context.clone(),
+        public_padding_context.cloned(),
         &limits,
     )?;
-    let public_padding_context = public_padding_context.as_ref().ok_or_else(|| {
+    let public_padding_context = public_padding_context.ok_or_else(|| {
         invalid_parameter(format!(
             "{label} native BFV AIR governed trace context is required"
         ))
@@ -3513,7 +3513,7 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proof_backend(
             attachment.backend.as_str(),
             &envelope,
             statement_hash,
-            Some(public_padding_context),
+            (Some(public_padding_context)).as_ref(),
             crate::zk_guardrails::guardrails_from_config(&state_transaction.zk),
             attachment.proof.bytes.len(),
         )
@@ -4695,7 +4695,7 @@ fn verify_provenance_payload(
     if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(signer_mismatch));
     }
-    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, payload)
         .map_err(|_| invalid_parameter(verification_failed))?;
     Ok(())
 }
@@ -5108,9 +5108,9 @@ pub(crate) fn write_soracloud_runtime_state(
 pub(crate) fn write_soracloud_service_lease_usage(
     state_transaction: &mut StateTransaction<'_, '_>,
     reporter: &AccountId,
-    service_name: Name,
+    service_name: &Name,
     (lease_started_height, reporting_epoch): (u64, u64),
-    active_service_version: String,
+    active_service_version: &str,
     (replica_slot, placement_incarnation): (u16, Hash),
     (replica_accounted_egress_bytes, finalize_reporter, reporter_has_active_assignment): (
         u64,
@@ -5127,7 +5127,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
     let active_assignment = if reporter_has_active_assignment {
         let placement_key = (
             service_name.as_ref().to_owned(),
-            active_service_version.clone(),
+            active_service_version.to_owned(),
         );
         let placement_record = state_transaction
             .world
@@ -5160,7 +5160,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
             })?;
         Some(SoraServiceLeaseReporterAssignmentV1 {
             schema_version: SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
-            service_version: active_service_version.clone(),
+            service_version: active_service_version.to_owned(),
             placement,
             placement_reconciled_at_ms: placement_record.reconciled_at_ms,
         })
@@ -5170,7 +5170,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
     let mut deployment = state_transaction
         .world
         .soracloud_service_deployments
-        .get(&service_name)
+        .get(service_name)
         .cloned()
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
@@ -5185,7 +5185,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
     if reporter_has_active_assignment
         && !active_service_versions
             .iter()
-            .any(|version| version == &active_service_version)
+            .any(|version| version == active_service_version)
     {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
@@ -5424,7 +5424,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
             previous_reporting_epoch: lease.reporting_epoch,
             new_reporting_epoch: successor_epoch,
             reporter_account_id: reporter.clone(),
-            active_service_version: active_service_version.clone(),
+            active_service_version: active_service_version.to_owned(),
             replica_slot,
             placement_incarnation,
             finalized_checkpoint_count: u32::try_from(
@@ -8795,8 +8795,7 @@ fn soracloud_fhe_job_output_residual_multiple_bound(
                             params,
                             bootstrap_key,
                             input_bound,
-                        ), |artifacts| if let Some(audit) = full_bootstrap_release_audit {
-                            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                        ), |artifacts| full_bootstrap_release_audit.map_or_else(|| Err(full_bootstrap_release_audit_context_required_error()), |audit| bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
                                 params,
                                 bootstrap_key,
                                 artifacts,
@@ -8806,10 +8805,7 @@ fn soracloud_fhe_job_output_residual_multiple_bound(
                                 audit.expected_package_digest,
                                 audit.trusted_reviewer_id,
                                 audit.trusted_reviewer_public_key,
-                            )
-                        } else {
-                            Err(full_bootstrap_release_audit_context_required_error())
-                        })
+                            )))
                 }
             };
             result.map(Some).map_err(|err| {
@@ -8942,8 +8938,7 @@ fn soracloud_fhe_job_output_bounded_noise_bound(
                             params,
                             bootstrap_key,
                             input_bound,
-                        ), |artifacts| if let Some(audit) = full_bootstrap_release_audit {
-                            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                        ), |artifacts| full_bootstrap_release_audit.map_or_else(|| Err(full_bootstrap_release_audit_context_required_error()), |audit| bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
                                 params,
                                 bootstrap_key,
                                 artifacts,
@@ -8953,10 +8948,7 @@ fn soracloud_fhe_job_output_bounded_noise_bound(
                                 audit.expected_package_digest,
                                 audit.trusted_reviewer_id,
                                 audit.trusted_reviewer_public_key,
-                            )
-                        } else {
-                            Err(full_bootstrap_release_audit_context_required_error())
-                        })
+                            )))
                 }
             };
             result.map(Some).map_err(|err| {
@@ -9226,8 +9218,7 @@ fn execute_soracloud_fhe_job_with_full_bootstrap_artifacts(
                                     params,
                                     bootstrap_key,
                                     slot,
-                                ), |artifacts| if let Some(audit) = full_bootstrap_release_audit {
-                                    full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                                ), |artifacts| full_bootstrap_release_audit.map_or_else(|| Err(full_bootstrap_release_audit_context_required_error()), |audit| full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
                                         params,
                                         bootstrap_key,
                                         artifacts,
@@ -9237,10 +9228,7 @@ fn execute_soracloud_fhe_job_with_full_bootstrap_artifacts(
                                         audit.expected_package_digest,
                                         audit.trusted_reviewer_id,
                                         audit.trusted_reviewer_public_key,
-                                    )
-                                } else {
-                                    Err(full_bootstrap_release_audit_context_required_error())
-                                })
+                                    )))
                         }
                     };
                     result.map_err(|err| invalid_parameter(format!("FHE bootstrap failed: {err}")))
@@ -9350,8 +9338,7 @@ fn execute_soracloud_fhe_job_bounded_noise_with_full_bootstrap_artifacts(
                                     params,
                                     bootstrap_key,
                                     slot,
-                                ), |artifacts| if let Some(audit) = full_bootstrap_release_audit {
-                                    full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                                ), |artifacts| full_bootstrap_release_audit.map_or_else(|| Err(full_bootstrap_release_audit_context_required_error()), |audit| full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
                                         params,
                                         bootstrap_key,
                                         artifacts,
@@ -9361,10 +9348,7 @@ fn execute_soracloud_fhe_job_bounded_noise_with_full_bootstrap_artifacts(
                                         audit.expected_package_digest,
                                         audit.trusted_reviewer_id,
                                         audit.trusted_reviewer_public_key,
-                                    )
-                                } else {
-                                    Err(full_bootstrap_release_audit_context_required_error())
-                                })
+                                    )))
                         }
                     };
                     result
@@ -9652,22 +9636,22 @@ fn enforce_service_mutation_precondition(
 fn admit_bundle(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
-    bundle: SoraDeploymentBundleV1,
+    bundle: &SoraDeploymentBundleV1,
     (initial_service_configs, initial_service_secrets): (
         BTreeMap<String, Json>,
         BTreeMap<String, SecretEnvelopeV1>,
     ),
-    precondition: SoraServiceMutationPreconditionV1,
+    precondition: &SoraServiceMutationPreconditionV1,
     provenance: ManifestProvenance,
     action: SoraServiceLifecycleActionV1,
 ) -> Result<(), InstructionExecutionError> {
     require_soracloud_permission(authority, state_transaction)?;
     verify_bundle_provenance(
         authority,
-        &bundle,
+        bundle,
         &initial_service_configs,
         &initial_service_secrets,
-        &precondition,
+        precondition,
         &provenance,
     )?;
     bundle
@@ -9689,7 +9673,7 @@ fn admit_bundle(
         .soracloud_service_deployments
         .get(&service_name)
         .cloned();
-    enforce_service_mutation_precondition(action, &service_name, &precondition, existing.as_ref())?;
+    enforce_service_mutation_precondition(action, &service_name, precondition, existing.as_ref())?;
     if action == SoraServiceLifecycleActionV1::Upgrade {
         let existing = existing.as_ref().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
@@ -9712,7 +9696,7 @@ fn admit_bundle(
             &service_name,
             &existing.current_service_version,
         )?;
-        enforce_service_upgrade_identity(&current_bundle, &bundle)?;
+        enforce_service_upgrade_identity(&current_bundle, bundle)?;
     }
     let process_generation = match existing.as_ref() {
         Some(deployment) => {
@@ -9811,7 +9795,7 @@ fn admit_bundle(
                 .into(),
             )
         })?;
-        Some(build_rollout_state(&bundle, sequence, baseline_version)?)
+        Some(build_rollout_state(bundle, sequence, baseline_version)?)
     } else {
         None
     };
@@ -9819,13 +9803,13 @@ fn admit_bundle(
         .clone()
         .filter(|rollout| rollout.stage == SoraRolloutStageV1::Canary);
     let service_lease = build_http_service_lease_state(
-        &bundle,
+        bundle,
         existing.as_ref(),
         state_transaction.block_height(),
         action == SoraServiceLifecycleActionV1::Upgrade,
     )?;
     let lease_volume_states =
-        build_http_service_lease_volume_states(&bundle, service_lease.as_ref(), existing.as_ref())?;
+        build_http_service_lease_volume_states(bundle, service_lease.as_ref(), existing.as_ref())?;
     let audit_service_lease = service_lease.clone();
     let config_snapshot_hash =
         iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
@@ -9945,9 +9929,9 @@ impl Execute for isi::DeploySoracloudService {
         admit_bundle(
             authority,
             state_transaction,
-            self.bundle,
+            &(self.bundle),
             (self.initial_service_configs, self.initial_service_secrets),
-            self.precondition,
+            &(self.precondition),
             self.provenance,
             SoraServiceLifecycleActionV1::Deploy,
         )
@@ -9962,9 +9946,9 @@ impl Execute for isi::UpgradeSoracloudService {
         admit_bundle(
             authority,
             state_transaction,
-            self.bundle,
+            &(self.bundle),
             (self.initial_service_configs, self.initial_service_secrets),
-            self.precondition,
+            &(self.precondition),
             self.provenance,
             SoraServiceLifecycleActionV1::Upgrade,
         )
@@ -10061,12 +10045,12 @@ fn admit_app_infra(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
     manifest: SoraAppInfraManifestV1,
-    precondition: SoraAppInfraMutationPreconditionV1,
+    precondition: &SoraAppInfraMutationPreconditionV1,
     provenance: ManifestProvenance,
     action: SoraAppInfraActionV1,
 ) -> Result<(), InstructionExecutionError> {
     require_soracloud_permission(authority, state_transaction)?;
-    verify_app_infra_provenance(authority, &manifest, &precondition, &provenance)?;
+    verify_app_infra_provenance(authority, &manifest, precondition, &provenance)?;
     manifest
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
@@ -10076,7 +10060,7 @@ fn admit_app_infra(
         .soracloud_app_infra_states
         .get(&app_name)
         .cloned();
-    enforce_app_infra_mutation_precondition(action, &app_name, &precondition, existing.as_ref())?;
+    enforce_app_infra_mutation_precondition(action, &app_name, precondition, existing.as_ref())?;
     let manifest_hash = manifest.manifest_hash();
     if action == SoraAppInfraActionV1::Upgrade
         && existing.as_ref().is_some_and(|state| {
@@ -10208,7 +10192,7 @@ impl Execute for isi::DeploySoracloudAppInfra {
             authority,
             state_transaction,
             self.manifest,
-            self.precondition,
+            &(self.precondition),
             self.provenance,
             SoraAppInfraActionV1::Deploy,
         )
@@ -10224,7 +10208,7 @@ impl Execute for isi::UpgradeSoracloudAppInfra {
             authority,
             state_transaction,
             self.manifest,
-            self.precondition,
+            &(self.precondition),
             self.provenance,
             SoraAppInfraActionV1::Upgrade,
         )
@@ -15929,9 +15913,9 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
         write_soracloud_service_lease_usage(
             state_transaction,
             authority,
-            self.service_name,
+            &(self.service_name),
             (self.lease_started_height, self.reporting_epoch),
-            self.active_service_version,
+            &(self.active_service_version),
             (self.replica_slot, self.placement_incarnation),
             (
                 self.replica_accounted_egress_bytes,
@@ -16847,9 +16831,7 @@ fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
             verifier_key,
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
         )
-        .map_or(false, |canonical_verifier_key| {
-            canonical_verifier_key == governed_verifier_key
-        })
+        .is_ok_and(|canonical_verifier_key| canonical_verifier_key == governed_verifier_key)
     };
     if !verifier_key_matches_governed_artifact {
         return Err(invalid_parameter(

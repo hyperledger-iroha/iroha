@@ -645,8 +645,8 @@ fn signed_reserve_account_sdk_loopback_verifies_native_absence_then_registration
         transaction_status_timeout: Duration::from_secs(30),
         transaction_add_nonce: true,
         sorafs_alias_cache: iroha::config::AliasCache::default().into_policy(),
-        sorafs_anonymity_policy: Default::default(),
-        sorafs_rollout_phase: Default::default(),
+        sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
+        sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
     })
     .build()
     .unwrap();

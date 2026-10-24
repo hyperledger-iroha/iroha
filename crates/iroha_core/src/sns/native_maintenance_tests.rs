@@ -441,17 +441,16 @@ fn sns_source_inspection_refuses_foreign_incomplete_and_repeated_native_owners()
         let original = source(&fixture.state, EXPIRY - WINDOW);
         let parent_height = fixture.state.committed_height();
         let mut block;
-        let recording;
-        if refusal == 1 {
+        let recording = if refusal == 1 {
             block = Box::new(fixture.state.block(original.header()));
-            recording = None;
+            None
         } else {
             let (actual, recorder, outputs, _) =
                 crate::state::run_empty_network_owner_fixture(&fixture.state, &original);
             assert!(outputs.is_empty());
             block = actual;
-            recording = Some(recorder);
-        }
+            Some(recorder)
+        };
         let refused = if refusal == 0 {
             let foreign = source(&fixture.state, EXPIRY - WINDOW + 1);
             block.finalize_sns_owned_sources_for_testing(&foreign)

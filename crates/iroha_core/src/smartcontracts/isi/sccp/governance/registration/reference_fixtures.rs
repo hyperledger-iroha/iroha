@@ -24,7 +24,7 @@ pub fn rows() -> Vec<Value> {
             let pin=sample_pin(&first);
             let deadlines=vec![first.deadline_ms,second.deadline_ms];
             let state=blank_state();let mut block=state.block(header(4));let mut tx=block.transaction();
-            install_generation(&mut tx,1,first).unwrap();install_generation(&mut tx,2,second).unwrap();
+            install_generation(&mut tx,1,&(first)).unwrap();install_generation(&mut tx,2,&(second)).unwrap();
             store::committee_current::set(&mut tx,2);
             let outcome=match retained_pin(&*tx.world,&pin,now,fixture::HEARTBEAT,3) {
                 Ok(_) => "Accepted",

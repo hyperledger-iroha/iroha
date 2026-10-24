@@ -119,7 +119,7 @@ pub(super) fn prepare(
                 tx,
                 head,
                 previous.as_ref().map(|row| &row.record),
-                record,
+                &(record),
                 writes,
             )
         }
@@ -170,7 +170,7 @@ pub(super) fn prepare(
                     commitment: request.commitment,
                     signatures_digest: request.signatures_digest,
                 });
-            stage_operation(tx, head, Some(&active.record), record, writes)
+            stage_operation(tx, head, Some(&active.record), &(record), writes)
         }
         Action::Expire(request) => {
             let active =
@@ -199,7 +199,7 @@ pub(super) fn prepare(
             record.execution = execution;
             record.execution_origin = None;
             record.outcome = FinalPromotionOperationOutcomeV1::Expired;
-            stage_operation(tx, head, Some(&active.record), record, writes)
+            stage_operation(tx, head, Some(&active.record), &(record), writes)
         }
         _ => Err(Error::Invalid),
     }

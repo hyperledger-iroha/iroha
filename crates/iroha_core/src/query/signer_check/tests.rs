@@ -210,8 +210,10 @@ fn common_binding_rejects_non_check_actions_for_both_closed_purposes() {
                 &state,
                 &mut round,
                 instruction,
-                state.view().chain_id().as_ref(),
-                *state.network_id_ref().as_bytes(),
+                (
+                    state.view().chain_id().as_ref(),
+                    *state.network_id_ref().as_bytes()
+                ),
                 &AccountId::new(key(2).public_key().clone()),
                 floor(),
                 signed
@@ -250,8 +252,10 @@ fn complete_external_bytes_and_signature_are_retained_by_the_single_owner() {
             &state,
             &mut round,
             NativeCustodyCheckRefV1::FinalPromotionAccount(&exact),
-            state.view().chain_id().as_ref(),
-            *state.network_id_ref().as_bytes(),
+            (
+                state.view().chain_id().as_ref(),
+                *state.network_id_ref().as_bytes()
+            ),
             &AccountId::new(key(2).public_key().clone()),
             floor(),
             forged

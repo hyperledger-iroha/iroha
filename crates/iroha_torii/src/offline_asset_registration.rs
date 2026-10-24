@@ -1,7 +1,7 @@
 //! Current committed registration projection for the independently trusted retail issuer.
 //!
 //! This read is not an ownership certificate or native enrollment capability. All fields
-//! come from one StateView; absent registration-incarnation evidence is never synthesized.
+//! come from one `StateView`; absent registration-incarnation evidence is never synthesized.
 
 use super::*;
 use iroha_data_model::{asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1};

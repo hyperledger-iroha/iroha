@@ -271,7 +271,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
     (fixture_seed, proof_seed): ([u8; 32], [u8; 32]),
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseZkAceNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
-    validate_context_and_signer_v1(&transaction_context, private_key)?;
+    validate_context_and_signer_v1(transaction_context, private_key)?;
     if amount == 0 || source == destination {
         return Err(evidence_error());
     }
@@ -304,7 +304,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
     )
     .map_err(|_| evidence_error())?;
     let mut statement = ZkAcePqAuthorizationStatementV1 {
-        context: statement_context_v1(&transaction_context, profile),
+        context: statement_context_v1(transaction_context, profile),
         identity_commitment: policy.identity_commitment,
         policy_id: policy.policy_id,
         policy_digest: policy.policy_digest,
@@ -317,7 +317,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         replay_nullifier: iroha_data_model::privacy::PrivacyZkAceReplayNullifierV1::default(),
     };
     let intent = draft_intent_v1(
-        &transaction_context,
+        transaction_context,
         placeholder_envelope_v1(
             profile,
             PrivacyStatementV1::ZkAcePqAuthorizationV1(statement.clone()),
@@ -341,7 +341,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         PrivacyStatementV1::ZkAcePqAuthorizationV1(statement.clone()),
         PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(proof)),
     )?;
-    let transaction = finish_transaction_v1(&transaction_context, envelope, intent, private_key)?;
+    let transaction = finish_transaction_v1(transaction_context, envelope, intent, private_key)?;
     Ok(PrivacyReleaseZkAceNetworkActionV1 {
         transaction,
         policy,
@@ -366,7 +366,7 @@ pub fn build_privacy_release_verange_network_action_v1(
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseVeRangeNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
     const MAX_AGGREGATION: usize = 8;
-    validate_context_and_signer_v1(&transaction_context, private_key)?;
+    validate_context_and_signer_v1(transaction_context, private_key)?;
     if values.is_empty()
         || values.len() > MAX_AGGREGATION
         || values.iter().any(|value| *value > u64::from(u32::MAX))
@@ -396,7 +396,7 @@ pub fn build_privacy_release_verange_network_action_v1(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut statement = VeRangeTransparentRangeStatementV1 {
-        context: statement_context_v1(&transaction_context, profile),
+        context: statement_context_v1(transaction_context, profile),
         asset_definition_id,
         policy_id,
         value_commitments: commitments
@@ -408,7 +408,7 @@ pub fn build_privacy_release_verange_network_action_v1(
     };
     let draft_statement = PrivacyStatementV1::VeRangeTransparentRangeV1(statement.clone());
     let intent = draft_intent_v1(
-        &transaction_context,
+        transaction_context,
         placeholder_envelope_v1(
             profile,
             draft_statement,
@@ -438,7 +438,7 @@ pub fn build_privacy_release_verange_network_action_v1(
         VeRangeType1BatchStatementV1::new(native_profile, commitments, &transcript)
             .map_err(|_| evidence_error())?;
     let mut rng = EvidenceRng06::new(network_seed_v1(fixture_seed, b"verange-proof", 0));
-    let proof = prove_batch(&native_statement, &values, &blindings, &mut rng)
+    let proof = prove_batch(&native_statement, values, &blindings, &mut rng)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?
         .encode();
     let envelope = final_envelope_v1(
@@ -446,7 +446,7 @@ pub fn build_privacy_release_verange_network_action_v1(
         typed_statement,
         PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(proof)),
     )?;
-    let transaction = finish_transaction_v1(&transaction_context, envelope, intent, private_key)?;
+    let transaction = finish_transaction_v1(transaction_context, envelope, intent, private_key)?;
     Ok(PrivacyReleaseVeRangeNetworkActionV1 {
         transaction,
         statement,
@@ -464,7 +464,7 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseBootleLanternNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
-    validate_context_and_signer_v1(&transaction_context, private_key)?;
+    validate_context_and_signer_v1(transaction_context, private_key)?;
     let profile = compiled_privacy_profile_v1(
         iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
     )
@@ -483,7 +483,7 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
             },
         })
         .collect::<Vec<_>>();
-    let context = statement_context_v1(&transaction_context, profile);
+    let context = statement_context_v1(transaction_context, profile);
     let mut keygen_rng =
         EvidenceRng06::new(network_seed_v1(fixture_seed, b"bootle-issuer-keygen", 0));
     let issuer_key_pair =
@@ -540,7 +540,7 @@ iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuan
         }],
     };
     let intent = draft_intent_v1(
-        &transaction_context,
+        transaction_context,
         placeholder_envelope_v1(
             profile,
             PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone()),
@@ -631,7 +631,7 @@ iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuan
         PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone()),
         PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(proof)),
     )?;
-    let transaction = finish_transaction_v1(&transaction_context, envelope, intent, private_key)?;
+    let transaction = finish_transaction_v1(transaction_context, envelope, intent, private_key)?;
     let successor_parameter_id = PrivacyParameterIdV1::new(network_seed_v1(
         fixture_seed,
         b"bootle-successor-issuer-parameter",
@@ -730,7 +730,7 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
     const RECIPIENT_COUNT: usize = 2;
     const SENDER_INDEX: usize = 7;
     const RECIPIENT_INDICES: [usize; RECIPIENT_COUNT] = [2, 12];
-    validate_context_and_signer_v1(&transaction_context, private_key)?;
+    validate_context_and_signer_v1(transaction_context, private_key)?;
     let profile = compiled_privacy_profile_v1(
         iroha_data_model::privacy::PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
     )
@@ -885,7 +885,7 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
     let mut statement = AnonymousPgcKOutOfNStatementV1 {
-        context: statement_context_v1(&transaction_context, profile),
+        context: statement_context_v1(transaction_context, profile),
         asset_definition_id,
         pool_id,
         account_state_root: initial_root,
@@ -904,7 +904,7 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
         recipient_count: u32::try_from(RECIPIENT_COUNT).expect("PGC recipient count fits u32"),
     };
     let intent = draft_intent_v1(
-        &transaction_context,
+        transaction_context,
         placeholder_envelope_v1(
             profile,
             PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement.clone()),
@@ -967,7 +967,7 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
         typed_statement,
         PrivacyProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(proof)),
     )?;
-    let transaction = finish_transaction_v1(&transaction_context, envelope, intent, private_key)?;
+    let transaction = finish_transaction_v1(transaction_context, envelope, intent, private_key)?;
     Ok(PrivacyReleaseAnonymousPgcNetworkActionV1 {
         transaction,
         bootstrap,
@@ -1005,7 +1005,7 @@ pub fn build_privacy_release_fcmp_network_action_v1(
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseFcmpNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
-    validate_context_and_signer_v1(&transaction_context, private_key)?;
+    validate_context_and_signer_v1(transaction_context, private_key)?;
     let profile = compiled_privacy_profile_v1(
         iroha_data_model::privacy::PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
     )
@@ -1078,7 +1078,7 @@ pub fn build_privacy_release_fcmp_network_action_v1(
     )
     .map_err(|_| evidence_error())?;
     let mut statement = MoneroFcmpPlusPlusStatementV1 {
-        context: statement_context_v1(&transaction_context, profile),
+        context: statement_context_v1(transaction_context, profile),
         asset_definition_id,
         pool_id,
         output_set_root: PrivacyFcmpTreeRootV1 {
@@ -1091,7 +1091,7 @@ pub fn build_privacy_release_fcmp_network_action_v1(
         encrypted_outputs: vec![encrypted_output],
     };
     let intent = draft_intent_v1(
-        &transaction_context,
+        transaction_context,
         placeholder_envelope_v1(
             profile,
             PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement.clone()),
@@ -1130,7 +1130,7 @@ pub fn build_privacy_release_fcmp_network_action_v1(
         typed_statement,
         PrivacyProofV1::MoneroFcmpPlusPlusV1(PrivacyProofBytesV1::new(proof.proof_wire().to_vec())),
     )?;
-    let transaction = finish_transaction_v1(&transaction_context, envelope, intent, private_key)?;
+    let transaction = finish_transaction_v1(transaction_context, envelope, intent, private_key)?;
     Ok(PrivacyReleaseFcmpNetworkActionV1 {
         transaction,
         bootstrap,
@@ -1155,7 +1155,7 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseIvmPrivateNoteNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
-    validate_context_and_signer_v1(&transaction_context, private_key)?;
+    validate_context_and_signer_v1(transaction_context, private_key)?;
     let profile = compiled_privacy_profile_v1(
         iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
     )
@@ -1194,12 +1194,12 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
     let mut statement = fixture.statement;
-    statement.context = statement_context_v1(&transaction_context, profile);
+    statement.context = statement_context_v1(transaction_context, profile);
     statement.action_digest = statement
         .computed_action_digest()
         .map_err(|_| evidence_error())?;
     let intent = draft_intent_v1(
-        &transaction_context,
+        transaction_context,
         placeholder_envelope_v1(
             profile,
             PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement.clone()),
@@ -1232,7 +1232,7 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
         PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement.clone()),
         PrivacyProofV1::IrohaIvmPrivateNoteStarkV1(PrivacyProofBytesV1::new(proof)),
     )?;
-    let transaction = finish_transaction_v1(&transaction_context, envelope, intent, private_key)?;
+    let transaction = finish_transaction_v1(transaction_context, envelope, intent, private_key)?;
     Ok(PrivacyReleaseIvmPrivateNoteNetworkActionV1 {
         transaction,
         bootstrap,

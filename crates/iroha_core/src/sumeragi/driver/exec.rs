@@ -1939,7 +1939,7 @@ mod refusal_tests {
         let registration = ExecutionRegistrations::admit(&budget).unwrap();
         let held = budget.try_reserve_bytes(1).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
-        let body = block(1, Hash32::ZERO, Hash32::ZERO, &vec![1]);
+        let body = block(1, Hash32::ZERO, Hash32::ZERO, &[1]);
         let result = Hash32([9; 32]);
         let qc = commit_qc(&body, result);
         let mut scheduler = ExecSched::new(0, Backoff::default(), registration);

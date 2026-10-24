@@ -177,7 +177,7 @@ fn command_rejects_another_chain_before_creating_or_opening_journals() {
 
 #[test]
 fn rendering_preserves_native_review_fields_and_json_document() {
-    let data = norito::json!({"operation":"onboarding","status":"Prepared","account_id":"account","network_id":"network","chain_discriminant":369,"expires_at_unix_ms":120000,"fee_payment":{},"transaction_hash":"hash","alias":"coffee@universal","issuer":"issuer","permissions_requested":[],"owner_auto_renew_follow_up":false,"journal":"/private/runtime/journal"});
+    let data = norito::json!({"operation":"onboarding","status":"Prepared","account_id":"account","network_id":"network","chain_discriminant":369,"expires_at_unix_ms":120_000,"fee_payment":{},"transaction_hash":"hash","alias":"coffee@universal","issuer":"issuer","permissions_requested":[],"owner_auto_renew_follow_up":false,"journal":"/private/runtime/journal"});
     let report = OperationReport {
         status: OperationStatus::Prepared,
         data: data.clone(),
@@ -194,7 +194,7 @@ fn rendering_preserves_native_review_fields_and_json_document() {
         "onboard submit",
         "Network: network",
         "Address profile: 369",
-        "Expires at (Unix ms): 120000",
+        "Expires at (Unix ms): 120_000",
         "Fee intent: {}",
     ] {
         assert!(rendered.contains(field), "missing {field}");

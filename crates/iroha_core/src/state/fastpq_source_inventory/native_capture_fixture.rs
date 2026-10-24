@@ -209,16 +209,16 @@ pub fn with_native_capture_sources<T>(
 ) -> T {
     assert!(!transfers_per_entry.is_empty());
     let (state, alice, _) = fixture();
-    with_native_state_sources(state, alice, transfers_per_entry, action)
+    with_native_state_sources(&(state), &(alice), transfers_per_entry, action)
 }
 
 fn with_native_state_sources<T>(
-    state: State,
-    alice: AssetId,
+    state: &State,
+    alice: &AssetId,
     transfers_per_entry: &[usize],
     action: impl FnOnce(&State, Box<StateBlock<'_>>, ExecWitnessGuard, SignedBlock, Vec<Hash>) -> T,
 ) -> T {
-    let header = quantity_successor_header(&state);
+    let header = quantity_successor_header(state);
     let mut builder = BlockBuilder::new(header);
     let mut contexts = Vec::new();
     let mut hashes = Vec::new();
@@ -287,7 +287,7 @@ fn with_native_state_sources<T>(
         hashes.push(Hash::from(
             TransactionEntrypoint::External(signed.clone()).execution_call_hash(),
         ));
-        contexts.push(quantity_execution_context(&state, &signed, &header));
+        contexts.push(quantity_execution_context(state, &signed, &header));
         builder.push_transaction(signed);
     }
     assert_eq!(
@@ -312,7 +312,7 @@ fn with_native_state_sources<T>(
     assert_eq!(rows.len(), transfers_per_entry.len());
     assert!(rows.iter().all(|row| row.result().is_ok()), "{rows:?}");
     assert_eq!(source.header().height().get(), 2);
-    action(&state, block, recording, source, hashes)
+    action(state, block, recording, source, hashes)
 }
 
 /// Complete the real owned output boundary and retain its quantity-source journal.
@@ -425,8 +425,8 @@ pub fn with_native_capture_quota_source<T>(
         setup.commit_world_overlay_for_testing().unwrap();
     }
     with_native_state_sources(
-        state,
-        alice,
+        &(state),
+        &(alice),
         &[0],
         |state, block, recording, source, ordinary_hashes| {
             assert_eq!(block.fastpq_transcripts.len(), 1);
@@ -673,10 +673,15 @@ pub fn with_native_capture_dataspace_source<T>(
         None,
     )
     .unwrap();
-    with_native_state_sources(state, alice, &[1], |state, block, guard, source, hashes| {
-        assert_eq!(hashes.len(), 1);
-        action(state, block, guard, source, hashes[0])
-    })
+    with_native_state_sources(
+        &(state),
+        &(alice),
+        &[1],
+        |state, block, guard, source, hashes| {
+            assert_eq!(hashes.len(), 1);
+            action(state, block, guard, source, hashes[0])
+        },
+    )
 }
 
 /// Signed root and funded Alice transfer source for actual native publication controls.

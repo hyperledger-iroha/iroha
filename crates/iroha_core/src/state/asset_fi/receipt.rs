@@ -17,7 +17,7 @@ use iroha_data_model::{
 
 /// Source-owned admitted snapshots carried only with the private movement capability.
 /// This value neither debits funds nor independently authorizes execution.
-pub(crate) struct Capture {
+pub struct Capture {
     instruction: TransferToLinkedFiV1,
     instruction_hash: Hash,
     authority: AccountId,
@@ -130,7 +130,7 @@ impl Capture {
         let transcript_index = tx.next_transfer_transcript_index(&call)?;
         let receipt = AssetFiTransferReceiptV1 {
             asset_incarnation: self.asset_incarnation,
-            network: tx.network_id().clone(),
+            network: *tx.network_id(),
             execution_call_hash: call,
             instruction_hash: self.instruction_hash,
             instruction: self.instruction,
@@ -164,7 +164,7 @@ impl Capture {
     }
 }
 
-pub(crate) fn key(
+pub fn key(
     definition: &AssetDefinitionId,
     account: &AccountId,
     call: &Hash,
@@ -177,7 +177,7 @@ pub(crate) fn key(
             [..usize::try_from(text.position()).expect("fixed stack cursor position fits usize")],
     )
     .expect("fixed native FI occurrence path is ASCII");
-    path(text.to_owned())
+    path(text)
 }
 
 /// One shared spelling; every formatting buffer is fixed and stack-owned.
@@ -215,8 +215,8 @@ fn key_text(
 }
 
 /// Exact key using caller-admitted canonical I105 text and the existing
-/// fallible, resource-scoped StatePath owner. No external text enters this helper.
-pub(crate) fn key_for_admission(
+/// fallible, resource-scoped `StatePath` owner. No external text enters this helper.
+pub fn key_for_admission(
     definition: &AssetDefinitionId,
     account_text: &str,
     call: &Hash,
@@ -233,7 +233,7 @@ pub(crate) fn key_for_admission(
 }
 
 /// Internal historical consistency only; no current relationship may replace a snapshot.
-pub(crate) fn validate(value: &AssetFiTransferReceiptV1) -> Result<(), Error> {
+pub fn validate(value: &AssetFiTransferReceiptV1) -> Result<(), Error> {
     validate_fields(value)?;
     if Hash::new(super::super::asset_uid::encode(&InstructionBox::from(
         value.instruction.clone(),
@@ -252,7 +252,7 @@ pub(crate) fn validate(value: &AssetFiTransferReceiptV1) -> Result<(), Error> {
 
 /// Allocation-free historical field relationships. Callers must separately check
 /// the exact instruction hash and derive any actual controller subject.
-pub(crate) fn validate_fields(value: &AssetFiTransferReceiptV1) -> Result<(), Error> {
+pub fn validate_fields(value: &AssetFiTransferReceiptV1) -> Result<(), Error> {
     value
         .asset_incarnation
         .validate()
@@ -300,7 +300,7 @@ pub(crate) fn validate_fields(value: &AssetFiTransferReceiptV1) -> Result<(), Er
     Ok(())
 }
 
-pub(crate) fn read_record(
+pub fn read_record(
     world: &impl WorldReadOnly,
     record_key: &StatePath,
 ) -> Result<AssetFiTransferReceiptV1, Error> {
@@ -322,7 +322,7 @@ pub(crate) fn read_record(
     Ok(value)
 }
 
-pub(crate) fn referenced_accounts(value: &AssetFiTransferReceiptV1) -> Vec<AccountId> {
+pub fn referenced_accounts(value: &AssetFiTransferReceiptV1) -> Vec<AccountId> {
     let mut accounts = vec![
         value.instruction.account_id.clone(),
         value.fi.fi_account_id.clone(),

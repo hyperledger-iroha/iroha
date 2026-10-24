@@ -1,7 +1,7 @@
 //! Native MCP endpoint support for Torii.
 //!
 //! This module exposes a lightweight JSON-RPC bridge that maps MCP tool calls to existing Torii
-//! HTTP routes. OpenAPI supplies operation schemas, but an HTTP operation becomes an MCP tool only
+//! HTTP routes. `OpenAPI` supplies operation schemas, but an HTTP operation becomes an MCP tool only
 //! after its exact method/path pair opts into the catalog's MCP projection. Purpose-built `iroha.*`
 //! tools form a separate, explicit allowlist.
 //!
@@ -678,9 +678,7 @@ fn tool_semantics(tool: &ToolSpec) -> ToolSemantics {
     let authority = if effect == ToolEffect::Operator {
         AuthorityClass::Operator
     } else {
-        route
-            .map(authority_for_route)
-            .unwrap_or(AuthorityClass::ListenerCredential)
+        route.map_or(AuthorityClass::ListenerCredential, authority_for_route)
     };
     // TODO: Move audited `AdditiveOnly` declarations into explicit curated capability entries as
     // each legacy `ToolEffect` descriptor is migrated. Unknown mutations stay destructive.
@@ -982,7 +980,7 @@ static VALIDATED_MCP_ROUTE_CATALOG: LazyLock<()> = LazyLock::new(|| {
         }
     }
 });
-/// Build the MCP tool registry from OpenAPI operations.
+/// Build the MCP tool registry from `OpenAPI` operations.
 pub fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp) -> Vec<ToolSpec> {
     LazyLock::force(&VALIDATED_MCP_ROUTE_CATALOG);
     let mut tools = Vec::new();
@@ -1456,11 +1454,10 @@ fn is_tool_allowed_by_policy(
     }
     let semantics = tool_semantics(tool);
     let profile_allowed = match (cfg.profile, semantics.operation(), semantics.authority()) {
-        (ToriiMcpProfile::Operator, _, _) => true,
-        (ToriiMcpProfile::Writer, _, AuthorityClass::Operator) => false,
-        (ToriiMcpProfile::Writer, _, _) => true,
-        (ToriiMcpProfile::ReadOnly, OperationKind::Observe | OperationKind::Construct, _) => true,
-        (ToriiMcpProfile::ReadOnly, OperationKind::Mutate, _) => false,
+        (ToriiMcpProfile::Writer, _, AuthorityClass::Operator)
+        | (ToriiMcpProfile::ReadOnly, OperationKind::Mutate, _) => false,
+        (ToriiMcpProfile::Operator | ToriiMcpProfile::Writer, _, _)
+        | (ToriiMcpProfile::ReadOnly, OperationKind::Observe | OperationKind::Construct, _) => true,
     };
     if !profile_allowed {
         return false;
@@ -1925,18 +1922,18 @@ pub async fn handle_validated_jsonrpc_request(
                 .and_then(|request| request.get("params"))
                 .and_then(Value::as_object)
                 .is_some_and(|params| params.len() == 1 && params.contains_key("_meta"));
-            if !only_meta {
+            if only_meta {
+                let visible_tools = visible_tools_for_app(&app);
+                JsonRpcRequestOutcome::Response(jsonrpc_result_response(
+                    id,
+                    modern_discovery_payload(&visible_tools),
+                ))
+            } else {
                 JsonRpcRequestOutcome::Response(jsonrpc_error_response(
                     id,
                     JSONRPC_INVALID_PARAMS,
                     "server/discover accepts no params beyond standard _meta",
                     None,
-                ))
-            } else {
-                let visible_tools = visible_tools_for_app(&app);
-                JsonRpcRequestOutcome::Response(jsonrpc_result_response(
-                    id,
-                    modern_discovery_payload(&visible_tools),
                 ))
             }
         }
@@ -2167,9 +2164,8 @@ pub fn handle_cancelled_notification(
 
 fn is_jsonrpc_id(id: &Value) -> bool {
     match id {
-        Value::String(_) => true,
         Value::Number(json::native::Number::U128(value)) => u64::try_from(*value).is_ok(),
-        Value::Number(_) => true,
+        Value::String(_) | Value::Number(_) => true,
         _ => false,
     }
 }
@@ -2413,23 +2409,23 @@ async fn handle_named_tool_call(
                 dispatch_iroha_transactions_inspect(&app, arguments)
             }
         }
-        .map_or_else(mcp_tool_error, mcp_tool_success);
+        .map_or_else(|value| mcp_tool_error(&value), mcp_tool_success);
         return jsonrpc_result_response(id, tool_result);
     }
     let purpose_built_dispatch = match validate_purpose_built_dispatch_backing(tool_spec) {
         Ok(purpose_built_dispatch) => purpose_built_dispatch,
         Err(error) => {
-            return jsonrpc_result_response(id, mcp_tool_error(error));
+            return jsonrpc_result_response(id, mcp_tool_error(&(error)));
         }
     };
     if !purpose_built_dispatch {
         let tool_result = dispatch_openapi_tool(&app, inbound_headers, tool_spec, arguments)
             .await
-            .map_or_else(mcp_tool_error, mcp_tool_success);
+            .map_or_else(|value| mcp_tool_error(&value), mcp_tool_success);
         return jsonrpc_result_response(id, tool_result);
     }
     let result = select_purpose_built_tool_dispatch(&app, inbound_headers, name, arguments).await;
-    let tool_result = result.map_or_else(mcp_tool_error, mcp_tool_success);
+    let tool_result = result.map_or_else(|value| mcp_tool_error(&value), mcp_tool_success);
     jsonrpc_result_response(id, tool_result)
 }
 /// Select one heap-owned handler before polling its forwarded HTTP route.
@@ -3521,8 +3517,7 @@ fn mcp_tool_success(structured: Value) -> Value {
     let mut structured = structured;
     if is_http_error && let Some(map) = structured.as_object_mut() {
         let error_code = status
-            .map(http_status_error_code)
-            .unwrap_or("http_error")
+            .map_or("http_error", http_status_error_code)
             .to_owned();
         map.entry("error_code".into())
             .or_insert(Value::String(error_code));
@@ -3543,9 +3538,9 @@ fn mcp_tool_success(structured: Value) -> Value {
         "structuredContent": structured
     })
 }
-fn mcp_tool_error(message: String) -> Value {
-    let error_message = message.clone();
-    let error_code = match message.as_str() {
+fn mcp_tool_error(message: &str) -> Value {
+    let error_message = message.to_owned();
+    let error_code = match message {
         TARGET_RESPONSE_TOO_LARGE_MESSAGE => MCP_RESPONSE_TOO_LARGE_CODE,
         TARGET_RESPONSE_READ_FAILED_MESSAGE => MCP_RESPONSE_READ_FAILED_CODE,
         TARGET_RESPONSE_TIMEOUT_MESSAGE => MCP_RESPONSE_TIMEOUT_CODE,
@@ -3553,7 +3548,7 @@ fn mcp_tool_error(message: String) -> Value {
     };
     let envelope = error_envelope_value(
         error_code,
-        error_message.as_str(),
+        &error_message,
         Some(norito::json!({
             "layer": "mcp"
         })),
@@ -3584,10 +3579,9 @@ fn parse_parameters(spec: &Value, value: Option<&Value>) -> Vec<ParameterInfo> {
                 .get("required")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let schema = param
-                .get("schema")
-                .map(|schema| inline_openapi_schema(spec, schema, 0))
-                .unwrap_or_else(string_schema);
+            let schema = param.get("schema").map_or_else(string_schema, |schema| {
+                inline_openapi_schema(spec, schema, 0)
+            });
             Some(ParameterInfo {
                 name: name.to_owned(),
                 location: location.to_owned(),
@@ -3647,13 +3641,7 @@ fn build_input_schema(
         query_schema.insert("additionalProperties".into(), Value::Bool(false));
         properties.insert("query".into(), Value::Object(query_schema));
     }
-    if !header_props.is_empty() {
-        let mut headers_schema = Map::new();
-        headers_schema.insert("type".into(), Value::String("object".to_owned()));
-        headers_schema.insert("properties".into(), Value::Object(header_props));
-        headers_schema.insert("additionalProperties".into(), Value::Bool(false));
-        properties.insert("headers".into(), Value::Object(headers_schema));
-    } else {
+    if header_props.is_empty() {
         properties.insert(
             "headers".into(),
             norito::json!({
@@ -3661,6 +3649,12 @@ fn build_input_schema(
                 "additionalProperties": false
             }),
         );
+    } else {
+        let mut headers_schema = Map::new();
+        headers_schema.insert("type".into(), Value::String("object".to_owned()));
+        headers_schema.insert("properties".into(), Value::Object(header_props));
+        headers_schema.insert("additionalProperties".into(), Value::Bool(false));
+        properties.insert("headers".into(), Value::Object(headers_schema));
     }
     if let Some(request_body) = request_body {
         let request_body_descriptor = deref_openapi_value(spec, request_body);
@@ -6993,9 +6987,10 @@ async fn wait_for_transaction_applied(
         let remaining = timeout.saturating_sub(start.elapsed());
         tokio::time::sleep(poll_interval.min(remaining)).await;
     }
-    let last_kind = last_kind
-        .map(|kind| format!(" (last status kind: `{kind}`)"))
-        .unwrap_or_else(|| " (last status kind: `not_observed`)".to_owned());
+    let last_kind = last_kind.map_or_else(
+        || " (last status kind: `not_observed`)".to_owned(),
+        |kind| format!(" (last status kind: `{kind}`)"),
+    );
     Err(format!(
         "timed out waiting for state-resolved Applied after {timeout_ms}ms for `{tx_hash}`{last_kind}"
     ))
@@ -7434,13 +7429,13 @@ fn require_governance_openapi_json_body(arguments: &Map) -> Result<&Value, Strin
                 .to_owned(),
         );
     }
-    if let Some(content_type) = arguments.get("content_type") {
-        if content_type.as_str() != Some("application/json") {
-            return Err(
-                "governance MCP identifier preflight requires `content_type` to be `application/json`"
-                    .to_owned(),
-            );
-        }
+    if let Some(content_type) = arguments.get("content_type")
+        && content_type.as_str() != Some("application/json")
+    {
+        return Err(
+            "governance MCP identifier preflight requires `content_type` to be `application/json`"
+                .to_owned(),
+        );
     }
     arguments
         .get("body")
@@ -8281,7 +8276,7 @@ async fn response_to_value(
     structured.insert("headers".into(), headers_value);
     structured.insert(
         "content_type".into(),
-        content_type.map(Value::String).unwrap_or(Value::Null),
+        content_type.map_or(Value::Null, Value::String),
     );
     structured.insert("body".into(), body_value);
     Ok(Value::Object(structured))
@@ -8427,11 +8422,11 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
     match url.scheme() {
         "http" => {
             url.set_scheme("ws")
-                .map_err(|_| "failed to convert http->ws".to_owned())?;
+                .map_err(|()| "failed to convert http->ws".to_owned())?;
         }
         "https" => {
             url.set_scheme("wss")
-                .map_err(|_| "failed to convert https->wss".to_owned())?;
+                .map_err(|()| "failed to convert https->wss".to_owned())?;
         }
         "ws" | "wss" => {}
         other => {
@@ -9836,14 +9831,15 @@ fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
                         definition.path
                     )
                 });
-            let body_schema = build_request_body_schema(spec, request_body)
-                .map(|schema| inline_openapi_schema(spec, &schema, 0))
-                .unwrap_or_else(|| {
+            let body_schema = build_request_body_schema(spec, request_body).map_or_else(
+                || {
                     panic!(
                         "Musubi V1 OpenAPI operation {} has no JSON request schema",
                         definition.path
                     )
-                });
+                },
+                |schema| inline_openapi_schema(spec, &schema, 0),
+            );
             ToolSpec::route(
                 definition.name.to_owned(),
                 definition.description.to_owned(),
@@ -10178,7 +10174,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
                 "timeout_ms": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 600000,
+                    "maximum": 600_000,
                     "description": "Polling timeout in milliseconds (default 30000, max 600000)."
                 },
                 "poll_interval_ms": {

@@ -1239,7 +1239,7 @@ fn initial_authority_has_exact_permission(
     authority: &AccountId,
     permission: &Permission,
 ) -> Result<bool, ValidationFail> {
-    authority_has_permission(&state_transaction.world, authority, &permission)
+    authority_has_permission(&state_transaction.world, authority, permission)
 }
 fn can_unregister_domain_initial(
     state_transaction: &StateTransaction<'_, '_>,

@@ -943,7 +943,7 @@ fn generation_lookup_and_inclusive_liability_use_captured_values_only() {
         generation_for_claim(Current(&*stx.world), &x, 0, 0),
         Err(ForgeryVerificationError::EvidenceUnknownGeneration)
     ));
-    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, rec.clone())
+    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, &(rec))
         .unwrap();
     let last = rec.liable_until_lc + rec.progress_cap_ms;
     assert!(generation_for_claim(Current(&*stx.world), &x, 2, last).is_ok());
@@ -980,7 +980,7 @@ fn generation_lookup_and_inclusive_liability_use_captured_values_only() {
     });
     rec.dest_cleared_lc = Some(rec.liable_until_lc + 5);
     let last = rec.dest_cleared_lc.unwrap() + rec.grace_ms;
-    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, rec.clone())
+    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, &(rec))
         .unwrap();
     assert!(generation_for_claim(Current(&*stx.world), &x, 2, last).is_ok());
     assert!(matches!(

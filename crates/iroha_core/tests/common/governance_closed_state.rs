@@ -16,7 +16,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 
-pub(super) fn state() -> State {
+pub fn state() -> State {
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let domain =
         Domain::new(DomainId::try_new("wonderland", "universal").expect("domain")).build(&ALICE_ID);
@@ -34,7 +34,7 @@ pub(super) fn state() -> State {
     state
 }
 
-pub(super) fn grant_permissions(transaction: &mut StateTransaction<'_, '_>, referendum: &str) {
+pub fn grant_permissions(transaction: &mut StateTransaction<'_, '_>, referendum: &str) {
     for permission in [
         Permission::new("CanManageVerifyingKeys".to_owned(), Json::new(())),
         CanManageParliament.into(),

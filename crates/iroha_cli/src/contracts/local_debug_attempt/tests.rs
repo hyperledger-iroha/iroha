@@ -89,10 +89,10 @@ fn actual_trace_policy_change_cannot_reach_completed_report() {
     assert_eq!(host.calls, 1);
     assert!(!report_built);
     assert!(match (
-        &(report.downcast_ref::<VMError>()),
-        &(Some(&VMError::ExecutionDeferred(
+        &report.downcast_ref::<VMError>(),
+        &Some(&VMError::ExecutionDeferred(
             ExecutionDeferral::TraceOwnerUnavailable
-        )))
+        ))
     ) {
         (
             Some(VMError::ExecutionDeferred(actual_field_0)),

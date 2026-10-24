@@ -2599,12 +2599,14 @@ impl<'block> SetTransaction<'block> {
             let updated = match event_type {
                 TriggeringEventType::Data => {
                     let updated = self.data_triggers.get_mut(&trigger_id).map(|action| {
-                        let mut updated = replace_trigger_authority(action, old, new);
-                        if action.filter.replace_account_id(old, new) {
+                        let authority_updated = replace_trigger_authority(action, old, new);
+                        let mut updated = if action.filter.replace_account_id(old, new) {
                             replacement_filter = Some(action.filter.clone());
                             replacement_filter_is_active = Set::action_is_active(action);
-                            updated = true;
-                        }
+                            true
+                        } else {
+                            authority_updated
+                        };
                         updated |= replace_data_trigger_global_permission_grantee(
                             &mut action.metadata,
                             old,

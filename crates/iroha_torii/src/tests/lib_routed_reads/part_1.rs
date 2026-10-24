@@ -370,7 +370,7 @@ async fn collect_torii_singleton_json_payloads_skips_route_unavailable_until_suc
                         "authoritative peers offline",
                     )
                 } else {
-                    crate::utils::respond_value_with_format(expected, ResponseFormat::Json)
+                    crate::utils::respond_value_with_format(&(expected), ResponseFormat::Json)
                 }
             }
         },
@@ -493,8 +493,8 @@ async fn collect_torii_singleton_json_payloads_keeps_one_route_body_live_at_a_ti
                     tokio::task::yield_now().await;
                     active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                     let payload =
-                        crate::json_object(vec![crate::json_entry("route", route.dataspace_id)]);
-                    crate::utils::respond_value_with_format(payload, ResponseFormat::Json)
+                        crate::json_object(vec![crate::json_entry("route", &(route.dataspace_id))]);
+                    crate::utils::respond_value_with_format(&(payload), ResponseFormat::Json)
                 }
             }
         },
@@ -683,7 +683,10 @@ async fn with_torii_fanout_headers_adds_warning_for_successful_alias_responses_w
     diagnostics.record_attempt();
     diagnostics.record_success();
     let response = with_torii_fanout_headers(
-        crate::utils::respond_value_with_format(norito::json!({"ok": true}), ResponseFormat::Json),
+        crate::utils::respond_value_with_format(
+            &(norito::json!({"ok": true})),
+            ResponseFormat::Json,
+        ),
         diagnostics,
     );
     assert_eq!(response.status(), StatusCode::OK);
@@ -739,7 +742,7 @@ async fn collect_torii_alias_json_payloads_returns_permission_denied_when_only_s
         routed_read_test_working_set_bytes(),
         ROUTED_READ_TEST_BODY_BYTES,
         |_route: RoutingDecision| async move {
-            crate::utils::respond_value_with_format(norito::json!({}), ResponseFormat::Json)
+            crate::utils::respond_value_with_format(&(norito::json!({})), ResponseFormat::Json)
         },
     )
     .await
@@ -789,7 +792,10 @@ async fn collect_torii_alias_json_payloads_returns_not_found_when_no_visible_rou
             move |_route: RoutingDecision| {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 async move {
-                    crate::utils::respond_value_with_format(norito::json!({}), ResponseFormat::Json)
+                    crate::utils::respond_value_with_format(
+                        &(norito::json!({})),
+                        ResponseFormat::Json,
+                    )
                 }
             }
         },
@@ -878,7 +884,7 @@ async fn collect_torii_alias_json_payloads_keeps_success_when_other_routes_are_d
                 if route == routes[0] {
                     torii_alias_permission_denied_response("routed dataspace blocked the lookup")
                 } else {
-                    crate::utils::respond_value_with_format(expected, ResponseFormat::Json)
+                    crate::utils::respond_value_with_format(&(expected), ResponseFormat::Json)
                 }
             }
         },
@@ -2395,7 +2401,7 @@ async fn merged_pipeline_status_response_prefers_state_failure_over_cached_appli
 }
 fn pipeline_status_hint_response(kind: &str, resolved_from: &str) -> Response {
     crate::utils::respond_with_format(
-        PipelineTransactionStatusResponse::new(
+        &(PipelineTransactionStatusResponse::new(
             HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
                 [0x51; Hash::LENGTH],
             ))
@@ -2406,7 +2412,7 @@ fn pipeline_status_hint_response(kind: &str, resolved_from: &str) -> Response {
             },
             "global".to_owned(),
             resolved_from.to_owned(),
-        ),
+        )),
         ResponseFormat::Json,
     )
 }
@@ -2678,7 +2684,7 @@ async fn pipeline_status_fanout_requires_exact_scoped_absence() {
     ] {
         let correct = actual_hash == hash.to_string() && scope == "global";
         let response = crate::utils::respond_with_format(
-            PipelineTransactionStatusResponse::new(
+            &(PipelineTransactionStatusResponse::new(
                 actual_hash,
                 PipelineTransactionStatus {
                     kind: "Applied".into(),
@@ -2686,7 +2692,7 @@ async fn pipeline_status_fanout_requires_exact_scoped_absence() {
                 },
                 scope.into(),
                 "state".into(),
-            ),
+            )),
             ResponseFormat::Json,
         );
         let hinted =
@@ -2777,7 +2783,7 @@ async fn pipeline_status_fanout_requires_exact_scoped_absence() {
                         response
                     }
                     10 => crate::utils::respond_with_format(
-                        PipelineTransactionStatusResponse::new(
+                        &(PipelineTransactionStatusResponse::new(
                             hash.to_string(),
                             iroha_torii_shared::PipelineTransactionStatus {
                                 kind: "Applied".to_owned(),
@@ -2785,7 +2791,7 @@ async fn pipeline_status_fanout_requires_exact_scoped_absence() {
                             },
                             "global".to_owned(),
                             "state".to_owned(),
-                        ),
+                        )),
                         ResponseFormat::Json,
                     ),
                     _ => {
@@ -2842,7 +2848,7 @@ async fn pipeline_status_fanout_requires_exact_scoped_absence() {
                 )
             } else {
                 crate::utils::respond_with_format(
-                    PipelineTransactionStatusResponse::new(
+                    &(PipelineTransactionStatusResponse::new(
                         hash.to_string(),
                         iroha_torii_shared::PipelineTransactionStatus {
                             kind: "Applied".to_owned(),
@@ -2850,7 +2856,7 @@ async fn pipeline_status_fanout_requires_exact_scoped_absence() {
                         },
                         "global".to_owned(),
                         "state".to_owned(),
-                    ),
+                    )),
                     ResponseFormat::Json,
                 )
             }
@@ -3131,21 +3137,36 @@ async fn canonical_visibility_busy_source_is_capacity_and_preserves_request_nonc
     let headers = crate::tests_runtime_handlers::signed_app_headers(
         &authority, &key_pair, &method, &uri, body,
     );
-    let authenticate = || torii_visibility_account_from_headers(
-        &app, &headers, &method, &uri, body, "v1/accounts/query",
-    );
+    let authenticate = || {
+        torii_visibility_account_from_headers(
+            &app,
+            &headers,
+            &method,
+            &uri,
+            body,
+            "v1/accounts/query",
+        )
+    };
     let refused = app.state.with_held_header_for_reader_test(|_| {
         authenticate().expect_err("held original State source cannot authenticate")
     });
-    assert!(matches!(
-        &refused,
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
-        ))
-    ), "physical reader contention is not invalid credentials: {refused:?}");
-    assert_eq!(refused.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
-    assert!(matches!(authenticate().expect("same original request succeeds after release"),
-        ToriiAccountReadVisibility::Signed(account) if account == authority));
+    assert!(
+        matches!(
+            &refused,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            ))
+        ),
+        "physical reader contention is not invalid credentials: {refused:?}"
+    );
+    assert_eq!(
+        refused.into_response().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert!(
+        matches!(authenticate().expect("same original request succeeds after release"),
+        ToriiAccountReadVisibility::Signed(account) if account == authority)
+    );
     let replay = authenticate().expect_err("a consumed request remains replay-protected");
     assert!(matches!(&replay, Error::AppUnauthorized { code, message }
         if *code == "canonical_authentication_invalid" && message == "request nonce already used"));
