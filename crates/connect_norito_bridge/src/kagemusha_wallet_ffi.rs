@@ -67,7 +67,7 @@ pub use review::{
 #[cfg(test)]
 mod tests;
 
-/// Invalid input or malformed callback result.
+/// Invalid input/state or malformed callback result.
 pub const INVALID: i32 = -1;
 /// Closed, closing, or unknown opaque handle.
 pub const CLOSED: i32 = -2;
@@ -118,7 +118,8 @@ pub struct Failure {
     /// For unavailable/uncertain: 0 locked, 1 before first unlock, 2 busy, 3 I/O,
     /// 4 platform, 5 unusable key, 6 permanently invalidated. For custody loss:
     /// 100-105 lost-custody kind, 110-114 unavailable custody kind, 120 unexpected
-    /// entry; see the C header's closed table. Otherwise -1 when inapplicable.
+    /// entry. For invalid input/state: 200-209 state refusal, 220-241 provider
+    /// archive/marker refusal; see the C header's closed table. Otherwise -1.
     pub reason: i32,
     /// Original OS/platform error code; zero when inapplicable.
     pub platform_code: i32,
@@ -136,6 +137,15 @@ impl Failure {
     fn custody(reason: i32) -> Self {
         Self {
             status: CUSTODY_LOST,
+            reason,
+            platform_code: 0,
+        }
+    }
+    // Closed, static causes only. Never encode caller data or expose an error string.
+    // This preserves the already-produced INVALID refusal and performs no recovery.
+    fn invalid(reason: i32) -> Self {
+        Self {
+            status: INVALID,
             reason,
             platform_code: 0,
         }
@@ -165,7 +175,32 @@ impl From<advance::KagemushaWalletProviderErrorV1> for Failure {
             E::Unavailable(reason) => Self::unavailable(UNAVAILABLE, reason),
             E::Uncertain(reason) => Self::unavailable(UNCERTAIN, reason),
             E::NoSpace => Self::code(NOT_ENOUGH_STORAGE),
-            E::NoReplaceUnsupported | E::Invalid { .. } => Self::code(INVALID),
+            E::NoReplaceUnsupported => Self::invalid(236),
+            E::Invalid { field } => Self::invalid(match field {
+                "provider handle poisoned" => 207,
+                "archive.manifest_size" => 220,
+                "archive.head_not_released" => 221,
+                "archive.stale_checkpoint" => 222,
+                "archive.immutable_record" => 223,
+                "archive.call_failed" => 224,
+                "marker.archive_checkpoint" => 225,
+                "marker.generation" => 226,
+                "marker.state" => 227,
+                "marker.phase" => 228,
+                "marker.frame" => 229,
+                "marker.selected_generation" => 230,
+                "marker.completion_digest" => 231,
+                "marker.slot" => 232,
+                "marker.anchor_kind" => 233,
+                "marker.superseded" => 234,
+                "marker.retired_generation" => 235,
+                "archive.slot" => 237,
+                "archive.call" => 238,
+                "archive.pending_records" => 239,
+                "archive.record_size" | "archive size" => 240,
+                "current source" => 241,
+                _ => -1,
+            }),
             E::UnavailableCustodyData { object } => Self::custody(match object {
                 "enrollment intent" => 111,
                 "enrollment phase" => 112,
@@ -202,12 +237,23 @@ impl From<state::Error> for Failure {
             // Preserve an unexpected typed read until this final ABI projection;
             // do not invent locality or an invalidity verdict from its diagnostic.
             E::FinalityRead(_) => Self::code(INTERNAL),
-            E::Invalid(_) | E::Collected => Self::code(INVALID),
+            E::Invalid(field) => Self::invalid(match field {
+                "ledger activation unconfirmed" => 200,
+                "ledger Load request" | "ledger Load request identity" => 201,
+                "changed ledger Load request" => 202,
+                "ledger Load lifecycle" => 203,
+                "G1 validation" => 204,
+                "archive encoding" | "private archive encoding" => 205,
+                "index object size" | "index value size" => 206,
+                "provider handle poisoned" => 207,
+                _ => -1,
+            }),
+            E::Collected => Self::invalid(209),
             E::WitnessLost(_) => Self::code(CUSTODY_LOST),
             E::CreditConflict | E::OperationConflict => Self::code(CONFLICT),
             E::FoldRequired => Self::code(FOLD_REQUIRED),
             E::Pending => Self::code(UNCERTAIN),
-            E::NoHead => Self::code(INVALID),
+            E::NoHead => Self::invalid(208),
             E::Cancelled => Self::code(CANCELLED),
             E::ArtifactsUnavailable(_) => Self::code(ARTIFACTS_UNAVAILABLE),
             E::Proof(_) => Self::code(PROOF_REJECTED),

@@ -1878,8 +1878,21 @@ typedef struct {
        110 unavailable custody data (unspecified kind), 111 enrollment intent,
        112 enrollment phase, 113 committed enrollment marker,
        114 abandoned-slot custody conflict, 120 unexpected custody entry.
+       For -1: 200 ledger activation unconfirmed, 201 invalid Load request,
+       202 changed Load amount, 203 inactive Load lifecycle, 204 G1 validation,
+       205 archive encoding, 206 index object/value size, 207 poisoned provider handle,
+       208 no monetary head, 209 collected witness;
+       220 archive manifest size, 221 archive head not released,
+       222 stale archive checkpoint, 223 immutable archive record conflict,
+       224 failed archive call, 225 marker archive checkpoint,
+       226 marker generation, 227 marker state, 228 marker phase,
+       229 marker frame, 230 marker selected generation, 231 marker completion digest,
+       232 marker slot, 233 marker anchor kind, 234 marker superseded,
+       235 marker retired generation, 236 atomic no-replace publication unsupported,
+       237 archive slot, 238 missing archive call, 239 pending archive records,
+       240 archive record/envelope size, 241 current source.
        -1 means no more specific cause. Diagnostic only: no recovery permission,
-       actor/key data, or change to the refusal. platform_code stays zero for -7. */
+       actor/key data, or change to the refusal. platform_code stays zero for -1/-7. */
     int32_t reason;
     int32_t platform_code;
     uint64_t sequence_low;
