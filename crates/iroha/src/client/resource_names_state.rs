@@ -6,6 +6,37 @@ use iroha_torii_shared::resource_names_state::{
     NativeResourceNamesStateV1,
 };
 
+/// HTTP rejection from a native-originals read, without private response data.
+///
+/// Consumers may distinguish an unavailable provider from a responding invalid
+/// proof using the status; they must still verify every successful carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeReadHttpError {
+    status: StatusCode,
+}
+impl NativeReadHttpError {
+    /// Construct an error from a received HTTP response status.
+    #[must_use]
+    pub fn new(status: StatusCode) -> Self {
+        Self { status }
+    }
+    /// Return the received status without retaining a body, URL or credentials.
+    #[must_use]
+    pub fn status(&self) -> u16 {
+        self.status.as_u16()
+    }
+}
+impl std::fmt::Display for NativeReadHttpError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "native originals read returned HTTP {}",
+            self.status
+        )
+    }
+}
+impl std::error::Error for NativeReadHttpError {}
+
 impl Client {
     /// Fetch canonical complete native alias/SNS wire using this client's exact account signer.
     ///
@@ -81,10 +112,7 @@ impl Client {
         // Never follow a non-success carrier or reinterpret an HTTP error as absence.
         if response.status() != StatusCode::OK {
             // Private provider bodies and any echoed credentials never enter an error/log.
-            return Err(eyre!(
-                "native resource names read returned HTTP {}",
-                response.status()
-            ));
+            return Err(NativeReadHttpError::new(response.status()).into());
         }
         let media_type = Self::response_content_type(&response)
             .split(';')
@@ -262,6 +290,34 @@ mod tests {
                 .verify(client.key_pair.public_key(), &message)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn native_names_provider_preserves_typed_http_rejections_without_private_bodies() {
+        for status in [502, 503, 504, 401, 403, 429] {
+            let client = client_with_base_url(Url::parse("https://mock.local/peer4/").unwrap());
+            let response = Response::builder()
+                .status(status)
+                .body(b"private-provider-body-must-not-escape".to_vec())
+                .unwrap();
+            let (result, requests) = capture_requests(response, |transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(transport)
+                    .get_native_resource_names_state_wire([0xab; 32], transport_fixture_scope())
+            });
+            let error = result.unwrap_err();
+            assert_eq!(
+                error
+                    .downcast_ref::<NativeReadHttpError>()
+                    .unwrap()
+                    .status(),
+                status
+            );
+            assert!(!format!("{error:#}").contains("private-provider-body"));
+            assert_eq!(requests.len(), 1);
+            assert_canonical_account_signed_request(&client, &requests[0]);
+        }
     }
     #[test]
     fn native_names_provider_preserves_exact_peer_prefix_in_signed_get() {
