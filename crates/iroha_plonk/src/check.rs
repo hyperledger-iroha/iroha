@@ -32,10 +32,12 @@
 //! reads unassigned advice cells in the usable rows as zero, which is what the
 //! halo2-axiom `MockProver` does.
 //!
-//! The checker is single-threaded and deterministic; failures are reported in
-//! gate, lookup and copy order.
+//! Rows are evaluated in parallel, and the report stays deterministic: failures are
+//! reported in gate, lookup and copy order, in row order within each.
 
 use std::collections::BTreeSet;
+
+use rayon::prelude::*;
 
 use core::fmt;
 
@@ -610,11 +612,15 @@ fn check_gates<F: PastaField>(
 ) {
     for (gate_index, gate) in cs.gates().iter().enumerate() {
         for (poly_index, poly) in gate.polynomials().iter().enumerate() {
-            for row in 0..witness.n {
-                let value = poly.evaluate(&mut RowEvaluator { witness, row });
-                if matches!(value, Val::Real(v) if v.is_zero_vartime()) {
-                    continue;
-                }
+            // Rows are independent; an indexed collect keeps them in row order.
+            let unsatisfied: Vec<(usize, Val<F>)> = (0..witness.n)
+                .into_par_iter()
+                .filter_map(|row| {
+                    let value = poly.evaluate(&mut RowEvaluator { witness, row });
+                    (!matches!(value, Val::Real(v) if v.is_zero_vartime())).then_some((row, value))
+                })
+                .collect();
+            for (row, value) in unsatisfied {
                 let cells = witness.queried_cells([poly], row);
                 let location = witness.locate(row, &cells);
                 let gate_name = gate.name().to_owned();
@@ -651,8 +657,12 @@ fn check_lookups<F: PastaField>(
 ) {
     for (lookup_index, lookup) in cs.lookups().iter().enumerate() {
         let mut table = BTreeSet::new();
-        for row in 0..witness.usable {
-            if let Some(tuple) = evaluate_tuple(witness, lookup.table_expressions(), row) {
+        let tuples: Vec<Option<Vec<F>>> = (0..witness.usable)
+            .into_par_iter()
+            .map(|row| evaluate_tuple(witness, lookup.table_expressions(), row))
+            .collect();
+        for (row, tuple) in tuples.into_iter().enumerate() {
+            if let Some(tuple) = tuple {
                 table.insert(tuple);
             } else {
                 let cells = witness.queried_cells(lookup.table_expressions(), row);
@@ -665,11 +675,14 @@ fn check_lookups<F: PastaField>(
                 });
             }
         }
-        for row in 0..witness.usable {
-            let input = evaluate_tuple(witness, lookup.input_expressions(), row);
-            if input.as_ref().is_some_and(|tuple| table.contains(tuple)) {
-                continue;
-            }
+        let missing: Vec<(usize, Option<Vec<F>>)> = (0..witness.usable)
+            .into_par_iter()
+            .filter_map(|row| {
+                let input = evaluate_tuple(witness, lookup.input_expressions(), row);
+                (!input.as_ref().is_some_and(|tuple| table.contains(tuple))).then_some((row, input))
+            })
+            .collect();
+        for (row, input) in missing {
             let cells = witness.queried_cells(lookup.input_expressions(), row);
             let location = witness.locate(row, &cells);
             failures.push(match input {
