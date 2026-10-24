@@ -131,6 +131,12 @@ pub trait RecordStore: Send + Sync {
     /// # Errors
     /// A write failure.
     fn append_log(&self, entry: &LogEntry) -> io::Result<()>;
+    /// Exclusive installation over this store. Instances that share one record store (the
+    /// global instance and every lane) run their store-id check, installation events and
+    /// store-id writes one at a time (§7.4); `None` for a store with a single instance.
+    fn installation(&self) -> Option<parking_lot::MutexGuard<'_, ()>> {
+        None
+    }
 }
 
 /// Durable store of block bodies the core accepted and that are not applied yet (§7.4 body
