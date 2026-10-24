@@ -101,6 +101,66 @@ fn refused(stage: &'static str, reason: &'static str) -> Error {
     unavailable()
 }
 
+// Only the original physical World writer can wake this snapshot attempt.
+// No StateView or failed World overlay is retained while parked. The capture
+// closure must keep the same certified tip, challenge, attestation and budget;
+// every retry reruns the original cut, permission and publication fences.
+fn snapshot_after_busy<T>(
+    budget: &AllocationBudget,
+    deadline: std::time::Instant,
+    mut capture: impl FnMut() -> Result<T, WorldStateSnapshotError>,
+) -> Result<T, WorldStateSnapshotError> {
+    use iroha_allocation::release::ReleaseRegistration;
+    use std::task::{Context, Waker};
+
+    // Admit the physical waiter before the first snapshot attempt. If it cannot
+    // fit, preserve the original one-attempt behavior and its exact refusal.
+    let mut registration = budget
+        .try_reserve(ReleaseRegistration::allocation_layout())
+        .ok()
+        .and_then(|mut prepaid| ReleaseRegistration::from_reservation(&mut prepaid).ok());
+    if let Some(registration) = &mut registration {
+        registration.bind_thread(std::thread::current());
+    }
+    loop {
+        let error = match capture() {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        let WorldStateSnapshotError::Acquisition(mv::storage::AdmittedStorageError::Busy {
+            release,
+            ..
+        }) = &error
+        else {
+            return Err(error);
+        };
+        let Some(registration) = &mut registration else {
+            return Err(error);
+        };
+        let mut context = Context::from_waker(Waker::noop());
+        loop {
+            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                registration.cancel();
+                return Err(error);
+            };
+            if remaining.is_zero() {
+                registration.cancel();
+                return Err(error);
+            }
+            if registration.poll_wait(release, &mut context).is_ready() {
+                registration.cancel();
+                break;
+            }
+            // The registration wakes this exact blocking worker. Spurious
+            // wakes recheck the same release; neither wait nor retry resets time.
+            std::thread::park_timeout(remaining);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(error);
+        }
+    }
+}
+
 /// Full-original carrier requires real native signed read authority; API-token access alone never suffices.
 pub async fn handler(
     State(app): State<SharedAppState>,
@@ -122,6 +182,11 @@ async fn handle(
     uri: Uri,
     remote: std::net::SocketAddr,
 ) -> Result<AxResponse, Error> {
+    // Reuse the existing query admission allowance, measured once at route
+    // entry. The caller's own request/freshness deadline is never extended.
+    let snapshot_deadline = std::time::Instant::now()
+        .checked_add(query_admission_remaining(&app))
+        .ok_or_else(capacity)?;
     let principal = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     let challenge = validate_request_target(&headers, &method, &uri, &challenge_literal)?;
     let account = authenticate(&app, &headers, &method, &uri, &[])?;
@@ -258,8 +323,8 @@ async fn handle(
             .map_err(|error| refused("attestation", attestation_refusal_reason(&error)))?;
             drop(chain);
             drop(view);
-            let mut body = state
-                .with_native_resource_names_snapshot_v1(
+            let mut body = snapshot_after_busy(&budget, snapshot_deadline, || {
+                state.with_native_resource_names_snapshot_v1(
                     &tip,
                     &capture_authority,
                     &budget,
@@ -309,7 +374,8 @@ async fn handle(
                             .map_err(|_| "native names state serialization refused".to_owned())
                     },
                 )
-                .map_err(|error| refused("snapshot", snapshot_refusal_reason(&error)))?;
+            })
+            .map_err(|error| refused("snapshot", snapshot_refusal_reason(&error)))?;
             body.memory = Some(_memory);
             let content_type = match format {
                 ResponseFormat::Norito => "application/x-norito",
@@ -383,6 +449,10 @@ fn unavailable() -> Error {
 #[cfg(test)]
 #[path = "resource_names_state/recent_tip_tests.rs"]
 mod recent_tip_tests;
+
+#[cfg(test)]
+#[path = "resource_names_state/snapshot_wait_tests.rs"]
+mod snapshot_wait_tests;
 
 #[cfg(test)]
 mod tests {

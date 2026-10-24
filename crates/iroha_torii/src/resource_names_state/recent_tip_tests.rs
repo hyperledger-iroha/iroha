@@ -58,6 +58,15 @@ fn names_current_tip_uses_three_original_frames_at_later_height_and_keeps_source
         assert_eq!(actual.block_hash(), original.block_hash());
         assert_eq!(actual.core_hash(), original.core_hash());
         assert_eq!(actual.result(), original.result());
+        // The live default operation pool is 48 MB. Its source allocation
+        // shares that original pool with the response and complete World cut.
+        let production_source = NativeFinalityLimits {
+            block_bytes: 6_000_000,
+            journal_bytes: 12_000_000,
+            block_count: 3,
+            allocated_bytes: 24_000_000,
+        };
+        assert_eq!(read(production_source).unwrap().id(), original.id());
         for insufficient in [
             NativeFinalityLimits {
                 block_count: 2,
@@ -104,7 +113,7 @@ fn names_current_tip_preserves_actual_signed_dataspace_scope_and_rejects_other_r
     assert!(read(SumeragiRootScope::Global).is_err());
     let other_scope = SumeragiRootScope::Dataspace {
         parent_network_id: approval.global_network,
-        dataspace_id: iroha_data_model::nexus::DataSpaceId::new(
+        dataspace_id: iroha_model_base::topology::DataSpaceId::new(
             approval.dataspace.as_u64().wrapping_add(1),
         ),
     };
