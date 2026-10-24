@@ -1,20 +1,24 @@
-//! A startup owner retains its lock, validated prefix and every original recovery allocation.
+//! A startup owner retains its lock, its tip authentication and every original recovery allocation.
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError as Attempt;
 
 /// Exclusive initialization in progress; no not-ready store or unvalidated tip is exposed.
+///
+/// Opening authenticates only the durable tip frame. Every lower frame carries its own CommitQC
+/// and availability evidence, and the read that first uses it authenticates it, so opening a
+/// store costs one frame instead of its whole history.
 pub struct LaneStoreOpen {
     pub(super) store: FileLaneBlockStore,
     target: u64,
-    pub(super) validated: u64,
+    pub(super) tip_authenticated: bool,
 }
 impl LaneStoreOpen {
     pub(super) fn new(store: FileLaneBlockStore, target: u64) -> Self {
         Self {
             store,
             target,
-            validated: 0,
+            tip_authenticated: target == 0,
         }
     }
     /// Complete recovery, returning this exact owner on every refusal or error.
@@ -22,7 +26,8 @@ impl LaneStoreOpen {
     /// failures remain errors. No retry spins or alternate proof/source replacement occur here.
     ///
     /// # Errors
-    /// Full certificate/availability validation, original-pool resource refusal or durability.
+    /// Full certificate/availability validation of the tip, original-pool resource refusal or
+    /// durability.
     #[allow(
         clippy::result_large_err,
         reason = "return original startup ownership without allocating"
@@ -47,16 +52,19 @@ impl LaneStoreOpen {
     }
     fn progress(&mut self) -> Result<(), Attempt<io::Error>> {
         self.store.revalidate_custody()?;
-        while self.validated < self.target {
-            let height = self.validated + 1;
+        if !self.tip_authenticated {
             let mut state = self.store.state.lock();
-            let prepared =
-                self.store
-                    .read_prepared(&mut state, height, &super::ReadInterest::Historical)?;
+            let prepared = self.store.read_prepared(
+                &mut state,
+                self.target,
+                &super::ReadInterest::Historical,
+            )?;
             let bytes = prepared.prepare(&self.store.budget).map_err(record_error)?;
-            self.store.publish_frame(height, bytes)?;
+            // Synchronizes the tip frame and its directory entry. Each lower frame finished
+            // its own synchronized publication before its successor could be appended.
+            self.store.publish_frame(self.target, bytes)?;
             state.read = None;
-            self.validated = height;
+            self.tip_authenticated = true;
         }
         self.store.revalidate_custody()?;
         Ok(())

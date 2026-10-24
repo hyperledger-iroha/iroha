@@ -1,6 +1,7 @@
 //! Original-funded durable lane frames with retained startup, read and publication owners.
 //!
-//! One exclusive instance owner validates its entire recovered prefix before exposing a tip.
+//! One exclusive instance owner authenticates its durable tip frame before exposing it; every
+//! lower frame is authenticated by the read that first uses it.
 //! Complete signed availability and the original CommitQC share one canonical atomic frame.
 
 use super::{

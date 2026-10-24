@@ -596,6 +596,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     let state = &prepared.state;
     let crypto = &prepared.crypto;
     let blocks = &prepared.blocks;
+    let lane_stores = &prepared.lane_stores;
     let executor = &mut prepared.executor;
     // Replay what Kura holds above genesis.
     let stored = blocks.height();
@@ -616,6 +617,10 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
                 height,
                 reason: ReplayError::Execution(reason),
             })?;
+        // No lane runner reconciles retirement during replay; release the stores of
+        // incarnations the replayed block retired, as the runner does once it starts.
+        let lanes = state.view().world().sumeragi_lanes().clone();
+        lane_stores.release_retired(&lanes);
     }
     // Every replayed result bound the complete World state roots; the incrementally advanced
     // accumulator must also equal a cold capture of the rebuilt World (Appendix E, E51).
