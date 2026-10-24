@@ -64,7 +64,8 @@ const MERCHANT_KEY_SEED: u8 = 250;
 const FUNDING: u128 = 5;
 const LOAD: u128 = 3;
 const PAY: u128 = 2;
-/// Concurrent proving jobs across payer setup, Sends, the merchant's Receives and its fold.
+/// Concurrent payer proving jobs (setup and Sends); the merchant proves its Receives and fold
+/// as one device, outside these slots.
 const PROVERS: usize = 6;
 /// Ledger transactions per block for Activate and IssueLoad batches, and instructions per
 /// transaction for registration and funding.
@@ -745,7 +746,10 @@ fn hundred_payers_pay_one_merchant_and_every_accepted_payment_folds_unburned() {
                 };
                 match prepared {
                     ControlFlow::Continue(job) => {
-                        let proved = slots.run(|| job.prove());
+                        // The merchant is one device: its fold proves at once, never behind a
+                        // payer slot. A prepared job holds the scheduler until it runs, and a
+                        // Receive waits for it to observe cancellation.
+                        let proved = job.prove();
                         let outcome = proved
                             .and_then(|proved| wallets[0].lock().unwrap().fold_publish(proved));
                         match outcome {
@@ -797,9 +801,8 @@ fn hundred_payers_pay_one_merchant_and_every_accepted_payment_folds_unburned() {
                         let send_ms = send.elapsed().as_millis();
                         let receive_at = Instant::now();
                         let incoming = receive(&payment, &companion, id(213, index));
-                        let received = slots.run(|| {
-                            complete(wallets[0].lock().unwrap().execute(incoming).unwrap())
-                        });
+                        let received =
+                            complete(wallets[0].lock().unwrap().execute(incoming).unwrap());
                         let digests =
                             KagemushaWalletPaymentV1::decode_canonical(&payment, &scheme_id)
                                 .unwrap()
