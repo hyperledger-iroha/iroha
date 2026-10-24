@@ -14,6 +14,8 @@ mod account_history_sse;
 #[cfg(feature = "app_api")]
 pub use account_history_sse::{AccountHistorySseRequest, handle_v1_account_history_sse};
 #[cfg(feature = "app_api")]
+pub(crate) mod asset_movements;
+#[cfg(feature = "app_api")]
 pub mod collection_sources;
 #[cfg(feature = "app_api")]
 mod contract_return_attempt;

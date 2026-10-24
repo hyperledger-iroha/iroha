@@ -4697,6 +4697,7 @@ With `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite now:
 | repo agreements | `torii.repoAgreements` | `POST /v1/repo/agreements/query` |
 | account assets | `torii.accountAssets(accountId)` | `POST /v1/accounts/{account_id}/assets/query` |
 | asset holders | `torii.assetHolders(definitionId)` | `POST /v1/assets/{definition_id}/holders/query` |
+| asset movements | `torii.assetMovements(definitionId)` | `POST /v1/assets/{definition_id}/movements/query` |
 | transactions | `torii.transactions` | `POST /v1/transactions/query` |
 | account transactions | `torii.accountTransactions(accountId)` | `POST /v1/accounts/{account_id}/transactions/query` |
 
@@ -4767,8 +4768,8 @@ only for `metadata.*` fields and travel in the JSON form.
 filter, projection, ordering and cursor controls. Pages require `next_cursor`
 on the wire (a nonempty token or null); unknown envelope fields are rejected.
 
-Transactions, account transactions, `contractActivity`, `contractEvents` and
-`accountHistory(accountId)` are history collections: rows come
+Transactions, account transactions, `contractActivity`, `contractEvents`,
+`accountHistory(accountId)` and `assetMovements(definitionId)` are history collections: rows come
 newest first by `block_height`, then `block_index` (the position within the
 block; account movements also carry `movement_index`), and `sort`, `includeTotal` and `aggregate` are rejected. Each page has
 a bounded scan budget, so a page may hold fewer than `limit` items, even none,

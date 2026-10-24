@@ -4,6 +4,15 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added the asset movement feed of `GET /v1/assets/{definition_id}/movements`: `assetMovements(definitionId)`
+  on `ToriiClient` and `ToriiBrowserClient` is a history collection of every committed movement of the
+  definition, newest first (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`,
+  with `result_ok: false` for a failed transaction's attempted movement). Its rows are decoded with the new
+  strict `decodeAssetMovementRow` (`decodeAssetMovementRows` for a page's items) unless the query has
+  `select`; `ASSET_MOVEMENT_KINDS` and `ASSET_MOVEMENT_ROW_FIELDS` name the kinds and fields
+  (`ToriiAssetMovementRow`). Torii answers from a node-local index: `503 asset_movements_indexing` with
+  `Retry-After` while it catches up, and `asset_movements_not_retained` below its retained floor. It needs a
+  validator build that includes the feed.
 - `queryMultisigProposals` and `resolveMultisigProposal` take `includeApprovals: true` to receive
   `approvals`: one `{ approver, approved_at_ms, block_height }` per approver in `proposal.approvals`, in the
   order the approvals landed (`MultisigProposalApproval`). The node reads the times from committed blocks,

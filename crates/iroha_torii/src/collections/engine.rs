@@ -1069,6 +1069,11 @@ fn sort_plan_bytes(spec: &CollectionSpec, query: &ListQuery) -> Result<usize, Co
     Ok(charge)
 }
 
+/// Collections whose pages may continue strictly below a completely examined public block.
+fn continues_at_block_boundaries(spec: &CollectionSpec) -> bool {
+    spec.tag == super::specs::ACCOUNT_HISTORY.tag || spec.tag == super::specs::ASSET_MOVEMENTS.tag
+}
+
 fn decode_position(
     spec: &CollectionSpec,
     digest: &[u8; DIGEST_BYTES],
@@ -1076,10 +1081,10 @@ fn decode_position(
     allocation_bytes: usize,
 ) -> Result<Vec<u64>, CursorError> {
     let values = cursor::decode(token, spec.tag, digest, spec.positioned, allocation_bytes)?;
-    // Account-history scans may finish between complete public blocks without
-    // seeing an account movement. Null coordinates name that block boundary,
-    // never a hidden transaction or movement inside it.
-    if spec.tag == super::specs::ACCOUNT_HISTORY.tag
+    // Account-history and asset-movement pages may finish between complete public
+    // blocks without seeing a visible movement. Null coordinates name that block
+    // boundary, never a hidden transaction or movement inside it.
+    if continues_at_block_boundaries(spec)
         && matches!(values.as_slice(), [_, Value::Null, Value::Null])
     {
         let height = values[0]
@@ -1478,7 +1483,8 @@ impl Prepared<'_> {
             .map(|position| (position[0], position[1], position[2]))
     }
 
-    /// Account history continues strictly below this completely scanned public block.
+    /// Account history and asset movements continue strictly below this completely
+    /// scanned public block.
     pub(crate) fn resume_before_block(&self) -> Option<u64> {
         self.after_position
             .as_ref()
@@ -1492,7 +1498,7 @@ impl Prepared<'_> {
         items: Vec<Map>,
         height: u64,
     ) -> Result<RowPage, CollectionError> {
-        if self.spec.tag != super::specs::ACCOUNT_HISTORY.tag || height == 0 {
+        if !continues_at_block_boundaries(self.spec) || height == 0 {
             return Err(cursor_error(CursorError::Malformed));
         }
         Ok(RowPage {
@@ -2976,6 +2982,27 @@ mod tests {
         )
         .unwrap();
         assert!(events.block_boundary_page(Vec::new(), 70).is_err());
+    }
+
+    #[test]
+    fn asset_movement_pages_continue_below_public_block_boundaries() {
+        let spec = &super::super::specs::ASSET_MOVEMENTS;
+        let query = ListQuery::new().filter(field("kind").eq("TRANSFER"));
+        let prepared = prepare(spec, "coin", &query, &LIMITS).unwrap();
+        let token = prepared
+            .block_boundary_page(Vec::new(), 70)
+            .unwrap()
+            .next_cursor
+            .unwrap();
+        let next = query.clone().cursor(token);
+        let resumed = prepare(spec, "coin", &next, &LIMITS).unwrap();
+        assert_eq!(resumed.resume_before_block(), Some(70));
+        assert_eq!(resumed.resume_subrow_position(), None);
+        assert!(prepare(spec, "other", &next, &LIMITS).is_err());
+        let page = prepared.subrow_page(Vec::new(), Some((70, 2, 8))).unwrap();
+        let next = query.clone().cursor(page.next_cursor.unwrap());
+        let resumed = prepare(spec, "coin", &next, &LIMITS).unwrap();
+        assert_eq!(resumed.resume_subrow_position(), Some((70, 2, 8)));
     }
 
     #[test]

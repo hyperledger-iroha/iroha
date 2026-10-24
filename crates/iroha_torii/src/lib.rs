@@ -38094,6 +38094,7 @@ impl Torii {
         );
         mount_account_transactions_query(builder, app_state.clone(), transaction_max_content_len);
         mount_account_history_query(builder, app_state.clone(), transaction_max_content_len);
+        mount_asset_movements_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
             CONTRACTS_ACTIVITY_GET => optional_canonical_signature_get(handler_contracts_activity_get);
@@ -38115,6 +38116,7 @@ impl Torii {
             ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => optional_canonical_signature_get(handler_account_permissions);
             ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => optional_canonical_signature_get(handler_account_transactions_get);
             ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET => optional_canonical_signature_get(handler_account_history_get);
+            ASSETS_BY_DEFINITION_ID_MOVEMENTS_GET => optional_canonical_signature_get(routing::asset_movements::handler_get);
         );
         mount_signed_proof_query(builder);
         mount_catalog_route_rows!(

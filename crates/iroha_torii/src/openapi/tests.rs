@@ -494,6 +494,7 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/accounts/inspect"
                     | "/v1/accounts/{account_id}/assets/query"
                     | "/v1/assets/{definition_id}/holders/query"
+                    | "/v1/assets/{definition_id}/movements/query"
                     | "/v1/transactions/query"
                     | "/v1/accounts/{account_id}/transactions/query"
                     | "/v1/repo/agreements/query"
@@ -3140,6 +3141,78 @@ fn openapi_uint64_bounds_keep_exact_integer_tokens_recursively() {
 mod privacy_release_qualification;
 #[path = "tests/validator_committee_contract.rs"]
 mod validator_committee_contract;
+
+#[test]
+fn asset_movement_feed_documents_rows_kinds_and_freshness() {
+    let document = canonical_document();
+    for (path, method) in [
+        ("/v1/assets/{definition_id}/movements", "get"),
+        ("/v1/assets/{definition_id}/movements/query", "post"),
+    ] {
+        let operation = openapi_operation(&document, path, method);
+        assert_eq!(
+            operation_response_schema_ref(operation, "200", path),
+            "#/components/schemas/AssetMovementPage",
+            "{method} {path}"
+        );
+        for status in ["400", "503"] {
+            assert_eq!(
+                operation_response_schema_ref(operation, status, path),
+                "#/components/schemas/ErrorEnvelope",
+                "{method} {path} {status}"
+            );
+        }
+        assert!(
+            operation["responses"]["503"]["headers"]
+                .get("Retry-After")
+                .is_some(),
+            "{method} {path} names its retry delay"
+        );
+    }
+    let schemas = component_schemas(&document);
+    let row = &schemas["AssetMovementRow"];
+    assert_eq!(row["additionalProperties"].as_bool(), Some(false));
+    let properties = row["properties"].as_object().unwrap();
+    assert_eq!(
+        properties
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "id",
+            "kind",
+            "timestamp_ms",
+            "from_account_id",
+            "to_account_id",
+            "asset_definition_id",
+            "amount",
+            "tx_hash",
+            "authority",
+            "block_height",
+            "block_index",
+            "movement_index",
+            "result_ok",
+        ])
+    );
+    let kinds: Vec<&str> = properties["kind"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|kind| kind.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "TRANSFER",
+            "MINT",
+            "BURN",
+            "OFFLINE_LOAD",
+            "OFFLINE_UNLOAD",
+            "OFFLINE_FEE"
+        ]
+    );
+    assert_eq!(properties["result_ok"]["type"].as_str(), Some("boolean"));
+}
 
 #[test]
 fn multisig_proposal_reads_return_approval_times_only_when_asked() {

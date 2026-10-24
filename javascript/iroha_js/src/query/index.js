@@ -47,6 +47,12 @@ export {
   decodeAccountAliasRows,
   decodeAccountAliases,
 } from "./accountAliases.js";
+export {
+  ASSET_MOVEMENT_KINDS,
+  ASSET_MOVEMENT_ROW_FIELDS,
+  decodeAssetMovementRow,
+  decodeAssetMovementRows,
+} from "./assetMovements.js";
 export { decodePage } from "./page.js";
 export {
   TORII_COLLECTION_PATHS,

@@ -33,6 +33,7 @@ Design rules:
 | RWA lots | `GET /v1/rwas` | `POST /v1/rwas/query` |
 | account assets | `GET /v1/accounts/{account_id}/assets` | `POST /v1/accounts/{account_id}/assets/query` |
 | asset holders | `GET /v1/assets/{definition_id}/holders` | `POST /v1/assets/{definition_id}/holders/query` |
+| asset movements | `GET /v1/assets/{definition_id}/movements` | `POST /v1/assets/{definition_id}/movements/query` |
 | transactions | — | `POST /v1/transactions/query` |
 | account transactions | `GET /v1/accounts/{account_id}/transactions` | `POST /v1/accounts/{account_id}/transactions/query` |
 | repo agreements | `GET /v1/repo/agreements` | `POST /v1/repo/agreements/query` |
@@ -47,7 +48,7 @@ Design rules:
 | bond entitlements | `GET /v1/bonds/{bond_id}/entitlements` | — |
 
 `GET` and `POST …/query` are equivalent; `POST` additionally supports
-`aggregate` and avoids URL length limits. Responses are JSON. Transactions, account movements, contract activity and events
+`aggregate` and avoids URL length limits. Responses are JSON. Transactions, account movements, asset movements, contract activity and events
 are [history collections](#history-collections) with a few
 restrictions.
 
@@ -259,6 +260,7 @@ Request problems return `400` with the standard error envelope:
 | `invalid_cursor` | malformed cursors or cursors from a different query |
 | `invalid_include_total` | non-boolean values |
 | `query_scan_limit_exceeded` | reads that exceed the row, group, distinct-value or byte budget, and history pages that exhaust their budget without a safe continuation |
+| `asset_movements_not_retained` | asset movement reads that need movements below the node's retained floor (`details.expected`) |
 
 `details.field` names the control; when a data field is at fault,
 `details.actual` names it and `details.expected` lists the accepted fields as a
@@ -297,6 +299,7 @@ absent.
 | contract activity | `authority`, `entrypoint_hash`, `contract_address`, `contract_alias`, `contract_entrypoint` (strings), `timestamp_ms`, `block_height`, `block_index` (numbers), `result_ok` (bool), `contract_payload`, `fee_payment` (JSON) | newest first |
 | bonds | `id`, `vault`, `terms.issuer`, `terms.paying_agent`, `terms.payment_asset`, `terms.identifiers.isin`, `state.lifecycle` (strings, *sort*), `terms.coupon_rate_bps`, `terms.coupon_frequency`, `terms.issue_date_ms`, `terms.maturity_date_ms` (numbers, *sort*), `state.outstanding_units`, `state.redeemed_units`, `state.retired_units` (decimals, *sort*), `state.transfers_frozen` (bool), `terms`, `state` (JSON); each item is the complete `BondRecord` | `id` |
 | bond entitlements | `id` (`<index>:<holder>`), `bond`, `holder` (strings, *sort*), `index`, `claimed_at_ms` (number or null) (numbers, *sort*), `units`, `amount` (decimals, *sort*), `claimed` (bool) | `id` (cash flow, then holder) |
+| asset movements | `id` (`<tx_hash>:<movement_index>`), `kind` (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`), `asset_definition_id`, `tx_hash`, `authority`, `from_account_id` (string or null for `MINT`), `to_account_id` (string or null for `BURN`) (strings), `timestamp_ms`, `block_height`, `block_index`, `movement_index` (numbers), `amount` (decimal), `result_ok` (bool) | newest chain position first, then descending movement index |
 | contract events | `event_id`, `provenance` (always `emitted`), `authority`, `execution_hash_hex`, `block_hash_hex`, `contract_address`, `event_kind` (strings), `schema_version`, `timestamp_ms`, `block_height`, `output_index`, `emission_index` (numbers), `result_ok` (always true), `participants`, `asset_ids` (lists of strings), `numeric_fields`, `payload`, `emission`, `fee_payment` (JSON) | descending `block_height`, `output_index`, `emission_index` |
 
 Subscription status is a lower-case string (`active`, `paused`, `past_due`,
@@ -445,6 +448,49 @@ a rejected output retaining emissions is invalid.
   outputs and Pipeline callbacks sourced from a Network input also require
   visibility of that committed input's route legs. Block-approved and Time
   callbacks use their public source event and the emitting contract's scope.
+
+### Asset movements
+
+`/v1/assets/{definition_id}/movements` lists every committed movement of one asset
+definition, one row per movement, newest first by `(block_height, block_index,
+movement_index)`. Instead of walking committed blocks for each page, the node folds every
+committed block once into a local index, so a page costs the same at any chain length and a
+`block_height > N` filter examines only the rows above `N`.
+
+- `TRANSFER`, `MINT` and `BURN` rows are exactly what account history projects for the
+  transaction: instruction legs in instruction order, then applied batch receipts and executed
+  multisig movements. A transfer is one row from its source to its destination (account history's
+  outgoing and incoming legs), a mint has a null `from_account_id`, a burn a null
+  `to_account_id`, and a transfer to oneself names the same account twice.
+- KAGEMUSHA Loads, Unloads and fee claims move value inside the executor, without a transfer
+  instruction. Top-level `iroha.kagemusha.wallet.ledger.v1` instructions of successful
+  transactions add `OFFLINE_LOAD` rows (payer to reserve, and a quoted online charge from the
+  payer to the charge beneficiary) when the immutable issuance record names the transaction, and
+  `OFFLINE_UNLOAD` rows (reserve to the account, and the online charge) and `OFFLINE_FEE` rows
+  (reserve to the fee beneficiary) when the immutable payout record names it. A retry that finds
+  an earlier payout moved nothing and has no row. Amounts are the registered atomic units at the
+  registered scale.
+- `movement_index` counts the transaction's movements in that order, across asset definitions;
+  `id` is `<tx_hash>:<movement_index>`. `authority` is the transaction's signer and
+  `timestamp_ms` its creation time, as account history reports them.
+- A failed transaction keeps its attempted instruction legs with `result_ok: false`, so activity
+  counts include failures; batch receipts, multisig executions and KAGEMUSHA records exist only
+  for successful transactions. Sum the `result_ok = true` rows for the value moved.
+- Visibility is account history's: a row is visible when the caller reads every data space of its
+  transaction's committed route legs, or reads all ledger data. Hidden rows count toward a page's
+  budget of 20,000 examined rows; a page that spends it continues strictly below a public block
+  boundary.
+- A read brings the index up to the committed tip itself when at most 64 blocks are missing. A
+  longer gap, as after a restart, is folded by one background pass; until it reaches the tip,
+  reads answer `503 asset_movements_indexing` with `Retry-After`, the indexed height in
+  `details.actual` and the committed tip in `details.expected`, never a silently incomplete page.
+  A node started in emergency Fast mode answers `503 emergency_fast_history_unavailable`.
+- The index keeps at most 500,000 rows. Past that it drops its oldest blocks, and a read that
+  needs movements below the retained floor answers `400 asset_movements_not_retained` with the
+  floor height in `details.expected`; `block_height >= <floor>` reads what is retained. A block
+  the node cannot project raises the floor above it.
+- The index changes nothing the chain executes, so it ships with an in-place node update and
+  covers the existing history.
 
 ## Aggregates
 

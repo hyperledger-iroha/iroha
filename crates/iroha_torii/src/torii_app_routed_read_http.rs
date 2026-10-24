@@ -206,6 +206,7 @@ enum AppLocalCollectionRead {
     AccountInspection,
     ContractActivity,
     ContractEvents,
+    AssetMovements,
     RepoAgreements,
     SubscriptionPlans,
     Subscriptions,
@@ -269,7 +270,7 @@ impl AppReadHttpRoute {
     }
 }
 #[cfg(feature = "app_api")]
-const APP_LOCAL_COLLECTION_HTTP_ROUTES_V1: [AppReadHttpRoute; 43] = [
+const APP_LOCAL_COLLECTION_HTTP_ROUTES_V1: [AppReadHttpRoute; 45] = [
     AppReadHttpRoute {
         endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::AccountInspection),
         route: route_catalog::application_api::ACCOUNTS_INSPECT_POST,
@@ -293,6 +294,16 @@ const APP_LOCAL_COLLECTION_HTTP_ROUTES_V1: [AppReadHttpRoute; 43] = [
     AppReadHttpRoute {
         endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ContractEvents),
         route: route_catalog::application_api::CONTRACTS_EVENTS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::AssetMovements),
+        route: route_catalog::application_api::ASSETS_BY_DEFINITION_ID_MOVEMENTS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::AssetMovements),
+        route: route_catalog::application_api::ASSETS_BY_DEFINITION_ID_MOVEMENTS_QUERY_POST,
         decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
     },
     AppReadHttpRoute {

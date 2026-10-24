@@ -11,7 +11,7 @@
  * executor that performs the request (transport, signing, error decoding) is
  * supplied by the client that owns the collection.
  *
- * Transaction, contract and account history collections: rows come newest first by
+ * Transaction, contract, account history and asset movement collections: rows come newest first by
  * block position, and `sort`, `includeTotal` and `aggregate` are rejected. A
  * page may hold fewer than `limit` items (even none) and still carry a
  * `nextCursor`; the iterators keep following it. Explorer feeds use the same
@@ -221,6 +221,12 @@ export function createToriiCollections(execute, decoders = {}) {
         decoders.uaidManifest === undefined ? undefined : (row) => decoders.uaidManifest(row, uaid)),
     assetHolders: (assetDefinitionId) =>
       collection(`/v1/assets/${pathSegment(assetDefinitionId, "assetDefinitionId")}/holders`),
+    assetMovements: (assetDefinitionId) =>
+      collection(
+        `/v1/assets/${pathSegment(assetDefinitionId, "assetDefinitionId")}/movements`,
+        true,
+        decoders.assetMovement,
+      ),
     accountTransactions: (accountId) =>
       collection(`/v1/accounts/${pathSegment(accountId, "accountId")}/transactions`, true),
   });

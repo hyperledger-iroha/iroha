@@ -200,6 +200,7 @@ import {
   isIdempotentSubmissionRejection,
 } from "./toriiErrors.js";
 import { createToriiCollections } from "./query/collections.js";
+import { decodeAssetMovementRow } from "./query/assetMovements.js";
 import { decodePage, decodePageText, stringifyRequestJson } from "./query/page.js";
 import { filterQueryText } from "./query/listQuery.js";
 import { decodeEventFrames } from "./toriiEventStream.js";
@@ -1568,6 +1569,7 @@ export class ToriiClient {
         uaidManifest: (row, uaid) => normalizeUaidManifestRecord(row, uaid, "uaid manifest row"),
         contractActivity: (row) => normalizeContractActivityListItem(row, "contract activity row"),
         contractEvents: (row) => normalizeContractEventListItem(row, "contract event row"),
+        assetMovement: (row) => decodeAssetMovementRow(row, "asset movement row"),
         explorerRwas: (row) => {
           normalizeExplorerRwaRecord(row, "explorer rwa row");
           return row;
@@ -1697,6 +1699,16 @@ export class ToriiClient {
    */
   assetHolders(assetDefinitionId) {
     return this.#collections.assetHolders(assetDefinitionId);
+  }
+
+  /**
+   * Every committed movement of one asset definition, newest first
+   * (`POST /v1/assets/{definition_id}/movements/query`). A history collection whose
+   * rows are decoded with `decodeAssetMovementRow` unless the query has `select`.
+   * @param {string} assetDefinitionId asset definition id or alias
+   */
+  assetMovements(assetDefinitionId) {
+    return this.#collections.assetMovements(assetDefinitionId);
   }
 
   /**

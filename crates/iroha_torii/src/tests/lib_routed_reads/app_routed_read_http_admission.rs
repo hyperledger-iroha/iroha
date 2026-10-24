@@ -219,7 +219,7 @@ mod app_routed_read_http_admission_tests {
                 )
             })
             .collect();
-        assert_eq!(collections.len(), 32);
+        assert_eq!(collections.len(), 34);
         for pair in collections.chunks_exact(2) {
             assert_eq!(pair[0].endpoint, pair[1].endpoint);
             assert_eq!(
@@ -257,7 +257,7 @@ mod app_routed_read_http_admission_tests {
             inspection.decoder,
             AppRoutedReadHttpDecoder::Json("AccountInspectionRequest")
         );
-        assert_eq!(ids.len(), 43);
+        assert_eq!(ids.len(), 45);
     }
 
     async fn native_read_owner_probe(

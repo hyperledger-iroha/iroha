@@ -3328,6 +3328,8 @@ type ToriiRuntimeNamespaceExport =
   | "FilterSyntaxError"
   | "ACCOUNT_ALIAS_FIELDS"
   | "ACCOUNT_ALIAS_ROW_FIELDS"
+  | "ASSET_MOVEMENT_KINDS"
+  | "ASSET_MOVEMENT_ROW_FIELDS"
   | "AGGREGATE_FUNCTIONS"
   | "CURSOR_MAX_BYTES"
   | "FIELD_PATH_MAX_BYTES"
@@ -3350,6 +3352,8 @@ type ToriiRuntimeNamespaceExport =
   | "accountsInAliasScope"
   | "decodeAccountAliasRows"
   | "decodeAccountAliases"
+  | "decodeAssetMovementRow"
+  | "decodeAssetMovementRows"
   | "decodePage"
   | "field"
   | "isDecimalText"
@@ -9535,6 +9539,87 @@ export declare function decodeAccountAliasRows(
   context?: string,
 ): ToriiAccountAliasRow[];
 
+/** What one asset movement moved (`/v1/assets/{definition_id}/movements`). */
+export type ToriiAssetMovementKind =
+  | "TRANSFER"
+  | "MINT"
+  | "BURN"
+  | "OFFLINE_LOAD"
+  | "OFFLINE_UNLOAD"
+  | "OFFLINE_FEE";
+
+/** Every movement kind, in the order Torii documents them. */
+export declare const ASSET_MOVEMENT_KINDS: readonly [
+  "TRANSFER",
+  "MINT",
+  "BURN",
+  "OFFLINE_LOAD",
+  "OFFLINE_UNLOAD",
+  "OFFLINE_FEE",
+];
+
+/** Fields of a complete movement row; `decodeAssetMovementRow` requires every one. */
+export declare const ASSET_MOVEMENT_ROW_FIELDS: readonly [
+  "id",
+  "kind",
+  "timestamp_ms",
+  "from_account_id",
+  "to_account_id",
+  "asset_definition_id",
+  "amount",
+  "tx_hash",
+  "authority",
+  "block_height",
+  "block_index",
+  "movement_index",
+  "result_ok",
+];
+
+/**
+ * One committed movement of an asset definition, from the node's movement index. `TRANSFER`,
+ * `MINT` and `BURN` are instruction legs, applied batch receipts and executed multisig transfers;
+ * `OFFLINE_LOAD`, `OFFLINE_UNLOAD` and `OFFLINE_FEE` are KAGEMUSHA Loads, paid Unloads and paid
+ * fee claims. A failed transaction's attempted movement has `result_ok: false`.
+ */
+export interface ToriiAssetMovementRow {
+  /** `<tx_hash>:<movement_index>`. */
+  readonly id: string;
+  readonly kind: ToriiAssetMovementKind;
+  /** Creation time of the transaction, Unix milliseconds. */
+  readonly timestamp_ms: number;
+  /** Null only for `MINT`. */
+  readonly from_account_id: string | null;
+  /** Null only for `BURN`. */
+  readonly to_account_id: string | null;
+  readonly asset_definition_id: string;
+  /** Exact canonical decimal text. */
+  readonly amount: string;
+  readonly tx_hash: string;
+  /** Signer of the transaction. */
+  readonly authority: string;
+  readonly block_height: number;
+  readonly block_index: number;
+  /** Position among the transaction's movements. */
+  readonly movement_index: number;
+  readonly result_ok: boolean;
+}
+
+/**
+ * Decode one complete movement row exactly: unknown kinds, non-canonical amounts, a null
+ * account outside `MINT`/`BURN`, non-integer coordinates and a failed KAGEMUSHA row are
+ * `invalid_response`; fields Torii adds later are ignored.
+ */
+export declare function decodeAssetMovementRow(
+  row: unknown,
+  context?: string,
+): ToriiAssetMovementRow;
+
+/** Decode the items of an asset movement page read without `select`. */
+export declare function decodeAssetMovementRows(
+  items: unknown,
+  context?: string,
+): ToriiAssetMovementRow[];
+
 export interface CollectionRequestOptions {
   /** Abort the request (and, for `pages()`/`iterate()`, further paging). */
   signal?: AbortSignal;
@@ -10086,6 +10171,8 @@ export declare class ToriiBrowserClient {
   accountAssets(accountId: string): ToriiCollection<ToriiAccountAssetRow, ToriiBrowserCollectionRequestOptions>;
   /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
   assetHolders(assetDefinitionId: string): ToriiCollection<ToriiAssetHolderRow, ToriiBrowserCollectionRequestOptions>;
+  /** Every committed movement of one asset definition, newest first (`POST /v1/assets/{definition_id}/movements/query`). */
+  assetMovements(assetDefinitionId: string): ToriiHistoryCollection<ToriiAssetMovementRow, ToriiBrowserCollectionRequestOptions>;
   /** Committed transactions, newest first (`POST /v1/transactions/query`). */
   readonly transactions: ToriiHistoryCollection<ToriiTransactionRow, ToriiBrowserCollectionRequestOptions>;
   /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`). */
@@ -10398,6 +10485,8 @@ export declare class ToriiClient {
   accountAssets(accountId: string): ToriiCollection<ToriiAccountAssetRow, ToriiCollectionRequestOptions>;
   /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
   assetHolders(assetDefinitionId: string): ToriiCollection<ToriiAssetHolderRow, ToriiCollectionRequestOptions>;
+  /** Every committed movement of one asset definition, newest first (`POST /v1/assets/{definition_id}/movements/query`). */
+  assetMovements(assetDefinitionId: string): ToriiHistoryCollection<ToriiAssetMovementRow, ToriiCollectionRequestOptions>;
   /** Committed transactions, newest first (`POST /v1/transactions/query`). */
   readonly transactions: ToriiHistoryCollection<ToriiTransactionRow, ToriiCollectionRequestOptions>;
   /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`). */

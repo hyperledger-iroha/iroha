@@ -34,6 +34,8 @@ pub enum CollectionTarget {
     AccountAssets(String),
     /// `/v1/assets/{definition_id}/holders` (path literal: id or alias)
     AssetHolders(String),
+    /// `/v1/assets/{definition_id}/movements` (path literal: id or alias)
+    AssetMovements(String),
     /// `/v1/accounts/{account_id}/transactions` (path literal: I105 id or alias)
     AccountTransactions(String),
     /// `/v1/accounts/{account_id}/history`
@@ -71,6 +73,7 @@ impl CollectionTarget {
             Self::Rwas => &specs::RWAS,
             Self::AccountAssets(_) => &specs::ACCOUNT_ASSETS,
             Self::AssetHolders(_) => &specs::ASSET_HOLDERS,
+            Self::AssetMovements(_) => &specs::ASSET_MOVEMENTS,
             Self::AccountTransactions(_) => &specs::ACCOUNT_TRANSACTIONS,
             Self::AccountHistory(_) => &specs::ACCOUNT_HISTORY,
             Self::Transactions => &specs::TRANSACTIONS,
@@ -92,6 +95,7 @@ impl CollectionTarget {
         match self {
             Self::AccountAssets(literal)
             | Self::AssetHolders(literal)
+            | Self::AssetMovements(literal)
             | Self::AccountTransactions(literal)
             | Self::AccountHistory(literal)
             | Self::AccountPermissions(literal)
@@ -122,6 +126,7 @@ impl CollectionTarget {
             Self::Rwas => ENDPOINT_RWAS_QUERY,
             Self::AccountAssets(_) => ENDPOINT_ACCOUNTS_ASSETS_QUERY,
             Self::AssetHolders(_) => ENDPOINT_ASSET_HOLDERS_QUERY,
+            Self::AssetMovements(_) => super::asset_movements::ENDPOINT,
             Self::AccountTransactions(_) => ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
             Self::AccountHistory(_) => ENDPOINT_ACCOUNTS_HISTORY,
             Self::Transactions => ENDPOINT_TRANSACTIONS_QUERY,
@@ -793,6 +798,26 @@ fn execute_prepared_collection_local(
             } else {
                 prepared.execute_entries(rows.map(|(_, row)| row), limits)
             }
+        }
+        CollectionTarget::AssetMovements(definition_literal) => {
+            // Movements come from the node-local index, which the route brought up to
+            // the committed tip before this worker started.
+            let now_ms = asset_alias_observation_time_ms(state);
+            let definition = {
+                let world = state.world_view();
+                let definition =
+                    resolve_asset_definition_selector(&world, definition_literal, now_ms)?;
+                if !visibility.allows_asset_definition(&world, &definition) {
+                    return Err(explorer_not_found());
+                }
+                definition
+            };
+            return super::asset_movements::collection_page(
+                state,
+                prepared,
+                &definition,
+                visibility,
+            );
         }
         CollectionTarget::AccountTransactions(account_literal) => {
             let (account, _) = parse_account_path_segment_with_state(

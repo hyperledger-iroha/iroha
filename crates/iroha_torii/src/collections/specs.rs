@@ -623,8 +623,36 @@ pub static BOND_ENTITLEMENTS: CollectionSpec = CollectionSpec {
     ordered: true,
 };
 
+/// `/v1/assets/{definition_id}/movements`: every committed movement of one asset
+/// definition, newest first, from the node-local movement index. One row per movement;
+/// a failed transaction's attempted movements carry `result_ok: false`.
+pub static ASSET_MOVEMENTS: CollectionSpec = CollectionSpec {
+    id: "asset_movements",
+    tag: 20,
+    fields: &[
+        text("id"),
+        text("kind"),
+        number("timestamp_ms"),
+        account("from_account_id"),
+        account("to_account_id"),
+        text("asset_definition_id"),
+        number("amount"),
+        text("tx_hash"),
+        account("authority"),
+        number("block_height"),
+        number("block_index"),
+        number("movement_index"),
+        boolean("result_ok"),
+    ],
+    metadata: false,
+    default_sort: &[],
+    identity: &["block_height", "block_index", "movement_index"],
+    positioned: 3,
+    ordered: false,
+};
+
 /// Every collection, in cursor-tag order.
-pub const ALL: [&CollectionSpec; 19] = [
+pub const ALL: [&CollectionSpec; 20] = [
     &DOMAINS,
     &ACCOUNTS,
     &ASSET_DEFINITIONS,
@@ -644,6 +672,7 @@ pub const ALL: [&CollectionSpec; 19] = [
     &CONTRACT_EVENTS,
     &BONDS,
     &BOND_ENTITLEMENTS,
+    &ASSET_MOVEMENTS,
 ];
 
 #[cfg(test)]
