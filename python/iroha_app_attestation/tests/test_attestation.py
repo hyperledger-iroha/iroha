@@ -16,6 +16,8 @@ from iroha_app_attestation.attestation import (
     EvidenceRefused,
     _authorization_list,
     _certificate_valid_at,
+    _x509_extensions,
+    _x509_tbs,
     android_patch_policy_met,
     cbor_exact,
     certificate_key_extensions,
@@ -69,13 +71,22 @@ class AttestationTests(unittest.TestCase):
             return tlv(0x30, tlv(0x30, version + mandatory + optionals)
                        + b"\x30\x00\x03\x01\x00")
 
-        _, extensions = certificate_spki_extensions(certificate(block(oid_one)))
-        self.assertEqual(extensions, {"1.2.3.4": b"x"})
+        for critical, expected in ((b"", False), (b"\x01\x01\x00", False),
+                                   (b"\x01\x01\xff", True)):
+            original = certificate(block(oid_one, critical))
+            _, extensions = certificate_spki_extensions(original)
+            self.assertEqual(extensions, {"1.2.3.4": b"x"})
+            _, tbs, start, version_number = _x509_tbs(original)
+            self.assertEqual(_x509_extensions(tbs, start, version_number),
+                             {"1.2.3.4": (expected, b"x")})
         for malformed in (
             block(oid_one) + block(oid_two),
             block(oid_one) + b"\x81\x02\x00\x01",
             block(oid_one, b"\x02\x01\x01"),
-            block(oid_one, b"\x01\x01\x00"),
+            block(oid_one, b"\x01\x01\x01"),
+            block(oid_one, b"\x01\x00"),
+            block(oid_one, b"\x01\x02\x00\xff"),
+            block(oid_one, b"\x21\x01\x00"),
         ):
             with self.subTest(malformed=malformed), self.assertRaises(AttestationRejected):
                 certificate_spki_extensions(certificate(malformed))
