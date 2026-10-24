@@ -40684,7 +40684,7 @@ mod tiered_snapshot_diff_tests {
         source.commit(Vec::new());
         assert!(matches!(
             decode_state_snapshot_value(norito::json::to_value(source.state().as_ref()).unwrap()),
-            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+            Err(deserialize::StateRestoreError::SuccessorRequired { height: 2 })
         ));
         let mut replay = CertifiedTestChain::start(config()).expect("same signed genesis");
         replay

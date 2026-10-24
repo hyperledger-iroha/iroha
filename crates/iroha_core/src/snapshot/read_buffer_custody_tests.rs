@@ -310,13 +310,10 @@ async fn snapshot_read_buffer_writer_notifies_after_unlock_on_success_and_error(
                 .poll(&mut Context::from_waker(&waker))
                 .is_pending()
         );
-        let extras = if expect_error {
-            // Two authenticated extras make rollback chronology ambiguous.
-            // The writer reads/refunds both, then fails before pointer mutation.
-            Some((
-                publish_test_snapshot_generation(&store, b"extra one", &key).1,
-                publish_test_snapshot_generation(&store, b"extra two", &key).1,
-            ))
+        let extra = if expect_error {
+            // An authenticated extra larger than the remaining read pool refuses GC's
+            // payload read, so the writer fails before pointer mutation.
+            Some(publish_test_snapshot_generation(&store, &vec![b'x'; payload_len + 64], &key).1)
         } else {
             None
         };
@@ -329,12 +326,9 @@ async fn snapshot_read_buffer_writer_notifies_after_unlock_on_success_and_error(
             SnapshotResourcePolicy::default(),
             &budget,
         );
-        if let Some((first, second)) = extras {
-            assert!(
-                matches!(result, Err(TryWriteError::PublicationIntegrity(ref reason)) if reason.contains("ambiguous"))
-            );
-            assert!(first.snapshot_directory.is_dir());
-            assert!(second.snapshot_directory.is_dir());
+        if let Some(extra) = extra {
+            assert!(matches!(result, Err(TryWriteError::PayloadAllocation(_))));
+            assert!(extra.snapshot_directory.is_dir());
         } else {
             result.unwrap();
         }

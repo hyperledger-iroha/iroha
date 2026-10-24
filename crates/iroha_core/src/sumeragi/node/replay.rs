@@ -23,6 +23,9 @@ pub enum NativeReplaySeedError {
     /// A seed can be captured only before genesis, never from current World state.
     #[error("replay seed requires original pre-genesis State")]
     NotEmpty,
+    /// A restored-State seed requires a State restored at a positive height.
+    #[error("restored replay seed requires a State restored from a snapshot")]
+    NotRestored,
 }
 
 /// Original pre-genesis input identity and public policy snapshots.
@@ -70,7 +73,61 @@ impl NativeReplaySeed {
             return Err(NativeReplaySeedError::NotEmpty);
         }
         drop(view);
-        Ok(Self {
+        Ok(Self::from_state(
+            state,
+            kura_config,
+            genesis_account,
+            consensus_mode,
+            state.nexus_snapshot(),
+            state.lane_manifests.read().clone(),
+            state.lane_compliance_engine(),
+        ))
+    }
+
+    /// Capture the original pre-genesis inputs for a State restored from a snapshot (E56).
+    ///
+    /// Process policies are installed from the same configuration as on a fresh State. The
+    /// restored lane catalogs are those of its height, so the caller supplies the configured
+    /// pre-genesis Nexus and manifests (`crate::state::pregenesis_lane_policy`) that a fresh
+    /// State installs before genesis, which the isolated replay starts from again.
+    ///
+    /// # Errors
+    /// A State not restored at a positive height, or an original State-view refusal.
+    pub fn capture_restored(
+        state: &State,
+        kura_config: config::Kura,
+        genesis_account: AccountId,
+        consensus_mode: ConsensusMode,
+        nexus: config::Nexus,
+        manifests: crate::governance::manifest::LaneManifestRegistryHandle,
+        compliance: Option<Arc<crate::compliance::LaneComplianceEngine>>,
+    ) -> Result<Self, NativeReplaySeedError> {
+        let view = state.try_view_once()?;
+        if view.height() == 0 || view.native_execution_tip().is_none() {
+            return Err(NativeReplaySeedError::NotRestored);
+        }
+        drop(view);
+        Ok(Self::from_state(
+            state,
+            kura_config,
+            genesis_account,
+            consensus_mode,
+            nexus,
+            manifests,
+            compliance,
+        ))
+    }
+
+    fn from_state(
+        state: &State,
+        kura_config: config::Kura,
+        genesis_account: AccountId,
+        consensus_mode: ConsensusMode,
+        nexus: config::Nexus,
+        manifests: crate::governance::manifest::LaneManifestRegistryHandle,
+        compliance: Option<Arc<crate::compliance::LaneComplianceEngine>>,
+    ) -> Self {
+        Self {
             source: state.kura_handle(),
             budget: state.ivm_execution_budget(),
             chain: state.chain_id_ref().clone(),
@@ -81,15 +138,15 @@ impl NativeReplaySeed {
             pipeline: state.installed_pipeline().clone(),
             zk: state.installed_zk().clone(),
             crypto: state.crypto(),
-            nexus: state.nexus_snapshot(),
+            nexus,
             oracle: state.oracle.clone(),
             fraud: state.fraud_monitoring.clone(),
             governance: state.gov.clone(),
             content: state.content.clone(),
             settlement: state.settlement,
-            manifests: state.lane_manifests.read().clone(),
-            compliance: state.lane_compliance_engine(),
-        })
+            manifests,
+            compliance,
+        }
     }
 
     pub(crate) fn belongs_to(&self, state: &State) -> bool {

@@ -621,30 +621,53 @@ async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_pub
 }
 
 #[tokio::test]
-async fn snapshot_publication_preserves_native_cut_and_requires_original_replay() {
+async fn snapshot_publication_preserves_native_cut_and_restores_only_below_the_kura_tip() {
     let mut chain = native_snapshot_chain();
     chain.commit(Vec::new());
-    let state = chain.state();
     let root = tempdir().unwrap();
     let store = root.path().join("snapshot");
     let key = checked_random_snapshot_keypair();
-    let before = exact_snapshot_payload_bytes(state);
-    try_write_snapshot(state, &store, &key, TEST_CHUNK_SIZE).unwrap();
+    let before = exact_snapshot_payload_bytes(chain.state());
+    let snapshot_tip = chain.state().latest_block_hash_fast();
+    try_write_snapshot(chain.state(), &store, &key, TEST_CHUNK_SIZE).unwrap();
     assert_canonical_snapshot_generation(&store);
     assert_eq!(
         std::fs::read(current_generation_artifact(&store, SNAPSHOT_FILE_NAME)).unwrap(),
         before
     );
     let budget = snapshot_read_budget_for_testing();
+    // At the Kura tip nothing certifies the published World yet.
     assert!(matches!(
-        strict_snapshot_read_for_custody_test(&store, state, chain.kura(), &key, &budget, &|_| Ok(
-            ()
-        )),
-        Err(TryReadError::NativeExecutionReplayRequired)
+        strict_snapshot_read_for_custody_test(
+            &store,
+            chain.state(),
+            chain.kura(),
+            &key,
+            &budget,
+            &|_| Ok(())
+        ),
+        Err(TryReadError::SuccessorRequired { snapshot_height: 2 })
     ));
     assert_eq!(budget.reserved_bytes(), 0);
-    assert_eq!(exact_snapshot_payload_bytes(state), before);
+    assert_eq!(exact_snapshot_payload_bytes(chain.state()), before);
     assert_eq!(chain.kura().exact_durable_blocks_count().unwrap(), 2);
+    // Its certified successor binds that World, so the same generation restores.
+    chain.commit(Vec::new());
+    let restored = strict_snapshot_read_for_custody_test(
+        &store,
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| Ok(()),
+    )
+    .expect("a snapshot below the Kura tip restores against its successor");
+    assert_eq!(restored.committed_height(), 2);
+    assert_eq!(restored.latest_block_hash_fast(), snapshot_tip);
+    assert_eq!(exact_snapshot_payload_bytes(&restored), before);
+    drop(restored);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(chain.kura().exact_durable_blocks_count().unwrap(), 3);
 }
 #[tokio::test]
 async fn snapshot_fixture_key_generation_preserves_algorithm() {

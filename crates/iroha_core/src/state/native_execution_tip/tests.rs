@@ -132,8 +132,14 @@ fn snapshot_claim(state: &State) -> NativeExecutionTipSnapshot {
 fn restore_reauthenticates_native_current_and_undo_and_rejects_claim_substitution() {
     let mut chain = chain();
     chain.commit(Vec::new());
-    let view = chain.state().view();
+    let state = Arc::clone(chain.state());
+    let view = state.view();
     let hashes: Vec<_> = view.block_hashes().iter().copied().collect();
+    // Every substitution starts from the claim captured at the snapshot tip.
+    let captured = norito::json::to_json(&snapshot_claim(&state)).unwrap();
+    let claim = || norito::json::from_str::<NativeExecutionTipSnapshot>(&captured).unwrap();
+    // The certified successor binds the World published at the snapshot tip.
+    chain.commit(Vec::new());
     let restore = |claim: NativeExecutionTipSnapshot| {
         claim.restore(
             &chain.state().ivm_execution_budget(),
@@ -141,18 +147,33 @@ fn restore_reauthenticates_native_current_and_undo_and_rejects_claim_substitutio
             view.network_id(),
             &hashes,
             chain.kura(),
+            &mut |_| Ok(()),
         )
     };
-    let restored = restore(snapshot_claim(chain.state())).unwrap();
-    assert_eq!(*restored.view().get(), view.native_execution_tip());
+    let restored = restore(claim()).unwrap();
+    assert_eq!(*restored.cell.view().get(), view.native_execution_tip());
     assert_eq!(
-        *restored.predecessor_view().get(),
+        *restored.cell.predecessor_view().get(),
         *view.native_execution_tip_predecessor.get()
     );
-    let mut wrong_result = snapshot_claim(chain.state());
+    assert_eq!(
+        restored.world_root,
+        Some(
+            chain
+                .committed(3)
+                .commitment()
+                .execution
+                .parent_world_state_root
+        )
+    );
+    assert_eq!(
+        restored.world_root,
+        Some(view.world.state_accumulator.get().root().unwrap())
+    );
+    let mut wrong_result = claim();
     wrong_result.blocks.as_mut().unwrap().result[0] ^= 1;
     assert!(restore(wrong_result).is_err());
-    let mut wrong_scope = snapshot_claim(chain.state());
+    let mut wrong_scope = claim();
     wrong_scope.blocks.as_mut().unwrap().root_scope =
         iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
             parent_network_id: *view.network_id(),
@@ -162,7 +183,7 @@ fn restore_reauthenticates_native_current_and_undo_and_rejects_claim_substitutio
         matches!(restore(wrong_scope), Err(TipRestoreError::History(_))),
         "a decoded scope cannot replace the authenticated genesis scope"
     );
-    let mut wrong_undo_scope = snapshot_claim(chain.state());
+    let mut wrong_undo_scope = claim();
     wrong_undo_scope
         .revert
         .as_mut()
@@ -178,7 +199,7 @@ fn restore_reauthenticates_native_current_and_undo_and_rejects_claim_substitutio
         matches!(restore(wrong_undo_scope), Err(TipRestoreError::History(_))),
         "the predecessor scope is checked against the same authenticated prefix"
     );
-    let mut wrong_undo = snapshot_claim(chain.state());
+    let mut wrong_undo = claim();
     wrong_undo
         .revert
         .as_mut()
@@ -189,13 +210,14 @@ fn restore_reauthenticates_native_current_and_undo_and_rejects_claim_substitutio
         .core_hash[0] ^= 1;
     assert!(restore(wrong_undo).is_err());
     assert!(
-        snapshot_claim(chain.state())
+        claim()
             .restore(
                 &chain.state().ivm_execution_budget(),
                 &"another-native-instance".parse().unwrap(),
                 view.network_id(),
                 &hashes,
                 chain.kura(),
+                &mut |_| Ok(()),
             )
             .is_err()
     );
@@ -215,8 +237,11 @@ fn restore_rebuilds_sparse_history_checkpoints_from_verified_snapshot_prefix() {
     let target_height = checkpoint_height - 1;
     let target_hash = chain.committed(target_height).block_hash();
     let claim = snapshot_claim(chain.state());
-    let view = chain.state().view();
+    let state = Arc::clone(chain.state());
+    let view = state.view();
     let hashes: Vec<_> = view.block_hashes().iter().copied().collect();
+    // The certified successor binds the World published at the snapshot tip.
+    chain.commit(Vec::new());
     let checkpoints = chain.kura().history_checkpoints();
     // A restart has the authenticated journal and decoded snapshot, but no
     // node-local checkpoints retained from the original executions.
@@ -229,13 +254,15 @@ fn restore_rebuilds_sparse_history_checkpoints_from_verified_snapshot_prefix() {
             view.network_id(),
             &hashes,
             chain.kura(),
+            &mut |_| Ok(()),
         )
         .unwrap();
-    assert_eq!(*restored.view().get(), view.native_execution_tip());
+    assert_eq!(*restored.cell.view().get(), view.native_execution_tip());
     assert_eq!(
-        *restored.predecessor_view().get(),
+        *restored.cell.predecessor_view().get(),
         *view.native_execution_tip_predecessor.get()
     );
+    assert!(restored.world_root.is_some());
     assert_eq!(checkpoints.sparse_len(), 1);
     assert_eq!(
         checkpoints.recent_len(),
@@ -275,6 +302,80 @@ fn restore_rebuilds_sparse_history_checkpoints_from_verified_snapshot_prefix() {
 }
 
 #[test]
+fn restore_requires_the_certified_successor_of_the_snapshot_tip() {
+    let mut chain = chain();
+    chain.commit(Vec::new());
+    let view = chain.state().view();
+    let hashes: Vec<_> = view.block_hashes().iter().copied().collect();
+    assert!(matches!(
+        snapshot_claim(chain.state()).restore(
+            &chain.state().ivm_execution_budget(),
+            view.chain_id(),
+            view.network_id(),
+            &hashes,
+            chain.kura(),
+            &mut |_| Ok(()),
+        ),
+        Err(TipRestoreError::SuccessorRequired { height: 2 })
+    ));
+}
+
+#[test]
+fn restore_passes_each_certified_height_once_to_its_observer() {
+    let mut chain = chain();
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let claim = snapshot_claim(chain.state());
+    let refused_claim = snapshot_claim(chain.state());
+    let state = Arc::clone(chain.state());
+    let view = state.view();
+    let hashes: Vec<_> = view.block_hashes().iter().copied().collect();
+    chain.commit(Vec::new());
+    let mut observed = Vec::new();
+    claim
+        .restore(
+            &chain.state().ivm_execution_budget(),
+            view.chain_id(),
+            view.network_id(),
+            &hashes,
+            chain.kura(),
+            &mut |certified| {
+                observed.push(certified.height());
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        observed,
+        [1, 2, 3],
+        "genesis through the tip, not the successor"
+    );
+    let refusal = refused_claim.restore(
+        &chain.state().ivm_execution_budget(),
+        view.chain_id(),
+        view.network_id(),
+        &hashes,
+        chain.kura(),
+        &mut |certified| {
+            if certified.height() == 2 {
+                return Err(TipRestoreError::Field {
+                    field: "world.validator_committee",
+                    message: "refused".to_owned(),
+                });
+            }
+            Ok(())
+        },
+    );
+    assert!(matches!(
+        refusal,
+        Err(TipRestoreError::Field {
+            field: "world.validator_committee",
+            ..
+        })
+    ));
+}
+
+#[test]
 fn genesis_only_snapshot_cannot_decode_its_unsigned_result_into_authority() {
     let chain = chain();
     let view = chain.state().view();
@@ -287,6 +388,7 @@ fn genesis_only_snapshot_cannot_decode_its_unsigned_result_into_authority() {
                 view.network_id(),
                 &hashes,
                 chain.kura(),
+                &mut |_| Ok(()),
             )
             .is_err()
     );
@@ -347,10 +449,13 @@ fn restore_preserves_original_pool_refusal_release_and_same_source_retry() {
 
     let mut chain = chain();
     chain.commit(Vec::new());
-    let view = chain.state().view();
+    let state = Arc::clone(chain.state());
+    let view = state.view();
     let hashes: Vec<_> = view.block_hashes().iter().copied().collect();
-    let refused_claim = snapshot_claim(chain.state());
-    let retry_claim = snapshot_claim(chain.state());
+    let refused_claim = snapshot_claim(&state);
+    let retry_claim = snapshot_claim(&state);
+    // The certified successor binds the World published at the snapshot tip.
+    chain.commit(Vec::new());
     let pool = chain.state().ivm_execution_budget();
     let mut registration = crate::unit_test_support::release_registration(&pool);
     // The waiter is an original fixture owner, admitted before measuring request work.
@@ -390,6 +495,7 @@ fn restore_preserves_original_pool_refusal_release_and_same_source_retry() {
             view.network_id(),
             &hashes,
             chain.kura(),
+            &mut |_| Ok(()),
         )
         .map_err(StateRestoreError::from);
     let occupied = pool.reserved_bytes();
@@ -437,12 +543,13 @@ fn restore_preserves_original_pool_refusal_release_and_same_source_retry() {
             view.network_id(),
             &hashes,
             chain.kura(),
+            &mut |_| Ok(()),
         )
         .map_err(StateRestoreError::from)
         .expect("identical native source retries after original release");
-    assert_eq!(*restored.view().get(), view.native_execution_tip());
+    assert_eq!(*restored.cell.view().get(), view.native_execution_tip());
     assert_eq!(
-        *restored.predecessor_view().get(),
+        *restored.cell.predecessor_view().get(),
         *view.native_execution_tip_predecessor.get()
     );
     assert!(
@@ -464,7 +571,7 @@ fn restore_preserves_original_pool_refusal_release_and_same_source_retry() {
             .eq(hashes.iter().copied())
     );
     drop(view);
-    drop((chain, registration, release, exported, original));
+    drop((chain, state, registration, release, exported, original));
     collect_retired_restore_owners(&pool);
 }
 
@@ -511,10 +618,13 @@ fn restore_preserves_cumulative_prefix_decode_refusal_and_same_source_retry() {
     let mut chain = chain();
     chain.commit(Vec::new());
     chain.commit(Vec::new());
-    let view = chain.state().view();
+    let state = Arc::clone(chain.state());
+    let view = state.view();
     let hashes: Vec<_> = view.block_hashes().iter().copied().collect();
-    let refused_claim = snapshot_claim(chain.state());
-    let retry_claim = snapshot_claim(chain.state());
+    let refused_claim = snapshot_claim(&state);
+    let retry_claim = snapshot_claim(&state);
+    // The certified successor binds the World published at the snapshot tip.
+    chain.commit(Vec::new());
     let pool = chain.state().ivm_execution_budget();
     let baseline = pool.reserved_bytes();
     // Calibrate only the actual canonical constructor, under its original pool and codec.
@@ -576,6 +686,7 @@ fn restore_preserves_cumulative_prefix_decode_refusal_and_same_source_retry() {
                 view.network_id(),
                 &hashes,
                 chain.kura(),
+                &mut |_| Ok(()),
             )
             .map_err(StateRestoreError::from)
     });
@@ -640,12 +751,13 @@ fn restore_preserves_cumulative_prefix_decode_refusal_and_same_source_retry() {
             view.network_id(),
             &hashes,
             chain.kura(),
+            &mut |_| Ok(()),
         )
         .map_err(StateRestoreError::from)
         .expect("identical native prefix retries after caller decode scope");
-    assert_eq!(*restored.view().get(), view.native_execution_tip());
+    assert_eq!(*restored.cell.view().get(), view.native_execution_tip());
     assert_eq!(
-        *restored.predecessor_view().get(),
+        *restored.cell.predecessor_view().get(),
         *view.native_execution_tip_predecessor.get()
     );
     drop(restored);
@@ -662,7 +774,7 @@ fn restore_preserves_cumulative_prefix_decode_refusal_and_same_source_retry() {
     drop((exported, captured, original));
     assert_eq!(pool.reserved_bytes(), baseline + retired);
     drop(view);
-    drop(chain);
+    drop((chain, state));
     collect_retired_restore_owners(&pool);
 }
 
@@ -671,9 +783,12 @@ fn restore_keeps_corrupt_native_history_a_completed_schema_rejection() {
     use crate::state::deserialize::StateRestoreError;
     let mut chain = chain();
     chain.commit(Vec::new());
-    let view = chain.state().view();
-    let claim = snapshot_claim(chain.state());
+    let state = Arc::clone(chain.state());
+    let view = state.view();
+    let claim = snapshot_claim(&state);
     let hashes: Vec<_> = view.block_hashes().iter().copied().collect();
+    // The certified successor binds the World published at the snapshot tip.
+    chain.commit(Vec::new());
     let pool = chain.state().ivm_execution_budget();
     let reserved = pool.reserved_bytes();
     // This mutates real durable H2 bytes, leaving its pinned slot/hash and cached body intact.
@@ -687,6 +802,7 @@ fn restore_keeps_corrupt_native_history_a_completed_schema_rejection() {
             view.network_id(),
             &hashes,
             chain.kura(),
+            &mut |_| Ok(()),
         )
         .map_err(StateRestoreError::from)
         .err()

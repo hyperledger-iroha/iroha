@@ -287,7 +287,7 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         .clone();
     assert!(matches!(
         deserialize_state_snapshot_value_with_kura(value.clone(), Arc::clone(&kura)),
-        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        Err(super::deserialize::StateRestoreError::SuccessorRequired { .. })
     ));
     let (component, projected_nexus) =
         snapshot_runtime_component(&value, &state, Some(&configured))
@@ -386,7 +386,7 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
     let value: norito::json::Value = norito::json::from_json(&snapshot).unwrap();
     assert!(matches!(
         deserialize_state_snapshot_value_with_kura(value.clone(), Arc::clone(&state.kura)),
-        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        Err(super::deserialize::StateRestoreError::SuccessorRequired { .. })
     ));
     let (_, restored_nexus) = snapshot_runtime_component(&value, &state, Some(&configured))
         .expect("full configured baseline validates the retained runtime catalog component");
@@ -552,7 +552,7 @@ state_test! { sync snapshot_runtime_requires_exact_retained_predecessor_and_roun
     let snapshot = norito::json::to_value(&state).expect("complete State snapshot");
     assert!(matches!(
         deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(&state.kura)),
-        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        Err(super::deserialize::StateRestoreError::SuccessorRequired { .. })
     ));
     let (restored, _) = snapshot_runtime_component(&snapshot, &state, None)
         .expect("decode complete typed runtime component with both cuts");
@@ -648,7 +648,7 @@ state_test! { sync snapshot_owner_policy_native_replay_retains_original_configur
     assert!(matches!(
         deserialize_state_snapshot_value_with_kura(norito::json::to_value(replay.state().as_ref()).unwrap(),
             Arc::clone(replay.kura())),
-        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        Err(super::deserialize::StateRestoreError::SuccessorRequired { .. })
     ));
     assert!(!replay.state().nexus_runtime_restored_from_snapshot());
 }

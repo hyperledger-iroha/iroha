@@ -129,49 +129,84 @@ impl State {
         // Decode from the same protected parameter-cell version without acquiring the
         // unrelated World inventory; all catalog and baseline checks below stay native.
         let runtime = runtime_catalog_from_parameters(self.world.parameters.view().get())?;
-        let expected_dataspaces =
-            runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, runtime.as_ref())?;
-        if expected_dataspaces != nexus.dataspace_catalog {
-            return Err(runtime_catalog_invalid(
-                "effective dataspaces differ from the committed catalog",
-            ));
-        }
-        let registry = match runtime {
-            Some(runtime) => {
-                if runtime.baseline_manifests_hash
-                    != Hash::prehashed(baseline.baseline_consensus_policy_digest())
-                {
-                    return Err(runtime_catalog_invalid(
-                        "configured manifest baseline differs from committed catalog authority",
-                    ));
-                }
-                baseline
-                    .with_runtime_additions(
-                        &runtime.manifests,
-                        &nexus.lane_catalog,
-                        &nexus.dataspace_catalog,
-                        &nexus.governance,
-                    )
-                    .map_err(runtime_catalog_invalid)?
+        materialized_lane_manifests(baseline, nexus, runtime)
+    }
+}
+
+/// The configured lane policy a fresh State installs before its genesis: the static baseline
+/// and no committed runtime catalog. A replay that starts again from signed genesis (the
+/// isolated FASTPQ replay) needs it after a snapshot restore, whose State instead carries the
+/// effective catalogs of its height.
+///
+/// # Errors
+/// Rejects a changed baseline projection, incomplete active-lane coverage or invalid manifests.
+pub fn pregenesis_lane_policy(
+    mut nexus: iroha_config::parameters::actual::Nexus,
+    baseline: &LaneManifestRegistryHandle,
+) -> Result<
+    (
+        iroha_config::parameters::actual::Nexus,
+        LaneManifestRegistryHandle,
+    ),
+    LaneLifecycleError,
+> {
+    baseline
+        .validate_materialized_source_projection()
+        .map_err(runtime_catalog_invalid)?;
+    nexus.dataspace_catalog =
+        runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, None)?;
+    let manifests = materialized_lane_manifests(baseline, &nexus, None)?;
+    Ok((nexus, manifests))
+}
+
+// Effective manifests from frozen baseline sources and, once committed, the runtime catalog.
+fn materialized_lane_manifests(
+    baseline: &LaneManifestRegistryHandle,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    runtime: Option<iroha_data_model::nexus::NexusRuntimeCatalogV1>,
+) -> Result<LaneManifestRegistryHandle, LaneLifecycleError> {
+    let expected_dataspaces =
+        runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, runtime.as_ref())?;
+    if expected_dataspaces != nexus.dataspace_catalog {
+        return Err(runtime_catalog_invalid(
+            "effective dataspaces differ from the committed catalog",
+        ));
+    }
+    let registry = match runtime {
+        Some(runtime) => {
+            if runtime.baseline_manifests_hash
+                != Hash::prehashed(baseline.baseline_consensus_policy_digest())
+            {
+                return Err(runtime_catalog_invalid(
+                    "configured manifest baseline differs from committed catalog authority",
+                ));
             }
-            None => baseline
+            baseline
                 .with_runtime_additions(
-                    &[],
+                    &runtime.manifests,
                     &nexus.lane_catalog,
                     &nexus.dataspace_catalog,
                     &nexus.governance,
                 )
-                .map_err(runtime_catalog_invalid)?,
-        };
-        registry
-            .validate_active_coverage_for_catalog(&nexus.lane_catalog)
-            .map_err(|error| LaneLifecycleError::ManifestPolicyUnavailable {
-                lane: error.lane,
-                reason: error.message(),
-            })?;
-        registry
-            .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
-            .map_err(runtime_catalog_invalid)?;
-        Ok(Arc::new(registry))
-    }
+                .map_err(runtime_catalog_invalid)?
+        }
+        None => baseline
+            .with_runtime_additions(
+                &[],
+                &nexus.lane_catalog,
+                &nexus.dataspace_catalog,
+                &nexus.governance,
+            )
+            .map_err(runtime_catalog_invalid)?,
+    };
+    registry
+        .validate_active_coverage_for_catalog(&nexus.lane_catalog)
+        .map_err(|error| LaneLifecycleError::ManifestPolicyUnavailable {
+            lane: error.lane,
+            reason: error.message(),
+        })?;
+    registry
+        .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
+        .map_err(runtime_catalog_invalid)?;
+    Ok(Arc::new(registry))
 }
