@@ -5,7 +5,7 @@ use iroha_data_model::privacy::{
 };
 use thiserror::Error;
 /// Failure deriving one canonical Anonymous-PGC encrypted account-state root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum PrivacyPgcAccountStateRootErrorV1 {
     /// The supplied namespace is not structurally valid.
     #[error("privacy PGC account-root namespace is invalid")]
@@ -31,9 +31,9 @@ pub enum PrivacyPgcAccountStateRootErrorV1 {
     /// A public key or ciphertext component is not a canonical P-256 point.
     #[error("privacy PGC account-root contains an invalid canonical P-256 point")]
     InvalidPoint,
-    /// The canonical namespace could not be encoded.
-    #[error("privacy PGC namespace encoding failed")]
-    NamespaceEncoding,
+    /// Original canonical namespace encoding failure, retaining local resource provenance.
+    #[error("privacy PGC namespace encoding failed: {0}")]
+    NamespaceEncoding(#[source] norito::core::DecodeAttemptError),
     /// The canonical namespace encoding length cannot be represented.
     #[error("privacy PGC namespace encoding length overflow")]
     NamespaceEncodingLength,
@@ -49,8 +49,9 @@ pub enum PrivacyPgcAccountStateRootErrorV1 {
 /// 64 entries; no partial-table or caller-selected root form exists.
 ///
 /// # Errors
-/// Rejects an invalid namespace, epoch, supply, account count, ordering, or curve point;
-/// also reports namespace encoding failures and the reserved all-zero derived root.
+/// Rejects an invalid namespace, epoch, supply, account count, ordering, or curve point,
+/// and the reserved all-zero derived root. Canonical namespace encoding failures retain
+/// their original scoped allocation origin.
 pub fn derive_privacy_pgc_account_state_root_v1(
     namespace: PrivacyNamespaceV1,
     epoch: u64,
@@ -93,8 +94,22 @@ pub fn derive_privacy_pgc_account_state_root_v1(
                 .map_err(|_| PrivacyPgcAccountStateRootErrorV1::InvalidPoint)?;
         }
     }
-    let namespace_bytes = norito::to_bytes(&namespace)
-        .map_err(|_| PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding)?;
+    let namespace_bytes = norito::core::classify_decode_attempt(|| {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        // The closed namespace has fixed-size fields. Count and reserve its exact frame through
+        // the original allocation owner; do not use the infallible-growth ByteSink destination.
+        norito::core::to_bytes_bounded(&namespace, usize::MAX).map_err(|error| match error {
+            norito::core::BoundedEncodeError::Serialization(original) => original,
+            norito::core::BoundedEncodeError::AllocationFailed { bytes } => {
+                norito::Error::AllocationFailed {
+                    bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
+                }
+            }
+            norito::core::BoundedEncodeError::FrameTooLarge { .. } => norito::Error::LengthMismatch,
+        })
+    })
+    .map_err(PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding)?;
     let namespace_len = u64::try_from(namespace_bytes.len())
         .map_err(|_| PrivacyPgcAccountStateRootErrorV1::NamespaceEncodingLength)?;
     let mut hasher = blake3::Hasher::new();
@@ -114,14 +129,4 @@ pub fn derive_privacy_pgc_account_state_root_v1(
         return Err(PrivacyPgcAccountStateRootErrorV1::ZeroRoot);
     }
     Ok(root)
-}
-#[doc(hidden)]
-pub fn compute_privacy_pgc_account_state_root_v1(
-    namespace: PrivacyNamespaceV1,
-    epoch: u64,
-    total_supply: u32,
-    accounts: &[PrivacyPgcAccountV1],
-) -> Result<PrivacyRootV1, &'static str> {
-    derive_privacy_pgc_account_state_root_v1(namespace, epoch, total_supply, accounts)
-        .map_err(|_| "privacy PGC account-state root derivation failed")
 }

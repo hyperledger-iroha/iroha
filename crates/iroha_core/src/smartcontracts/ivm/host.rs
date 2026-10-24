@@ -3568,8 +3568,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Create a new host for the given authority.
     pub fn new(authority: AccountId) -> Self {
         let default_crypto = iroha_config::parameters::actual::Crypto::default();
-        let mut default = ivm::host::DefaultHost::new();
-        default.set_sm_enabled(default_crypto.sm_helpers_enabled());
+        let default = ivm::host::DefaultHost::new();
         apply_sm_openssl_preview(default_crypto.enable_sm_openssl_preview);
         let crypto = Arc::new(default_crypto);
         Self {
@@ -3697,8 +3696,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Create host with an account snapshot for iteration helpers.
     pub fn with_accounts(authority: AccountId, accounts: Arc<Vec<AccountId>>) -> Self {
         let default_crypto = iroha_config::parameters::actual::Crypto::default();
-        let mut default = ivm::host::DefaultHost::new();
-        default.set_sm_enabled(default_crypto.sm_helpers_enabled());
+        let default = ivm::host::DefaultHost::new();
         apply_sm_openssl_preview(default_crypto.enable_sm_openssl_preview);
         let crypto = Arc::new(default_crypto);
         Self {
@@ -3780,8 +3778,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         args: iroha_primitives::json::Json,
     ) -> Self {
         let default_crypto = iroha_config::parameters::actual::Crypto::default();
-        let mut default = ivm::host::DefaultHost::new();
-        default.set_sm_enabled(default_crypto.sm_helpers_enabled());
+        let default = ivm::host::DefaultHost::new();
         apply_sm_openssl_preview(default_crypto.enable_sm_openssl_preview);
         let crypto = Arc::new(default_crypto);
         Self {
@@ -4182,11 +4179,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     pub(crate) fn next_nft_sequence(&self) -> u64 {
         self.nft_seq
     }
-    /// Update cryptography configuration and propagate toggles to the helper host.
+    /// Update local implementation selection and cryptography telemetry.
     pub fn set_crypto_config(&mut self, crypto: Arc<iroha_config::parameters::actual::Crypto>) {
         self.crypto = crypto;
-        self.default
-            .set_sm_enabled(self.crypto.sm_helpers_enabled());
         apply_sm_openssl_preview(self.crypto.enable_sm_openssl_preview);
         self.notify_telemetry_crypto_config();
     }
@@ -4604,53 +4599,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let _ = cache_event;
         snapshot
     }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    #[doc(hidden)]
-    pub fn force_sm_enabled_for_tests(&mut self, enabled: bool) {
-        #[cfg(feature = "sm")]
-        {
-            use iroha_config::parameters::defaults::crypto as defaults;
-            use iroha_crypto::Algorithm;
-            fn adjust(cfg: &mut iroha_config::parameters::actual::Crypto, enabled: bool) {
-                if enabled {
-                    if !cfg
-                        .allowed_signing
-                        .iter()
-                        .any(|algo| matches!(algo, Algorithm::Sm2))
-                    {
-                        cfg.allowed_signing.push(Algorithm::Sm2);
-                    }
-                    cfg.allowed_signing.sort();
-                    cfg.allowed_signing.dedup();
-                    if !cfg.default_hash.eq_ignore_ascii_case("sm3-256") {
-                        "sm3-256".clone_into(&mut cfg.default_hash);
-                    }
-                    if cfg.sm2_distid_default.trim().is_empty() {
-                        cfg.sm2_distid_default = defaults::sm2_distid_default();
-                    }
-                } else {
-                    cfg.allowed_signing
-                        .retain(|algo| !matches!(algo, Algorithm::Sm2));
-                    if cfg.default_hash.eq_ignore_ascii_case("sm3-256") {
-                        cfg.default_hash = defaults::default_hash();
-                    }
-                }
-            }
-            if let Some(cfg) = Arc::get_mut(&mut self.crypto) {
-                adjust(cfg, enabled);
-            } else {
-                let mut cfg = iroha_config::parameters::actual::Crypto::default();
-                adjust(&mut cfg, enabled);
-                self.crypto = Arc::new(cfg);
-            }
-        }
-        #[cfg(not(feature = "sm"))]
-        {
-            let _ = enabled;
-        }
-        self.default
-            .set_sm_enabled(self.crypto.sm_helpers_enabled());
-    }
     /// Configure STARK verification limits for forwarded `ZK_VERIFY` syscalls.
     pub fn set_stark_config(&mut self, cfg: &iroha_config::parameters::actual::Stark) {
         self.stark_config = *cfg;
@@ -4683,7 +4631,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.zk_gas_schedule
     }
     #[cfg(feature = "telemetry")]
-    /// Attach a telemetry sink to the host and align it with the current SM state toggle.
+    /// Attach a telemetry sink and report the local SM implementation selection.
     pub fn set_telemetry(&mut self, telemetry: StateTelemetry) {
         self.telemetry = Some(telemetry);
         self.align_telemetry_snapshot();
@@ -9932,19 +9880,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_SM4_CCM_SEAL
                 | ivm::syscalls::SYSCALL_SM4_CCM_OPEN
         ) {
-            return if self.crypto.sm_helpers_enabled() {
-                let quote = self.default.prepare_syscall(number, vm);
-                // A malformed request rejected during quoting never reaches syscall dispatch.
-                #[cfg(feature = "telemetry")]
-                if quote.is_err()
-                    && let Some(telemetry) = self.telemetry.as_ref()
-                {
-                    Self::record_sm_syscall(telemetry, number, &quote);
-                }
-                quote
-            } else {
-                Ok(0)
-            };
+            let quote = self.default.prepare_syscall(number, vm);
+            // Invalid inputs rejected during quoting never reach syscall dispatch.
+            #[cfg(feature = "telemetry")]
+            if quote.is_err()
+                && let Some(telemetry) = self.telemetry.as_ref()
+            {
+                Self::record_sm_syscall(telemetry, number, &quote);
+            }
+            return quote;
         }
         let response_quote = match number {
             ivm::syscalls::SYSCALL_GET_AUTHORITY | ivm::syscalls::SYSCALL_SYSVAR_AUTHORITY => {
@@ -11337,16 +11281,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
                     Self::reject_soracloud_syscall(vm, number)
                 }
-                // SM helper syscalls are gated by crypto configuration and forwarded to DefaultHost.
+                // Mandatory V1 SM helpers share the portable DefaultHost implementation.
                 ivm::syscalls::SYSCALL_SM3_HASH
                 | ivm::syscalls::SYSCALL_SM2_VERIFY
                 | ivm::syscalls::SYSCALL_SM4_GCM_SEAL
                 | ivm::syscalls::SYSCALL_SM4_GCM_OPEN
                 | ivm::syscalls::SYSCALL_SM4_CCM_SEAL
                 | ivm::syscalls::SYSCALL_SM4_CCM_OPEN => {
-                    if !self.crypto.sm_helpers_enabled() {
-                        return Err(ivm::VMError::PermissionDenied);
-                    }
                     let result = self.default.syscall(number, vm);
                     #[cfg(feature = "telemetry")]
                     if let Some(telemetry) = self.telemetry.as_ref() {
@@ -16094,7 +16035,7 @@ seiyaku StaleRuntimeBinding { permission CanUpdateContract;
         stx.current_dataspace_id = Some(dataspace);
         stx.world.current_dataspace_id = Some(dataspace);
         let result = crate::executor::Executor::Initial
-            .execute_transaction(&mut stx, authority, tx, ivm_cache);
+            .execute_transaction(&mut stx, authority, &tx, ivm_cache);
         if result.is_ok() {
             stx.apply();
             block

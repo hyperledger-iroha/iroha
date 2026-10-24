@@ -54,12 +54,23 @@ use iroha_primitives::numeric::Numeric;
 use std::num::NonZeroU64;
 
 /// Return a blank test [`State`].
-pub fn blank_state() -> State {
-    State::new_for_testing(
+pub(crate) fn blank_state() -> State {
+    let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
+    );
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(
+        Algorithm::ALL.to_vec(),
     )
+    .unwrap();
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .get_mut()
+        .set_parameter(policy.into_parameter().unwrap())
+        .unwrap();
+    parameters.commit();
+    state
 }
 
 /// `nexus.staking.unbonding_delay` of the SCCP staking profile in milliseconds (21 d): the
@@ -642,11 +653,22 @@ pub fn funded_xor_state(holder: &AccountId, balance: u128) -> State {
         )],
         [],
     );
-    State::new_for_testing(
+    let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
+    );
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(
+        Algorithm::ALL.to_vec(),
     )
+    .unwrap();
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .get_mut()
+        .set_parameter(policy.into_parameter().unwrap())
+        .unwrap();
+    parameters.commit();
+    state
 }
 
 /// Initialize SCCP (Taira default parameters and the three route escrows) unless it already

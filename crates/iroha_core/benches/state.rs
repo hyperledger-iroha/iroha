@@ -9,7 +9,7 @@ use iroha_core::{
     da::{LaneEpoch, receipts::DaReceiptCursorIndex},
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, World},
+    state::{State, World, range_bounds::index_contains},
 };
 #[cfg(feature = "bench")]
 use iroha_crypto::{Hash, Signature};
@@ -24,7 +24,9 @@ use iroha_data_model::{
 #[cfg(feature = "bench")]
 use iroha_model_base::topology::LaneId;
 #[cfg(feature = "bench")]
-use std::{hint::black_box, time::Duration};
+use mv::storage::Storage;
+#[cfg(feature = "bench")]
+use std::{collections::BTreeSet, hint::black_box, time::Duration};
 #[cfg(feature = "bench")]
 fn bench_state_write_lock_heavy_world_commit(c: &mut Criterion) {
     let mut group = c.benchmark_group("state_write_lock_heavy_world_commit");
@@ -98,12 +100,85 @@ fn bench_da_receipt_cursor_sparse_bundle_commit(c: &mut Criterion) {
     }
     group.finish();
 }
+/// Group key of the measured membership index.
+#[cfg(feature = "bench")]
+const MEMBERSHIP_GROUP: u64 = 1;
+/// A 32-byte member whose big-endian ordinal fixes its sort position.
+#[cfg(feature = "bench")]
+fn membership_member(ordinal: u64) -> [u8; 32] {
+    let mut member = [0; 32];
+    member[24..].copy_from_slice(&ordinal.to_be_bytes());
+    member
+}
+/// Insert one member and remove it again, each in its own block and transaction.
+///
+/// `rows/N` uses the production `(key, member) -> ()` layout with the same
+/// contains-then-write rule as the World row helpers. `grouped_reference/N`
+/// measures the retired `key -> BTreeSet<member>` layout as the comparison
+/// baseline only; no production index keeps it.
+#[cfg(feature = "bench")]
+fn bench_derived_membership_index_write(c: &mut Criterion) {
+    let mut group = c.benchmark_group("derived_membership_index_write");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(200));
+    for group_size in [1_000_u64, 10_000, 100_000] {
+        // Even ordinals are seeded; the odd probe is absent and sorts mid-group.
+        let seeded = || (0..group_size).map(|ordinal| membership_member(ordinal * 2));
+        let probe = membership_member(group_size | 1);
+        let rows: Storage<(u64, [u8; 32]), ()> = seeded()
+            .map(|member| ((MEMBERSHIP_GROUP, member), ()))
+            .collect();
+        group.bench_function(format!("rows/{group_size}"), |b| {
+            b.iter(|| {
+                let mut block = rows.block();
+                let mut transaction = block.transaction();
+                if !index_contains(&transaction, &MEMBERSHIP_GROUP, &probe) {
+                    transaction.insert((MEMBERSHIP_GROUP, probe), ());
+                }
+                transaction.apply();
+                block.commit();
+                let mut block = rows.block();
+                let mut transaction = block.transaction();
+                if index_contains(&transaction, &MEMBERSHIP_GROUP, &probe) {
+                    transaction.remove((MEMBERSHIP_GROUP, probe));
+                }
+                transaction.apply();
+                block.commit();
+            });
+        });
+        let grouped: Storage<u64, BTreeSet<[u8; 32]>> = [(MEMBERSHIP_GROUP, seeded().collect())]
+            .into_iter()
+            .collect();
+        group.bench_function(format!("grouped_reference/{group_size}"), |b| {
+            b.iter(|| {
+                let mut block = grouped.block();
+                let mut transaction = block.transaction();
+                transaction
+                    .get_mut(&MEMBERSHIP_GROUP)
+                    .expect("seeded membership group")
+                    .insert(probe);
+                transaction.apply();
+                block.commit();
+                let mut block = grouped.block();
+                let mut transaction = block.transaction();
+                transaction
+                    .get_mut(&MEMBERSHIP_GROUP)
+                    .expect("seeded membership group")
+                    .remove(&probe);
+                transaction.apply();
+                block.commit();
+            });
+        });
+    }
+    group.finish();
+}
 /// Entry point for the benchmark binary.
 #[cfg(feature = "bench")]
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_state_write_lock_heavy_world_commit(&mut c);
     bench_da_receipt_cursor_sparse_bundle_commit(&mut c);
+    bench_derived_membership_index_write(&mut c);
     c.final_summary();
 }
 /// Entry point used when benchmark-only helpers are not compiled.

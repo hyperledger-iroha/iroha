@@ -94,7 +94,10 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         &block_time_source,
     )
     .expect("transaction should pass stateless admission");
@@ -213,7 +216,10 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -349,7 +355,10 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -527,7 +536,10 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -662,7 +674,10 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
             &state.network_id,
             max_clock_drift,
             tx_limits,
-            state.crypto().as_ref(),
+            state
+                .transaction_admission_parameters()
+                .require_crypto_policy()
+                .expect("original fixture policy"),
             Duration::from_millis(10),
         )
         .expect("transaction passes stateless admission")
@@ -845,7 +860,10 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
             &state.network_id,
             max_clock_drift,
             tx_limits,
-            state.crypto().as_ref(),
+            state
+                .transaction_admission_parameters()
+                .require_crypto_policy()
+                .expect("original fixture policy"),
             Duration::from_millis(10),
         )
         .expect("ExecuteTrigger transaction passes stateless admission");
@@ -993,7 +1011,10 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -1135,7 +1156,10 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -1271,7 +1295,10 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("first transaction should pass stateless admission");
@@ -1290,7 +1317,10 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("second transaction should pass stateless admission");
@@ -1454,7 +1484,10 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -1657,7 +1690,10 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -2151,7 +2187,10 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -2242,14 +2281,17 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
         InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
     ])
     .sign(keypair.private_key());
-    let crypto_cfg = state.crypto();
     let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
     let tx = AcceptedTransaction::accept_with_time_source(
         tx,
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        crypto_cfg.as_ref(),
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
         &time_source,
     )
     .expect("admission should accept transaction shape");

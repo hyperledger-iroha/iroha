@@ -416,8 +416,15 @@ fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
     use AccountAddressError::*;
     let mut fields = JsonMap::new();
     match err {
-        UnsupportedAlgorithm(algorithm) => {
-            fields.insert("algorithm".into(), JsonValue::from(algorithm.to_string()));
+        UnsupportedImplementation(original) => {
+            fields.insert(
+                "algorithm".into(),
+                JsonValue::from(original.algorithm.as_static_str()),
+            );
+            fields.insert(
+                "operation".into(),
+                JsonValue::from(original.operation.to_string()),
+            );
         }
         KeyPayloadTooLong(len) => {
             fields.insert("length".into(), JsonValue::from(u64::from(*len)));
@@ -454,6 +461,39 @@ fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
     } else {
         Some(fields)
     }
+}
+#[cfg(test)]
+#[test]
+fn account_address_diagnostic_retains_known_missing_implementation() {
+    let error =
+        AccountAddressError::UnsupportedImplementation(iroha_crypto::UnsupportedImplementation {
+            algorithm: iroha_crypto::Algorithm::BlsNormal,
+            operation: iroha_crypto::CryptoOperation::ParsePublicKey,
+        });
+    let payload = encode_account_address_error(error);
+    let value: JsonValue = norito::json::from_slice(&payload).expect("canonical error JSON");
+    assert_eq!(
+        value.get("code").and_then(JsonValue::as_str),
+        Some("ERR_UNSUPPORTED_IMPLEMENTATION")
+    );
+    assert_eq!(
+        value
+            .get("fields")
+            .and_then(|fields| fields.get("algorithm"))
+            .and_then(JsonValue::as_str),
+        Some("bls_normal")
+    );
+    assert_eq!(
+        value
+            .get("fields")
+            .and_then(|fields| fields.get("operation"))
+            .and_then(JsonValue::as_str),
+        Some("public-key parsing")
+    );
+    assert_ne!(
+        value.get("code").and_then(JsonValue::as_str),
+        Some("ERR_UNKNOWN_CURVE")
+    );
 }
 fn encode_account_address_error(err: AccountAddressError) -> Vec<u8> {
     let mut map = JsonMap::new();

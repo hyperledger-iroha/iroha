@@ -211,6 +211,15 @@ fn generated_queries() -> Vec<Value> {
         EscrowId::new(Hash::new(b"query escrow")),
     )]));
     rows.push(record([
+        query::asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1::new(
+            asset_definition(),
+            iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+                *Hash::new("escrow scope capture incarnation").as_ref(),
+            )
+            .expect("nonzero escrow asset incarnation"),
+        ),
+    ]));
+    rows.push(record([
         query::asset_fi::FindAssetFiTransferReceiptV1::new(
             asset_definition(),
             iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
@@ -794,12 +803,12 @@ fn generated_queries() -> Vec<Value> {
 #[test]
 fn generated_queries_preserve_captured_frames() {
     let rows = generated_queries();
-    assert_eq!(rows.len(), 131);
+    assert_eq!(rows.len(), 132);
     assert_eq!(
         rows.iter()
             .map(|row| row.get("cases").unwrap().as_array().unwrap().len())
             .sum::<usize>(),
-        177,
+        178,
     );
     let captured: Value = json::from_str(include_str!(
         "fixtures/query_generated_identity_frames.json"

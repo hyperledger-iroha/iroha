@@ -338,41 +338,28 @@ fn keyless_role_accounts_are_distinct_and_profile_scoped() {
     );
 }
 
-/// `crypto.curves.allowed_curve_ids` must follow each profile's `allowed_signing`; omitting the
-/// curves section would keep the code default, which drops `bls_normal`. The `bls_normal` curve id
-/// exists only in builds with the data model's `bls` feature, so the profile must request the
-/// derivation explicitly (an empty list) rather than rely on what this build derives.
+/// Profiles configure local implementations, while signed genesis owns ordinary admission.
 #[test]
-fn every_profile_derives_curve_ids_from_its_signing_algorithms() {
+fn profiles_do_not_install_local_crypto_admission_authorities() {
     use iroha_config_base::util::Emitter;
     for id in ProfileId::ALL {
         let profile = Profile::compiled(id).unwrap();
-        assert_eq!(
-            value_at(profile.static_config(), "crypto.curves.allowed_curve_ids").as_array(),
-            Some(&Vec::new()),
-            "{id} must derive crypto.curves.allowed_curve_ids from crypto.allowed_signing"
-        );
-        let crypto = profile
+        let table = profile
             .static_config()
             .get("crypto")
             .and_then(toml::Value::as_table)
-            .cloned()
-            .unwrap_or_else(|| panic!("{id} sets [static.crypto]"));
+            .expect("profile local crypto options")
+            .clone();
+        assert!(!table.contains_key("allowed_signing"));
+        assert!(!table.contains_key("curves"));
         let user = ConfigReader::new()
             .without_env()
-            .with_toml_source(TomlSource::inline(crypto))
+            .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<user::Crypto>()
-            .unwrap_or_else(|report| panic!("{id}: {report:?}"));
+            .expect("local options parse");
         let mut emitter = Emitter::new();
-        let crypto = user.parse(&mut emitter);
-        emitter
-            .into_result()
-            .unwrap_or_else(|report| panic!("{id}: {report:?}"));
-        assert_eq!(
-            crypto.allowed_curve_ids,
-            defaults::crypto::derive_curve_ids_from_algorithms(&crypto.allowed_signing),
-            "{id}"
-        );
+        let _local = user.parse(&mut emitter);
+        emitter.into_result().unwrap();
     }
 }
 
@@ -741,6 +728,44 @@ fn consensus_digest_is_sensitive_to_every_consensus_input() {
 }
 
 #[test]
+fn genesis_fee_authoring_orders_exemptions_and_rejects_duplicates() {
+    let discriminant = defaults::common::chain_discriminant();
+    let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
+    let defaults = defaults::nexus::fees::genesis_policy();
+    let mut accounts = [
+        defaults.fee_sink_account_id.clone(),
+        defaults.sponsor_vault_custody_account_id.clone(),
+    ];
+    accounts.sort();
+    let author = |exemptions: Vec<String>| GenesisRootFeesFile {
+        fee_asset_id: defaults.fee_asset_id.canonical_address(),
+        fee_sink_account_id: defaults.fee_sink_account_id.to_string(),
+        sponsor_vault_custody_account_id: defaults.sponsor_vault_custody_account_id.to_string(),
+        successful_claim_fee_exempt_authorities: exemptions,
+        base_fee: defaults.base_fee.clone(),
+        per_byte_fee: defaults.per_byte_fee.clone(),
+        per_instruction_fee: defaults.per_instruction_fee.clone(),
+        per_gas_unit_fee: defaults.per_gas_unit_fee.clone(),
+    };
+    let policy = author(accounts.iter().rev().map(ToString::to_string).collect())
+        .into_policy(discriminant)
+        .expect("unordered authored exemptions are canonicalized");
+    assert_eq!(
+        policy
+            .successful_claim_fee_exempt_authorities
+            .iter()
+            .collect::<Vec<_>>(),
+        accounts.iter().collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        author(vec![accounts[0].to_string(), accounts[0].to_string()])
+            .into_policy(discriminant)
+            .unwrap_err(),
+        "genesis fee exemptions repeat an account",
+    );
+}
+
+#[test]
 fn consensus_digest_binds_every_signed_root_fee_field() {
     let base = sora();
     let consensus = base.consensus_digest(4).unwrap();
@@ -762,7 +787,8 @@ fn consensus_digest_binds_every_signed_root_fee_field() {
             2 => fees.sponsor_vault_custody_account_id = alternate.clone(),
             3 => {
                 fees.successful_claim_fee_exempt_authorities
-                    .insert(alternate.clone());
+                    .try_insert(alternate.clone())
+                    .expect("fixture fee exemption");
             }
             4 => fees.base_fee = 17_u32.into(),
             5 => fees.per_byte_fee = 19_u32.into(),

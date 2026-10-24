@@ -47,7 +47,7 @@ fn fixture_with_instructions(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
         config::chain_id(),
         crate::config::GenesisPolicyConfig {
-            genesis_crypto: None,
+            genesis_crypto: crate::config::test_network_crypto_admission_policy(),
             da_proof_policies: None,
             nexus_config: None,
             zk_config: None,

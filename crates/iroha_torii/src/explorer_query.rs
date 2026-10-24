@@ -498,9 +498,7 @@ async fn execute(
 ) -> Result<Response, Error> {
     let spec =
         specification(uri.path()).ok_or_else(|| invalid("query", "unknown Explorer collection"))?;
-    let visibility = caller
-        .into_dataspace_context(Arc::clone(app))
-        .current_visibility();
+    let visibility = caller.dataspace_visibility(app.as_ref());
     if let Some(filter) = query.filter.as_mut() {
         let fields: &[&str] = match spec.id {
             "explorer_accounts" => &["id"],

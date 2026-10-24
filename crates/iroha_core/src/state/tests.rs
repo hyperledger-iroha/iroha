@@ -262,9 +262,9 @@ fn authenticate_trigger_fixture(component: State) -> State {
         .get()
         .parameters()
         .filter(|parameter| !matches!(parameter, Parameter::Sumeragi(_) | Parameter::Custom(_)))
-        .collect();
+        .collect::<Vec<_>>();
     let mut config = TestChainConfig::new(component.world, 0);
-    config.genesis_parameters = genesis_parameters;
+    config.genesis_parameters.extend(genesis_parameters);
     config.chain_id = component.chain_id;
     config.pipeline = component.pipeline;
     config.governance = Some(component.gov);
@@ -6054,10 +6054,9 @@ fn executor_reconciliation_cannot_replace_signed_npos_parameters() {
         parameters.commit();
     }
     let mut attacker_model = ExecutorDataModel::default();
-    attacker_model.parameters.insert(
-        SumeragiNposParameters::parameter_id(),
-        attacker_value.into_custom_parameter(),
-    );
+    attacker_model
+        .parameters
+        .insert(attacker_value.into_custom_parameter());
 
     let signed_payload = empty_signed_block_after(None, 1);
     let mut block = state.block(signed_payload.header());
@@ -6094,7 +6093,7 @@ state_test! { sync executor_data_model_reconciliation_purges_undeclared_permissi
         ALICE_ID.clone(),
         BTreeSet::from([retained.clone(), retired.clone()]),
     );
-    let_row! { data_model = ExecutorDataModel::new( BTreeMap::new(), BTreeSet::new(), BTreeSet::from([retained.name().to_owned()]), Json::new(()), ) };
+    let_row! { data_model = ExecutorDataModel::new( iroha_data_model::parameter::CustomParameters::new(), BTreeSet::new(), BTreeSet::from([retained.name().to_owned()]), Json::new(()), ) };
     let_row! { state = State::new_for_testing( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut transaction = block.transaction();

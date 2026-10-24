@@ -2562,7 +2562,6 @@ mod tests {
             "genesis stateless admission".to_owned(),
         )])
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let crypto_cfg = state.crypto();
         let (_clock, time_source) =
             iroha_primitives::time::TimeSource::new_mock(tx.creation_time());
         assert!(
@@ -2571,7 +2570,11 @@ mod tests {
                 &state.network_id,
                 max_clock_drift,
                 tx_limits,
-                crypto_cfg.as_ref(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time_source,
             )
             .is_ok(),

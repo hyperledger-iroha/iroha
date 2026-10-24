@@ -1,4 +1,5 @@
 //! Sample configuration builders
+use iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1;
 #[path = "genesis_policy.rs"]
 mod genesis_policy;
 use crate::init_instruction_registry;
@@ -6,8 +7,7 @@ use color_eyre::{Report, eyre::eyre};
 pub(crate) use genesis_policy::{discover_generated_policy_hashes, execute_generated_genesis};
 use iroha_config::base::toml::WriteExt;
 use iroha_config::parameters::actual::{
-    Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline, Root as ActualRoot,
-    Zk as ActualZk,
+    Nexus as ActualNexus, Pipeline as ActualPipeline, Root as ActualRoot, Zk as ActualZk,
 };
 use iroha_core::{
     block::ValidBlock,
@@ -17,7 +17,7 @@ use iroha_core::{
     state::{State, World, derive_committee_key_id},
     sumeragi::network_topology::Topology as CoreTopology,
 };
-use iroha_crypto::{Hash, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     Registrable as _,
     account::{Account, AccountId},
@@ -55,9 +55,7 @@ use iroha_executor_data_model::permission::{
     role::CanManageRoles,
     trigger::CanRegisterTrigger,
 };
-use iroha_genesis::{
-    GenesisBlock, GenesisBuilder, GenesisTopologyEntry, ManifestCrypto, RawGenesisTransaction,
-};
+use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -92,10 +90,10 @@ pub(crate) fn genesis_signing_count() -> usize {
     GENESIS_SIGNING_COUNT.with(std::cell::Cell::get)
 }
 
-/// Optional policies carried from a test-network builder into genesis authoring.
-#[derive(Default)]
+/// Authored signed policies and optional runtime settings for test-network genesis.
 pub(crate) struct GenesisPolicyConfig {
-    pub(crate) genesis_crypto: Option<ManifestCrypto>,
+    pub(crate) genesis_crypto: CryptoAdmissionPolicyV1,
+    pub(crate) staking_policy: iroha_data_model::block::consensus::PublicLaneStakingPolicy,
     pub(crate) da_proof_policies: Option<DaProofPolicyBundle>,
     pub(crate) pipeline_config: Option<ActualPipeline>,
     pub(crate) nexus_config: Option<ActualNexus>,
@@ -105,6 +103,24 @@ pub(crate) struct GenesisPolicyConfig {
     pub(crate) consensus_mode_override: Option<SumeragiConsensusMode>,
     pub(crate) confidential_policy_hash: Option<[u8; 32]>,
     pub(crate) preview_cadence_ms: Option<std::num::NonZeroU64>,
+}
+
+impl Default for GenesisPolicyConfig {
+    fn default() -> Self {
+        Self {
+            genesis_crypto: test_network_crypto_admission_policy(),
+            staking_policy: default_test_network_staking_policy(),
+            da_proof_policies: None,
+            pipeline_config: None,
+            nexus_config: None,
+            zk_config: None,
+            runtime_config: None,
+            consensus_handshake_meta: None,
+            consensus_mode_override: None,
+            confidential_policy_hash: None,
+            preview_cadence_ms: None,
+        }
+    }
 }
 
 /// Borrowed runtime policies used during isolated genesis validation.
@@ -227,16 +243,16 @@ pub fn base_iroha_config() -> Table {
         .write(["logger", "level"], "INFO")
         .write(["logger", "format"], "pretty")
 }
+/// Algorithms explicitly selected by the built-in test-network genesis profile.
+/// This authors signed genesis; node configuration never supplies policy authority.
 #[must_use]
-pub(crate) fn manifest_crypto_from_actual(crypto: &ActualCrypto) -> ManifestCrypto {
-    ManifestCrypto {
-        sm_openssl_preview: crypto.enable_sm_openssl_preview,
-        sm_intrinsics: crypto.sm_intrinsics.as_str().to_owned(),
-        default_hash: crypto.default_hash.clone(),
-        allowed_signing: crypto.allowed_signing.clone(),
-        sm2_distid_default: crypto.sm2_distid_default.clone(),
-        allowed_curve_ids: crypto.allowed_curve_ids.clone(),
-    }
+pub(crate) fn test_network_crypto_admission_policy() -> CryptoAdmissionPolicyV1 {
+    CryptoAdmissionPolicyV1::new(vec![
+        Algorithm::Ed25519,
+        Algorithm::Secp256k1,
+        Algorithm::BlsNormal,
+    ])
+    .expect("the test-network profile authors a canonical algorithm list")
 }
 pub fn genesis(
     extra_transactions: Vec<Vec<InstructionBox>>,
@@ -293,7 +309,7 @@ pub(crate) fn genesis_unexecuted_with_keypair_and_post_topology(
         genesis_key_pair,
         chain_id(),
         crate::config::GenesisPolicyConfig {
-            genesis_crypto: None,
+            genesis_crypto: test_network_crypto_admission_policy(),
             da_proof_policies: None,
             nexus_config: None,
             zk_config: None,
@@ -319,6 +335,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     chain_id: ChainId,
     crate::config::GenesisPolicyConfig {
         genesis_crypto,
+        staking_policy,
         da_proof_policies,
         nexus_config: _nexus_config,
         zk_config,
@@ -337,6 +354,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         chain_id,
         crate::config::GenesisPolicyConfig {
             genesis_crypto,
+            staking_policy,
             da_proof_policies,
             pipeline_config: None,
             nexus_config: _nexus_config,
@@ -359,6 +377,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
     chain_id: ChainId,
     crate::config::GenesisPolicyConfig {
         genesis_crypto,
+        staking_policy,
         da_proof_policies,
         pipeline_config,
         nexus_config,
@@ -384,6 +403,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
         chain_id,
         crate::config::GenesisPolicyConfig {
             genesis_crypto,
+            staking_policy,
             da_proof_policies,
             pipeline_config,
             nexus_config,
@@ -480,7 +500,7 @@ fn build_minimal_genesis(
         genesis_key_pair,
         chain_id(),
         crate::config::GenesisPolicyConfig {
-            genesis_crypto: None,
+            genesis_crypto: test_network_crypto_admission_policy(),
             da_proof_policies: None,
             nexus_config: None,
             zk_config: None,
@@ -502,6 +522,7 @@ fn build_minimal_genesis_with_post_topology(
     chain_id: ChainId,
     crate::config::GenesisPolicyConfig {
         genesis_crypto,
+        staking_policy,
         da_proof_policies,
         nexus_config,
         zk_config,
@@ -520,6 +541,7 @@ fn build_minimal_genesis_with_post_topology(
         chain_id,
         crate::config::GenesisPolicyConfig {
             genesis_crypto,
+            staking_policy,
             da_proof_policies,
             pipeline_config: None,
             nexus_config,
@@ -542,6 +564,7 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     chain_id: ChainId,
     crate::config::GenesisPolicyConfig {
         genesis_crypto,
+        staking_policy,
         da_proof_policies,
         pipeline_config,
         nexus_config,
@@ -584,6 +607,7 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
             chain_id,
             crate::config::GenesisPolicyConfig {
                 genesis_crypto,
+                staking_policy,
                 da_proof_policies,
                 nexus_config: nexus_config.clone(),
                 zk_config: zk_config.clone(),
@@ -632,7 +656,7 @@ fn build_minimal_genesis_unexecuted(
         genesis_key_pair,
         chain_id(),
         crate::config::GenesisPolicyConfig {
-            genesis_crypto: None,
+            genesis_crypto: test_network_crypto_admission_policy(),
             da_proof_policies: None,
             nexus_config: None,
             zk_config: None,
@@ -647,6 +671,16 @@ fn build_minimal_genesis_unexecuted(
     );
     (block, account, peers, key_pair)
 }
+pub(crate) fn default_test_network_staking_policy()
+-> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+    let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    crate::genesis_support::staking_policy(
+        fees.fee_asset_id,
+        fees.fee_sink_account_id.clone(),
+        fees.fee_sink_account_id,
+    )
+}
+
 fn build_minimal_genesis_unexecuted_with_post_topology(
     extra_transactions: Vec<Vec<InstructionBox>>,
     post_topology_transactions: Vec<Vec<InstructionBox>>,
@@ -656,6 +690,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     chain_id: ChainId,
     crate::config::GenesisPolicyConfig {
         genesis_crypto,
+        staking_policy,
         da_proof_policies,
         nexus_config,
         zk_config: _zk_config,
@@ -734,10 +769,18 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let carpenter_id = sanitize_account_id(&CARPENTER_ID);
     let ivm_dir = default_ivm_dir();
     let mut builder = if let Some(executor_path) = try_default_executor_path() {
-        GenesisBuilder::new(chain.clone(), executor_path, ivm_dir.clone())
+        GenesisBuilder::new(
+            chain.clone(),
+            executor_path,
+            ivm_dir.clone(),
+            genesis_crypto,
+        )
     } else {
-        GenesisBuilder::new_without_executor(chain.clone(), ivm_dir.clone())
+        GenesisBuilder::new_without_executor(chain.clone(), ivm_dir.clone(), genesis_crypto)
     };
+    builder = builder
+        .with_staking_policy(staking_policy)
+        .expect("explicit test-network staking author");
     let consensus_handshake_metadata = consensus_handshake_meta
         .as_ref()
         .map(decode_consensus_handshake_metadata)
@@ -768,9 +811,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     builder = builder.with_sumeragi_context_parameters(sumeragi_context);
     if let Some(block_cadence_ms) = block_cadence_ms {
         builder = builder.with_block_cadence_ms(block_cadence_ms);
-    }
-    if let Some(crypto) = genesis_crypto {
-        builder = builder.with_crypto(crypto);
     }
     if let Some(policies) = &da_proof_policies {
         builder = builder.with_da_proof_policies(policies.clone());
@@ -1992,7 +2032,7 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
             crate::config::GenesisPolicyConfig {
-                genesis_crypto: None,
+                genesis_crypto: test_network_crypto_admission_policy(),
                 da_proof_policies: None,
                 nexus_config: None,
                 zk_config: None,
@@ -2099,7 +2139,7 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
             crate::config::GenesisPolicyConfig {
-                genesis_crypto: None,
+                genesis_crypto: test_network_crypto_admission_policy(),
                 da_proof_policies: None,
                 nexus_config: None,
                 zk_config: None,
@@ -2170,7 +2210,7 @@ mod tests {
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 super::chain_id(),
                 crate::config::GenesisPolicyConfig {
-                    genesis_crypto: None,
+                    genesis_crypto: test_network_crypto_admission_policy(),
                     da_proof_policies: None,
                     nexus_config: None,
                     zk_config: None,
@@ -2749,7 +2789,7 @@ mod tests {
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 super::chain_id(),
                 crate::config::GenesisPolicyConfig {
-                    genesis_crypto: None,
+                    genesis_crypto: test_network_crypto_admission_policy(),
                     da_proof_policies: Some(policies),
                     nexus_config: None,
                     zk_config: None,
@@ -2788,7 +2828,36 @@ mod tests {
         );
     }
     #[test]
-    fn populate_genesis_results_uses_supplied_nexus_config_for_custom_staking_genesis() {
+    fn fresh_factory_rejects_a_second_staking_assignment_from_caller_instructions() {
+        init_instruction_registry();
+        let (topology, entries) = genesis_committee();
+        let duplicate = SetParameter::new(Parameter::Custom(
+            super::default_test_network_staking_policy()
+                .into_custom_parameter()
+                .unwrap(),
+        ));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::build_minimal_genesis_unexecuted(
+                vec![vec![duplicate.into()]],
+                topology,
+                entries,
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            )
+        }))
+        .expect_err("a caller parameter cannot replace the explicit fresh-genesis author");
+        let message = failure
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| failure.downcast_ref::<&str>().copied())
+            .unwrap();
+        assert!(
+            message.contains("genesis contains repeated public_lane_staking_v1 assignments"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn populate_genesis_results_uses_only_the_signed_staking_policy() {
         use iroha_core::block::{BlockValidationError, InvalidGenesisError};
         use iroha_data_model::{
             ValidationFail,
@@ -2822,6 +2891,11 @@ mod tests {
             .public_key()
             .clone(),
         );
+        let mut authored_policy = super::default_test_network_staking_policy();
+        authored_policy.stake_asset_id = stake_asset_id.clone();
+        authored_policy.stake_escrow_account_id = escrow_account.clone();
+        authored_policy.slash_sink_account_id = escrow_account.clone();
+        authored_policy.min_validator_stake = stake_amount.clone();
         let nexus = ActualNexus {
             staking: iroha_config::parameters::actual::NexusStaking {
                 stake_asset_id: stake_asset_id.to_string(),
@@ -2892,7 +2966,8 @@ mod tests {
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 super::chain_id(),
                 crate::config::GenesisPolicyConfig {
-                    genesis_crypto: None,
+                    genesis_crypto: test_network_crypto_admission_policy(),
+                    staking_policy: authored_policy.clone(),
                     da_proof_policies: None,
                     nexus_config: Some(nexus.clone()),
                     zk_config: None,
@@ -2917,7 +2992,7 @@ mod tests {
                     .any(|instruction| instruction.as_any().is::<RegisterPublicLaneValidator>())
             })
             .expect("the signed inputs contain the staking registration source");
-        let (block, _) = super::genesis_fixture_policy::bind_proposal(
+        let (block, manifest) = super::genesis_fixture_policy::bind_proposal(
             block,
             manifest,
             &genesis_account,
@@ -2932,23 +3007,16 @@ mod tests {
             WireConsensusMode::Npos
         );
         let original_wire = block.0.encode_wire().unwrap();
-        let mut wrong_asset_config = nexus.clone();
-        wrong_asset_config.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
+        let mut different_local_config = nexus.clone();
+        different_local_config.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         )
         .to_string();
-        for (config, expected_cause) in [
-            (
-                None,
-                "staking monetary plan does not match its exact current transfer and custody state",
-            ),
-            (
-                Some(&wrong_asset_config),
-                "configured staking or reward asset differs from the committed network XOR identity",
-            ),
-        ] {
-            let report = super::populate_genesis_results(
+        different_local_config.staking.stake_escrow_account_id = BOB_ID.to_string();
+        different_local_config.staking.slash_sink_account_id = BOB_ID.to_string();
+        for config in [None, Some(&different_local_config)] {
+            let executed = super::populate_genesis_results(
                 &block,
                 &genesis_account,
                 &topology_vec,
@@ -2956,27 +3024,18 @@ mod tests {
                 config,
                 None,
             )
-            .expect_err("signed staking custody requires its supplied Nexus configuration");
-            let error = report
-                .downcast_ref::<Box<BlockValidationError>>()
-                .expect("retain the native validation error");
-            let BlockValidationError::InvalidGenesis(InvalidGenesisError::RejectedOutput(
-                rejection,
-            )) = error.as_ref()
-            else {
-                panic!("expected an actual staking instruction rejection: {report:#}");
-            };
-            assert_eq!(rejection.output_index, expected_rejection_index);
+            .expect("local Nexus monetary values cannot override the signed staking author");
             assert!(
-                matches!(
-                    rejection.reason.as_ref(),
-                    TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
-                        InstructionExecutionError::InvariantViolation(cause)
-                    )) if cause.as_ref() == expected_cause
-                ),
-                "unexpected staking rejection: {report:#}"
+                executed
+                    .output_results()
+                    .all(|result| result.as_ref().is_ok())
             );
-            assert!(!block.0.has_results(), "failed outputs remain unpublished");
+            assert!(super::genesis_results_are_canonical(&executed));
+            assert_eq!(executed.hash(), block.0.hash());
+            assert!(
+                !block.0.has_results(),
+                "original signed proposal remains unpublished"
+            );
             assert_eq!(block.0.encode_wire().unwrap(), original_wire);
         }
         let executed = super::populate_genesis_results(
@@ -2987,12 +3046,12 @@ mod tests {
             Some(&nexus),
             None,
         )
-        .expect("custom staking genesis should succeed with the resolved nexus config");
+        .expect("the exact signed staking policy should execute with its ordinary runtime config");
         assert!(
             executed
                 .output_results()
                 .all(|result| result.as_ref().is_ok()),
-            "pre-executed custom staking genesis should succeed when the builder threads the resolved nexus config"
+            "the explicit signed staking policy must execute without partial results"
         );
         assert!(super::genesis_results_are_canonical(&executed));
         assert!(super::genesis_signature_is_canonical(
@@ -3001,6 +3060,75 @@ mod tests {
         ));
         assert_eq!(executed.hash(), block.0.hash());
         assert_eq!(block.0.encode_wire().unwrap(), original_wire);
+        for change_custody in [true, false] {
+            let mut changed_policy = authored_policy.clone();
+            let expected_cause = if change_custody {
+                changed_policy.stake_escrow_account_id = BOB_ID.clone();
+                "staking monetary plan does not match its exact current transfer and custody state"
+            } else {
+                changed_policy.min_validator_stake =
+                    stake_amount.checked_add(&1_u64.into()).unwrap();
+                "initial stake below committed minimum amount"
+            };
+            let mut parameters = manifest.effective_parameters().unwrap();
+            parameters.set_parameter(Parameter::Custom(
+                changed_policy.into_custom_parameter().unwrap(),
+            ));
+            let mut value = norito::json::to_value(&manifest).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .get_mut("transactions")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()[0]
+                .as_object_mut()
+                .unwrap()
+                .insert(
+                    "parameters".into(),
+                    norito::json::to_value(&parameters).unwrap(),
+                );
+            let changed: RawGenesisTransaction = norito::json::from_value(value).unwrap();
+            let proposal = changed
+                .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+                    &genesis_key_pair,
+                    None,
+                    Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+                )
+                .unwrap();
+            let changed_wire = proposal.0.encode_wire().unwrap();
+            let report = super::populate_genesis_results(
+                &proposal,
+                &genesis_account,
+                &topology_vec,
+                &genesis_key_pair,
+                Some(&nexus),
+                None,
+            )
+            .expect_err("changed signed custody or bounds must reject the original monetary plan");
+            let error = report
+                .downcast_ref::<Box<BlockValidationError>>()
+                .expect("native block validation refusal");
+            let BlockValidationError::InvalidGenesis(InvalidGenesisError::RejectedOutput(
+                rejection,
+            )) = error.as_ref()
+            else {
+                panic!("expected an actual staking instruction rejection: {report:#}");
+            };
+            assert_eq!(rejection.output_index, expected_rejection_index);
+            assert!(
+                matches!(rejection.reason.as_ref(), TransactionRejectionReason::Validation(
+                ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(cause)))
+                if cause.as_ref() == expected_cause),
+                "unexpected staking rejection: {report:#}"
+            );
+            assert!(
+                !proposal.0.has_results(),
+                "failed outputs remain unpublished"
+            );
+            assert_eq!(proposal.0.encode_wire().unwrap(), changed_wire);
+            assert_eq!(block.0.encode_wire().unwrap(), original_wire);
+        }
     }
     #[test]
     fn populate_genesis_results_leases_genesis_account_labels() {
@@ -3184,13 +3312,10 @@ mod tests {
         );
     }
     #[test]
-    fn genesis_with_crypto_override_embeds_manifest_metadata() {
-        use iroha_data_model::{
-            isi::SetParameter,
-            parameter::{Parameter, system::crypto_metadata},
-            transaction::Executable,
-        };
-        fn embedded_manifest_crypto(block: &GenesisBlock) -> ManifestCrypto {
+    fn genesis_with_explicit_policy_embeds_exactly_one_authenticated_parameter() {
+        use iroha_data_model::{isi::SetParameter, parameter::Parameter, transaction::Executable};
+        fn embedded_crypto_policy(block: &GenesisBlock) -> CryptoAdmissionPolicyV1 {
+            let mut policies = Vec::new();
             for tx in block.0.external_transactions() {
                 let Executable::Instructions(instrs) = tx.instructions() else {
                     continue;
@@ -3202,15 +3327,20 @@ mod tests {
                     let Parameter::Custom(custom) = set_param.inner() else {
                         continue;
                     };
-                    if custom.id() == &crypto_metadata::manifest_meta_id() {
-                        return custom
-                            .payload()
-                            .try_into_any()
-                            .expect("decode embedded crypto manifest");
+                    if custom.id() == &CryptoAdmissionPolicyV1::parameter_id() {
+                        policies.push(
+                            CryptoAdmissionPolicyV1::from_payload(custom.payload())
+                                .expect("decode the canonical signed policy"),
+                        );
                     }
                 }
             }
-            panic!("crypto manifest metadata parameter not found in genesis");
+            assert_eq!(
+                policies.len(),
+                1,
+                "exactly one policy across every signed batch"
+            );
+            policies.pop().unwrap()
         }
         let allowed_signing = vec![
             Algorithm::Ed25519,
@@ -3218,14 +3348,7 @@ mod tests {
             Algorithm::BlsNormal,
         ];
         let expected =
-            super::manifest_crypto_from_actual(&iroha_config::parameters::actual::Crypto {
-                allowed_curve_ids:
-                    iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
-                        &allowed_signing,
-                    ),
-                allowed_signing,
-                ..Default::default()
-            });
+            CryptoAdmissionPolicyV1::new(allowed_signing).expect("explicit test override");
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (topology, entries) = genesis_committee_with_key(&bls);
         let block = super::genesis_with_keypair_and_post_topology_with_policies(
@@ -3236,7 +3359,7 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
             crate::config::GenesisPolicyConfig {
-                genesis_crypto: Some(expected.clone()),
+                genesis_crypto: expected.clone(),
                 da_proof_policies: None,
                 nexus_config: None,
                 zk_config: None,
@@ -3248,7 +3371,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(embedded_manifest_crypto(&block), expected);
+        assert_eq!(embedded_crypto_policy(&block), expected);
     }
     #[test]
     fn minimal_genesis_contains_fixture_accounts() {
@@ -3441,7 +3564,7 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
             crate::config::GenesisPolicyConfig {
-                genesis_crypto: None,
+                genesis_crypto: test_network_crypto_admission_policy(),
                 da_proof_policies: None,
                 nexus_config: None,
                 zk_config: None,

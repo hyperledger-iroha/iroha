@@ -85,7 +85,10 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -317,7 +320,10 @@ ledger::account::set_metadata(
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -435,7 +441,10 @@ fn successful_live_batches_accumulate_parent_block_gas() {
                     &state.network_id,
                     max_clock_drift,
                     tx_limits,
-                    state.crypto().as_ref(),
+                    state
+                        .transaction_admission_parameters()
+                        .require_crypto_policy()
+                        .expect("original fixture policy"),
                     Duration::from_millis(10),
                 )
                 .expect("batch must pass stateless admission")

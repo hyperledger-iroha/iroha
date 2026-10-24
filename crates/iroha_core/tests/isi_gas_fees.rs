@@ -74,6 +74,15 @@ fn install_pipeline_gas_fixture(
     assert_eq!(state.pipeline_snapshot().gas, pipeline.gas);
     state.set_pipeline(pipeline);
 }
+// Author the selected fee rates in the signed genesis snapshot. Installing local
+// pipeline settings alone cannot change the committed monetary policy.
+fn signed_gas_chain(state: State) -> crate::sumeragi::test_chain::CertifiedTestChain {
+    let gas = state.installed_pipeline().gas.clone();
+    let parameters = crate::pipeline_gas_policy::parameters_for_testing(gas.clone()).to_vec();
+    let chain = crate::block::tests::component_chain_with_genesis_parameters(state, parameters);
+    assert_eq!(chain.state().view().world().parameters().gas(), &gas);
+    chain
+}
 fn new_account_in_domain(account_id: &AccountId, _domain: &str) -> Account {
     Account::new(account_id.clone()).build(account_id)
 }
@@ -199,7 +208,7 @@ fn non_vm_instructions_charge_fees() {
         volatility: GasVolatility::Stable,
     }];
     install_pipeline_gas_fixture(&mut state, pipeline);
-    let native_chain = crate::block::tests::component_chain(state);
+    let native_chain = signed_gas_chain(state);
     let state = native_chain.state();
     // 3) Build a simple native ISI transaction (SetKeyValue<Account>)
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
@@ -250,7 +259,7 @@ fn non_vm_instructions_charge_fees() {
     state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
-        .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
+        .execute_transaction(&mut state_tx, &alice_id, &tx, &mut ivm_cache)
         .expect("execution");
     // Used gas is recorded for block-level accounting
     assert!(state_tx.last_tx_gas_used >= used);
@@ -324,7 +333,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
         volatility: GasVolatility::Stable,
     }];
     install_pipeline_gas_fixture(&mut state, pipeline);
-    let native_chain = crate::block::tests::component_chain(state);
+    let native_chain = signed_gas_chain(state);
     let state = native_chain.state();
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
         alice_id.clone(),
@@ -372,7 +381,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
     state_tx.world.current_dataspace_id = Some(route);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
-        .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
+        .execute_transaction(&mut state_tx, &alice_id, &tx, &mut ivm_cache)
         .expect("execution");
     assert_eq!(state_tx.current_dataspace_id, Some(route));
     let fee = u128::from(state_tx.last_tx_gas_used) * u128::from(rate);
@@ -473,7 +482,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         volatility: GasVolatility::Stable,
     }];
     install_pipeline_gas_fixture(&mut state, pipeline);
-    let native_chain = crate::block::tests::component_chain(state);
+    let native_chain = signed_gas_chain(state);
     let state = native_chain.state();
 
     // 3) Build a simple native ISI transaction (SetKeyValue<Account>)
@@ -538,7 +547,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
 
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
-        .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
+        .execute_transaction(&mut state_tx, &alice_id, &tx, &mut ivm_cache)
         .expect("execution");
     // Used gas is recorded for block-level accounting
     assert!(state_tx.last_tx_gas_used >= used);
@@ -717,7 +726,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     }];
     install_pipeline_gas_fixture(&mut state, pipeline);
 
-    let mut native_chain = crate::block::tests::component_chain(state);
+    let mut native_chain = signed_gas_chain(state);
     let state = Arc::clone(native_chain.state());
     let fee_payment = FeePaymentIntent::sponsor(
         program_id,
@@ -874,6 +883,12 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     config.genesis_key = alice_kp;
     config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
     config.genesis_instructions = vec![instruction];
+    // Keep the constructor's explicit staking policy and the selected NPoS asset.
+    config
+        .genesis_parameters
+        .extend(crate::pipeline_gas_policy::parameters_for_testing(
+            pipeline.gas.clone(),
+        ));
     config
         .genesis_parameters
         .push(iroha_data_model::parameter::Parameter::Custom(
@@ -991,7 +1006,7 @@ fn non_vm_gas_limit_too_low_rejects() {
     state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-    let res = executor.execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache);
+    let res = executor.execute_transaction(&mut state_tx, &alice_id, &tx, &mut ivm_cache);
     assert!(
         matches!(
             &res,
@@ -1047,7 +1062,7 @@ fn ivm_syscall_charges_fees() {
         volatility: GasVolatility::Stable,
     }];
     install_pipeline_gas_fixture(&mut state, pipeline);
-    let native_chain = crate::block::tests::component_chain(state);
+    let native_chain = signed_gas_chain(state);
     let state = native_chain.state();
     let scall = encoding::wide::encode_sys(
         instruction::wide::system::SCALL,
@@ -1092,7 +1107,7 @@ fn ivm_syscall_charges_fees() {
     state_tx.world.current_dataspace_id = Some(contract_route);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
-        .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
+        .execute_transaction(&mut state_tx, &alice_id, &tx, &mut ivm_cache)
         .expect("execution");
     assert_eq!(state_tx.current_dataspace_id, Some(contract_route));
     let scall_cost = ivm::gas::cost_of(scall).expect("SCALL must have gas cost");
@@ -1231,7 +1246,7 @@ fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
         volatility: GasVolatility::Stable,
     }];
     install_pipeline_gas_fixture(&mut state, pipeline);
-    let native_chain = crate::block::tests::component_chain(state);
+    let native_chain = signed_gas_chain(state);
     let state = native_chain.state();
     // 3) Build a minimal IVM program that consumes gas
     let mut code = Vec::new();
@@ -1281,7 +1296,7 @@ fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
     state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
-        .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
+        .execute_transaction(&mut state_tx, &alice_id, &tx, &mut ivm_cache)
         .expect("execution");
     assert!(state_tx.last_tx_gas_used > 0);
     let fee = u128::from(state_tx.last_tx_gas_used) * u128::from(rate);

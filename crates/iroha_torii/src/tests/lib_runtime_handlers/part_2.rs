@@ -3034,6 +3034,211 @@ fn long_lived_dataspace_context_rechecks_permission_revocation() {
 }
 
 #[cfg(feature = "app_api")]
+#[test]
+fn one_shot_visibility_comes_from_its_view_and_seeds_admitted_contexts() {
+    let caller = checked_torii_test_account_id(0xd3, "derive one-view visibility reader key");
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&caller),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+    let permission: Permission = CanReadRestrictedDataspace {
+        dataspace: restricted_dataspace,
+    }
+    .into();
+    grant_account_permission_for_test(&app, &caller, permission);
+    let signed = super::ToriiAccountReadVisibility::Signed(caller.clone());
+
+    let state_view = app.state.view();
+    let in_view = signed.dataspace_visibility_in(&state_view);
+    assert_eq!(
+        in_view,
+        super::torii_dataspace_read_visibility_in(&state_view, Some(&caller))
+    );
+    assert!(in_view.allows_dataspace(restricted_dataspace));
+    assert!(
+        !super::ToriiAccountReadVisibility::None
+            .dataspace_visibility_in(&state_view)
+            .allows_dataspace(restricted_dataspace)
+    );
+    drop(state_view);
+    assert_eq!(signed.dataspace_visibility(app.as_ref()), in_view);
+
+    // An admitted baseline is retained exactly as resolved; it is never re-read.
+    let narrowed = routing::DataspaceReadVisibility::new(
+        std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL]),
+        false,
+    );
+    let admitted = signed
+        .clone()
+        .into_admitted_dataspace_context(app.clone(), narrowed.clone());
+    assert_eq!(admitted.admitted_visibility, narrowed);
+    assert_eq!(admitted.caller(), Some(&caller));
+    let resolved = signed.into_dataspace_context(app.clone());
+    assert_eq!(resolved.admitted_visibility, in_view);
+    let anonymous = super::ToriiAccountReadVisibility::None
+        .into_admitted_dataspace_context(app, narrowed.clone());
+    assert_eq!(anonymous.caller(), None);
+    assert_eq!(anonymous.admitted_visibility, narrowed);
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn global_reader_grant_and_visibility_resolve_together() {
+    const ENDPOINT: &str = "v1/blocks/stream";
+    let caller = checked_torii_test_account_id(0xd4, "derive one-view global reader key");
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&caller),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+    match super::torii_global_reader_visibility(
+        app.as_ref(),
+        &super::ToriiAccountReadVisibility::None,
+        ENDPOINT,
+    ) {
+        Err(Error::AppUnauthorized { code, .. }) => {
+            assert_eq!(code, "canonical_authentication_required");
+        }
+        other => panic!("an anonymous global read must be refused: {other:?}"),
+    }
+    let signed = super::ToriiAccountReadVisibility::Signed(caller.clone());
+    match super::torii_global_reader_visibility(app.as_ref(), &signed, ENDPOINT) {
+        Err(Error::Query(ValidationFail::NotPermitted(message))) => assert_eq!(
+            message,
+            "CanReadAllLedgerData permission is required for v1/blocks/stream"
+        ),
+        other => panic!("a reader without the global grant must be refused: {other:?}"),
+    }
+
+    grant_account_permission_for_test(&app, &caller, CanReadAllLedgerData.into());
+    let visibility = super::torii_global_reader_visibility(app.as_ref(), &signed, ENDPOINT)
+        .expect("a global reader is admitted");
+    assert!(visibility.can_read_all());
+    assert!(visibility.allows_dataspace(restricted_dataspace));
+    assert_eq!(visibility, signed.dataspace_visibility(app.as_ref()));
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn global_reader_admission_refuses_anonymous_requests_before_reading_state() {
+    let app = crate::mk_app_state_for_tests();
+    let uri: Uri = "/v1/blocks/stream".parse().expect("blocks stream uri");
+    match super::require_torii_global_reader(
+        &app,
+        &HeaderMap::new(),
+        &Method::GET,
+        &uri,
+        "v1/blocks/stream",
+    ) {
+        Err(Error::AppUnauthorized { code, .. }) => {
+            assert_eq!(code, "canonical_authentication_required");
+        }
+        Err(other) => panic!("anonymous stream admission refused for another reason: {other:?}"),
+        Ok(_) => panic!("anonymous callers must not open the complete block stream"),
+    }
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+#[tokio::test]
+async fn explorer_metrics_requires_a_canonical_global_reader() {
+    let result = super::handler_explorer_metrics(
+        State(crate::mk_app_state_for_tests()),
+        HeaderMap::new(),
+        Method::GET,
+        "/v1/explorer/metrics".parse().expect("metrics uri"),
+        crate::loopback_connect_info(),
+    )
+    .await;
+    match result {
+        Err(Error::AppUnauthorized { code, .. }) => {
+            assert_eq!(code, "canonical_authentication_required");
+        }
+        Err(other) => panic!("anonymous metrics refused for another reason: {other:?}"),
+        Ok(_) => panic!("Explorer metrics require a canonical global reader"),
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn asset_registration_checks_definition_visibility_in_its_projection_view() {
+    let owner = checked_torii_test_account_id(0xd5, "derive registration visibility owner key");
+    let global: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+        .parse()
+        .expect("global definition address");
+    let restricted = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("cash", "restricted").expect("definition seed"),
+        "kina".parse().expect("definition name"),
+    );
+    let mut world = World::with(
+        [],
+        [Account::new(owner.clone()).build(&owner)],
+        [AssetDefinition::numeric(
+            global.clone(),
+            "XOR",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&owner)],
+    );
+    world
+        .insert_direct_asset_definition_with_assets_for_testing(
+            AssetDefinition::numeric(
+                restricted.clone(),
+                "Kina",
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                None,
+            )
+            .build(&owner),
+            DataSpaceId::new(10),
+            [],
+        )
+        .expect("restricted definition home");
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world,
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+    assert_eq!(restricted_dataspace, DataSpaceId::new(10));
+    let request = |asset: &AssetDefinitionId| {
+        super::offline_asset_registration::handler(
+            State(app.clone()),
+            HeaderMap::new(),
+            Method::GET,
+            format!("/v1/assets/definitions/{asset}/registration")
+                .parse()
+                .expect("registration uri"),
+            crate::loopback_connect_info(),
+            AxPath(asset.to_string()),
+        )
+    };
+
+    let absent = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("cash", "restricted").expect("definition seed"),
+        "absent".parse().expect("definition name"),
+    );
+    // A hidden home is indistinguishable from an absent definition.
+    for hidden in [&restricted, &absent] {
+        match request(hidden).await {
+            Err(Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))) => {}
+            Err(other) => panic!("hidden definition refused for another reason: {other:?}"),
+            Ok(_) => panic!("an anonymous reader must not project a hidden definition"),
+        }
+    }
+    // A visible definition passes the same-view check and reaches the projection,
+    // which refuses the fixture's absent committed block.
+    match request(&global).await {
+        Err(Error::AppServiceUnavailable { code, .. }) => {
+            assert_eq!(code, "offline_asset_registration_unavailable");
+        }
+        Err(other) => panic!("visible definition refused for another reason: {other:?}"),
+        Ok(_) => panic!("the fixture has no committed registration block"),
+    }
+}
+
+#[cfg(feature = "app_api")]
 #[tokio::test]
 async fn handler_account_assets_reports_selected_route_and_keeps_restricted_rows_private() {
     let authority = checked_torii_test_account_id(

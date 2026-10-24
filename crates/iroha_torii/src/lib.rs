@@ -9662,17 +9662,17 @@ async fn handler_accounts_capabilities(
         "v1/accounts/capabilities",
     )
     .await?;
-    let crypto = app.state.crypto();
-    let payload = AccountCapabilitiesV1::from_admission(
+    let parameters = app.state.transaction_admission_parameters();
+    let policy = parameters.require_crypto_policy().map_err(|_| {
+        Error::TransactionAdmissionDeferred(
+            ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable.into(),
+        )
+    })?;
+    let payload = AccountCapabilitiesV1::from_policy(
         *app.state.network_id_ref(),
         iroha_data_model::account::address::chain_discriminant(),
-        &crypto.allowed_signing,
-    )
-    .map_err(|message| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            message.to_owned(),
-        ))
-    })?;
+        policy,
+    );
     let bytes = norito::json::to_vec(&payload).map_err(|source| Error::SerializationFailure {
         context: "account_capabilities",
         source: Box::new(source),
@@ -10994,19 +10994,16 @@ async fn handler_explorer_metrics(
     uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    const ENDPOINT: &str = "v1/explorer/metrics";
     let remote_ip = remote.ip();
-    let visibility =
-        require_torii_global_reader(&app, &headers, &method, &uri, "v1/explorer/metrics")?;
+    let caller = torii_one_shot_caller_from_headers(&app, &headers, &method, &uri, ENDPOINT)?;
+    let visibility = torii_global_reader_visibility(app.as_ref(), &caller, ENDPOINT)?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
-        check_access(&app, &headers, Some(remote_ip), "v1/explorer/metrics").await?;
+        check_access(&app, &headers, Some(remote_ip), ENDPOINT).await?;
     }
-    routing::handle_v1_explorer_metrics(
-        &app.state,
-        &(app.telemetry),
-        &(visibility.current_visibility()),
-    )
+    routing::handle_v1_explorer_metrics(&app.state, &(app.telemetry), &visibility)
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -11178,8 +11175,14 @@ async fn handler_explorer_account_detail(
         &[],
         CONTEXT_EXPLORER_ACCOUNT_DETAIL,
     )?;
-    let current_visibility = torii_dataspace_read_visibility(app.as_ref(), visibility.caller());
-    if !current_visibility.allows_account(&app.state.world_view(), &parsed_account_id) {
+    // Resolve visibility and check the account in the same committed view.
+    let account_visible = {
+        let state_view = app.state.view();
+        visibility
+            .dataspace_visibility_in(&state_view)
+            .allows_account(state_view.world(), &parsed_account_id)
+    };
+    if !account_visible {
         return Err(routing::explorer_not_found());
     }
     let use_target_account_routes = torii_should_use_target_account_routes(
@@ -15180,15 +15183,33 @@ impl ToriiAccountReadVisibility {
 
     /// Resolve one-shot visibility without constructing a stream baseline.
     fn dataspace_visibility(&self, app: &AppState) -> routing::DataspaceReadVisibility {
-        torii_dataspace_read_visibility(app, self.caller())
+        self.dataspace_visibility_in(&app.state.view())
+    }
+
+    /// Resolve one-shot visibility from the State view that also serves the read.
+    fn dataspace_visibility_in(
+        &self,
+        state_view: &iroha_core::state::StateView<'_>,
+    ) -> routing::DataspaceReadVisibility {
+        torii_dataspace_read_visibility_in(state_view, self.caller())
     }
 
     fn into_dataspace_context(self, app: SharedAppState) -> ToriiDataspaceReadContext {
+        let admitted_visibility = self.dataspace_visibility(app.as_ref());
+        self.into_admitted_dataspace_context(app, admitted_visibility)
+    }
+
+    /// Retain `admitted_visibility`, already resolved for this caller, as the
+    /// long-lived admission baseline without reading State again.
+    fn into_admitted_dataspace_context(
+        self,
+        app: SharedAppState,
+        admitted_visibility: routing::DataspaceReadVisibility,
+    ) -> ToriiDataspaceReadContext {
         let caller = match self {
             Self::Signed(account_id) => Some(account_id),
             Self::None => None,
         };
-        let admitted_visibility = torii_dataspace_read_visibility(app.as_ref(), caller.as_ref());
         ToriiDataspaceReadContext {
             app,
             caller,
@@ -15220,6 +15241,9 @@ impl ToriiDataspaceReadContext {
         self.caller.as_ref()
     }
 
+    /// Observe the live visibility of a retained context. Production streams read it
+    /// through their cached authorization; one-shot reads never build a context.
+    #[cfg(test)]
     fn current_visibility(&self) -> routing::DataspaceReadVisibility {
         self.visibility_in(&self.app.state.view())
     }
@@ -15359,23 +15383,34 @@ fn require_torii_global_reader(
     uri: &Uri,
     endpoint: &'static str,
 ) -> Result<ToriiDataspaceReadContext, Error> {
-    let context = torii_dataspace_context_from_headers(app, headers, method, uri, endpoint)?;
-    let Some(caller) = context.caller() else {
+    let caller = torii_one_shot_caller_from_headers(app, headers, method, uri, endpoint)?;
+    let visibility = torii_global_reader_visibility(app.as_ref(), &caller, endpoint)?;
+    Ok(caller.into_admitted_dataspace_context(Arc::clone(app), visibility))
+}
+
+/// Admit a canonical `CanReadAllLedgerData` reader. Its grant and complete
+/// visibility come from one State view.
+#[cfg(feature = "app_api")]
+fn torii_global_reader_visibility(
+    app: &AppState,
+    caller: &ToriiAccountReadVisibility,
+    endpoint: &'static str,
+) -> Result<routing::DataspaceReadVisibility, Error> {
+    if !caller.is_signed() {
         return Err(Error::AppUnauthorized {
             code: "canonical_authentication_required",
             message: "canonical account request authentication is required".to_owned(),
         });
-    };
-    let permission: Permission = CanReadAllLedgerData.into();
-    let state_view = app.state.view();
-    if !torii_account_has_permission(state_view.world(), caller, &permission) {
+    }
+    let visibility = caller.dataspace_visibility(app);
+    if !visibility.can_read_all() {
         return Err(Error::Query(
             iroha_data_model::ValidationFail::NotPermitted(format!(
                 "CanReadAllLedgerData permission is required for {endpoint}"
             )),
         ));
     }
-    Ok(context)
+    Ok(visibility)
 }
 fn torii_visible_account_read_routes(
     app: &AppState,
@@ -15995,10 +16030,12 @@ fn torii_account_assets_route_visibility(
                 return Err(torii_signed_query_permission_denied_response(&caller, 1));
             }
             // One execution answers for every authorized route of the account.
-            Ok(routing::DataspaceReadVisibility::exact_account(
-                routes.iter().map(|route| route.dataspace_id).collect(),
-                path_account,
-            ))
+            Ok(
+                torii_dataspace_read_visibility(app, Some(&caller)).with_exact_account(
+                    routes.iter().map(|route| route.dataspace_id).collect(),
+                    path_account,
+                ),
+            )
         }
         ToriiFanoutRouteScopeV1::VisibleAccount {
             caller_account_id: None,
@@ -24541,14 +24578,16 @@ fn require_contract_artifact_visibility(
     artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
 ) -> Result<(), Error> {
     use iroha_data_model::block::consensus::SumeragiRootScope;
-    let root = iroha_core::sumeragi::lanes::routing::committed_root_scope(app.state.view().world())
+    // The root scope and the caller's visibility come from one committed view.
+    let state_view = app.state.view();
+    let root = iroha_core::sumeragi::lanes::routing::committed_root_scope(state_view.world())
         .ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::NotPermitted(
                 "contract artifact reads require authenticated root scope".into(),
             ))
         })?;
     if matches!(root, SumeragiRootScope::Dataspace { dataspace_id, .. } if dataspace_id != artifact_id.dataspace_id)
-        || !torii_dataspace_read_visibility(app, Some(caller))
+        || !torii_dataspace_read_visibility_in(&state_view, Some(caller))
             .allows_dataspace(artifact_id.dataspace_id)
     {
         return Err(Error::Query(
@@ -28969,13 +29008,7 @@ async fn admit_signed_transaction_for_ingress(
                 <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
                     &transaction,
                 );
-            let transaction = DecodedVersionedSignedTransaction::decode_versioned(
-                &transaction_bytes,
-            )
-            .map_err(|error| Error::AppQueryValidation {
-                code: "invalid_transaction_payload",
-                message: format!("transaction payload could not be decoded: {error}"),
-            })?;
+            let transaction = decode_signed_transaction_for_ingress(&transaction_bytes)?;
             if transaction.hash() != submitted_signed_transaction_hash {
                 return Err(Error::AppServiceUnavailable {
                     code: "transaction_identity_changed",
@@ -29153,6 +29186,29 @@ async fn handler_post_transaction_entrypoint(
     .await
 }
 
+// Programmatic routes re-decode the original signed bytes under the same local
+// parser readiness rules as the public transaction extractor.
+fn decode_signed_transaction_for_ingress(
+    payload: &[u8],
+) -> Result<DecodedVersionedSignedTransaction, Error> {
+    DecodedVersionedSignedTransaction::decode_versioned(payload).map_err(|error| {
+        if let iroha_version::error::Error::NoritoCodec(original) = &error
+            && let Some(deferred) =
+                iroha_core::execution_attempt::crypto_public_key_decode_deferred(original)
+        {
+            return Error::TransactionAdmissionDeferred(deferred);
+        }
+        Error::AppQueryValidation {
+            code: "invalid_transaction_payload",
+            message: format!("transaction payload could not be decoded: {error}"),
+        }
+    })
+}
+
+#[cfg(test)]
+#[path = "tests/transaction_crypto_decode.rs"]
+mod transaction_crypto_decode_tests;
+
 fn decode_transaction_batch_payloads(
     payloads: Vec<Vec<u8>>,
 ) -> Result<Vec<DecodedVersionedSignedTransaction>, Error> {
@@ -29161,6 +29217,12 @@ fn decode_transaction_batch_payloads(
         .enumerate()
         .map(|(idx, payload)| {
             DecodedVersionedSignedTransaction::decode_versioned_owned(payload).map_err(|error| {
+                if let iroha_version::error::Error::NoritoCodec(original) = &error
+                    && let Some(deferred) =
+                        iroha_core::execution_attempt::crypto_public_key_decode_deferred(original)
+                {
+                    return Error::TransactionAdmissionDeferred(deferred);
+                }
                 Error::AppQueryValidation {
                     code: "invalid_transaction_batch_payload",
                     message: format!("transaction batch item {idx} could not be decoded: {error}"),
@@ -43269,7 +43331,9 @@ pub enum Error {
         retry_after_secs: u64,
     },
     /// Failed to accept transaction
-    AcceptTransaction(#[from] iroha_core::tx::AcceptTransactionFail),
+    AcceptTransaction(#[source] iroha_core::tx::AcceptTransactionFail),
+    /// Local readiness or resources prevented transaction admission; no acceptance or rejection was produced.
+    TransactionAdmissionDeferred(#[source] iroha_core::execution_attempt::ExecutionDeferred),
     /// Failed to get or set configuration
     Config(#[source] eyre::Report),
     /// `SoraFS` moderation runtime startup failed `{code}`
@@ -43394,10 +43458,54 @@ fn public_validation_fail_envelope(
     }
     ErrorEnvelope::new("query_validation_failed", validation_fail_message(fail))
 }
+impl From<iroha_core::tx::AcceptTransactionFail> for Error {
+    fn from(error: iroha_core::tx::AcceptTransactionFail) -> Self {
+        match error.into_execution_deferred() {
+            Ok(original) => Self::TransactionAdmissionDeferred(original),
+            Err(completed) => Self::AcceptTransaction(completed),
+        }
+    }
+}
+impl Error {
+    // Public callers can construct AcceptTransaction directly. Every rendering
+    // boundary still separates an unfinished local attempt from a completed verdict.
+    fn classify_transaction_admission(self) -> Self {
+        match self {
+            Self::AcceptTransaction(error) => error.into(),
+            other => other,
+        }
+    }
+    fn transaction_admission_deferred_envelope() -> ErrorEnvelope {
+        ErrorEnvelope::new(
+            "transaction_admission_deferred",
+            "Local readiness or resources prevented transaction admission. This request was not queued; retry the unchanged signed request.",
+        )
+        .with_details(ErrorDetails {
+            retry_after_seconds: Some(1),
+            ..Default::default()
+        })
+    }
+}
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let format = utils::current_response_format();
-        match self {
+        match self.classify_transaction_admission() {
+            Self::TransactionAdmissionDeferred(original) => {
+                // The exact cause reaches the HTTP boundary intact. The caller
+                // retains the signed request for retry; no pending server custody
+                // or terminal rejection is created for this unqueued attempt.
+                iroha_logger::debug!(?original, "transaction admission deferred locally");
+                let mut response = utils::respond_with_status_and_format(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Self::transaction_admission_deferred_envelope(),
+                    format,
+                );
+                response.headers_mut().insert(
+                    axum::http::header::RETRY_AFTER,
+                    HeaderValue::from_static("1"),
+                );
+                response
+            }
             Self::Query(err) => {
                 let status = Self::query_status_code(&err);
                 if status.is_server_error() {
@@ -43722,7 +43830,11 @@ use iroha_data_model::nexus::FeeSponsorProgram;
 pub(crate) use tests_runtime_handlers::mk_app_state_for_tests;
 impl Error {
     fn into_envelope(self) -> ErrorEnvelope {
-        match self {
+        match self.classify_transaction_admission() {
+            Self::TransactionAdmissionDeferred(original) => {
+                iroha_logger::debug!(?original, "transaction admission deferred locally");
+                Self::transaction_admission_deferred_envelope()
+            }
             Self::Query(err) => {
                 let status = Self::query_status_code(&err);
                 public_validation_fail_envelope(&err, status)
@@ -43868,7 +43980,17 @@ impl Error {
             AcceptTransaction(AcceptTransactionFail::AnonymousBallotUnavailable) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
+            AcceptTransaction(error)
+                if error.local_refusal().is_some()
+                    || matches!(
+                        error,
+                        AcceptTransactionFail::CryptoImplementationUnavailable(_)
+                    ) =>
+            {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             AcceptTransaction(_) => StatusCode::BAD_REQUEST,
+            TransactionAdmissionDeferred(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppQueryValidation { .. } => StatusCode::BAD_REQUEST,
             #[cfg(feature = "app_api")]
             CollectionQuery(_) => StatusCode::BAD_REQUEST,

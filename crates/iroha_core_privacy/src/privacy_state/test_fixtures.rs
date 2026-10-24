@@ -112,7 +112,7 @@ fn bootle_lantern_issuer_policy(
 }
 fn validate_persisted_commitments(
     commitments: &Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
-) -> Result<(), String> {
+) -> Result<(), PrivacyStateValidationErrorV1> {
     let activations = Storage::<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>::new();
     let pgc_accounts = Storage::<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>::new();
     let pgc_pool_invariants =
@@ -463,7 +463,7 @@ struct PgcPersistedFixture {
     provenance: PrivacyRootProvenanceV1,
 }
 impl PgcPersistedFixture {
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), PrivacyStateValidationErrorV1> {
         validate_privacy_persisted_state_v1(
             &PrivacyConsensusPolicyV1::taira_default(),
             &self.activations.view(),
@@ -532,7 +532,7 @@ impl PgcPersistedFixture {
                 .expect("successor account provenance");
         let invariant = self.invariant();
         let account_table = self.account_table();
-        let next_root = compute_privacy_pgc_account_state_root_v1(
+        let next_root = derive_privacy_pgc_account_state_root_v1(
             self.namespace,
             next_epoch,
             invariant.total_supply(),
@@ -647,7 +647,7 @@ impl PgcPersistedFixture {
     fn load_with_retention(
         &self,
         retained_root_count: u32,
-    ) -> Result<PrivacyPgcPoolSnapshotV1, String> {
+    ) -> Result<PrivacyPgcPoolSnapshotV1, PrivacyStateValidationErrorV1> {
         load_privacy_pgc_pool_snapshot_v1(
             self.namespace,
             retained_root_count,
@@ -666,7 +666,7 @@ fn pgc_persisted_fixture() -> PgcPersistedFixture {
     let epoch = PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1;
     let account_table = pgc_accounts(16);
     let root =
-        compute_privacy_pgc_account_state_root_v1(namespace, epoch, total_supply, &account_table)
+        derive_privacy_pgc_account_state_root_v1(namespace, epoch, total_supply, &account_table)
             .expect("canonical fixture root");
     let account_provenance =
         PrivacyPgcAccountProvenanceV1::bootstrap(bootstrap_digest, bootstrap_proof_digest, 9)
@@ -751,7 +751,7 @@ fn expect_pgc_persisted_error(mutate: impl FnOnce(&mut PgcPersistedFixture), exp
         .validate()
         .expect_err("adversarial persisted state must reject");
     assert!(
-        error.contains(expected),
+        error.to_string().contains(expected),
         "expected `{expected}` in persisted-state rejection, got `{error}`"
     );
 }
@@ -769,7 +769,7 @@ struct OrchardPersistedFixture {
     head_key: PrivacyRootHeadKeyV1,
 }
 impl OrchardPersistedFixture {
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), PrivacyStateValidationErrorV1> {
         validate_privacy_persisted_state_v1(
             &PrivacyConsensusPolicyV1::taira_default(),
             &self.activations.view(),
@@ -985,7 +985,7 @@ fn expect_orchard_persisted_error(
         .validate()
         .expect_err("adversarial Orchard state must reject");
     assert!(
-        error.contains(expected),
+        error.to_string().contains(expected),
         "expected `{expected}` in Orchard persisted-state rejection, got `{error}`"
     );
 }
@@ -1400,7 +1400,7 @@ fn validate_proof_managed_fixture_maps(
     commitments: &Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
     roots: &Storage<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: &Storage<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
-) -> Result<(), String> {
+) -> Result<(), PrivacyStateValidationErrorV1> {
     let activation = crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
         .expect("compiled proof-managed profile")
         .activation_record(PrivacyProtocolLifecycleV1::Active(

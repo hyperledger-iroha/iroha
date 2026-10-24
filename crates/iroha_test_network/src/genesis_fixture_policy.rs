@@ -25,7 +25,7 @@ pub(super) fn policy_bound_proposal(
             key,
             chain_id(),
             crate::config::GenesisPolicyConfig {
-                genesis_crypto: None,
+                genesis_crypto: crate::config::test_network_crypto_admission_policy(),
                 da_proof_policies: None,
                 nexus_config: None,
                 zk_config: None,

@@ -1,4 +1,3 @@
-#[cfg(feature = "governance")]
 use crate::isi::governance;
 mod wire_ids;
 
@@ -203,7 +202,7 @@ mod tests {
             "pair payload should decode back into the canonical boxed family"
         );
     }
-    #[cfg(feature = "governance")]
+
     #[test]
     fn parliament_registry_contains_only_current_lifecycle_and_standalone_ballots() {
         let registry = default();
@@ -374,10 +373,7 @@ mod tests {
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
         const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 413;
-        #[cfg(feature = "governance")]
         const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 413;
-        #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 395;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -403,12 +399,8 @@ mod tests {
         assert_eq!(
             EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS,
             inventory.matches("built_in_wire_id!(").count()
-                + if cfg!(feature = "governance") {
-                    inventory.matches("governance_wire_id!(").count()
-                } else {
-                    0
-                },
-            "source feature scope and enabled inventory length diverged"
+                + inventory.matches("governance_wire_id!(").count(),
+            "source inventory and complete compiled inventory length diverged"
         );
         for forbidden in ["register::<", "register_slice::<", "remap_wire_id"] {
             assert!(
@@ -425,7 +417,7 @@ mod tests {
     #[test]
     fn instruction_wire_ids_match_v1_golden_inventory_hash() {
         use sha2::{Digest, Sha256};
-        #[cfg(feature = "governance")]
+
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
             "7b2a802db23d9f4e69770e3d67da01898f5727672cffbb081971669513483e66";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
@@ -449,7 +441,7 @@ mod tests {
             without_governance, EXPECTED_WITHOUT_GOVERNANCE_SHA256,
             "non-governance V1 type-to-wire-ID assignments changed"
         );
-        #[cfg(feature = "governance")]
+
         {
             assert_eq!(
                 wire_ids::ALL
@@ -466,7 +458,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "governance")]
+
     #[test]
     fn governance_instruction_wire_ids_are_exact_and_manual_council_stays_retired() {
         const PERMITTED_GOVERNANCE_WIRE_IDS: &[&str] = &[
@@ -1588,7 +1580,7 @@ mod tests {
                 .expect_err("retired confidential JSON must not dispatch");
         }
     }
-    #[cfg(feature = "governance")]
+
     #[test]
     fn default_registry_registers_citizenship_instructions() {
         let registry = default();

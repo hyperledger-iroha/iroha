@@ -93,7 +93,8 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
                 genesis_key_pair.clone(),
                 chain,
                 crate::config::GenesisPolicyConfig {
-                    genesis_crypto: Some(config::manifest_crypto_from_actual(&actual.crypto)),
+                    genesis_crypto: config::test_network_crypto_admission_policy(),
+                    staking_policy: config::default_test_network_staking_policy(),
                     da_proof_policies: Some(iroha_core::da::proof_policy_bundle(
                         &actual.nexus.lane_config,
                     )),

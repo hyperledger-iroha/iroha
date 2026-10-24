@@ -295,7 +295,13 @@ pub struct DataspaceReadVisibility {
     visible_dataspaces: BTreeSet<DataSpaceId>,
     fixed_scope: Option<crate::stream_control::FixedScopeOwner>,
     can_read_all: bool,
-    exact_account: Option<AccountId>,
+    exact_account: Option<ExactAccountReadScope>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ExactAccountReadScope {
+    account: AccountId,
+    balance_dataspaces: BTreeSet<DataSpaceId>,
 }
 
 impl DataspaceReadVisibility {
@@ -308,20 +314,25 @@ impl DataspaceReadVisibility {
         }
     }
 
-    /// Restrict an authorized account-assets read to one exact account on its
-    /// authorized dataspaces. The account grant opens its balance routes, not
-    /// the caller's siblings.
-    pub(crate) fn exact_account(dataspaces: BTreeSet<DataSpaceId>, account: AccountId) -> Self {
-        Self {
-            visible_dataspaces: dataspaces,
-            fixed_scope: None,
-            can_read_all: false,
-            exact_account: Some(account),
-        }
+    /// Retain definition visibility while restricting holdings to the exact
+    /// account and all of its authorized balance routes. A broader definition
+    /// grant must not expand this account selector or its balance authority.
+    pub(crate) fn with_exact_account(
+        mut self,
+        balance_dataspaces: BTreeSet<DataSpaceId>,
+        account: AccountId,
+    ) -> Self {
+        self.visible_dataspaces
+            .extend(balance_dataspaces.iter().copied());
+        self.exact_account = Some(ExactAccountReadScope {
+            account,
+            balance_dataspaces,
+        });
+        self
     }
 
     pub(crate) fn exact_account_id(&self) -> Option<&AccountId> {
-        self.exact_account.as_ref()
+        self.exact_account.as_ref().map(|scope| &scope.account)
     }
 
     #[cfg(any(test, feature = "bench"))]
@@ -414,7 +425,8 @@ impl DataspaceReadVisibility {
         account_id: &AccountId,
     ) -> bool {
         if let Some(exact_account) = &self.exact_account {
-            return exact_account == account_id && world.accounts().get(account_id).is_some();
+            return &exact_account.account == account_id
+                && world.accounts().get(account_id).is_some();
         }
         if self.can_read_all {
             return true;
@@ -478,14 +490,25 @@ impl DataspaceReadVisibility {
 
     /// Return whether an asset bucket and its holder belong only to visible routes.
     pub(crate) fn allows_asset(&self, world: &impl WorldReadOnly, asset_id: &AssetId) -> bool {
-        if self.can_read_all {
+        if !self.allows_account(world, asset_id.account()) {
+            return false;
+        }
+        if self.can_read_all && self.exact_account.is_none() {
             return true;
         }
         if world.assets().get(asset_id).is_none()
             || !self.allows_asset_definition(world, asset_id.definition())
-            || !self.allows_account(world, asset_id.account())
         {
             return false;
+        }
+        // One execution serves the complete authorized route set. Definition
+        // visibility, including a global grant, cannot add other balance routes.
+        if let Some(exact_account) = &self.exact_account {
+            let dataspace = match asset_id.scope() {
+                iroha_data_model::asset::AssetBalanceScope::Global => DataSpaceId::UNIVERSAL,
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => *dataspace,
+            };
+            return exact_account.balance_dataspaces.contains(&dataspace);
         }
         match asset_id.scope() {
             iroha_data_model::asset::AssetBalanceScope::Global => true,
@@ -518,6 +541,24 @@ impl DataspaceReadVisibility {
         );
         for dataspace in self.dataspace_ids() {
             hasher.update(dataspace.as_u64().to_be_bytes());
+        }
+        if let Some(scope) = &self.exact_account {
+            hasher.update(b"exact-account");
+            let account = norito::codec::Encode::encode(&scope.account);
+            hasher.update(
+                u32::try_from(account.len())
+                    .expect("canonical account encoding fits u32")
+                    .to_be_bytes(),
+            );
+            hasher.update(account);
+            hasher.update(
+                u32::try_from(scope.balance_dataspaces.len())
+                    .expect("configured dataspace count fits u32")
+                    .to_be_bytes(),
+            );
+            for dataspace in &scope.balance_dataspaces {
+                hasher.update(dataspace.as_u64().to_be_bytes());
+            }
         }
         hasher.finalize().into()
     }
@@ -9550,7 +9591,14 @@ pub fn accept_transaction_for_ingress(
     );
     #[cfg(feature = "telemetry")]
     let verify_started = std::time::Instant::now();
-    let (max_clock_drift, tx_limits) = state.transaction_admission_limits();
+    let parameters = state.transaction_admission_parameters();
+    let max_clock_drift = parameters.sumeragi().max_clock_drift();
+    let tx_limits = parameters.transaction();
+    let crypto_policy = parameters.require_crypto_policy().map_err(|_| {
+        Error::TransactionAdmissionDeferred(
+            ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable.into(),
+        )
+    })?;
     if let TransactionEntrypoint::External(signed) = &tx
         && let Some(rejection) = reject_direct_multisig_signing(state.as_ref(), signed)
     {
@@ -9609,14 +9657,13 @@ pub fn accept_transaction_for_ingress(
             )
         }
     };
-    let crypto_cfg = state.crypto();
     let network_id = *state.network_id_ref();
     match iroha_core::tx::AcceptedTransaction::accept_entrypoint(
         tx,
         &network_id,
         max_clock_drift,
         tx_limits,
-        crypto_cfg.as_ref(),
+        crypto_policy,
     ) {
         Ok(tx) => {
             #[cfg(feature = "telemetry")]
@@ -9630,6 +9677,20 @@ pub fn accept_transaction_for_ingress(
             Ok(tx)
         }
         Err(err) => {
+            let err = match err.into_execution_deferred() {
+                Ok(original) => {
+                    #[cfg(feature = "telemetry")]
+                    observe_route_stage_latency(
+                        telemetry,
+                        "transaction",
+                        "verify",
+                        "deferred",
+                        verify_started.elapsed(),
+                    );
+                    return Err(Error::TransactionAdmissionDeferred(original));
+                }
+                Err(completed) => completed,
+            };
             iroha_logger::warn!(?err, "transaction admission did not complete");
             #[cfg(feature = "telemetry")]
             telemetry.with_metrics(|tel| {
@@ -9690,7 +9751,14 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
     );
     #[cfg(feature = "telemetry")]
     let verify_started = std::time::Instant::now();
-    let (max_clock_drift, tx_limits) = state.transaction_admission_limits();
+    let parameters = state.transaction_admission_parameters();
+    let max_clock_drift = parameters.sumeragi().max_clock_drift();
+    let tx_limits = parameters.transaction();
+    let crypto_policy = parameters.require_crypto_policy().map_err(|_| {
+        Error::TransactionAdmissionDeferred(
+            ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable.into(),
+        )
+    })?;
     if let Some(rejection) = reject_direct_multisig_signing(state.as_ref(), tx.signed()) {
         iroha_logger::warn!(
             authority = %tx.authority(),
@@ -9729,7 +9797,6 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
             authority_label,
         )
     };
-    let crypto_cfg = state.crypto();
     let network_id = *state.network_id_ref();
     let accepted = if let Some(err) = precheck_rejection {
         Err(err)
@@ -9738,10 +9805,10 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
             &network_id,
             max_clock_drift,
             tx_limits,
-            crypto_cfg.as_ref(),
+            crypto_policy,
         )
     } else {
-        tx.into_accepted(&network_id, max_clock_drift, tx_limits, crypto_cfg.as_ref())
+        tx.into_accepted(&network_id, max_clock_drift, tx_limits, crypto_policy)
     };
     match accepted {
         Ok(tx) => {
@@ -9756,6 +9823,20 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
             Ok(tx)
         }
         Err(err) => {
+            let err = match err.into_execution_deferred() {
+                Ok(original) => {
+                    #[cfg(feature = "telemetry")]
+                    observe_route_stage_latency(
+                        telemetry,
+                        "transaction",
+                        "verify",
+                        "deferred",
+                        verify_started.elapsed(),
+                    );
+                    return Err(Error::TransactionAdmissionDeferred(original));
+                }
+                Err(completed) => completed,
+            };
             iroha_logger::warn!(?err, "transaction admission did not complete");
             #[cfg(feature = "telemetry")]
             telemetry.with_metrics(|tel| {
@@ -10056,7 +10137,11 @@ async fn handle_transaction_with_metrics_and_routing_plan(
         &telemetry,
         "transaction",
         "handle",
-        if result.is_ok() { "ok" } else { "error" },
+        match &result {
+            Ok(_) => "ok",
+            Err(Error::TransactionAdmissionDeferred(_)) => "deferred",
+            Err(_) => "error",
+        },
         start.elapsed(),
     );
     #[cfg(feature = "telemetry")]
@@ -20887,6 +20972,7 @@ dataspace_catalog,
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa")
     }
     fn build_state(mut world: World) -> Arc<State> {
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
         // Fee quotation reads the immutable root even when this fixture charges zero.
         crate::test_utils::bind_fixture_root(
             &mut world,
@@ -22209,9 +22295,9 @@ None,
         let clock = TimeSource::new_fixed(network_now);
         let max_clock_drift = Duration::from_millis(1_000);
         let limits = iroha_data_model::parameter::TransactionParameters::default();
-        let crypto = iroha_config::parameters::actual::Crypto::default();
+        let crypto_policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![iroha_crypto::Algorithm::Ed25519, iroha_crypto::Algorithm::Secp256k1]).expect("explicit fixture admission policy");
         let accept = |tx, source: &TimeSource| AcceptedTransaction::accept_with_time_source(
-            tx, state.network_id_ref(), max_clock_drift, limits, &crypto, source,
+            tx, state.network_id_ref(), max_clock_drift, limits, &crypto_policy, source,
         );
         let signed = builder.clone().try_sign(keypair.private_key()).expect("sign exact draft");
         let accepted = accept(signed.clone(), &clock).expect("network-time draft passes admission");
@@ -36803,7 +36889,7 @@ mod explorer_lookup_tests {
             iroha_config::parameters::actual::Nexus { dataspace_catalog: catalog, ..Default::default() },
             LiveQueryStore::start_test(),
         ));
-        let visibility = DataspaceReadVisibility::exact_account(BTreeSet::from([DataSpaceId::UNIVERSAL]), owner.clone());
+        let visibility = DataspaceReadVisibility::default().with_exact_account(BTreeSet::from([DataSpaceId::UNIVERSAL]), owner.clone());
         {
             let world = state.world_view();
             assert!(world.asset_definitions().get(&global).unwrap().alias().is_none());
