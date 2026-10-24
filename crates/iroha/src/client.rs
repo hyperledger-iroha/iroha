@@ -1,4 +1,5 @@
 //! End-point querying logic, including custom public and authenticated routes.
+mod account_alias_readers;
 mod authority_originals;
 pub(crate) mod bounded_async_response;
 #[cfg(test)]
@@ -3691,9 +3692,7 @@ fn decode_account_alias_resolution(
             )
             .map(Some)
         }
-        status => Err(eyre!(
-            "account-alias resolution failed with HTTP status {status}"
-        )),
+        _ => Err(crate::error::http_error("account.alias.resolve", response.clone()).into()),
     }
 }
 fn decode_account_alias_index_resolution(
@@ -17816,11 +17815,14 @@ impl Client {
         let body = norito::json::to_vec(&AccountAliasResolveRequestWireV1 {
             alias: alias.to_string(),
         })?;
-        let response = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
+        let request = self
+            .account_signed_request(HttpMethod::POST, url, body)?
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .build()?;
+        let response = self
+            .send_prepared_request(request)
+            .map_err(|error| dispatch::transport_error("account.alias.resolve", error))?;
         decode_account_alias_resolution(&response, alias)
     }
     /// Resolve an exact alias index without account authentication.
@@ -18166,11 +18168,14 @@ impl Client {
         )?;
         let url = join_torii_url(&self.torii_url, "v1/multisig/spec");
         let body = norito::json::to_vec(request)?;
-        let resp = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
+        let prepared = self
+            .account_signed_request(HttpMethod::POST, url, body)?
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .build()?;
+        let resp = self
+            .send_prepared_request(prepared)
+            .map_err(|error| dispatch::transport_error("multisig.spec", error))?;
         if resp.status() != StatusCode::OK {
             return Err(crate::error::http_error("multisig.spec", resp).into());
         }
