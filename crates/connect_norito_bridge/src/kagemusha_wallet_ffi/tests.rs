@@ -1351,6 +1351,7 @@ fn invalid_state_reasons_report_closed_causes_without_changing_the_refusal() {
         (state::Error::Invalid("provider handle poisoned"), 207),
         (state::Error::NoHead, 208),
         (state::Error::Collected, 209),
+        (state::Error::Invalid("incoming lineage verdict"), 242),
         (state::Error::Invalid("unlisted private diagnostic"), -1),
     ] {
         let failure = Failure::from(error);

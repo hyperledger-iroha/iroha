@@ -1890,7 +1890,8 @@ typedef struct {
        232 marker slot, 233 marker anchor kind, 234 marker superseded,
        235 marker retired generation, 236 atomic no-replace publication unsupported,
        237 archive slot, 238 missing archive call, 239 pending archive records,
-       240 archive record/envelope size, 241 current source.
+       240 archive record/envelope size, 241 current source,
+       242 incoming lineage verdict (Receive admission: the fold would burn this Payment).
        -1 means no more specific cause. Diagnostic only: no recovery permission,
        actor/key data, or change to the refusal. platform_code stays zero for -1/-7. */
     int32_t reason;

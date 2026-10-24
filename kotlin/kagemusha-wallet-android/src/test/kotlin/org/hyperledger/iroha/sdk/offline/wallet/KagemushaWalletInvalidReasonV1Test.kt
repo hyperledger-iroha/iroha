@@ -23,7 +23,7 @@ class KagemushaWalletInvalidReasonV1Test {
             233 to "MARKER_ANCHOR_KIND", 234 to "MARKER_SUPERSEDED",
             235 to "MARKER_RETIRED_GENERATION", 236 to "ATOMIC_PUBLICATION_UNSUPPORTED",
             237 to "ARCHIVE_SLOT", 238 to "ARCHIVE_CALL", 239 to "ARCHIVE_PENDING_RECORDS",
-            240 to "ARCHIVE_RECORD_SIZE", 241 to "CURRENT_SOURCE",
+            240 to "ARCHIVE_RECORD_SIZE", 241 to "CURRENT_SOURCE", 242 to "INCOMING_LINEAGE_VERDICT",
         )
         assertEquals(contract, KagemushaWalletInvalidReasonV1.values().associate { it.code to it.name })
         for ((code, name) in contract) {
@@ -32,7 +32,7 @@ class KagemushaWalletInvalidReasonV1Test {
     }
 
     @Test fun exceptionAndOutputKeepRawTripletsAndExposeOnlyStatusScopedCauses() {
-        for (reason in listOf(-1, 0, 6, 99, 200, 209, 210, 219, 220, 236, 237, 241, 242, Int.MAX_VALUE)) {
+        for (reason in listOf(-1, 0, 6, 99, 200, 209, 210, 219, 220, 236, 237, 241, 242, 243, Int.MAX_VALUE)) {
             for (status in listOf(-1, -2, -5, -6, -7, -100)) {
                 val error = KagemushaWalletExceptionV1(status, reason, 31)
                 val output = KagemushaWalletCallV1(status, reason, 31, 0, 0, 0, byteArrayOf())
@@ -43,6 +43,7 @@ class KagemushaWalletInvalidReasonV1Test {
                     236 -> KagemushaWalletInvalidReasonV1.ATOMIC_PUBLICATION_UNSUPPORTED
                     237 -> KagemushaWalletInvalidReasonV1.ARCHIVE_SLOT
                     241 -> KagemushaWalletInvalidReasonV1.CURRENT_SOURCE
+                    242 -> KagemushaWalletInvalidReasonV1.INCOMING_LINEAGE_VERDICT
                     else -> null
                 } else null
                 assertEquals(expected, error.invalidReason)

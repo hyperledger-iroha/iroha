@@ -246,6 +246,8 @@ impl From<state::Error> for Failure {
                 "archive encoding" | "private archive encoding" => 205,
                 "index object size" | "index value size" => 206,
                 "provider handle poisoned" => 207,
+                // Receive admission: the fold would burn this exact Payment (design §3.2).
+                "incoming lineage verdict" => 242,
                 _ => -1,
             }),
             E::Collected => Self::invalid(209),

@@ -41,7 +41,8 @@ enum class KagemushaWalletInvalidReasonV1(@JvmField val code: Int) {
     ARCHIVE_CALL(238),
     ARCHIVE_PENDING_RECORDS(239),
     ARCHIVE_RECORD_SIZE(240),
-    CURRENT_SOURCE(241);
+    CURRENT_SOURCE(241),
+    INCOMING_LINEAGE_VERDICT(242);
 
     companion object {
         /** Resolve only the invalid-refusal namespace; preserve unknown reasons as `null`. */
