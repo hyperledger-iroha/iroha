@@ -599,14 +599,24 @@ impl LedgerFixture {
         TransactionEntrypoint::External(signed)
     }
 
-    fn unload(&self, nullifier: u8, payees: Vec<(AccountId, u128)>) -> PayoutClaim {
+    /// An Unload claim paying `account` and, when quoted, the online charge, as
+    /// `PayoutClaim::unload` builds it from a canonical claim.
+    fn unload(
+        &self,
+        nullifier: u8,
+        account: (AccountId, u128),
+        charge: Option<(AccountId, u128)>,
+    ) -> PayoutClaim {
+        let mut payees = vec![(account.0, account.1, Kind::OfflineUnload)];
+        if let Some((beneficiary, online_charge)) = charge {
+            payees.push((beneficiary, online_charge, Kind::OfflineCharge));
+        }
         PayoutClaim {
-            kind: Kind::OfflineUnload,
             scheme: self.scheme,
             asset: self.asset,
             key: KagemushaWalletPayoutKeyV1::Unload([nullifier; 32]),
             source: [0x44; 32],
-            amount: payees.iter().map(|(_, value)| value).sum(),
+            amount: payees.iter().map(|(_, value, _)| value).sum(),
             payees,
         }
     }
@@ -742,7 +752,7 @@ fn a_charged_load_pays_its_online_charge_to_the_quoted_beneficiary() {
                 "5".to_owned()
             ),
             (
-                Kind::OfflineLoad,
+                Kind::OfflineCharge,
                 Some(payer.to_string()),
                 Some(beneficiary.to_string()),
                 "0.25".to_owned()
@@ -758,7 +768,8 @@ fn unloads_and_fees_pay_once_from_the_transaction_their_record_names() {
     let beneficiary = account(0x62);
     let unload = ledger.unload(
         0x51,
-        vec![(holder.clone(), 1_950), (beneficiary.clone(), 50)],
+        (holder.clone(), 1_950),
+        Some((beneficiary.clone(), 50)),
     );
     let paying = [0x81; 32];
     let mut out = Vec::new();
@@ -792,7 +803,7 @@ fn unloads_and_fees_pay_once_from_the_transaction_their_record_names() {
                 "19.5".to_owned()
             ),
             (
-                Kind::OfflineUnload,
+                Kind::OfflineCharge,
                 Some(ledger.reserve.to_string()),
                 Some(beneficiary.to_string()),
                 "0.5".to_owned()
@@ -800,18 +811,22 @@ fn unloads_and_fees_pay_once_from_the_transaction_their_record_names() {
         ]
     );
     // A whole-charge Unload pays only the charge; a record for other terms is refused.
-    let charge_only = ledger.unload(0x52, vec![(holder.clone(), 0), (beneficiary.clone(), 7)]);
+    let charge_only = ledger.unload(0x52, (holder.clone(), 0), Some((beneficiary.clone(), 7)));
     ledger.pay(&charge_only, paying);
     let mut rows = Vec::new();
     charge_only
         .movements(paying, &ledger.rows, &mut BTreeSet::new(), &mut rows)
         .unwrap();
-    assert_eq!(rows.len(), 1);
     assert_eq!(
-        rows[0].to.as_deref(),
-        Some(beneficiary.to_string().as_str())
+        offline_rows(&rows),
+        [(
+            Kind::OfflineCharge,
+            Some(ledger.reserve.to_string()),
+            Some(beneficiary.to_string()),
+            "0.07".to_owned()
+        )]
     );
-    let mut altered = ledger.unload(0x52, vec![(holder.clone(), 8)]);
+    let mut altered = ledger.unload(0x52, (holder.clone(), 8), None);
     altered.source = [0x45; 32];
     assert!(
         altered
@@ -819,13 +834,12 @@ fn unloads_and_fees_pay_once_from_the_transaction_their_record_names() {
             .is_err()
     );
     let fee = PayoutClaim {
-        kind: Kind::OfflineFee,
         scheme: ledger.scheme,
         asset: ledger.asset,
         key: KagemushaWalletPayoutKeyV1::Fee([0x53; 32]),
         source: [0x46; 32],
         amount: 3,
-        payees: vec![(beneficiary.clone(), 3)],
+        payees: vec![(beneficiary.clone(), 3, Kind::OfflineFee)],
     };
     ledger.pay(&fee, paying);
     let mut fees = Vec::new();
@@ -847,51 +861,63 @@ fn unloads_and_fees_pay_once_from_the_transaction_their_record_names() {
 
 #[test]
 fn offline_rows_render_the_contract_json() {
-    let ledger = LedgerFixture::new();
+    let mut ledger = LedgerFixture::new();
     let payer = account(0x41);
     let holder = account(0x61);
     let beneficiary = account(0x62);
     let definition = ledger.definition.to_string();
-    let (payer, holder, beneficiary, reserve) = (
-        payer.to_string(),
-        holder.to_string(),
-        beneficiary.to_string(),
-        ledger.reserve.to_string(),
+    let (loading, unloading) = ([0xa1; 32], [0xa2; 32]);
+    // A charged Load: 1032.25 to the reserve and a 0.25 online charge, from the issuance that
+    // names the loading transaction.
+    let issuance = ledger.issuance(&payer, 103_225, Some((&beneficiary, 25)), (loading, 12));
+    ledger.insert(
+        KagemushaWalletLedgerKeyV1::from_parts(ISSUANCE_ROW, ledger.scheme, WALLET, REQUEST),
+        &issuance,
     );
+    let issue = KagemushaWalletLedgerV1::new(
+        ledger.scheme,
+        KagemushaWalletLedgerActionV1::IssueLoad {
+            wallet: WALLET,
+            asset: ledger.asset,
+            ordinal: 0,
+            request_id: REQUEST,
+            amount: 103_225,
+            charge: None,
+        },
+    );
+    let mut load_legs = Vec::new();
+    offline_instruction_movements(
+        &issue,
+        (loading, 12),
+        &ledger.rows,
+        &mut BTreeSet::new(),
+        &mut load_legs,
+    )
+    .unwrap();
+    // A charged Unload: 19.5 to the account and a 0.5 online charge, from the payout record that
+    // names the unloading transaction.
+    let unload = ledger.unload(
+        0x51,
+        (holder.clone(), 1_950),
+        Some((beneficiary.clone(), 50)),
+    );
+    ledger.pay(&unload, unloading);
+    let mut unload_legs = Vec::new();
+    unload
+        .movements(
+            unloading,
+            &ledger.rows,
+            &mut BTreeSet::new(),
+            &mut unload_legs,
+        )
+        .unwrap();
+    let mut load = folded_transaction(0, None, load_legs);
+    load.tx_hash = hex::encode(loading);
+    load.authority = payer.to_string();
+    let mut unload = folded_transaction(1, None, unload_legs);
+    unload.tx_hash = hex::encode(unloading);
+    unload.authority = holder.to_string();
     let mut index = AssetMovementIndex::new(MAX_ROWS);
-    let mut load = folded_transaction(
-        0,
-        None,
-        vec![movement(
-            &definition,
-            Kind::OfflineLoad,
-            Some(payer.as_str()),
-            Some(reserve.as_str()),
-            "1032.25",
-        )],
-    );
-    load.authority.clone_from(&payer);
-    let mut unload = folded_transaction(
-        1,
-        None,
-        vec![
-            movement(
-                &definition,
-                Kind::OfflineUnload,
-                Some(reserve.as_str()),
-                Some(holder.as_str()),
-                "19.5",
-            ),
-            movement(
-                &definition,
-                Kind::OfflineUnload,
-                Some(reserve.as_str()),
-                Some(beneficiary.as_str()),
-                "0.5",
-            ),
-        ],
-    );
-    unload.authority.clone_from(&holder);
     index.append(block(12, vec![load, unload]));
     let rows = walk(
         &index,
@@ -899,48 +925,86 @@ fn offline_rows_render_the_contract_json() {
         &ListQuery::new(),
         &DataspaceReadVisibility::all_for_tests(),
     );
-    let load = rows
-        .iter()
-        .find(|row| row["kind"].as_str() == Some("OFFLINE_LOAD"))
-        .unwrap();
-    let unloads: Vec<&Map> = rows
-        .iter()
-        .filter(|row| row["kind"].as_str() == Some("OFFLINE_UNLOAD"))
-        .collect();
-    println!(
-        "OFFLINE_LOAD row: {}",
-        norito::json::to_json(&Value::Object(load.clone())).unwrap()
-    );
-    for unload in &unloads {
+    for row in &rows {
+        let movement = if row["block_index"].as_u64() == Some(0) {
+            "charged Load"
+        } else {
+            "charged Unload"
+        };
         println!(
-            "OFFLINE_UNLOAD row: {}",
-            norito::json::to_json(&Value::Object((*unload).clone())).unwrap()
+            "{movement} {} row: {}",
+            row["kind"].as_str().unwrap(),
+            norito::json::to_json(&Value::Object(row.clone())).unwrap()
         );
     }
-    assert_eq!(load["from_account_id"].as_str(), Some(payer.as_str()));
-    assert_eq!(load["amount"].as_str(), Some("1032.25"));
-    assert_eq!(load["result_ok"].as_bool(), Some(true));
-    assert_eq!(
-        load["asset_definition_id"].as_str(),
-        Some(definition.as_str())
+    let (payer, holder, beneficiary, reserve) = (
+        payer.to_string(),
+        holder.to_string(),
+        beneficiary.to_string(),
+        ledger.reserve.to_string(),
     );
     assert_eq!(
-        unloads
-            .iter()
+        rows.iter()
             .map(|row| (
+                row["kind"].as_str().unwrap(),
                 row["from_account_id"].as_str().unwrap(),
                 row["to_account_id"].as_str().unwrap(),
                 row["amount"].as_str().unwrap(),
+                row["block_index"].as_u64().unwrap(),
                 row["movement_index"].as_u64().unwrap(),
             ))
             .collect::<Vec<_>>(),
         [
-            (reserve.as_str(), beneficiary.as_str(), "0.5", 1),
-            (reserve.as_str(), holder.as_str(), "19.5", 0),
+            (
+                "OFFLINE_CHARGE",
+                reserve.as_str(),
+                beneficiary.as_str(),
+                "0.5",
+                1,
+                1
+            ),
+            (
+                "OFFLINE_UNLOAD",
+                reserve.as_str(),
+                holder.as_str(),
+                "19.5",
+                1,
+                0
+            ),
+            (
+                "OFFLINE_CHARGE",
+                payer.as_str(),
+                beneficiary.as_str(),
+                "0.25",
+                0,
+                1
+            ),
+            (
+                "OFFLINE_LOAD",
+                payer.as_str(),
+                reserve.as_str(),
+                "1032.25",
+                0,
+                0
+            ),
         ],
-        "the online charge follows the account payout; pages run newest first"
+        "each online charge follows its Load or Unload leg; pages run newest first"
     );
-    assert_eq!(rows.len(), 3);
+    for row in &rows {
+        assert_eq!(row["result_ok"].as_bool(), Some(true));
+        assert_eq!(
+            row["asset_definition_id"].as_str(),
+            Some(definition.as_str())
+        );
+        assert_eq!(
+            row["id"].as_str().unwrap(),
+            format!(
+                "{}:{}",
+                row["tx_hash"].as_str().unwrap(),
+                row["movement_index"].as_u64().unwrap()
+            )
+        );
+    }
 }
 
 /// A real certified chain with ordinary, failed, batch and multisig-executed movements.

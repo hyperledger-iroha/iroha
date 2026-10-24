@@ -7,7 +7,9 @@
 //! definition. Instruction legs, applied batch receipts and executed multisig movements use
 //! exactly the account-history projection. KAGEMUSHA Loads, Unloads and fee claims move value
 //! inside the executor, so they come from their immutable ledger records, and only for the
-//! transaction a record names: a retry in a later transaction moved nothing. A failed
+//! transaction a record names: a retry in a later transaction moved nothing. A quoted online
+//! charge of a Load or an Unload is its own `OFFLINE_CHARGE` row, so `OFFLINE_LOAD` is only the
+//! payer-to-reserve leg and `OFFLINE_UNLOAD` only the reserve-to-account leg. A failed
 //! transaction keeps its attempted instruction legs, with `result_ok: false`.
 //!
 //! Like the multisig approval landings, the index changes nothing the chain executes: it ships
@@ -105,12 +107,15 @@ enum Kind {
     Mint,
     /// Value destroyed from an account.
     Burn,
-    /// A KAGEMUSHA Load: payer to reserve, and its online charge to the charge beneficiary.
+    /// A KAGEMUSHA Load: payer to reserve.
     OfflineLoad,
-    /// A paid KAGEMUSHA Unload: reserve to the account, and its online charge.
+    /// A paid KAGEMUSHA Unload: reserve to the unloading account.
     OfflineUnload,
     /// A paid KAGEMUSHA fee claim: reserve to the fee beneficiary.
     OfflineFee,
+    /// The online charge of a KAGEMUSHA Load (payer to the charge beneficiary) or of a paid
+    /// Unload (reserve to the charge beneficiary).
+    OfflineCharge,
 }
 
 impl Kind {
@@ -122,6 +127,7 @@ impl Kind {
             Self::OfflineLoad => "OFFLINE_LOAD",
             Self::OfflineUnload => "OFFLINE_UNLOAD",
             Self::OfflineFee => "OFFLINE_FEE",
+            Self::OfflineCharge => "OFFLINE_CHARGE",
         }
     }
 }
@@ -549,7 +555,8 @@ fn amount_text(amount: u128, scale: u32) -> Result<String, crate::Error> {
         .ok_or_else(|| record_error(format!("amount {amount} at scale {scale}")))
 }
 
-/// Rows of one immutable Load issuance: payer to reserve, and its online charge.
+/// Rows of one immutable Load issuance: payer to reserve, then its online charge from the payer
+/// to the charge beneficiary as an `OFFLINE_CHARGE` row.
 fn load_movements(
     issuance: &Issuance,
     registration: &Registration,
@@ -570,7 +577,7 @@ fn load_movements(
     {
         out.push(Movement {
             definition,
-            kind: Kind::OfflineLoad,
+            kind: Kind::OfflineCharge,
             from: Some(payer),
             to: Some(charge.beneficiary.to_string()),
             amount: amount_text(issuance.body.online_charge, scale)?,
@@ -580,31 +587,34 @@ fn load_movements(
 }
 
 /// A reserve payout one claim asks for: its exact-once key, the source and total its record
-/// must carry, and the accounts it pays.
+/// must carry, and the accounts it pays, each with the kind of its row.
 struct PayoutClaim {
-    kind: Kind,
     scheme: [u8; 32],
     asset: [u8; 32],
     key: KagemushaWalletPayoutKeyV1,
     source: [u8; 32],
     amount: u128,
-    payees: Vec<(AccountId, u128)>,
+    payees: Vec<(AccountId, u128, Kind)>,
 }
 
 impl PayoutClaim {
-    /// The payout of a canonical Unload claim: the account payout and a quoted online charge.
+    /// The payout of a canonical Unload claim: the account payout (`OFFLINE_UNLOAD`) and a quoted
+    /// online charge (`OFFLINE_CHARGE`).
     fn unload(bytes: &[u8], scheme: &[u8; 32]) -> Result<Self, crate::Error> {
         let claim = KagemushaWalletUnloadClaimV1::decode_canonical(bytes, scheme)
             .map_err(|error| record_error(format!("Unload claim: {error}")))?;
         let paid = claim
             .payout()
             .map_err(|error| record_error(format!("Unload payout: {error}")))?;
-        let mut payees = vec![(claim.account.clone(), paid.account_payout)];
+        let mut payees = vec![(
+            claim.account.clone(),
+            paid.account_payout,
+            Kind::OfflineUnload,
+        )];
         if let KagemushaWalletUnloadChargeV1::Quoted { beneficiary, .. } = &claim.charge {
-            payees.push((beneficiary.clone(), paid.online_charge));
+            payees.push((beneficiary.clone(), paid.online_charge, Kind::OfflineCharge));
         }
         Ok(Self {
-            kind: Kind::OfflineUnload,
             scheme: claim.credential.body.scheme_id,
             asset: claim.credential.body.asset_digest,
             key: KagemushaWalletPayoutKeyV1::Unload(paid.nullifier),
@@ -627,13 +637,12 @@ impl PayoutClaim {
             .digests()
             .map_err(|error| record_error(format!("fee claim digests: {error}")))?;
         Ok(Self {
-            kind: Kind::OfflineFee,
             scheme: request.body.scheme_id,
             asset: request.body.asset_digest,
             key: KagemushaWalletPayoutKeyV1::Fee(digests.credit_id),
             source: digests.payment,
             amount: request.body.fee,
-            payees: vec![(claim.beneficiary, request.body.fee)],
+            payees: vec![(claim.beneficiary, request.body.fee, Kind::OfflineFee)],
         })
     }
 
@@ -662,13 +671,13 @@ impl PayoutClaim {
         let registration = registration(ledger, self.scheme, self.asset)?;
         let definition = registration.asset.asset.to_string();
         let reserve = registration.reserve.to_string();
-        for (payee, value) in &self.payees {
+        for (payee, value, kind) in &self.payees {
             if *value == 0 {
                 continue;
             }
             out.push(Movement {
                 definition: definition.clone(),
-                kind: self.kind,
+                kind: *kind,
                 from: Some(reserve.clone()),
                 to: Some(payee.to_string()),
                 amount: amount_text(*value, registration.asset.scale)?,

@@ -4434,14 +4434,15 @@
             "type": "string"
           },
           "kind": {
-            "description": "TRANSFER, MINT and BURN: instruction legs, applied batch receipts and executed multisig transfers. OFFLINE_LOAD: a KAGEMUSHA Load, payer to reserve and its online charge to the charge beneficiary. OFFLINE_UNLOAD: a paid Unload, reserve to the account and its online charge. OFFLINE_FEE: a paid fee claim, reserve to the fee beneficiary.",
+            "description": "TRANSFER, MINT and BURN: instruction legs, applied batch receipts and executed multisig transfers. OFFLINE_LOAD: a KAGEMUSHA Load, payer to reserve. OFFLINE_UNLOAD: a paid Unload, reserve to the unloading account. OFFLINE_FEE: a paid fee claim, reserve to the fee beneficiary. OFFLINE_CHARGE: the online charge of a Load (payer to the charge beneficiary) or of a paid Unload (reserve to the charge beneficiary).",
             "enum": [
               "TRANSFER",
               "MINT",
               "BURN",
               "OFFLINE_LOAD",
               "OFFLINE_UNLOAD",
-              "OFFLINE_FEE"
+              "OFFLINE_FEE",
+              "OFFLINE_CHARGE"
             ],
             "type": "string"
           },
@@ -64601,7 +64602,7 @@
     },
     "/v1/assets/{definition_id}/movements": {
       "get": {
-        "description": "Every committed movement of one asset definition, newest first by block height, block index and movement index, served from this node's movement index. One row per movement: TRANSFER, MINT and BURN for instruction legs, applied batch receipts and executed multisig transfers; OFFLINE_LOAD, OFFLINE_UNLOAD and OFFLINE_FEE for KAGEMUSHA Loads, paid Unloads and paid fee claims, read from the ledger records of the transaction that moved the value. A failed transaction keeps its attempted instruction movements with result_ok false. Accepts shared filter, select, limit and cursor; a block_height lower bound such as `block_height > 1200` reads only the newer rows. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "description": "Every committed movement of one asset definition, newest first by block height, block index and movement index, served from this node's movement index. One row per movement: TRANSFER, MINT and BURN for instruction legs, applied batch receipts and executed multisig transfers; OFFLINE_LOAD, OFFLINE_UNLOAD and OFFLINE_FEE for KAGEMUSHA Loads, paid Unloads and paid fee claims, and OFFLINE_CHARGE for the online charge of a Load or an Unload, read from the ledger records of the transaction that moved the value. A failed transaction keeps its attempted instruction movements with result_ok false. Accepts shared filter, select, limit and cursor; a block_height lower bound such as `block_height > 1200` reads only the newer rows. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
             "description": "Asset selector (unprefixed Base58 id or alias).",
@@ -64768,7 +64769,7 @@
     },
     "/v1/assets/{definition_id}/movements/query": {
       "post": {
-        "description": "Every committed movement of one asset definition, newest first by block height, block index and movement index, served from this node's movement index. One row per movement: TRANSFER, MINT and BURN for instruction legs, applied batch receipts and executed multisig transfers; OFFLINE_LOAD, OFFLINE_UNLOAD and OFFLINE_FEE for KAGEMUSHA Loads, paid Unloads and paid fee claims, read from the ledger records of the transaction that moved the value. A failed transaction keeps its attempted instruction movements with result_ok false. Accepts shared filter, select, limit and cursor; a block_height lower bound such as `block_height > 1200` reads only the newer rows. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "description": "Every committed movement of one asset definition, newest first by block height, block index and movement index, served from this node's movement index. One row per movement: TRANSFER, MINT and BURN for instruction legs, applied batch receipts and executed multisig transfers; OFFLINE_LOAD, OFFLINE_UNLOAD and OFFLINE_FEE for KAGEMUSHA Loads, paid Unloads and paid fee claims, and OFFLINE_CHARGE for the online charge of a Load or an Unload, read from the ledger records of the transaction that moved the value. A failed transaction keeps its attempted instruction movements with result_ok false. Accepts shared filter, select, limit and cursor; a block_height lower bound such as `block_height > 1200` reads only the newer rows. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
             "description": "Asset selector (unprefixed Base58 id or alias).",

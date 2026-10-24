@@ -299,7 +299,7 @@ absent.
 | contract activity | `authority`, `entrypoint_hash`, `contract_address`, `contract_alias`, `contract_entrypoint` (strings), `timestamp_ms`, `block_height`, `block_index` (numbers), `result_ok` (bool), `contract_payload`, `fee_payment` (JSON) | newest first |
 | bonds | `id`, `vault`, `terms.issuer`, `terms.paying_agent`, `terms.payment_asset`, `terms.identifiers.isin`, `state.lifecycle` (strings, *sort*), `terms.coupon_rate_bps`, `terms.coupon_frequency`, `terms.issue_date_ms`, `terms.maturity_date_ms` (numbers, *sort*), `state.outstanding_units`, `state.redeemed_units`, `state.retired_units` (decimals, *sort*), `state.transfers_frozen` (bool), `terms`, `state` (JSON); each item is the complete `BondRecord` | `id` |
 | bond entitlements | `id` (`<index>:<holder>`), `bond`, `holder` (strings, *sort*), `index`, `claimed_at_ms` (number or null) (numbers, *sort*), `units`, `amount` (decimals, *sort*), `claimed` (bool) | `id` (cash flow, then holder) |
-| asset movements | `id` (`<tx_hash>:<movement_index>`), `kind` (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`), `asset_definition_id`, `tx_hash`, `authority`, `from_account_id` (string or null for `MINT`), `to_account_id` (string or null for `BURN`) (strings), `timestamp_ms`, `block_height`, `block_index`, `movement_index` (numbers), `amount` (decimal), `result_ok` (bool) | newest chain position first, then descending movement index |
+| asset movements | `id` (`<tx_hash>:<movement_index>`), `kind` (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`, `OFFLINE_CHARGE`), `asset_definition_id`, `tx_hash`, `authority`, `from_account_id` (string or null for `MINT`), `to_account_id` (string or null for `BURN`) (strings), `timestamp_ms`, `block_height`, `block_index`, `movement_index` (numbers), `amount` (decimal), `result_ok` (bool) | newest chain position first, then descending movement index |
 | contract events | `event_id`, `provenance` (always `emitted`), `authority`, `execution_hash_hex`, `block_hash_hex`, `contract_address`, `event_kind` (strings), `schema_version`, `timestamp_ms`, `block_height`, `output_index`, `emission_index` (numbers), `result_ok` (always true), `participants`, `asset_ids` (lists of strings), `numeric_fields`, `payload`, `emission`, `fee_payment` (JSON) | descending `block_height`, `output_index`, `emission_index` |
 
 Subscription status is a lower-case string (`active`, `paused`, `past_due`,
@@ -464,12 +464,14 @@ committed block once into a local index, so a page costs the same at any chain l
   `to_account_id`, and a transfer to oneself names the same account twice.
 - KAGEMUSHA Loads, Unloads and fee claims move value inside the executor, without a transfer
   instruction. Top-level `iroha.kagemusha.wallet.ledger.v1` instructions of successful
-  transactions add `OFFLINE_LOAD` rows (payer to reserve, and a quoted online charge from the
-  payer to the charge beneficiary) when the immutable issuance record names the transaction, and
-  `OFFLINE_UNLOAD` rows (reserve to the account, and the online charge) and `OFFLINE_FEE` rows
-  (reserve to the fee beneficiary) when the immutable payout record names it. A retry that finds
-  an earlier payout moved nothing and has no row. Amounts are the registered atomic units at the
-  registered scale.
+  transactions add an `OFFLINE_LOAD` row (payer to reserve) when the immutable issuance record
+  names the transaction, and an `OFFLINE_UNLOAD` row (reserve to the unloading account) or an
+  `OFFLINE_FEE` row (reserve to the fee beneficiary) when the immutable payout record names it.
+  A quoted online charge is its own `OFFLINE_CHARGE` row after the leg it belongs to: payer to the
+  charge beneficiary for a Load, reserve to the charge beneficiary for an Unload. An Unload whose
+  whole value is its charge has only its `OFFLINE_CHARGE` row, and a retry that finds an earlier
+  payout moved nothing and has no row. Amounts are the registered atomic units at the registered
+  scale.
 - `movement_index` counts the transaction's movements in that order, across asset definitions;
   `id` is `<tx_hash>:<movement_index>`. `authority` is the transaction's signer and
   `timestamp_ms` its creation time, as account history reports them.

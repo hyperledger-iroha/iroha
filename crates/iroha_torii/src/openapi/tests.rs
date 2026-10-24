@@ -3208,7 +3208,8 @@ fn asset_movement_feed_documents_rows_kinds_and_freshness() {
             "BURN",
             "OFFLINE_LOAD",
             "OFFLINE_UNLOAD",
-            "OFFLINE_FEE"
+            "OFFLINE_FEE",
+            "OFFLINE_CHARGE"
         ]
     );
     assert_eq!(properties["result_ok"]["type"].as_str(), Some("boolean"));

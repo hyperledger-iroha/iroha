@@ -7,7 +7,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - Added the asset movement feed of `GET /v1/assets/{definition_id}/movements`: `assetMovements(definitionId)`
   on `ToriiClient` and `ToriiBrowserClient` is a history collection of every committed movement of the
   definition, newest first (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`,
-  with `result_ok: false` for a failed transaction's attempted movement). Its rows are decoded with the new
+  and `OFFLINE_CHARGE` for the online charge of a Load or an Unload, with `result_ok: false` for a failed
+  transaction's attempted movement). Its rows are decoded with the new
   strict `decodeAssetMovementRow` (`decodeAssetMovementRows` for a page's items) unless the query has
   `select`; `ASSET_MOVEMENT_KINDS` and `ASSET_MOVEMENT_ROW_FIELDS` name the kinds and fields
   (`ToriiAssetMovementRow`). Torii answers from a node-local index: `503 asset_movements_indexing` with

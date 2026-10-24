@@ -6,9 +6,11 @@
  *
  * - `TRANSFER`, `MINT`, `BURN`: instruction transfers, mints and burns, applied batch receipts and
  *   executed multisig transfers, as account history projects them;
- * - `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`: KAGEMUSHA Loads (payer to reserve, and a
- *   quoted online charge), paid Unloads (reserve to the account, and the online charge) and paid
- *   fee claims, read from the ledger records of the transaction that moved the value.
+ * - `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`: KAGEMUSHA Loads (payer to reserve), paid
+ *   Unloads (reserve to the unloading account) and paid fee claims (reserve to the fee
+ *   beneficiary), read from the ledger records of the transaction that moved the value;
+ * - `OFFLINE_CHARGE`: the online charge of a Load (payer to the charge beneficiary) or of a paid
+ *   Unload (reserve to the charge beneficiary).
  *
  * A failed transaction keeps its attempted instruction movements with `result_ok: false`; sum
  * only `result_ok: true` rows for balances. `from_account_id` is null only for `MINT` and
@@ -33,6 +35,7 @@ export const ASSET_MOVEMENT_KINDS = Object.freeze([
   "OFFLINE_LOAD",
   "OFFLINE_UNLOAD",
   "OFFLINE_FEE",
+  "OFFLINE_CHARGE",
 ]);
 
 /** Fields of a complete movement row; `decodeAssetMovementRow` requires every one. */
@@ -52,7 +55,7 @@ export const ASSET_MOVEMENT_ROW_FIELDS = Object.freeze([
   "result_ok",
 ]);
 
-const OFFLINE_KINDS = Object.freeze(["OFFLINE_LOAD", "OFFLINE_UNLOAD", "OFFLINE_FEE"]);
+const OFFLINE_KINDS = Object.freeze(["OFFLINE_LOAD", "OFFLINE_UNLOAD", "OFFLINE_FEE", "OFFLINE_CHARGE"]);
 /** Canonical non-negative decimal text: no sign, exponent, leading or trailing zeros. */
 const CANONICAL_AMOUNT = /^(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?$/u;
 const TX_HASH = /^[0-9a-f]{64}$/u;

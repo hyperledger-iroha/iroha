@@ -69,6 +69,7 @@ test("every entry point exports the asset movement decoder", () => {
       "OFFLINE_LOAD",
       "OFFLINE_UNLOAD",
       "OFFLINE_FEE",
+      "OFFLINE_CHARGE",
     ]);
     assert.equal(sdk.ASSET_MOVEMENT_ROW_FIELDS.length, 13);
     for (const name of ["decodeAssetMovementRow", "decodeAssetMovementRows"]) {
@@ -93,6 +94,17 @@ test("decodeAssetMovementRow returns exactly the contract fields, frozen", () =>
     "OFFLINE_LOAD",
     "TRANSFER",
   ]);
+});
+
+test("decodeAssetMovementRow accepts an online charge row and rejects a failed one", () => {
+  const charge = decodeAssetMovementRow(row({ kind: "OFFLINE_CHARGE", amount: "0.25" }));
+  assert.equal(charge.kind, "OFFLINE_CHARGE");
+  assert.equal(charge.amount, "0.25");
+  assert.equal(charge.result_ok, true);
+  assert.throws(
+    () => decodeAssetMovementRow(row({ kind: "OFFLINE_CHARGE", result_ok: false })),
+    assertInvalidResponse(/OFFLINE_CHARGE rows come only from successful transactions/u),
+  );
 });
 
 test("decodeAssetMovementRow rejects every malformed field", () => {

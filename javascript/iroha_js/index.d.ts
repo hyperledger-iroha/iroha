@@ -9546,7 +9546,8 @@ export type ToriiAssetMovementKind =
   | "BURN"
   | "OFFLINE_LOAD"
   | "OFFLINE_UNLOAD"
-  | "OFFLINE_FEE";
+  | "OFFLINE_FEE"
+  | "OFFLINE_CHARGE";
 
 /** Every movement kind, in the order Torii documents them. */
 export declare const ASSET_MOVEMENT_KINDS: readonly [
@@ -9556,6 +9557,7 @@ export declare const ASSET_MOVEMENT_KINDS: readonly [
   "OFFLINE_LOAD",
   "OFFLINE_UNLOAD",
   "OFFLINE_FEE",
+  "OFFLINE_CHARGE",
 ];
 
 /** Fields of a complete movement row; `decodeAssetMovementRow` requires every one. */
@@ -9578,8 +9580,10 @@ export declare const ASSET_MOVEMENT_ROW_FIELDS: readonly [
 /**
  * One committed movement of an asset definition, from the node's movement index. `TRANSFER`,
  * `MINT` and `BURN` are instruction legs, applied batch receipts and executed multisig transfers;
- * `OFFLINE_LOAD`, `OFFLINE_UNLOAD` and `OFFLINE_FEE` are KAGEMUSHA Loads, paid Unloads and paid
- * fee claims. A failed transaction's attempted movement has `result_ok: false`.
+ * `OFFLINE_LOAD`, `OFFLINE_UNLOAD` and `OFFLINE_FEE` are KAGEMUSHA Loads (payer to reserve),
+ * paid Unloads (reserve to the unloading account) and paid fee claims; `OFFLINE_CHARGE` is the
+ * online charge of a Load or an Unload, paid to the charge beneficiary. A failed transaction's
+ * attempted movement has `result_ok: false`.
  */
 export interface ToriiAssetMovementRow {
   /** `<tx_hash>:<movement_index>`. */
