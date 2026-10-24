@@ -19097,6 +19097,7 @@ fn query_multisig_proposals(
             operation_type,
             intent,
             proposal,
+            approvals: None,
             status: status.as_str().to_owned(),
             terminal_at_ms: None,
         });
@@ -19171,6 +19172,7 @@ fn query_multisig_proposals(
             operation_type,
             intent,
             proposal: terminal_state.proposal,
+            approvals: None,
             status: status.as_str().to_owned(),
             terminal_at_ms: Some(terminal_state.terminal_at_ms),
         });
@@ -22557,6 +22559,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             },
             signer_one_id.clone(),
         )
@@ -22569,6 +22572,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             }),
         )
         .await
@@ -22585,6 +22589,7 @@ None,
             MultisigProposalsResolveRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: (active_hash.clone()).parse().unwrap(),
+                include_approvals: false,
             },
             signer_one_id,
         )
@@ -22595,6 +22600,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: active_hash.parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -22618,6 +22624,7 @@ None,
                 status: Vec::new(),
                 cursor: None,
                 limit: Some(1),
+                include_approvals: false,
             },
             signer_one,
         )
@@ -22634,6 +22641,7 @@ None,
                 status: Vec::new(),
                 cursor: Some(cursor.clone()),
                 limit: Some(1),
+                include_approvals: false,
             }),
         )
         .await
@@ -22656,6 +22664,7 @@ None,
                     status: statuses,
                     cursor: Some(cursor),
                     limit: Some(1),
+                    include_approvals: false,
                 }),
             )
             .await
@@ -22703,6 +22712,7 @@ None,
                     status: Vec::new(),
                     cursor: Some(encode_multisig_proposals_cursor(&forged)),
                     limit: Some(1),
+                    include_approvals: false,
                 }),
             )
             .await
@@ -22723,6 +22733,7 @@ None,
                 status: vec!["EXPIRED".to_owned()],
                 cursor: Some(filter_rebound_cursor),
                 limit: Some(1),
+                include_approvals: false,
             }),
         )
         .await
@@ -22739,6 +22750,7 @@ None,
                     status: Vec::new(),
                     cursor: None,
                     limit: Some(limit),
+                    include_approvals: false,
                 }),
             )
             .await
@@ -22774,6 +22786,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: (active_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -22804,6 +22817,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: (active_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -22845,6 +22859,7 @@ None,
                 status: vec!["CANCELED".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             },
             signer_one_id.clone(),
         )
@@ -22862,6 +22877,7 @@ None,
             MultisigProposalsResolveRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: canceled_id,
+                include_approvals: false,
             },
             signer_one_id,
         )
@@ -22891,14 +22907,14 @@ None,
         let selector = concrete_selector(old_account.clone());
         let JsonBody(query) = handle_post_multisig_proposals_query(state.clone(),
             NoritoJson(MultisigProposalsQueryRequestDto { selector: selector.clone(),
-                status: vec!["CANCELED".into()], cursor: None, limit: None }),
+                status: vec!["CANCELED".into()], cursor: None, limit: None, include_approvals: false }),
         ).await.expect("retired original policy history");
         assert_eq!(query.resolved_multisig_account_id, old_account);
         assert_eq!(query.proposals.len(), 1);
         assert_eq!(query.proposals[0].proposal, terminal.proposal);
         let JsonBody(resolved) = handle_post_multisig_proposals_resolve(state.clone(),
             NoritoJson(MultisigProposalsResolveRequestDto { selector: selector.clone(),
-                proposal_id: id }),
+                proposal_id: id, include_approvals: false }),
         ).await.expect("exact original terminal record");
         assert_eq!(resolved.resolved_multisig_account_id, old_account);
         assert_eq!(resolved.status, "CANCELED");
@@ -22918,6 +22934,54 @@ None,
         );
         assert!(resolve_multisig_proposal_read_account(&build_state(invalid), &selector, None).is_err(),
             "a retired controller cannot retain actionable proposal state");
+    }
+    routing_test! { sync multisig_proposal_reads_add_approval_times_only_when_asked
+        // Core decodes resolve answers with a closed field set, so a read that does not ask keeps
+        // exactly its earlier fields; a read that asks gets one entry per approver.
+        let (world, multisig_account_id, signer_one_id, _signer_two_id, _alias_literal, active_hash) =
+            multisig_test_world();
+        let state = build_state(world);
+        let resolve_body = format!(
+            r#"{{"multisig_account_id":"{multisig_account_id}","proposal_id":"{active_hash}"}}"#
+        );
+        let resolve = norito::json::from_str::<MultisigProposalsResolveRequestDto>(&resolve_body)
+            .expect("a resolve request without the flag");
+        assert!(!resolve.include_approvals);
+        let asked = norito::json::from_str::<MultisigProposalsResolveRequestDto>(&format!(
+            r#"{{"multisig_account_id":"{multisig_account_id}","proposal_id":"{active_hash}","include_approvals":true}}"#
+        ))
+        .expect("a resolve request with the flag");
+        assert!(asked.include_approvals);
+        let query = norito::json::from_str::<MultisigProposalsQueryRequestDto>(&format!(
+            r#"{{"multisig_account_id":"{multisig_account_id}","include_approvals":true}}"#
+        ))
+        .expect("a query request with the flag");
+        assert!(query.include_approvals);
+
+        let mut resolved = multisig_proposals_resolve_response(&state, &resolve, None)
+            .expect("resolve the active proposal");
+        let plain = norito::json::to_value(&resolved).expect("serialize resolve");
+        assert!(plain.get("approvals").is_none(), "an unasked resolve keeps its fields");
+        let mut listed = multisig_proposals_query_response(&state, &query, None)
+            .expect("query proposals");
+        let plain_list = norito::json::to_value(&listed).expect("serialize query");
+        assert!(plain_list["proposals"][0].get("approvals").is_none());
+
+        resolved.approvals = Some(vec![MultisigProposalApprovalDto {
+            approver: signer_one_id.clone(),
+            approved_at_ms: None,
+            block_height: None,
+        }]);
+        let timed = norito::json::to_value(&resolved).expect("serialize resolve");
+        assert_eq!(
+            timed["approvals"][0]["approver"].as_str(),
+            Some(signer_one_id.to_string().as_str())
+        );
+        assert_eq!(timed["approvals"][0]["approved_at_ms"], norito::json::Value::Null);
+        assert_eq!(timed["approvals"][0]["block_height"], norito::json::Value::Null);
+        listed.proposals[0].approvals = Some(Vec::new());
+        let timed_list = norito::json::to_value(&listed).expect("serialize query");
+        assert!(timed_list["proposals"][0]["approvals"].as_array().is_some_and(Vec::is_empty));
     }
     routing_test! { async multisig_proposals_query_and_resolve_include_asset_transfer_control_intent
         let (
@@ -22948,6 +23012,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             }),
         )
         .await
@@ -22977,6 +23042,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: (freeze_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -23031,6 +23097,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             }),
         )
         .await
@@ -23050,6 +23117,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: (pacs009_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -23107,6 +23175,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             }),
         )
         .await
@@ -23132,6 +23201,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: (transfer_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -23143,6 +23213,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: (execute_trigger_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -23179,6 +23250,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             }),
         )
         .await
@@ -23195,6 +23267,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: (malformed_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -26548,6 +26621,7 @@ fn multisig_proposals_resolve_response(
         operation_type,
         intent,
         proposal: proposal_record.proposal,
+        approvals: None,
         status: proposal_record.status.as_str().to_owned(),
         terminal_at_ms: proposal_record.terminal_at_ms,
         terminal_entrypoint_hash,
@@ -28890,6 +28964,9 @@ pub struct MultisigProposalsResolveRequestDto {
     pub selector: MultisigAccountSelectorDto,
     /// Exact proposal occurrence, never an instruction hash alias.
     pub proposal_id: MultisigProposalId,
+    /// Also return when each approval landed (`approvals`). Without it the response is unchanged.
+    #[norito(default)]
+    pub include_approvals: bool,
 }
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload for a selector-explicit multisig proposal read.
@@ -28901,6 +28978,9 @@ pub struct MultisigProposalResolveResponseDto {
     #[norito(default)]
     pub intent: Option<IrohaJson>,
     pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    /// When each approval in `proposal.approvals` landed; present only when requested.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub approvals: Option<Vec<MultisigProposalApprovalDto>>,
     pub status: String,
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
@@ -28925,6 +29005,9 @@ pub struct MultisigProposalsQueryRequestDto {
     /// Optional page size; zero and values above the configured app-query maximum are rejected.
     #[norito(default)]
     pub limit: Option<u64>,
+    /// Also return when each approval landed (`approvals`). Without it the response is unchanged.
+    #[norito(default)]
+    pub include_approvals: bool,
 }
 ( Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Envelope describing a multisig proposal returned by Torii.
@@ -28935,9 +29018,25 @@ pub struct MultisigProposalEntryDto {
     #[norito(default)]
     pub intent: Option<IrohaJson>,
     pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    /// When each approval in `proposal.approvals` landed; present only when requested.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub approvals: Option<Vec<MultisigProposalApprovalDto>>,
     pub status: String,
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
+}
+( Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+/// When one signer's approval of a multisig proposal landed, as this node read it from committed
+/// blocks: the proposer's with its proposal, every other signer's with its first approval.
+pub struct MultisigProposalApprovalDto {
+    /// Signer whose approval is counted.
+    pub approver: iroha_data_model::account::AccountId,
+    /// Creation time of the block holding the proposing or approving transaction, in Unix
+    /// milliseconds; null when this node did not see it (an approval made inside another
+    /// proposal's execution or by a contract, or a block not read yet).
+    pub approved_at_ms: Option<u64>,
+    /// Height of that block; null exactly when `approved_at_ms` is.
+    pub block_height: Option<u64>,
 }
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(decode_from_slice)]

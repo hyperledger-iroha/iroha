@@ -41,6 +41,8 @@ mod kagemusha_wallet;
 #[cfg(feature = "app_api")]
 mod kagemusha_wallet_finality;
 mod ledger_state_finality;
+#[cfg(feature = "app_api")]
+mod multisig_approval_landings;
 mod multisig_execution_evidence;
 mod native_projection_response;
 mod nft_market;
@@ -26467,6 +26469,7 @@ async fn handler_post_multisig_proposals_query(
         &request.value.selector,
     )
     .await?;
+    let include_approvals = request.value.include_approvals;
     let response = if let Some(authority) = resolve_authority {
         crate::routing::handle_post_multisig_proposals_query_for_authority(
             app.state.clone(),
@@ -26482,7 +26485,15 @@ async fn handler_post_multisig_proposals_query(
         .await
     };
     match response {
-        Ok(resp) => Ok(resp.into_response()),
+        Ok(JsonBody(mut body)) => {
+            if include_approvals {
+                let landings = multisig_approval_landings::current(&app).await;
+                for entry in &mut body.proposals {
+                    entry.approvals = Some(landings.approvals(&entry.proposal));
+                }
+            }
+            Ok(JsonBody(body).into_response())
+        }
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_query"));
@@ -26523,6 +26534,7 @@ async fn handler_post_multisig_proposals_resolve(
         &request.value.selector,
     )
     .await?;
+    let include_approvals = request.value.include_approvals;
     let response = if let Some(authority) = resolve_authority {
         crate::routing::handle_post_multisig_proposals_resolve_for_authority(
             app.state.clone(),
@@ -26538,7 +26550,13 @@ async fn handler_post_multisig_proposals_resolve(
         .await
     };
     match response {
-        Ok(resp) => Ok(resp.into_response()),
+        Ok(JsonBody(mut body)) => {
+            if include_approvals {
+                let landings = multisig_approval_landings::current(&app).await;
+                body.approvals = Some(landings.approvals(&body.proposal));
+            }
+            Ok(JsonBody(body).into_response())
+        }
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_resolve"));

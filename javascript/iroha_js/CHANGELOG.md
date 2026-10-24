@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- `queryMultisigProposals` and `resolveMultisigProposal` take `includeApprovals: true` to receive
+  `approvals`: one `{ approver, approved_at_ms, block_height }` per approver in `proposal.approvals`, in the
+  order the approvals landed (`MultisigProposalApproval`). The node reads the times from committed blocks,
+  so they need no ledger change; an approval it did not see has null time and height. Without the flag the
+  request and response are unchanged.
 - Added the account alias join of `GET /v1/accounts`: `accountsInAliasScope(scope, { limit, cursor,
   accountId })` builds the query for the accounts that hold an active alias in `scope` (`domain.dataspace`,
   or `dataspace`) and selects `id`, `uaid` and `aliases`; `decodeAccountAliasRows` and `decodeAccountAliases`

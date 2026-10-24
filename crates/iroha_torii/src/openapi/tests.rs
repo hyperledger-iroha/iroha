@@ -3142,6 +3142,46 @@ mod privacy_release_qualification;
 mod validator_committee_contract;
 
 #[test]
+fn multisig_proposal_reads_return_approval_times_only_when_asked() {
+    let schemas = openapi_schemas();
+    for name in [
+        "MultisigProposalsQueryRequest",
+        "MultisigProposalsResolveRequest",
+    ] {
+        let flag = &schemas[name]["properties"]["include_approvals"];
+        assert_eq!(flag["type"].as_str(), Some("boolean"), "{name}");
+        assert_eq!(flag["default"].as_bool(), Some(false), "{name}");
+    }
+    for name in ["MultisigProposalEntry", "MultisigProposalResolveResponse"] {
+        let schema = &schemas[name];
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("approvals")),
+            "{name}.approvals stays optional for readers that do not ask"
+        );
+        assert_eq!(
+            schema["properties"]["approvals"]["items"]["$ref"].as_str(),
+            Some("#/components/schemas/MultisigProposalApproval"),
+            "{name}"
+        );
+    }
+    let approval = &schemas["MultisigProposalApproval"];
+    assert_eq!(approval["additionalProperties"].as_bool(), Some(false));
+    for field in ["approver", "approved_at_ms", "block_height"] {
+        assert!(
+            approval["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some(field)),
+            "MultisigProposalApproval.{field}"
+        );
+    }
+}
+#[test]
 fn multisig_occurrence_contract_separates_identity_from_content() {
     let schemas = openapi_schemas();
     for name in [

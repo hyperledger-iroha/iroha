@@ -430,10 +430,14 @@ export interface MultisigProposalsQueryRequest extends MultisigAccountSelector {
   status?: ReadonlyArray<MultisigProposalStatus>;
   cursor?: string | null;
   limit?: number | string | bigint | null;
+  /** Also return `approvals`, when each approval of each proposal landed. */
+  includeApprovals?: boolean;
 }
 
 export interface MultisigProposalsResolveRequest extends MultisigAccountSelector {
   proposalId: string;
+  /** Also return `approvals`, when each approval landed. */
+  includeApprovals?: boolean;
 }
 
 export type MultisigProposeInstructionInput =
@@ -599,12 +603,25 @@ export interface MultisigSpecResponse {
   spec: JsonValue;
 }
 
+/**
+ * When one signer's approval of a multisig proposal landed, as the node read it from committed
+ * blocks: the proposer's with its proposal, every other signer's with its first approval.
+ */
+export interface MultisigProposalApproval {
+  approver: string;
+  /** Block creation time in Unix milliseconds; null when the node did not see the approval. */
+  approved_at_ms: number | null;
+  block_height: number | null;
+}
+
 export interface MultisigProposalEntry {
   proposal_id: string;
   instructions_hash: string;
   operation_type: string;
   intent: JsonValue | null;
   proposal: JsonValue;
+  /** One per approver in `proposal.approvals`, in landing order; only when `includeApprovals` was set. */
+  approvals?: ReadonlyArray<MultisigProposalApproval>;
   status: MultisigProposalStatus;
   terminal_at_ms: number | null;
 }
