@@ -559,3 +559,55 @@ fn stale_receive_replanning_cannot_replace_the_bound_payment_or_companion() {
         assert_complete_once(&mut wallet, signatures);
     }
 }
+
+/// Receive admission (design §3.2) runs inside native planning; this mock refuses there exactly
+/// as the native owner does when the fold would burn the Payment.
+#[test]
+fn receive_admission_refusal_unbinds_the_fresh_request_and_moves_no_value() {
+    let mut wallet = receiver();
+    let request = receive_request();
+    let refused = |result: Result<Completion, Error>| {
+        matches!(result, Err(Error::Invalid(field))
+            if field == crate::kagemusha_wallet_state_v1::native_worker::RECEIVE_ADMISSION_REFUSAL)
+    };
+    let before = wallet.snapshot().unwrap();
+    let signatures = wallet.custody.signatures;
+    let retained = capsules(&wallet);
+    wallet.proofs.refuse_receive_admission = true;
+    assert!(refused(wallet.execute(request.clone())));
+    // Nothing references the refused Payment: the request reads Unknown, so both apps
+    // quarantine it, and no signature, capsule, head or balance changed.
+    assert_eq!(
+        wallet.retry_request(&request.request_id).unwrap(),
+        RequestStatusV1::Unknown
+    );
+    let after = wallet.snapshot().unwrap();
+    assert_eq!(
+        (
+            after.head,
+            after.sequence,
+            after.balance,
+            after.owned_balance
+        ),
+        (
+            before.head,
+            before.sequence,
+            before.balance,
+            before.owned_balance
+        )
+    );
+    assert_eq!(wallet.custody.signatures, signatures);
+    assert_eq!(capsules(&wallet), retained);
+    // The same exact bytes meet the same refusal, also after a restart.
+    assert!(refused(wallet.execute(request.clone())));
+    let mut wallet = restart(wallet);
+    assert!(refused(wallet.execute(request.clone())));
+    assert_eq!(
+        wallet.retry_request(&request.request_id).unwrap(),
+        RequestStatusV1::Unknown
+    );
+    assert_eq!(wallet.custody.signatures, signatures);
+    // The refusal left nothing behind: once admitted, the same identity completes exactly once.
+    wallet.proofs.refuse_receive_admission = false;
+    assert_complete_once(&mut wallet, signatures);
+}

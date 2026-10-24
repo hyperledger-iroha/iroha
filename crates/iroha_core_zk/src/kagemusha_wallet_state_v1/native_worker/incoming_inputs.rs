@@ -46,13 +46,12 @@ fn sigma_view(original: &[u8], expected: usize) -> Result<(Vec<u8>, u32), Error>
 }
 
 fn sigma_slot(
-    worker: &NativeFoldWorkerV1,
+    sources: &QualifiedWalletSourcesV1,
     selector: u8,
     statement: &[Fp; 26],
     original: &[u8],
 ) -> Result<SigmaSlotWitness, Error> {
-    let key = worker
-        .sources
+    let key = sources
         .sigmas()
         .key(selector)
         .ok_or(Error::Proof("incoming sigma source"))?;
@@ -64,6 +63,146 @@ fn sigma_slot(
         proof: bytes,
         length,
     })
+}
+
+/// Λ_recv's four incoming results and their modes, exactly as the fixed Receive owners
+/// derive them: the Omega transport, the incoming Q-σ, the three nonproof predicates and
+/// every decide. The fold binds them into its proposal; Receive admission refuses, before
+/// Advance, every Payment whose verdict burns.
+struct ReceiveVerdictV1 {
+    incoming: super::incoming::TransportV1,
+    slot: SigmaSlotWitness,
+    results: [bool; 4],
+    modes: [IncomingMode; 4],
+    pallas_corrections: [iroha_pasta::EpAffine; 2],
+    vesta_correction: iroha_pasta::EqAffine,
+}
+
+impl ReceiveVerdictV1 {
+    /// The burn branch: a false result or a corrected claim.
+    fn burns(&self) -> bool {
+        self.modes.contains(&IncomingMode::Corrected) || !self.results.iter().all(|v| *v)
+    }
+}
+
+/// Derive the verdict from exact predicate inputs, whose incoming selector must be the
+/// route's. The fold supplies its own source; admission supplies its projection.
+fn receive_verdict(
+    installed: &InstalledVerifierPackV1,
+    sources: &QualifiedWalletSourcesV1,
+    budget: MemoryBudget,
+    route: OperationRoute,
+    input: receive::PredicateInputs,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<ReceiveVerdictV1, Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+    let pallas_params = installed.verifier().pallas_parameters();
+    let vesta_params = proof(installed.verifier().vesta_parameters(16))?;
+    let fixed = proof(sources.route(route))?;
+    let QualifiedOperationOwnerV1::Receive(prover) = fixed.owner() else {
+        return Err(Error::Proof("Receive source route"));
+    };
+    let omega = fixed
+        .candidate_omega()
+        .ok_or(Error::Proof("Receive Omega source"))?;
+    let incoming = super::incoming::transport(
+        pallas_params,
+        vesta_params,
+        omega,
+        &input.objects[4],
+        budget,
+        cancellation,
+    )?;
+    let selector = route
+        .incoming
+        .filter(|selector| *selector == input.incoming_selector)
+        .ok_or(Error::Proof("Receive incoming selector"))?;
+    let slot = sigma_slot(
+        sources,
+        selector,
+        &input.incoming_statement,
+        &input.objects[5],
+    )?;
+    let q = proof(sources.q(route))?;
+    let sigma = proof(
+        q.sigma()
+            .ok_or(Error::Proof("incoming sigma source"))?
+            .incoming_original_cancellable(&slot, selector, budget, cancellation),
+    )?;
+    let bits = proof(prover.propose_nonproof(input))?;
+    let results = [incoming.valid && sigma.is_some(), bits[0], bits[1], bits[2]];
+    let (modes, pallas_corrections, vesta_correction) = super::incoming::modes(
+        pallas_params,
+        vesta_params,
+        results.iter().all(|v| *v),
+        &incoming,
+        sigma.as_ref(),
+        budget,
+        cancellation,
+    )?;
+    Ok(ReceiveVerdictV1 {
+        incoming,
+        slot,
+        results,
+        modes,
+        pallas_corrections,
+        vesta_correction,
+    })
+}
+
+impl NativeFoldWorkerV1 {
+    /// Receive admission (§3.2): before a new Receive plan can reach Advance, derive the
+    /// verdict its fold will derive and refuse the Payment if that verdict burns it, so an
+    /// accepted Payment is never burned. The predicates read the receiver lineage only
+    /// through its stable identity and never read the own receipt, so the admission tapes
+    /// (`PreparationV1::receive_admission_fields`) give the fold's exact results and modes.
+    /// # Errors
+    /// [`Error::Invalid`] with [`super::RECEIVE_ADMISSION_REFUSAL`] for a Payment the fold
+    /// would burn, a final verdict on these exact bytes; otherwise the verdict's own errors.
+    pub(crate) fn receive_admission(
+        &self,
+        preparation: &PreparationV1<'_>,
+        prepared: &PreparedOperationV1,
+        source: &ReleasedStep,
+    ) -> Result<(), Error> {
+        let owner = prepared.owner();
+        let monetary = prepared
+            .monetary()
+            .ok_or(Error::Proof("Receive preparation"))?;
+        let fields = proof(preparation.receive_admission_fields(owner, source, monetary))?;
+        let route = super::inputs::receive_route(fields.renewed, &fields.payment)?;
+        let selector = route
+            .incoming
+            .ok_or(Error::Proof("Receive incoming selector"))?;
+        let root = self.sources.scope().root();
+        let signatures = super::inputs::receive_signatures_under(
+            &fields.objects,
+            super::inputs::key(&fields.own_key, 0)?,
+            fields.renewed,
+            [root.x, root.y],
+        )?;
+        let verdict = receive_verdict(
+            &self.installed,
+            &self.sources,
+            self.budget,
+            route,
+            receive::PredicateInputs {
+                before: fields.before,
+                after: fields.after,
+                statement: fields.statement,
+                consumed: fields.consumed,
+                incoming_statement: fields.incoming_statement,
+                objects: fields.objects,
+                signatures,
+                incoming_selector: selector,
+            },
+            None,
+        )?;
+        if verdict.burns() {
+            return Err(Error::Invalid(super::RECEIVE_ADMISSION_REFUSAL));
+        }
+        Ok(())
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -79,8 +218,6 @@ pub(super) fn receive(
     cancellation: &Cancellation,
 ) -> Result<(ReceiveFoldFieldsV1, Option<IncomingSigma>), Error> {
     cancellation.check()?;
-    let pallas_params = worker.installed.verifier().pallas_parameters();
-    let vesta_params = proof(worker.installed.verifier().vesta_parameters(16))?;
     let owner = prepared.owner();
     let monetary = prepared
         .monetary()
@@ -93,42 +230,9 @@ pub(super) fn receive(
         public,
         worker.budget,
     ))?;
-    let fixed = proof(worker.sources.route(route))?;
-    let QualifiedOperationOwnerV1::Receive(prover) = fixed.owner() else {
-        return Err(Error::Proof("Receive source route"));
-    };
-    let omega = fixed
-        .candidate_omega()
-        .ok_or(Error::Proof("Receive Omega source"))?;
-    let incoming = super::incoming::transport(
-        pallas_params,
-        vesta_params,
-        omega,
-        &sources.objects[4],
-        worker.budget,
-        Some(cancellation.prover_token()),
-    )?;
     let selector = route
         .incoming
         .ok_or(Error::Proof("Receive incoming selector"))?;
-    let slot = sigma_slot(
-        worker,
-        selector,
-        &sources.incoming_statement,
-        &sources.objects[5],
-    )?;
-    let q = proof(worker.sources.q(route))?;
-    let sigma = proof(
-        q.sigma()
-            .ok_or(Error::Proof("incoming sigma source"))?
-            .incoming_original_cancellable(
-                &slot,
-                selector,
-                worker.budget,
-                Some(cancellation.prover_token()),
-            ),
-    )?;
-    let (pp, pv) = predecessor_claims(predecessor)?;
     let root = worker.sources.scope().root();
     let signatures = super::inputs::receive_signatures(
         &sources.objects,
@@ -136,29 +240,24 @@ pub(super) fn receive(
         route.variant == Variant::ReceiveRenewed,
         [root.x, root.y],
     )?;
-    let bits = proof(prover.propose_nonproof(receive::PredicateInputs {
-        before: sources.before,
-        after: sources.after,
-        statement: sources.statement,
-        consumed: sources.consumed,
-        incoming_statement: sources.incoming_statement,
-        objects: sources.objects.clone(),
-        signatures,
-        predecessor_pallas: pp,
-        predecessor_vesta: pv,
-        incoming_selector: selector,
-    }))?;
-    let results = [incoming.valid && sigma.is_some(), bits[0], bits[1], bits[2]];
-    let (modes, pc, vc) = super::incoming::modes(
-        pallas_params,
-        vesta_params,
-        results.iter().all(|v| *v),
-        &incoming,
-        sigma.as_ref(),
+    let verdict = receive_verdict(
+        &worker.installed,
+        &worker.sources,
         worker.budget,
+        route,
+        receive::PredicateInputs {
+            before: sources.before,
+            after: sources.after,
+            statement: sources.statement,
+            consumed: sources.consumed,
+            incoming_statement: sources.incoming_statement,
+            objects: sources.objects,
+            signatures,
+            incoming_selector: selector,
+        },
         Some(cancellation.prover_token()),
     )?;
-    let burned = modes.contains(&IncomingMode::Corrected) || !results.iter().all(|v| *v);
+    let burned = verdict.burns();
     let KagemushaWalletEffectV1::Receive { amount, .. } =
         step.frozen.capsule.body().statement.effect
     else {
@@ -172,6 +271,14 @@ pub(super) fn receive(
         .ok_or(Error::Proof("Receive burn overflow"))?;
     let credit = custody.credit_record(burned)?;
     public.credit_digest_root = custody.credit_root();
+    let ReceiveVerdictV1 {
+        incoming,
+        slot,
+        results,
+        modes,
+        pallas_corrections,
+        vesta_correction,
+    } = verdict;
     let proposal = receive::IncomingWitness {
         public: incoming.public,
         public_valid: incoming.public_valid,
@@ -180,8 +287,8 @@ pub(super) fn receive(
         opening: incoming.opening,
         results,
         modes,
-        pallas_corrections: pc,
-        vesta_correction: vc,
+        pallas_corrections,
+        vesta_correction,
     };
     let fields = proof(preparation.receive_fold_fields(
         owner,
@@ -309,7 +416,7 @@ pub(super) fn archive(
             let selector = route
                 .incoming
                 .ok_or(Error::Proof("Archive Receive selector"))?;
-            let slot = sigma_slot(worker, selector, statement, sigma)?;
+            let slot = sigma_slot(&worker.sources, selector, statement, sigma)?;
             let q = proof(worker.sources.q(route))?;
             let claim = proof(
                 q.sigma()

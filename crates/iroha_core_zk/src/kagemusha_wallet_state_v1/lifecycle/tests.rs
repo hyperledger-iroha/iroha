@@ -73,6 +73,14 @@ impl NativePreparation for TestProofs {
             };
             return Ok((plan, prepared));
         }
+        if let Some(OperationActionV1::Receive { .. }) =
+            request.user_request().map(|request| &request.action)
+            && self.refuse_receive_admission
+        {
+            return Err(Error::Invalid(
+                crate::kagemusha_wallet_state_v1::native_worker::RECEIVE_ADMISSION_REFUSAL,
+            ));
+        }
         if let Some(action @ OperationActionV1::Receive { .. }) =
             request.user_request().map(|request| &request.action)
             && self.receive_plans

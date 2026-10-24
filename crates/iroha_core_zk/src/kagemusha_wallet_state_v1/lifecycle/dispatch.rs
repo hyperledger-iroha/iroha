@@ -763,7 +763,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         let (plan, planned) = if let Some(plan) = held_plan {
             (plan, None)
         } else {
-            let Some((plan, prepared)) = self.prepare_intake_plan(
+            let planned = self.prepare_intake_plan(
                 &request,
                 &bytes,
                 &source,
@@ -773,8 +773,26 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                 &mut selected,
                 &mut manifest,
                 speculative.as_ref(),
-            )?
-            else {
+            );
+            // Receive admission (§3.2) refused this exact Payment before any plan existed.
+            // Unbind the Entry, which no request object, plan or capsule references, so the
+            // request reads Unknown and the caller may quarantine the Payment; retrying the
+            // same bytes repeats the same refusal.
+            if let Err(Error::Invalid(field)) = &planned {
+                if *field
+                    == crate::kagemusha_wallet_state_v1::native_worker::RECEIVE_ADMISSION_REFUSAL
+                    && entry.request.is_none()
+                    && entry.plan.is_none()
+                    && entry.capsule.is_none()
+                    && entry.operation.is_none()
+                {
+                    manifest.preparations = manifest
+                        .preparations
+                        .remove(&mut self.archive, &request.request_id())?;
+                    self.publish_manifest(selected, &manifest)?;
+                }
+            }
+            let Some((plan, prepared)) = planned? else {
                 return Ok(Completion::NotPerformed(NotPerformed::StaleHead));
             };
             (plan, Some(prepared))

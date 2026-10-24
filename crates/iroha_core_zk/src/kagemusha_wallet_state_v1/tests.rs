@@ -880,6 +880,9 @@ pub(super) struct TestProofs {
     archive_plans: bool,
     // Mock Receive plans exercise coordinator recovery, never native proof validity.
     receive_plans: bool,
+    // Mock Receive admission (design §3.2): native planning refuses a Receive whose fold
+    // would burn the Payment, as the native owner does before any plan exists.
+    refuse_receive_admission: bool,
     fail_commit_derivation: bool,
     preparation_payload: Vec<u8>,
     advance_checks: Arc<AtomicUsize>,
