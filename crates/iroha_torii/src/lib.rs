@@ -32306,6 +32306,114 @@ pub(crate) fn quote_internal_fee_payment_from_parts(
     })
 }
 #[cfg(feature = "app_api")]
+/// Retain the fee quote's exact bytes before polling its body, independently of execution
+/// credit. A queued authentication never pins uncharged request bodies or the credit that
+/// another queued request needs to execute. All phases spend the original query deadline.
+async fn enforce_fee_quote_body_admission(
+    State(app): State<SharedAppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let serve = async {
+        let body_limit = app.transaction_max_content_len.min(
+            usize::try_from(app.app_routed_read_body_inflight.capacity_bytes())
+                .unwrap_or(usize::MAX),
+        );
+        let declared = match preflight_app_routed_read_content_length(request.headers(), body_limit)
+        {
+            Ok(declared) => declared,
+            Err(response) => return response,
+        };
+        let memory =
+            match acquire_app_routed_read_body_memory(&app, declared.unwrap_or(body_limit)).await {
+                Ok(memory) => memory,
+                Err(response) => return response,
+            };
+        let (parts, unread_body) = request.into_parts();
+        let admitted =
+            match collect_app_routed_read_body(unread_body, body_limit, declared, memory).await {
+                Ok(admitted) => admitted,
+                Err(response) => return response,
+            };
+        // The single replacement frame shares the exact owner-backed allocation. Its
+        // retention credit follows Bytes through extraction and every authentication wait.
+        next.run(Request::from_parts(parts, Body::from(admitted.bytes)))
+            .await
+    };
+    if app.query_queue_timeout.is_zero() {
+        return serve.await;
+    }
+    let deadline = tokio::time::Instant::now() + query_admission_remaining(&app);
+    APP_ROUTED_READ_DEADLINE
+        .scope(deadline, async {
+            tokio::time::timeout_at(deadline, serve)
+                .await
+                .unwrap_or_else(|_| app_routed_read_deadline_response())
+        })
+        .await
+}
+#[cfg(feature = "app_api")]
+/// Authenticate a fee quote within its original admission deadline. This endpoint keeps its
+/// exact self-registration exception while sharing ordinary authentication's memory queue and
+/// publication-release wait. A local owner limit may grow once, before a nonce is published.
+async fn authenticate_fee_quote_request(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    request: crate::app_auth::CanonicalRequestParts<'_>,
+    (mut owner, borrowed): (crate::history_producer::HistoryProducerOwner, bool),
+    deadline: tokio::time::Instant,
+) -> Result<
+    (
+        Option<crate::app_auth::VerifiedCanonicalRequest>,
+        crate::history_producer::HistoryProducerOwner,
+    ),
+    Error,
+> {
+    loop {
+        let (result, refused_by_publication) =
+            crate::app_auth::authorize_after_publication_outcome(
+                &app.auth_publication_waiters,
+                query_admission_remaining(app)
+                    .min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+                || {
+                    crate::app_auth::verify_fee_quote_canonical_request(
+                        &app.state,
+                        headers,
+                        request.method,
+                        request.uri,
+                        request.body,
+                        owner.allocation_context(),
+                    )
+                },
+            )
+            .await;
+        let capacity = matches!(
+            result,
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            )))
+        );
+        if !capacity || refused_by_publication {
+            return result.map(|verified| (verified, owner));
+        }
+        owner.note_owner_limit_refused();
+        if borrowed || owner.working_set_bytes() >= app.query_fanout_working_set_bytes {
+            return result.map(|verified| (verified, owner));
+        }
+        // Release the smaller reservation before waiting for the configured owner. Keep the
+        // same signed bytes and deadline; successful authentication is never attempted twice.
+        drop(owner);
+        owner = tokio::time::timeout_at(
+            deadline,
+            crate::history_producer::HistoryProducerOwner::authentication_read_waiting(app, None),
+        )
+        .await
+        .map_err(|_| crate::app_auth::canonical_request_capacity_error())?
+        .map_err(|_| crate::app_auth::canonical_request_capacity_error())?
+        .0;
+    }
+}
+#[cfg(feature = "app_api")]
 async fn handler_fee_quote(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -32313,22 +32421,39 @@ async fn handler_fee_quote(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    let authentication_owner =
-        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
-            Ok(owner) => owner,
-            Err(error) => {
-                return Err(error);
-            }
-        };
-
-    let verified = crate::app_auth::verify_fee_quote_canonical_request(
-        &app.state,
+    let deadline = tokio::time::Instant::now() + query_admission_remaining(&app);
+    // The body is already bounded and collected by this handler's extractor. Size from its
+    // actual bytes, including chunked requests, rather than trusting Content-Length.
+    let unit_bytes = body
+        .len()
+        .max(
+            headers
+                .get(crate::app_auth::HEADER_WITNESS)
+                .map_or(0, HeaderValue::len),
+        )
+        .max(CANONICAL_AUTHENTICATION_MIN_UNIT_BYTES);
+    let authentication_owner = tokio::time::timeout_at(
+        deadline,
+        crate::history_producer::HistoryProducerOwner::authentication_read_waiting(
+            &app,
+            Some(unit_bytes),
+        ),
+    )
+    .await
+    .map_err(|_| crate::app_auth::canonical_request_capacity_error())?
+    .map_err(|_| crate::app_auth::canonical_request_capacity_error())?;
+    let (verified, _authentication_owner) = authenticate_fee_quote_request(
+        &app,
         &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        authentication_owner.allocation_context(),
-    )?;
+        crate::app_auth::CanonicalRequestParts {
+            method: &method,
+            uri: &uri,
+            body: body.as_ref(),
+        },
+        authentication_owner,
+        deadline,
+    )
+    .await?;
     let Some(caller) = verified.as_ref().map(|request| &request.account) else {
         return Ok(torii_canonical_auth_required_response(
             "fee_quote_signature_required",
@@ -37323,9 +37448,18 @@ impl Torii {
     #[cfg(feature = "app_api")]
     fn add_fee_routes(&self, builder: &mut RouterBuilder) {
         let quote_body_limit = self.transaction_max_content_len;
+        builder.route(
+            &route_catalog::fees::QUOTE,
+            catalog_post(handler_fee_quote)
+                .layer(DefaultBodyLimit::max(quote_body_limit))
+                .layer(axum::middleware::from_fn_with_state(
+                    builder.state().clone(),
+                    enforce_fee_quote_body_admission,
+                ))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         mount_catalog_route_rows!(
             builder, fees;
-            QUOTE => limited_canonical_signature_post(handler_fee_quote, quote_body_limit);
             SPONSOR_PROGRAM_BY_ID => limited_canonical_signature_post(handler_fee_sponsor_program_by_id, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             SPONSOR_ENROLLMENT_BY_ID => limited_canonical_signature_post(handler_fee_sponsor_enrollment_by_id, EXACT_ALIAS_READ_MAX_BODY_BYTES);
         );

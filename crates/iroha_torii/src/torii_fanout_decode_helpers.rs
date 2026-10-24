@@ -742,12 +742,26 @@ fn query_memory_geometry(
         QueryFanoutMemoryEnvelope::for_body_admission(fanout_working_set_bytes).ok()?;
     let ingress_slots = NonZeroUsize::new(QUERY_INGRESS_SLOT_COUNT)?;
     // Retry bodies outlive individual execution owners. Give them independent
-    // credit from the ingress quarter, sufficient for one maximum-sized body or
-    // many small portal requests, without reducing the fanout pool.
-    let routed_read_body_pool_bytes = provisional_fanout.route_body_bytes;
+    // credit from the ingress quarter, shared by routed reads and fee quotes. Grow
+    // retention only from slack beyond the original signed-query ingress phases, so
+    // a smaller pool keeps every existing request/decode limit and remains valid.
+    let ingress_unit_cap = max_content_bytes.min(provisional_fanout.route_body_bytes);
+    let original_slot_bytes =
+        ingress_pool_bytes.checked_sub(provisional_fanout.route_body_bytes)? / ingress_slots.get();
+    let original_ingress =
+        QueryIngressMemoryEnvelope::from_slot_bytes(original_slot_bytes, ingress_unit_cap)?;
+    let required_slot_bytes = query_ingress_fixed_overhead_bytes()?.checked_add(
+        original_ingress
+            .body_bytes
+            .checked_mul(QUERY_INGRESS_PHASE_UNITS)?,
+    )?;
+    let retention_capacity =
+        ingress_pool_bytes.checked_sub(required_slot_bytes.checked_mul(ingress_slots.get())?)?;
+    let routed_read_body_pool_bytes = provisional_fanout
+        .route_body_bytes
+        .max(max_content_bytes.min(retention_capacity));
     let ingress_slot_bytes =
         ingress_pool_bytes.checked_sub(routed_read_body_pool_bytes)? / ingress_slots.get();
-    let ingress_unit_cap = max_content_bytes.min(provisional_fanout.route_body_bytes);
     let ingress =
         QueryIngressMemoryEnvelope::from_slot_bytes(ingress_slot_bytes, ingress_unit_cap)?;
     let fanout_slots = query_fanout_slot_count(
