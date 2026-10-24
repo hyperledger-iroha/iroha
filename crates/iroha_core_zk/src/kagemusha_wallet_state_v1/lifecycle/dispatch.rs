@@ -54,6 +54,16 @@ impl Plan {
     }
 }
 
+// Receive preserves an already-issued payer claim; Archive only removes delivered outbox
+// evidence. Neither releases local value. Replanning still needs authenticated nonselection,
+// exact retained originals and complete retirement of the former immutable preparation.
+fn can_replan_unselected(kind: KagemushaWalletOperationKindV1) -> bool {
+    matches!(
+        kind,
+        KagemushaWalletOperationKindV1::Receive | KagemushaWalletOperationKindV1::ArchiveSent
+    )
+}
+
 fn original(
     frozen: &FrozenTransition,
     role: KagemushaWalletRetainedInputRoleV1,
@@ -278,11 +288,11 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(())
     }
 
-    /// Retire only an authenticated stale ArchiveSent plan that Advance never selected.
+    /// Retire an authenticated stale Receive/ArchiveSent plan that Advance never selected.
     /// The durable Entry keeps its exact request and stale capsule locator until every unlink
     /// succeeds. A crash therefore repeats these idempotent removals before replacing the plan.
-    /// No selected completion, uncertain lookup or monetary operation can reach this path.
-    fn retire_archive_plan(
+    /// No selected completion, uncertain lookup or value-releasing operation reaches this path.
+    fn retire_unselected_plan(
         &mut self,
         request: &NativeIntentV1,
         source: &[u8; 32],
@@ -291,18 +301,18 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         manifest: &mut manifest::Manifest,
     ) -> Result<(), Error> {
         entry.require_binding()?;
-        if request.kind() != KagemushaWalletOperationKindV1::ArchiveSent
-            || entry.kind != KagemushaWalletOperationKindV1::ArchiveSent
+        if !can_replan_unselected(request.kind())
+            || entry.kind != request.kind()
             || entry.plan.is_none()
             || entry.request != Some(plan.request_object)
             || plan.source == *source
         {
-            return Err(Error::WitnessLost("stale Archive retirement binding"));
+            return Err(Error::WitnessLost("stale intake retirement binding"));
         }
         if let Some(operation) = entry.operation {
             let capsule = entry
                 .capsule
-                .ok_or(Error::WitnessLost("stale Archive capsule"))?;
+                .ok_or(Error::WitnessLost("stale intake capsule"))?;
             // Low-level Unknown alone is insufficient: an older committed output may be
             // missing. The permanent authenticated operation index must also prove absence.
             if !matches!(self.custody.lookup(&operation)?, Lookup::Unknown)
@@ -310,16 +320,16 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     .missing_retained_output(&operation, Some(&capsule))?
                     .is_some()
             {
-                return Err(Error::WitnessLost("stale Archive already selected"));
+                return Err(Error::WitnessLost("stale intake already selected"));
             }
-            let plan_address = entry.plan.ok_or(Error::WitnessLost("stale Archive plan"))?;
+            let plan_address = entry.plan.ok_or(Error::WitnessLost("stale intake plan"))?;
             if manifest
                 .capsule_plans
                 .get(&mut self.archive, &capsule)?
                 .as_deref()
                 != Some(plan_address.as_slice())
             {
-                return Err(Error::WitnessLost("stale Archive capsule plan binding"));
+                return Err(Error::WitnessLost("stale intake capsule plan binding"));
             }
         }
         // The source-selected stale Entry plus authenticated nonselection authorizes retiring
@@ -578,7 +588,8 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
     ///
     /// # Errors
     /// Conflicting request, missing native custody, unavailable storage/artifacts, invalid proof
-    /// or uncertain Advance. A stale prepared source returns `NotPerformed` without rebasing.
+    /// or uncertain Advance. Only never-selected Receive and ArchiveSent may retire a stale
+    /// plan and prepare again from the current source; every other kind returns `NotPerformed`.
     pub fn execute(&mut self, request: OperationRequestV1) -> Result<Completion, Error> {
         self.execute_intent(NativeIntentV1::user(request))
     }
@@ -717,17 +728,18 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             .as_ref()
             .is_some_and(|plan| plan.source != source_digest)
         {
-            if request.kind() != KagemushaWalletOperationKindV1::ArchiveSent {
+            if !can_replan_unselected(request.kind()) {
                 return Ok(Completion::NotPerformed(NotPerformed::StaleHead));
             }
-            // A deferred, never-selected Archive may replan on the new head. The helper
-            // preserves a durable recovery locator until stale artifact retirement finishes.
-            self.retire_archive_plan(
+            // Receive and deferred Archive may replan only after authenticated nonselection.
+            // Their immutable inputs remain bound to the same request. The helper preserves
+            // a durable recovery locator until stale artifact retirement finishes.
+            self.retire_unselected_plan(
                 &request,
                 &source_digest,
                 held_plan
                     .as_ref()
-                    .ok_or(Error::WitnessLost("stale Archive plan"))?,
+                    .ok_or(Error::WitnessLost("stale intake plan"))?,
                 &mut entry,
                 &mut manifest,
             )?;

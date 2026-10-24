@@ -1349,7 +1349,10 @@ unrelated sends, receives and cleanup.
 - Receive does not depend on a still-open Request, the receiver's old head or
   the receiver credential that was current when the Request was signed. A
   Request quoted before a renewal stays receivable after it (§3.2). Delayed
-  valid Payments remain receivable after other payments. Malformed,
+  valid Payments remain receivable after other payments. If a Receive preparation
+  was interrupted before Advance selected it, a later head does not strand that
+  Payment: the native owner follows the §5.3 authenticated retirement procedure
+  and prepares again with the same request identity and exact Payment. Malformed,
   unauthenticated or wrong-recipient objects are rejected without mutation;
   rejection is not a value-return authorization.
 - Lost Credited evidence only leaves delivery unconfirmed at the payer.
@@ -1396,9 +1399,18 @@ inputs, source, native choices, plan and objects.
 Only after every object and original is durably acknowledged may one manifest
 publication select the plan. Uncertain publication reopens the selected manifest
 and adopts any present exact batch. Fresh planning is allowed only after definitive batch absence
-before plan selection. Recovery never replaces retained choices, rebases a
-stale source or deletes possibly shared objects. Every materialized object is
-read back from durable storage after the plan publication and before cleanup.
+before plan selection. Recovery never mutates a selected plan's choices or
+source, or deletes possibly shared objects. A never-selected Receive or ArchiveSent may retire its entire
+stale preparation before planning again at the current head, under the same
+request binding and exact retained originals. Receive retains the already-issued
+Payment unchanged; this exception never applies to Send, Unload or Retiring.
+If a capsule exists, both custody nonselection and authenticated absence from the
+permanent operation index are mandatory. Keep the old entry, plan and capsule
+locator selected until idempotent draft/capsule cleanup finishes; only then
+publish a replacement. Retain a batch-only original under the authenticated
+entry before removing its immutable draft key. Interrupted cleanup repeats on
+restart; selected, pending, uncertain or delivery-data-loss outcomes never replan.
+Every materialized object is read back from durable storage after the plan publication and before cleanup.
 Cleanup removes only the acknowledged staging record. Subsequent validation can
 confirm retained objects and proving takes no custody; neither can create new
 preparation objects.
