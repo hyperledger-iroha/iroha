@@ -407,9 +407,11 @@ internal object AndroidAttestationE1EvaluatorV1 {
                 val parts = extension.children()
                 require(parts.size == 2 || parts.size == 3) { "invalid X.509 extension" }
                 val name = parts[0].oid()
-                if (parts.size == 3) require(parts[1].primitive(Der.BOOLEAN).contentEquals(byteArrayOf(-1))) { "invalid X.509 extension critical flag" }
+                // KeyMint certificates may explicitly encode the default false value. Read the
+                // BOOLEAN itself; its presence does not make an extension critical.
+                val critical = if (parts.size == 3) parts[1].boolean() else false
                 require(name !in extensions) { "duplicate X.509 extension" }
-                extensions[name] = Extension(parts.size == 3, parts.last().primitive(Der.OCTET_STRING))
+                extensions[name] = Extension(critical, parts.last().primitive(Der.OCTET_STRING))
             }
         }
         val certificate = CertificateFactory.getInstance("X.509").generateCertificate(ByteArrayInputStream(der)) as X509Certificate
