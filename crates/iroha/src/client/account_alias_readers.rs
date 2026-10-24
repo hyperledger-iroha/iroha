@@ -183,6 +183,18 @@ mod tests {
         )
     }
 
+    fn exact_absence() -> String {
+        use iroha_torii_shared::{ErrorDetails, ErrorEnvelope, aliases::*};
+        let envelope =
+            ErrorEnvelope::new(ACCOUNT_ALIAS_NOT_FOUND_CODE, "absent").with_details(ErrorDetails {
+                account_alias_not_found: Some(AccountAliasNotFoundV1 {
+                    alias: alias().to_string(),
+                }),
+                ..Default::default()
+            });
+        norito::json::to_json(&envelope).unwrap()
+    }
+
     fn readers(transport: DefaultHttpTransport) -> [Client; 2] {
         let mut first = client_with_base_url(base_url()).with_test_http_transport(transport);
         first.torii_request_timeout = Duration::from_millis(200);
@@ -319,16 +331,36 @@ mod tests {
     }
 
     #[test]
-    fn exact_absence_stops_without_another_reader() {
-        use iroha_torii_shared::{ErrorDetails, ErrorEnvelope, aliases::*};
-        let envelope =
-            ErrorEnvelope::new(ACCOUNT_ALIAS_NOT_FOUND_CODE, "absent").with_details(ErrorDetails {
-                account_alias_not_found: Some(AccountAliasNotFoundV1 {
-                    alias: alias().to_string(),
-                }),
-                ..Default::default()
+    fn late_refusal_is_not_replaced_by_a_retryable_deadline() {
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            let (result, requests) = exercise(move |request| {
+                // The refusal arrives after this reader's share of the deadline.
+                std::thread::sleep(request.timeout.unwrap() + Duration::from_millis(20));
+                Ok(json_response(status, "{}"))
             });
-        let body = norito::json::to_json(&envelope).unwrap();
+            let error = result.unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<crate::Error>().unwrap().http_status(),
+                Some(status.as_u16())
+            );
+            assert_eq!(requests.len(), 1);
+        }
+    }
+
+    #[test]
+    fn late_exact_absence_is_not_replaced_by_a_retryable_deadline() {
+        let body = exact_absence();
+        let (result, requests) = exercise(move |request| {
+            std::thread::sleep(request.timeout.unwrap() + Duration::from_millis(20));
+            Ok(json_response(StatusCode::NOT_FOUND, &body))
+        });
+        assert!(result.unwrap().is_none());
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn exact_absence_stops_without_another_reader() {
+        let body = exact_absence();
         let (result, requests) = exercise(move |_| Ok(json_response(StatusCode::NOT_FOUND, &body)));
         assert!(result.unwrap().is_none());
         assert_eq!(requests.len(), 1);

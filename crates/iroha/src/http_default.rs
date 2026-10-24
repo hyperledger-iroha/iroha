@@ -120,9 +120,16 @@ impl DefaultHttpTransport {
 
     pub(crate) fn send_blocking(&self, request: TransportRequest) -> Result<Response<Bytes>> {
         let response = self.inner.send_blocking(self.bound_request(request)?);
-        if self
-            .deadline
-            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        // A late refusal or absence stays that answer; a deadline failure in its place
+        // would let a caller retry a reply the server has already settled.
+        let settled = response.as_ref().is_ok_and(|response| {
+            let status = response.status();
+            !status.is_success() && !matches!(status.as_u16(), 502..=504)
+        });
+        if !settled
+            && self
+                .deadline
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
         {
             return Err(request_deadline_elapsed());
         }
