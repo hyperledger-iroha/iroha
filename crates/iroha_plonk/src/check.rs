@@ -35,7 +35,7 @@
 //! Rows are evaluated in parallel, and the report stays deterministic: failures are
 //! reported in gate, lookup and copy order, in row order within each.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use rayon::prelude::*;
 
@@ -656,7 +656,9 @@ fn check_lookups<F: PastaField>(
     failures: &mut Vec<CheckFailure<F>>,
 ) {
     for (lookup_index, lookup) in cs.lookups().iter().enumerate() {
-        let mut table = BTreeSet::new();
+        // Membership only: hashing the Montgomery limbs agrees with `Eq`, while the
+        // canonical `Ord` reduces both operands on every comparison of every insert.
+        let mut table = HashSet::with_capacity(witness.usable);
         let tuples: Vec<Option<Vec<F>>> = (0..witness.usable)
             .into_par_iter()
             .map(|row| evaluate_tuple(witness, lookup.table_expressions(), row))
