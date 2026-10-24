@@ -557,7 +557,7 @@ where
     }
 
     // Explicit provider simulator fixture. Production callers require the verified permit above.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "kagemusha-simulator"))]
     pub(crate) fn test_begin_enrollment(
         &mut self,
         challenge: &KagemushaWalletEnrollmentChallengeV1,

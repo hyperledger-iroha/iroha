@@ -51,6 +51,9 @@ zk-preverify = []
 # Non-shipping helpers and fixtures for iroha_core's test builds; forbidden in
 # shipping library evidence (scripts/taira_release_check.py).
 test-utils = []
+# Non-shipping software-key wallet simulator (the provider tests' platform and engineering
+# issuer) for iroha_core's ignored in-process genuine-proof acceptance; enable explicitly.
+kagemusha-simulator = ["test-utils"]
 # Gate zk-heavy tests; enable with `--features zk-tests` when needed.
 zk-tests = ["test-utils"]
 

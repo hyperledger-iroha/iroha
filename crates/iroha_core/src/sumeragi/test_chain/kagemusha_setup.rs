@@ -6,6 +6,8 @@
 //! this is component evidence, not a running four-validator network or device qualification.
 
 mod funding;
+#[cfg(feature = "kagemusha-simulator")]
+mod hundred_payers;
 mod registration;
 
 use super::*;

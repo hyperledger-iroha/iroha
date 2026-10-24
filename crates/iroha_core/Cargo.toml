@@ -147,6 +147,10 @@ dev-tests = []
 # every user-provided executor path runs the admitted guest bytecode.
 iroha-core-tests = ["iroha_sccp/test-fixtures", "iroha_core_zk/test-utils", "iroha_core_privacy/test-utils", "iroha_core_timed_ovn/test-utils"]
 
+# Ignored genuine-proof merchant acceptance (100 payers, one merchant) through iroha_core_zk's
+# software-key wallet simulator. Non-shipping; enable explicitly.
+kagemusha-simulator = ["iroha_core_zk/kagemusha-simulator"]
+
 # Allow offline balance proof verification bypass + dummy backend in dev builds.
 
 # Enable BLS admission-time micro-batching (deterministic grouping + bisection path in block validation).
