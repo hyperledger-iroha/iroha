@@ -134,6 +134,7 @@ class HttpClientTransport private constructor(
     private val lifecycleLock = Any()
     private var closed = false
     private val pendingPolls = LinkedHashSet<CompletableFuture<Map<String, Any>>>()
+    private val pendingFeeQuotes = LinkedHashSet<CompletableFuture<*>>()
     private val lazyScheduler = lazy {
         Executors.newSingleThreadScheduledExecutor { r ->
             Thread(r, "iroha-http-pipeline-poll").apply { isDaemon = true }
@@ -541,7 +542,10 @@ class HttpClientTransport private constructor(
             if (closed) return
             closed = true
             if (lazyScheduler.isInitialized()) scheduler.shutdownNow()
-            pendingPolls.toList().also { pendingPolls.clear() }
+            (pendingPolls.toList() + pendingFeeQuotes.toList()).also {
+                pendingPolls.clear()
+                pendingFeeQuotes.clear()
+            }
         }
         polls.forEach { it.cancel(false) }
         executor.close()
@@ -1715,7 +1719,11 @@ class HttpClientTransport private constructor(
         )
     }
 
-    /** Quote the exact unsigned transaction payload before replacing only its fee maxima. */
+    /**
+     * Quote the exact unsigned payload. Capacity responses (HTTP 429) get at most four freshly
+     * signed attempts within 15 seconds (or the shorter configured timeout), honoring Retry-After.
+     * Explicit single-use authentication, other errors and transaction submissions are not retried.
+     */
     fun quoteFees(
         unsignedPayload: Map<String, Any?>,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -1737,27 +1745,27 @@ class HttpClientTransport private constructor(
             "unsignedPayload.fee_payment",
         )
         val body = encodeJsonBody(linkedMapOf("payload" to unsignedPayload))
-        return fetchJson(
-            buildVpnRequest(
-                "POST",
-                "/v1/fees/quote",
-                body,
-                canonicalAuth,
-                FEE_QUOTE_RESPONSE_MAX_BYTES,
-            ),
-            { response ->
-                require(response.size.toLong() <= FEE_QUOTE_RESPONSE_MAX_BYTES) {
+        val operation = synchronized(lifecycleLock) {
+            check(!closed) { "HTTP client is closed" }
+            FeeQuoteRetryV1(scheduler, config.requestTimeout(), !canonicalAuth.hasExplicitFreshness,
+                request = { buildVpnRequest("POST", "/v1/fees/quote", body, canonicalAuth, FEE_QUOTE_RESPONSE_MAX_BYTES) },
+                execute = { request -> notifyRequest(request); executor.execute(request) },
+                consume = { request, response ->
+                require(response.body.size.toLong() <= FEE_QUOTE_RESPONSE_MAX_BYTES) {
                     "fee quote response exceeds the $FEE_QUOTE_RESPONSE_MAX_BYTES byte limit"
                 }
-                FeePaymentJson.parseQuote(response)
-            },
-            "fee quote",
-            200,
-            exactJsonMediaType = true,
-        ).thenApply { quote ->
-            quote.validateForDraft(requestedIntent, authority)
-            quote
+                if (response.statusCode != 200) throw ToriiApiException.fromResponse(
+                    response.statusCode, response.headers, response.body, "fee quote")
+                requireExactJsonResponse(response, "fee quote")
+                val quote = FeePaymentJson.parseQuote(response.body)
+                quote.validateForDraft(requestedIntent, authority)
+                notifyResponse(request, ClientResponse(response.statusCode, response.body, response.message,
+                    null, extractRejectCode(response)))
+                quote
+            }, failed = ::notifyFailure).also { pendingFeeQuotes.add(it.result) }
         }
+        operation.result.whenComplete { _, _ -> synchronized(lifecycleLock) { pendingFeeQuotes.remove(operation.result) } }
+        return operation.start()
     }
 
     private fun requireNetworkTransactionDomain(
