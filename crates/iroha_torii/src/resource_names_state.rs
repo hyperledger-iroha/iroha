@@ -6,10 +6,21 @@
 
 use super::*;
 use crate::certified_originals_auth::{authenticate, require_permission};
-use crate::native_projection_response::{capacity, encode, native_committee_original_bytes};
+use crate::native_projection_response::{
+    NativeProjectionError, capacity, current_root_tip, encode, native_committee_original_bytes,
+};
 use iroha_core::{
-    state::AllocationBudget,
-    sumeragi::certified_chain::{CertifiedChain, QcVerification},
+    state::{AllocationBudget, StateReadOnly, WorldStateSnapshotError},
+    sumeragi::{
+        certified_chain::{CertifiedChain, CommittedBlock},
+        finality::AttestationBuildError,
+    },
+};
+use iroha_data_model::{
+    block::consensus::SumeragiRootScope,
+    sumeragi::finality::{
+        NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityLimits,
+    },
 };
 use iroha_torii_shared::resource_names_state::{
     NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1, NATIVE_RESOURCE_NAMES_STATE_ROUTE_PREFIX_V1,
@@ -17,6 +28,78 @@ use iroha_torii_shared::resource_names_state::{
     NativeResourceNamesStateRefV1,
 };
 const ROUTE: &str = "/v1/ledger/resource-names/{challenge}";
+
+// This helper is also exercised with exact three-frame limits (genesis, target
+// and parent), so a full historical certificate walk cannot regress unnoticed.
+fn current_names_tip(
+    view: &impl StateReadOnly,
+    height: u64,
+    root_scope: SumeragiRootScope,
+    limits: NativeFinalityLimits,
+) -> Result<CommittedBlock, Error> {
+    current_root_tip(view, height, root_scope, limits, unavailable).map_err(|error| {
+        let reason = match &error {
+            NativeProjectionError::ResponseLimit { .. } => "response_bound",
+            NativeProjectionError::Buffer(_) => "buffer",
+            NativeProjectionError::Encoding(_) => "encoding",
+            NativeProjectionError::RootScope(_) => "root_scope_read",
+            NativeProjectionError::History(_) => "history_or_certificate",
+            NativeProjectionError::Invalid(_) => "invalid_geometry",
+            NativeProjectionError::Unavailable(_) => "cut_or_root_mismatch",
+        };
+        refused("recent_tip", reason)
+    })
+}
+
+fn require_status_height(
+    status: &iroha_data_model::sumeragi::SumeragiStatus,
+    height: u64,
+) -> Result<(), Error> {
+    if status.applied_height != height || status.committed_height != height {
+        return Err(refused("driver", "status_height_mismatch"));
+    }
+    Ok(())
+}
+
+fn attestation_refusal_reason(error: &AttestationBuildError) -> &'static str {
+    match error {
+        AttestationBuildError::EmptyState => "empty_state",
+        AttestationBuildError::HeightOverflow => "height_overflow",
+        AttestationBuildError::HeightIsNotDurableTip { .. } => "tip_changed",
+        AttestationBuildError::StatusHeightMismatch => "status_height_mismatch",
+        AttestationBuildError::RestartRequired => "restart_required",
+        AttestationBuildError::InvalidStatus => "invalid_status",
+        AttestationBuildError::InvalidSigner => "invalid_signer",
+        AttestationBuildError::FinalityProof(_) => "tip_proof",
+        AttestationBuildError::GenesisFinalityProof(_) => "genesis_proof",
+        AttestationBuildError::InvalidBody(_) => "invalid_body",
+        AttestationBuildError::ClockUnavailable => "clock_unavailable",
+        AttestationBuildError::Signing(_) => "signing",
+    }
+}
+
+fn snapshot_refusal_reason(error: &WorldStateSnapshotError) -> &'static str {
+    match error {
+        WorldStateSnapshotError::Encoding(_) => "encoding",
+        WorldStateSnapshotError::View(_) => "view",
+        WorldStateSnapshotError::Acquisition(_) => "overlay_acquisition",
+        WorldStateSnapshotError::Allocation(_) => "allocation",
+        WorldStateSnapshotError::Buffer(_) => "buffer",
+        WorldStateSnapshotError::Allocator(_) => "allocator",
+        WorldStateSnapshotError::DecodeControl(_) => "decode_control",
+        WorldStateSnapshotError::RootScopeRead(_) => "root_scope_read",
+        WorldStateSnapshotError::Amx(_) => "amx_original",
+        WorldStateSnapshotError::CutChanged { .. } => "cut_changed",
+        WorldStateSnapshotError::Invalid(_) => "invalid_cut_or_original",
+    }
+}
+
+fn refused(stage: &'static str, reason: &'static str) -> Error {
+    // Fixed classifications only: no private originals, account, request,
+    // challenge, URL, credentials or arbitrary error text enter diagnostics.
+    iroha_logger::warn!(stage, reason, "native resource names current cut refused");
+    unavailable()
+}
 
 /// Full-original carrier requires real native signed read authority; API-token access alone never suffices.
 pub async fn handler(
@@ -61,18 +144,12 @@ async fn handle(
     let max_response = app
         .torii_proxy_max_response_bytes
         .min(NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1);
-    let driver = app.sumeragi.as_ref().ok_or_else(unavailable)?;
-    if driver.restart_required() {
-        return Err(unavailable());
-    }
-    let status = driver.status_dto().ok_or_else(unavailable)?;
-    if status.unanchored || status.abstaining || status.halted.is_some() {
-        return Err(unavailable());
-    }
+    let driver = app
+        .sumeragi
+        .as_ref()
+        .ok_or_else(|| refused("driver", "absent"))?
+        .clone();
     let identity = driver.identity().clone();
-    if status.signer.as_ref() != Some(identity.node_id.public_key()) {
-        return Err(unavailable());
-    }
     let fingerprint = iroha_crypto::Hash::new_from_chunks(&[
         app.build_status.version.as_bytes(),
         app.build_status.git_commit_sha.as_bytes(),
@@ -85,24 +162,58 @@ async fn handle(
         move || {
             let _memory = memory;
             let view = state.view();
-            let height = u64::try_from(view.height()).map_err(|_| unavailable())?;
+            let height =
+                u64::try_from(view.height()).map_err(|_| refused("view", "height_overflow"))?;
             if height < 2 {
-                return Err(unavailable());
+                return Err(refused("view", "no_certified_tip"));
             }
-            let chain = CertifiedChain::new(&view).map_err(|_| unavailable())?;
-            let certified = chain.certified(height).map_err(|_| unavailable())?;
-            if certified.verification() != QcVerification::Verified {
-                return Err(unavailable());
+            // Sample the actual driver after this worker opens its immutable
+            // view, rather than before a potentially long blocking-worker queue.
+            // A publication race still refuses; the attestation builder repeats
+            // the complete identity, instance and height checks after proof work.
+            if driver.restart_required() {
+                return Err(refused("driver", "restart_required"));
             }
-            let tip = certified.into_committed();
+            let status = driver
+                .status_dto()
+                .ok_or_else(|| refused("driver", "status_absent"))?;
+            if status.unanchored || status.abstaining || status.halted.is_some() {
+                return Err(refused("driver", "not_active"));
+            }
+            if status.signer.as_ref() != Some(identity.node_id.public_key()) {
+                return Err(refused("driver", "signer_mismatch"));
+            }
+            require_status_height(&status, height)?;
+            let chain =
+                CertifiedChain::new(&view).map_err(|_| refused("chain", "source_unavailable"))?;
+            // The original State execution ancestry supplies the target's
+            // parent schedule. Reverify the exact target quorum and signed
+            // availability, without replaying every historical quorum for each
+            // current read. Keep one finite source/decode owner through output.
+            let unit = bytes / 8;
+            let limits = NativeFinalityLimits {
+                block_bytes: unit.min(NATIVE_FINALITY_MAX_BLOCK_BYTES),
+                journal_bytes: (unit * 2).min(NATIVE_FINALITY_MAX_JOURNAL_BYTES),
+                block_count: 8,
+                allocated_bytes: unit * 4,
+            };
+            let decode_limits = limits.decode_limits().map_err(|_| capacity())?;
+            let _source_charge = budget
+                .try_reserve_bytes(limits.journal_bytes + limits.allocated_bytes)
+                .map_err(|_| capacity())?;
+            let tip = norito::core::with_decode_limits_scope(decode_limits, || {
+                current_names_tip(&view, height, chain.root_scope(), limits)
+            })?;
             // Proof frame copies and their finite committee/signer vectors are
             // prepaid from the same operation budget before the existing builder.
-            let genesis = chain.committed(1).map_err(|_| unavailable())?;
+            let genesis = chain
+                .committed(1)
+                .map_err(|_| refused("genesis", "source_unavailable"))?;
             let proof_bytes = norito::canonical_frame_len(genesis.block().as_ref())
                 .and_then(|len| {
                     norito::canonical_frame_len(tip.block().as_ref()).map(|tip_len| (len, tip_len))
                 })
-                .map_err(|_| unavailable())?;
+                .map_err(|_| refused("proof_backing", "invalid_frame"))?;
             let genesis_committee = &genesis.commitment().schedule.current.committee;
             let tip_committee = &tip.commitment().schedule.current.committee;
             let genesis_storage = native_committee_original_bytes(
@@ -144,7 +255,7 @@ async fn handle(
                 challenge,
                 &signer,
             )
-            .map_err(|_| unavailable())?;
+            .map_err(|error| refused("attestation", attestation_refusal_reason(&error)))?;
             drop(chain);
             drop(view);
             let mut body = state
@@ -198,7 +309,7 @@ async fn handle(
                             .map_err(|_| "native names state serialization refused".to_owned())
                     },
                 )
-                .map_err(|_| unavailable())?;
+                .map_err(|error| refused("snapshot", snapshot_refusal_reason(&error)))?;
             body.memory = Some(_memory);
             let content_type = match format {
                 ResponseFormat::Norito => "application/x-norito",
@@ -270,6 +381,10 @@ fn unavailable() -> Error {
 }
 
 #[cfg(test)]
+#[path = "resource_names_state/recent_tip_tests.rs"]
+mod recent_tip_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -298,6 +413,32 @@ mod tests {
         ));
         assert_eq!(
             finalize(Err(unavailable())).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    #[test]
+    fn names_refusal_diagnostics_preserve_fixed_service_rejection() {
+        assert_eq!(
+            attestation_refusal_reason(&AttestationBuildError::StatusHeightMismatch),
+            "status_height_mismatch"
+        );
+        assert_eq!(
+            attestation_refusal_reason(&AttestationBuildError::Signing("private input".into())),
+            "signing"
+        );
+        assert_eq!(
+            snapshot_refusal_reason(&WorldStateSnapshotError::CutChanged {
+                requested_height: 2,
+                observed_height: 3,
+            }),
+            "cut_changed"
+        );
+        assert_eq!(
+            snapshot_refusal_reason(&WorldStateSnapshotError::Invalid("private original".into())),
+            "invalid_cut_or_original"
+        );
+        assert_eq!(
+            finalize(Err(refused("snapshot", "cut_changed"))).status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
     }
