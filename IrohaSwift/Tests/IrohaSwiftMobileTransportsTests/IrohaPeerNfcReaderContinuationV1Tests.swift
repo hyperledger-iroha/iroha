@@ -272,6 +272,26 @@ final class IrohaPeerNfcReaderContinuationV1Tests: XCTestCase {
         XCTAssertEqual(events.map(\.attempt), [1, 1, 1, 2, 2, 2, 2])
     }
 
+    func testCancelAfterAFinishedPaymentIsChosenStillPublishesItsCompletion() {
+        var events: [IrohaPeerNfcProgressStageV1] = []
+        let owner = IrohaPeerNfcReaderOperationContextV1(checkpoint: nil, onTypedProgress: { events.append($0.stage) })
+        let relay = IrohaPeerNfcReaderProgressRelayV1(owner.progress)
+        relay.emit(.ackPersisted, bytes: 64)
+        owner.reservePaymentCompletion()   // finish() chose the durable payment result
+        owner.cancel()                     // Cancel lands before the completion is published
+        relay.finishPayment()
+        XCTAssertEqual(events, [.ackPersisted, .complete], "The returned success and its completion event agree")
+        XCTAssertThrowsError(try owner.requireActive(), "The cancelled owner still admits no new work")
+
+        var cancelledEvents: [IrohaPeerNfcProgressStageV1] = []
+        let cancelled = IrohaPeerNfcReaderOperationContextV1(checkpoint: nil,
+                                                             onTypedProgress: { cancelledEvents.append($0.stage) })
+        let cancelledRelay = IrohaPeerNfcReaderProgressRelayV1(cancelled.progress)
+        cancelled.cancel()
+        cancelledRelay.finishPayment()
+        XCTAssertEqual(cancelledEvents, [], "A cancellation that wins first never reports completion")
+    }
+
     func testRenewalRequiresRealMatchingInvalidationNotItsFallbackTimer() throws {
         final class Session {}
         let session = Session()

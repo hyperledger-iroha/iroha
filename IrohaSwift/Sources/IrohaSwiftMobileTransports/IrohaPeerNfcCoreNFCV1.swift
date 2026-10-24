@@ -283,6 +283,7 @@ final class IrohaPeerNfcReaderOperationContextV1: @unchecked Sendable {
         startedAtNanoseconds: DispatchTime.now().uptimeNanoseconds)
     private let lock = NSLock()
     private var cancelled = false
+    private var completionPending = false
 
     init(checkpoint: Data?, onTypedProgress: ((IrohaPeerNfcProgressEventV1) -> Void)?) {
         checkpoints = .init(checkpoint)
@@ -299,11 +300,17 @@ final class IrohaPeerNfcReaderOperationContextV1: @unchecked Sendable {
         checkpoints.load() != nil || preparation.currentTask != nil
     }
 
+    /// The reader selected this operation's finished payment. Its `.complete` still has to be
+    /// published, so a cancellation arriving now leaves the reporter to `finishPayment`.
+    func reservePaymentCompletion() {
+        lock.lock(); completionPending = true; lock.unlock()
+    }
+
     func cancel() {
-        lock.lock(); cancelled = true; lock.unlock()
+        lock.lock(); cancelled = true; let pending = completionPending; lock.unlock()
         preparation.cancel()
         acknowledgement.cancel()
-        progress.invalidate()
+        if !pending { progress.invalidate() }
     }
 }
 
@@ -2308,6 +2315,9 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         }
         completed = true
         _ = operationGate.finishOperation(capturedEpoch: operationEpoch)
+        // Chosen together with the result: a Cancel landing before `finishPayment` below
+        // cannot retire the progress that reports this payment complete.
+        if Self.isFinishedPayment(result) { logicalOperation?.reservePaymentCompletion() }
         let session = session
         let awaitInvalidation = invalidating && session != nil
         let continuation = awaitInvalidation ? nil : self.continuation
