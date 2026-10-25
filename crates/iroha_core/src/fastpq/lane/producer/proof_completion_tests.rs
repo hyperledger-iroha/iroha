@@ -83,20 +83,44 @@ fn proof_activity_excludes_only_nonoverlapping_real_proving_intervals() {
     let baseline = activity.elapsed(phase_start);
     activity.begin(at(250));
     let proving = activity.elapsed(at(300)).saturating_sub(baseline);
-    assert_eq!(at(300) - phase_start - proving, Duration::from_secs(50));
+    assert_eq!(
+        at(300)
+            .duration_since(phase_start)
+            .checked_sub(proving)
+            .expect("fixture proving duration"),
+        Duration::from_secs(50)
+    );
     activity.finish(at(310), true);
     let proving = activity.elapsed(at(350)).saturating_sub(baseline);
-    assert_eq!(at(350) - phase_start - proving, Duration::from_secs(90));
+    assert_eq!(
+        at(350)
+            .duration_since(phase_start)
+            .checked_sub(proving)
+            .expect("fixture proving duration"),
+        Duration::from_secs(90)
+    );
 
     // Busy, errors and skipped outputs restore all wall time to the idle allowance.
     activity.begin(at(350));
     activity.finish(at(360), false);
     let proving = activity.elapsed(at(380)).saturating_sub(baseline);
-    assert_eq!(at(380) - phase_start - proving, Duration::from_secs(120));
+    assert_eq!(
+        at(380)
+            .duration_since(phase_start)
+            .checked_sub(proving)
+            .expect("fixture proving duration"),
+        Duration::from_secs(120)
+    );
     activity.begin(at(380));
     activity.finish(at(390), false);
     let proving = activity.elapsed(at(390)).saturating_sub(baseline);
-    assert_eq!(at(390) - phase_start - proving, Duration::from_secs(130));
+    assert_eq!(
+        at(390)
+            .duration_since(phase_start)
+            .checked_sub(proving)
+            .expect("fixture proving duration"),
+        Duration::from_secs(130)
+    );
     activity.begin(at(390));
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -254,7 +278,7 @@ fn remove_original_tapes(chain: &CertifiedTestChain) -> BTreeMap<PathBuf, Vec<u8
     assert!(
         original_files
             .keys()
-            .all(|path| !path.extension().is_some_and(|ext| ext == "producer"))
+            .all(|path| path.extension().is_none_or(|ext| ext != "producer"))
     );
     original_files
 }
@@ -352,15 +376,14 @@ async fn publish_on_idle_worker(
     positions: &BTreeMap<Hash, (u64, usize)>,
     original_files: &BTreeMap<PathBuf, Vec<u8>>,
     engine: Arc<dyn FastpqProofEngine>,
-    produced: &AtomicUsize,
-    activity: &parking_lot::Mutex<ProofActivity>,
+    (produced, activity): (&AtomicUsize, &parking_lot::Mutex<ProofActivity>),
 ) -> BTreeMap<PathBuf, Vec<u8>> {
     // Restart uses only its own original startup seed, signed history and existing
     // timer/queue service. The sender stays open but never receives one work item.
-    let producer = WorkerProducer::new(Arc::clone(chain.state()), policy, seed);
+    let worker = WorkerProducer::new(Arc::clone(chain.state()), policy, seed);
     let started = Instant::now();
     let proof_baseline = activity.lock().elapsed(started);
-    let (_sender, shutdown, task) = start_idle_worker(producer, engine);
+    let (_sender, shutdown, task) = start_idle_worker(worker, engine);
     // Keep the existing 120-second finite allowance for idle wakes, replay and
     // publication. Real synchronous proving may exceed that wall time in debug
     // builds; it retains the original default structural work and memory policy.
@@ -404,7 +427,7 @@ async fn publish_on_idle_worker(
     );
     let without_artifacts: BTreeMap<_, _> = published
         .iter()
-        .filter(|(path, _)| !path.extension().is_some_and(|ext| ext == "producer"))
+        .filter(|(path, _)| path.extension().is_none_or(|ext| ext != "producer"))
         .map(|(path, bytes)| (path.clone(), bytes.clone()))
         .collect();
     assert_eq!(
@@ -576,8 +599,7 @@ async fn missing_nonempty_h1_h2_complete_real_proofs_and_recover_after_restart_w
         &positions,
         &original_files,
         Arc::clone(&engine),
-        &produced,
-        &activity,
+        (&produced, &activity),
     ))
     .await;
     Box::pin(verify_after_restart(

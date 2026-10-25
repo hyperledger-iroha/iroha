@@ -145,7 +145,7 @@ fn staking_component_fixture_owns_crypto_without_committed_genesis() {
         &crate::sumeragi::test_chain::crypto_fixture_policy(),
     );
 }
-pub(crate) fn staking_test_lane_catalog() -> LaneCatalog {
+pub fn staking_test_lane_catalog() -> LaneCatalog {
     // Each fixture lane represents a distinct staking authority. Provision only
     // the identities exercised below; unused lane storage adds no coverage.
     let lane_count = nonzero!(213_u32);
@@ -181,7 +181,7 @@ fn set_transaction_lane_catalog(stx: &mut StateTransaction<'_, '_>, lane_catalog
     stx.nexus.lane_config =
         iroha_config::parameters::actual::LaneConfig::from_catalog(&stx.nexus.lane_catalog);
 }
-pub(crate) fn register_peer_for_account(
+pub fn register_peer_for_account(
     stx: &mut StateTransaction<'_, '_>,
     account: &AccountId,
 ) -> iroha_model_base::peer::PeerId {

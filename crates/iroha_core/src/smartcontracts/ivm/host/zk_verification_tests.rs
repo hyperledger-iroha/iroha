@@ -21,7 +21,7 @@ fn enforce_zk_envelope_maps_errors_and_ok() {
     );
     let mut map = BTreeMap::new();
     map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-    host.set_verifying_keys(map).expect("set registry");
+    host.set_verifying_keys(&(map)).expect("set registry");
     let ok_env = dummy_env(
         circuit_id,
         commitment,
@@ -42,6 +42,8 @@ fn enforce_zk_envelope_maps_errors_and_ok() {
 }
 #[test]
 fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
+    type EnvelopeMutation = fn(&mut iroha_data_model::zk::OpenVerifyEnvelope);
+
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
@@ -64,8 +66,8 @@ fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
     );
     let mut map = BTreeMap::new();
     map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-    host.set_verifying_keys(map).expect("set registry");
-    let invalid_cases: [(&str, fn(&mut iroha_data_model::zk::OpenVerifyEnvelope), u64); 10] = [
+    host.set_verifying_keys(&(map)).expect("set registry");
+    let invalid_cases: [(&str, EnvelopeMutation, u64); 10] = [
         (
             "empty circuit id",
             |env| env.circuit_id.clear(),
@@ -174,7 +176,7 @@ fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
     );
     let mut map = BTreeMap::new();
     map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-    host.set_verifying_keys(map).expect("set registry");
+    host.set_verifying_keys(&(map)).expect("set registry");
     let env = dummy_env(
         circuit_id,
         commitment,
@@ -196,7 +198,7 @@ fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
     );
     let mut map = BTreeMap::new();
     map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-    host.set_verifying_keys(map).expect("set registry");
+    host.set_verifying_keys(&(map)).expect("set registry");
     host.set_current_manifest_id(Some("other".to_string()));
     assert_eq!(
         host.enforce_zk_envelope(&env, "transfer"),
@@ -225,7 +227,7 @@ fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
     );
     let mut map = BTreeMap::new();
     map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-    host.set_verifying_keys(map).expect("set registry");
+    host.set_verifying_keys(&(map)).expect("set registry");
     // Schema hash mismatch is rejected.
     let env = dummy_env(circuit_id, commitment, vec![5u8, 6, 7, 8], vec![0xAA; 16]);
     assert_eq!(
@@ -588,7 +590,7 @@ fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
     );
     let mut map = BTreeMap::new();
     map.insert(VerifyingKeyId::new(backend, "vk_stark"), rec);
-    host.set_verifying_keys(map).expect("set registry");
+    host.set_verifying_keys(&(map)).expect("set registry");
     let payload = norito::to_bytes(&vec![env]).expect("encode batch");
     let mut vm = IVM::new(50_000_000);
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
@@ -693,7 +695,7 @@ fn zk_verify_batch_reports_first_error_for_dummy_payloads() {
     );
     let mut map = BTreeMap::new();
     map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-    host.set_verifying_keys(map).expect("set registry");
+    host.set_verifying_keys(&(map)).expect("set registry");
     let env_bytes = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
     let env = ivm::host::decode_canonical_zk_envelope(&env_bytes).expect("decode envelope");
     let payload = norito::to_bytes(&vec![env]).expect("encode batch");
@@ -800,11 +802,8 @@ fn committed_native_proof_limit_accepts_exact_bound_and_rejects_one_more() {
             "transfer",
             vk_bytes.clone(),
         );
-        host.set_verifying_keys(BTreeMap::from([(
-            VerifyingKeyId::new(backend, "vk"),
-            record,
-        )]))
-        .expect("install registry");
+        host.set_verifying_keys(&(BTreeMap::from([(VerifyingKeyId::new(backend, "vk"), record)])))
+            .expect("install registry");
         host.set_zk_config(&block.zk);
         let at_limit = dummy_env(
             circuit_id,

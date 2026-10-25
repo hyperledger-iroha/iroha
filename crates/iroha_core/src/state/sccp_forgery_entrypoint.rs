@@ -80,22 +80,22 @@ impl StateTransaction<'_, '_> {
                         && self.current_network_entrypoint_hash == Some(binding.entrypoint_hash)
                         && self.current_entrypoint_index == Some(binding.index)
                         && self.tx_call_hash == Some(binding.call_hash)
-                        && match &binding.evidence {
-                            Some(evidence) => {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<SubmitSccpForgeryEvidenceV1>()
-                                    == Some(evidence)
-                            }
-                            None => {
+                        && binding.evidence.as_ref().map_or_else(
+                            || {
                                 instruction
                                     .as_any()
                                     .is::<iroha_data_model::isi::chain::Keepalive>()
                                     && crate::smartcontracts::isi::sccp::keepalive::valid_shape(
                                         signed.payload(),
                                     )
-                            }
-                        }
+                            },
+                            |evidence| {
+                                instruction
+                                    .as_any()
+                                    .downcast_ref::<SubmitSccpForgeryEvidenceV1>()
+                                    == Some(evidence)
+                            },
+                        )
                 });
     }
 

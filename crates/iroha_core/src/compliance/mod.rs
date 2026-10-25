@@ -57,24 +57,24 @@ const LANE_COMPLIANCE_POLICY_DECODE_ALLOCATION_MULTIPLIER: usize = 8;
 const LANE_COMPLIANCE_POLICY_DECODE_FIXED_ALLOCATION_BYTES: usize = 16 * 1024;
 #[derive(Clone, Copy)]
 struct LaneComplianceLoadLimits {
-    max_files: usize,
-    max_file_bytes: usize,
-    max_aggregate_bytes: usize,
-    max_field_bytes: usize,
-    max_sequence_elements: usize,
-    max_total_elements: usize,
-    max_decode_allocated_bytes: usize,
-    max_decode_depth: usize,
+    files: usize,
+    file_bytes: usize,
+    aggregate_bytes: usize,
+    field_bytes: usize,
+    sequence_elements: usize,
+    total_elements: usize,
+    decode_allocated_bytes: usize,
+    decode_depth: usize,
 }
 const LANE_COMPLIANCE_LOAD_LIMITS: LaneComplianceLoadLimits = LaneComplianceLoadLimits {
-    max_files: MAX_ACTIVE_EXECUTION_LANES,
-    max_file_bytes: LANE_COMPLIANCE_POLICY_MAX_BYTES,
-    max_aggregate_bytes: LANE_COMPLIANCE_POLICY_AGGREGATE_MAX_BYTES,
-    max_field_bytes: LANE_COMPLIANCE_POLICY_MAX_FIELD_BYTES,
-    max_sequence_elements: LANE_COMPLIANCE_POLICY_MAX_SEQUENCE_ELEMENTS,
-    max_total_elements: LANE_COMPLIANCE_POLICY_MAX_TOTAL_ELEMENTS,
-    max_decode_allocated_bytes: LANE_COMPLIANCE_POLICY_MAX_DECODE_ALLOCATED_BYTES,
-    max_decode_depth: LANE_COMPLIANCE_POLICY_MAX_DECODE_DEPTH,
+    files: MAX_ACTIVE_EXECUTION_LANES,
+    file_bytes: LANE_COMPLIANCE_POLICY_MAX_BYTES,
+    aggregate_bytes: LANE_COMPLIANCE_POLICY_AGGREGATE_MAX_BYTES,
+    field_bytes: LANE_COMPLIANCE_POLICY_MAX_FIELD_BYTES,
+    sequence_elements: LANE_COMPLIANCE_POLICY_MAX_SEQUENCE_ELEMENTS,
+    total_elements: LANE_COMPLIANCE_POLICY_MAX_TOTAL_ELEMENTS,
+    decode_allocated_bytes: LANE_COMPLIANCE_POLICY_MAX_DECODE_ALLOCATED_BYTES,
+    decode_depth: LANE_COMPLIANCE_POLICY_MAX_DECODE_DEPTH,
 };
 impl LaneComplianceEngine {
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -152,26 +152,26 @@ impl LaneComplianceEngine {
                 continue;
             }
             file_count = file_count.saturating_add(1);
-            if file_count > limits.max_files {
+            if file_count > limits.files {
                 return Err(LaneComplianceLoadError::FileCountExceeded {
                     actual: file_count,
-                    maximum: limits.max_files,
+                    maximum: limits.files,
                 });
             }
             if !file_type.is_file() || file_type.is_symlink() {
                 return Err(LaneComplianceLoadError::NotRegularFile(path));
             }
-            let bytes = read_bounded_policy_file(&path, limits.max_file_bytes)?;
+            let bytes = read_bounded_policy_file(&path, limits.file_bytes)?;
             let next_aggregate = aggregate_bytes.checked_add(bytes.len()).ok_or(
                 LaneComplianceLoadError::AggregateBytesExceeded {
                     actual: usize::MAX,
-                    maximum: limits.max_aggregate_bytes,
+                    maximum: limits.aggregate_bytes,
                 },
             )?;
-            if next_aggregate > limits.max_aggregate_bytes {
+            if next_aggregate > limits.aggregate_bytes {
                 return Err(LaneComplianceLoadError::AggregateBytesExceeded {
                     actual: next_aggregate,
-                    maximum: limits.max_aggregate_bytes,
+                    maximum: limits.aggregate_bytes,
                 });
             }
             aggregate_bytes = next_aggregate;
@@ -184,7 +184,7 @@ impl LaneComplianceEngine {
                 path: path.clone(),
                 source,
             })?;
-            insert_policy(&mut policies, policy, limits.max_files)?;
+            insert_policy(&mut policies, policy, limits.files)?;
         }
         if policies.is_empty() {
             return Err(LaneComplianceLoadError::Empty(dir.to_path_buf()));
@@ -356,13 +356,13 @@ fn lane_compliance_decode_limits(
     let allocation_budget = encoded_len
         .saturating_mul(LANE_COMPLIANCE_POLICY_DECODE_ALLOCATION_MULTIPLIER)
         .saturating_add(LANE_COMPLIANCE_POLICY_DECODE_FIXED_ALLOCATION_BYTES)
-        .min(limits.max_decode_allocated_bytes);
+        .min(limits.decode_allocated_bytes);
     DecodeLimits::new(
-        limits.max_sequence_elements.min(encoded_element_budget),
-        limits.max_field_bytes.min(encoded_len),
-        limits.max_total_elements.min(encoded_element_budget),
+        limits.sequence_elements.min(encoded_element_budget),
+        limits.field_bytes.min(encoded_len),
+        limits.total_elements.min(encoded_element_budget),
         allocation_budget,
-        limits.max_decode_depth,
+        limits.decode_depth,
     )
 }
 fn read_bounded_policy_file(
@@ -547,14 +547,13 @@ fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<
             _ => return false,
         }
     }
-    if let Some(tag) = selector.capability_tag.as_deref() {
-        if !ctx
+    if let Some(tag) = selector.capability_tag.as_deref()
+        && !ctx
             .capability_tags
             .iter()
             .any(|capability| capability == tag)
-        {
-            return false;
-        }
+    {
+        return false;
     }
     if !selector.privacy_commitments_any_of.is_empty() {
         let has_verified = selector
@@ -918,14 +917,14 @@ mod tests {
         }
     }
     fn test_load_limits(
-        max_files: usize,
-        max_file_bytes: usize,
-        max_aggregate_bytes: usize,
+        files: usize,
+        file_bytes: usize,
+        aggregate_bytes: usize,
     ) -> LaneComplianceLoadLimits {
         LaneComplianceLoadLimits {
-            max_files,
-            max_file_bytes,
-            max_aggregate_bytes,
+            files,
+            file_bytes,
+            aggregate_bytes,
             ..LANE_COMPLIANCE_LOAD_LIMITS
         }
     }
@@ -1027,7 +1026,7 @@ mod tests {
             }
         ));
         assert_eq!(
-            LANE_COMPLIANCE_LOAD_LIMITS.max_files, MAX_ACTIVE_EXECUTION_LANES,
+            LANE_COMPLIANCE_LOAD_LIMITS.files, MAX_ACTIVE_EXECUTION_LANES,
             "production file capacity must follow the protocol active-lane bound"
         );
     }
@@ -1084,7 +1083,7 @@ mod tests {
             &sample_policy(LaneId::SINGLE, &[alpha, beta], &[]),
         );
         let mut limits = test_load_limits(1, bytes.len(), bytes.len());
-        limits.max_sequence_elements = 1;
+        limits.sequence_elements = 1;
         let error =
             LaneComplianceEngine::from_directory_with_limits(directory.path(), false, limits)
                 .expect_err("two-rule policy must exceed one-element decode limit");

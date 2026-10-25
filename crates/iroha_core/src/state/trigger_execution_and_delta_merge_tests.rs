@@ -885,6 +885,18 @@ fn generic_trigger_resolution_retains_original_allocation_refusal() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let block = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(1).unwrap());
         header.creation_time_ms = 1;
@@ -1068,7 +1080,10 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
     };
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query_handle);
+    // Initial accounts precede signed genesis; its policy remains uninitialized.
+    let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+    let state = State::new(world, kura, query_handle);
+    assert!(state.world.parameters.view().crypto_policy().is_none());
     let block1 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(1).unwrap());
         h.creation_time_ms = 1;
@@ -1080,9 +1095,6 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
     ))
     .execute(&ALICE_ID, &mut stx)
     .unwrap();
-    Register::account(new_sample_account(&ALICE_ID))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
     let trigger_id: TriggerId = "ivm_time_cache".parse().unwrap();
     let mut raw = Vec::new();
     raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -1275,6 +1287,18 @@ fn execute_called_trigger_fails_closed_on_missing_bytecode_with_warm_prepared_ar
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(World::default(), kura, query_handle);
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let trigger_id: TriggerId = "missing_bytecode_by_call".parse().unwrap();
     let program = kotodama_lang::compiler::Compiler::new()
         .compile_source(
@@ -1372,6 +1396,18 @@ fn execute_trigger_isi_rejects_depleted_entry_and_prunes_trigger() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let trigger_id: TriggerId = "depleted_by_call".parse().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
@@ -1462,6 +1498,18 @@ fn execute_called_trigger_rejects_disabled_trigger() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let trigger_id: TriggerId = "disabled_by_call".parse().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
@@ -1531,6 +1579,18 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let trigger_id: TriggerId = "numeric_zero_by_call".parse().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
@@ -1611,6 +1671,18 @@ fn execute_called_trigger_rejects_malformed_enabled_trigger() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let trigger_id: TriggerId = "malformed_enabled_by_call".parse().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
@@ -1689,6 +1761,18 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let trigger_id: TriggerId = "disabled_data_trigger".parse().unwrap();
     let flag_key: Name = "flag".parse().expect("valid name");
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
@@ -1769,6 +1853,18 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let numeric_trigger_id: TriggerId = "numeric_zero_data_trigger".parse().unwrap();
     let malformed_trigger_id: TriggerId = "malformed_enabled_data_trigger".parse().unwrap();
     let numeric_flag: Name = "numeric_data_flag".parse().expect("valid name");
@@ -1880,6 +1976,18 @@ fn depleted_data_trigger_is_pruned_before_event_scan_without_mutating_state() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let trigger_id: TriggerId = "depleted_data_trigger".parse().unwrap();
     let flag_key: Name = "depleted_data_flag".parse().expect("valid name");
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
@@ -1959,6 +2067,18 @@ fn execute_data_triggers_dfs_clears_events_without_triggers() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -2233,6 +2353,18 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(World::default(), kura, query_handle);
+    // Component account registration requires an explicit original policy.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let trigger_id: TriggerId = "missing_bytecode_data".parse().unwrap();
     let mut raw = Vec::new();
     raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());

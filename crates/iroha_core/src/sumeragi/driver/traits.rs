@@ -473,6 +473,10 @@ pub trait Executor: Send {
     /// # Errors
     /// An unfinished local attempt transfers its exact owner to the driver's retained job.
     /// It emits no completed execution event; consuming custody failure requires recovery.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn execute(
         &mut self,
         block: &AvailableBody,
@@ -489,6 +493,10 @@ pub trait Executor: Send {
     /// # Errors
     /// A retryable refusal retains the original owner. A consuming failure or unwind requires
     /// recovery; the driver halts instead of preparing or executing again.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn prepare(
         &mut self,
         block: &AvailableBody,
@@ -504,6 +512,10 @@ pub trait Executor: Send {
     /// # Errors
     /// A retryable refusal retains the original owner. A consuming failure requires recovery;
     /// the driver halts and never reports a successful apply for it.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn commit(
         &mut self,
         block: &AvailableBody,
@@ -514,6 +526,10 @@ pub trait Executor: Send {
     ///
     /// # Errors
     /// Local refusal/awaiting shares is retryable; a lost owner requires recovery.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn build_control_witness(
         &mut self,
         context: &iroha_sumeragi::api::ControlWitnessContext,
@@ -523,6 +539,10 @@ pub trait Executor: Send {
     ///
     /// # Errors
     /// Revalidate the complete source against State; never trust caller-supplied parent result.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn drive_control(
         &mut self,
         context: &iroha_sumeragi::api::ApplicationControlContext,
@@ -531,6 +551,10 @@ pub trait Executor: Send {
     ///
     /// # Errors
     /// The application verifies sender/index, exact source/session and the partial signature.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn receive_application_control(
         &mut self,
         from: &PublicKey,
@@ -542,6 +566,10 @@ pub trait Executor: Send {
     ///
     /// # Errors
     /// A local refusal retains the exact source and completed encoding for retry.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn build(
         &mut self,
         height: u64,
@@ -554,6 +582,10 @@ pub trait Executor: Send {
     ///
     /// # Errors
     /// A local refusal retains the body for retry; lost custody requires recovery.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn recover_proposal_admission(
         &mut self,
         body: &AvailableBody,

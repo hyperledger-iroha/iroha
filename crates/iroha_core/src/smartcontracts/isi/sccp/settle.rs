@@ -337,19 +337,21 @@ fn release_inbound(
         false
     };
     let credits = release_credits(&account, net, sink.as_ref(), fee);
-    for (to, value, reason) in &credits {
-        if escrow::precheck_release(state_transaction, network, to, *value).is_err() {
-            return hold_inbound(
-                state_transaction,
-                message_id,
-                record,
-                *reason,
-                registered_now,
-            );
-        }
+    let ordered_credits = credits.map(|credit| credit.map(|(to, value, _)| (to, value)));
+    if let Err((index, _)) = escrow::precheck_releases(state_transaction, network, &ordered_credits)
+    {
+        return hold_inbound(
+            state_transaction,
+            message_id,
+            record,
+            credits[index]
+                .expect("a refused credit occupies its ordered slot")
+                .2,
+            registered_now,
+        );
     }
-    for (to, value, _) in credits {
-        escrow::release(state_transaction, network, &to, value, message_id)?;
+    for (to, value, _) in credits.into_iter().flatten() {
+        escrow::release(state_transaction, network, to, value, message_id)?;
     }
     debit_liability(state_transaction, network, revision, amount)?;
     adjust_pending(state_transaction, (network, revision), -1, 0)?;
@@ -378,29 +380,31 @@ fn release_inbound(
 
 /// The escrow credits of a release of `net` to `account` and `fee` to the fee `sink`, each
 /// with the hold reason its refusal maps to. Zero credits are skipped, and a sink that is the
-/// recipient itself receives one combined credit.
-fn release_credits(
-    account: &AccountId,
+/// recipient itself receives one combined credit. The two compact slots borrow the original
+/// accounts; an empty slot never precedes an occupied one.
+fn release_credits<'a>(
+    account: &'a AccountId,
     net: u128,
-    sink: Option<&AccountId>,
+    sink: Option<&'a AccountId>,
     fee: u128,
-) -> Vec<(AccountId, u128, SccpPendingReasonV1)> {
-    let mut credits = Vec::with_capacity(2);
+) -> [Option<(&'a AccountId, u128, SccpPendingReasonV1)>; 2] {
     if sink == Some(account) {
-        credits.push((
-            account.clone(),
-            net.saturating_add(fee),
-            SccpPendingReasonV1::CreditRefused,
-        ));
-        return credits;
+        return [
+            Some((
+                account,
+                net.saturating_add(fee),
+                SccpPendingReasonV1::CreditRefused,
+            )),
+            None,
+        ];
     }
-    if net > 0 {
-        credits.push((account.clone(), net, SccpPendingReasonV1::CreditRefused));
-    }
-    if let Some(sink) = sink.filter(|_| fee > 0) {
-        credits.push((sink.clone(), fee, SccpPendingReasonV1::FeeSinkUnavailable));
-    }
-    credits
+    let recipient = (net > 0).then_some((account, net, SccpPendingReasonV1::CreditRefused));
+    let fee_credit = sink
+        .filter(|_| fee > 0)
+        .map(|sink| (sink, fee, SccpPendingReasonV1::FeeSinkUnavailable));
+    recipient.map_or([fee_credit, None], |recipient| {
+        [Some(recipient), fee_credit]
+    })
 }
 
 /// Bounce the inbound message `message_id` back to its source-chain sender (§4.12.5), or hold

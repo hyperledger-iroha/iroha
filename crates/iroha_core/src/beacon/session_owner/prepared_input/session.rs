@@ -5,7 +5,7 @@ use common::*;
 use finish::Ledger;
 use inline::InlineValue;
 use iroha_data_model::{consensus::GlobalThresholdBeaconDkgSessionV1, id::NetworkId};
-use rows::{Acceptance, Dealer, Edge, Recipient};
+use rows::{Acceptance, Edge, PreparedDealer, PreparedRecipient};
 use sequence::Rows;
 
 /// The nested transcript has its own generated canonical record traversal.
@@ -13,8 +13,8 @@ struct Transcript {
     session: GlobalThresholdBeaconDkgSessionV1,
     generator_h: [u8; 96],
     generator_v: [u8; 96],
-    dealers: Rows<Dealer>,
-    recipients: Rows<Recipient>,
+    dealers: Rows<PreparedDealer>,
+    recipients: Rows<PreparedRecipient>,
     edges: Rows<Edge>,
     acceptances: Rows<Acceptance>,
     qualified: CopySequence<u16>,
@@ -34,9 +34,11 @@ impl Transcript {
             session,
             generator_h: [0; 96],
             generator_v: [0; 96],
-            dealers: Rows::new(n, budget, |_| Dealer::new(session.threshold, budget))?,
+            dealers: Rows::new(n, budget, |_| {
+                PreparedDealer::new(session.threshold, budget)
+            })?,
             recipients: Rows::new(n, budget, |index| {
-                Recipient::new(roster[index].public_key(), budget)
+                PreparedRecipient::new(roster[index].public_key(), budget)
             })?,
             edges: Rows::new(edges, budget, |_| Edge::new(budget))?,
             acceptances: Rows::new(edges, budget, |_| Acceptance::new(budget))?,
@@ -157,8 +159,8 @@ impl SerializePayload for Transcript {
             session: PayloadRef<'a, GlobalThresholdBeaconDkgSessionV1>,
             generator_h: [u8; 96],
             generator_v: [u8; 96],
-            dealers: PayloadRef<'a, Rows<Dealer>>,
-            recipients: PayloadRef<'a, Rows<Recipient>>,
+            dealers: PayloadRef<'a, Rows<PreparedDealer>>,
+            recipients: PayloadRef<'a, Rows<PreparedRecipient>>,
             edges: PayloadRef<'a, Rows<Edge>>,
             acceptances: PayloadRef<'a, Rows<Acceptance>>,
             qualified: PayloadRef<'a, CopySequence<u16>>,
@@ -187,7 +189,7 @@ impl SerializePayload for Transcript {
 }
 
 /// One independently prepared final public graph. Ledger follows the payload fields.
-pub(super) struct Session {
+pub(super) struct PreparedSession {
     version: u16,
     network_id: NetworkId,
     session_id: [u8; 32],
@@ -204,7 +206,7 @@ pub(super) struct Session {
     ready: bool,
     canonical: bool,
 }
-impl Session {
+impl PreparedSession {
     pub(super) fn new(
         session: GlobalThresholdBeaconDkgSessionV1,
         roster: &[PeerId],
@@ -288,6 +290,10 @@ impl Session {
         self.canonical = true;
         Ok(())
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failed sealing returns the original paid secret or session owner without a new fallible allocation"
+    )]
     pub(super) fn finish(self) -> Result<RetainedPayload<GlobalThresholdBeaconKeySessionV1>, Self> {
         if !self.canonical || !self.ready || !self.shares.ready() || !self.transcript.ready() {
             return Err(self);
@@ -309,18 +315,23 @@ impl Session {
         Ok(ledger.finish(payload, &self.budget))
     }
 }
-impl FieldDestination for Session {
+impl FieldDestination for PreparedSession {
     type Error = DestinationError;
 }
-scalar!(Session, 0, version, u16);
-scalar!(Session, 1, network_id, NetworkId);
-scalar!(Session, 2, session_id, [u8; 32]);
-scalar!(Session, 3, roster_hash, [u8; 32]);
-scalar!(Session, 4, committee_size, u16);
-scalar!(Session, 5, threshold, u16);
-scalar!(Session, 6, group_public_key, [u8; 96]);
-sequence!(Session, 7, shares, GlobalThresholdBeaconPublicShareV1);
-impl DecodeField<8, GlobalThresholdBeaconDkgTranscriptV1> for Session {
+scalar!(PreparedSession, 0, version, u16);
+scalar!(PreparedSession, 1, network_id, NetworkId);
+scalar!(PreparedSession, 2, session_id, [u8; 32]);
+scalar!(PreparedSession, 3, roster_hash, [u8; 32]);
+scalar!(PreparedSession, 4, committee_size, u16);
+scalar!(PreparedSession, 5, threshold, u16);
+scalar!(PreparedSession, 6, group_public_key, [u8; 96]);
+sequence!(
+    PreparedSession,
+    7,
+    shares,
+    GlobalThresholdBeaconPublicShareV1
+);
+impl DecodeField<8, GlobalThresholdBeaconDkgTranscriptV1> for PreparedSession {
     type Value = ();
     fn decode_field(
         &mut self,
@@ -329,8 +340,8 @@ impl DecodeField<8, GlobalThresholdBeaconDkgTranscriptV1> for Session {
         field.with_payload(|bytes| self.transcript.decode(bytes))
     }
 }
-scalar!(Session, 9, dkg_contribution_hash, [u8; 32]);
-impl DecodeField<10, [u8; 32]> for Session {
+scalar!(PreparedSession, 9, dkg_contribution_hash, [u8; 32]);
+impl DecodeField<10, [u8; 32]> for PreparedSession {
     type Value = ();
     fn decode_field(&mut self, field: CanonicalField<'_, [u8; 32]>) -> DecodeResult<()> {
         self.transcript_hash = field.decode_owned()?;
@@ -338,7 +349,7 @@ impl DecodeField<10, [u8; 32]> for Session {
         Ok(())
     }
 }
-impl PreparedRecordDestination<GlobalThresholdBeaconKeySessionV1> for Session {
+impl PreparedRecordDestination<GlobalThresholdBeaconKeySessionV1> for PreparedSession {
     fn reset(&mut self) {
         self.ready = false;
         self.canonical = false;
@@ -346,7 +357,7 @@ impl PreparedRecordDestination<GlobalThresholdBeaconKeySessionV1> for Session {
         self.transcript.reset();
     }
 }
-impl SerializePayload for Session {
+impl SerializePayload for PreparedSession {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::Error> {
         #[derive(norito::NoritoSerialize)]
         struct View<'a> {

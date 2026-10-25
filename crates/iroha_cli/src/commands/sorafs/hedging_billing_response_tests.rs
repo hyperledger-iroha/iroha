@@ -18,7 +18,7 @@ fn exact_checkpoint_page_response(
         .body(norito::json::to_vec(&Value::Object(page)).expect("encode exact-checkpoint page"))
         .expect("exact-checkpoint response")
 }
-fn assert_payload_free_binding_error(error: eyre::Report, expected: &str) {
+fn assert_payload_free_binding_error(error: &eyre::Report, expected: &str) {
     let message = error.to_string();
     assert_eq!(message, expected);
     assert!(!message.contains("DO_NOT_ECHO"));
@@ -38,7 +38,7 @@ fn billing_statements_cli_rejects_missing_response_anchor_without_output() {
         })
         .expect_err("missing response anchor must fail closed");
     assert_payload_free_binding_error(
-        error,
+        &(error),
         "SoraFS hedging/billing exact-checkpoint response is missing anchor.checkpoint_fingerprint",
     );
     assert!(context.printed.is_empty());
@@ -62,7 +62,7 @@ fn hedging_projection_cli_rejects_mismatched_and_wrong_case_anchors_without_outp
             })
             .expect_err("mismatched or lowercase response anchor must fail closed");
         assert_payload_free_binding_error(
-            error,
+            &(error),
             "SoraFS hedging/billing exact-checkpoint response anchor does not match the request",
         );
         assert!(context.printed.is_empty());
@@ -96,7 +96,7 @@ fn exact_checkpoint_cli_rejects_ambiguous_json_media_type_without_output() {
         })
         .expect_err("ambiguous JSON media type must fail closed");
     assert_payload_free_binding_error(
-        error,
+        &(error),
         "SoraFS hedging/billing exact-checkpoint response must use application/json",
     );
     assert!(context.printed.is_empty());
@@ -120,7 +120,7 @@ fn exact_checkpoint_cli_rejects_non_ok_without_echoing_response() {
         })
         .expect_err("non-OK response must fail closed");
     assert_payload_free_binding_error(
-        error,
+        &(error),
         "SoraFS hedging/billing exact-checkpoint response returned status 409 Conflict",
     );
     assert!(context.printed.is_empty());

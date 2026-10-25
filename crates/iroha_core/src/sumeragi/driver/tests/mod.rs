@@ -51,7 +51,7 @@ pub(super) fn block(
     height: u64,
     parent: Hash32,
     parent_result: Hash32,
-    payload: Vec<u8>,
+    payload: &[u8],
 ) -> AvailableBody {
     assert!(
         !payload.is_empty(),
@@ -71,7 +71,7 @@ pub(super) fn block(
         origin_view: 0,
         parent_hash: parent,
         parent_result,
-        payload_hash: payload_hash(&validators.crypto, &payload),
+        payload_hash: payload_hash(&validators.crypto, payload),
         availability_digest: Hash32::ZERO,
         payload_len: u32::try_from(payload.len()).unwrap(),
         proposer: 0,
@@ -79,7 +79,7 @@ pub(super) fn block(
     };
     iroha_sumeragi::testing::author_body(
         header,
-        &payload,
+        payload,
         &config,
         &test_budget(),
         &validators.crypto,

@@ -239,19 +239,19 @@ pub enum RoutingResolveError {
         /// Bounded deterministic model validation error.
         reason: &'static str,
     },
-    /// lane {lane_id} is not present in the lane catalog
+    /// lane {`lane_id`} is not present in the lane catalog
     #[error("lane {lane_id} is not present in the lane catalog")]
     UnknownLane {
         /// Lane selected by the routing policy.
         lane_id: LaneId,
     },
-    /// dataspace {dataspace_id} is not present in the dataspace catalog
+    /// dataspace {`dataspace_id`} is not present in the dataspace catalog
     #[error("dataspace {dataspace_id} is not present in the dataspace catalog")]
     UnknownDataspace {
         /// Dataspace selected by the routing policy.
         dataspace_id: DataSpaceId,
     },
-    /// lane {lane_id} is bound to dataspace {lane_dataspace_id}, but resolved dataspace is {dataspace_id}
+    /// lane {`lane_id`} is bound to dataspace {`lane_dataspace_id`}, but resolved dataspace is {`dataspace_id`}
     #[error(
         "lane {lane_id} is bound to dataspace {lane_dataspace_id}, but resolved dataspace is {dataspace_id}"
     )]
@@ -263,7 +263,7 @@ pub enum RoutingResolveError {
         /// Dataspace selected by the routing policy.
         dataspace_id: DataSpaceId,
     },
-    /// lane {lane_id} is not active for dataspace {dataspace_id} at the current block height
+    /// lane {`lane_id`} is not active for dataspace {`dataspace_id`} at the current block height
     #[error(
         "lane {lane_id} is not active for dataspace {dataspace_id} at the current block height"
     )]
@@ -273,13 +273,13 @@ pub enum RoutingResolveError {
         /// Dataspace selected by the routing policy.
         dataspace_id: DataSpaceId,
     },
-    /// no lane is bound to dataspace {dataspace_id}
+    /// no lane is bound to dataspace {`dataspace_id`}
     #[error("no lane is bound to dataspace {dataspace_id}")]
     NoLaneForDataspace {
         /// Dataspace selected by the routing policy.
         dataspace_id: DataSpaceId,
     },
-    /// routing rule lane {lane_id} uses reserved autoscale metadata and cannot be an explicit rule target
+    /// routing rule lane {`lane_id`} uses reserved autoscale metadata and cannot be an explicit rule target
     #[error(
         "routing rule lane {lane_id} uses reserved autoscale metadata and cannot be an explicit rule target"
     )]
@@ -287,7 +287,7 @@ pub enum RoutingResolveError {
         /// Lane selected by the matched routing rule.
         lane_id: LaneId,
     },
-    /// default lane {lane_id} uses reserved autoscale metadata and cannot be the default route anchor
+    /// default lane {`lane_id`} uses reserved autoscale metadata and cannot be the default route anchor
     #[error(
         "default lane {lane_id} uses reserved autoscale metadata and cannot be the default route anchor"
     )]
@@ -295,7 +295,7 @@ pub enum RoutingResolveError {
         /// Lane selected by the default routing policy.
         lane_id: LaneId,
     },
-    /// transaction mixes dataspace-scoped permission targets {first_dataspace_id} and {second_dataspace_id}
+    /// transaction mixes dataspace-scoped permission targets {`first_dataspace_id`} and {`second_dataspace_id`}
     #[error(
         "transaction mixes dataspace-scoped permission targets {first_dataspace_id} and {second_dataspace_id}"
     )]
@@ -305,7 +305,7 @@ pub enum RoutingResolveError {
         /// Conflicting dataspace target found in the transaction.
         second_dataspace_id: DataSpaceId,
     },
-    /// transaction mixes dataspace-routed write targets {first_dataspace_id} and {second_dataspace_id}
+    /// transaction mixes dataspace-routed write targets {`first_dataspace_id`} and {`second_dataspace_id`}
     #[error(
         "transaction mixes dataspace-routed write targets {first_dataspace_id} and {second_dataspace_id}"
     )]
@@ -378,21 +378,28 @@ pub enum RoutingResolveError {
 
 /// Assert every field of a completed routing verdict without comparing local owners.
 #[cfg(test)]
-pub(crate) fn assert_completed_routing_error_eq(
+pub fn assert_completed_routing_error_eq(
     actual: &RoutingResolveError,
     expected: &RoutingResolveError,
     context: core::fmt::Arguments<'_>,
 ) {
     use RoutingResolveError::*;
     match (actual, expected) {
-        (UnauthenticatedRootScope, UnauthenticatedRootScope) => {}
         (
             InvalidAtomicSettlement { reason: a_reason },
             InvalidAtomicSettlement { reason: b_reason },
         ) => {
             assert_eq!(a_reason, b_reason, "{context}: reason");
         }
-        (UnknownLane { lane_id: a_lane_id }, UnknownLane { lane_id: b_lane_id }) => {
+        (UnknownLane { lane_id: a_lane_id }, UnknownLane { lane_id: b_lane_id })
+        | (
+            AutoscaleOwnedRuleLane { lane_id: a_lane_id },
+            AutoscaleOwnedRuleLane { lane_id: b_lane_id },
+        )
+        | (
+            AutoscaleOwnedDefaultLane { lane_id: a_lane_id },
+            AutoscaleOwnedDefaultLane { lane_id: b_lane_id },
+        ) => {
             assert_eq!(a_lane_id, b_lane_id, "{context}: lane_id");
         }
         (
@@ -400,6 +407,14 @@ pub(crate) fn assert_completed_routing_error_eq(
                 dataspace_id: a_dataspace_id,
             },
             UnknownDataspace {
+                dataspace_id: b_dataspace_id,
+            },
+        )
+        | (
+            NoLaneForDataspace {
+                dataspace_id: a_dataspace_id,
+            },
+            NoLaneForDataspace {
                 dataspace_id: b_dataspace_id,
             },
         ) => {
@@ -438,28 +453,6 @@ pub(crate) fn assert_completed_routing_error_eq(
             assert_eq!(a_dataspace_id, b_dataspace_id, "{context}: dataspace_id");
         }
         (
-            NoLaneForDataspace {
-                dataspace_id: a_dataspace_id,
-            },
-            NoLaneForDataspace {
-                dataspace_id: b_dataspace_id,
-            },
-        ) => {
-            assert_eq!(a_dataspace_id, b_dataspace_id, "{context}: dataspace_id");
-        }
-        (
-            AutoscaleOwnedRuleLane { lane_id: a_lane_id },
-            AutoscaleOwnedRuleLane { lane_id: b_lane_id },
-        ) => {
-            assert_eq!(a_lane_id, b_lane_id, "{context}: lane_id");
-        }
-        (
-            AutoscaleOwnedDefaultLane { lane_id: a_lane_id },
-            AutoscaleOwnedDefaultLane { lane_id: b_lane_id },
-        ) => {
-            assert_eq!(a_lane_id, b_lane_id, "{context}: lane_id");
-        }
-        (
             ConflictingDataspaceScopedPermissions {
                 first_dataspace_id: a_first_dataspace_id,
                 second_dataspace_id: a_second_dataspace_id,
@@ -468,17 +461,8 @@ pub(crate) fn assert_completed_routing_error_eq(
                 first_dataspace_id: b_first_dataspace_id,
                 second_dataspace_id: b_second_dataspace_id,
             },
-        ) => {
-            assert_eq!(
-                a_first_dataspace_id, b_first_dataspace_id,
-                "{context}: first_dataspace_id"
-            );
-            assert_eq!(
-                a_second_dataspace_id, b_second_dataspace_id,
-                "{context}: second_dataspace_id"
-            );
-        }
-        (
+        )
+        | (
             ConflictingTransactionDataspaceTargets {
                 first_dataspace_id: a_first_dataspace_id,
                 second_dataspace_id: a_second_dataspace_id,
@@ -517,12 +501,8 @@ pub(crate) fn assert_completed_routing_error_eq(
             FxCorridorPolicyStateUnavailable {
                 policy_id: b_policy_id,
             },
-        ) => {
-            assert_eq!(a_policy_id, b_policy_id, "{context}: policy_id");
-        }
-        (FxCorridorPolicyRegistryMissing, FxCorridorPolicyRegistryMissing) => {}
-        (FxCorridorPolicyRegistryMalformed, FxCorridorPolicyRegistryMalformed) => {}
-        (
+        )
+        | (
             FxCorridorPolicyNotFound {
                 policy_id: a_policy_id,
             },
@@ -561,7 +541,10 @@ pub(crate) fn assert_completed_routing_error_eq(
             assert_eq!(a_account, b_account, "{context}: account");
             assert_eq!(a_proposal_id, b_proposal_id, "{context}: proposal_id");
         }
-        (StaleRoutingPlan, StaleRoutingPlan) => {}
+        (UnauthenticatedRootScope, UnauthenticatedRootScope)
+        | (FxCorridorPolicyRegistryMissing, FxCorridorPolicyRegistryMissing)
+        | (FxCorridorPolicyRegistryMalformed, FxCorridorPolicyRegistryMalformed)
+        | (StaleRoutingPlan, StaleRoutingPlan) => {}
         (
             OrdinaryRouteUnavailable { reason: a_reason },
             OrdinaryRouteUnavailable { reason: b_reason },
@@ -2746,9 +2729,7 @@ fn merge_top_level_instruction_dataspace_target_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     top_level_instruction_index: usize,
     same_transaction_multisig_proposals: &[SameTransactionMultisigProposalTarget],
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    world: &W,
-    ledger_time_ms: Option<u64>,
+    (dataspace_catalog, world, ledger_time_ms): (Option<&DataSpaceCatalog>, &W, Option<u64>),
     reject_cross_dataspace: bool,
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<(), RoutingResolveError> {
@@ -2913,9 +2894,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
                     &**instruction,
                     top_level_instruction_index,
                     &same_transaction_multisig_proposals,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
+                    (dataspace_catalog, world, ledger_time_ms),
                     reject_cross_dataspace,
                     &fx_overlay,
                 )?;
@@ -2939,9 +2918,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
                             &**instruction,
                             top_level_instruction_index,
                             &same_transaction_multisig_proposals,
-                            dataspace_catalog,
-                            world,
-                            ledger_time_ms,
+                            (dataspace_catalog, world, ledger_time_ms),
                             reject_cross_dataspace,
                             &fx_overlay,
                         )?;
@@ -2977,9 +2954,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
                     &**instruction,
                     top_level_instruction_index,
                     &same_transaction_multisig_proposals,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
+                    (dataspace_catalog, world, ledger_time_ms),
                     reject_cross_dataspace,
                     &fx_overlay,
                 )?;
@@ -2997,7 +2972,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
 }
 
 /// Native scope carried by a transaction before logical lane sharding.
-pub(crate) struct NativeExecutionTarget {
+pub struct NativeExecutionTarget {
     /// Concrete application scope, when the executable supplies one.
     pub dataspace: Option<DataSpaceId>,
     /// Registry/control-plane instructions and cross-dataspace coordinators use lane zero.
@@ -3007,7 +2982,7 @@ pub(crate) struct NativeExecutionTarget {
 /// Resolve the native instruction/address scope without treating the authority's aliases as
 /// ownership of all of its transactions. Control-plane batches stay on the global chain so a
 /// new dataspace can register its bootstrap grant and name before its lane is active.
-pub(crate) fn native_execution_target<W: WorldReadOnly>(
+pub fn native_execution_target<W: WorldReadOnly>(
     tx: &dyn TransactionRoutingView,
     dataspaces: &DataSpaceCatalog,
     world: &W,
@@ -3055,7 +3030,7 @@ pub(crate) fn native_execution_target<W: WorldReadOnly>(
 }
 /// Resolve an actually executed instruction using the same native scope rules as admission.
 /// Deferred multisig bodies and composite settlement legs retain their coordinator identity.
-pub(crate) fn native_instruction_execution_target<W: WorldReadOnly>(
+pub fn native_instruction_execution_target<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspaces: &DataSpaceCatalog,
     world: &W,
@@ -3068,9 +3043,7 @@ pub(crate) fn native_instruction_execution_target<W: WorldReadOnly>(
         instruction,
         0,
         &[],
-        Some(dataspaces),
-        world,
-        Some(ledger_time_ms),
+        (Some(dataspaces), world, Some(ledger_time_ms)),
         false,
         &fx_overlay,
     )?;
@@ -3111,7 +3084,7 @@ pub(crate) fn native_instruction_execution_target<W: WorldReadOnly>(
 /// Resolve one instruction solely for an authenticated original private genesis source.
 /// Private genesis initializes its own alias registry; ordinary alias acquisition remains global.
 /// This classification grants no authority: callers must retain the original genesis capability.
-pub(crate) fn private_genesis_instruction_target<W: WorldReadOnly>(
+pub fn private_genesis_instruction_target<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspaces: &DataSpaceCatalog,
     world: &W,
@@ -3144,7 +3117,7 @@ pub(crate) fn private_genesis_instruction_target<W: WorldReadOnly>(
 /// per-dataspace legs that make a native transaction require a coordinator
 /// route so block commitments can expose deterministic prepare/commit evidence.
 #[cfg(test)]
-pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
+pub fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
     tx: &dyn TransactionRoutingView,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
@@ -3180,9 +3153,7 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
                     &**instruction,
                     top_level_instruction_index,
                     &same_transaction_multisig_proposals,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
+                    (dataspace_catalog, world, ledger_time_ms),
                     &mut dataspaces,
                     &fx_overlay,
                     &mut multisig_stack,
@@ -3211,9 +3182,7 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
                             &**instruction,
                             top_level_instruction_index,
                             &same_transaction_multisig_proposals,
-                            dataspace_catalog,
-                            world,
-                            ledger_time_ms,
+                            (dataspace_catalog, world, ledger_time_ms),
                             &mut dataspaces,
                             &fx_overlay,
                             &mut multisig_stack,
@@ -3243,9 +3212,7 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
                     &**instruction,
                     top_level_instruction_index,
                     &same_transaction_multisig_proposals,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
+                    (dataspace_catalog, world, ledger_time_ms),
                     &mut dataspaces,
                     &fx_overlay,
                     &mut multisig_stack,
@@ -3266,9 +3233,7 @@ fn collect_top_level_instruction_native_amx_participants<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     top_level_instruction_index: usize,
     same_transaction_multisig_proposals: &[SameTransactionMultisigProposalTarget],
-    dataspace_catalog: &DataSpaceCatalog,
-    world: &W,
-    ledger_time_ms: Option<u64>,
+    (dataspace_catalog, world, ledger_time_ms): (&DataSpaceCatalog, &W, Option<u64>),
     dataspaces: &mut BTreeSet<DataSpaceId>,
     fx_overlay: &FxCorridorRoutingOverlay,
     stack: &mut MultisigProposalRoutingStack,
@@ -3749,9 +3714,7 @@ enum AccountPermissionHolderTarget<'account> {
     Abort,
 }
 fn account_permission_holder_routing_target(tx: &dyn TransactionRoutingView) -> Option<&AccountId> {
-    let Some(executable) = transaction_executable(tx) else {
-        return None;
-    };
+    let executable = transaction_executable(tx)?;
     match executable {
         Executable::Instructions(instructions) => account_permission_holder_from_instructions(
             instructions.iter().map(|instruction| &**instruction),
@@ -7104,10 +7067,10 @@ fn authority_dataspace_target_with_world<W: WorldReadOnly>(
     if transaction_registers_only_unlabeled_accounts(tx)? {
         return Ok(None);
     }
-    match tx.authority_opt() {
-        Some(authority) => account_dataspace_target(world, authority, ledger_time_ms),
-        None => Ok(None),
-    }
+    tx.authority_opt().map_or_else(
+        || Ok(None),
+        |authority| account_dataspace_target(world, authority, ledger_time_ms),
+    )
 }
 fn domain_dataspace_target_with_state(
     domain_id: &DomainId,
@@ -7453,12 +7416,13 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     }
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return match settlement {
-            SettlementInstructionBox::Atomic(_) => false,
-            SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => true,
-            SettlementInstructionBox::SetFxCorridorPolicy(_) => false,
-            SettlementInstructionBox::FundFxCorridorEscrow(_)
+            SettlementInstructionBox::Dvp(_)
+            | SettlementInstructionBox::Pvp(_)
+            | SettlementInstructionBox::FundFxCorridorEscrow(_)
             | SettlementInstructionBox::RefundFxCorridorEscrow(_)
             | SettlementInstructionBox::SettleFxCorridor(_) => true,
+            SettlementInstructionBox::Atomic(_)
+            | SettlementInstructionBox::SetFxCorridorPolicy(_) => false,
         };
     }
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
@@ -7610,8 +7574,7 @@ fn asset_definition_dataspace_target(
         });
     let effective_id = resolved
         .as_ref()
-        .map(|(resolved_id, _, _, _)| resolved_id)
-        .unwrap_or(asset_definition_id);
+        .map_or(asset_definition_id, |(resolved_id, _, _, _)| resolved_id);
     let effective_alias = resolved
         .as_ref()
         .and_then(|(_, _, _, resolved_alias)| resolved_alias.as_ref());
@@ -7653,8 +7616,7 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
     );
     let effective_id = resolved
         .as_ref()
-        .map(|(resolved_id, _, _, _)| resolved_id)
-        .unwrap_or(asset_definition_id);
+        .map_or(asset_definition_id, |(resolved_id, _, _, _)| resolved_id);
     let effective_alias = resolved
         .as_ref()
         .and_then(|(_, _, _, resolved_alias)| resolved_alias.as_ref());
@@ -7706,8 +7668,7 @@ fn asset_balance_definition_route_target(
         });
     let effective_id = resolved
         .as_ref()
-        .map(|(resolved_id, _, _, _)| resolved_id)
-        .unwrap_or(asset_definition_id);
+        .map_or(asset_definition_id, |(resolved_id, _, _, _)| resolved_id);
     let effective_alias = resolved
         .as_ref()
         .and_then(|(_, _, _, resolved_alias)| resolved_alias.as_ref());
@@ -7765,8 +7726,7 @@ fn asset_balance_definition_route_target_with_world<W: WorldReadOnly>(
     });
     let effective_id = resolved
         .as_ref()
-        .map(|(resolved_id, _, _, _)| resolved_id)
-        .unwrap_or(asset_definition_id);
+        .map_or(asset_definition_id, |(resolved_id, _, _, _)| resolved_id);
     let effective_alias = resolved
         .as_ref()
         .and_then(|(_, _, _, resolved_alias)| resolved_alias.as_ref());
@@ -7986,10 +7946,7 @@ fn resolve_optional_dataspace_target<T>(
     value: Option<T>,
     resolve: impl FnOnce(T) -> Result<Option<DataSpaceId>, RoutingResolveError>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
-    match value {
-        Some(value) => resolve(value),
-        None => Ok(None),
-    }
+    value.map_or_else(|| Ok(None), resolve)
 }
 fn dataspace_scoped_permission_target(
     permission: &Permission,
@@ -8704,10 +8661,7 @@ fn insert_height_active_routable_lane(
 }
 /// Resolve height-specific routable lanes for routing and scheduler regression fixtures.
 #[cfg(test)]
-pub(crate) fn routable_lane_ids_for_nexus_at_height(
-    nexus: &Nexus,
-    block_height: u64,
-) -> BTreeSet<LaneId> {
+pub fn routable_lane_ids_for_nexus_at_height(nexus: &Nexus, block_height: u64) -> BTreeSet<LaneId> {
     let mut lane_ids = BTreeSet::new();
     let policy = &nexus.routing_policy;
     let lane_catalog = &nexus.lane_catalog;
@@ -8842,8 +8796,7 @@ fn resolve_policy_routing_plan(
         matched_rule,
         target.dataspace_id,
         target.coordinator_route,
-        lane_catalog,
-        dataspace_catalog,
+        (lane_catalog, dataspace_catalog),
         tx,
         autoscale_range,
     )?;
@@ -8892,8 +8845,7 @@ fn resolve_policy_routing_decision(
     matched_rule: Option<&LaneRoutingRule>,
     target_dataspace: Option<DataSpaceId>,
     target_is_coordinator_route: bool,
-    lane_catalog: &LaneCatalog,
-    dataspace_catalog: &DataSpaceCatalog,
+    (lane_catalog, dataspace_catalog): (&LaneCatalog, &DataSpaceCatalog),
     tx: Option<&dyn TransactionRoutingView>,
     autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
@@ -8961,8 +8913,7 @@ pub fn resolve_query_routing_decision(
             matched_rule,
             target_dataspace,
             target_dataspace == Some(DataSpaceId::UNIVERSAL),
-            lane_catalog,
-            dataspace_catalog,
+            (lane_catalog, dataspace_catalog),
             None,
             Some(AutoscaleElasticRange::from_nexus_at_height(
                 state_view.nexus(),
@@ -8978,8 +8929,7 @@ pub fn resolve_query_routing_decision(
         matched_rule,
         None,
         false,
-        lane_catalog,
-        dataspace_catalog,
+        (lane_catalog, dataspace_catalog),
         None,
         None,
     )
@@ -9002,8 +8952,7 @@ fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
         matched_rule,
         target_dataspace,
         target_dataspace == Some(DataSpaceId::UNIVERSAL),
-        lane_catalog,
-        dataspace_catalog,
+        (lane_catalog, dataspace_catalog),
         None,
         autoscale_range,
     )
@@ -9109,7 +9058,7 @@ fn rule_matches_with_world<W: WorldReadOnly>(
 /// placement; an explicit instruction matcher still applies.
 ///
 /// Local refusal retains the original reader reason; it is not a completed mismatch.
-pub(crate) fn matchers_match_with_world<W: WorldReadOnly>(
+pub fn matchers_match_with_world<W: WorldReadOnly>(
     account: Option<&str>,
     instruction: Option<&str>,
     tx: &dyn TransactionRoutingView,
@@ -9155,10 +9104,10 @@ fn query_rule_matches(
     if rule.matcher.instruction.is_some() {
         return Ok(false);
     }
-    match rule.matcher.account.as_deref() {
-        Some(account) => account_matches(account, authority, state_view),
-        None => Ok(true),
-    }
+    rule.matcher.account.as_deref().map_or_else(
+        || Ok(true),
+        |account| account_matches(account, authority, state_view),
+    )
 }
 fn query_rule_matches_with_world<W: WorldReadOnly>(
     rule: &LaneRoutingRule,
@@ -9170,12 +9119,12 @@ fn query_rule_matches_with_world<W: WorldReadOnly>(
     if rule.matcher.instruction.is_some() {
         return Ok(false);
     }
-    match rule.matcher.account.as_deref() {
-        Some(account) => {
+    rule.matcher.account.as_deref().map_or_else(
+        || Ok(true),
+        |account| {
             account_matches_with_world(account, authority, dataspace_catalog, world, ledger_time_ms)
-        }
-        None => Ok(true),
-    }
+        },
+    )
 }
 fn account_matches_literal_or_encoded(
     pattern: &str,
@@ -9202,16 +9151,18 @@ fn account_matches(
     if pattern.is_empty() {
         return Ok(false);
     }
-    match state_view {
-        Some(view) => account_matches_with_world(
-            pattern,
-            authority,
-            &view.nexus().dataspace_catalog,
-            view.world(),
-            Some(state_view_ledger_time_ms(view)),
-        ),
-        None => account_matches_literal_or_encoded(pattern, authority),
-    }
+    state_view.map_or_else(
+        || account_matches_literal_or_encoded(pattern, authority),
+        |view| {
+            account_matches_with_world(
+                pattern,
+                authority,
+                &view.nexus().dataspace_catalog,
+                view.world(),
+                Some(state_view_ledger_time_ms(view)),
+            )
+        },
+    )
 }
 fn account_matches_with_world<W: WorldReadOnly>(
     pattern: &str,
@@ -12626,8 +12577,7 @@ mod tests {
                 Some(&policy.rules[0]),
                 Some(DataSpaceId::UNIVERSAL),
                 false,
-                &lane_catalog,
-                &dataspace_catalog,
+                (&lane_catalog, &dataspace_catalog),
                 None,
                 None,
             ))

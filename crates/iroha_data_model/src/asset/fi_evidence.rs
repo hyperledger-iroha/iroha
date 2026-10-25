@@ -1,6 +1,6 @@
 //! Staged shared native FI assertion carrier; no field is authenticated by decoding.
 //!
-//! Proposed destination: iroha_data_model::asset::fi_evidence. Native owns public
+//! Proposed destination: `iroha_data_model::asset::fi_evidence`. Native owns public
 //! registration. The assertion/snapshot types are the staged v3 native contract.
 
 use norito::{Decode, Encode};
@@ -22,9 +22,9 @@ pub struct AssetFiContextAssertionCapsuleV1 {
     pub version: u8,
     /// Exact execution-cut value whose canonical native hash the assertion checks.
     pub snapshot: AssetFiContextSnapshotV1,
-    /// Canonical SignedTransaction::encode_wire_v1 including its authorization.
+    /// Canonical `SignedTransaction::encode_wire_v1` including its authorization.
     pub assertion_signed_transaction: Vec<u8>,
-    /// Existing canonical QueryResponse selecting exactly the assertion's committed row.
+    /// Existing canonical `QueryResponse` selecting exactly the assertion's committed row.
     pub committed_transaction_response: Vec<u8>,
     /// Existing native consecutive finality frames rooted at the local checkpoint.
     pub finality_proof_chain: Vec<SumeragiFinalityProof>,
@@ -46,6 +46,11 @@ impl AssetFiContextAssertionCapsuleV1 {
     }
 
     /// Encodes exactly the retained candidate. It authenticates no ledger result.
+    ///
+    /// # Errors
+    /// Returns an error for an unsupported version, empty or oversized components,
+    /// a canonical frame outside the operational size bound, a Norito sizing or
+    /// encoding failure, or a mismatch between the calculated and encoded sizes.
     pub fn encode_canonical(&self) -> Result<Vec<u8>, String> {
         self.check_carrier_bounds()?;
         let size = norito::canonical_frame_len(self).map_err(|error| error.to_string())?;
@@ -60,6 +65,11 @@ impl AssetFiContextAssertionCapsuleV1 {
     }
 
     /// One bounded canonical native frame; returned fields remain untrusted.
+    ///
+    /// # Errors
+    /// Returns an error if the input is empty or exceeds the operational size bound,
+    /// canonical Norito decoding fails or exceeds its limits, or the decoded
+    /// version or component bounds are invalid.
     pub fn decode_canonical(bytes: &[u8]) -> Result<Self, String> {
         if bytes.is_empty() || bytes.len() > MAX_ASSET_FI_CONTEXT_CAPSULE_BYTES_V1 {
             return Err("FI context capsule exceeds its operational bound".into());

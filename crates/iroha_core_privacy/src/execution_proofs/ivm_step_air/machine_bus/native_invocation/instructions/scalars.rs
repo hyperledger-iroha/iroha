@@ -103,7 +103,10 @@ fn every_public_expression_uses_full_words_original_sources_and_atomic_alias_wri
                 let left_packet = &native.packets()[start + 17];
                 let right_packet = &native.packets()[start + 18];
                 let output = &native.packets()[start + 19];
-                assert_eq!(left_packet.index(), operands.0 as u32);
+                assert_eq!(
+                    left_packet.index(),
+                    u32::try_from(operands.0).expect("bounded fixture value")
+                );
                 assert_eq!(value(left_packet, false), left);
                 assert_eq!(left_packet.before(), left_packet.after());
                 assert_eq!(left_packet.before_private(), 0);
@@ -115,7 +118,10 @@ fn every_public_expression_uses_full_words_original_sources_and_atomic_alias_wri
                 };
                 assert_eq!(right_packet.enabled(), operands.1.is_some());
                 if let Some(register) = operands.1 {
-                    assert_eq!(right_packet.index(), register as u32);
+                    assert_eq!(
+                        right_packet.index(),
+                        u32::try_from(register).expect("bounded fixture value")
+                    );
                     assert_eq!(value(right_packet, false), right_value);
                     assert_eq!(right_packet.before(), right_packet.after());
                     assert_eq!(right_packet.before_private(), 0);
@@ -173,7 +179,10 @@ fn zero_and_maximum_register_sources_do_not_disappear_when_destination_is_r0() {
         let start = instruction_clocks(index + 1).unwrap()[0] as usize;
         let (left, right) = ivm::execution_packets::public_scalar_operands(word).unwrap();
         assert!(native.packets()[start + 17].enabled());
-        assert_eq!(native.packets()[start + 17].index(), left as u32);
+        assert_eq!(
+            native.packets()[start + 17].index(),
+            u32::try_from(left).expect("bounded fixture value")
+        );
         assert_eq!(native.packets()[start + 18].enabled(), right.is_some());
         assert!(!native.packets()[start + 19].enabled());
         assert!(native.packets()[start + 1].enabled());

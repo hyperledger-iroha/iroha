@@ -187,23 +187,17 @@ pub mod query {
                 ),
                 DomainQueryPlan::Owners(owners) => {
                     Box::new(owners.into_iter().flat_map(move |owner| {
-                        world
-                            .domains_by_owner()
-                            .get(&owner)
-                            .cloned()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(move |domain_id| world.domain(&domain_id).ok().cloned())
+                        crate::state::range_bounds::index_members(world.domains_by_owner(), &owner)
+                            .filter_map(move |domain_id| world.domain(domain_id).ok().cloned())
                     }))
                 }
                 DomainQueryPlan::Full => Box::new(world.domains_iter().cloned()),
             };
             Ok(iter.filter(move |domain| {
-                if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_domain(predicate, domain)
-                } else {
-                    filter.applies(domain)
-                }
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(domain),
+                    |predicate| predicate_matches_domain(predicate, domain),
+                )
             }))
         }
     }
@@ -819,7 +813,7 @@ mod tests {
         let mut transaction = block.transaction();
         transaction
             .world
-            .insert_account_alias_binding(alias.clone(), missing_alias_owner.clone());
+            .insert_account_alias_binding(&(alias.clone()), &(missing_alias_owner.clone()));
         transaction
             .world
             .replace_account_rekey_record(history.clone());
@@ -854,15 +848,10 @@ mod tests {
             owned_by: owner.clone(),
         };
         state.world.domains.insert(domain_id.clone(), domain);
-        let mut domains = state
+        state
             .world
             .domains_by_owner
-            .view()
-            .get(owner)
-            .cloned()
-            .unwrap_or_default();
-        domains.insert(domain_id.clone());
-        state.world.domains_by_owner.insert(owner.clone(), domains);
+            .insert((owner.clone(), domain_id.clone()), ());
     }
     fn seed_account(state: &mut State, account_id: &AccountId, domain_id: &DomainId) {
         let account = Account {
@@ -1161,7 +1150,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.world.insert_domain_entry(domain_id.clone(), domain);
+        tx.world.insert_domain_entry(&(domain_id.clone()), domain);
         let owned_domains = tx
             .world
             .domains_owned_by_iter(&owner)
@@ -1261,8 +1250,7 @@ mod tests {
                     InvalidParameterError::SmartContract(
                         "alias setup never accepts lease expiry; use RenewAliasLease".into(),
                     ),
-                )
-                .into());
+                ));
             }
             let alias = self.alias.ok_or_else(|| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
@@ -1317,8 +1305,7 @@ mod tests {
                     InvalidParameterError::SmartContract(
                         "primary-alias CAS never accepts lease expiry; use RenewAliasLease".into(),
                     ),
-                )
-                .into());
+                ));
             }
             let current = tx.world.account(&self.account)?.label().cloned();
             if let Some(alias) = current.as_ref() {
@@ -1549,11 +1536,10 @@ mod tests {
                 .world
                 .domains
                 .get(&domain_id)
-                .map(|domain| domain.owned_by().clone())
-                .unwrap_or_else(|| owner.clone());
+                .map_or_else(|| owner.clone(), |domain| domain.owned_by().clone());
             if tx.world.domains.get(&domain_id).is_none() {
                 let domain = Domain::new(domain_id.clone()).build(&domain_owner);
-                tx.world.insert_domain_entry(domain_id.clone(), domain);
+                tx.world.insert_domain_entry(&(domain_id.clone()), domain);
                 tx.world.track_domain_owner(&domain_id, &domain_owner);
             }
             let selector =
@@ -2324,7 +2310,7 @@ mod tests {
             tx.world.accounts.insert(account_id, account_value);
         }
         tx.world
-            .insert_account_alias_binding(alias.clone(), current_account_id.clone());
+            .insert_account_alias_binding(&(alias.clone()), &(current_account_id.clone()));
         tx.world
             .replace_account_rekey_record(AccountRekeyRecord::new(
                 alias.clone(),
@@ -2455,7 +2441,7 @@ mod tests {
             );
         }
         tx.world
-            .insert_account_alias_binding(ubl_alias.clone(), target.clone());
+            .insert_account_alias_binding(&(ubl_alias.clone()), &(target.clone()));
         tx.world
             .replace_account_rekey_record(AccountRekeyRecord::new(
                 ubl_alias.clone(),
@@ -2587,7 +2573,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("same-FI secondary aliases remain supported");
         tx.world
-            .insert_account_alias_binding(ubl_home_alias.clone(), ubl_account.clone());
+            .insert_account_alias_binding(&(ubl_home_alias.clone()), &(ubl_account.clone()));
         tx.world
             .replace_account_rekey_record(AccountRekeyRecord::new(
                 ubl_home_alias.clone(),
@@ -2685,7 +2671,7 @@ mod tests {
             .expect("customer account")
             .set_label(Some(ubl_alias.clone()));
         tx.world
-            .insert_account_alias_binding(ubl_alias.clone(), customer.clone());
+            .insert_account_alias_binding(&(ubl_alias.clone()), &(customer.clone()));
         tx.world
             .replace_account_rekey_record(AccountRekeyRecord::new(
                 ubl_alias.clone(),
@@ -2754,7 +2740,7 @@ mod tests {
             .expect("customer account")
             .set_label(Some(old_alias.clone()));
         tx.world
-            .insert_account_alias_binding(old_alias.clone(), customer.clone());
+            .insert_account_alias_binding(&(old_alias.clone()), &(customer.clone()));
         tx.world
             .replace_account_rekey_record(AccountRekeyRecord::new(
                 old_alias.clone(),
@@ -2818,7 +2804,7 @@ mod tests {
             .expect("alias target")
             .set_label(Some(ubl_alias.clone()));
         tx.world
-            .insert_account_alias_binding(ubl_alias.clone(), target.clone());
+            .insert_account_alias_binding(&(ubl_alias.clone()), &(target.clone()));
         tx.world
             .replace_account_rekey_record(AccountRekeyRecord::new(
                 ubl_alias.clone(),
@@ -4279,7 +4265,7 @@ mod tests {
             owned_by: account_id.clone(),
         };
         let (nft_id, nft_value) = nft.into_key_value();
-        tx.world.insert_nft_entry(nft_id.clone(), nft_value);
+        tx.world.insert_nft_entry(&nft_id, nft_value);
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister account");
@@ -4325,7 +4311,7 @@ mod tests {
             owned_by: account_id.clone(),
         };
         let (nft_id, nft_value) = nft.into_key_value();
-        tx.world.insert_nft_entry(nft_id.clone(), nft_value);
+        tx.world.insert_nft_entry(&(nft_id.clone()), nft_value);
         let permission: Permission = iroha_executor_data_model::permission::nft::CanTransferNft {
             nft: nft_id.clone(),
         }
@@ -5341,7 +5327,7 @@ mod tests {
                     iroha_data_model::repo::RepoGovernance::new(1_000, 60, false),
                     None,
                 );
-                tx.world.insert_repo_agreement_entry(agreement);
+                tx.world.insert_repo_agreement_entry(&(agreement));
             },
             "account with repo agreement state must not be unregistered",
             "repo agreement state",
@@ -6790,7 +6776,7 @@ mod tests {
         let paynet = DataSpaceId::new(7);
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         tx.world.insert_asset_definition_entry(
-            definition_id.clone(),
+            &(definition_id.clone()),
             AssetDefinition::numeric(
                 definition_id.clone(),
                 "unit".to_owned(),
@@ -6920,7 +6906,7 @@ mod tests {
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         // Registration refuses restricted homes, so seed the homed definition directly.
         tx.world.insert_asset_definition_entry(
-            definition_id.clone(),
+            &(definition_id.clone()),
             AssetDefinition::numeric(
                 definition_id.clone(),
                 "unit".to_owned(),
@@ -7648,8 +7634,8 @@ mod tests {
         .expect("register asset definition");
         let repo_id: iroha_data_model::repo::RepoAgreementId =
             "repo_asset_guard".parse().expect("repo agreement id");
-        tx.world
-            .insert_repo_agreement_entry(iroha_data_model::repo::RepoAgreement::new(
+        tx.world.insert_repo_agreement_entry(
+            &(iroha_data_model::repo::RepoAgreement::new(
                 repo_id,
                 initiator.clone(),
                 counterparty.clone(),
@@ -7677,7 +7663,8 @@ mod tests {
                 1,
                 iroha_data_model::repo::RepoGovernance::new(1_000, 60, false),
                 None,
-            ));
+            )),
+        );
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("asset definition with repo agreement reference must not be unregistered");
@@ -8042,7 +8029,7 @@ mod tests {
         tx.world
             .bind_asset_definition_alias(
                 &asset_definition_id,
-                alias.clone(),
+                &(alias.clone()),
                 None,
                 None,
                 bound_at_ms,

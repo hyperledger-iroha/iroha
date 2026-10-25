@@ -159,6 +159,9 @@ pub enum BootleLanternIssuanceClaimV1 {
 /// their configured retention horizon.
 pub trait BootleLanternIssuanceStoreV1: Send + Sync {
     /// Register a newly generated authorization as fresh.
+    ///
+    /// # Errors
+    /// Rejects invalid authorization bounds, duplicate registrations, exhausted capacity, or storage failures.
     fn register_fresh_v1(
         &self,
         authorization_id: [u8; 32],
@@ -171,6 +174,9 @@ pub trait BootleLanternIssuanceStoreV1: Send + Sync {
     /// This is the cheap replay gate used before expensive P1 verification.
     /// A subsequent [`Self::claim_v1`] independently rechecks the same state
     /// and height under its transition lock.
+    ///
+    /// # Errors
+    /// Rejects an unknown or substituted authorization, invalid heights, and unavailable or corrupt storage.
     fn preflight_v1(
         &self,
         authorization_id: [u8; 32],
@@ -184,6 +190,9 @@ pub trait BootleLanternIssuanceStoreV1: Send + Sync {
     /// in-flight retry returns [`BootleLanternIssuanceStoreErrorV1::Busy`]. Every request
     /// substitution and terminal failure returns
     /// [`BootleLanternIssuanceStoreErrorV1::AuthorizationConsumed`].
+    ///
+    /// # Errors
+    /// Rejects busy, consumed, substituted, expired, or unknown authorizations and storage failures.
     fn claim_v1(
         &self,
         authorization_id: [u8; 32],
@@ -192,6 +201,9 @@ pub trait BootleLanternIssuanceStoreV1: Send + Sync {
         current_height: u64,
     ) -> Result<BootleLanternIssuanceClaimV1, BootleLanternIssuanceStoreErrorV1>;
     /// Atomically persist exact canonical response bytes and mark completed.
+    ///
+    /// # Errors
+    /// Rejects a nonmatching processing claim, invalid response bounds or completion height, and storage failures.
     fn complete_v1(
         &self,
         authorization_id: [u8; 32],
@@ -201,6 +213,9 @@ pub trait BootleLanternIssuanceStoreV1: Send + Sync {
         completed_at_height: u64,
     ) -> Result<(), BootleLanternIssuanceStoreErrorV1>;
     /// Irreversibly mark a claimed authorization failed.
+    ///
+    /// # Errors
+    /// Rejects a nonmatching processing claim, invalid transition height, or storage failures.
     fn fail_v1(
         &self,
         authorization_id: [u8; 32],
@@ -218,6 +233,9 @@ pub trait BootleLanternIssuanceStoreV1: Send + Sync {
     ///
     /// The default fails closed for test or adapter stores that do not persist
     /// recoverable processing state.
+    ///
+    /// # Errors
+    /// Rejects invalid recovery heights and unavailable or corrupt storage; the default implementation refuses recovery.
     fn recover_processing_v1(
         &self,
         _authoritative_height: u64,
@@ -229,6 +247,9 @@ pub trait BootleLanternIssuanceStoreV1: Send + Sync {
     ///
     /// Processing records are never silently evicted. Callers must explicitly resolve a recovered
     /// in-flight record to `Failed` before it can become eligible for terminal pruning.
+    ///
+    /// # Errors
+    /// Rejects invalid authoritative heights and unavailable or corrupt storage.
     fn prune_v1(
         &self,
         authoritative_height: u64,
@@ -1851,7 +1872,10 @@ fn load_file_store_v1(
             config,
         )?;
         let file = open_record_file_v1(&entry.path(), &metadata)?;
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        let mut bytes = Vec::with_capacity(
+            usize::try_from(metadata.len())
+                .map_err(|_| BootleLanternIssuanceStoreErrorV1::Corrupt)?,
+        );
         file.take(BOOTLE_LANTERN_ISSUANCE_STORE_MAX_RECORD_BYTES_V1 + 1)
             .read_to_end(&mut bytes)
             .map_err(|_| BootleLanternIssuanceStoreErrorV1::Backend)?;
@@ -3347,7 +3371,9 @@ mod tests {
                 2 => bytes[0] ^= 1,
                 3 => bytes[5] = STORE_COMPLETED_TAG_V1,
                 4 => bytes.resize(
-                    BOOTLE_LANTERN_ISSUANCE_STORE_MAX_RECORD_BYTES_V1 as usize + 1,
+                    usize::try_from(BOOTLE_LANTERN_ISSUANCE_STORE_MAX_RECORD_BYTES_V1)
+                        .expect("record cap fits address space")
+                        + 1,
                     0,
                 ),
                 _ => unreachable!(),

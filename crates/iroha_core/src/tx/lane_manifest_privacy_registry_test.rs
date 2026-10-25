@@ -242,7 +242,7 @@ fn stateful_privacy_refusal_retains_original_cause_and_forbids_settlement() {
         panic!("actual owner did not retain the original capacity source");
     };
     let error =
-        StateBlock::validate_stateful_admission(&tx, &mut overlay, native, policy_route, None)
+        StateBlock::validate_stateful_admission(&tx, &mut overlay, native, &policy_route, None)
             .expect_err("unfinished privacy acquisition must stop admission");
     assert!(matches!(error, TransactionRejectionReason::Validation(_)));
     assert!(overlay.is_execution_deferred());

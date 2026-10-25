@@ -32,16 +32,16 @@ mod app_api_integration_tests {
         )
     }
     fn state_with_assets(
-        domain_id: DomainId,
-        authority: AccountId,
+        domain_id: &DomainId,
+        authority: &AccountId,
         accounts: Vec<AccountId>,
         asset_definitions: Vec<(AssetDefinitionId, String)>,
         assets: Vec<Asset>,
     ) -> Arc<State> {
-        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let domain = Domain::new(domain_id.clone()).build(authority);
         let accounts: Vec<Account> = accounts
             .into_iter()
-            .map(|id| Account::new(id.clone()).build(&authority))
+            .map(|id| Account::new(id.clone()).build(authority))
             .collect();
         let asset_definitions: Vec<AssetDefinition> = asset_definitions
             .into_iter()
@@ -52,7 +52,7 @@ mod app_api_integration_tests {
                     iroha_data_model::asset::AssetBalancePolicy::Global,
                     None,
                 )
-                .build(&authority)
+                .build(authority)
             })
             .collect();
         let world = World::with_assets([domain], accounts, asset_definitions, assets, []);
@@ -89,8 +89,8 @@ mod app_api_integration_tests {
             ),
         ];
         let state = state_with_assets(
-            domain_id,
-            alice_id.clone(),
+            &(domain_id),
+            &(alice_id),
             vec![alice_id.clone(), bob_id],
             vec![
                 (rose_def.clone(), "rose".to_owned()),
@@ -169,8 +169,10 @@ mod app_api_integration_tests {
     }
     #[tokio::test]
     async fn confidential_asset_transitions_reports_pending_window_metadata() {
-        let _guard = app_query_limits_guard();
         use axum::routing::get;
+
+        let _guard = app_query_limits_guard();
+
         let alice_id = checked_app_api_account_id(
             0x85,
             "derive confidential asset transition fixture account key",
@@ -286,9 +288,11 @@ mod app_api_integration_tests {
     }
     #[tokio::test]
     async fn get_parameters_returns_json() {
-        let _guard = app_query_limits_guard();
         use axum::routing::get;
         use iroha_core::{kura::Kura, query::store::LiveQueryStore};
+
+        let _guard = app_query_limits_guard();
+
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),

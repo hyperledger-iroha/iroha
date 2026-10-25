@@ -158,6 +158,10 @@ fn resident_registration_rejects_a_crossing_mutation_and_partial_coverage() {
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent completeness and failure axes are combined by this test fixture."
+)]
 struct ExpandedFailureOwner {
     values: BTreeSet<u64>,
     complete: bool,

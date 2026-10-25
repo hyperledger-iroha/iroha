@@ -37,10 +37,8 @@ fn evaluate<A: PolynomialAirFieldV1>(rows: &[Vec<A>; 5]) -> Vec<A> {
     io_constraint_residues_v1(
         SegmentLayoutV1::for_full_io().unwrap(),
         17,
-        &rows[0],
-        &rows[1],
-        &rows[2],
-        &rows[3],
+        (&rows[0], &rows[1]),
+        (&rows[2], &rows[3]),
         &rows[4],
         challenges(),
     )
@@ -108,10 +106,8 @@ fn io_fp4_rejects_bad_dimensions_and_binds_logical_extent() {
     let changed = io_constraint_residues_v1(
         layout,
         18,
-        &rows[0],
-        &rows[1],
-        &rows[2],
-        &rows[3],
+        (&rows[0], &rows[1]),
+        (&rows[2], &rows[3]),
         &rows[4],
         challenges(),
     )
@@ -124,10 +120,8 @@ fn io_fp4_rejects_bad_dimensions_and_binds_logical_extent() {
             io_constraint_residues_v1(
                 layout,
                 17,
-                &malformed[0],
-                &malformed[1],
-                &malformed[2],
-                &malformed[3],
+                (&malformed[0], &malformed[1]),
+                (&malformed[2], &malformed[3]),
                 &malformed[4],
                 challenges()
             )
@@ -139,10 +133,8 @@ fn io_fp4_rejects_bad_dimensions_and_binds_logical_extent() {
             io_constraint_residues_v1(
                 layout,
                 logical,
-                &rows[0],
-                &rows[1],
-                &rows[2],
-                &rows[3],
+                (&rows[0], &rows[1]),
+                (&rows[2], &rows[3]),
                 &rows[4],
                 challenges()
             )
@@ -155,10 +147,8 @@ fn io_fp4_rejects_bad_dimensions_and_binds_logical_extent() {
         io_constraint_residues_v1(
             layout,
             17,
-            &rows[0],
-            &rows[1],
-            &rows[2],
-            &rows[3],
+            (&rows[0], &rows[1]),
+            (&rows[2], &rows[3]),
             &rows[4],
             invalid_challenges
         )
@@ -174,10 +164,8 @@ fn io_fp4_rejects_bad_dimensions_and_binds_logical_extent() {
         io_constraint_residues_v1(
             layout,
             17,
-            &base[0],
-            &base[1],
-            &base[2],
-            &base[3],
+            (&base[0], &base[1]),
+            (&base[2], &base[3]),
             &base[4],
             challenges()
         )

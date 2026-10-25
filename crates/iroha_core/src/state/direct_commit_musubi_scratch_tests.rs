@@ -30,6 +30,7 @@ impl Wake for Wakes {
     }
 }
 
+#[derive(Clone, Copy)]
 enum MusubiFixture {
     Empty,
     Publication,

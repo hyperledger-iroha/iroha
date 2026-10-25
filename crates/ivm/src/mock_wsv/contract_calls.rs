@@ -96,6 +96,38 @@ impl WsvHost {
         let artifact_id = ContractArtifactId::for_address(&address, prepared.code_hash())
             .map_err(|_| VMError::InvalidMetadata)?;
         Self::materialize_subject_account(&mut self.wsv, &address.subject_id());
+        // Materialize the signed manifest's trigger ownership for native permission
+        // diagnostics. Scheduling remains outside this local test host.
+        for entry in &prepared.contract_interface().entrypoints {
+            for trigger in &entry.triggers {
+                let id = trigger.id.to_string();
+                let authority = trigger
+                    .authority
+                    .clone()
+                    .unwrap_or_else(|| address.subject_id());
+                if self
+                    .wsv
+                    .trigger_authorities
+                    .get(&id)
+                    .is_some_and(|owner| owner != &authority)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
+                let enabled_key: Name = "__enabled".parse().expect("static metadata name");
+                let enabled = trigger
+                    .metadata
+                    .get(&enabled_key)
+                    .map(|value| {
+                        value
+                            .try_into_any_norito::<bool>()
+                            .map_err(|_| VMError::NoritoInvalid)
+                    })
+                    .transpose()?
+                    .unwrap_or(true);
+                self.wsv.trigger_authorities.insert(id.clone(), authority);
+                self.wsv.triggers.insert(id, enabled);
+            }
+        }
         self.wsv.contract_artifacts.insert(artifact_id, prepared);
         self.wsv
             .contract_instances

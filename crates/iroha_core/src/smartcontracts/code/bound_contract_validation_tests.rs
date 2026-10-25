@@ -228,7 +228,7 @@ fn bound_contract_validation_borrows_exact_stored_payloads_and_preserves_owned_r
         ));
         assert!(std::ptr::eq(
             borrowed.contract_subject,
-            &transaction
+            &raw const transaction
                 .world
                 .contract_subject_bindings
                 .get(&address)
@@ -288,6 +288,82 @@ fn bound_contract_validation_retains_scope_error_before_incomplete_binding() {
         outcome(snapshot_bound_contract_records_by_subject(&transaction)).map(|_| ()),
         expected
     );
+}
+
+#[test]
+fn bound_contract_validation_matches_eager_outcome_across_roots_and_dataspaces() {
+    use iroha_data_model::block::consensus::SumeragiRootScope;
+    let dataspaces = [
+        DataSpaceId::UNIVERSAL,
+        DataSpaceId::new(7),
+        DataSpaceId::new(9),
+    ];
+    // `None` keeps the fixture's Global root.
+    for root in [None, Some(DataSpaceId::new(7)), Some(DataSpaceId::new(9))] {
+        // Each set bit deploys two instances in that dataspace.
+        for placement in 1_u8..8 {
+            for unbind_first in [false, true] {
+                let (state, authority, _) = test_state();
+                let mut block = state.block(default_header(1));
+                let mut transaction = block.transaction();
+                let mut index = 0;
+                for (bit, dataspace_id) in dataspaces.into_iter().enumerate() {
+                    if placement & (1 << bit) != 0 {
+                        for _ in 0..2 {
+                            insert_contract(&mut transaction, &authority, index, dataspace_id, 64);
+                            index += 1;
+                        }
+                    }
+                }
+                if unbind_first {
+                    // An absent record must neither hide nor raise a scope error.
+                    let first = transaction
+                        .world
+                        .contract_instances
+                        .iter()
+                        .next()
+                        .map(|(address, _)| address.clone())
+                        .expect("deployed instance");
+                    transaction.world.contract_subject_bindings.remove(first);
+                }
+                if let Some(dataspace_id) = root {
+                    transaction
+                        .world
+                        .set_parameter_for_testing(
+                            crate::sumeragi::lanes::routing::test_support::metadata(
+                                SumeragiRootScope::Dataspace {
+                                    parent_network_id: state.network_id,
+                                    dataspace_id,
+                                },
+                            ),
+                        )
+                        .expect("private scope metadata");
+                }
+                let foreign = root.is_some_and(|root| {
+                    dataspaces.iter().enumerate().any(|(bit, dataspace_id)| {
+                        placement & (1 << bit) != 0 && *dataspace_id != root
+                    })
+                });
+                let expected = outcome(eager_snapshot(&transaction)).map(|_| ());
+                let case = format!("root {root:?}, placement {placement}, unbind {unbind_first}");
+                assert_eq!(expected.is_err(), foreign, "{case}");
+                if foreign {
+                    assert!(
+                        expected
+                            .as_ref()
+                            .unwrap_err()
+                            .contains("foreign artifact dataspace"),
+                        "{case}"
+                    );
+                }
+                assert_eq!(
+                    outcome(validate_bound_contract_records_by_subject(&transaction)),
+                    expected,
+                    "{case}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -403,7 +479,10 @@ fn bound_contract_validation_many_contracts_diagnostic() {
     let started = std::time::Instant::now();
     for _ in 0..ROUNDS {
         let snapshot = eager_snapshot(std::hint::black_box(&transaction)).expect("eager snapshot");
-        assert_eq!(snapshot.len(), CONTRACTS as usize);
+        assert_eq!(
+            snapshot.len(),
+            usize::try_from(CONTRACTS).expect("contract count fits usize")
+        );
         std::hint::black_box(snapshot);
     }
     let eager_elapsed = started.elapsed();
@@ -415,7 +494,7 @@ fn bound_contract_validation_many_contracts_diagnostic() {
     eprintln!(
         "bound contract setup: {CONTRACTS} contracts x {BYTES} bytes x {ROUNDS} rounds; eager={eager_elapsed:?}, validation={:?}; eliminated {} copied bytecode bytes per invocation",
         started.elapsed(),
-        CONTRACTS as usize * BYTES,
+        usize::try_from(CONTRACTS).expect("contract count fits usize") * BYTES,
     );
 }
 

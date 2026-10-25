@@ -82,11 +82,11 @@ fn sorafs_provider_governance_proposer_must_be_a_fully_bonded_citizen() {
 }
 #[test]
 fn contract_subject_binding_materializes_missing_account_and_preserves_existing_account() {
-    let state = State::new_for_testing(
+    let state = component_state_with_crypto_policy(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    );
+    ));
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
         None,
@@ -414,6 +414,10 @@ impl VerifiedFeeSponsorProofFixtures {
         }
     }
 
+    #[expect(
+        clippy::map_unwrap_or,
+        reason = "Clone the cached owner before the fallback mutably inserts into the same locked entries vector."
+    )]
     fn get_or_produce(
         &self,
         batch: &fastpq_prover::TransitionBatch,
@@ -422,20 +426,19 @@ impl VerifiedFeeSponsorProofFixtures {
     ) -> Vec<u8> {
         let proof = {
             let mut entries = self.entries.lock().expect("fee-sponsor fixture lookup");
-            if let Some(entry) = entries
+            entries
                 .iter()
                 .find(|entry| &entry.batch == batch && &entry.binding == binding)
-            {
-                std::sync::Arc::clone(&entry.proof)
-            } else {
-                let proof = std::sync::Arc::new(std::sync::OnceLock::new());
-                entries.push(VerifiedFeeSponsorProofFixture {
-                    batch: batch.clone(),
-                    binding: binding.clone(),
-                    proof: std::sync::Arc::clone(&proof),
-                });
-                proof
-            }
+                .map(|entry| std::sync::Arc::clone(&entry.proof))
+                .unwrap_or_else(|| {
+                    let proof = std::sync::Arc::new(std::sync::OnceLock::new());
+                    entries.push(VerifiedFeeSponsorProofFixture {
+                        batch: batch.clone(),
+                        binding: binding.clone(),
+                        proof: std::sync::Arc::clone(&proof),
+                    });
+                    proof
+                })
         };
         // OnceLock retains only a successful initialization. A genuine producer
         // panic propagates to its test and leaves this exact request retryable.
@@ -784,7 +787,7 @@ fn verified_fee_sponsor_registration_fixture(
         batch_hash: source_tx_commitment,
         deltas: vec![delta],
         authority_digest: Hash::new(
-            &norito::encode_canonical(&*ALICE_ID).expect("canonical funding authority"),
+            norito::encode_canonical(&*ALICE_ID).expect("canonical funding authority"),
         ),
         poseidon_preimage_digest: Some(digest),
     }];
@@ -1077,8 +1080,22 @@ fn assert_initial_genesis_fee_sponsor_lifecycle(authored_custody: bool) {
             FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle, FeeSponsorVaultKey,
         },
     };
+    let bootstrap_custody =
+        iroha_config::parameters::defaults::nexus::fees::sponsor_vault_custody_account_id();
+    let custody = if authored_custody {
+        let key =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x75; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("deterministic custody test key");
+        AccountId::new(key.public_key().clone())
+    } else {
+        bootstrap_custody.clone()
+    };
+    // Seed canonical accounts while retaining an absent ordinary crypto policy.
+    // The original signed genesis below owns its policy installation.
+    let accounts = [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()]
+        .map(|account| Account::new(account).build(&ALICE_ID));
     let state = State::new_for_testing(
-        World::default(),
+        World::with([], accounts, []),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
@@ -1091,34 +1108,11 @@ fn assert_initial_genesis_fee_sponsor_lifecycle(authored_custody: bool) {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let bootstrap_custody = stx
-        .root_fee_policy()
-        .expect("original fixture fee policy")
-        .sponsor_vault_custody_account_id
-        .clone();
-    let custody = if authored_custody {
-        let key =
-            iroha_crypto::KeyPair::try_from_seed(vec![0x75; 32], iroha_crypto::Algorithm::Ed25519)
-                .expect("deterministic custody test key");
-        AccountId::new(key.public_key().clone())
-    } else {
-        bootstrap_custody.clone()
-    };
-    let mut authored_policy = stx
-        .root_fee_policy()
-        .expect("original fixture fee policy")
-        .clone();
+    let mut authored_policy = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
     authored_policy.sponsor_vault_custody_account_id = custody.clone();
     if authored_custody {
         assert_ne!(custody, bootstrap_custody);
         assert!(stx.world.account(&bootstrap_custody).is_err());
-    }
-    for account in [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()] {
-        if stx.world.account(&account).is_err() {
-            Register::account(Account::new(account))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register genesis fee sponsor fixture account");
-        }
     }
     let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
         .parse()
@@ -1885,11 +1879,11 @@ fn post_genesis_fund_mismatch_preserves_balances_vault_and_transcripts() {
         isi::nexus::FundFeeSponsorProgram,
         nexus::{FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorVaultKey},
     };
-    let state = State::new_for_testing(
+    let state = component_state_with_crypto_policy(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    );
+    ));
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(2).expect("nonzero height"),
         None,
@@ -1980,11 +1974,11 @@ fn fee_sponsor_program_rejects_unregistered_payout_account() {
         isi::nexus::CreateFeeSponsorProgram,
         nexus::{FeeSponsorProgram, FeeSponsorProgramId},
     };
-    let state = State::new_for_testing(
+    let state = component_state_with_crypto_policy(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    );
+    ));
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
         None,
@@ -2040,11 +2034,11 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
         permission::Permissions,
     };
     use iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram;
-    let state = State::new_for_testing(
+    let state = component_state_with_crypto_policy(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    );
+    ));
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
         None,
@@ -2527,7 +2521,7 @@ fn install_retained_validation_fee_unregister_fixture(
             effective_from_ms: 1_793_451_600_000,
             notice_published_at_ms: 1_790_859_600_000,
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            network_id: network_id.clone(),
+            network_id,
             policy_version: 1,
             previous_policy_hash: None,
             ds_asset_id: policy_ds_asset_id,
@@ -2639,7 +2633,7 @@ fn register_validation_fee_fixture_asset(
 
 #[test]
 fn enacted_policy_reward_custody_references_are_pinned_without_conversion_lifecycle() {
-    blank_test_state_transaction!(state, block, stx);
+    component_test_state_transaction!(state, block, stx);
     bootstrap_alice_account(&mut stx);
     let fixture_domain = DomainId::try_new("vfcustody", "universal").expect("fixture domain");
     let policy_ds = AssetDefinitionId::derive_from_components(
@@ -2789,7 +2783,7 @@ fn non_enacted_validation_fee_proposal_statuses_do_not_pin_payout_references() {
         crate::state::GovernanceProposalStatus::Superseded,
         crate::state::GovernanceProposalStatus::ExecutionFailed,
     ] {
-        blank_test_state_transaction!(state, block, stx);
+        component_test_state_transaction!(state, block, stx);
         bootstrap_alice_account(&mut stx);
         let fixture_domain = DomainId::try_new("vfunpinned", "universal").expect("fixture domain");
         let policy_ds = AssetDefinitionId::derive_from_components(
@@ -2848,7 +2842,7 @@ fn non_enacted_validation_fee_proposal_statuses_do_not_pin_payout_references() {
 
 #[test]
 fn enacted_validation_fee_account_references_reject_unregister_atomically() {
-    blank_test_state_transaction!(state, block, stx);
+    component_test_state_transaction!(state, block, stx);
     bootstrap_alice_account(&mut stx);
     let fixture_domain = DomainId::try_new("vfaccount", "universal").expect("fixture domain");
     let fixture = install_retained_validation_fee_unregister_fixture(
@@ -2933,7 +2927,7 @@ fn enacted_validation_fee_account_references_reject_unregister_atomically() {
 
 #[test]
 fn enacted_validation_fee_asset_references_reject_unregister_atomically() {
-    blank_test_state_transaction!(state, block, stx);
+    component_test_state_transaction!(state, block, stx);
     bootstrap_alice_account(&mut stx);
     let fixture_domain = DomainId::try_new("vfasset", "universal").expect("fixture domain");
     let policy_ds = AssetDefinitionId::derive_from_components(
@@ -3013,7 +3007,7 @@ fn enacted_validation_fee_asset_references_reject_unregister_atomically() {
 
 #[test]
 fn enacted_validation_fee_asset_references_reject_containing_domain_unregister_atomically() {
-    blank_test_state_transaction!(state, block, stx);
+    component_test_state_transaction!(state, block, stx);
     bootstrap_alice_account(&mut stx);
     let policy_domain = DomainId::try_new("vfpolicy", "universal").expect("policy domain");
     let payout_ds_domain = DomainId::try_new("vfpayoutds", "universal").expect("payout DS domain");
@@ -3184,7 +3178,7 @@ fn signed_payout_scope_refusal_cannot_publish_a_parliament_terminal_outcome() {
             prefix_bytes,
             32,
         );
-        norito::with_decode_limits_scope(limits, &prefix);
+        norito::with_decode_limits_scope(limits, prefix);
         let producer_refusal = norito::with_decode_limits_scope(limits, || {
             prefix();
             crate::smartcontracts::code::fetch_bound_contract_record(
@@ -3321,7 +3315,8 @@ fn due_payout_graph_refusal_discards_permission_events_and_retries_original_cert
             );
             super::validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
                 &binding, &setup,
-            ).unwrap();
+            )
+            .unwrap();
             let fixture = seed_due_parliament_certificate(
                 &mut setup,
                 ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
@@ -3337,22 +3332,33 @@ fn due_payout_graph_refusal_discards_permission_events_and_retries_original_cert
         let staged_events = block.world.pending_external_events().to_vec();
         let original = block.world.parameters.get().clone();
         let predecessor = block.world.parameters.get_before_block().clone();
-        let pool = block.world.sccp_committee_generations.allocation_budget().clone();
+        let pool = block
+            .world
+            .sccp_committee_generations
+            .allocation_budget()
+            .clone();
         let held = pool.reserved_bytes();
         let layout = RetainedStateParameters::graph_allocation_layout_for_testing();
         {
             let mut attempt = block.transaction();
             let permissions = super::validation_fee_runtime_permissions(
-                &attempt, &binding, &binding.pool_contract_address,
-            ).unwrap();
+                &attempt,
+                &binding,
+                &binding.pool_contract_address,
+            )
+            .unwrap();
             assert!(!permissions.is_empty());
             assert!(attempt.world.internal_event_buf.is_empty());
             let (result, observed) = refuse_one_layout_during(layout, || {
                 super::execute_due_parliament_certificate_v1(
-                    fixture.governance_attempt_id, &mut attempt,
+                    fixture.governance_attempt_id,
+                    &mut attempt,
                 )
             });
-            assert!(observed, "the actual payout successor must allocate its graph shell");
+            assert!(
+                observed,
+                "the actual payout successor must allocate its graph shell"
+            );
             let Err(ExecutionAttemptError::Deferred(refused)) = result else {
                 panic!("local graph refusal must not become a terminal EffectFailed outcome");
             };
@@ -3365,7 +3371,8 @@ fn due_payout_graph_refusal_discards_permission_events_and_retries_original_cert
             assert!(refused.allocation_refusal().is_none());
             let transported = crate::execution_attempt::ExecutionDeferred::try_from_vm_error(
                 refused.into_vm_error(),
-            ).unwrap();
+            )
+            .unwrap();
             assert!(matches!(
                 transported.allocator_refusal().unwrap().shared_error(),
                 Some(iroha_allocation::PrepaidSharedError::Allocator { requested_bytes })
@@ -3378,61 +3385,119 @@ fn due_payout_graph_refusal_discards_permission_events_and_retries_original_cert
             // or permission-allocation failure that never reached publication.
             assert_eq!(attempt.world.internal_event_buf.len(), permissions.len());
             for (permission, holder, _) in &permissions {
-                assert!(attempt.world.account_contains_inherent_permission(holder, permission));
-                assert!(attempt.world.internal_event_buf.iter().any(|event| matches!(
-                    event.as_ref(),
-                    iroha_data_model::events::data::DataEvent::Account(
-                        AccountEvent::PermissionAdded(added)
-                    ) if &added.account == holder && &added.permission == permission
-                )));
+                assert!(
+                    attempt
+                        .world
+                        .account_contains_inherent_permission(holder, permission)
+                );
+                assert!(
+                    attempt
+                        .world
+                        .internal_event_buf
+                        .iter()
+                        .any(|event| matches!(
+                            event.as_ref(),
+                            iroha_data_model::events::data::DataEvent::Account(
+                                AccountEvent::PermissionAdded(added)
+                            ) if &added.account == holder && &added.permission == permission
+                        ))
+                );
             }
             assert_eq!(
-                attempt.world.governance_proposals.get(&fixture.proposal_id).unwrap().status,
+                attempt
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .unwrap()
+                    .status,
                 crate::state::GovernanceProposalStatus::Proposed,
             );
             assert_eq!(
-                attempt.world.parliament_attempts.get(&fixture.governance_attempt_id)
-                    .unwrap().attempt().status,
+                attempt
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .unwrap()
+                    .attempt()
+                    .status,
                 GovernanceAttemptStatusV1::Certified,
             );
             // The production caller discards this failed child, including every
             // staged permission/event owner, before any terminal outcome can publish.
         }
         assert_eq!(pool.reserved_bytes(), held);
-        assert_eq!(crate::snapshot::canonical_staged_state_snapshot_bytes(&block), staged);
-        assert_eq!(block.world.pending_external_events(), staged_events.as_slice());
+        assert_eq!(
+            crate::snapshot::canonical_staged_state_snapshot_bytes(&block),
+            staged
+        );
+        assert_eq!(
+            block.world.pending_external_events(),
+            staged_events.as_slice()
+        );
         assert!(original.same_version(block.world.parameters.get()));
         {
             let mut retry = block.transaction();
             assert!(matches!(
                 super::execute_due_parliament_certificate_v1(
-                    fixture.governance_attempt_id, &mut retry,
-                ).unwrap(),
+                    fixture.governance_attempt_id,
+                    &mut retry,
+                )
+                .unwrap(),
                 super::DueParliamentCertificateExecutionV1::Applied,
             ));
             assert!(!retry.is_execution_deferred());
             assert_eq!(
-                retry.world.governance_proposals.get(&fixture.proposal_id).unwrap().status,
+                retry
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .unwrap()
+                    .status,
                 crate::state::GovernanceProposalStatus::Enacted,
             );
             assert_eq!(
-                retry.world.parliament_attempts.get(&fixture.governance_attempt_id)
-                    .unwrap().attempt().status,
+                retry
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .unwrap()
+                    .attempt()
+                    .status,
                 GovernanceAttemptStatusV1::Enacted,
             );
-            let registry = super::validation_fee_policy_registry(&retry).unwrap().unwrap();
-            assert_eq!(registry.payout_policies.head().unwrap().payout_binding, binding);
-            assert_eq!(retry.world.internal_event_buf.iter().filter(|event| matches!(
-                event.as_ref(), iroha_data_model::events::data::DataEvent::Configuration(_)
-            )).count(), 1);
+            let registry = super::validation_fee_policy_registry(&retry)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                registry.payout_policies.head().unwrap().payout_binding,
+                binding
+            );
+            assert_eq!(
+                retry
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .filter(|event| matches!(
+                        event.as_ref(),
+                        iroha_data_model::events::data::DataEvent::Configuration(_)
+                    ))
+                    .count(),
+                1
+            );
             assert!(predecessor.same_version(retry.world.parameters.get_before_block()));
             retry.apply();
         }
         assert!(!original.same_version(block.world.parameters.get()));
         assert!(predecessor.same_version(block.world.parameters.get_before_block()));
     }
-    assert_eq!(crate::snapshot::canonical_state_snapshot_bytes(chain.state()), original_state);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_bytes(chain.state()),
+        original_state
+    );
     assert_eq!(chain.height(), original_height);
     assert_eq!(chain.state().view().latest_block_hash(), original_tip);
-    assert_eq!(chain.kura().blocks_count(), usize::try_from(original_height).unwrap());
+    assert_eq!(
+        chain.kura().blocks_count(),
+        usize::try_from(original_height).unwrap()
+    );
 }

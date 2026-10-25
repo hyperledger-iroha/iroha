@@ -19,7 +19,7 @@ use sorafs_manifest::signer::{
     protocol::SignerOperationActionV1,
 };
 
-pub(crate) fn authorized(
+pub fn authorized(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     deployment: &str,
@@ -43,10 +43,10 @@ pub(crate) fn authorized(
                 || !has_permission(
                     world,
                     &check.expected_operator,
-                    CanOperateSorafsFinalPromotion {
+                    &(CanOperateSorafsFinalPromotion {
                         deployment_id: deployment.to_owned(),
                     }
-                    .into(),
+                    .into()),
                 )
             {
                 return false;
@@ -57,10 +57,10 @@ pub(crate) fn authorized(
             .into()
         }
     };
-    has_permission(world, authority, permission)
+    has_permission(world, authority, &(permission))
 }
 
-pub(crate) fn check_floor(
+pub fn check_floor(
     state: &impl StateReadOnly,
     check: &FinalPromotionCheckV1,
     execution_height: u64,
@@ -86,7 +86,7 @@ pub(crate) fn check_floor(
 }
 
 /// Evaluate an exact phase against already validated native rows and current custody.
-pub(crate) fn check_subject(
+pub fn check_subject(
     check: &FinalPromotionCheckV1,
     observer: &AccountId,
     custody: &VerifiedSignerCustodyV1,
@@ -155,7 +155,7 @@ pub(crate) fn check_subject(
 
 /// Re-read the authority and account grants from exactly the supplied current applied cut.
 /// This does not authenticate the challenge, executed entry/result, committee lineage or time.
-pub(crate) fn check_applied_snapshot_v1(
+pub fn check_applied_snapshot_v1(
     view: &impl StateReadOnly,
     instruction: &MutateSorafsFinalPromotionAuthority,
     binding: &SignerCustodyBindingV1,

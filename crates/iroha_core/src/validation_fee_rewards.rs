@@ -73,7 +73,7 @@ fn conversion_projection_map_key(index: i128) -> Result<Vec<u8>, Error> {
 fn fail(message: impl Into<String>) -> Error {
     Error::InvariantViolation(message.into().into())
 }
-fn rejection(error: Error) -> TransactionRejectionReason {
+fn rejection(error: &Error) -> TransactionRejectionReason {
     TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
         "validation fee rewards: {error}"
     )))
@@ -678,23 +678,21 @@ pub(crate) fn credit_collected_fee(
     }
     crate::retail_fee::ensure_reward_history_open(&stx.world, earning_period_start_ms)
         .map_err(|error| string_attempt_instruction_error(stx, error))
-        .map_err(rejection)?;
+        .map_err(|error| rejection(&error))?;
     let binding = crate::validation_fee::active_payout_binding_at_height(stx, stx.block_height())
         .map_err(|error| {
             error_attempt_transaction_error(
                 stx,
-                error.map_rejection(crate::validation_fee::admission_rejection),
+                error.map_rejection(|error| crate::validation_fee::admission_rejection(&error)),
             )
         })?
         .ok_or_else(|| {
-            rejection(fail(
-                "collected fee has no finalized Parliament conversion policy",
-            ))
+            rejection(&(fail("collected fee has no finalized Parliament conversion policy")))
         })?;
     if binding.custody() != policy.reward_custody {
-        return Err(rejection(fail(
-            "collected fee custody differs from the conversion policy",
-        )));
+        return Err(rejection(
+            &(fail("collected fee custody differs from the conversion policy")),
+        ));
     }
     let binding = &binding;
     let result = (|| {
@@ -711,7 +709,7 @@ pub(crate) fn credit_collected_fee(
         write(stx, key, &credit)?;
         save_state(stx, binding, &state)
     })();
-    result.map_err(rejection)
+    result.map_err(|error| rejection(&error))
 }
 /// Retain native observations only after the ordinary oracle handler verified
 /// provider authorization, signature, feed version, slot and replay constraints.

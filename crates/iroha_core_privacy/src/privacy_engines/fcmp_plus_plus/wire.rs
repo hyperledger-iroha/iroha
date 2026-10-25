@@ -60,6 +60,9 @@ pub struct FcmpProofInputPublicV1 {
 }
 impl FcmpProofInputPublicV1 {
     /// Validate one complete O~/I~/R/C~/L public relation.
+    ///
+    /// # Errors
+    /// Rejects any invalid or noncanonical public point.
     pub fn new(
         output_key_tilde: [u8; 32],
         linking_tag_generator_tilde: [u8; 32],
@@ -130,7 +133,7 @@ struct TapeSizer {
 }
 impl TapeSizer {
     fn new(commitment_len: usize) -> Result<Self, FcmpNativeErrorV1> {
-        if commitment_len == 0 || commitment_len % COMMITMENT_WORD_LEN_V1 != 0 {
+        if commitment_len == 0 || !commitment_len.is_multiple_of(COMMITMENT_WORD_LEN_V1) {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
         Ok(Self {
@@ -254,7 +257,7 @@ fn fcmp_membership_proof_size_v1(inputs: usize, layers: usize) -> Result<usize, 
         c1.append_claimed_point();
     }
     let additional_c2_points = c2_non_root_branches
-        .checked_add(inputs * usize::from(layers % 2 == 0))
+        .checked_add(inputs * usize::from(layers.is_multiple_of(2)))
         .ok_or(FcmpNativeErrorV1::TreeFull)?;
     for _ in 0..additional_c2_points {
         c2.append_claimed_point();
@@ -279,6 +282,9 @@ fn fcmp_membership_proof_size_v1(inputs: usize, layers: usize) -> Result<usize, 
         .ok_or(FcmpNativeErrorV1::TreeFull)
 }
 /// Return the unique `IFC1` wire size for input, tree-depth, and output counts.
+///
+/// # Errors
+/// Rejects unsupported input, output, or layer counts and proof-size overflow.
 pub fn fcmp_plus_plus_wire_size_v1(
     inputs: usize,
     layers: u8,
@@ -330,6 +336,9 @@ fn take_array<const N: usize>(
 /// This function validates canonical points, canonical scalars, exact length,
 /// public-input cardinality, tree parity, and root-blind encodings.  It does
 /// not verify the SAL or generalized Bulletproof equations.
+///
+/// # Errors
+/// Rejects incorrect framing or size, noncanonical points/scalars, duplicate key images or pseudo-outputs, and public-input mismatches.
 pub fn decode_fcmp_plus_plus_wire_v1(
     bytes: &[u8],
     public_inputs: &[FcmpProofInputPublicV1],
@@ -524,7 +533,14 @@ pub(super) fn decode_fcmp_membership_fixture_v1(
     framed[6] = u8::try_from(output_count).map_err(|_| FcmpNativeErrorV1::ArithmeticInvariant)?;
     let words = fcmp_range_proof_size_v1(output_count)? / FCMP_POINT_BYTES_V1;
     for index in 0..words {
-        if index < 3 || index >= 6 {
+        if (3..6).contains(&index) {
+            framed.extend_from_slice(
+                &Scalar::from(
+                    u64::try_from(index + 1).map_err(|_| FcmpNativeErrorV1::ArithmeticInvariant)?,
+                )
+                .to_bytes(),
+            );
+        } else {
             framed.extend_from_slice(
                 &(ED25519_BASEPOINT_POINT
                     * Scalar::from(
@@ -532,13 +548,6 @@ pub(super) fn decode_fcmp_membership_fixture_v1(
                             .map_err(|_| FcmpNativeErrorV1::ArithmeticInvariant)?,
                     ))
                 .compress()
-                .to_bytes(),
-            );
-        } else {
-            framed.extend_from_slice(
-                &Scalar::from(
-                    u64::try_from(index + 1).map_err(|_| FcmpNativeErrorV1::ArithmeticInvariant)?,
-                )
                 .to_bytes(),
             );
         }
@@ -633,11 +642,11 @@ mod tests {
         cursor += 32;
         let range_words = fcmp_range_proof_size_v1(outputs).expect("range size") / 32;
         for index in 0..range_words {
-            if index < 3 || index >= 6 {
+            if (3..6).contains(&index) {
+                wire[cursor] = u8::try_from(index + 1).expect("small scalar");
+            } else {
                 wire[cursor..cursor + 32].copy_from_slice(&point(multiple));
                 multiple += 1;
-            } else {
-                wire[cursor] = u8::try_from(index + 1).expect("small scalar");
             }
             cursor += 32;
         }

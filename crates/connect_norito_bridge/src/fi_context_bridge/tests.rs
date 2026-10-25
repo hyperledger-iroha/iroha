@@ -167,7 +167,7 @@ fn ffi_rejects_null_and_oversized_buffers_before_dereference_and_clears_outputs(
     for index in 0..4 {
         let mut pointers = [byte.as_ptr(); 4];
         pointers[index] = std::ptr::null();
-        let mut output = 1_usize as *mut c_uchar;
+        let mut output = std::ptr::dangling_mut::<c_uchar>();
         let mut length = 123;
         let result = unsafe {
             connect_norito_verify_fi_context_assertion_v1(
@@ -198,7 +198,7 @@ fn ffi_rejects_null_and_oversized_buffers_before_dereference_and_clears_outputs(
     ] {
         let mut lengths = [1 as c_ulong; 4];
         lengths[index] = (maximum + 1) as c_ulong;
-        let mut output = 1_usize as *mut c_uchar;
+        let mut output = std::ptr::dangling_mut::<c_uchar>();
         let mut length = 123;
         let result = unsafe {
             connect_norito_verify_fi_context_assertion_v1(

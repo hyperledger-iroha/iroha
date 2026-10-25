@@ -395,7 +395,7 @@
    "id": "native_pipa_r.kaigi_authorization",
    "family": "Native PIPA-R over Pasta",
    "status": "implemented",
-   "guarantee": "Kaigi authorization bound to the public network, call, subject, role and sequence (31 instance rows).",
+   "guarantee": "Kaigi authorization bound to the public network, call, subject, role and sequence (25 instance rows).",
    "verifier": {"path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs", "symbol": "pub fn verify_authorization("},
    "core": {
     "path": "crates/iroha_core_zk/src/lib.rs",
@@ -410,7 +410,7 @@
      "path": "crates/iroha_core/src/smartcontracts/isi/kaigi.rs",
      "test": "private_join_leave_and_rejoin_consume_exact_sequences_with_real_proofs"
     },
-    {"path": "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs", "test": "final_kaigi_real_proof_verifies_and_binds_all_31_rows"},
+    {"path": "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs", "test": "final_kaigi_real_proof_verifies_and_binds_all_public_rows"},
     {
      "path": "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs",
      "test": "final_kaigi_rejects_retired_labels_schema_metadata_and_relabelled_keys"
@@ -424,7 +424,7 @@
    "id": "native_pipa_r.kaigi_usage",
    "family": "Native PIPA-R over Pasta",
    "status": "implemented",
-   "guarantee": "Kaigi usage bound to the public call, host, segment and billed tuple (25 instance rows).",
+   "guarantee": "Kaigi usage bound to the public call, host, segment and billed tuple (21 instance rows).",
    "verifier": {"path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs", "symbol": "pub fn verify_usage_commitment("},
    "core": {
     "path": "crates/iroha_core_zk/src/lib.rs",
@@ -435,7 +435,10 @@
     ]
    },
    "tests": [
-    {"path": "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs", "test": "final_usage_real_proof_binds_all_25_rows_and_both_admission_routes"},
+    {
+     "path": "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs",
+     "test": "final_usage_real_proof_binds_all_public_rows_and_both_admission_routes"
+    },
     {"path": "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs", "test": "final_usage_rejects_k8_aliases_and_wrong_canonical_key"}
    ],
    "test_words": ["KAIGI_USAGE_CIRCUIT_ID_V1", "KaigiUsage"],
@@ -3614,7 +3617,7 @@
     },
     {
      "path": "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs",
-     "test": "final_kaigi_real_proof_verifies_and_binds_all_31_rows",
+     "test": "final_kaigi_real_proof_verifies_and_binds_all_public_rows",
      "covers": "The relation's backend verifier with a real proof; the handler is not executed."
     }
    ],
@@ -3911,7 +3914,7 @@
     },
     {
      "path": "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs",
-     "test": "final_usage_real_proof_binds_all_25_rows_and_both_admission_routes",
+     "test": "final_usage_real_proof_binds_all_public_rows_and_both_admission_routes",
      "covers": "The relation's backend verifier with a real proof; the handler is not executed."
     }
    ],
@@ -10869,9 +10872,9 @@
      },
      {
       "role": "authorization identities",
-      "algorithm": "six-lane Goldilocks Poseidon digest profile",
+      "algorithm": "unkeyed BLAKE3-256 over native.commitment.blake3-256.frame-v1, all 32 raw bytes",
       "path": "crates/iroha_data_model/src/kaigi/authorization.rs",
-      "symbol": "profile: b\"poseidon-x7-goldilocks-6x64-v1\","
+      "symbol": "Ok(KaigiIdentityDigestV1(*commitment.digest().as_bytes()))"
      }
     ],
     "in_circuit": [
@@ -11373,7 +11376,7 @@
      "crates/iroha_core/src/smartcontracts/isi/kaigi.rs",
      "crates/iroha_data_model/src/kaigi"
     ],
-    "census": {"blake2b": 1, "iroha_hash": 1, "poseidon": 41},
+    "census": {"blake2b": 1, "iroha_hash": 1, "poseidon": 40},
     "native": [
      {
       "role": "roster root",

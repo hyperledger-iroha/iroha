@@ -202,14 +202,13 @@ pub fn hold(mut response: Response, memory: QueryFanoutMemoryReservation) -> Res
     };
     response.extensions_mut().insert(memory.clone());
     let (parts, body) = response.into_parts();
-    match self::body(body, &owner) {
-        Ok(body) => Response::from_parts(parts, body),
-        Err(_) => {
-            drop(parts);
-            drop(owner);
-            drop(memory);
-            refusal()
-        }
+    if let Ok(body) = self::body(body, &owner) {
+        Response::from_parts(parts, body)
+    } else {
+        drop(parts);
+        drop(owner);
+        drop(memory);
+        refusal()
     }
 }
 

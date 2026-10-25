@@ -12,7 +12,7 @@ use iroha_data_model::parameter::{
 use iroha_primitives::json::Json;
 
 /// Valid genesis metadata carrying one explicit root scope.
-pub(crate) fn metadata(scope: SumeragiRootScope) -> Parameter {
+pub fn metadata(scope: SumeragiRootScope) -> Parameter {
     let mut context =
         iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended();
     context.root_scope = scope;
@@ -31,7 +31,7 @@ pub(crate) fn metadata(scope: SumeragiRootScope) -> Parameter {
 }
 
 /// Component World with explicit structural root metadata for the requested scope.
-pub(crate) fn world(scope: SumeragiRootScope) -> World {
+pub fn world(scope: SumeragiRootScope) -> World {
     let world = World::new();
     let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
         .expect("original parameter-only fixture block");
@@ -46,7 +46,7 @@ pub(crate) fn world(scope: SumeragiRootScope) -> World {
 }
 
 /// Original signed genesis with a canonical committee and explicit root scope.
-pub(crate) fn signed_genesis(scope: SumeragiRootScope) -> iroha_data_model::block::SignedBlock {
+pub fn signed_genesis(scope: SumeragiRootScope) -> iroha_data_model::block::SignedBlock {
     iroha_genesis::init_instruction_registry();
     let Parameter::Custom(parameter) = metadata(scope) else {
         unreachable!()

@@ -252,6 +252,10 @@ where
 
 /// A redundant pair read from disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "keep the original verified pair inline without allocating during custody reads"
+)]
 pub(super) enum KagemushaWalletPairReadV1<T> {
     /// At least one copy is valid.
     Loaded(KagemushaWalletLoadedPairV1<T>),
@@ -563,7 +567,7 @@ where
     if !fresh {
         // A copy of this exact name already exists (an interrupted earlier attempt): adopt it
         // after checking it, replace an invalid one, and rewrite it to a fresh inode.
-        match read_pair::<F, C>(
+        if let Some(mut pair) = read_pair::<F, C>(
             store,
             &dir,
             names.clone(),
@@ -571,22 +575,19 @@ where
             binding,
             |_, digest| *digest == capsule_digest,
         )? {
-            Some(mut pair) => {
-                kagemusha_wallet_repair_pair_v1(store, &mut pair, current_boot)?;
-                kagemusha_wallet_settle_pair_v1(store, &pair, true)?;
-            }
-            None => {
-                remove_pair(store, &dir, &names)?;
-                for outcome in write_pair::<F, C>(
-                    store,
-                    &dir,
-                    &names,
-                    selected_generation,
-                    current_boot,
-                    &frame,
-                )? {
-                    kagemusha_wallet_require_published_v1(outcome)?;
-                }
+            kagemusha_wallet_repair_pair_v1(store, &mut pair, current_boot)?;
+            kagemusha_wallet_settle_pair_v1(store, &pair, true)?;
+        } else {
+            remove_pair(store, &dir, &names)?;
+            for outcome in write_pair::<F, C>(
+                store,
+                &dir,
+                &names,
+                selected_generation,
+                current_boot,
+                &frame,
+            )? {
+                kagemusha_wallet_require_published_v1(outcome)?;
             }
         }
     }

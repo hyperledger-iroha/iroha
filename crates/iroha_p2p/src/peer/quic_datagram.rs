@@ -487,7 +487,11 @@ mod tests {
         };
         let budget = SharedByteBudget::new(1024, 0).expect("test byte budget");
         ingress
-            .authenticate(InboundSourceByteBudget::shared_only(Arc::clone(&budget)))
+            .authenticate(InboundSourceByteBudget {
+                shared: Arc::clone(&budget),
+                peer_reserve: None,
+                decode_scratch: SharedByteBudget::new(1024, 0).expect("test decode scratch"),
+            })
             .await
             .expect("activate ingress");
         let charge = quic_datagram_queue_charge(6).expect("small charge");
@@ -542,7 +546,11 @@ mod tests {
         let mut ingress = QuicDatagramIngress::spawn(&server, 32);
         let budget = SharedByteBudget::new(1024, 0).expect("test byte budget");
         ingress
-            .authenticate(InboundSourceByteBudget::shared_only(budget))
+            .authenticate(InboundSourceByteBudget {
+                shared: budget,
+                peer_reserve: None,
+                decode_scratch: SharedByteBudget::new(1024, 0).expect("test decode scratch"),
+            })
             .await
             .expect("activate ingress after draining pre-authentication traffic");
 

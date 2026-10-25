@@ -37,13 +37,7 @@ fn fixture_with_policy(
     configure: impl FnOnce(&mut crate::pipeline_validity_policy::PipelineValidityPolicyV1),
 ) -> State {
     let mut state = state(row_bytes);
-    let mut expected_policy = state
-        .world
-        .parameters
-        .view()
-        .get()
-        .pipeline_policy()
-        .clone();
+    let mut expected_policy = *state.world.parameters.view().get().pipeline_policy();
     configure(&mut expected_policy);
     expected_policy
         .validate()
@@ -70,7 +64,7 @@ fn fixture_with_policy(
     }
     // Genesis executes under its original predecessor's policy. Its signed
     // parameter writes install these limits for the successor being tested.
-    let state = authenticate_output_state_with_policy(state, expected_policy.clone());
+    let state = authenticate_output_state_with_policy(state, expected_policy);
     assert_eq!(
         state.world.parameters.view().get().pipeline_policy(),
         &expected_policy,
@@ -589,7 +583,7 @@ fn rejected_live_batch_rolls_back_business_and_applies_only_its_actual_fee_fragm
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
     use iroha_primitives::numeric::Quantity;
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
@@ -723,7 +717,19 @@ fn frozen_fraud_admission_refuses_before_business_work_and_permission_preserves_
         let before = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
         let result = network_row(&block, 0);
-        if !missing_assessment_permitted {
+        if missing_assessment_permitted {
+            assert!(result.result.is_ok());
+            assert_eq!(block.committed_fragment_count(), before + 1);
+            assert_eq!(
+                block
+                    .world
+                    .account(&ALICE_ID)
+                    .unwrap()
+                    .metadata()
+                    .get("fraud_effect"),
+                Some(&Json::new(1_u32))
+            );
+        } else {
             assert!(
                 matches!(result.result.as_ref(), Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                 iroha_data_model::ValidationFail::NotPermitted(reason))) if reason == "fraud monitoring requires an attached assessment")
@@ -738,18 +744,6 @@ fn frozen_fraud_admission_refuses_before_business_work_and_permission_preserves_
                     .metadata()
                     .get("fraud_effect")
                     .is_none()
-            );
-        } else {
-            assert!(result.result.is_ok());
-            assert_eq!(block.committed_fragment_count(), before + 1);
-            assert_eq!(
-                block
-                    .world
-                    .account(&ALICE_ID)
-                    .unwrap()
-                    .metadata()
-                    .get("fraud_effect"),
-                Some(&Json::new(1_u32))
             );
         }
     }
@@ -826,7 +820,7 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
     use iroha_primitives::numeric::Quantity;
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),

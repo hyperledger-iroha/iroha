@@ -144,6 +144,14 @@ fn base_batch_rejects_shape_phase_and_unrelated_adapters() {
 #[test]
 #[ignore = "all five signatures and every full native base column before and after binding"]
 fn base_batches_match_every_scalar_column_in_both_phases_and_reject_token_mutation() {
+    type BatchFill<'a> = dyn FnMut(
+            P256MainRegistrationV1,
+            usize,
+            &mut [&mut [F]],
+        ) -> Result<(), P256AggregateAdapterErrorV1>
+        + 'a;
+    type ScalarFill<'a> = dyn FnMut(P256MainRegistrationV1, usize, &mut [F]) -> Result<(), P256AggregateAdapterErrorV1>
+        + 'a;
     let mut base = p256_main_base_source_fixture_for_test_v1().unwrap();
     let registrations = base
         .canonical_registrations_v1()
@@ -157,16 +165,7 @@ fn base_batches_match_every_scalar_column_in_both_phases_and_reject_token_mutati
         })
         .collect::<Vec<_>>();
     assert_eq!(registrations.len(), 15);
-    let check = |batch: &mut dyn FnMut(
-        P256MainRegistrationV1,
-        usize,
-        &mut [&mut [F]],
-    ) -> Result<(), P256AggregateAdapterErrorV1>,
-                 scalar: &mut dyn FnMut(
-        P256MainRegistrationV1,
-        usize,
-        &mut [F],
-    ) -> Result<(), P256AggregateAdapterErrorV1>| {
+    let check = |batch: &mut BatchFill<'_>, scalar: &mut ScalarFill<'_>| {
         let mut checked = 0;
         for &registration in &registrations {
             let shape = registration.shape_v1().unwrap();
@@ -202,7 +201,7 @@ fn base_batches_match_every_scalar_column_in_both_phases_and_reject_token_mutati
     );
     assert_eq!(base.allocated_payload_bytes_v1(), retained);
     let token = super::tests::main_post_base_v1(71);
-    let mut bound = base.bind_v1(token).unwrap();
+    let mut bound = base.bind_v1(&token).unwrap();
     assert!(base.private_is_zeroized_v1());
     let retained = bound.allocated_payload_bytes_v1();
     check(

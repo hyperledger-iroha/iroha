@@ -79,7 +79,7 @@ pub struct PublicLaneCommitteeStatusArgs {
 /// Exact owner-authorized preparation operation, never an activation or cancellation.
 #[derive(clap::Args, Debug)]
 pub struct PublicLaneCommitteeSubmitArgs {
-    /// Canonical Norito JSON ValidatorCommitteeOperationV1 reviewed before submission
+    /// Canonical Norito JSON `ValidatorCommitteeOperationV1` reviewed before submission
     #[arg(long, value_name = "PATH")]
     pub file: PathBuf,
 }

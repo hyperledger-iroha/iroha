@@ -266,7 +266,7 @@ fn account_check_rejects_noncheck_binding_and_oversized_instruction_at_applied_c
     transact(&mut f.state, 2_100, |tx| {
         let before = retained(tx);
         assert_eq!(
-            apply(oversized.clone(), &f.observer, tx),
+            apply(&(oversized.clone()), &f.observer, tx),
             Err(HistoryError::Invalid)
         );
         assert_eq!(retained(tx), before);

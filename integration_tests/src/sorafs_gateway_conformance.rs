@@ -354,7 +354,7 @@ pub struct AttestationBundle {
     /// Human-readable summary emitted for operators.
     pub summary_text: String,
 }
-/// Verified metadata extracted from a SoraFS gateway conformance attestation.
+/// Verified metadata extracted from a `SoraFS` gateway conformance attestation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedGatewayAttestation {
     /// Profile version advertised by the embedded report.
@@ -1157,7 +1157,7 @@ pub fn generate_attestation(
         summary_text,
     })
 }
-/// Verify a SoraFS gateway conformance attestation envelope.
+/// Verify a `SoraFS` gateway conformance attestation envelope.
 ///
 /// The verifier recomputes the BLAKE3 digest over the canonical embedded report
 /// JSON and verifies the declared signature with the embedded public key.

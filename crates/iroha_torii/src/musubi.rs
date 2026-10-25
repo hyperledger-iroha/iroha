@@ -67,7 +67,7 @@ pub async fn handler_find_exact_package(
     request.package.validate().map_err(invalid_query_request)?;
     Ok(JsonBody(execute_query(
         &app,
-        FindMusubiExactPackageV1::new(request),
+        &(FindMusubiExactPackageV1::new(request)),
     )?))
 }
 /// Execute an exact structural release query.
@@ -78,7 +78,7 @@ pub async fn handler_find_exact_release(
     request.release.validate().map_err(invalid_query_request)?;
     Ok(JsonBody(execute_query(
         &app,
-        FindMusubiExactReleaseV1::new(request),
+        &(FindMusubiExactReleaseV1::new(request)),
     )?))
 }
 /// Execute an exact immutable provider bundle-attestation audit query.
@@ -89,7 +89,7 @@ pub async fn handler_find_provider_bundle_attestation(
     key.validate().map_err(invalid_query_request)?;
     Ok(JsonBody(execute_query(
         &app,
-        FindMusubiProviderBundleAttestationV1::new(key),
+        &(FindMusubiProviderBundleAttestationV1::new(key)),
     )?))
 }
 /// Execute a finalized universal resolver-index query.
@@ -104,7 +104,7 @@ pub async fn handler_find_resolver_index(
     validate_cursor_page(&app, &request.page)?;
     Ok(JsonBody(execute_musubi_query(
         &app,
-        FindMusubiResolverIndexV1::new(request),
+        &(FindMusubiResolverIndexV1::new(request)),
     )?))
 }
 /// Execute a finalized structured-version page query.
@@ -115,7 +115,7 @@ pub async fn handler_find_versions(
     validate_package_page_request(&app, &request)?;
     Ok(JsonBody(execute_musubi_query(
         &app,
-        FindMusubiVersionsV1::new(request),
+        &(FindMusubiVersionsV1::new(request)),
     )?))
 }
 /// Execute a finalized accepted-member and pending-invitation page query.
@@ -126,7 +126,7 @@ pub async fn handler_find_maintainers(
     validate_package_page_request(&app, &request)?;
     Ok(JsonBody(execute_musubi_query(
         &app,
-        FindMusubiMaintainersV1::new(request),
+        &(FindMusubiMaintainersV1::new(request)),
     )?))
 }
 /// Execute a finalized archive-location page query.
@@ -142,7 +142,7 @@ pub async fn handler_find_archive_locations(
     validate_cursor_page(&app, &request.page)?;
     Ok(JsonBody(execute_musubi_query(
         &app,
-        FindMusubiArchiveLocationsV1::new(request),
+        &(FindMusubiArchiveLocationsV1::new(request)),
     )?))
 }
 /// Execute a bounded exact finalized archive cache-retention query.
@@ -153,7 +153,7 @@ pub async fn handler_find_archive_retention(
     request.validate().map_err(invalid_query_request)?;
     Ok(JsonBody(execute_query(
         &app,
-        FindMusubiArchiveRetentionV1::new(request),
+        &(FindMusubiArchiveRetentionV1::new(request)),
     )?))
 }
 /// Execute an exact permanent-alias query.
@@ -164,7 +164,7 @@ pub async fn handler_find_alias(
     validate_alias_query_request(&app, &request)?;
     Ok(JsonBody(execute_query(
         &app,
-        FindMusubiAliasV1::new(request),
+        &(FindMusubiAliasV1::new(request)),
     )?))
 }
 /// Execute a finalized permanent-alias history query.
@@ -175,7 +175,7 @@ pub async fn handler_find_alias_history(
     validate_alias_query_request(&app, &request)?;
     Ok(JsonBody(execute_musubi_query(
         &app,
-        FindMusubiAliasHistoryV1::new(request),
+        &(FindMusubiAliasHistoryV1::new(request)),
     )?))
 }
 /// Execute a finalized byte-ordered package-prefix query.
@@ -187,7 +187,7 @@ pub async fn handler_find_ordered_prefix(
     validate_cursor_page(&app, &request.page)?;
     Ok(JsonBody(execute_musubi_query(
         &app,
-        FindMusubiOrderedPrefixV1::new(request),
+        &(FindMusubiOrderedPrefixV1::new(request)),
     )?))
 }
 /// Execute an exact-token query against the rebuildable finalized-event search projection.
@@ -380,22 +380,22 @@ const INVALID_CURSOR_FAILURE_REASON: MusubiCursorFailureReasonV1 =
 fn invalid_query_request(error: impl core::fmt::Display) -> Error {
     crate::routing::conversion_error(format!("invalid Musubi V1 query request: {error}"))
 }
-fn execute_query<Q>(app: &SharedAppState, query: Q) -> Result<Q::Output>
+fn execute_query<Q>(app: &SharedAppState, query: &Q) -> Result<Q::Output>
 where
     Q: ValidSingularQuery + SingularQuery,
 {
-    ValidSingularQuery::execute(&query, &app.state.view()).map_err(|error| {
+    ValidSingularQuery::execute(query, &app.state.view()).map_err(|error| {
         if let Some(reason) = core_cursor_failure_reason(&error) {
             record_cursor_failure(app, reason);
         }
         Error::Query(ValidationFail::QueryFailed(error))
     })
 }
-fn execute_musubi_query<Q>(app: &SharedAppState, query: Q) -> Result<Q::Output>
+fn execute_musubi_query<Q>(app: &SharedAppState, query: &Q) -> Result<Q::Output>
 where
     Q: ValidMusubiSingularQuery + SingularQuery,
 {
-    ValidMusubiSingularQuery::execute_musubi(&query, &app.state.view()).map_err(|error| {
+    ValidMusubiSingularQuery::execute_musubi(query, &app.state.view()).map_err(|error| {
         if let Some(reason) = error.cursor_failure() {
             record_cursor_failure(app, cursor_metric_reason(reason));
         }

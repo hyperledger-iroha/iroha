@@ -351,6 +351,10 @@ impl<T: StateReadOnly + ?Sized> SccpAdmissionView for T {
 /// # Errors
 ///
 /// Returns [`SccpAdmissionRejectV1`] when an eligible transaction fails pre-verification.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 pub fn classify(
     world: &(impl WorldReadOnly + ?Sized),
     view: &(impl SccpAdmissionView + ?Sized),
@@ -770,7 +774,7 @@ mod tests {
     fn sample_claim(authority: u8, entries: &[(u64, u8)]) -> SccpAdmissionKeysV1 {
         entries.iter().fold(
             SccpAdmissionKeysV1::new(SccpExemptClassV1::SelfClaim).with_exclusive(&authority),
-            |keys, entry| keys.with_content(entry),
+            super::SccpAdmissionKeysV1::with_content,
         )
     }
 

@@ -128,7 +128,7 @@ fn typed_templates_bind_app_platform_scheme_and_control_lifetime() {
             app_id: "TESTONLY.example.wallet".into(),
         },
     };
-    let controls = Controls {
+    let controls = EnrollmentPolicy {
         permitted_controls: 0,
         time_anchor_max_response_ms: 0,
         challenge_lifetime_ms: 60_000,
@@ -143,7 +143,7 @@ fn typed_templates_bind_app_platform_scheme_and_control_lifetime() {
             .unwrap();
     decoded.validate_for_app(&app).unwrap();
     assert!(KagemushaWalletEnrollmentPolicyTemplateV1::decode_canonical(&bytes, &[4; 32]).is_err());
-    let invalid = Controls {
+    let invalid = EnrollmentPolicy {
         attestation_lease_lifetime_ms: 1,
         ..controls
     };
@@ -153,7 +153,7 @@ fn typed_templates_bind_app_platform_scheme_and_control_lifetime() {
             &app,
             KagemushaWalletEnrollmentPlatformV1::Android {
                 root_set: vec![],
-                patch_floor_yyyymm: 202610
+                patch_floor_yyyymm: 202_610
             },
             &invalid
         )

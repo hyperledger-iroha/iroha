@@ -38,7 +38,7 @@ pub(super) fn control(stop: &AtomicBool) -> SccpNativeReadControl<'_> {
     }
 }
 
-/// Signed NPoS genesis initializes SCCP through its real instruction and output seal.
+/// Signed `NPoS` genesis initializes SCCP through its real instruction and output seal.
 /// No test writes a generation, X, R or QC. The long epoch avoids an unrelated boundary
 /// ceremony while a real heartbeat supplies the unchanged-key rotation test.
 pub(super) fn active_chain() -> CertifiedTestChain {
@@ -695,11 +695,9 @@ fn native_control_fields_and_paths_are_bound_to_the_original_committed_leaf() {
 
     let mut block = chain.state().block(header(4));
     let mut stx = block.transaction();
-    let mut changed = store::control_messages::get(&*stx.world, &(network, 1, 1))
-        .unwrap()
-        .clone();
+    let mut changed = *store::control_messages::get(&*stx.world, &(network, 1, 1)).unwrap();
     changed.effect_hash[0] ^= 1;
-    store::control_messages::insert(&mut stx, (network, 1, 1), changed.clone()).unwrap();
+    store::control_messages::insert(&mut stx, (network, 1, 1), changed).unwrap();
     assert!(matches!(
         control_proof(
             &stx,
@@ -752,8 +750,9 @@ fn generation_selection_uses_height_and_rejects_overlaps() {
     second.start_height = 9;
     let mut block = state.block(header(2));
     let mut stx = block.transaction();
-    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, first).unwrap();
-    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 2, second.clone())
+    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, &(first))
+        .unwrap();
+    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 2, &(second))
         .unwrap();
     let stop = AtomicBool::new(false);
     assert_eq!(
@@ -777,7 +776,7 @@ fn generation_selection_uses_height_and_rejects_overlaps() {
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     second.start_height = 8;
-    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 2, second)
+    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 2, &(second))
         .unwrap();
     assert!(matches!(
         signing_generation(&*stx.world, 8, control(&stop)),
@@ -1291,8 +1290,8 @@ fn check_original_handoff_coordinates(chain: &CertifiedTestChain) {
         }
         let mut block = chain.state().block(header(4));
         let mut stx = block.transaction();
-        install_generation(&mut stx, 1, old).unwrap();
-        install_generation(&mut stx, 2, next).unwrap();
+        install_generation(&mut stx, 1, &(old)).unwrap();
+        install_generation(&mut stx, 2, &(next)).unwrap();
         let rejected = committee_rotations(&stx, 1, 1, &budget, control(&stop));
         match change {
             1 | 4 => assert!(

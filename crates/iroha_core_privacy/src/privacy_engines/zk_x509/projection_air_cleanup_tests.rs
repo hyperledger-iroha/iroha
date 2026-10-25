@@ -51,9 +51,7 @@ fn projection_constructor_transfers_rows_and_clears_temporaries_on_success_and_u
                         assert_eq!(digests[index], invocation.expected_digest);
                     }
                 }
-                if unwind {
-                    panic!("injected after private material construction");
-                }
+                assert!(!unwind, "injected after private material construction");
                 drop((base, messages, digests));
             })
         });
@@ -116,7 +114,7 @@ fn projection_channel_transfer_preserves_values_and_clears_partial_error_and_unw
 
     let (result, observations) = observe_v1(|| {
         std::panic::catch_unwind(|| {
-            let _channels = vec![private_channel(0x71), private_channel(0x72)];
+            let _channels = [private_channel(0x71), private_channel(0x72)];
             panic!("injected before channel transfer");
         })
     });
@@ -151,9 +149,7 @@ fn projection_auxiliary_clears_success_failure_and_unwind() {
                 )
                 .unwrap();
                 assert_eq!(aux.rows.len(), ZK_X509_PROJECTION_TRACE_SIZE_V1);
-                if unwind {
-                    panic!("injected after auxiliary construction");
-                }
+                assert!(!unwind, "injected after auxiliary construction");
                 drop(aux);
             })
         });
@@ -185,9 +181,7 @@ fn projection_extracted_witness_clears_nested_buffers_and_redacts_debug() {
         let (result, observations) = observe_v1(|| {
             std::panic::catch_unwind(move || {
                 let _owned = owned;
-                if unwind {
-                    panic!("injected with extracted projection witness");
-                }
+                assert!(!unwind, "injected with extracted projection witness")
             })
         });
         assert_eq!(result.is_err(), unwind);

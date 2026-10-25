@@ -165,7 +165,7 @@ enum Kind {
     RecheckRevocation,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct Contents<'a> {
     preparation: Option<&'a [u8]>,
     original: Option<&'a [u8]>,

@@ -105,7 +105,7 @@ fn require_permission(
             .map_err(crate::app_auth::authorization_view_error)?
     })
 }
-pub(crate) async fn handler(
+pub async fn handler(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<String>,
     headers: HeaderMap,

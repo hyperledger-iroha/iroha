@@ -97,13 +97,15 @@ pub(in super::super) struct DerivedResetContext {
     pins: Vec<PinnedInput>,
     public_directory: PathBuf,
 }
+type RetainedStageTree = (PathBuf, String, u64, Vec<(String, PinnedInput)>);
+
 pub(super) struct RuntimeParts {
     pub(super) runtime_client_config_sha256: String,
     pub(super) onboarding_token_sha256: String,
     pub(super) validator_client_configs_sha256: String,
     pub(super) inrou_canary: Option<InrouCanaryV1>,
     pub(super) inrou_stage_tree_sha256: Option<String>,
-    stage: Option<(PathBuf, String, u64, Vec<(String, PinnedInput)>)>,
+    stage: Option<RetainedStageTree>,
 }
 
 pub(in super::super) fn decode_reset_topology_intent(
@@ -152,10 +154,10 @@ impl DerivedResetContext {
             revalidate_pinned(input, "retained native reset context")?;
         }
         validate_source_closure(&self.revision)?;
-        if let Some((directory, hash, bytes, files)) = &self.runtime.stage {
-            if host::revalidate_stage_files(directory, files, None)? != (hash.clone(), *bytes) {
-                return Err(eyre!("Inrou context changed before publication"));
-            }
+        if let Some((directory, hash, bytes, files)) = &self.runtime.stage
+            && host::revalidate_stage_files(directory, files, None)? != (hash.clone(), *bytes)
+        {
+            return Err(eyre!("Inrou context changed before publication"));
         }
         if public_inputs::load(&self.public_directory)? != self.public_inputs {
             return Err(eyre!("public genesis context changed"));
@@ -169,7 +171,7 @@ impl DerivedResetContext {
         self.revalidate()?;
         let mut value = InventoryV1 {
             schema: INVENTORY_SCHEMA_V1.into(),
-            qualification_scope: self.intent.qualification_scope.clone(),
+            qualification_scope: self.intent.qualification_scope,
             deployment_id: self.intent.deployment_id.clone(),
             chain_id: CHAIN_ID.into(),
             chain_discriminant: CHAIN_DISCRIMINANT,

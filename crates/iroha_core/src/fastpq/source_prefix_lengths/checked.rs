@@ -19,7 +19,7 @@ use super::{
 
 /// Failure before either the sizing or semantic prefix is published.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CheckedPrefixError {
+pub enum CheckedPrefixError {
     /// Exact frame sizing, digest presence or an explicit sizing ceiling failed.
     #[error(transparent)]
     Length(#[from] PrefixLengthError),
@@ -39,7 +39,7 @@ pub(crate) enum CheckedPrefixError {
 /// This result is not complete public preparation: selected-scale row order,
 /// exact row matching, key/path allocation and final commitments remain with
 /// the strict statement constructor. Error precedence may differ from it.
-pub(crate) struct CheckedSourcePrefix {
+pub struct CheckedSourcePrefix {
     lengths: SourcePrefixFrameSizer,
     semantics: QuantityPrefixValidator,
 }
@@ -51,7 +51,7 @@ pub(crate) struct CheckedSourcePrefix {
 /// A State adapter may use the measured lengths to reserve before committing
 /// this prefix; it still owns the matching ledger and world-state rollback.
 #[must_use = "commit the checked prefix after reservation or drop it to preserve previous state"]
-pub(crate) struct PendingCheckedPrefix<'a> {
+pub struct PendingCheckedPrefix<'a> {
     current_lengths: &'a mut SourcePrefixFrameSizer,
     next_lengths: SourcePrefixFrameSizer,
     semantics: PendingQuantityPrefixUpdate<'a>,

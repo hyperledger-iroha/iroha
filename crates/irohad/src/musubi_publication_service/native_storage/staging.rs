@@ -26,9 +26,11 @@ impl NativeMusubiStorageBackendV1 {
         let selection = with_native_musubi_storage_v1(
             &view,
             &self.authority,
-            request.commitment.archive_id(),
-            pin.query().manifest_digest,
-            pin.query().finalized_height,
+            (
+                request.commitment.archive_id(),
+                pin.query().manifest_digest,
+                pin.query().finalized_height,
+            ),
             self.seed.provider_id(),
             now / 1_000,
             |facts| {

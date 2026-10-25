@@ -113,12 +113,16 @@ fn controlled_waterfall_sweeps_existing_funds_and_custody_in_one_occurrence() {
     configure_link(&f, &mut tx, &context);
     let id = open(&f, &mut tx, &context, &f.owner, 30, "mixed-sweep");
     f.configure(&mut tx, 2, 20, 0);
-    let mut stale = draw(id, 30, 1);
-    run(&mut tx, &context, stale.clone()).expect_err("old policy quote cannot settle");
+    let mut outdated = draw(id, 30, 1);
+    run(&mut tx, &context, outdated.clone()).expect_err("old policy quote cannot settle");
     assert_eq!(f.balance(&tx, &f.first), Quantity::from(40_u32));
     assert_eq!(f.balance(&tx, &f.payee), Quantity::zero());
-    stale.waterfall.as_mut().unwrap().expected_policy_revision = 2;
-    run(&mut tx, &context, stale.clone()).unwrap();
+    outdated
+        .waterfall
+        .as_mut()
+        .unwrap()
+        .expected_policy_revision = 2;
+    run(&mut tx, &context, outdated.clone()).unwrap();
     assert_eq!(f.holdings(&tx), Quantity::from(20_u32));
     assert_eq!(f.balance(&tx, &f.first), Quantity::from(10_u32));
     assert_eq!(f.balance(&tx, &f.second), Quantity::from(10_u32));
@@ -137,7 +141,7 @@ fn controlled_waterfall_sweeps_existing_funds_and_custody_in_one_occurrence() {
             .remaining_amount
             .is_zero()
     );
-    run(&mut tx, &context, stale).expect_err("one CAS consumes the reserve only once");
+    run(&mut tx, &context, outdated).expect_err("one CAS consumes the reserve only once");
     assert_eq!(f.balance(&tx, &f.payee), Quantity::from(60_u32));
 }
 

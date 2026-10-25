@@ -181,7 +181,7 @@ async fn verified_source_admission_precedes_body_polling_and_transfers_one_slot(
 }
 #[tokio::test]
 async fn proof_body_absolute_deadline_rejects_continuous_trickle() {
-    let trickle = futures_util::stream::unfold((), |_| async {
+    let trickle = futures_util::stream::unfold((), |()| async {
         tokio::time::sleep(Duration::from_millis(5)).await;
         Some((
             Ok::<_, std::convert::Infallible>(Bytes::from_static(b"x")),

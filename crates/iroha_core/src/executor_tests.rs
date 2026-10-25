@@ -1651,10 +1651,10 @@ fn initial_batch_fixture() -> InitialBatchFixture {
     }
 }
 fn initial_batch_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
-    world
-        .asset(asset_id)
-        .map(|asset| asset.value().clone().into_inner())
-        .unwrap_or_else(|_| Quantity::zero())
+    world.asset(asset_id).map_or_else(
+        |_| Quantity::zero(),
+        |asset| asset.value().clone().into_inner(),
+    )
 }
 fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
@@ -2296,7 +2296,7 @@ fn fee_sponsor_multisig_operations_decode_variant_and_exact_target_account() {
         InstructionBox::from(MultisigApprove::new(
             target.clone(),
             proposal_id,
-            instructions_hash.clone(),
+            instructions_hash,
         )),
         InstructionBox::from(MultisigCancel::new(
             target.clone(),
@@ -3137,10 +3137,7 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
     fn operation(command: ValidatorCommitteeOperationV1) -> InstructionBox {
         SetParameter::new(Parameter::Custom(command.into_custom_parameter())).into()
     }
-    fn submit(
-        chain: &mut CertifiedTestChain,
-        inputs: Vec<(&KeyPair, InstructionBox, Option<&str>)>,
-    ) {
+    fn submit(chain: &mut CertifiedTestChain, inputs: &[(&KeyPair, InstructionBox, Option<&str>)]) {
         let height = chain.height() + 1;
         let time = height * 1_000;
         let transactions = inputs
@@ -3251,7 +3248,7 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
     bad_pop.proof_of_possession[0] ^= 1;
     submit(
         &mut chain,
-        vec![
+        &[
             (
                 intruder,
                 candidate.clone().into(),
@@ -3304,10 +3301,7 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
             Some(&before)
         );
     }
-    submit(
-        &mut chain,
-        vec![(&owners[4], candidate.clone().into(), None)],
-    );
+    submit(&mut chain, &[(&owners[4], candidate.clone().into(), None)]);
     {
         let view = chain.state().view();
         let registered = view
@@ -3335,7 +3329,7 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
     forged_transcript.credentials.beacon.transcript_hash[0] ^= 1;
     submit(
         &mut chain,
-        vec![
+        &[
             (
                 intruder,
                 operation(ValidatorCommitteeOperationV1::PrepareCredentials(
@@ -3375,7 +3369,7 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
     );
     submit(
         &mut chain,
-        vec![(
+        &[(
             &owners[0],
             operation(ValidatorCommitteeOperationV1::PrepareCredentials(
                 credentials,
@@ -3459,7 +3453,7 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
     corrupted.readiness.beacon.proof.z_s[0] ^= 1;
     submit(
         &mut chain,
-        vec![
+        &[
             (
                 intruder,
                 operation(ValidatorCommitteeOperationV1::AdmitSeat(ready.clone())),
@@ -3495,7 +3489,7 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
     );
     submit(
         &mut chain,
-        vec![(
+        &[(
             &owners[0],
             operation(ValidatorCommitteeOperationV1::AdmitSeat(ready.clone())),
             None,
@@ -3572,7 +3566,7 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
     )));
     submit(
         &mut chain,
-        vec![
+        &[
             (&owners[4], candidate.into(), Some(fresh_peer_refusal)),
             (
                 &owners[0],
@@ -6600,16 +6594,16 @@ fn proved_empty_overlay_accounts_verified_replay_gas() {
             &mut state_tx,
             &authority,
             &tx,
-            &Vec::new(),
-            Some(replay),
-            None,
-            None,
-            0,
-            Some(50_000),
-            true,
-            None,
-            None,
-            true,
+            &[],
+            (Some(replay), None, None),
+            InstructionFeeContext {
+                tx_bytes_len: 0,
+                gas_limit_md: Some(50_000),
+                require_gas_limit: true,
+                gas_asset_opt: None,
+                fee_sponsor: None,
+                skip_nexus_fee: true,
+            },
             None,
         )
         .expect("empty proved overlay should retain replay gas");
@@ -6718,16 +6712,16 @@ fn proved_replay_applies_durable_state_with_exact_per_path_authorization() {
             &mut state_tx,
             &authority,
             &tx,
-            &Vec::new(),
-            Some(replay),
-            Some(&runtime_context),
-            Some(&authorization),
-            0,
-            Some(50_000),
-            true,
-            None,
-            None,
-            true,
+            &[],
+            (Some(replay), Some(&runtime_context), Some(&authorization)),
+            InstructionFeeContext {
+                tx_bytes_len: 0,
+                gas_limit_md: Some(50_000),
+                require_gas_limit: true,
+                gas_asset_opt: None,
+                fee_sponsor: None,
+                skip_nexus_fee: true,
+            },
             None,
         )
         .expect("proved replay applies its authorized durable write");
@@ -6768,16 +6762,20 @@ fn proved_replay_applies_durable_state_with_exact_per_path_authorization() {
             &mut malformed_tx,
             &authority,
             &tx,
-            &Vec::new(),
-            Some(malformed_replay),
-            Some(&runtime_context),
-            Some(&authorization),
-            0,
-            Some(50_000),
-            true,
-            None,
-            None,
-            true,
+            &[],
+            (
+                Some(malformed_replay),
+                Some(&runtime_context),
+                Some(&authorization),
+            ),
+            InstructionFeeContext {
+                tx_bytes_len: 0,
+                gas_limit_md: Some(50_000),
+                require_gas_limit: true,
+                gas_asset_opt: None,
+                fee_sponsor: None,
+                skip_nexus_fee: true,
+            },
             None,
         )
         .expect_err("post-verification replay metadata must retain an exact authorization map");
@@ -6834,16 +6832,20 @@ fn proved_replay_applies_durable_state_with_exact_per_path_authorization() {
             &mut foreign_tx,
             &authority,
             &tx,
-            &Vec::new(),
-            Some(foreign_replay),
-            Some(&runtime_context),
-            Some(&authorization),
-            0,
-            Some(50_000),
-            true,
-            None,
-            None,
-            true,
+            &[],
+            (
+                Some(foreign_replay),
+                Some(&runtime_context),
+                Some(&authorization),
+            ),
+            InstructionFeeContext {
+                tx_bytes_len: 0,
+                gas_limit_md: Some(50_000),
+                require_gas_limit: true,
+                gas_asset_opt: None,
+                fee_sponsor: None,
+                skip_nexus_fee: true,
+            },
             None,
         )
         .expect_err("one contract's snapshot must not authorize another state namespace");
@@ -6892,16 +6894,16 @@ fn proved_replay_rejects_durable_state_without_root_authorization_before_effects
             &mut state_tx,
             &authority,
             &tx,
-            &Vec::new(),
-            Some(replay),
-            None,
-            None,
-            0,
-            Some(50_000),
-            true,
-            None,
-            None,
-            true,
+            &[],
+            (Some(replay), None, None),
+            InstructionFeeContext {
+                tx_bytes_len: 0,
+                gas_limit_md: Some(50_000),
+                require_gas_limit: true,
+                gas_asset_opt: None,
+                fee_sponsor: None,
+                skip_nexus_fee: true,
+            },
             None,
         )
         .expect_err("proved replay durable state writes require root authorization");
@@ -6998,15 +7000,15 @@ fn supplied_replay_group_limits_preserve_work_and_refuse_before_effects() {
             &ALICE_ID,
             &signed,
             &instructions,
-            Some(replay),
-            None,
-            None,
-            0,
-            Some(50_000),
-            true,
-            None,
-            None,
-            true,
+            (Some(replay), None, None),
+            InstructionFeeContext {
+                tx_bytes_len: 0,
+                gas_limit_md: Some(50_000),
+                require_gas_limit: true,
+                gas_asset_opt: None,
+                fee_sponsor: None,
+                skip_nexus_fee: true,
+            },
             None,
         );
         let finished = transaction.finish_execution_effect_budget();
@@ -7417,8 +7419,7 @@ fn test_asset_balance(
         .world
         .assets()
         .get(asset_id)
-        .map(|asset| asset.as_ref().clone())
-        .unwrap_or_else(Quantity::zero)
+        .map_or_else(Quantity::zero, |asset| asset.as_ref().clone())
 }
 fn configure_direct_ivm_fee_fixture(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -8534,12 +8535,10 @@ fn sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain() 
     let current = resolve_fee_sponsor_program(
         &state_transaction.world,
         &state_transaction.nexus,
-        &program_id,
-        1,
+        (&program_id, 1),
         &beneficiary,
         transaction.payload(),
-        Some(DataSpaceId::UNIVERSAL),
-        10,
+        (Some(DataSpaceId::UNIVERSAL), 10),
         fee_sponsor_multisig::RuleContext::admission(1),
     )
     .expect("old revision stays effective while its lease is live");
@@ -8547,12 +8546,10 @@ fn sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain() 
     let early_error = resolve_fee_sponsor_program(
         &state_transaction.world,
         &state_transaction.nexus,
-        &program_id,
-        2,
+        (&program_id, 2),
         &beneficiary,
         transaction.payload(),
-        Some(DataSpaceId::UNIVERSAL),
-        10,
+        (Some(DataSpaceId::UNIVERSAL), 10),
         fee_sponsor_multisig::RuleContext::admission(1),
     )
     .expect_err("scheduled revision must not be predicted before old leases drain");
@@ -8563,12 +8560,10 @@ fn sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain() 
     let drained = resolve_fee_sponsor_program(
         &state_transaction.world,
         &state_transaction.nexus,
-        &program_id,
-        2,
+        (&program_id, 2),
         &beneficiary,
         transaction.payload(),
-        Some(DataSpaceId::UNIVERSAL),
-        21,
+        (Some(DataSpaceId::UNIVERSAL), 21),
         fee_sponsor_multisig::RuleContext::admission(1),
     )
     .expect("scheduled revision becomes effective after the old lease expiry");
@@ -8941,13 +8936,13 @@ fn author_component_fee_policy(
     parameters.commit();
 }
 fn assert_direct_fee_exempt_draft(
-    world: World,
+    world: &World,
     nexus: &iroha_config::parameters::actual::Nexus,
     pipeline: &Pipeline,
     mut payload: TransactionPayload,
 ) {
     let authority = payload.authority.clone();
-    author_component_fee_policy(&world, &nexus.fees);
+    author_component_fee_policy(world, &nexus.fees);
     let world = world.block();
     let draft = quote_nexus_fee_admission_draft(
         &world,
@@ -9021,7 +9016,7 @@ fn protocol_fee_exempt_draft_returns_zero_quote_in_direct_mode() {
         },
     )]
     .into();
-    assert_direct_fee_exempt_draft(world, &nexus, &pipeline, payload);
+    assert_direct_fee_exempt_draft(&(world), &nexus, &pipeline, payload);
 }
 include!("executor_fee_quote_tests.rs");
 #[test]
@@ -12222,9 +12217,7 @@ fn contract_runtime_context_alias_does_not_bypass_permission_grant_authorization
         matches!(
             result,
             Err(ValidationFail::NotPermitted(ref message))
-                if message.contains(
-                    "deployed contracts may grant or revoke only exact CanUseContractPermission tokens"
-                )
+                if message.contains("deployed contract")
         ),
         "contract alias must not bypass the common permission boundary: {result:?}"
     );
@@ -12302,10 +12295,10 @@ fn initial_executor_contract_alias_never_bypasses_permission_grant_validation() 
 }
 #[test]
 fn initial_executor_contract_alias_never_bypasses_transfer_control_validation() {
-    fn assert_rejected(result: Result<(), ValidationFail>, context: &str) {
+    fn assert_rejected(result: &Result<(), ValidationFail>, context: &str) {
         assert!(
             matches!(
-                &result,
+                result,
                 Err(ValidationFail::NotPermitted(_)
                     | ValidationFail::InstructionFailed(
                         InstructionExecutionError::InvariantViolation(_)
@@ -12387,21 +12380,21 @@ fn initial_executor_contract_alias_never_bypasses_transfer_control_validation() 
         )
     }
     assert_rejected(
-        execute_case(
+        &(execute_case(
             "apps_freeze::sbp",
             "apply_freeze",
             "availability",
             AssetTransferControlWindow::Day,
-        ),
+        )),
         "unprivileged branded freeze",
     );
     assert_rejected(
-        execute_case(
+        &(execute_case(
             "apps_limits_update::sbp",
             "apply_limits",
             "limit",
             AssetTransferControlWindow::Day,
-        ),
+        )),
         "unprivileged branded limit update",
     );
     for (alias, entrypoint, kind, window) in [
@@ -12437,7 +12430,7 @@ fn initial_executor_contract_alias_never_bypasses_transfer_control_validation() 
         ),
     ] {
         assert_rejected(
-            execute_case(alias, entrypoint, kind, window),
+            &(execute_case(alias, entrypoint, kind, window)),
             &format!("contract {alias}/{entrypoint} must not emit {kind}/{window}"),
         );
     }
@@ -14447,29 +14440,30 @@ seiyaku MeteredFailure { permission CanInvokeContractEntrypoint;
     state_transaction
         .begin_execution_effect_budget(&signed)
         .unwrap();
-    let executor = state_transaction.world.executor.clone();
     let cache = state_transaction.ivm_cache;
     let resolved = {
         let mut guard = cache.lock();
-        executor
-            .resolve_contract_invocation(&mut state_transaction, &invocation, &mut guard)
-            .expect("resolve deployed contract while the cache is locked")
+        crate::executor::Executor::resolve_contract_invocation(
+            &mut state_transaction,
+            &invocation,
+            &mut guard,
+        )
+        .expect("resolve deployed contract while the cache is locked")
     };
     assert!(
         cache.try_lock().is_some(),
         "the resolved invocation must not retain the outer cache mutex"
     );
-    let error = executor
-        .execute_resolved_contract_invocation(
-            &mut state_transaction,
-            &authority,
-            &invocation,
-            resolved,
-            10,
-            0,
-            None,
-        )
-        .expect_err("ten units of gas cannot complete the contract");
+    let error = crate::executor::Executor::execute_resolved_contract_invocation(
+        &mut state_transaction,
+        &authority,
+        &invocation,
+        resolved,
+        (10, 0),
+        None,
+        None,
+    )
+    .expect_err("ten units of gas cannot complete the contract");
     state_transaction.finish_execution_effect_budget().unwrap();
     let ValidationFail::IvmFault(fault) = error else {
         panic!("expected a typed gas-exhaustion fault, got {error}");

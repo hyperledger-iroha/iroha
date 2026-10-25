@@ -7,7 +7,7 @@ use iroha_data_model::sccp::events::{
 };
 
 /// One optional draw at this native pulse height; never registers a pulse or carries deferred work.
-pub(crate) fn at_boundary<E: std::fmt::Debug>(
+pub fn at_boundary<E: std::fmt::Debug>(
     state: &mut StateBlock<'_>,
 ) -> Result<(), StateBlockStartError<E>> {
     let Some(parameters) = *store::parameters::get(&state.world) else {

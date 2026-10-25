@@ -62,13 +62,13 @@ impl TransparentStarkDigestContextV1 {
         Self { profile }
     }
     /// Execution proof byte ceiling, independent of cryptographic geometry.
-    pub(crate) const fn maximum_proof_bytes_v1(self) -> usize {
+    pub(crate) const fn maximum_proof_bytes_v1() -> usize {
         iroha_data_model::execution_proofs::EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1
     }
-    fn catalog_v1(self) -> [u8; 48] {
+    fn catalog_v1() -> [u8; 48] {
         sha2::Sha384::digest(b"iroha:execution:catalog:v1:goldilocks-poseidon-x7-six-lane").into()
     }
-    fn protocol_label_v1(self) -> &'static [u8] {
+    fn protocol_label_v1() -> &'static [u8] {
         b"native-execution-v1"
     }
     pub(crate) fn validate(self) -> Result<(), TransparentStarkErrorV1> {
@@ -631,11 +631,11 @@ pub fn goldilocks_digest384_frame_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDigestDomain);
     }
-    let catalog = context.catalog_v1();
+    let catalog = TransparentStarkDigestContextV1::catalog_v1();
     hash_bytes_384_v1(
         GoldilocksDigestDomainV1 {
             catalog: &catalog,
-            protocol: context.protocol_label_v1(),
+            protocol: TransparentStarkDigestContextV1::protocol_label_v1(),
             profile: context.profile,
             role,
             phase,
@@ -652,8 +652,7 @@ pub fn goldilocks_digest384_frame_v1(
 #[cfg(test)]
 pub fn goldilocks_digest384_last_field_stream_v1(
     context: TransparentStarkDigestContextV1,
-    role: &[u8],
-    phase: &[u8],
+    (role, phase): (&[u8], &[u8]),
     level: u64,
     index: u64,
     counter: u64,
@@ -668,11 +667,11 @@ pub fn goldilocks_digest384_last_field_stream_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDigestDomain);
     }
-    let catalog = context.catalog_v1();
+    let catalog = TransparentStarkDigestContextV1::catalog_v1();
     GoldilocksDigest384LastFieldStreamV1::new(
         GoldilocksDigestDomainV1 {
             catalog: &catalog,
-            protocol: context.protocol_label_v1(),
+            protocol: TransparentStarkDigestContextV1::protocol_label_v1(),
             profile: context.profile,
             role,
             phase,

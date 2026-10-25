@@ -1,4 +1,4 @@
-//! Explicit authority declarations for every actual WorldData field.
+//! Explicit authority declarations for every actual `WorldData` field.
 
 use iroha_data_model::nexus::{
     PrivateSettlementNullifierKeyV1, PrivateSettlementOutputKeyV1,
@@ -23,7 +23,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Cell(schema::<Peers>()))), release = peers;
     domains: Storage<DomainId, Domain> => ("world.domains",
         Role::Canonical(Canonical::Table { key: schema::<DomainId>(), value: schema::<Domain>() })), release = domains;
-    domains_by_owner: Storage<AccountId, BTreeSet<DomainId>> => ("world.domains_by_owner",
+    domains_by_owner: Storage<(AccountId, DomainId), ()> => ("world.domains_by_owner",
         Role::Derived { sources: &["world.domains"], check: DerivationCheck::Rebuild("World::rebuild_domain_owner_index; state::authority_registry::domain_ownership::CheckedDomainOwnership::capture") }), release = domains_by_owner;
     kaigi_relay_registry: Storage<AccountId, DomainId> => ("world.kaigi_relay_registry",
         Role::Derived { sources: &["world.domains", "world.accounts"], check: DerivationCheck::Rebuild("isi::kaigi::rebuild_kaigi_relay_registry; validate_rebuilt_kaigi_relay_registry") }), release = kaigi_relay_registry;
@@ -470,11 +470,11 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Cell(schema::<u64>()))), release = soradns_history_len;
     repo_agreements: Storage<RepoAgreementId, RepoAgreement> => ("world.repo_agreements",
         Role::Canonical(Canonical::Table { key: schema::<RepoAgreementId>(), value: schema::<RepoAgreement>() })), release = repo_agreements;
-    repo_agreements_by_initiator: Storage<AccountId, BTreeSet<RepoAgreementId>> => ("world.repo_agreements_by_initiator",
+    repo_agreements_by_initiator: Storage<(AccountId, RepoAgreementId), ()> => ("world.repo_agreements_by_initiator",
         Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes; state::authority_registry::grouped_ownership::CheckedRepoAgreements::capture") }), release = repo_agreements_by_initiator;
-    repo_agreements_by_counterparty: Storage<AccountId, BTreeSet<RepoAgreementId>> => ("world.repo_agreements_by_counterparty",
+    repo_agreements_by_counterparty: Storage<(AccountId, RepoAgreementId), ()> => ("world.repo_agreements_by_counterparty",
         Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes; state::authority_registry::grouped_ownership::CheckedRepoAgreements::capture") }), release = repo_agreements_by_counterparty;
-    repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>> => ("world.repo_agreements_by_custodian",
+    repo_agreements_by_custodian: Storage<(AccountId, RepoAgreementId), ()> => ("world.repo_agreements_by_custodian",
         Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes; state::authority_registry::grouped_ownership::CheckedRepoAgreements::capture") }), release = repo_agreements_by_custodian;
     settlement_receipts: Storage<SettlementId, SettlementReceipt> => ("world.settlement_receipts",
         Role::Canonical(Canonical::Table { key: schema::<SettlementId>(), value: schema::<SettlementReceipt>() })), release = settlement_receipts;

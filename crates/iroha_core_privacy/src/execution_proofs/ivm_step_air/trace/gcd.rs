@@ -99,6 +99,7 @@ pub(super) fn gas_witness(gas: u64) -> ([F; absolute::WIDTH], [F; mean::GAS_WIDT
 }
 
 /// Every mode is owned by authenticated fetch and a verifier-derived phase.
+#[derive(Clone, Copy)]
 pub(super) struct Selection {
     pub(super) fetched: F,
     pub(super) out_of_gas: F,
@@ -108,19 +109,32 @@ pub(super) struct Selection {
     pub(super) commit: F,
 }
 
+/// Borrowed GCD witness banks, sharing the retained trace row.
+#[derive(Clone, Copy)]
+pub(super) struct Banks<'a> {
+    pub(super) modes: &'a [F],
+    pub(super) digits: &'a [F],
+    pub(super) product: &'a [F],
+    pub(super) absolute: &'a [F],
+    pub(super) gas: &'a [F],
+}
+
 pub(super) fn append_residues(
     out: &mut Vec<F>,
-    modes: &[F],
-    bank: &[F],
-    product: &[F],
-    absolute_bank: &[F],
-    gas_bank: &[F],
+    banks: Banks<'_>,
     sources: Sources<'_>,
     next_sources: Sources<'_>,
     gas_digits: &[F],
     remainder_less: F,
     selection: Selection,
 ) {
+    let Banks {
+        modes,
+        digits: bank,
+        product,
+        absolute: absolute_bank,
+        gas: gas_bank,
+    } = banks;
     let initial = out.len();
     let Selection {
         fetched,

@@ -81,7 +81,7 @@ struct ScopeReclaim {
     _owner: StreamControlOwner,
 }
 
-/// A current fixed scope under its own exact native layout, without a BTreeSet copy.
+/// A current fixed scope under its own exact native layout, without a `BTreeSet` copy.
 #[derive(Clone)]
 pub struct FixedScopeOwner {
     scope: Shared<FixedRouteScope, ScopeReclaim>,
@@ -258,9 +258,6 @@ fn scalar_permission<T: norito::json::JsonSerialize>(
     name: &str,
     target: &T,
 ) -> Result<bool, Error> {
-    if permission.name() != name {
-        return Ok(false);
-    }
     struct ExactPayload<'a> {
         expected: &'a [u8],
         position: usize,
@@ -281,6 +278,11 @@ fn scalar_permission<T: norito::json::JsonSerialize>(
             Ok(())
         }
     }
+
+    if permission.name() != name {
+        return Ok(false);
+    }
+
     let mut output = ExactPayload {
         expected: permission.payload().get().as_bytes(),
         position: 0,
@@ -291,12 +293,12 @@ fn scalar_permission<T: norito::json::JsonSerialize>(
         .map_err(|_| capacity())?;
     Ok(output.matches && output.position == output.expected.len())
 }
-pub(crate) fn can_read_all(world: &impl WorldReadOnly, caller: &AccountId) -> Result<bool, Error> {
+pub fn can_read_all(world: &impl WorldReadOnly, caller: &AccountId) -> Result<bool, Error> {
     account_permission_matches(world, caller, |permission| {
         scalar_permission(permission, "CanReadAllLedgerData", &CanReadAllLedgerData)
     })
 }
-pub(crate) fn can_read_dataspace(
+pub fn can_read_dataspace(
     world: &impl WorldReadOnly,
     caller: &AccountId,
     id: DataSpaceId,

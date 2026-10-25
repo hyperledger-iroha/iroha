@@ -119,7 +119,7 @@ pub(super) fn decode_header(bytes: &[u8]) -> Result<BlockHeader, norito::Error> 
         || !header
             .skipped_leaders
             .iter()
-            .all(|key| key.is_well_formed())
+            .all(iroha_sumeragi::types::PublicKey::is_well_formed)
     {
         return Err(norito::Error::NonCanonicalEncoding);
     }

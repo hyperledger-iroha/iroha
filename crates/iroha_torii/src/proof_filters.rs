@@ -1,14 +1,17 @@
 use iroha_data_model::events::EventBox;
 use iroha_data_model::prelude::DataEvent;
+/// Canonical backend, call-hash and envelope-hash filter lists.
+pub type NormalizedProofFilters = (
+    Option<Vec<String>>,
+    Option<Vec<[u8; 32]>>,
+    Option<Vec<[u8; 32]>>,
+);
+
 pub fn normalize_proof_filters(
     proof_backend: Option<Vec<String>>,
     proof_call_hash: Option<Vec<[u8; 32]>>,
     proof_envelope_hash: Option<Vec<[u8; 32]>>,
-) -> (
-    Option<Vec<String>>,
-    Option<Vec<[u8; 32]>>,
-    Option<Vec<[u8; 32]>>,
-) {
+) -> NormalizedProofFilters {
     (
         normalize_vec(proof_backend),
         normalize_vec(proof_call_hash),
@@ -46,54 +49,50 @@ pub fn event_matches_proof_filters(
     }
     match proof_event {
         iroha_data_model::events::data::proof::ProofEvent::Verified(v) => {
-            if let Some(backends) = proof_backend {
-                if !backends.contains(&v.id.backend) {
-                    return false;
-                }
+            if let Some(backends) = proof_backend
+                && !backends.contains(&v.id.backend)
+            {
+                return false;
             }
-            if let Some(call_hashes) = proof_call_hash {
-                if !v
+            if let Some(call_hashes) = proof_call_hash
+                && !v
                     .call_hash
                     .as_ref()
                     .is_some_and(|hash| call_hashes.contains(hash))
-                {
-                    return false;
-                }
+            {
+                return false;
             }
-            if let Some(envelope_hashes) = proof_envelope_hash {
-                if !v
+            if let Some(envelope_hashes) = proof_envelope_hash
+                && !v
                     .envelope_hash
                     .as_ref()
                     .is_some_and(|hash| envelope_hashes.contains(hash))
-                {
-                    return false;
-                }
+            {
+                return false;
             }
             true
         }
         iroha_data_model::events::data::proof::ProofEvent::Rejected(r) => {
-            if let Some(backends) = proof_backend {
-                if !backends.contains(&r.id.backend) {
-                    return false;
-                }
+            if let Some(backends) = proof_backend
+                && !backends.contains(&r.id.backend)
+            {
+                return false;
             }
-            if let Some(call_hashes) = proof_call_hash {
-                if !r
+            if let Some(call_hashes) = proof_call_hash
+                && !r
                     .call_hash
                     .as_ref()
                     .is_some_and(|hash| call_hashes.contains(hash))
-                {
-                    return false;
-                }
+            {
+                return false;
             }
-            if let Some(envelope_hashes) = proof_envelope_hash {
-                if !r
+            if let Some(envelope_hashes) = proof_envelope_hash
+                && !r
                     .envelope_hash
                     .as_ref()
                     .is_some_and(|hash| envelope_hashes.contains(hash))
-                {
-                    return false;
-                }
+            {
+                return false;
             }
             true
         }
@@ -101,10 +100,10 @@ pub fn event_matches_proof_filters(
             if proof_call_hash.is_some() || proof_envelope_hash.is_some() {
                 return false;
             }
-            if let Some(backends) = proof_backend {
-                if !backends.contains(&p.backend) {
-                    return false;
-                }
+            if let Some(backends) = proof_backend
+                && !backends.contains(&p.backend)
+            {
+                return false;
             }
             true
         }

@@ -300,11 +300,6 @@
             "type": "array",
             "uniqueItems": true
           },
-          "default_signing": {
-            "const": "ed25519",
-            "description": "Explicit first-release account-bootstrap default. Ed25519 is mandatory in admission configuration and supports canonical wallet request signing.",
-            "type": "string"
-          },
           "network_id": {
             "description": "Exact checksummed genesis-derived NetworkId; the hash marker bit and checksum must validate.",
             "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
@@ -324,8 +319,7 @@
           "schema_version",
           "network_id",
           "network_prefix",
-          "allowed_signing",
-          "default_signing"
+          "allowed_signing"
         ],
         "type": "object",
         "x-iroha-max-bytes": 4096
@@ -32917,7 +32911,7 @@
           110,
           176
         ],
-        "description": "The sole pinned full native BLAKE3-256 commitment to the ordered first-release Exact12 catalog.",
+        "description": "The sole pinned 32-byte native BLAKE3-256 commitment to the ordered first-release Exact12 catalog.",
         "items": {
           "maximum": 255,
           "minimum": 0,

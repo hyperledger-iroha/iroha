@@ -447,14 +447,14 @@ fn native_validation_rejects_committed_da_pin_intent_identity_reuse() {
                     BlockValidationError::DaPinIntentBundle(
                         DaPinIntentValidationError::DuplicateStorageTicket { lane, .. },
                     ),
-                ) => *lane == LaneId::SINGLE,
-                (
+                )
+                | (
                     "manifest",
                     BlockValidationError::DaPinIntentBundle(
                         DaPinIntentValidationError::DuplicateManifest { lane, .. },
                     ),
-                ) => *lane == LaneId::SINGLE,
-                (
+                )
+                | (
                     "identity",
                     BlockValidationError::DaPinIntentBundle(
                         DaPinIntentValidationError::DuplicateIntent { lane, .. },

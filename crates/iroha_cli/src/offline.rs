@@ -35,7 +35,7 @@ const MAX_SIMULATION_TRIALS: u32 = 1_000;
 mod registration;
 
 #[derive(Subcommand, Debug)]
-pub(crate) enum Command {
+pub enum Command {
     /// Verify and package finalized universal-token registration originals for wallet import.
     RegistrationPackage(registration::RegistrationPackageArgs),
     /// Petal Stream optical handoff tooling.
@@ -69,7 +69,7 @@ impl Run for Command {
 }
 
 #[derive(Subcommand, Debug)]
-pub(crate) enum PetalCommand {
+pub enum PetalCommand {
     /// Encode a payload into a stream of Petal frames (PNG sequence or animated GIF).
     Encode(EncodeArgs),
     /// Reassemble a payload from a directory of rendered or captured PNG frames.
@@ -92,7 +92,7 @@ impl Run for PetalCommand {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum EncodeFormat {
+pub enum EncodeFormat {
     /// One PNG per frame (`frame_0000.png`, …).
     Png,
     /// One looping animated GIF (`stream.gif`); requires the `offline-visual-codecs` feature.
@@ -109,7 +109,7 @@ impl std::fmt::Display for EncodeFormat {
 }
 
 #[derive(Args, Debug, Clone)]
-pub(crate) struct EncodeArgs {
+pub struct EncodeArgs {
     /// Payload file to stream.
     #[arg(long, value_name = "PATH")]
     input: PathBuf,
@@ -117,7 +117,7 @@ pub(crate) struct EncodeArgs {
     #[arg(long, value_name = "DIR")]
     output: PathBuf,
     /// Payload kind byte carried in the beacon (KAGEMUSHA wallet V1 envelope tags: 1 Offer,
-    /// 2 Request, 3 Payment, 4 Credited, 5 SessionControl, 6 PolicyData, 7 Lineage).
+    /// 2 Request, 3 Payment, 4 Credited, 5 `SessionControl`, 6 `PolicyData`, 7 Lineage).
     #[arg(long, default_value_t = 0)]
     kind: u8,
     /// Frames to render. Zero renders one systematic pass plus 25 % repair (at least four extra frames).
@@ -138,7 +138,7 @@ pub(crate) struct EncodeArgs {
 }
 
 #[derive(Args, Debug, Clone)]
-pub(crate) struct DecodeArgs {
+pub struct DecodeArgs {
     /// Directory of PNG frames, read in file-name order.
     #[arg(long = "input-dir", value_name = "DIR")]
     input_dir: PathBuf,
@@ -154,14 +154,14 @@ pub(crate) struct DecodeArgs {
 }
 
 #[derive(Args, Debug, Clone)]
-pub(crate) struct InspectArgs {
+pub struct InspectArgs {
     /// PNG frame to inspect.
     #[arg(long, value_name = "PATH")]
     input: PathBuf,
 }
 
 #[derive(Args, Debug, Clone)]
-pub(crate) struct SimulateArgs {
+pub struct SimulateArgs {
     /// Payload file; omit to use pseudo-random bytes of `--bytes` length.
     #[arg(long, value_name = "PATH")]
     input: Option<PathBuf>,
@@ -291,6 +291,12 @@ impl Run for EncodeArgs {
 }
 
 impl EncodeArgs {
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "Display-only throughput estimates intentionally use floating-point rounding and saturating integer conversion."
+    )]
     fn encode(&self) -> Result<EncodeReport> {
         if !(MIN_SIZE..=MAX_SIZE).contains(&self.size) {
             return Err(eyre!(
@@ -500,10 +506,10 @@ impl Run for InspectArgs {
         .filter(|(_, lane)| lane.is_some())
         .map(|(letter, _)| *letter)
         .collect();
-        let text = match &report.error {
-            Some(error) => format!("no lane decoded: {error}"),
-            None => format!("lanes decoded: {lanes}"),
-        };
+        let text = report.error.as_ref().map_or_else(
+            || format!("lanes decoded: {lanes}"),
+            |error| format!("no lane decoded: {error}"),
+        );
         let readable = !lanes.is_empty();
         print_with_optional_text(context, Some(text), &report)?;
         if readable {
@@ -523,8 +529,8 @@ impl InspectArgs {
         let mut report = InspectReport {
             schema: INSPECT_SCHEMA.to_owned(),
             input_path: self.input.display().to_string(),
-            width: luma.width as u32,
-            height: luma.height as u32,
+            width: u32::try_from(luma.width).wrap_err("PNG width exceeds u32")?,
+            height: u32::try_from(luma.height).wrap_err("PNG height exceeds u32")?,
             error: None,
             rotation_quarter_turns: None,
             mirrored: None,
@@ -599,6 +605,10 @@ impl Run for SimulateArgs {
 }
 
 impl SimulateArgs {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Simulation summaries intentionally report approximate floating-point means and shares."
+    )]
     fn simulate(&self) -> Result<SimulateReport> {
         if self.trials == 0 || self.trials > MAX_SIMULATION_TRIALS {
             return Err(eyre!(
@@ -732,8 +742,14 @@ fn read_png_luma(path: &Path) -> Result<Luma> {
         .chunks_exact(channels)
         .map(|px| {
             if is_color {
-                ((299 * u32::from(px[0]) + 587 * u32::from(px[1]) + 114 * u32::from(px[2]) + 500)
-                    / 1_000) as u8
+                u8::try_from(
+                    (299 * u32::from(px[0])
+                        + 587 * u32::from(px[1])
+                        + 114 * u32::from(px[2])
+                        + 500)
+                        / 1_000,
+                )
+                .expect("weighted RGB luma fits one byte")
             } else {
                 px[0]
             }
@@ -801,7 +817,7 @@ mod tests {
 
     fn sample_payload(len: usize) -> Vec<u8> {
         (0..len)
-            .map(|i| (i.wrapping_mul(31) ^ (i >> 3)) as u8)
+            .map(|i| (i.wrapping_mul(31) ^ (i >> 3)).to_le_bytes()[0])
             .collect()
     }
 

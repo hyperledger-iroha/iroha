@@ -21,7 +21,7 @@ const RESULT_SCHEMA: &str = "taira.stopped-owner-maintenance.result.v1";
 
 /// Credential-free stopped-owner maintenance for the active routine updater.
 #[derive(clap::Args, Debug)]
-pub(crate) struct StoppedOwnerMaintenance {
+pub struct StoppedOwnerMaintenance {
     /// Read the bounded root-owned public request from this inherited read-only descriptor.
     #[arg(long)]
     request_fd: u32,
@@ -56,6 +56,13 @@ pub(super) struct MaintenanceLock {
 
 impl StoppedOwnerMaintenance {
     /// Run without opening client configuration or signing inputs.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "Linux custody uses the receiver; unsupported platforms preserve the same rejecting interface"
+        )
+    )]
     pub(crate) fn run_without_client_config(&self, mut output: impl Write) -> Result<()> {
         #[cfg(target_os = "linux")]
         {
@@ -326,7 +333,7 @@ pub(super) fn maintenance_scope(
 fn hash_observed_daemon(mut input: impl Read, size: u64, deadline: Instant) -> Result<String> {
     let mut digest = Sha256::new();
     let mut remaining = size;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         ensure!(
             Instant::now() < deadline,
@@ -496,6 +503,11 @@ pub(super) fn process_identity(bytes: &[u8]) -> Result<(u32, u32, u64)> {
 
 #[cfg(any(target_os = "linux", test))]
 fn require_updater_flock(bytes: &[u8], owner: &MaintenanceOwner) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    let device = owner.lock.device;
+    #[cfg(not(target_os = "linux"))]
+    let device = rustix::fs::Dev::try_from(owner.lock.device)
+        .wrap_err("device identifier does not fit platform dev_t")?;
     let mut matches = 0;
     for line in std::str::from_utf8(bytes)?.lines() {
         let row: Vec<_> = line.split_ascii_whitespace().collect();
@@ -508,10 +520,8 @@ fn require_updater_flock(bytes: &[u8], owner: &MaintenanceOwner) -> Result<()> {
         }
         let identity: Vec<_> = row[5].split(':').collect();
         if identity.len() == 3
-            && u32::from_str_radix(identity[0], 16).ok()
-                == Some(rustix::fs::major(owner.lock.device as rustix::fs::Dev))
-            && u32::from_str_radix(identity[1], 16).ok()
-                == Some(rustix::fs::minor(owner.lock.device as rustix::fs::Dev))
+            && u32::from_str_radix(identity[0], 16).ok() == Some(rustix::fs::major(device))
+            && u32::from_str_radix(identity[1], 16).ok() == Some(rustix::fs::minor(device))
             && identity[2].parse::<u64>().ok() == Some(owner.lock.inode)
         {
             matches += 1;
@@ -732,7 +742,8 @@ mod tests {
                     start_time_ticks: 456,
                     argv: vec!["/usr/bin/python3".into(), "-I".into(), "-".into()],
                     lock: MaintenanceLock {
-                        device: rustix::fs::makedev(8, 1) as u64,
+                        device: u64::try_from(rustix::fs::makedev(8, 1))
+                            .expect("fixture device identifier is positive"),
                         inode: 789,
                     },
                 },
@@ -764,7 +775,7 @@ mod tests {
                     "command": (format!("/srv/taira/{role}/current/bin/iroha3d_taira")),
                     "resolved": (format!("/srv/taira/{role}/releases/{release}/bin/iroha3d_taira")),
                     "sha256": "b764f5485343264985e5b257433eef77a4adf64c04f695f24c093de311f8e192",
-                    "size": 321112736_u64,
+                    "size": 321_112_736_u64,
                 }),
             );
         }
@@ -810,7 +821,7 @@ mod tests {
             assert_eq!(observed.release, release);
             assert_eq!(daemon.resolved, release.join("bin/iroha3d_taira"));
             assert_eq!(paths[index + 2], daemon.resolved);
-            assert_eq!(observed.size, 321112736);
+            assert_eq!(observed.size, 321_112_736);
             assert_eq!(
                 observed.sha256,
                 "b764f5485343264985e5b257433eef77a4adf64c04f695f24c093de311f8e192"
@@ -869,8 +880,8 @@ mod tests {
                 norito::json!("B764f5485343264985e5b257433eef77a4adf64c04f695f24c093de311f8e192"),
             ),
             ("sha256", norito::json!("00")),
-            ("size", norito::json!(1000000_u64)),
-            ("size", norito::json!(1073741824_u64)),
+            ("size", norito::json!(1_000_000_u64)),
+            ("size", norito::json!(1_073_741_824_u64)),
             ("size", norito::json!("321112736")),
             ("unexpected", norito::json!(true)),
         ] {
@@ -934,7 +945,7 @@ mod tests {
 
     #[test]
     fn observed_daemon_hash_is_exact_size_and_deadline_bounded() -> Result<()> {
-        let bytes = vec![17_u8; 131073];
+        let bytes = vec![17_u8; 131_073];
         let deadline = Instant::now() + Duration::from_secs(10);
         assert_eq!(
             hash_observed_daemon(bytes.as_slice(), bytes.len() as u64, deadline)?,

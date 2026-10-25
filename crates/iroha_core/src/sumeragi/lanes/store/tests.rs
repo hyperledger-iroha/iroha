@@ -1425,10 +1425,7 @@ fn read_only_missing_frame_preserves_not_found_and_reopens_after_publication() {
         Err(error) => error,
         Ok(mut read) => {
             // Dispose the original failed read before asserting its wrong classification.
-            let error = read
-                .poll()
-                .err()
-                .expect("missing frame cannot authenticate");
+            let error = read.poll().expect_err("missing frame cannot authenticate");
             drop(read);
             io::Error::new(error.io_kind(), "read-only missing source classification")
         }

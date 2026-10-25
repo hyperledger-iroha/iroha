@@ -399,6 +399,10 @@ impl PreparedFinalPromotionCheckV1 {
     /// mismatch. Signing and transport waits never reset the original interval.
     /// Every failure retains the exact signed graph and original preparation. Local refusals may
     /// retry only that same attempt; terminal rejection never reopens signing or renews its deadline.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn bind_signed_transaction(
         self,
         signed: SignedTransaction,
@@ -408,6 +412,10 @@ impl PreparedFinalPromotionCheckV1 {
             .map_err(FinalPromotionCheckBindingFailureV1)
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "This callback implements the fallible signer-check binding interface shared with scopes requiring validation"
+    )]
     fn binding_scope(&mut self) -> Result<BindingScope<'_>, NativeCheckErrorV1> {
         Ok(BindingScope {
             state: &self.state,
@@ -454,6 +462,10 @@ impl FinalPromotionCheckBindingFailureV1 {
     ///
     /// # Errors
     /// Returns the unchanged signed custody and original rejection or latest local refusal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn retry(self) -> Result<PendingFinalPromotionCheckV1, Self> {
         if !self.0.error.is_retryable() {
             return Err(self);
@@ -511,6 +523,10 @@ impl PendingFinalPromotionCheckV1 {
     /// # Errors
     /// Rejects expiry, missing exact application/finality, foreign committee continuity, changed
     /// signed envelope, rejected or misaligned result, unavailable clock, or current ineligibility.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn verify_finalized(
         self,
         source: FinalPromotionCheckSourceV1<'_>,

@@ -9,9 +9,8 @@ fn runtime_dependency_builders_retain_injected_instances() {
         sorafs::signer_test_support::TestSignerMode::Sign,
     );
     let signer_backend: Arc<dyn sorafs::StreamTokenSignerClientV1> = fixture.clone();
-    let observer: Arc<dyn sorafs::StreamTokenStateObserverClientV1> = Arc::new(
-        sorafs::signer_test_support::SignedObserver(fixture.clone()),
-    );
+    let observer: Arc<dyn sorafs::StreamTokenStateObserverClientV1> =
+        Arc::new(sorafs::signer_test_support::SignedObserver(fixture.clone()));
     let approved = sorafs::StreamTokenApprovedCustodyAnchorV1::new(
         fixture.pins.config_digest(),
         sorafs::signer_test_support::anchor(100),
@@ -21,11 +20,11 @@ fn runtime_dependency_builders_retain_injected_instances() {
         crate::build_identity_test_fixture::build_identity(),
         routing::MaybeTelemetry::disabled(),
     )
-        .with_sorafs_stream_token_signer_client(Arc::clone(&signer_backend))
-        .with_sorafs_stream_token_state_observer(Arc::clone(&observer))
-        .with_sorafs_stream_token_approved_anchor(approved)
-        .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
-        .with_sorafs_gateway_compliance_feed_transport(Arc::clone(&compliance_transport));
+    .with_sorafs_stream_token_signer_client(Arc::clone(&signer_backend))
+    .with_sorafs_stream_token_state_observer(Arc::clone(&observer))
+    .with_sorafs_stream_token_approved_anchor(approved)
+    .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
+    .with_sorafs_gateway_compliance_feed_transport(Arc::clone(&compliance_transport));
     assert!(Arc::ptr_eq(
         dependencies
             .sorafs_stream_token_signer_client

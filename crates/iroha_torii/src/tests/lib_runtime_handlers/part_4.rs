@@ -77,7 +77,7 @@ async fn run_route_unavailable_proxy_case(case: RouteUnavailableProxyCase) {
             "transport unavailable",
         ),
     };
-    let request = signed_query_proxy_request_for_test(request_id.clone(), route);
+    let request = signed_query_proxy_request_for_test(request_id, route);
     let completed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let completed_ref = completed.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
@@ -705,6 +705,9 @@ async fn privacy_ingest_denies_without_namespace_allowlist() {
 #[tokio::test]
 #[cfg(feature = "telemetry")]
 async fn privacy_ingest_authenticates_before_body_decode() {
+    const ROUTES: &[iroha_torii_shared::route_catalog::RouteDescriptor] =
+        &[route_catalog::telemetry::SORANET_PRIVACY_EVENT];
+
     let mut app = mk_app_state_for_tests();
     {
         let app_mut =
@@ -715,8 +718,7 @@ async fn privacy_ingest_authenticates_before_body_decode() {
             &app_mut.soranet_privacy_ingest.allow_cidrs,
         ));
     }
-    const ROUTES: &[iroha_torii_shared::route_catalog::RouteDescriptor] =
-        &[route_catalog::telemetry::SORANET_PRIVACY_EVENT];
+
     let descriptor = &ROUTES[0];
     let mut builder = RouterBuilder::new(
         app.clone(),
@@ -788,6 +790,9 @@ async fn privacy_ingest_authenticates_before_body_decode() {
 #[tokio::test]
 #[cfg(feature = "telemetry")]
 async fn privacy_ingest_authentication_enforces_route_body_limit() {
+    const ROUTES: &[iroha_torii_shared::route_catalog::RouteDescriptor] =
+        &[route_catalog::telemetry::SORANET_PRIVACY_EVENT];
+
     let mut app = mk_app_state_for_tests();
     assert!(
         app.transaction_max_content_len > super::SORANET_PRIVACY_INGEST_MAX_BODY_BYTES,
@@ -802,8 +807,7 @@ async fn privacy_ingest_authentication_enforces_route_body_limit() {
             &app_mut.soranet_privacy_ingest.allow_cidrs,
         ));
     }
-    const ROUTES: &[iroha_torii_shared::route_catalog::RouteDescriptor] =
-        &[route_catalog::telemetry::SORANET_PRIVACY_EVENT];
+
     let descriptor = &ROUTES[0];
     let mut builder = RouterBuilder::new(
         app.clone(),
@@ -1417,12 +1421,12 @@ fn signed_push_json<T>(
     key_pair: &KeyPair,
     method: Method,
     uri: axum::http::Uri,
-    value: T,
+    value: &T,
 ) -> (Method, axum::http::Uri, HeaderMap, axum::body::Bytes)
 where
     T: norito::json::JsonSerialize,
 {
-    let body = norito::json::to_vec(&value).expect("encode push body");
+    let body = norito::json::to_vec(value).expect("encode push body");
     let mut headers = signed_app_headers(account_id, key_pair, &method, &uri, body.as_ref());
     headers.insert(
         axum::http::header::CONTENT_TYPE,
@@ -1443,7 +1447,7 @@ async fn push_registration_rejected_when_disabled() {
     let req = mk_push_request(&account_id, "t-disabled");
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
-        signed_push_json(&account_id, &key_pair, Method::POST, uri, req);
+        signed_push_json(&account_id, &key_pair, Method::POST, uri, &(req));
     let resp =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -1469,7 +1473,7 @@ async fn push_registration_requires_credentials() {
     let req = mk_push_request(&account_id, "t-missing-creds");
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
-        signed_push_json(&account_id, &key_pair, Method::POST, uri, req);
+        signed_push_json(&account_id, &key_pair, Method::POST, uri, &(req));
     let resp =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -1490,7 +1494,7 @@ async fn push_registration_succeeds_with_credentials() {
     let req = mk_push_request(&account_id, "t-success");
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
-        signed_push_json(&account_id, &key_pair, Method::POST, uri, req);
+        signed_push_json(&account_id, &key_pair, Method::POST, uri, &(req));
     let resp =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
@@ -1511,7 +1515,7 @@ async fn push_registration_accepts_account_alias_and_stores_canonical_i105() {
     req.account_id = "wallet@universal".to_string();
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
-        signed_push_json(&canonical_account, &key_pair, Method::POST, uri, req);
+        signed_push_json(&canonical_account, &key_pair, Method::POST, uri, &(req));
     let rejected =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
@@ -1534,7 +1538,7 @@ async fn push_registration_accepts_account_alias_and_stores_canonical_i105() {
     req.account_id = resolved.to_string();
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
-        signed_push_json(&canonical_account, &key_pair, Method::POST, uri, req);
+        signed_push_json(&canonical_account, &key_pair, Method::POST, uri, &(req));
     let resp =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
@@ -1595,7 +1599,7 @@ async fn push_registration_rejects_body_account_mismatch_without_mutation() {
     let request = mk_push_request(&other, "t-mismatch");
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
-        signed_push_json(&signer, &signer_keys, Method::POST, uri, request);
+        signed_push_json(&signer, &signer_keys, Method::POST, uri, &(request));
     let response =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -1620,19 +1624,14 @@ async fn push_unregister_removes_device() {
     );
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let req = mk_push_request(&account_id, "t-remove");
-    let (method, signed_uri, headers, body) = signed_push_json(
-        &account_id,
-        &key_pair,
-        Method::POST,
-        uri.clone(),
-        req.clone(),
-    );
+    let (method, signed_uri, headers, body) =
+        signed_push_json(&account_id, &key_pair, Method::POST, uri.clone(), &(req));
     let resp =
         super::handler_push_register_device(State(app.clone()), method, signed_uri, headers, body)
             .await;
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let (method, signed_uri, headers, body) =
-        signed_push_json(&account_id, &key_pair, Method::DELETE, uri, req);
+        signed_push_json(&account_id, &key_pair, Method::DELETE, uri, &(req));
     let resp = super::handler_push_unregister_device(
         State(app.clone()),
         method,

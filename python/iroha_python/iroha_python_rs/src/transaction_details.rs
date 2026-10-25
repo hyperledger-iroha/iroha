@@ -116,6 +116,10 @@ pub(super) fn transaction_details_carrier_block_hash(
 /// Authenticate exact original details bytes and project using the sole output producer.
 #[pyfunction]
 #[pyo3(signature = (transaction_hash, details_response_bytes, native_finality_proof_chain_json, expected_network_id, expected_chain, trusted_checkpoint, *, expected_chain_discriminant))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+)]
 pub(super) fn verify_transaction_details_inclusion(
     py: Python<'_>,
     transaction_hash: &str,

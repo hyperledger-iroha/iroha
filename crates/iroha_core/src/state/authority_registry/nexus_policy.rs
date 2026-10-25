@@ -189,7 +189,7 @@ impl<'a> BorrowedNexusPolicy<'a> {
                 Seq(catalog
                     .lanes()
                     .iter()
-                    .map(|lane| lane.borrowed_consensus_projection()))
+                    .map(iroha_data_model::nexus::LaneConfig::borrowed_consensus_projection))
             ),
         )?;
         Ok(Self {
@@ -236,7 +236,8 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
                 runtime.owner_policy.routing_default_dataspace.as_u64(),
                 Seq(nexus.routing_policy.rules.iter().map(|rule| record!(
                     rule.lane.as_u32(),
-                    rule.dataspace.map(|id| id.as_u64()),
+                    rule.dataspace
+                        .map(iroha_model_base::topology::DataSpaceId::as_u64),
                     Ref(&rule.matcher.account),
                     Ref(&rule.matcher.instruction)
                 )))

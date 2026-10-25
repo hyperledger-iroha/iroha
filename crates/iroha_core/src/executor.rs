@@ -246,17 +246,7 @@ impl VerifiedFeeSponsorCharge {
             None,
         )
     }
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        AccountId,
-        FeeSponsorProgramId,
-        FeeChargeKind,
-        AssetId,
-        Option<AccountId>,
-        Quantity,
-        Option<(Hash, Hash, u64)>,
-    ) {
+    pub(crate) fn into_parts(self) -> FeeSponsorPaymentParts {
         (
             self.submitting_authority,
             self.program_id,
@@ -947,7 +937,7 @@ fn authority_has_native_global_read_permission(
 }
 
 /// Read the existing exact grant. `Json` has canonical lexical form; the strict
-/// one-field adapter and AccountId's canonical-I105 decoder preserve exact token semantics.
+/// one-field adapter and `AccountId`'s canonical-I105 decoder preserve exact token semantics.
 /// Unlike constructing a fresh token, inherited decoder refusal remains fallible here.
 fn authority_has_native_account_read_permission(
     world: &impl WorldReadOnly,
@@ -1056,15 +1046,9 @@ fn validate_builtin_account_alias_query_permission(
         return Ok(());
     };
     match query {
-        SingularQueryBox::FindAccountByAlias(query) => {
-            require_alias(query.alias()).map_err(Into::into)
-        }
-        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => {
-            require_alias(query.alias()).map_err(Into::into)
-        }
-        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => {
-            require_alias(query.alias()).map_err(Into::into)
-        }
+        SingularQueryBox::FindAccountByAlias(query) => require_alias(query.alias()),
+        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => require_alias(query.alias()),
+        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => require_alias(query.alias()),
         SingularQueryBox::FindAliasesByAccountId(query) => {
             let catalog = world.dataspace_catalog();
             let dataspace_filter = query
@@ -1431,8 +1415,8 @@ pub(crate) fn execute_instruction_detached(
     }
     if let Some(rb) = any.downcast_ref::<RegisterBox>() {
         match rb {
-            RegisterBox::Peer(_) => {}
-            RegisterBox::Domain(_)
+            RegisterBox::Peer(_)
+            | RegisterBox::Domain(_)
             | RegisterBox::Account(_)
             | RegisterBox::AssetDefinition(_)
             | RegisterBox::Nft(_)
@@ -1445,8 +1429,8 @@ pub(crate) fn execute_instruction_detached(
     }
     if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
         match ub {
-            UnregisterBox::Peer(_) => {}
-            UnregisterBox::Domain(_)
+            UnregisterBox::Peer(_)
+            | UnregisterBox::Domain(_)
             | UnregisterBox::Account(_)
             | UnregisterBox::AssetDefinition(_)
             | UnregisterBox::Nft(_)
@@ -1827,7 +1811,7 @@ fn transaction_fee_exemption(
         return Ok((ExecutionFeeExemption::Exempt, None));
     }
     Ok(
-        match crate::smartcontracts::isi::sccp::fees::exempt_class_in_block(
+        crate::smartcontracts::isi::sccp::fees::exempt_class_in_block(
             state_transaction,
             transaction.payload(),
         )
@@ -1835,10 +1819,10 @@ fn transaction_fee_exemption(
             crate::execution_attempt::ExecutionAttemptError::Rejected(
                 ValidationFail::InternalError(error.to_string()),
             )
-        })? {
-            Some(class) => (ExecutionFeeExemption::ExemptOnSuccess, Some(class)),
-            None => (ExecutionFeeExemption::Charged, None),
-        },
+        })?
+        .map_or((ExecutionFeeExemption::Charged, None), |class| {
+            (ExecutionFeeExemption::ExemptOnSuccess, Some(class))
+        }),
     )
 }
 #[derive(Clone, Copy)]
@@ -2085,6 +2069,7 @@ fn ensure_contract_entrypoint_authorization_mutation_allowed(
     Ok(())
 }
 fn ensure_contract_runtime_permission_mutation_allowed(
+    world: &impl WorldReadOnly,
     authority: &AccountId,
     instruction: &InstructionBox,
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
@@ -2111,25 +2096,52 @@ fn ensure_contract_runtime_permission_mutation_allowed(
     let Some(PermissionOrRoleMutation::AccountPermission { permission, .. }) = mutation else {
         return Ok(());
     };
-    let scoped =
-        executor_permission::smart_contract::CanUseContractPermission::try_from(permission)
-            .map_err(|_| {
-                ValidationFail::NotPermitted(
-            "deployed contracts may grant or revoke only exact CanUseContractPermission tokens"
-                .to_owned(),
-        )
-            })?;
     if authority != &context.contract_subject
-        || scoped.contract != context.contract_address
-        || scoped.contract.subject_id() != *authority
         || context.contract_address.subject_id() != context.contract_subject
     {
         return Err(ValidationFail::NotPermitted(
-            "deployed contract permission mutation must be bound to its immutable subject, address, and a declared instance permission"
+            "deployed contract permission mutation must be bound to its immutable subject and address"
                 .to_owned(),
         ));
     }
-    Ok(())
+    if let Ok(scoped) =
+        executor_permission::smart_contract::CanUseContractPermission::try_from(permission)
+    {
+        if scoped.contract == context.contract_address {
+            return Ok(());
+        }
+    } else if let Ok(transfer) = executor_permission::asset::CanTransferAsset::try_from(permission)
+    {
+        // A contract can delegate custody of one exact balance that it owns.
+        // Possessing a caller's transfer token never permits redelegating it.
+        // The normal executor still validates the native token and grant/revoke.
+        if transfer.asset.account() == &context.contract_subject
+            && valid_contract_runtime_subject(world, authority, Some(context))
+        {
+            return Ok(());
+        }
+    }
+    let trigger = executor_permission::trigger::CanModifyTriggerMetadata::try_from(permission)
+        .map(|token| token.trigger)
+        .or_else(|_| {
+            executor_permission::trigger::CanExecuteTrigger::try_from(permission)
+                .map(|token| token.trigger)
+        });
+    if let Ok(trigger) = trigger {
+        use crate::smartcontracts::isi::triggers::set::SetReadOnly as _;
+        if valid_contract_runtime_subject(world, authority, Some(context))
+            && world
+                .triggers()
+                .inspect_by_id(&trigger, |action| action.authority() == authority)
+                == Some(true)
+        {
+            return Ok(());
+        }
+    }
+    Err(ValidationFail::NotPermitted(
+        "deployed contracts may grant or revoke only exact own-instance CanUseContractPermission, own-source CanTransferAsset, or own-trigger CanModifyTriggerMetadata/CanExecuteTrigger tokens"
+            .to_owned(),
+    ))
 }
 fn parse_account_id_literal(
     world: &impl WorldReadOnly,
@@ -2184,10 +2196,10 @@ impl NexusFeeAdmissionError {
 }
 #[cfg(test)]
 fn smart_contract_state_name(
-    raw: String,
+    raw: &str,
     context: &'static str,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
-    StatePath::from_str(&raw).map_err(|_| {
+    StatePath::from_str(raw).map_err(|_| {
         NexusFeeAdmissionError::ConfigInvalid(format!(
             "invalid smart-contract state key: {context}"
         ))
@@ -2213,7 +2225,7 @@ fn fee_sponsor_vault_allocation_usage_state_key(
     lease_id: &iroha_crypto::Hash,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
     smart_contract_state_name(
-        VerifiedFeeSponsorVaultAllocation::usage_state_key_for(lease_id),
+        &(VerifiedFeeSponsorVaultAllocation::usage_state_key_for(lease_id)),
         "verified fee sponsor vault allocation usage",
     )
 }
@@ -2222,7 +2234,7 @@ fn fee_sponsor_vault_allocation_settled_usage_state_key(
     lease_id: &iroha_crypto::Hash,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
     smart_contract_state_name(
-        VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(lease_id),
+        &(VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(lease_id)),
         "settled verified fee sponsor vault allocation usage",
     )
 }
@@ -2693,12 +2705,10 @@ fn validate_fee_sponsor_rules(
 fn resolve_fee_sponsor_program(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
-    program_id: &FeeSponsorProgramId,
-    signed_revision: u64,
+    (program_id, signed_revision): (&FeeSponsorProgramId, u64),
     beneficiary: &AccountId,
     payload: &TransactionPayload,
-    route_dataspace_id: Option<DataSpaceId>,
-    block_height: u64,
+    (route_dataspace_id, block_height): (Option<DataSpaceId>, u64),
     context: fee_sponsor_multisig::RuleContext,
 ) -> Result<
     ResolvedSponsorProgram,
@@ -3107,8 +3117,30 @@ fn validate_governed_ivm_proved_execution_policy<R: StateReadOnly>(
         PreparedIvmZkAvailability::GovernedProof,
     )
 }
+/// Fee inputs fixed before metered instruction execution starts.
+struct InstructionFeeContext {
+    tx_bytes_len: usize,
+    gas_limit_md: Option<u64>,
+    require_gas_limit: bool,
+    gas_asset_opt: Option<String>,
+    fee_sponsor: Option<FeeSponsorProgramId>,
+    skip_nexus_fee: bool,
+}
+
+type FeeSponsorPaymentParts = (
+    AccountId,
+    FeeSponsorProgramId,
+    FeeChargeKind,
+    AssetId,
+    Option<AccountId>,
+    Quantity,
+    Option<(Hash, Hash, u64)>,
+);
+
+/// Canonical contract provenance passed through the public query adapter interface.
+/// Core constructs this opaque context only after resolving the invocation against ledger state.
 #[derive(Clone, Debug)]
-pub(crate) struct ContractRuntimeExecutionContext {
+pub struct ContractRuntimeExecutionContext {
     pub(crate) contract_address: iroha_data_model::smart_contract::ContractAddress,
     pub(crate) contract_subject: AccountId,
     // Retained as canonical provenance for queued/nested calls. Authorization must never branch
@@ -3340,7 +3372,6 @@ impl ContractEntrypointAuthorizationSnapshot {
             &self.entrypoint,
             &self.authorization,
         )
-        .map_err(Into::into)
     }
     /// Validate the snapshot and require the apply-time caller to be the captured caller.
     pub(crate) fn validate_for_authority(
@@ -3772,6 +3803,7 @@ fn is_self_describing_contract(bytecode: &[u8]) -> bool {
         .and_then(|parsed| parsed.contract_interface)
         .is_some()
 }
+#[derive(Clone, Copy)]
 enum ContractDispatchSource<'a> {
     Bytecode(&'a [u8]),
     Prepared(&'a ivm::PreparedContract),
@@ -4740,12 +4772,10 @@ fn evaluate_nexus_fee_admission_payload(
             let resolved = resolve_fee_sponsor_program(
                 world,
                 nexus,
-                program_id,
-                program_revision,
+                (program_id, program_revision),
                 &payload.authority,
                 payload,
-                route_dataspace_id,
-                next_block_height,
+                (route_dataspace_id, next_block_height),
                 fee_sponsor_multisig::RuleContext::admission(observation_time_ms),
             )?;
             let capacities = evaluate_fee_sponsor_capacity(
@@ -5003,7 +5033,7 @@ pub(crate) mod sorafs_admission_hash_probe {
     }
 
     /// Observe the next original outer hash only while this thread has an active probe.
-    pub(crate) fn note_outer_hash() {
+    pub fn note_outer_hash() {
         HASHES.with(|hashes| {
             if let Some(count) = hashes.get() {
                 hashes.set(Some(count + 1));
@@ -5012,7 +5042,7 @@ pub(crate) mod sorafs_admission_hash_probe {
     }
 
     /// Count actual helper hashes in one lexical call, restoring prior state even on unwind.
-    pub(crate) fn count<R>(body: impl FnOnce() -> R) -> (R, usize) {
+    pub fn count<R>(body: impl FnOnce() -> R) -> (R, usize) {
         struct Restore(Option<usize>);
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -5277,7 +5307,7 @@ fn charge_fees_for_applied_overlay(
             state_transaction,
             authority,
             transaction,
-            fee_sponsor,
+            fee_sponsor.as_ref(),
             tx_bytes_len,
             instruction_count,
             gas_used,
@@ -5488,12 +5518,13 @@ impl Executor {
         let resolved = resolve_fee_sponsor_program(
             &state_transaction.world,
             &state_transaction.nexus,
-            program_id,
-            program_revision,
+            (program_id, program_revision),
             authority,
             transaction.payload(),
-            state_transaction.current_dataspace_id,
-            state_transaction.block_height(),
+            (
+                state_transaction.current_dataspace_id,
+                state_transaction.block_height(),
+            ),
             fee_sponsor_multisig::RuleContext::settlement(
                 observation_time_ms,
                 authenticated_entrypoint,
@@ -5702,7 +5733,7 @@ impl Executor {
         #[cfg(feature = "telemetry")]
         {
             let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
-            state_transaction.stage_block_fee_amount(Quantity::from(delta));
+            state_transaction.stage_block_fee_amount(&(Quantity::from(delta)));
         }
         // This actual scoped transfer is the fee settlement. No synthetic XOR
         // conversion quote or lane-relay receipt can stand in for a balance effect.
@@ -5713,7 +5744,7 @@ impl Executor {
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         transaction: &SignedTransaction,
-        sponsor: Option<FeeSponsorProgramId>,
+        sponsor: Option<&FeeSponsorProgramId>,
         tx_bytes_len: usize,
         instruction_count: usize,
         gas_used: u64,
@@ -5786,7 +5817,7 @@ impl Executor {
         let receipt = state_transaction.prepare_actual_nexus_fee_receipt(
             authority,
             transaction,
-            sponsor.as_ref(),
+            sponsor,
             &asset_def,
             &fee,
             &cfg,
@@ -5794,7 +5825,7 @@ impl Executor {
             instruction_count,
             gas_used,
         )?;
-        let (payer, payer_id, program_revision) = if let Some(program_id) = sponsor.as_ref() {
+        let (payer, payer_id, program_revision) = if let Some(program_id) = sponsor {
             let program_revision = transaction
                 .fee_payment_intent()
                 .sponsor_program()
@@ -5841,7 +5872,7 @@ impl Executor {
         state_transaction.world.current_dataspace_id =
             Some(private_scope.unwrap_or(DataSpaceId::UNIVERSAL));
         let fee_burn_result = if matches!(payer_kind, NexusFeePayer::Sponsor) {
-            let program_id = sponsor.clone().ok_or_else(|| {
+            let program_id = sponsor.cloned().ok_or_else(|| {
                 ValidationFail::InternalError(
                     "sponsored Nexus burn lost its verified program id".to_owned(),
                 )
@@ -5899,7 +5930,7 @@ impl Executor {
         Ok(())
     }
     /// Validate the predecessor's complete monetary policy before any fee exemption.
-    /// Neither SetParameter nor other transaction-local changes refresh this snapshot.
+    /// Neither `SetParameter` nor other transaction-local changes refresh this snapshot.
     fn validate_root_fee_policy(
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), ValidationFail> {
@@ -6028,7 +6059,7 @@ impl Executor {
             )
         })
     }
-    /// Capture the exact original signed SetPolicy; genesis requires its opaque source owner.
+    /// Capture the exact original signed `SetPolicy`; genesis requires its opaque source owner.
     pub(crate) fn direct_reputation_policy_origin(
         state: &StateTransaction<'_, '_>,
         transaction: &SignedTransaction,
@@ -6246,15 +6277,19 @@ impl Executor {
         authority: &AccountId,
         transaction: &SignedTransaction,
         instructions: &[InstructionBox],
-        ivm_proved_replay: Option<crate::pipeline::overlay::IvmProvedReplay>,
-        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-        entrypoint_authorization: Option<&ContractEntrypointAuthorizationSnapshot>,
-        tx_bytes_len: usize,
-        gas_limit_md: Option<u64>,
-        require_gas_limit: bool,
-        gas_asset_opt: Option<String>,
-        fee_sponsor: Option<FeeSponsorProgramId>,
-        skip_nexus_fee: bool,
+        (ivm_proved_replay, contract_runtime_context, entrypoint_authorization): (
+            Option<crate::pipeline::overlay::IvmProvedReplay>,
+            Option<&ContractRuntimeExecutionContext>,
+            Option<&ContractEntrypointAuthorizationSnapshot>,
+        ),
+        InstructionFeeContext {
+            tx_bytes_len,
+            gas_limit_md,
+            require_gas_limit,
+            gas_asset_opt,
+            fee_sponsor,
+            skip_nexus_fee,
+        }: InstructionFeeContext,
         mut attachment_custody: Option<&mut attachment_custody::AttachmentCustody<'_>>,
     ) -> Result<(), ValidationFail> {
         state_transaction.current_direct_privacy_instruction_index = None;
@@ -6728,7 +6763,7 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction,
-                fee_sponsor,
+                fee_sponsor.as_ref(),
                 tx_bytes_len,
                 instruction_count,
                 used,
@@ -6741,7 +6776,6 @@ impl Executor {
     /// The returned value owns its prepared-program handle and can therefore be executed after
     /// the caller releases any mutex guard used to access `ivm_cache`.
     pub(crate) fn resolve_contract_invocation(
-        &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         call: &ContractInvocation,
         ivm_cache: &mut IvmCache,
@@ -6815,14 +6849,13 @@ impl Executor {
     /// signed gas limit and settling exactly once.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn execute_contract_invocation(
-        &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         call: &ContractInvocation,
         ivm_cache: &mut IvmCache,
-        effective_limit: u64,
-        logical_time_ms: u64,
+        (effective_limit, logical_time_ms): (u64, u64),
         trigger_context: Option<(&TriggerId, u64)>,
+        attachment_frame: Option<attachment_custody::ContractCustody<'_, '_>>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
         // A contract frame cannot inherit a native instruction's signed ordinal.
         state_transaction.current_direct_privacy_instruction_index = None;
@@ -6835,29 +6868,33 @@ impl Executor {
         state_transaction.current_direct_stream_token_reputation_payload = None;
         state_transaction.current_direct_reputation_policy_origin = None;
         state_transaction.current_direct_musubi_pin_outbox_origin = None;
-        let resolved = self.resolve_contract_invocation(state_transaction, call, ivm_cache)?;
-        self.execute_resolved_contract_invocation(
+        let resolved = Self::resolve_contract_invocation(state_transaction, call, ivm_cache)?;
+        Self::execute_resolved_contract_invocation(
             state_transaction,
             authority,
             call,
             resolved,
-            effective_limit,
-            logical_time_ms,
+            (effective_limit, logical_time_ms),
             trigger_context,
+            attachment_frame,
         )
     }
     /// Execute a previously resolved deployed-contract invocation without accessing `IvmCache`.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn execute_resolved_contract_invocation(
-        &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         call: &ContractInvocation,
         resolved: ResolvedContractInvocation,
-        effective_limit: u64,
-        logical_time_ms: u64,
+        (effective_limit, logical_time_ms): (u64, u64),
         trigger_context: Option<(&TriggerId, u64)>,
+        mut attachment_frame: Option<attachment_custody::ContractCustody<'_, '_>>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
+        if let Some(frame) = attachment_frame.as_mut() {
+            frame.require_original_call(call).map_err(|error| {
+                attachment_direct::custody_validation_error(state_transaction, error)
+            })?;
+        }
         // A contract frame cannot inherit a native instruction's signed ordinal.
         use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
         state_transaction.current_direct_privacy_instruction_index = None;
@@ -6997,9 +7034,14 @@ impl Executor {
                     )
                 })?;
         state_transaction.hydrate_zk_snapshots_for_execution(&mut host)?;
-        host.set_query_state_with_vrf_epoch_seeds(state_transaction, vrf_epoch_length);
         host.set_contract_runtime_context(contract_runtime_context.clone());
         host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
+        if let Some(frame) = attachment_frame {
+            host.bind_attachment_custody(frame).map_err(|error| {
+                attachment_direct::custody_validation_error(state_transaction, error)
+            })?;
+        }
+        host.set_query_state_with_vrf_epoch_seeds(state_transaction, vrf_epoch_length);
         if let Some(pending) = lifecycle_transition {
             host.set_contract_lifecycle_transition(&call.contract_address, pending);
         }
@@ -7110,7 +7152,7 @@ impl Executor {
         instruction_count: usize,
         tx_bytes_len: usize,
         gas_asset_opt: Option<String>,
-        fee_sponsor: Option<FeeSponsorProgramId>,
+        fee_sponsor: Option<&FeeSponsorProgramId>,
         skip_nexus_fee: bool,
     ) -> Result<(), ValidationFail> {
         if state_transaction.last_tx_gas_used < direct_gas_used {
@@ -7135,7 +7177,7 @@ impl Executor {
                 transaction,
                 &gas_asset_id_str,
                 direct_gas_used,
-                fee_sponsor.as_ref(),
+                fee_sponsor,
             )?;
         }
         if !skip_nexus_fee {
@@ -7271,12 +7313,13 @@ impl Executor {
                 let block_height = state_transaction.block_height();
                 let (expected_commitment, vk_active) =
                     if let Some(rec) = state_transaction.world.verifying_keys.get(&vk_ref) {
-                        if let Some(ns_hint) = namespace_hint.as_deref() {
-                            if !rec.namespace.is_empty() && rec.namespace != ns_hint {
-                                return Err(ValidationFail::NotPermitted(
-                                    "verifying key namespace/manifest mismatch".to_owned(),
-                                ));
-                            }
+                        if let Some(ns_hint) = namespace_hint.as_deref()
+                            && !rec.namespace.is_empty()
+                            && rec.namespace != ns_hint
+                        {
+                            return Err(ValidationFail::NotPermitted(
+                                "verifying key namespace/manifest mismatch".to_owned(),
+                            ));
                         }
                         (Some(rec.commitment), rec.is_active_at(block_height))
                     } else {
@@ -7419,7 +7462,7 @@ impl Executor {
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
         let tx_hash = transaction.hash();
-        state_transaction.current_tx_hash = Some(tx_hash.clone());
+        state_transaction.current_tx_hash = Some(tx_hash);
         let tx_bytes_len = norito::canonical_frame_len(transaction.payload()).map_err(|err| {
             ValidationFail::InternalError(format!(
                 "failed to encode transaction for fee metering: {err}"
@@ -7442,7 +7485,9 @@ impl Executor {
             == Some(crate::smartcontracts::isi::sccp::admission::SccpExemptClassV1::SelfClaim))
         .then(|| authority.clone());
         // Quote the predecessor-frozen pipeline fee snapshot shared with block execution.
-        let fee_quote = if !skip_nexus_fee {
+        let fee_quote = if skip_nexus_fee {
+            None
+        } else {
             Some(
                 evaluate_nexus_fee_admission_payload(
                     &state_transaction.world,
@@ -7463,8 +7508,6 @@ impl Executor {
                     )
                 })?,
             )
-        } else {
-            None
         };
         fastpq_rejection_tail::preflight(
             state_transaction,
@@ -7480,18 +7523,18 @@ impl Executor {
         // Multisig participation is signed by individual signatories. Approved
         // inner instructions execute separately under the multisig account.
         {
-            if let Ok(account) = state_transaction.world.account(authority) {
-                if account.id().controller().multisig_policy().is_some() {
-                    #[cfg(feature = "telemetry")]
-                    crate::telemetry::record_social_rejection(
-                        state_transaction.telemetry,
-                        "multisig_direct_sign",
-                    );
-                    return Err(ValidationFail::NotPermitted(
+            if let Ok(account) = state_transaction.world.account(authority)
+                && account.id().controller().multisig_policy().is_some()
+            {
+                #[cfg(feature = "telemetry")]
+                crate::telemetry::record_social_rejection(
+                    state_transaction.telemetry,
+                    "multisig_direct_sign",
+                );
+                return Err(ValidationFail::NotPermitted(
                         "direct signing with multisig accounts is forbidden; use multisig propose/approve"
                             .to_owned(),
                     ));
-                }
             }
         }
         // Gas asset and limit are explicit signature-bound fee intent fields.
@@ -7700,15 +7743,15 @@ impl Executor {
                 authority,
                 transaction,
                 instructions,
-                None,
-                None,
-                None,
-                tx_bytes_len,
-                gas_limit_md,
-                false,
-                gas_asset_opt,
-                fee_sponsor,
-                skip_nexus_fee,
+                (None, None, None),
+                InstructionFeeContext {
+                    tx_bytes_len,
+                    gas_limit_md,
+                    require_gas_limit: false,
+                    gas_asset_opt,
+                    fee_sponsor,
+                    skip_nexus_fee,
+                },
                 attachment_custody.as_mut(),
             ),
             (Self::Initial | Self::UserProvided(_), executable_source::Body::IvmProved) => {
@@ -7724,15 +7767,19 @@ impl Executor {
                     authority,
                     transaction,
                     &instructions,
-                    Some(replay),
-                    proved_contract_runtime_context.as_ref(),
-                    proved_entrypoint_authorization.as_ref(),
-                    tx_bytes_len,
-                    gas_limit_md,
-                    true,
-                    gas_asset_opt,
-                    fee_sponsor,
-                    false,
+                    (
+                        Some(replay),
+                        proved_contract_runtime_context.as_ref(),
+                        proved_entrypoint_authorization.as_ref(),
+                    ),
+                    InstructionFeeContext {
+                        tx_bytes_len,
+                        gas_limit_md,
+                        require_gas_limit: true,
+                        gas_asset_opt,
+                        fee_sponsor,
+                        skip_nexus_fee: false,
+                    },
                     None,
                 )
             }
@@ -7753,14 +7800,21 @@ impl Executor {
                         .saturating_sub(state_transaction.gas_used_in_block_so_far)
                 };
                 let effective_limit = gas_limit.min(block_remaining);
-                let outcome = self.execute_contract_invocation(
+                let attachment_frame = attachment_custody
+                    .as_mut()
+                    .map(|custody| custody.contract_host(0, call))
+                    .transpose()
+                    .map_err(|error| {
+                        attachment_direct::custody_validation_error(state_transaction, error)
+                    })?;
+                let outcome = Self::execute_contract_invocation(
                     state_transaction,
                     authority,
                     call,
                     ivm_cache,
-                    effective_limit,
-                    tx_creation_time_ms,
+                    (effective_limit, tx_creation_time_ms),
                     None,
+                    attachment_frame,
                 )?;
                 Self::settle_live_transaction_fees(
                     state_transaction,
@@ -7770,7 +7824,7 @@ impl Executor {
                     0,
                     tx_bytes_len,
                     gas_asset_opt,
-                    fee_sponsor,
+                    fee_sponsor.as_ref(),
                     skip_nexus_fee,
                 )
             }
@@ -7930,14 +7984,29 @@ impl Executor {
                                 block_remaining,
                                 state_transaction.last_tx_gas_used,
                             );
-                            let outcome = self.execute_contract_invocation(
+                            let root_index = u32::try_from(index).map_err(|_| {
+                                ValidationFail::NotPermitted(
+                                    "attachment root index overflow".into(),
+                                )
+                            })?;
+                            let attachment_frame = attachment_custody
+                                .as_mut()
+                                .map(|custody| custody.contract_host(root_index, call))
+                                .transpose()
+                                .map_err(|error| {
+                                    attachment_direct::custody_validation_error(
+                                        state_transaction,
+                                        error,
+                                    )
+                                })?;
+                            let outcome = Self::execute_contract_invocation(
                                 state_transaction,
                                 authority,
                                 call,
                                 ivm_cache,
-                                remaining,
-                                tx_creation_time_ms,
+                                (remaining, tx_creation_time_ms),
                                 None,
+                                attachment_frame,
                             )?;
                             gas_used = gas_used.saturating_add(outcome.gas_used);
                         }
@@ -7951,12 +8020,12 @@ impl Executor {
                     explicit_instructions.len(),
                     tx_bytes_len,
                     gas_asset_opt,
-                    fee_sponsor,
+                    fee_sponsor.as_ref(),
                     skip_nexus_fee,
                 )
             }
-            (Self::Initial | Self::UserProvided(_), executable_source::Body::Ivm(bytes)) => self
-                .execute_raw_ivm_transaction(
+            (Self::Initial | Self::UserProvided(_), executable_source::Body::Ivm(bytes)) => {
+                Self::execute_raw_ivm_transaction(
                     state_transaction,
                     authority,
                     transaction,
@@ -7970,7 +8039,8 @@ impl Executor {
                         skip_nexus_fee,
                         tx_bytes_len,
                     },
-                ),
+                )
+            }
         };
         execution_result?;
         if let Some(custody) = attachment_custody {
@@ -7985,7 +8055,6 @@ impl Executor {
     /// Native instructions do not reserve the runtime and host locals from this stage.
     #[allow(clippy::too_many_lines)]
     fn execute_raw_ivm_transaction(
-        &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         transaction_for_fee: &SignedTransaction,
@@ -8167,7 +8236,7 @@ impl Executor {
                         state_transaction,
                         authority,
                         transaction_for_fee,
-                        fee_sponsor,
+                        fee_sponsor.as_ref(),
                         tx_bytes_len,
                         0,
                         gas_used,
@@ -8258,17 +8327,17 @@ impl Executor {
             })?;
         runtime.set_max_cycles(effective_cycles.get());
         runtime.set_gas_limit(effective_limit);
-        if let Some(context) = contract_call_context.as_ref() {
-            if let Some(entrypoint_pc) = context.entrypoint_pc {
-                let code_len = runtime.memory.code_len();
-                runtime.set_register(1, code_len);
-                runtime.set_program_counter(entrypoint_pc).map_err(|err| {
-                    let selector = context.entrypoint.as_deref().unwrap_or("main");
-                    ValidationFail::NotPermitted(format!(
-                        "contract entrypoint `{selector}` resolved to invalid pc: {err}"
-                    ))
-                })?;
-            }
+        if let Some(context) = contract_call_context.as_ref()
+            && let Some(entrypoint_pc) = context.entrypoint_pc
+        {
+            let code_len = runtime.memory.code_len();
+            runtime.set_register(1, code_len);
+            runtime.set_program_counter(entrypoint_pc).map_err(|err| {
+                let selector = context.entrypoint.as_deref().unwrap_or("main");
+                ValidationFail::NotPermitted(format!(
+                    "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                ))
+            })?;
         }
         let precharge_result = contract_call_context
             .as_ref()
@@ -8382,7 +8451,7 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction_for_fee,
-                fee_sponsor,
+                fee_sponsor.as_ref(),
                 tx_bytes_len,
                 0,
                 gas_used,
@@ -8539,6 +8608,7 @@ impl Executor {
             instruction,
         )?;
         ensure_contract_runtime_permission_mutation_allowed(
+            &state_transaction.world,
             authority,
             instruction,
             contract_runtime_context,
@@ -8620,10 +8690,10 @@ impl Executor {
                 }
             }
             for role_id in state_transaction.world.account_roles_iter(authority) {
-                if let Some(role) = state_transaction.world.roles.get(role_id) {
-                    if role.permissions.iter().any(is_target_permission) {
-                        return Ok(true);
-                    }
+                if let Some(role) = state_transaction.world.roles.get(role_id)
+                    && role.permissions.iter().any(is_target_permission)
+                {
+                    return Ok(true);
                 }
             }
             Ok(false)
@@ -8820,14 +8890,13 @@ impl Executor {
                     .to_owned(),
             ));
         }
-        if let Some(account_id) = extract_account_metadata_target(instruction) {
-            if !is_genesis
-                && !can_modify_account_metadata(&state_transaction.world, authority, &account_id)?
-            {
-                return Err(ValidationFail::NotPermitted(
-                    "Can't set value to the metadata of another account".to_owned(),
-                ));
-            }
+        if let Some(account_id) = extract_account_metadata_target(instruction)
+            && !is_genesis
+            && !can_modify_account_metadata(&state_transaction.world, authority, &account_id)?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't set value to the metadata of another account".to_owned(),
+            ));
         }
         if let Some(nft_id) = instruction
             .as_any()
@@ -8857,8 +8926,7 @@ impl Executor {
                     .downcast_ref::<iroha_data_model::isi::RemoveKeyValue<iroha_data_model::nft::Nft>>()
                     .map(|rm| rm.object.clone())
             })
-        {
-            if !is_initial_genesis_context(state_transaction) {
+            && !is_initial_genesis_context(state_transaction) {
                 let domain_owner = state_transaction
                     .world
                     .domain(nft_id.domain())
@@ -8874,7 +8942,6 @@ impl Executor {
                     ));
                 }
             }
-        }
         if let Some(transfer_domain) = extract_transfer_domain(instruction)
             && !can_transfer_domain(
                 &state_transaction.world,
@@ -9963,6 +10030,13 @@ impl ExecutorRuntimePool {
             self.clear_storage();
         }
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "Test builds record pool events in this instance; production retains the same call sites"
+        )
+    )]
     fn record(&mut self, event: ExecutorRuntimePoolEvent) {
         #[cfg(test)]
         match event {
@@ -10051,7 +10125,9 @@ fn with_executor_runtime_pool<R>(
     pool: &Mutex<ExecutorRuntimePool>,
     operation: impl FnOnce(&mut ExecutorRuntimePool) -> R,
 ) -> R {
-    let mut guard = pool.lock().unwrap_or_else(|error| error.into_inner());
+    let mut guard = pool
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let budget = guard.execution_budget.clone();
     let run = move || operation(&mut guard);
     match budget {
@@ -10147,7 +10223,7 @@ fn stack_limit_for_gas(gas_limit: u64) -> u64 {
     IvmConfig::new(gas_limit).stack_limit_for_gas()
 }
 impl LoadedExecutor {
-    pub(crate) fn load(raw_executor: data_model_executor::Executor) -> Result<Self, VMError> {
+    pub(crate) fn load(original_executor: data_model_executor::Executor) -> Result<Self, VMError> {
         // Restore validates the same static image as load_program, but has no State
         // resource owner yet. Mutable runtimes are funded only at live checkout.
         struct PoolControl {
@@ -10161,9 +10237,9 @@ impl LoadedExecutor {
                 }
             }
         }
-        IVM::validate_program(raw_executor.bytecode().as_ref())?;
+        IVM::validate_program(original_executor.bytecode().as_ref())?;
         // Normalize caller spare Vec capacity, then charge the actual owned Vec.
-        let bytecode = raw_executor.bytecode().as_ref().to_vec();
+        let bytecode = original_executor.bytecode().as_ref().to_vec();
         let bytecode_capacity = bytecode.capacity();
         let raw_executor = ivm::cache_memory::SharedValue::new(
             data_model_executor::Executor::new(
@@ -10186,6 +10262,8 @@ impl LoadedExecutor {
             _memory: Arc::clone(&pool_memory),
         };
         let eviction = ivm::cache_memory::register_cache_evictor(move || control.clear());
+        // Retire the caller's original spare-capacity allocation at the load boundary.
+        drop(original_executor);
         Ok(Self {
             runtime_pool,
             pool_memory,
@@ -10266,14 +10344,14 @@ impl LoadedExecutor {
         let pool = self
             .runtime_pool
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         (pool.stats, pool.variants.len())
     }
     #[cfg(test)]
     fn runtime_variant_capacity(&self) -> usize {
         self.runtime_pool
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .capacity
     }
 }

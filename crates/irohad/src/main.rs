@@ -125,8 +125,10 @@ use iroha_data_model::{
 };
 use iroha_data_model::{prelude::*, transaction::Executable};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, Supervisor};
+#[cfg(test)]
+use iroha_genesis::RawGenesisTransaction;
 use iroha_genesis::{
-    GenesisBlock, RawGenesisTransaction, compute_genesis_vk_set_hash,
+    GenesisBlock, compute_genesis_vk_set_hash,
     init_instruction_registry as init_genesis_instruction_registry,
 };
 use iroha_logger::actor::LoggerHandle;
@@ -246,12 +248,13 @@ fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito:
 fn accept_internal_transaction(
     transaction: SignedTransaction,
     network: &iroha_data_model::NetworkId,
-    world: &iroha_core::state::WorldView<'_>,
+    parameters: &iroha_core::state::StateParameters,
 ) -> eyre::Result<iroha_core::tx::AcceptedTransaction<'static>> {
-    let parameters = world.transaction_admission_parameters();
-    let policy = parameters
-        .require_crypto_policy()
-        .map_err(|reason| eyre::eyre!(reason))?;
+    let policy = parameters.require_crypto_policy().map_err(|_| {
+        iroha_core::execution_attempt::ExecutionDeferred::from(
+            ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable,
+        )
+    })?;
     Ok(iroha_core::tx::AcceptedTransaction::accept(
         transaction,
         network,
@@ -614,6 +617,26 @@ mod handshake_payload_tests {
             matches!(&err, norito::Error::Json(_)),
             "invalid handshake input must retain its original JSON category: {err:?}"
         );
+    }
+    #[test]
+    fn parse_handshake_meta_preserves_validation_diagnostics() {
+        let payload = handshake_payload_from_genesis();
+        let metadata = parse_handshake_meta_str(payload.get()).expect("valid handshake metadata");
+        let mut wrong_version = metadata;
+        wrong_version.wire_protocol_version = 0;
+        let mut invalid_context = metadata;
+        invalid_context.sumeragi_context.execution_policy_hash = [0; 32];
+
+        for invalid in [wrong_version, invalid_context] {
+            let expected = invalid
+                .validate()
+                .expect_err("invalid handshake fixture")
+                .to_string();
+            let raw = norito::json::to_json(&invalid).expect("serialize handshake fixture");
+            let error =
+                parse_handshake_meta_str(&raw).expect_err("validation must reject metadata");
+            assert!(matches!(error, norito::Error::Message(message) if message == expected));
+        }
     }
     #[test]
     fn decode_consensus_meta_rejects_garbage() {
@@ -2648,7 +2671,6 @@ impl Iroha {
         let queue_limits = iroha_core::queue::QueueLimits::from_nexus(&runtime_nexus);
         let lane_catalog = Arc::new(runtime_nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(runtime_nexus.dataspace_catalog.clone());
-        let governance_catalog = Arc::new(runtime_nexus.governance.clone());
         let registry_cfg = runtime_nexus.registry.clone();
         let lane_compliance = frozen_startup_lane_compliance;
         if let Some(engine) = lane_compliance.as_ref() {
@@ -3095,8 +3117,8 @@ impl Iroha {
                 Arc::clone(&state),
                 kura.clone(),
                 queue.clone(),
-                network.online_peers_receiver(),
-                config.common.peer.id.clone(),
+                (network.online_peers_receiver(),
+                config.common.peer.id.clone()),
                 TimeSource::new_system(),
                 telemetry_profile.metrics_enabled(),
             )
@@ -12642,8 +12664,7 @@ fn authenticated_maximum_validator_roster_len(
 ) -> Result<usize, String> {
     match mode {
         iroha_data_model::block::consensus::ConsensusMode::Permissioned => {
-            if !iroha_model_base::topology::is_valid_committee_size(permissioned_roster_len)
-            {
+            if !iroha_model_base::topology::is_valid_committee_size(permissioned_roster_len) {
                 return Err(
                     "authenticated permissioned roster is not a bounded 3f + 1 committee"
                         .to_owned(),

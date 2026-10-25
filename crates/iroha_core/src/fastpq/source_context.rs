@@ -111,7 +111,7 @@ pub enum FastpqSourceCaptureError {
 
 /// Immutable height context shared by every transaction of one block scope.
 #[derive(Clone, Debug)]
-pub(crate) struct FastpqBlockStartSourceContext {
+pub struct FastpqBlockStartSourceContext {
     pub(crate) source: FastpqSourceStatementContextV1,
     pub(crate) lane_incarnations: BTreeMap<LaneId, Option<Hash>>,
 }
@@ -167,7 +167,7 @@ impl FastpqBlockStartSourceContext {
 /// capture. Final access requires a healthy seal; ordinary inspection remains available while
 /// constructing the inventory. Neither accessor grants consensus finality or remote authority.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct FastpqSourceCaptureAccumulator {
+pub struct FastpqSourceCaptureAccumulator {
     entries: BTreeMap<Hash, FastpqCapturedTranscriptSource>,
     error: Option<FastpqSourceCaptureError>,
     sealed: bool,
@@ -308,10 +308,7 @@ impl FastpqSourceCaptureAccumulator {
     pub(crate) fn sources(
         &self,
     ) -> Result<&BTreeMap<Hash, FastpqCapturedTranscriptSource>, &FastpqSourceCaptureError> {
-        match &self.error {
-            Some(error) => Err(error),
-            None => Ok(&self.entries),
-        }
+        self.error.as_ref().map_or(Ok(&self.entries), Err)
     }
 }
 

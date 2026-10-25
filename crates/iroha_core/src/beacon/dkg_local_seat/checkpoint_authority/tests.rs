@@ -15,15 +15,10 @@ fn signed_genesis_authority_keeps_original_wider_cutoff_and_authenticates_no_h1_
     let checked = authority
         .checkpoint_context(
             &clock,
-            1,
-            1,
+            (1, 1),
             signer,
-            "software-provider",
-            7,
-            [11; 32],
-            [0; 32],
-            [0; 32],
-            [12; 32],
+            ("software-provider", 7),
+            ([11; 32], [0; 32], [0; 32], [12; 32]),
         )
         .unwrap();
     assert_eq!(
@@ -39,15 +34,10 @@ fn signed_genesis_authority_keeps_original_wider_cutoff_and_authenticates_no_h1_
             authority
                 .checkpoint_context(
                     &clock,
-                    phase,
-                    1,
+                    (phase, 1),
                     signer,
-                    "software-provider",
-                    7,
-                    [11; 32],
-                    [13; 32],
-                    [14; 32],
-                    [12; 32]
+                    ("software-provider", 7),
+                    ([11; 32], [13; 32], [14; 32], [12; 32])
                 )
                 .is_err(),
             "a signed H1 body cannot substitute for a genuine finalized phase source"
@@ -58,15 +48,10 @@ fn signed_genesis_authority_keeps_original_wider_cutoff_and_authenticates_no_h1_
         authority
             .checkpoint_context(
                 &foreign_clock,
-                1,
-                1,
+                (1, 1),
                 signer,
-                "software-provider",
-                7,
-                [11; 32],
-                [0; 32],
-                [0; 32],
-                [12; 32]
+                ("software-provider", 7),
+                ([11; 32], [0; 32], [0; 32], [12; 32])
             )
             .is_err()
     );

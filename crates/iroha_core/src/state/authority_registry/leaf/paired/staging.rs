@@ -10,6 +10,10 @@ pub(super) struct PairedDigestRow {
     pub(super) lookup_value_digest: Hash,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(super) fn encode_key<K: Encode + NoritoSchema>(
     table: &'static str,
     schema: Schema,
@@ -34,6 +38,10 @@ pub(super) struct StagedRows {
     budget: AllocationBudget,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl StagedRows {
     pub(super) fn new(maximum: usize, budget: &AllocationBudget) -> Result<Self, LeafError> {
         Ok(Self {

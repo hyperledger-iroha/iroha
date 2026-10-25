@@ -35,7 +35,7 @@ fn control(stop: &AtomicBool) -> SccpNativeReadControl<'_> {
     }
 }
 
-pub(crate) fn keys() -> Vec<KeyPair> {
+pub fn keys() -> Vec<KeyPair> {
     let mut keys = (0x91..=0x94)
         .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
         .collect::<Vec<_>>();
@@ -55,20 +55,20 @@ fn raw_key(key: &KeyPair) -> [u8; 48] {
 // Real signed NPoS genesis, InitializeSccp, StateExecutor output seal and exact-q QC.
 // The owned keys intentionally permit adversarial signed certificates in these tests.
 /// Genuine initialized native chain with every G1 member funded and registered.
-pub(crate) fn active_chain() -> (CertifiedTestChain, Vec<KeyPair>) {
+pub fn active_chain() -> (CertifiedTestChain, Vec<KeyPair>) {
     configured_chain(4)
 }
 
 /// Genuine genesis registrations, captured by the same generation finalizer as its QC.
 /// No retained committee field or opaque tip is changed after authenticated execution.
-pub(crate) fn active_member_chain() -> (CertifiedTestChain, Vec<KeyPair>) {
+pub fn active_member_chain() -> (CertifiedTestChain, Vec<KeyPair>) {
     configured_chain(4)
 }
 
 /// Bind output limits and an optional real forgery-event callback in the signed genesis.
 /// Return the exact retained ordinary genesis signer separately from the BLS committee.
 /// Existing member helpers retain their unchanged default parameters and actions.
-pub(crate) fn active_member_chain_with_output_policy(
+pub fn active_member_chain_with_output_policy(
     policy: iroha_data_model::parameter::ExecutionOutputPolicyV1,
     callback_bytes: Option<usize>,
 ) -> (CertifiedTestChain, Vec<KeyPair>, KeyPair) {
@@ -76,7 +76,7 @@ pub(crate) fn active_member_chain_with_output_policy(
 }
 
 /// Supply the selector capacity in the original signed genesis, never the retained parent.
-pub(crate) fn active_member_chain_with_max_transactions(
+pub fn active_member_chain_with_max_transactions(
     max_transactions: NonZeroU64,
 ) -> (CertifiedTestChain, Vec<KeyPair>) {
     let (chain, keys, _) = configured_chain_with_output(4, None, Some(max_transactions), None);
@@ -84,7 +84,7 @@ pub(crate) fn active_member_chain_with_max_transactions(
 }
 
 /// Genuine signed genesis with an explicit immutable delay and ordinary transaction signer.
-pub(crate) fn active_member_chain_with_penalty_delay(
+pub fn active_member_chain_with_penalty_delay(
     delay: u64,
 ) -> (CertifiedTestChain, Vec<KeyPair>, KeyPair) {
     configured_chain_with_output(4, None, None, Some(delay))
@@ -328,7 +328,7 @@ pub(crate) fn register_genesis_members(
 }
 
 /// Read the original committed certificate through the actual native producer.
-pub(crate) fn original(chain: &CertifiedTestChain) -> SubmitSccpForgeryEvidenceV1 {
+pub fn original(chain: &CertifiedTestChain) -> SubmitSccpForgeryEvidenceV1 {
     let stop = AtomicBool::new(false);
     let budget = AllocationBudget::new(128 << 20);
     let view = chain.state().view();
@@ -342,7 +342,7 @@ pub(crate) fn original(chain: &CertifiedTestChain) -> SubmitSccpForgeryEvidenceV
 }
 
 /// Mutate fixed X DATA before explicitly resigning it with fixture keys.
-pub(crate) fn change_header(
+pub fn change_header(
     evidence: &mut SubmitSccpForgeryEvidenceV1,
     change: impl FnOnce(&mut SccpFinalityHeaderFieldsV1),
 ) {
@@ -356,11 +356,7 @@ pub(crate) fn change_header(
 }
 
 /// Recompute the exact native aggregate over the selected fixture quorum.
-pub(crate) fn resign(
-    evidence: &mut SubmitSccpForgeryEvidenceV1,
-    keys: &[KeyPair],
-    instance: Hash32,
-) {
+pub fn resign(evidence: &mut SubmitSccpForgeryEvidenceV1, keys: &[KeyPair], instance: Hash32) {
     let qc = QcFixedV1::parse(&evidence.qc).unwrap();
     let x = SccpFinalityHeaderV1::parse(&evidence.header).unwrap();
     let digest = ConsensusDigest::from_preimage(&commit_preimage(
@@ -380,7 +376,7 @@ pub(crate) fn resign(
 }
 
 /// Produce a genuine exact-quorum signature on an adversarial future-height claim.
-pub(crate) fn future(chain: &CertifiedTestChain, keys: &[KeyPair]) -> SubmitSccpForgeryEvidenceV1 {
+pub fn future(chain: &CertifiedTestChain, keys: &[KeyPair]) -> SubmitSccpForgeryEvidenceV1 {
     let mut evidence = original(chain);
     change_header(&mut evidence, |fields| fields.height = chain.height() + 1);
     resign(&mut evidence, keys, chain.instance());
@@ -970,7 +966,7 @@ fn generation_lookup_and_inclusive_liability_use_captured_values_only() {
         generation_for_claim(Current(&*stx.world), &x, 0, 0),
         Err(ForgeryVerificationError::EvidenceUnknownGeneration)
     ));
-    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, rec.clone())
+    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, &(rec))
         .unwrap();
     let last = rec.liable_until_lc + rec.progress_cap_ms;
     assert!(generation_for_claim(Current(&*stx.world), &x, 2, last).is_ok());
@@ -1007,7 +1003,7 @@ fn generation_lookup_and_inclusive_liability_use_captured_values_only() {
     });
     rec.dest_cleared_lc = Some(rec.liable_until_lc + 5);
     let last = rec.dest_cleared_lc.unwrap() + rec.grace_ms;
-    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, rec.clone())
+    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, &(rec))
         .unwrap();
     assert!(generation_for_claim(Current(&*stx.world), &x, 2, last).is_ok());
     assert!(matches!(

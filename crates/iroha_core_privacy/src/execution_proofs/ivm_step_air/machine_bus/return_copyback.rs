@@ -60,7 +60,8 @@ pub(super) fn schedules(
     owner_clocks: [u32; 4],
     first_cell_clock: u32,
 ) -> Option<impl ExactSizeIterator<Item = Schedule>> {
-    let last = first_cell_clock.checked_add((2 * CELLS - 1) as u32)?;
+    let last = first_cell_clock
+        .checked_add(u32::try_from(2 * CELLS - 1).expect("fixed port schedule fits u32"))?;
     if owner_clocks
         .iter()
         .any(|clock| (first_cell_clock..=last).contains(clock))
@@ -75,12 +76,15 @@ pub(super) fn schedules(
         vm,
         offset,
         owner_clocks,
-        child_clock: first_cell_clock + 2 * offset as u32,
-        parent_clock: first_cell_clock + 2 * offset as u32 + 1,
+        child_clock: first_cell_clock + 2 * u32::try_from(offset).expect("bounded circuit index"),
+        parent_clock: first_cell_clock
+            + 2 * u32::try_from(offset).expect("bounded circuit index")
+            + 1,
     }))
 }
 
 /// The same authoritative owner packets and per-cell Initialization producers.
+#[derive(Clone, Copy)]
 pub(super) struct Ports<'a> {
     pub(super) active: &'a [F; packet::WIDTH],
     pub(super) parent: &'a [F; packet::WIDTH],
@@ -139,20 +143,18 @@ pub(super) fn append_residues(
             out,
             port,
             schedule.vm,
-            Space::Owner,
-            F(index),
-            generation,
+            (Space::Owner, F(index), generation),
             selected,
             write,
             clock,
         );
-        if !write {
+        if write {
             for limb in 0..4 {
-                out.push(port[AFTER + limb].sub(port[BEFORE + limb]));
+                out.push(port[AFTER + limb].sub(if limb == 0 { parent } else { F::ZERO }));
             }
         } else {
             for limb in 0..4 {
-                out.push(port[AFTER + limb].sub(if limb == 0 { parent } else { F::ZERO }));
+                out.push(port[AFTER + limb].sub(port[BEFORE + limb]));
             }
         }
     }
@@ -260,9 +262,7 @@ pub(super) fn append_residues(
             out,
             port,
             schedule.vm,
-            Space::Initialization,
-            cell,
-            enabled.mul(generation),
+            (Space::Initialization, cell, enabled.mul(generation)),
             enabled,
             write,
             clock,
@@ -322,6 +322,7 @@ impl OperandSchedule {
 }
 
 /// Same original successful lifecycle packet plus original public operand reads.
+#[derive(Clone, Copy)]
 pub(super) struct OperandPorts<'a> {
     pub(super) active: &'a [F; packet::WIDTH],
     pub(super) packets: [&'a [F; packet::WIDTH]; OPERAND_PORTS],
@@ -353,9 +354,7 @@ pub(super) fn append_operand_residues(
             out,
             port,
             schedule.vm,
-            space,
-            F(index),
-            generation,
+            (space, F(index), generation),
             selected,
             false,
             schedule.clocks[slot],
@@ -383,13 +382,16 @@ pub(super) fn append_operand_residues(
 
 fn header(
     out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+
     port: &[F; packet::WIDTH],
+
     vm: u8,
-    space: packet::Space,
-    index: F,
-    generation: F,
+    (space, index, generation): (packet::Space, F, F),
+
     enabled: F,
+
     write: bool,
+
     clock: u32,
 ) {
     for (column, expected) in [

@@ -335,7 +335,6 @@ pub(super) fn live_stake_candidates_for_lanes(
                 &record.self_stake,
                 minimum_stake,
             )
-            .unwrap_or(false)
             || !world.peers().iter().any(|peer| peer == &record.peer_id)
             || !peer_has_live_consensus_key_for_lane(
                 world,
@@ -527,13 +526,13 @@ pub(super) fn peer_pool_with_inputs(
 ///
 /// Every transaction executes in the global Sumeragi block, so lanes and dataspaces are routing
 /// labels. An active route binds the exact authenticated epoch committee retained for
-/// `authority_height`, in canonical order, shared with QueuePlan admission. Live registrations
+/// `authority_height`, in canonical order, shared with `QueuePlan` admission. Live registrations
 /// cannot replace that authority. The reported fault tolerance is the global `(n − 1) / 3`.
 ///
 /// # Errors
 /// The dataspace is unknown, the lane is inactive, or the retained authenticated schedule is
 /// absent, malformed, pending its boundary, or does not cover `authority_height`.
-pub(crate) fn resolve_global_route(
+pub fn resolve_global_route(
     world: &impl WorldReadOnly,
     route: LaneAuthorityRoute,
     nexus: &iroha_config::parameters::actual::Nexus,

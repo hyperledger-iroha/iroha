@@ -606,7 +606,7 @@ fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), Str
         &mut overlay,
         &mut IvmCache::new(),
         leg.route,
-        policy_route,
+        &(policy_route),
         None,
     )
     .map_err(|error| format!("{error:?}"))?;
@@ -680,7 +680,7 @@ fn ensure(fixture: &Fixture, intent: AliasIntentV1) -> EnsureAlias {
     let selector = selector_for_resolved_alias_target(&intent.target()).expect("selector");
     let quote = sns::quote_resolved_name_registration(
         view.world(),
-        selector.clone(),
+        &(selector.clone()),
         alias_intent_owner(&intent),
         1,
         None,
@@ -717,8 +717,10 @@ fn balance(fixture: &Fixture, account: &AccountId) -> Quantity {
         .view()
         .world()
         .asset(&AssetId::of(fixture.payment_asset.clone(), account.clone()))
-        .map(|asset| asset.value().clone().into_inner())
-        .unwrap_or_else(|_| Quantity::zero())
+        .map_or_else(
+            |_| Quantity::zero(),
+            |asset| asset.value().clone().into_inner(),
+        )
 }
 
 #[test]
@@ -817,7 +819,7 @@ fn alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal() {
         sns::get_name_record_by_selector(view.world(), &selector, 0).expect("domain lease");
     let quote = sns::quote_resolved_name_renewal(
         view.world(),
-        selector.clone(),
+        &(selector.clone()),
         record.expires_at_ms,
         record.expires_at_ms + 31_536_000_000,
         0,

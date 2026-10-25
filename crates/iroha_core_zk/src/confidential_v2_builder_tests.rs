@@ -18,9 +18,13 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
         super::confidential_unshield_v2_vk_record("vk_unshield", 4).expect("unshield vk");
     let vk_box = vk_record.key.clone().expect("inline unshield vk");
     let proof = super::build_confidential_unshield_proof_v2(
-        &network_id,
-        asset_definition_id,
-        &spend_key,
+        crate::confidential_v2::ConfidentialProofContext {
+            network_id: &network_id,
+            asset_definition_id,
+            spend_key: &spend_key,
+            circuit_id: &vk_record.circuit_id,
+            vk_box: &vk_box,
+        },
         &tree_commitments,
         &[super::ConfidentialUnshieldInputV2 {
             amount: 9,
@@ -30,8 +34,6 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
         }],
         9,
         root_hint,
-        &vk_record.circuit_id,
-        &vk_box,
     )
     .expect("build unshield v2 proof");
     assert_eq!(proof.nullifiers.len(), 1);
@@ -55,9 +57,13 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
     let full_root = input_path.root;
     assert_ne!(full_root, root_hint);
     let explicit_path_proof = super::build_confidential_unshield_proof_v2_with_paths(
-        &network_id,
-        asset_definition_id,
-        &spend_key,
+        crate::confidential_v2::ConfidentialProofContext {
+            network_id: &network_id,
+            asset_definition_id,
+            spend_key: &spend_key,
+            circuit_id: &vk_record.circuit_id,
+            vk_box: &vk_box,
+        },
         std::slice::from_ref(&input_path),
         &[super::ConfidentialUnshieldInputV2 {
             amount: 9,
@@ -67,8 +73,6 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
         }],
         9,
         full_root,
-        &vk_record.circuit_id,
-        &vk_box,
     )
     .expect("build one-note full-redemption proof against a full-capacity tree");
     assert_eq!(explicit_path_proof.nullifiers.len(), 1);
@@ -86,9 +90,13 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
     wrong_leaf_path.directions[0] ^= 1;
     assert!(
         super::build_confidential_unshield_proof_v2_with_paths(
-            &network_id,
-            asset_definition_id,
-            &spend_key,
+            crate::confidential_v2::ConfidentialProofContext {
+                network_id: &network_id,
+                asset_definition_id,
+                spend_key: &spend_key,
+                circuit_id: &vk_record.circuit_id,
+                vk_box: &vk_box
+            },
             &[wrong_leaf_path],
             &[super::ConfidentialUnshieldInputV2 {
                 amount: 9,
@@ -98,8 +106,6 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
             }],
             9,
             full_root,
-            &vk_record.circuit_id,
-            &vk_box,
         )
         .is_err(),
         "full redemption must reject a substituted input direction",
@@ -136,9 +142,13 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         super::confidential_unshield_v3_vk_record("vk_unshield_v3", 5).expect("unshield v3 vk");
     let vk_box = vk_record.key.clone().expect("inline unshield v3 vk");
     let terminal = super::build_confidential_unshield_proof_v3(
-        &network_id,
-        asset_definition_id,
-        &spend_key,
+        crate::confidential_v2::ConfidentialProofContext {
+            network_id: &network_id,
+            asset_definition_id,
+            spend_key: &spend_key,
+            circuit_id: &vk_record.circuit_id,
+            vk_box: &vk_box,
+        },
         &tree_commitments,
         &[super::ConfidentialUnshieldInputV2 {
             amount: 9,
@@ -149,8 +159,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         &[],
         9,
         root_hint,
-        &vk_record.circuit_id,
-        &vk_box,
     )
     .expect("build terminal full unshield under the V3 verifier");
     assert_eq!(terminal.nullifiers.len(), 1);
@@ -169,9 +177,13 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         full_tree_input_path_v3::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }>(input_commitment);
     let full_root = input_path.root;
     let terminal_with_paths = super::build_confidential_unshield_proof_v3_with_paths(
-        &network_id,
-        asset_definition_id,
-        &spend_key,
+        crate::confidential_v2::ConfidentialProofContext {
+            network_id: &network_id,
+            asset_definition_id,
+            spend_key: &spend_key,
+            circuit_id: &vk_record.circuit_id,
+            vk_box: &vk_box,
+        },
         &[input_path],
         &[super::ConfidentialUnshieldInputV2 {
             amount: 9,
@@ -182,8 +194,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         &[],
         9,
         full_root,
-        &vk_record.circuit_id,
-        &vk_box,
     )
     .expect("build terminal one-note unshield against a full-capacity tree under V3");
     assert!(terminal_with_paths.output_commitments.is_empty());
@@ -196,9 +206,13 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         .expect("verification attempt must complete for this semantic fixture")
     );
     let missing_change = super::build_confidential_unshield_proof_v3(
-        &network_id,
-        asset_definition_id,
-        &spend_key,
+        crate::confidential_v2::ConfidentialProofContext {
+            network_id: &network_id,
+            asset_definition_id,
+            spend_key: &spend_key,
+            circuit_id: &vk_record.circuit_id,
+            vk_box: &vk_box,
+        },
         &tree_commitments,
         &[super::ConfidentialUnshieldInputV2 {
             amount: 9,
@@ -209,8 +223,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         &[],
         5,
         root_hint,
-        &vk_record.circuit_id,
-        &vk_box,
     )
     .expect_err("nonzero change must require a private change note");
     assert!(
@@ -220,9 +232,13 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         "unexpected missing-change error: {missing_change}"
     );
     let bad_change = super::build_confidential_unshield_proof_v3(
-        &network_id,
-        asset_definition_id,
-        &spend_key,
+        crate::confidential_v2::ConfidentialProofContext {
+            network_id: &network_id,
+            asset_definition_id,
+            spend_key: &spend_key,
+            circuit_id: &vk_record.circuit_id,
+            vk_box: &vk_box,
+        },
         &tree_commitments,
         &[super::ConfidentialUnshieldInputV2 {
             amount: 9,
@@ -236,8 +252,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         }],
         5,
         root_hint,
-        &vk_record.circuit_id,
-        &vk_box,
     )
     .expect_err("incorrect private change amount must reject");
     assert!(
@@ -281,9 +295,13 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
     let overflow_root_hint = super::compute_confidential_root_v2(&overflow_tree_commitments)
         .expect("overflow confidential root");
     let overflow = super::build_confidential_unshield_proof_v3(
-        &network_id,
-        asset_definition_id,
-        &spend_key,
+        crate::confidential_v2::ConfidentialProofContext {
+            network_id: &network_id,
+            asset_definition_id,
+            spend_key: &spend_key,
+            circuit_id: &vk_record.circuit_id,
+            vk_box: &vk_box,
+        },
         &overflow_tree_commitments,
         &[
             super::ConfidentialUnshieldInputV2 {
@@ -302,8 +320,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         &[],
         0,
         overflow_root_hint,
-        &vk_record.circuit_id,
-        &vk_box,
     )
     .expect_err("overflowing private input sum must reject");
     assert!(
@@ -313,9 +329,13 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         "unexpected overflow error: {overflow}"
     );
     let proof = super::build_confidential_unshield_proof_v3(
-        &network_id,
-        asset_definition_id,
-        &spend_key,
+        crate::confidential_v2::ConfidentialProofContext {
+            network_id: &network_id,
+            asset_definition_id,
+            spend_key: &spend_key,
+            circuit_id: &vk_record.circuit_id,
+            vk_box: &vk_box,
+        },
         &tree_commitments,
         &[super::ConfidentialUnshieldInputV2 {
             amount: 9,
@@ -329,8 +349,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         }],
         5,
         root_hint,
-        &vk_record.circuit_id,
-        &vk_box,
     )
     .expect("build unshield v3 proof");
     let expected_change_owner_tag =

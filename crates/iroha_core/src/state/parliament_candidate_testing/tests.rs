@@ -259,7 +259,7 @@ fn with_original(
 
 fn bind_input(
     tx: &mut StateTransaction<'_, '_>,
-    route: super::super::network_policy_routes::CapturedNetworkPolicyRoute,
+    route: &super::super::network_policy_routes::CapturedNetworkPolicyRoute,
     authenticated: &crate::block::AuthenticatedGenesisTransaction,
     signed: &SignedTransaction,
     input_index: usize,
@@ -281,7 +281,7 @@ async fn candidate_testing_only_exact_direct_original_instruction_can_install() 
         |block, route, original, signed, instruction, input, ordinal| {
             for case in 0..11 {
                 let mut tx = block.transaction();
-                bind_input(&mut tx, route, original, signed, input);
+                bind_input(&mut tx, &(route), original, signed, input);
                 let authority = signed.authority();
                 match case {
                     3 => tx.current_entrypoint_index = Some(input as u64 + 1),
@@ -338,7 +338,7 @@ async fn candidate_testing_consumption_is_one_use_including_rejected_consumption
         |block, route, original, signed, instruction, input, ordinal| {
             for wrong_authority in [false, true] {
                 let mut tx = block.transaction();
-                bind_input(&mut tx, route, original, signed, input);
+                bind_input(&mut tx, &(route), original, signed, input);
                 tx.arm_direct_parliament_candidate_testing(
                     signed,
                     signed.authority(),
@@ -450,7 +450,7 @@ async fn candidate_testing_borrowed_and_user_executor_dispatch_cannot_inherit_di
         |block, route, original, signed, instruction, input, ordinal| {
             for dispatch in 0..3 {
                 let mut tx = block.transaction();
-                bind_input(&mut tx, route, original, signed, input);
+                bind_input(&mut tx, &(route), original, signed, input);
                 tx.arm_direct_parliament_candidate_testing(
                     signed,
                     signed.authority(),

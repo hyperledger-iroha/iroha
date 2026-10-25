@@ -37,10 +37,12 @@ fn view<'a>(
         state,
         K::Send,
         None,
-        IndexRoot::default(),
-        IndexRoot::default(),
-        IndexRoot::default(),
-        None,
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: IndexRoot::default(),
+            anchors: IndexRoot::default(),
+            epochs: IndexRoot::default(),
+            blacklist: None,
+        },
     )
     .unwrap()
 }
@@ -97,17 +99,18 @@ fn refresh_original_drafts_are_role_bound_and_only_published_with_the_successor(
         send.retain_successor_original(R::SchemePolicy, &bytes)
             .is_err()
     );
-    drop(send);
     let mut refresh = PreparationCustodyV1::new(
         &mut store,
         &source,
         &state,
         K::RefreshPolicy,
         Some(U::SchemePolicy),
-        IndexRoot::default(),
-        IndexRoot::default(),
-        IndexRoot::default(),
-        None,
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: IndexRoot::default(),
+            anchors: IndexRoot::default(),
+            epochs: IndexRoot::default(),
+            blacklist: None,
+        },
     )
     .unwrap();
     refresh
@@ -130,10 +133,12 @@ fn refresh_original_drafts_are_role_bound_and_only_published_with_the_successor(
         &state,
         K::RefreshPolicy,
         Some(U::SchemePolicy),
-        IndexRoot::default(),
-        IndexRoot::default(),
-        IndexRoot::default(),
-        None,
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: IndexRoot::default(),
+            anchors: IndexRoot::default(),
+            epochs: IndexRoot::default(),
+            blacklist: None,
+        },
     )
     .unwrap();
     refresh
@@ -165,7 +170,6 @@ fn signed_time_original_cannot_manufacture_direct_clock_custody() {
         custody.anchored_time(),
         Err(Error::WitnessLost(_))
     ));
-    drop(custody);
     let address = store
         .write_object(
             &archive::encode(&anchored).unwrap(),
@@ -181,10 +185,12 @@ fn signed_time_original_cannot_manufacture_direct_clock_custody() {
         &state,
         K::Send,
         None,
-        IndexRoot::default(),
-        anchors,
-        IndexRoot::default(),
-        None,
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: IndexRoot::default(),
+            anchors,
+            epochs: IndexRoot::default(),
+            blacklist: None,
+        },
     )
     .unwrap();
     assert_eq!(custody.anchored_time().unwrap(), Some(anchored));
@@ -236,10 +242,12 @@ fn issued_request_is_exact_local_custody_and_never_a_peer_substitute() {
         &state,
         K::Receive,
         None,
-        issued,
-        IndexRoot::default(),
-        IndexRoot::default(),
-        None,
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued,
+            anchors: IndexRoot::default(),
+            epochs: IndexRoot::default(),
+            blacklist: None,
+        },
     )
     .unwrap();
     assert!(matches!(
@@ -347,10 +355,12 @@ fn successor_original_refusal_leaves_the_unpublished_draft_unmodified() {
         &state,
         K::RefreshPolicy,
         Some(U::SchemePolicy),
-        IndexRoot::default(),
-        IndexRoot::default(),
-        IndexRoot::default(),
-        None,
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: IndexRoot::default(),
+            anchors: IndexRoot::default(),
+            epochs: IndexRoot::default(),
+            blacklist: None,
+        },
     )
     .unwrap();
     let before = archive::encode(&draft.snapshot()).unwrap();

@@ -19,9 +19,12 @@
       "deferred"
     ],
     "crates/iroha_core/src/smartcontracts/isi/privacy.rs": [
-      "deferred"
+      "canonical"
     ],
     "crates/iroha_core/src/smartcontracts/isi/privacy/tests/zk_x509_governance_tests.rs": [
+      "test"
+    ],
+    "crates/iroha_core/src/state/world_state_snapshot/zk_x509/tests.rs": [
       "test"
     ],
     "crates/iroha_core_privacy/src/privacy_engines/zk_x509/der_air.rs": [
@@ -32,6 +35,12 @@
     ],
     "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs": [
       "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder/lifecycle.rs": [
+      "canonical"
     ],
     "crates/iroha_core_privacy/src/privacy_engines/zk_x509/main_io.rs": [
       "test"
@@ -172,33 +181,6 @@
         ]
       }
     ],
-    "crates/iroha_core/src/smartcontracts/isi/privacy.rs": [
-      {
-        "name": "validate_zk_x509_crl_freshness_v1",
-        "owner": "X.6",
-        "equals": "PrivacyZkX509PresentationBoundsV1::from_crl(record.update_interval()) containing block_timestamp_ms / 1000, for block seconds within the RFC 5280 calendar",
-        "todo": "TODO(X.6): call `from_crl(record.update_interval())` and `contains_unix_seconds` for CRL registration and rotation freshness, keeping the two error messages; the canonical form additionally rejects a block second after 9999-12-31T23:59:59Z. Pinned by `deferred_sites_equal_the_canonical_definition_on_a_boundary_grid`.",
-        "source": [
-          "let block_unix_seconds = block_timestamp_ms / 1_000;",
-          "if block_unix_seconds < record.this_update_unix_seconds",
-          "|| block_unix_seconds >= record.next_update_unix_seconds",
-          "{",
-          "return Err(invalid_privacy_parameter(",
-          "\"X.509 signed CRL is not current at the executing block timestamp\",",
-          "));",
-          "}",
-          "let age = block_unix_seconds",
-          ".checked_sub(record.this_update_unix_seconds)",
-          ".ok_or_else(|| invalid_privacy_parameter(\"X.509 signed CRL begins in the future\"))?;",
-          "if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {"
-        ],
-        "transcribed": [
-          "block_unix_seconds < record.this_update_unix_seconds || block_unix_seconds >= record.next_update_unix_seconds",
-          "block_unix_seconds.checked_sub(record.this_update_unix_seconds)",
-          "ZK_X509_MAX_CRL_AGE_SECONDS_V1"
-        ]
-      }
-    ],
     "integration_tests/tests/privacy_exact12_zk_x509_network.rs": [
       {
         "name": "require_live_x509_submission_window",
@@ -232,15 +214,6 @@
     ]
   },
   "build_gates": {
-    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs": {
-      "declared_in": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/mod.rs",
-      "declaration": [
-        "#[cfg(any(test, feature = \"privacy-release-evidence\"))]",
-        "#[doc(hidden)]",
-        "pub mod relation;"
-      ],
-      "note": "The native reference relation remains compiled with the prover: tests and the `privacy-release-evidence` feature only. The shared strict DER-to-bounds helper has its ordinary-build owner in zk_x509/presentation.rs; holder proving remains open."
-    },
     "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation/release_fixture.rs": {
       "declared_in": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs",
       "declaration": [
@@ -249,14 +222,6 @@
         "pub mod release_fixture;"
       ],
       "note": "Release fixtures exist only in tests and the `privacy-release-evidence` feature."
-    },
-    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs": {
-      "declared_in": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs",
-      "declaration": [
-        "#[cfg(any(test, feature = \"privacy-release-evidence\"))]",
-        "pub(crate) fn prepare_zk_x509_prover_input_v1("
-      ],
-      "note": "Prover preflight (state admission plus the reference relation) is compiled with the prover: tests and the `privacy-release-evidence` feature only."
     }
   }
 }

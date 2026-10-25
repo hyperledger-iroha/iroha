@@ -181,10 +181,7 @@ pub(super) fn read_limited<R: std::io::Read>(
         if next_len as u64 > max_bytes {
             return Err(SanitizeError::new(
                 SanitizeRejectReason::Expansion,
-                format!(
-                    "attachment expanded beyond max bytes (>{} bytes)",
-                    max_bytes
-                ),
+                format!("attachment expanded beyond max bytes (>{max_bytes} bytes)"),
             ));
         }
         out.extend_from_slice(&buf[..read]);
@@ -309,16 +306,17 @@ pub(super) fn sanitize_attachment_sync(
         ));
     }
     let declared_norm = declared_type.and_then(normalize_mime);
-    if let Some(ref declared) = declared_norm {
-        if declared != OCTET_STREAM_MIME_TYPE && declared != &outcome.summary.sniffed_type {
-            return Err(SanitizeError::new(
-                SanitizeRejectReason::Type,
-                format!(
-                    "declared content-type `{declared}` does not match sniffed `{}`",
-                    outcome.summary.sniffed_type
-                ),
-            ));
-        }
+    if let Some(ref declared) = declared_norm
+        && declared != OCTET_STREAM_MIME_TYPE
+        && declared != &outcome.summary.sniffed_type
+    {
+        return Err(SanitizeError::new(
+            SanitizeRejectReason::Type,
+            format!(
+                "declared content-type `{declared}` does not match sniffed `{}`",
+                outcome.summary.sniffed_type
+            ),
+        ));
     }
     if !cfg.allowed_mime_types.is_empty()
         && !cfg
@@ -389,13 +387,15 @@ pub(super) async fn sanitize_attachment_subprocess(
         allowed_mime_types: cfg.allowed_mime_types.clone(),
         max_expanded_bytes: cfg.max_expanded_bytes,
         max_archive_depth: cfg.max_archive_depth,
-        timeout_ms: cfg.timeout.as_millis().max(1) as u64,
+        timeout_ms: u64::try_from(cfg.timeout.as_millis().max(1)).unwrap_or(u64::MAX),
     };
     let outcome = crate::panic_recovery::join_recoverable(
         crate::panic_recovery::spawn_blocking_recoverable(move || {
             #[cfg(test)]
             wait_for_sanitizer_worker_test_gate();
-            let outcome = run_sanitizer_subprocess(request, cfg.timeout, admission.clone());
+            let outcome = run_sanitizer_subprocess(&request, cfg.timeout, admission.clone());
+            // Release the copied request body before returning its admission capacity.
+            drop(request);
             drop(admission);
             outcome
         }),
@@ -410,13 +410,13 @@ pub(super) async fn sanitize_attachment_subprocess(
     Ok(outcome)
 }
 pub(super) fn run_sanitizer_subprocess(
-    request: SanitizerRequest,
+    request: &SanitizerRequest,
     timeout: Duration,
     admission: Option<crate::ProofBodyAdmissionLease>,
 ) -> Result<SanitizerOutcome, SanitizeError> {
     let exe = sanitizer_executable()?;
     let exe = validate_sanitizer_executable(&exe)?;
-    let request_bytes = norito::encode_canonical(&request).map_err(|err| {
+    let request_bytes = norito::encode_canonical(request).map_err(|err| {
         SanitizeError::new(
             SanitizeRejectReason::Sandbox,
             format!("attachment sanitizer request encode failed: {err}"),

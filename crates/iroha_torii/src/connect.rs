@@ -732,9 +732,7 @@ impl Bus {
         let mut map_write = self.inner.write().await;
         for (key, candidate) in candidates {
             let should_remove = if let Some(current) = map_write.get(&key) {
-                if !Arc::ptr_eq(current, &candidate) {
-                    false
-                } else {
+                if Arc::ptr_eq(current, &candidate) {
                     let last = *current.last_activity.lock().await;
                     let app_active = current.app_tx.lock().await.is_some();
                     let wallet_active = current.wallet_tx.lock().await.is_some();
@@ -742,6 +740,8 @@ impl Bus {
                         || (now.saturating_duration_since(last) > ttl
                             && !app_active
                             && !wallet_active)
+                } else {
+                    false
                 }
             } else {
                 false
@@ -1248,13 +1248,13 @@ impl Bus {
             proto::Role::App => sess.app_tx.lock().await.clone(),
             proto::Role::Wallet => sess.wallet_tx.lock().await.clone(),
         };
-        if let Some(tx) = tx_opt {
-            if matches!(
+        if let Some(tx) = tx_opt
+            && matches!(
                 tokio::time::timeout(self.local_delivery_timeout(), tx.send(frame)).await,
                 Ok(Ok(()))
-            ) {
-                *sess.last_activity.lock().await = Instant::now();
-            }
+            )
+        {
+            *sess.last_activity.lock().await = Instant::now();
         }
     }
     fn local_delivery_timeout(&self) -> Duration {
@@ -1551,7 +1551,7 @@ impl Bus {
                     }
                     *open_binding = Some(OpenBinding {
                         app_pk: *app_pk,
-                        constraints: constraints.clone(),
+                        constraints: *constraints,
                     });
                     drop(open_binding);
                     (*sess.req_perms.lock().await).clone_from(permissions);
@@ -1900,7 +1900,7 @@ impl Bus {
             return false;
         }
         let wallet_hash = *session.wallet_token_hash.lock().await;
-        !wallet_hash.is_some_and(|stored| stored != claim.token_wallet_hash)
+        wallet_hash.is_none_or(|stored| stored == claim.token_wallet_hash)
     }
     async fn install_peer_session_claim(&self, claim: &proto::ConnectSessionClaimV1) {
         self.shared
@@ -1974,35 +1974,32 @@ impl Bus {
         *session.expected_app_pk.lock().await = Some(claim.app_pk);
         *session.last_activity.lock().await = Instant::now();
         let mut map = self.inner.write().await;
-        match map.get(&claim.sid.to_vec()).cloned() {
-            Some(existing) => {
-                drop(map);
-                if !Self::claim_matches_session(&existing, claim).await {
-                    self.shared
-                        .p2p_session_claim_conflicts_total
-                        .fetch_add(1, Ordering::Relaxed);
-                    warn!(
-                        sid = ?hex::encode(claim.sid),
-                        "connect: ignoring racing conflicting P2P session claim"
-                    );
-                }
-            }
-            None => {
-                if map.len() >= self.policy.ws_max_sessions {
-                    self.shared
-                        .p2p_session_claim_conflicts_total
-                        .fetch_add(1, Ordering::Relaxed);
-                    warn!(
-                        sid = ?hex::encode(claim.sid),
-                        "connect: dropping racing P2P session claim at capacity"
-                    );
-                    return;
-                }
-                map.insert(claim.sid.to_vec(), session);
+        if let Some(existing) = map.get(&claim.sid.to_vec()).cloned() {
+            drop(map);
+            if !Self::claim_matches_session(&existing, claim).await {
                 self.shared
-                    .p2p_session_claims_installed_total
+                    .p2p_session_claim_conflicts_total
                     .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    sid = ?hex::encode(claim.sid),
+                    "connect: ignoring racing conflicting P2P session claim"
+                );
             }
+        } else {
+            if map.len() >= self.policy.ws_max_sessions {
+                self.shared
+                    .p2p_session_claim_conflicts_total
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    sid = ?hex::encode(claim.sid),
+                    "connect: dropping racing P2P session claim at capacity"
+                );
+                return;
+            }
+            map.insert(claim.sid.to_vec(), session);
+            self.shared
+                .p2p_session_claims_installed_total
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
     async fn apply_role_consumed(&self, event: proto::ConnectSessionRoleConsumedV1) {
@@ -2202,7 +2199,7 @@ impl Bus {
         }
         let mut misses = 0usize;
         let mut oldest = Duration::from_secs(0);
-        for entry in queue.pending.iter() {
+        for entry in &queue.pending {
             let elapsed = now.saturating_duration_since(entry.sent_at);
             if elapsed >= self.policy.heartbeat_interval {
                 misses += 1;
@@ -2246,7 +2243,7 @@ fn test_network_id() -> NetworkId {
         ),
     )
 }
-fn diff(req: &Vec<String>, acc: &Vec<String>) -> (Vec<String>, Vec<String>) {
+fn diff(req: &[String], acc: &[String]) -> (Vec<String>, Vec<String>) {
     use std::collections::HashSet;
     let r: HashSet<_> = req.iter().cloned().collect();
     let a: HashSet<_> = acc.iter().cloned().collect();
@@ -2465,7 +2462,6 @@ async fn handle_ws_inner(
                     }
                 }
                 Ok(Message::Close(_)) => break,
-                Ok(Message::Ping(_)) => { /* ignore ping in reader */ }
                 Ok(Message::Text(_)) => {
                     // Connect is a binary-only protocol. The upgrade-level cap
                     // bounds this frame before it reaches the handler; terminate
@@ -2624,7 +2620,8 @@ impl Bus {
                 ws_max_sessions: self.policy.ws_max_sessions,
                 ws_per_ip_max_sessions: self.policy.ws_per_ip_max_sessions,
                 ws_rate_per_ip_per_min: self.policy.ws_rate_per_ip_per_min,
-                session_ttl_ms: self.policy.session_ttl.as_millis() as u64,
+                session_ttl_ms: u64::try_from(self.policy.session_ttl.as_millis())
+                    .unwrap_or(u64::MAX),
                 frame_max_bytes: self.policy.frame_max_bytes,
                 session_buffer_max_bytes: self.policy.session_buffer_max_bytes,
                 relay_enabled: self.policy.relay_enabled,
@@ -2632,9 +2629,13 @@ impl Bus {
                 relay_effective_strategy,
                 relay_p2p_attached,
                 p2p_ttl_hops: self.policy.p2p_ttl_hops,
-                heartbeat_interval_ms: self.policy.heartbeat_interval.as_millis() as u64,
+                heartbeat_interval_ms: u64::try_from(self.policy.heartbeat_interval.as_millis())
+                    .unwrap_or(u64::MAX),
                 heartbeat_miss_tolerance: self.policy.heartbeat_miss_tolerance,
-                heartbeat_min_interval_ms: self.policy.heartbeat_min_interval.as_millis() as u64,
+                heartbeat_min_interval_ms: u64::try_from(
+                    self.policy.heartbeat_min_interval.as_millis(),
+                )
+                .unwrap_or(u64::MAX),
             },
             frames_in_total: self.shared.frames_in_total.load(Ordering::Relaxed),
             frames_out_total: self.shared.frames_out_total.load(Ordering::Relaxed),
@@ -2942,6 +2943,10 @@ impl TokenBucket {
             last_refill: Instant::now(),
         }
     }
+    #[expect(
+        clippy::suboptimal_flops,
+        reason = "Preserve separate multiplication and addition rounding at the token admission boundary"
+    )]
     fn allow(&mut self, amount: f64) -> bool {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_refill).as_secs_f64();

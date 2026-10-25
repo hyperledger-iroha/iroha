@@ -165,7 +165,7 @@ impl ZkX509Sha256CircuitV1 {
     }
     /// Differentially validate every local gate and exact wire binding.
     pub(crate) fn validate(&self) -> Result<(), ZkX509Sha256AirErrorV1> {
-        if self.wires.get(0) != Some(&F::ZERO)
+        if self.wires.first() != Some(&F::ZERO)
             || self.wires.get(1) != Some(&F::ONE)
             || self
                 .wires
@@ -182,7 +182,7 @@ impl ZkX509Sha256CircuitV1 {
         let input_end = 2_usize
             .checked_add(self.input_wires.len())
             .ok_or(ZkX509Sha256AirErrorV1::CircuitShape)?;
-        if self.input_wires.len() % 512 != 0
+        if !self.input_wires.len().is_multiple_of(512)
             || self.input_wires.len() != padded_len.saturating_mul(8)
             || self.input_wires.iter().copied().ne(2..input_end)
         {
@@ -295,10 +295,10 @@ impl CircuitBuilderV1 {
             gates: Vec::new(),
         }
     }
-    const fn zero(&self) -> WireV1 {
+    const fn zero() -> WireV1 {
         0
     }
-    const fn one(&self) -> WireV1 {
+    const fn one() -> WireV1 {
         1
     }
     fn value(&self, wire: WireV1) -> bool {
@@ -314,12 +314,12 @@ impl CircuitBuilderV1 {
         self.input_wires.push(wire);
         wire
     }
-    fn constant_word(&self, value: u32) -> WordV1 {
+    fn constant_word(value: u32) -> WordV1 {
         core::array::from_fn(|bit| {
             if value & (1_u32 << bit) == 0 {
-                self.zero()
+                Self::zero()
             } else {
-                self.one()
+                Self::one()
             }
         })
     }
@@ -333,9 +333,9 @@ impl CircuitBuilderV1 {
             kind: GateKindV1::And,
             left,
             right,
-            carry_in: self.zero(),
+            carry_in: Self::zero(),
             out,
-            carry_out: self.zero(),
+            carry_out: Self::zero(),
             row,
         });
         out
@@ -347,9 +347,9 @@ impl CircuitBuilderV1 {
             kind: GateKindV1::Xor,
             left,
             right,
-            carry_in: self.zero(),
+            carry_in: Self::zero(),
             out,
-            carry_out: self.zero(),
+            carry_out: Self::zero(),
             row,
         });
         out
@@ -381,7 +381,7 @@ impl CircuitBuilderV1 {
         self.xor_words(partial, third)
     }
     fn add_words(&mut self, left: WordV1, right: WordV1) -> WordV1 {
-        let mut carry = self.zero();
+        let mut carry = Self::zero();
         core::array::from_fn(|bit| {
             let (sum, next_carry) = self.full_adder(left[bit], right[bit], carry);
             carry = next_carry;
@@ -392,10 +392,12 @@ impl CircuitBuilderV1 {
         words
             .iter()
             .copied()
-            .fold(self.constant_word(0), |sum, word| self.add_words(sum, word))
+            .fold(Self::constant_word(0), |sum, word| {
+                self.add_words(sum, word)
+            })
     }
     fn not_word(&mut self, word: WordV1) -> WordV1 {
-        core::array::from_fn(|bit| self.xor(word[bit], self.one()))
+        core::array::from_fn(|bit| self.xor(word[bit], Self::one()))
     }
     fn choose(&mut self, x: WordV1, y: WordV1, z: WordV1) -> WordV1 {
         let not_x = self.not_word(x);
@@ -438,7 +440,7 @@ fn build_sha256_circuit_unchecked_v1(
 ) -> Result<ZkX509Sha256CircuitV1, ZkX509Sha256AirErrorV1> {
     let padded = sha256_padding_v1(message)?;
     let mut builder = CircuitBuilderV1::new();
-    let mut state = SHA256_INITIAL_STATE_V1.map(|word| builder.constant_word(word));
+    let mut state = SHA256_INITIAL_STATE_V1.map(CircuitBuilderV1::constant_word);
     let input_words: Vec<_> = padded
         .chunks_exact(4)
         .map(|bytes| {
@@ -456,12 +458,12 @@ fn build_sha256_circuit_unchecked_v1(
             let sigma_zero = builder.xor_three_words(
                 rotate_right_v1(schedule[index - 15], 7),
                 rotate_right_v1(schedule[index - 15], 18),
-                shift_right_v1(schedule[index - 15], 3, builder.zero()),
+                shift_right_v1(schedule[index - 15], 3, CircuitBuilderV1::zero()),
             );
             let sigma_one = builder.xor_three_words(
                 rotate_right_v1(schedule[index - 2], 17),
                 rotate_right_v1(schedule[index - 2], 19),
-                shift_right_v1(schedule[index - 2], 10, builder.zero()),
+                shift_right_v1(schedule[index - 2], 10, CircuitBuilderV1::zero()),
             );
             schedule.push(builder.add_many_words(&[
                 schedule[index - 16],
@@ -478,7 +480,7 @@ fn build_sha256_circuit_unchecked_v1(
                 rotate_right_v1(work[4], 25),
             );
             let choose = builder.choose(work[4], work[5], work[6]);
-            let round_constant = builder.constant_word(SHA256_ROUND_CONSTANTS_V1[round]);
+            let round_constant = CircuitBuilderV1::constant_word(SHA256_ROUND_CONSTANTS_V1[round]);
             let t1 = builder.add_many_words(&[
                 work[7],
                 big_sigma_one,

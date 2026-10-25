@@ -68,7 +68,7 @@ fn fixture() -> World {
             ("redundant", ProofStatus::Rejected),
             ("metadata", ProofStatus::Rejected),
         ] {
-            tx.insert_proof_record(record(name, status));
+            tx.insert_proof_record(&(record(name, status)));
         }
         tx.apply();
         block.commit();
@@ -79,21 +79,23 @@ fn fixture() -> World {
 /// Use actual canonical/index mutators as an independent reconstruction oracle.
 fn change(block: &mut WorldBlock<'_>, replacement: bool) {
     let mut tx = block.transaction_without_telemetry(LaneConfig::default(), 0);
-    tx.insert_proof_record(record(
-        "moving",
-        if replacement {
-            ProofStatus::Rejected
-        } else {
-            ProofStatus::Verified
-        },
-    ));
+    tx.insert_proof_record(
+        &(record(
+            "moving",
+            if replacement {
+                ProofStatus::Rejected
+            } else {
+                ProofStatus::Verified
+            },
+        )),
+    );
     tx.remove_proof_record(&id("removed")).unwrap();
-    tx.insert_proof_record(record("added", ProofStatus::Submitted));
-    tx.insert_proof_record(record("redundant", ProofStatus::Rejected));
+    tx.insert_proof_record(&(record("added", ProofStatus::Submitted)));
+    tx.insert_proof_record(&(record("redundant", ProofStatus::Rejected)));
     let mut metadata = record("metadata", ProofStatus::Rejected);
     metadata.vk_commitment = Some([52; 32]);
     metadata.verified_at_height = Some(123);
-    tx.insert_proof_record(metadata);
+    tx.insert_proof_record(&(metadata));
     assert!(tx.remove_proof_record(&id("absent")).is_none());
     tx.apply();
 }
@@ -197,14 +199,14 @@ fn last_status_member_move_keeps_prior_absence_and_removed_bucket() {
     {
         let mut block = world.block();
         let mut tx = block.transaction_without_telemetry(LaneConfig::default(), 0);
-        tx.insert_proof_record(record("only", ProofStatus::Submitted));
+        tx.insert_proof_record(&(record("only", ProofStatus::Submitted)));
         tx.apply();
         block.commit();
     }
     {
         let mut block = world.block();
         let mut tx = block.transaction_without_telemetry(LaneConfig::default(), 0);
-        tx.insert_proof_record(record("only", ProofStatus::Rejected));
+        tx.insert_proof_record(&(record("only", ProofStatus::Rejected)));
         tx.apply();
         block.commit();
     }

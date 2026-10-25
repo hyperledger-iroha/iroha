@@ -877,7 +877,7 @@ fn token_expiry_during_finality_read_is_rechecked_before_release() {
                 vec![0xaa],
                 PROVIDER,
                 "sorafs.sf1@1.0.0".into(),
-                short.clone(),
+                short,
                 None,
             )
             .expect("every signed fixture is eligible before its exclusive deadline");
@@ -971,7 +971,7 @@ fn authenticated_subject_quota_is_enforced() {
             vec![0xAA],
             provider,
             "sorafs.sf1@1.0.0".to_string(),
-            overrides.clone(),
+            overrides,
             None,
         )
         .expect("first token");
@@ -982,7 +982,7 @@ fn authenticated_subject_quota_is_enforced() {
             vec![0xAA],
             provider,
             "sorafs.sf1@1.0.0".to_string(),
-            overrides.clone(),
+            overrides,
             None,
         )
         .expect("second token");
@@ -993,7 +993,7 @@ fn authenticated_subject_quota_is_enforced() {
             vec![0xAA],
             provider,
             "sorafs.sf1@1.0.0".to_string(),
-            overrides.clone(),
+            overrides,
             None,
         )
         .expect_err("quota exceeded");

@@ -115,9 +115,9 @@ mod tests {
         let world = World::new();
         let network = SccpNetworkV1::EthereumMainnet;
         let mut route = sample_route(network);
-        let first = route.revisions[&1].clone();
+        let first = route.revisions[&1];
         for revision in 2..=130 {
-            let mut record = first.clone();
+            let mut record = first;
             record.revision = revision;
             route.revisions.insert(revision, record);
         }

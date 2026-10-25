@@ -617,8 +617,8 @@ fn submit_transaction_at(
         .try_sign(key.private_key())
         .map_err(|error| eyre::eyre!("sign SCCP transaction: {error:?}"))?;
     let accepted = {
-        let world = state.world_view();
-        crate::accept_internal_transaction(transaction, state.network_id_ref(), &world)
+        let parameters = state.transaction_admission_parameters();
+        crate::accept_internal_transaction(transaction, state.network_id_ref(), &parameters)
     }
     .wrap_err("accept SCCP transaction")?;
     queue
@@ -1754,12 +1754,12 @@ mod tests {
                 )))
                 .expect("install the signed SCCP handshake fixture");
             block
-                .set_parameter_for_testing(
-                    crate::daemon_fixture_crypto_policy()
-                        .into_parameter()
-                        .expect("canonical ordinary crypto policy parameter"),
-                )
-                .expect("commit the SCCP fixture's explicit ordinary signing policy");
+                .set_parameter_for_testing(Parameter::Custom(
+                    iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+                        .into_custom_parameter()
+                        .expect("canonical root fee fixture"),
+                ))
+                .expect("install committed root fees before quoting");
             block.commit();
         }
         let state = Arc::new(State::new_for_testing(
@@ -1784,6 +1784,57 @@ mod tests {
             state.view().world().account(&authority).is_err(),
             "the keeper key has no account"
         );
+        let error = submit_transaction_at(
+            &state,
+            &queue,
+            &key,
+            InstructionBox::from(empty_advance(SccpNetworkV1::EthereumMainnet)),
+            wall_clock_ms(),
+        )
+        .expect_err("ordinary admission requires a committed crypto policy");
+        assert_eq!(
+            error
+                .downcast_ref::<iroha_core::execution_attempt::ExecutionDeferred>()
+                .expect("missing policy is an unfinished attempt")
+                .reason(),
+            ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable,
+        );
+        for algorithm in [
+            iroha_crypto::Algorithm::Secp256k1,
+            iroha_crypto::Algorithm::Ed25519,
+        ] {
+            let header = BlockHeader::new(NonZeroU64::new(1).expect("nonzero"), None, None, 0, 0);
+            let mut block = state.block(header);
+            block
+                .world
+                .set_parameter_for_testing(
+                    iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                        algorithm,
+                    ])
+                    .expect("explicit fixture policy")
+                    .into_parameter()
+                    .expect("canonical fixture policy"),
+                )
+                .expect("install the committed policy");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("publish the committed policy");
+            if algorithm == iroha_crypto::Algorithm::Secp256k1 {
+                let error = submit_transaction_at(
+                    &state,
+                    &queue,
+                    &key,
+                    InstructionBox::from(empty_advance(SccpNetworkV1::EthereumMainnet)),
+                    wall_clock_ms(),
+                )
+                .expect_err("the keeper's Ed25519 key is not permitted");
+                assert!(matches!(
+                    error.downcast_ref::<iroha_core::tx::AcceptTransactionFail>(),
+                    Some(iroha_core::tx::AcceptTransactionFail::SignatureVerification(failure))
+                        if failure.code() == iroha_core::tx::SignatureRejectionCode::AlgorithmNotPermitted
+                ));
+            }
+        }
         let advance = empty_advance(SccpNetworkV1::EthereumMainnet);
         let error = submit_transaction(&state, &queue, &key, InstructionBox::from(advance))
             .expect_err("no light client is installed");

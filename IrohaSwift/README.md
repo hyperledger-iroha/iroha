@@ -1701,6 +1701,16 @@ four-byte `noritoDiscriminant`, `canonicalTypedVariantLabel`,
 `expectedProofSystem`, and `expectedEngine`; the proof-system and native-engine
 tags remain distinct Swift types even where their current numeric ordinals
 coincide. Unknown tags and legacy variant labels fail closed.
+`ZkX509SigningPreparationV1.prepareOwnershipSigningV1(statementNorito:)` accepts
+one canonical Norito `PrivacyStatementV1` archive carrying the X.509 variant.
+The current native holder implementation returns its canonical `message` and
+32-byte SHA-256 `digest` together. A P-256 message-signing API hashes `message`
+exactly once; a prehash API signs `digest` directly. Keep the subject key in the
+external signer and normalize its signature to low-s, fixed 64-byte `r || s`
+before building a witness. This preparation neither authenticates current
+State nor proves a credential, pairs a device, or establishes network readiness.
+Missing native support and noncanonical or wrong-protocol input fail explicitly.
+
 The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteOpening`, `ConfidentialNoteCommitment.deriveFromOpening`,
 `ConfidentialNoteNullifier`, `ConfidentialOwnerTag`,

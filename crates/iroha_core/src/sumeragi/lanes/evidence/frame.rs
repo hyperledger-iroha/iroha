@@ -32,6 +32,10 @@ impl FundedLaneSource {
         unsafe_code,
         reason = "only move the same prepaid config fields into a scalar source wrapper"
     )]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(in crate::sumeragi) fn new(
         config: RetainedPayload<HeightConfig>,
         instance: Hash32,
@@ -42,7 +46,7 @@ impl FundedLaneSource {
         if !config.belongs_to(budget) || !config.get().epoch.contains(height) {
             return Err((
                 config,
-                std::io::Error::from(std::io::ErrorKind::InvalidInput).into(),
+                std::io::Error::from(std::io::ErrorKind::InvalidInput),
             ));
         }
         // SAFETY: AvailabilitySource adds only fixed scalar identity. Its private config is

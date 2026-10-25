@@ -21,7 +21,7 @@ use mv::storage::StorageReadOnly;
 use std::fmt;
 
 /// A sealed original capture stays alive through every local post-execution refusal.
-pub(crate) enum CapturedExecution {
+pub enum CapturedExecution {
     Boundary(FrozenEpochBoundary),
     Ordinary(RetainedPayload<NativeExecutionInputs>),
 }
@@ -73,7 +73,11 @@ fn set_params(slot: &mut super::ScheduledSlot, next: ChainParamsRecord) {
 
 /// One native block's sealed schedule lifecycle. The original owner is never recreated on retry.
 #[derive(Default)]
-pub(crate) enum ScheduleStep {
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
+pub enum ScheduleStep {
     /// This overlay has no native consensus execution request.
     #[default]
     Off,
@@ -165,7 +169,7 @@ impl ScheduleStep {
 
 /// Authenticate a successor's original native context at one committed State cut.
 /// Reused before event attribution and by the pristine writer before schedule effects.
-pub(crate) fn authenticate_successor_context(
+pub fn authenticate_successor_context(
     state: &(impl StateReadOnly + ?Sized),
     header: &iroha_data_model::block::BlockHeader,
     expected: &GlobalThresholdBeaconPulseContextV1,
@@ -496,7 +500,7 @@ fn boundary_capture_attempt_error(
 
 /// Reconcile signed genesis authority with the actual executed registration state. Later
 /// epochs deliberately do not reread mutable validity when retaining original credentials.
-pub(crate) fn validate_executed_genesis(
+pub fn validate_executed_genesis(
     world: &impl WorldReadOnly,
     context: &iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ScheduleError>> {
@@ -542,7 +546,7 @@ pub(crate) fn validate_executed_genesis(
             .into());
         }
     }
-    for peer in world.peers().iter() {
+    for peer in world.peers() {
         if world.consensus_keys().iter().any(|(id, record)| {
             id == &record.id
                 && id.role == ConsensusKeyRole::Validator

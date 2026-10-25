@@ -23,11 +23,12 @@ pub(super) fn account_offset(seed: &str, account_count: usize) -> Result<usize> 
     let digest = Sha256::digest(format!("scaling-account-offset-v1:{seed}").as_bytes());
     let mut selector = [0_u8; 8];
     selector.copy_from_slice(&digest[..8]);
-    Ok((u64::from_le_bytes(selector) % account_count as u64) as usize)
+    usize::try_from(u64::from_le_bytes(selector) % u64::try_from(account_count)?)
+        .wrap_err("account offset exceeds usize")
 }
 
 pub(super) fn validate_schedule(schedule: &Schedule, account_count: usize) -> Result<()> {
-    if account_count == 0 || account_count > MAX_ACCOUNTS || account_count % 4 != 0 {
+    if account_count == 0 || account_count > MAX_ACCOUNTS || !account_count.is_multiple_of(4) {
         bail!("routed workload requires a fixed pool of 4 through 64 accounts divisible by four");
     }
     let warmup = schedule.count(Cohort::Warmup)?;
@@ -194,7 +195,10 @@ fn verify_account(expected: &Account, observed: &Account) -> Result<String> {
 pub(super) struct Baselines(Vec<Account>);
 
 fn validate_pool(authorities: &[&AccountId], records: &[Record]) -> Result<()> {
-    if authorities.is_empty() || authorities.len() > MAX_ACCOUNTS || authorities.len() % 4 != 0 {
+    if authorities.is_empty()
+        || authorities.len() > MAX_ACCOUNTS
+        || !authorities.len().is_multiple_of(4)
+    {
         bail!("workload verification account pool is outside its bound");
     }
     let mut identities = BTreeSet::new();

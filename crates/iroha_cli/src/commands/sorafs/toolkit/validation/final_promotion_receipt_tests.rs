@@ -118,7 +118,7 @@ fn final_promotion_cli_verifies_complete_signed_fixture_and_reports_exact_scope(
     );
     assert!(!result.contains_key("promotion_eligible"));
     assert!(!result.contains_key("release_qualified"));
-    assert_eq!(run(args).unwrap(), ExitCode::SUCCESS);
+    assert_eq!(run(&args).unwrap(), ExitCode::SUCCESS);
 }
 
 #[test]
@@ -310,7 +310,7 @@ fn final_promotion_cli_rejects_missing_file_and_unsupported_output() {
     replace(&mut arguments, "--statement", "/unused-source-file".into());
     let mut args = parse(&arguments).unwrap();
     assert!(matches!(
-        run(parse(&arguments).unwrap()),
+        run(&parse(&arguments).unwrap()),
         Err(CliError::Io(_))
     ));
     args.format = "yaml".into();

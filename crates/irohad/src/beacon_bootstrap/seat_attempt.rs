@@ -620,15 +620,15 @@ impl SeatDkgAttempt {
             .map_err(|_| AttemptError::Binding)?;
         Ok(self.authority.checkpoint_context(
             self.finality.clock(),
-            phase,
-            self.signer_index,
+            (phase, self.signer_index),
             &self.signer,
-            handle,
-            self.provider_revision,
-            public_hash,
-            self.phase_input_hash(phase)?,
-            self.durable.previous_checkpoint_hash(phase)?,
-            intent_hash,
+            (handle, self.provider_revision),
+            (
+                public_hash,
+                self.phase_input_hash(phase)?,
+                self.durable.previous_checkpoint_hash(phase)?,
+                intent_hash,
+            ),
         )?)
     }
     fn claim_and_fifo_identity(&self) -> std::result::Result<AttemptSourceIdentity, AttemptError> {
@@ -742,11 +742,12 @@ impl SeatDkgAttempt {
             self.sealed.as_ref().ok_or(AttemptError::Phase)?,
             self.signer_index,
             &self.signer,
-            handle,
-            self.provider_revision,
-            self.durable.previous_checkpoint_hash(4)?,
-            self.durable.latest_head_hash()?,
-            intent_hash,
+            (handle, self.provider_revision),
+            (
+                self.durable.previous_checkpoint_hash(4)?,
+                self.durable.latest_head_hash()?,
+                intent_hash,
+            ),
         )?)
     }
     fn prepare_extraction_intent(&mut self) -> std::result::Result<(), AttemptError> {
@@ -872,15 +873,15 @@ impl SeatDkgAttempt {
             .map_err(|_| AttemptError::Binding)?;
         let context = self.authority.checkpoint_context(
             self.finality.clock(),
-            1,
-            self.signer_index,
+            (1, self.signer_index),
             &self.signer,
-            handle,
-            self.provider_revision,
-            head.context.public_output_hash,
-            [0; 32],
-            [0; 32],
-            head.context.producer_intent_hash,
+            (handle, self.provider_revision),
+            (
+                head.context.public_output_hash,
+                [0; 32],
+                [0; 32],
+                head.context.producer_intent_hash,
+            ),
         )?;
         if context.binding() != &head.context {
             return Err(AttemptError::Binding);
@@ -1012,15 +1013,15 @@ impl SeatDkgAttempt {
             )?;
             let context = self.authority.checkpoint_context(
                 self.finality.clock(),
-                3,
-                self.signer_index,
+                (3, self.signer_index),
                 &self.signer,
-                handle,
-                self.provider_revision,
-                accepted_head.context.public_output_hash,
-                accepted_head.context.phase_input_hash,
-                accepted_head.context.previous_checkpoint_hash,
-                accepted_head.context.producer_intent_hash,
+                (handle, self.provider_revision),
+                (
+                    accepted_head.context.public_output_hash,
+                    accepted_head.context.phase_input_hash,
+                    accepted_head.context.previous_checkpoint_hash,
+                    accepted_head.context.producer_intent_hash,
+                ),
             )?;
             if context.binding() != &accepted_head.context {
                 return Err(AttemptError::Binding);
@@ -1068,11 +1069,12 @@ impl SeatDkgAttempt {
             self.sealed.as_ref().ok_or(AttemptError::Phase)?,
             self.signer_index,
             &self.signer,
-            handle,
-            self.provider_revision,
-            accepted_head.checkpoint_hash,
-            Hash::new(self.aggregate_durable.source(3)?).into(),
-            self.aggregate_durable.intent_hash()?,
+            (handle, self.provider_revision),
+            (
+                accepted_head.checkpoint_hash,
+                Hash::new(self.aggregate_durable.source(3)?).into(),
+                self.aggregate_durable.intent_hash()?,
+            ),
         )?;
         if context.binding() != &head.binding {
             return Err(AttemptError::Binding);
@@ -1234,8 +1236,7 @@ impl SeatDkgAttempt {
                 local.restore_delivered(
                     &context,
                     phase_input,
-                    publication,
-                    output,
+                    (publication, output),
                     private,
                     &self.signer,
                     norito::canonical_decode_limits(private.len()),
@@ -1244,8 +1245,7 @@ impl SeatDkgAttempt {
                 local.restore_accepted(
                     &context,
                     phase_input,
-                    publication,
-                    output,
+                    (publication, output),
                     private,
                     &self.signer,
                     norito::canonical_decode_limits(private.len()),

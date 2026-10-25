@@ -3,6 +3,10 @@
 
 impl ValidBlock {
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     fn finalize_owned_execution_metadata(
         block: &SignedBlock,
         state: &mut StateBlock<'_>,
@@ -51,7 +55,9 @@ impl ValidBlock {
         let sccp_inputs_owner = Self::sccp_height_inputs(block, state, sccp_height);
         // This owner retains the original funded schedule across every mutable hook path.
         // Projection borrows the same immutable graph; no committee is copied or reacquired.
-        let sccp_inputs = match sccp_inputs_owner.as_ref().map(|original| original.inputs()) {
+        let sccp_inputs = match sccp_inputs_owner.as_ref().map(
+            super::super::smartcontracts::isi::sccp::height::RetainedSccpHeightInputsV1::inputs,
+        ) {
             Some(Ok(inputs)) => Some(inputs),
             Some(Err(error)) => {
                 iroha_logger::warn!(%error, "SCCP: original height projection failed closed");
@@ -116,6 +122,10 @@ impl ValidBlock {
 
     /// Shared deterministic metadata runs after actual Network/Pipeline/Time
     /// execution and before the one output seal captures its final World delta.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     fn finalize_common_execution_metadata(
         block: &SignedBlock,
         state: &mut StateBlock<'_>,

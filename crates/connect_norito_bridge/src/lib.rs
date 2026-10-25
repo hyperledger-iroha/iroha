@@ -138,18 +138,17 @@ mod fi_checkpoint_selection;
 pub use fi_checkpoint_selection::connect_norito_verify_fi_checkpoint_selection_v1;
 mod fi_checkpoint_advance;
 pub use fi_checkpoint_advance::connect_norito_advance_fi_checkpoint_v1;
-mod fi_context_verification;
 mod fi_context_bridge;
+mod fi_context_verification;
 pub use fi_context_bridge::connect_norito_verify_fi_context_assertion_v1;
 mod fi_context_continuation;
-pub use fi_context_continuation::{
-    connect_norito_admit_fi_assertion_original_v1,
-    connect_norito_verify_fi_context_continuation_v1,
-};
 pub use committed_transaction_inclusion::{
     connect_norito_committed_transaction_candidate_block_hash_v1,
     connect_norito_verify_committed_transaction_inclusion_v1,
     connect_norito_verify_exact_successful_committed_transaction_v1,
+};
+pub use fi_context_continuation::{
+    connect_norito_admit_fi_assertion_original_v1, connect_norito_verify_fi_context_continuation_v1,
 };
 mod committed_transaction_query;
 pub use committed_transaction_query::{
@@ -170,6 +169,8 @@ use connect_approval_ffi::{
 };
 mod confidential_note_ffi;
 mod confidential_prover_ffi;
+mod zk_x509_holder_ffi;
+pub use zk_x509_holder_ffi::connect_norito_zk_x509_prepare_ownership_signing_v1;
 #[cfg(not(unix))]
 compile_error!(
     "Native KAGEMUSHA wallet storage is not implemented for non-Unix targets; \
@@ -5259,7 +5260,7 @@ mod detached_transaction_scaffold_tests {
             assert_eq!(
                 root.get("payload_hash_hex"),
                 Some(&JsonValue::from(hex::encode(
-                    Hash::new(&norito::encode_canonical(tx.payload()).unwrap()).as_ref()
+                    Hash::new(norito::encode_canonical(tx.payload()).unwrap()).as_ref()
                 )))
             );
             assert_eq!(

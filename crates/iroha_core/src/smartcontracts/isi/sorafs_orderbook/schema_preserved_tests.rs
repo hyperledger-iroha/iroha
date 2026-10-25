@@ -4,6 +4,7 @@ fn committed_event_journal_resolves_immutable_hashes_and_block_indexes() {
     let buyer = keypair(0x2A);
     let authority = account(&buyer);
     let mut state = state_with_accounts(&[&buyer]);
+    seed_component_crypto_policy(&state);
     let mut policy_digest = [0; 32];
     transact(&mut state, 1, NOW, |transaction| {
         policy_digest = activate_policy(transaction, &authority);
@@ -95,6 +96,7 @@ fn orderbook_durable_frames_preserve_authoritative_journal_position() {
     let buyer = keypair(0x2A);
     let authority = account(&buyer);
     let mut state = state_with_accounts(&[&buyer]);
+    seed_component_crypto_policy(&state);
     let mut policy_digest = [0; 32];
     transact(&mut state, 1, NOW, |transaction| {
         policy_digest = activate_policy(transaction, &authority);

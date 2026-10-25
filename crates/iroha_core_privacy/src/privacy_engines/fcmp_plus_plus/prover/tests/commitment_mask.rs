@@ -219,8 +219,7 @@ fn prover_input_scalar_owner_handoff_covers_every_exit() {
             vec![output],
             Vec::new(),
         )
-        .err()
-        .expect("noncanonical spend-x must reject"),
+        .expect_err("noncanonical spend-x must reject"),
         FcmpNativeErrorV1::ScalarEncoding
     );
     assert_eq!(rerandomization_canonicality_owner_drops(), 1);
@@ -240,8 +239,7 @@ fn prover_input_scalar_owner_handoff_covers_every_exit() {
             vec![output],
             Vec::new(),
         )
-        .err()
-        .expect("noncanonical output-y must reject"),
+        .expect_err("noncanonical output-y must reject"),
         FcmpNativeErrorV1::ScalarEncoding
     );
     assert_eq!(rerandomization_canonicality_owner_drops(), 2);
@@ -261,8 +259,7 @@ fn prover_input_scalar_owner_handoff_covers_every_exit() {
             vec![output],
             Vec::new(),
         )
-        .err()
-        .expect("zero spend-x must reject after scalar decoding"),
+        .expect_err("zero spend-x must reject after scalar decoding"),
         FcmpNativeErrorV1::ArithmeticInvariant
     );
     assert_eq!(rerandomization_canonicality_owner_drops(), 2);
@@ -283,8 +280,7 @@ fn prover_input_scalar_owner_handoff_covers_every_exit() {
             vec![output],
             vec![vec![[u8::MAX; 32]]],
         )
-        .err()
-        .expect("deep branch decode must reject before publication"),
+        .expect_err("deep branch decode must reject before publication"),
         FcmpNativeErrorV1::ScalarEncoding
     );
     assert_eq!(rerandomization_canonicality_owner_drops(), 2);
@@ -329,8 +325,7 @@ fn prover_input_scalar_owner_handoff_covers_every_exit() {
                 vec![output],
                 vec![branch],
             )
-            .err()
-            .expect("noncanonical Helioselene branch scalar must reject"),
+            .expect_err("noncanonical Helioselene branch scalar must reject"),
             FcmpNativeErrorV1::ScalarEncoding
         );
         assert_eq!(
@@ -357,8 +352,7 @@ fn prover_input_scalar_owner_handoff_covers_every_exit() {
                 vec![output],
                 vec![vec![cycle_one], branch],
             )
-            .err()
-            .expect("noncanonical Field25519 branch scalar must reject"),
+            .expect_err("noncanonical Field25519 branch scalar must reject"),
             FcmpNativeErrorV1::ScalarEncoding
         );
         assert_eq!(

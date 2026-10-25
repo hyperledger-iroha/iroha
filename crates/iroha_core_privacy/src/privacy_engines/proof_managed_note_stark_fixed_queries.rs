@@ -302,7 +302,7 @@ mod tests {
     fn selected_evaluations_are_identical_across_rayon_widths() {
         let columns = vec![
             (0..512)
-                .map(|row| F((row * row + 7) as u64))
+                .map(|row| F(u64::try_from(row * row + 7).expect("fixture field element")))
                 .collect::<Vec<_>>(),
             (0..512).map(|row| F(u64::from(row % 7 == 0))).collect(),
         ];

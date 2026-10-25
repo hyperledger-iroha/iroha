@@ -69,7 +69,9 @@ fn governance_world_with_accounts(
     );
     World::with_assets(
         [domain],
-        [alice_account, escrow, slash].into_iter().chain(extra_accounts),
+        [alice_account, escrow, slash]
+            .into_iter()
+            .chain(extra_accounts),
         [asset_def],
         [alice_asset, escrow_asset, slash_asset],
         [],
@@ -80,8 +82,7 @@ fn governance_state_with_accounts(
     escrow_account: &iroha_data_model::account::AccountId,
     slash_account: &iroha_data_model::account::AccountId,
 ) -> State {
-    let world =
-        governance_world_with_accounts(voting_asset_id, escrow_account, slash_account, []);
+    let world = governance_world_with_accounts(voting_asset_id, escrow_account, slash_account, []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     State::new_for_testing(world, kura, query_handle)
@@ -235,8 +236,10 @@ fn double_vote_slashes_plain_lock() {
         def_id.clone(),
         &escrow_id,
         &slash_id,
-        [iroha_data_model::account::Account::new(iroha_test_samples::BOB_ID.clone())
-            .build(&ALICE_ID)],
+        [
+            iroha_data_model::account::Account::new(iroha_test_samples::BOB_ID.clone())
+                .build(&ALICE_ID),
+        ],
     );
     let mut initial_state = State::new_for_testing(
         world,
@@ -246,18 +249,35 @@ fn double_vote_slashes_plain_lock() {
     {
         let view = initial_state.view();
         assert!(view.world().parameters().crypto_policy().is_none());
-        assert!(view.world().accounts().get(&*iroha_test_samples::BOB_ID).is_some());
+        assert!(
+            view.world()
+                .accounts()
+                .get(&*iroha_test_samples::BOB_ID)
+                .is_some()
+        );
         assert!(view.world().citizens().get(&*ALICE_ID).is_none());
         assert_eq!(
-            view.world().asset(&AssetId::new(def_id.clone(), ALICE_ID.clone()))
-                .expect("original voter balance").as_ref(),
+            view.world()
+                .asset(&AssetId::new(def_id.clone(), ALICE_ID.clone()))
+                .expect("original voter balance")
+                .as_ref(),
             &Quantity::from(1_000_u64)
         );
-        assert!(view.world().assets().get(&AssetId::new(
-            def_id.clone(), iroha_test_samples::BOB_ID.clone()
-        )).is_none());
+        assert!(
+            view.world()
+                .assets()
+                .get(&AssetId::new(
+                    def_id.clone(),
+                    iroha_test_samples::BOB_ID.clone()
+                ))
+                .is_none()
+        );
         assert_eq!(
-            view.world().asset_definitions().get(&def_id).unwrap().total_quantity(),
+            view.world()
+                .asset_definitions()
+                .get(&def_id)
+                .unwrap()
+                .total_quantity(),
             &Quantity::from(1_000_u64)
         );
     }
@@ -350,18 +370,32 @@ fn double_vote_slashes_plain_lock() {
         assert!(view.world().parameters().crypto_policy().is_none());
         assert!(view.world().governance_locks().get(&rid).is_none());
         assert_eq!(
-            view.world().asset(&AssetId::new(def_id.clone(), ALICE_ID.clone()))
-                .expect("unbonded ballot source").as_ref(),
+            view.world()
+                .asset(&AssetId::new(def_id.clone(), ALICE_ID.clone()))
+                .expect("unbonded ballot source")
+                .as_ref(),
             &Quantity::from(1_000_u64)
         );
         assert_eq!(
-            view.world().asset(&AssetId::new(def_id.clone(), iroha_test_samples::BOB_ID.clone()))
-                .expect("actual citizenship custody").as_ref(),
+            view.world()
+                .asset(&AssetId::new(
+                    def_id.clone(),
+                    iroha_test_samples::BOB_ID.clone()
+                ))
+                .expect("actual citizenship custody")
+                .as_ref(),
             &Quantity::from(10_u64)
         );
-        assert_eq!(view.world().citizens().get(&alice).unwrap().amount, Quantity::from(10_u64));
         assert_eq!(
-            view.world().asset_definitions().get(&def_id).unwrap().total_quantity(),
+            view.world().citizens().get(&alice).unwrap().amount,
+            Quantity::from(10_u64)
+        );
+        assert_eq!(
+            view.world()
+                .asset_definitions()
+                .get(&def_id)
+                .unwrap()
+                .total_quantity(),
             &Quantity::from(1_010_u64)
         );
     }
@@ -369,13 +403,19 @@ fn double_vote_slashes_plain_lock() {
     config.governance = Some(governance);
     config.genesis_key = ALICE_KEYPAIR.clone();
     config.genesis_instructions = vec![ballot_ok.into()];
-    assert_eq!(config.genesis_instructions.len(), 1, "the signed ballot remains a singleton");
+    assert_eq!(
+        config.genesis_instructions.len(),
+        1,
+        "the signed ballot remains a singleton"
+    );
     let mut chain =
         CertifiedTestChain::start(config).expect("actual signed initial ballot genesis");
     let state = Arc::clone(chain.state());
     assert_eq!(chain.validators(), fixture_validators().as_slice());
     assert!(
-        state.transaction_admission_parameters().require_crypto_policy()
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
             .expect("only signed genesis installs the ordinary policy")
             .allows(ALICE_KEYPAIR.public_key().algorithm())
     );

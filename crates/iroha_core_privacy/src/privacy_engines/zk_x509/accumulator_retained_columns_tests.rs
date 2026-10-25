@@ -116,13 +116,12 @@ struct PartialEntropy {
 impl TryRngCore for PartialEntropy {
     type Error = EntropyFailure;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        self.try_next_u64().map(|v| v as u32)
+        self.try_next_u64()
+            .map(|v| u32::try_from(v & u64::from(u32::MAX)).expect("masked random word"))
     }
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         if self.remaining == 0 {
-            if self.unwind {
-                panic!("deliberate CA coefficient entropy unwind");
-            }
+            assert!(!self.unwind, "deliberate CA coefficient entropy unwind");
             return Err(EntropyFailure);
         }
         self.remaining -= 1;

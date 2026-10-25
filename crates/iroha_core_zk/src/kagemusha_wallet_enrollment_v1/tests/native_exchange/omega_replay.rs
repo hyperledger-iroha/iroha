@@ -67,7 +67,10 @@ fn check_original(sources: &Sources, expected: &KagemushaWalletLineageV1) {
     assert_eq!(key_digest, allowlist.lineage_verifying_key_digest);
     let proof_bytes = Protocol::new(binding.descriptor()).unwrap().proof_length();
     assert_eq!(expected.proof.len(), proof_bytes + 2 * ACCUMULATOR_BYTES);
-    assert_eq!(expected.proof.len() as u32, allowlist.lineage_proof_bytes);
+    assert_eq!(
+        u32::try_from(expected.proof.len()).unwrap(),
+        allowlist.lineage_proof_bytes
+    );
     let original = norito::encode_canonical(expected).unwrap();
     let (proof, claims) = expected.proof.split_at(proof_bytes);
     let (p, v) = claims.split_at(ACCUMULATOR_BYTES);

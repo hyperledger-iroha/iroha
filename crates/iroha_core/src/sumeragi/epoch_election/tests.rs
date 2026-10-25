@@ -400,16 +400,9 @@ fn fresh_entropy_requires_actual_threshold_pulse_and_exact_prestate_parent() {
     let mut wrong_parent = hashes.clone();
     wrong_parent[7] = HashOf::from_untyped_unchecked(Hash::new(b"another certified parent"));
     assert!(authenticated_boundary_entropy(&world.view(), &wrong_parent, &current, 10).is_err());
-    let pulse = world
-        .global_beacon_pulses
-        .view()
-        .iter()
-        .next()
-        .unwrap()
-        .1
-        .clone();
+    let pulse = *world.global_beacon_pulses.view().iter().next().unwrap().1;
     for mutation in 0..9 {
-        let mut bad = pulse.clone();
+        let mut bad = pulse;
         match mutation {
             0 => bad.signature[0] ^= 1,
             1 => bad.seed[0] ^= 1,
@@ -456,7 +449,7 @@ pub(super) fn boundary_fixture(
         world.global_beacon_active_session.insert(*id, *value);
     }
     for (id, value) in view.global_beacon_latest_pulse().iter() {
-        world.global_beacon_latest_pulse.insert(*id, value.clone());
+        world.global_beacon_latest_pulse.insert(*id, *value);
     }
     let params = ChainParamsRecord::from_parameters(world.view().parameters().sumeragi());
     let graph = ConsensusSchedule::from_owned_entries(vec![

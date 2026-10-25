@@ -197,8 +197,10 @@ pub(super) fn adaptive_beacon_fixture_for_session_and_keys(
         let recipient_offset = usize::from(edge.recipient_index - 1);
         let (_, acceptance) = accept_global_threshold_beacon_dkg_private_edge_v1(
             &dkg_session,
-            &recipient_keys[dealer_offset],
-            &recipient_keys[recipient_offset],
+            (
+                &recipient_keys[dealer_offset],
+                &recipient_keys[recipient_offset],
+            ),
             &signing_keys[recipient_offset],
             encryption_keys[recipient_offset].secret(),
             &dealer_dtos[dealer_offset],
@@ -277,7 +279,7 @@ pub fn signed_persisted_pulse_fixture_for_world(
 
 /// Produce real threshold signatures for exact native parent anchors and roster.
 #[cfg(test)]
-pub(crate) fn signed_pulses_fixture_for_roster_and_anchors(
+pub fn signed_pulses_fixture_for_roster_and_anchors(
     network_id: NetworkId,
     signing_keys: &[iroha_crypto::KeyPair],
     anchors: &[(
@@ -382,7 +384,7 @@ fn signed_pulses_fixture_with_binding(
 
 /// Produce a complete verified test DKG and zeroizing providers for every exact seat.
 #[cfg(test)]
-pub(crate) fn prepared_session_and_signers_fixture_v1(
+pub fn prepared_session_and_signers_fixture_v1(
     dkg_session: GlobalThresholdBeaconDkgSessionV1,
     budget: &iroha_allocation::AllocationBudget,
 ) -> (
@@ -398,7 +400,7 @@ pub(crate) fn prepared_session_and_signers_fixture_v1(
 
 /// Produce providers bound to an exact authenticated test-chain committee.
 #[cfg(any(test, feature = "iroha-core-tests"))]
-pub(crate) fn prepared_session_and_signers_fixture_for_keys_v1(
+pub fn prepared_session_and_signers_fixture_for_keys_v1(
     dkg_session: GlobalThresholdBeaconDkgSessionV1,
     keys: &[iroha_crypto::KeyPair],
     budget: &iroha_allocation::AllocationBudget,

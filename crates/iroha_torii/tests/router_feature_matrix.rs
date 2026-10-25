@@ -444,8 +444,7 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
             state.clone(),
             kura.clone(),
             queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
+            (peers_rx.clone(), local_peer_id),
             ts,
             false,
         )

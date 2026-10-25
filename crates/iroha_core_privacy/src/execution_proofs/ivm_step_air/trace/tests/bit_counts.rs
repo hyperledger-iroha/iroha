@@ -18,7 +18,7 @@ fn maximum_segment() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
         .map(|index| {
             enc::encode_rr(
                 COUNT_OPS[index % COUNT_OPS.len()],
-                8 + (index % 3) as u8,
+                8 + u8::try_from(index % 3).expect("bounded fixture value"),
                 6,
                 255,
             )
@@ -26,7 +26,7 @@ fn maximum_segment() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
         .collect::<Vec<_>>();
     body.push(enc::encode_offset24(
         wide::control::JMP,
-        -((body_words - 1) as i32),
+        -i32::try_from(body_words - 1).expect("bounded fixture body"),
     ));
     let (segment, records) = recorded(
         &body,
@@ -165,8 +165,8 @@ fn coherent_wrong_counts_prefixes_and_orientation_cannot_change_public_results()
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                forged[0].before,
-                forged[0].after,
+                &forged[0].before,
+                &forged[0].after,
                 SegmentOutcome::Continue,
             )
             .unwrap();
@@ -187,8 +187,8 @@ fn coherent_wrong_counts_prefixes_and_orientation_cannot_change_public_results()
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                forged[0].before,
-                forged[0].after,
+                &forged[0].before,
+                &forged[0].after,
                 SegmentOutcome::Continue,
             )
             .unwrap();
@@ -215,8 +215,8 @@ fn coherent_count_banks_cannot_substitute_a_different_source_word() {
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             1,
-            forged[0].before,
-            forged[0].after,
+            &forged[0].before,
+            &forged[0].after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -318,8 +318,8 @@ fn native_stark_proves_maximum_count_segment_and_binds_result_and_orientation() 
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             segment.steps,
-            segment.before,
-            after,
+            &segment.before,
+            &after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -332,8 +332,8 @@ fn native_stark_proves_maximum_count_segment_and_binds_result_and_orientation() 
     let changed = ScalarSegment::new(
         ivm::prepare_contract(Arc::from(artifact)).unwrap(),
         segment.steps,
-        segment.before,
-        segment.after,
+        &segment.before,
+        &segment.after,
         SegmentOutcome::Continue,
     )
     .unwrap();

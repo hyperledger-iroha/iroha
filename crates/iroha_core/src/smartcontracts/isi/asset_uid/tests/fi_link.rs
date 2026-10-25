@@ -524,8 +524,7 @@ fn world_balance(world: &impl WorldReadOnly, f: &Fixture, account: &AccountId) -
     world
         .assets()
         .get(&f.asset(account))
-        .map(|value| value.as_ref().clone())
-        .unwrap_or_else(Quantity::zero)
+        .map_or_else(Quantity::zero, |value| value.as_ref().clone())
 }
 
 #[test]
@@ -556,7 +555,13 @@ fn linked_fi_receipts_bind_distinct_identical_occurrences_to_full_execution_fact
     for index in 0_u64..2 {
         instruction.clone().execute(&f.first, &mut tx).unwrap();
         let record = fi_receipt(tx.world(), &f, &call, index);
-        assert_eq!(record.asset_incarnation, *tx.world().axt_asset_incarnations().get(&f.definition).unwrap());
+        assert_eq!(
+            record.asset_incarnation,
+            *tx.world()
+                .axt_asset_incarnations()
+                .get(&f.definition)
+                .unwrap()
+        );
         assert_eq!(record.network, state.network_id);
         assert_eq!(record.execution_call_hash, call);
         assert_eq!(record.instruction, instruction);
@@ -968,21 +973,31 @@ fn linked_fi_capture_requires_the_exact_valid_registry_incarnation_before_moveme
         let mut tx = block.transaction_for_fastpq_testing(call);
         f.configure(&mut tx, 1, 50, 10);
         setup(&f, &mut tx);
-        let admitted = *tx.world().axt_asset_incarnations().get(&f.definition).unwrap();
+        let admitted = *tx
+            .world()
+            .axt_asset_incarnations()
+            .get(&f.definition)
+            .unwrap();
         tx.world.axt_asset_incarnations.remove(f.definition.clone());
         // A token for another definition cannot supply the selected definition.
         let foreign = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("uid", "universal").unwrap(), "foreign".parse().unwrap());
+            DomainId::try_new("uid", "universal").unwrap(),
+            "foreign".parse().unwrap(),
+        );
         tx.world.axt_asset_incarnations.insert(foreign, admitted);
         if corrupt {
             // Follow the existing AXT JSON corruption fixture: the typed Hash
             // marker is syntactically valid, while the logical token is zero.
             let invalid = invalid_fi_incarnation(admitted);
             assert!(invalid.validate().is_err());
-            tx.world.axt_asset_incarnations.insert(f.definition.clone(), invalid);
+            tx.world
+                .axt_asset_incarnations
+                .insert(f.definition.clone(), invalid);
         }
         let before = tx.pending_transfer_transcript_count_for_testing();
-        off_ramp(&f, 1).execute(&f.first, &mut tx).expect_err("missing or invalid exact incarnation refuses capture before debit");
+        off_ramp(&f, 1)
+            .execute(&f.first, &mut tx)
+            .expect_err("missing or invalid exact incarnation refuses capture before debit");
         assert_eq!(fi_receipt_count(tx.world()), 0);
         assert_eq!(tx.pending_transfer_transcript_count_for_testing(), before);
         assert_eq!(f.balance(&tx, &f.first), Quantity::from(40_u32));
@@ -999,24 +1014,40 @@ fn linked_fi_historical_incarnation_is_immutable_and_independent_of_the_current_
     let mut tx = block.transaction_for_fastpq_testing(call);
     f.configure(&mut tx, 1, 50, 10);
     setup(&f, &mut tx);
-    let admitted = *tx.world().axt_asset_incarnations().get(&f.definition).unwrap();
+    let admitted = *tx
+        .world()
+        .axt_asset_incarnations()
+        .get(&f.definition)
+        .unwrap();
     off_ramp(&f, 1).execute(&f.first, &mut tx).unwrap();
     let key = crate::state::asset_fi::receipt::key(&f.definition, &f.first, &call, 0);
     let original = crate::state::asset_fi::receipt::read_record(tx.world(), &key).unwrap();
     assert_eq!(original.asset_incarnation, admitted);
-    let later = AxtAssetIncarnationV1::try_from_bytes(*Hash::new("later-registration").as_ref()).unwrap();
-    tx.world.axt_asset_incarnations.insert(f.definition.clone(), later);
-    assert_eq!(crate::state::asset_fi::receipt::read_record(tx.world(), &key).unwrap(), original);
+    let later =
+        AxtAssetIncarnationV1::try_from_bytes(*Hash::new("later-registration").as_ref()).unwrap();
+    tx.world
+        .axt_asset_incarnations
+        .insert(f.definition.clone(), later);
+    assert_eq!(
+        crate::state::asset_fi::receipt::read_record(tx.world(), &key).unwrap(),
+        original
+    );
     // The occurrence itself must retain a valid token, even when today's map is valid.
     let mut corrupt = original;
     corrupt.asset_incarnation = invalid_fi_incarnation(admitted);
-    tx.world.smart_contract_state.insert(key.clone(), asset_uid::encode(&corrupt).unwrap());
+    tx.world
+        .smart_contract_state
+        .insert(key.clone(), asset_uid::encode(&corrupt).unwrap());
     assert!(crate::state::asset_fi::receipt::read_record(tx.world(), &key).is_err());
 }
 
-fn invalid_fi_incarnation(valid: iroha_data_model::nexus::AxtAssetIncarnationV1) -> iroha_data_model::nexus::AxtAssetIncarnationV1 {
+fn invalid_fi_incarnation(
+    valid: iroha_data_model::nexus::AxtAssetIncarnationV1,
+) -> iroha_data_model::nexus::AxtAssetIncarnationV1 {
     let mut value = norito::json::to_value(&valid).unwrap();
-    value.as_array_mut().expect("transparent incarnation JSON tuple")[0] =
+    value
+        .as_array_mut()
+        .expect("transparent incarnation JSON tuple")[0] =
         norito::json::to_value(&Hash::prehashed([0; Hash::LENGTH])).unwrap();
     norito::json::from_value(value).expect("logical-zero hash is syntactically decodable")
 }

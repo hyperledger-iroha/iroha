@@ -1,4 +1,4 @@
-//! Actual repo_agreement encoding refusals retain all native owners and State fences.
+//! Actual `repo_agreement` encoding refusals retain all native owners and State fences.
 use super::*;
 use crate::{
     kura::Kura, query::store::LiveQueryStore,

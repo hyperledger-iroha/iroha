@@ -247,7 +247,7 @@ impl FilePrivateSettlementArtifacts {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub mod tests {
     use super::*;
     use crate::test_support::client_with_base_url;
     use iroha_test_samples::private_settlement::{
@@ -255,7 +255,7 @@ pub(super) mod tests {
     };
 
     fn fixture() -> Artifact {
-        let client = client_with_base_url("http://mock.local/".parse().unwrap());
+        let client = client_with_base_url(&"http://mock.local/".parse().unwrap());
         let (material, _) = availability_material_fixture_v1(client.network_id(), client.account());
         Artifact {
             key: ArtifactKey {
@@ -281,7 +281,7 @@ pub(super) mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("artifacts");
         let key = fixture().key;
-        let client = client_with_base_url("http://mock.local/".parse().unwrap());
+        let client = client_with_base_url(&"http://mock.local/".parse().unwrap());
         let proof = PrivateSettlementContextsProofV1 {
             contexts: vec![context_fixture(client.network_id(), client.account())],
         };

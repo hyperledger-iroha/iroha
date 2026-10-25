@@ -152,7 +152,7 @@ pub(super) fn check_retained_load_event(
         )));
         wsv::WsvLedger::new(tx, &memory.registration.reserve)
             .unwrap()
-            .register(memory.registration.clone())
+            .register(&memory.registration)
             .unwrap();
         tx.world.kagemusha_wallet_ledger.insert(
             storage::key(storage::WALLET, original.scheme_id, original.wallet_id),

@@ -63,7 +63,10 @@ impl<'storage> MembershipWriter<'storage> {
     fn take_release(&mut self) -> MembershipRelease {
         self.release();
         MembershipRelease {
-            _history: self.history.as_mut().map(|history| history.cleanup()),
+            _history: self
+                .history
+                .as_mut()
+                .map(super::super::history_slot::Slot::cleanup),
             _writer: self.take_writer_release(),
         }
     }
@@ -88,6 +91,10 @@ impl Drop for MembershipWriter<'_> {
     }
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Each phase retains the original charged membership owner; transitions and refusal cannot allocate"
+)]
 pub(super) enum MembershipCapturePhase<'storage> {
     Empty,
     Attached(TransactionsBlock<'storage>),
@@ -107,7 +114,7 @@ pub(super) enum MembershipCapturePhase<'storage> {
 /// any slot. No snapshot or newly constructed release source substitutes for
 /// the original guard, staged set, predecessor, or prepared action.
 #[must_use = "keep the original membership capture in its enclosing aggregate"]
-pub(crate) struct TransactionsCaptureSlot<'storage> {
+pub struct TransactionsCaptureSlot<'storage> {
     pub(super) phase: MembershipCapturePhase<'storage>,
     attempted: bool,
     released: bool,
@@ -117,6 +124,10 @@ pub(crate) struct TransactionsCaptureSlot<'storage> {
     retry_cleanup: Option<DetachedTransactionsPublicationSlot<'storage, ()>>,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl<'storage> TransactionsCaptureSlot<'storage> {
     /// Validate while the original block remains in this caller-owned slot.
     /// A refusal is terminal but retains the actual physical writer in place.
@@ -361,6 +372,10 @@ pub struct TransactionsBlockField<'storage> {
     original_history: &'storage history::Map,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl<'storage> TransactionsBlockField<'storage> {
     pub(crate) fn new(block: TransactionsBlock<'storage>) -> Self {
         Self {

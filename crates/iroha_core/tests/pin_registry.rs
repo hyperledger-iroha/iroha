@@ -1120,8 +1120,8 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         default_policy().min_replicas,
         default_policy().storage_class,
         &default_chunker(),
-        consensus_epoch,
-        u64::from(iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+        (consensus_epoch,
+        u64::from(iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1)),
         2,
     )
     .expect("seed canonical capacity and matching completion owners");

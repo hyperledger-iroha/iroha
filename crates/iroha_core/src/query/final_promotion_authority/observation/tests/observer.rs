@@ -19,7 +19,12 @@ fn receipt_check_retains_distinct_observer_and_operator_through_real_finality() 
     let signed = f.sign(prepared_instruction(&prepared), 3, NOW);
     let pending = prepared.bind_signed_transaction(signed).unwrap();
     assert_eq!(
-        f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+        f.commit(
+            NOW,
+            std::slice::from_ref(pending.signed_transaction()),
+            true,
+            true
+        ),
         [true]
     );
     let verified = pending
@@ -93,7 +98,12 @@ fn receipt_current_check_requires_the_pinned_operator_registered_and_authorized(
         let signed = f.sign(prepared_instruction(&prepared), 3, NOW);
         let pending = prepared.bind_signed_transaction(signed).unwrap();
         assert_eq!(
-            f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+            f.commit(
+                NOW,
+                std::slice::from_ref(pending.signed_transaction()),
+                true,
+                true
+            ),
             [false]
         );
         assert_eq!(
@@ -130,7 +140,7 @@ fn receipt_observer_role_permission_and_account_removal_are_rechecked_at_applied
             assert_eq!(
                 f.commit(
                     NOW,
-                    vec![f.sign(register, 3, NOW), f.sign(remove_direct, 3, NOW)],
+                    &[f.sign(register, 3, NOW), f.sign(remove_direct, 3, NOW)],
                     true,
                     true
                 ),
@@ -149,12 +159,12 @@ fn receipt_observer_role_permission_and_account_removal_are_rechecked_at_applied
                 entries.push(revoke.clone());
             }
             assert!(
-                f.commit(NOW + 1, entries, true, true)
+                f.commit(NOW + 1, &(entries), true, true)
                     .into_iter()
                     .all(|success| success)
             );
             if !same_block {
-                assert_eq!(f.commit(NOW + 2, vec![revoke], true, true), [true]);
+                assert_eq!(f.commit(NOW + 2, &[revoke], true, true), [true]);
             }
             assert_eq!(
                 pending
@@ -184,7 +194,7 @@ fn receipt_observer_permission_revoked_before_execution_cannot_supply_a_success(
     assert_eq!(
         f.commit(
             NOW,
-            vec![
+            &[
                 f.sign(revoke.into(), 3, NOW),
                 pending.signed_transaction().clone()
             ],

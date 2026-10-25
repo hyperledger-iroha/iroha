@@ -96,13 +96,13 @@ impl Execute for iroha_data_model::isi::soradns::PublishDirectory {
             })?;
         ensure_directory_record_supported(&draft.record)?;
         ensure_previous_pointer_matches(state_transaction, &draft.record)?;
-        if let Some(expected_prev) = expected_prev {
-            if *state_transaction.world.soradns_directory_latest.get() != Some(expected_prev) {
-                return Err(invalid_parameter(format!(
-                    "expected previous directory id {} does not match the latest pointer",
-                    hex_directory_id(&expected_prev)
-                )));
-            }
+        if let Some(expected_prev) = expected_prev
+            && *state_transaction.world.soradns_directory_latest.get() != Some(expected_prev)
+        {
+            return Err(invalid_parameter(format!(
+                "expected previous directory id {} does not match the latest pointer",
+                hex_directory_id(&expected_prev)
+            )));
         }
         verify_builder_signature(&draft.record)?;
         enforce_rotation_policy(

@@ -178,7 +178,7 @@ fn persisted_amx_records_survive_deadline_pruning_and_certified_replay() {
         read_proof(&chain, 2, AmxRecordKind::Begin, tx)
             .unwrap()
             .as_ref()
-            .map(|proof| proof.canonical()),
+            .map(iroha_data_model::sumeragi_amx::AllocatedAmxRecordProofV1::canonical),
         Some(begin.canonical())
     );
     let mut restored = CertifiedTestChain::start(config()).unwrap();
@@ -664,7 +664,7 @@ fn persisted_amx_detached_source_keeps_original_frame_pool_and_retry_after_view_
         "detach must not retire original prefix or source charges inside the State borrow"
     );
     assert_eq!(
-        owned.acquired_frame().map(|bytes| bytes.as_ptr()),
+        owned.acquired_frame().map(<[u8]>::as_ptr),
         Some(original_pointer),
         "detached AMX source must retain the exact acquired frame"
     );

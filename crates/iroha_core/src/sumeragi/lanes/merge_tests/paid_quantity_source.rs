@@ -125,7 +125,7 @@ fn paid_log(fixture: &Fixture, key: &KeyPair, text: &str, created_ms: u64) -> Si
 }
 
 fn assert_paid_lane_source(dataspace: DataSpaceId) {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let mut fixture = paid_fixture(dataspace);
     for (height, created_ms) in [(2, GENESIS_MS), (3, GENESIS_MS + 1)] {
         let work = paid_log(&fixture, &other_user(), "activate paid lane", created_ms);

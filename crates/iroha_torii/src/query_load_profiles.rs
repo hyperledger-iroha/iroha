@@ -96,7 +96,9 @@ impl QueryLoadProfile {
         if self.fetch_size == 0 {
             return Err(QueryLoadProfileError::FetchSizeZero);
         }
-        if self.fetch_size > MAX_FETCH_SIZE.get() as usize {
+        if self.fetch_size
+            > usize::try_from(MAX_FETCH_SIZE.get()).expect("maximum fetch size fits usize")
+        {
             return Err(QueryLoadProfileError::FetchSizeTooLarge);
         }
         if self.page_limit == 0 {
@@ -428,7 +430,9 @@ mod tests {
         );
         assert_invalid(
             QueryLoadProfile {
-                fetch_size: MAX_FETCH_SIZE.get() as usize + 1,
+                fetch_size: usize::try_from(MAX_FETCH_SIZE.get())
+                    .expect("maximum fetch size fits usize")
+                    + 1,
                 ..valid_profile()
             },
             QueryLoadProfileError::FetchSizeTooLarge,

@@ -153,8 +153,7 @@ fn check_canonical_source(chain: &CertifiedTestChain) {
     let table_pointer = table.as_slice().as_ptr();
     let mut admitted = 0;
     verify(
-        header.instance,
-        &config,
+        (header.instance, &config),
         &header,
         &table,
         payload.as_slice(),
@@ -185,8 +184,7 @@ fn check_canonical_source(chain: &CertifiedTestChain) {
     ] {
         let (result, refused) = refuse_one_layout_during(layout, || {
             verify(
-                header.instance,
-                &config,
+                (header.instance, &config),
                 &header,
                 &table,
                 payload.as_slice(),
@@ -213,8 +211,7 @@ fn check_canonical_source(chain: &CertifiedTestChain) {
         .try_reserve_bytes(bytes)
         .unwrap_err();
     let result = verify(
-        header.instance,
-        &config,
+        (header.instance, &config),
         &header,
         &table,
         payload.as_slice(),
@@ -229,8 +226,7 @@ fn check_canonical_source(chain: &CertifiedTestChain) {
     assert_eq!(budget.reserved_bytes(), retained);
     assert!(matches!(
         verify(
-            Hash32([0; 32]),
-            &config,
+            (Hash32([0; 32]), &config),
             &header,
             &table,
             payload.as_slice(),
@@ -243,8 +239,7 @@ fn check_canonical_source(chain: &CertifiedTestChain) {
     let wrong_payload = &payload.as_slice()[1..];
     assert!(matches!(
         verify(
-            header.instance,
-            &config,
+            (header.instance, &config),
             &header,
             &table,
             wrong_payload,
@@ -277,8 +272,7 @@ fn check_canonical_source(chain: &CertifiedTestChain) {
         .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
         .unwrap();
     let Err(VerificationReadError::Deferred(original)) = verify(
-        header.instance,
-        &config,
+        (header.instance, &config),
         &header,
         &table,
         payload.as_slice(),
@@ -309,8 +303,7 @@ fn check_canonical_source(chain: &CertifiedTestChain) {
     assert!(Pin::new(&mut wait).poll(&mut cx).is_ready());
     drop(wait);
     verify(
-        header.instance,
-        &config,
+        (header.instance, &config),
         &header,
         &table,
         payload.as_slice(),

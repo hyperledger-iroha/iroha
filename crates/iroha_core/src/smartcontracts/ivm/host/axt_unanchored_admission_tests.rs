@@ -10,9 +10,9 @@ mod axt_unanchored_admission_tests {
         let lane = LaneId::new(1);
         host.clear_axt_reject();
         let deferred = host.map_axt_fastpq_error(
-            fastpq_prover::Error::LocalAllocationUnavailable {
+            &(fastpq_prover::Error::LocalAllocationUnavailable {
                 context: "axt test allocation",
-            },
+            }),
             "FASTPQ verification failed",
             dsid,
             lane,
@@ -24,7 +24,7 @@ mod axt_unanchored_admission_tests {
         assert!(matches!(
             (
                 &(host.map_axt_fastpq_error(
-                    fastpq_prover::Error::CommitmentMismatch,
+                    &(fastpq_prover::Error::CommitmentMismatch),
                     "FASTPQ verification failed",
                     dsid,
                     lane,

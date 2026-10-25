@@ -29,11 +29,8 @@ pub mod zk_ace;
 #[doc(hidden)]
 pub mod zk_ace_stark;
 pub mod zk_ams;
-// The native prover and its RFC 5280 reference machinery are consumed by the
-// internal test harness and the opt-in release-evidence runner; their roots are
-// gated to those builds. Ordinary builds also expose strict DER interval
-// preflight for holders; it does not authenticate a credential or produce a proof.
-#[doc(hidden)]
+/// Complete native X.509 credential proving and verification, including the holder API.
+/// Release fixtures and process diagnostics remain confined to test/evidence builds.
 pub mod zk_x509;
 use self::fcmp_plus_plus::{FcmpNativeErrorV1, FcmpOutputTupleV1};
 use self::proof_managed_accumulator::{
@@ -73,6 +70,9 @@ pub enum ZkX509CredentialProofContainerErrorV1 {
 /// lookup and does not replace full proof verification; it proves that the returned bytes are the
 /// sole first-release container and that they bind the exact typed statement and committed genesis
 /// hash before an SDK signs a submission transaction.
+///
+/// # Errors
+/// Rejects an invalid typed statement, genesis binding, container size, canonical header, or proof profile.
 pub fn validate_zk_x509_credential_proof_container_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -91,16 +91,14 @@ pub fn validate_zk_x509_credential_proof_container_v1(
             ZkX509CredentialProofErrorV1::ProofTooLarge => {
                 ZkX509CredentialProofContainerErrorV1::ProofTooLarge
             }
-            ZkX509CredentialProofErrorV1::MalformedEnvelope => {
-                ZkX509CredentialProofContainerErrorV1::MalformedContainer
-            }
             ZkX509CredentialProofErrorV1::InvalidStatement => {
                 ZkX509CredentialProofContainerErrorV1::InvalidStatement
             }
             ZkX509CredentialProofErrorV1::PublicBindingMismatch => {
                 ZkX509CredentialProofContainerErrorV1::PublicBindingMismatch
             }
-            ZkX509CredentialProofErrorV1::MainProof
+            ZkX509CredentialProofErrorV1::MalformedEnvelope
+            | ZkX509CredentialProofErrorV1::MainProof
             | ZkX509CredentialProofErrorV1::CaProof
             | ZkX509CredentialProofErrorV1::CrossSubproofMismatch => {
                 ZkX509CredentialProofContainerErrorV1::MalformedContainer
@@ -236,7 +234,7 @@ mod tests {
         );
         assert_eq!(
             validate_zk_x509_credential_proof_container_v1(&statement, [0xA6; 32], &proof),
-            Err(ZkX509CredentialProofContainerErrorV1::PublicBindingMismatch)
+            Err(ZkX509CredentialProofContainerErrorV1::InvalidStatement)
         );
         for length in 0..proof.len() {
             assert_eq!(

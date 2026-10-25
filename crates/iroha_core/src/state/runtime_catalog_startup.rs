@@ -52,7 +52,7 @@ impl State {
         let privacy = LanePrivacyRegistry::try_from_manifest_registry(manifests, &pool)
             .map_err(LaneLifecycleError::ParameterDeferred)?;
         let publication = publication_notice.begin();
-        self.install_prepared_lane_manifests_in_publication(
+        Self::install_prepared_lane_manifests_in_publication(
             Arc::clone(manifests),
             privacy.clone(),
             &publication,

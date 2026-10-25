@@ -1,7 +1,7 @@
 //! Generate public canonical ballot fixtures using real candidate proofs and 28-bit stamps.
 //!
 //! Usage: `canonical_resource_fixtures OUTPUT_DIR SEATS THREADS [valid|late-invalid]`,
-//! where SEATS is 3, 500 or 1000 and OUTPUT_DIR must not exist. Inputs and proving tapes
+//! where SEATS is 3, 500 or 1000 and `OUTPUT_DIR` must not exist. Inputs and proving tapes
 //! are deterministic public fixture material. Parallel stamp search may select different
 //! valid nonces and attempt counts on different runs. These files carry no qualification.
 
@@ -90,7 +90,7 @@ fn options(args: &[String]) -> Result<Options> {
         return Err("SEATS must be 3, 500 or 1000".into());
     }
     let threads = args[2].parse::<NonZeroUsize>()?;
-    let variant = match args.get(3).map(String::as_str).unwrap_or("valid") {
+    let variant = match args.get(3).map_or("valid", String::as_str) {
         "valid" => Variant::Valid,
         "late-invalid" => Variant::LateInvalid,
         _ => return Err("variant must be valid or late-invalid".into()),
@@ -264,6 +264,10 @@ fn envelope(
 
 /// The manifest distinguishes deterministic proof inputs from scheduled nonce search.
 #[derive(JsonSerialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the external manifest records independent evidence and qualification flags"
+)]
 struct Manifest {
     schema: &'static str,
     status: &'static str,

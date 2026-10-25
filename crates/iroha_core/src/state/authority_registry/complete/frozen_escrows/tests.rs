@@ -450,7 +450,6 @@ fn every_escrow_index_mismatch_rejects_either_original_image_before_allocation()
                         },
                         mismatch: match case % 3 {
                             0 => GroupMismatch::MissingMember,
-                            1 => GroupMismatch::ForeignMember,
                             _ => GroupMismatch::ForeignMember,
                         },
                     }

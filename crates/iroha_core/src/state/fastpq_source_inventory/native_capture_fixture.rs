@@ -13,6 +13,7 @@ use crate::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
+    Registrable,
     account::{Account, AccountId},
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
@@ -46,11 +47,20 @@ fn fixture_with_bob_balance(
     definition: AssetDefinitionId,
     bob_balance: Option<Quantity>,
 ) -> (State, AssetId, AssetId) {
+    // Initial accounts precede signed genesis; its policy remains uninitialized.
     let state = State::new_for_testing(
-        World::default(),
+        World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&ALICE_ID),
+            ],
+            [],
+        ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    assert!(state.world.parameters.view().crypto_policy().is_none());
     let mut fees = state.nexus_snapshot().fees;
     fees.base_fee = Quantity::zero();
     fees.per_byte_fee = Quantity::zero();
@@ -78,12 +88,6 @@ fn fixture_with_bob_balance(
     {
         let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
         let mut transaction = setup.transaction_for_callback_testing();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
         Register::domain(Domain::new(domain))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
@@ -191,7 +195,7 @@ fn quantity_execution_context(
 }
 
 /// Execute one genuine Network source; false is a successful zero-transfer Log.
-pub(crate) fn with_native_capture_source<T>(
+pub fn with_native_capture_source<T>(
     with_transfer: bool,
     action: impl FnOnce(&State, Box<StateBlock<'_>>, ExecWitnessGuard, SignedBlock, Hash) -> T,
 ) -> T {
@@ -207,22 +211,22 @@ pub(crate) fn with_native_capture_source<T>(
 /// Execute distinct original entries with the specified transfer counts.
 /// A distinct diagnostic Log in every entry gives repeated equal transfer bodies
 /// separate authentic identities without fabricating an execution-call hash.
-pub(crate) fn with_native_capture_sources<T>(
+pub fn with_native_capture_sources<T>(
     transfers_per_entry: &[usize],
     action: impl FnOnce(&State, Box<StateBlock<'_>>, ExecWitnessGuard, SignedBlock, Vec<Hash>) -> T,
 ) -> T {
     assert!(!transfers_per_entry.is_empty());
     let (state, alice, _) = fixture();
-    with_native_state_sources(state, alice, transfers_per_entry, action)
+    with_native_state_sources(&(state), &(alice), transfers_per_entry, action)
 }
 
 fn with_native_state_sources<T>(
-    state: State,
-    alice: AssetId,
+    state: &State,
+    alice: &AssetId,
     transfers_per_entry: &[usize],
     action: impl FnOnce(&State, Box<StateBlock<'_>>, ExecWitnessGuard, SignedBlock, Vec<Hash>) -> T,
 ) -> T {
-    let header = quantity_successor_header(&state);
+    let header = quantity_successor_header(state);
     let mut builder = BlockBuilder::new(header);
     let mut contexts = Vec::new();
     let mut hashes = Vec::new();
@@ -291,7 +295,7 @@ fn with_native_state_sources<T>(
         hashes.push(Hash::from(
             TransactionEntrypoint::External(signed.clone()).execution_call_hash(),
         ));
-        contexts.push(quantity_execution_context(&state, &signed, &header));
+        contexts.push(quantity_execution_context(state, &signed, &header));
         builder.push_transaction(signed);
     }
     assert_eq!(
@@ -316,11 +320,11 @@ fn with_native_state_sources<T>(
     assert_eq!(rows.len(), transfers_per_entry.len());
     assert!(rows.iter().all(|row| row.result().is_ok()), "{rows:?}");
     assert_eq!(source.header().height().get(), 2);
-    action(&state, block, recording, source, hashes)
+    action(state, block, recording, source, hashes)
 }
 
 /// Complete the real owned output boundary and retain its quantity-source journal.
-pub(crate) fn seal_native_source(
+pub fn seal_native_source(
     block: &mut StateBlock<'_>,
     source: &mut SignedBlock,
 ) -> Result<(), crate::state::output_capacity::ExecutionOutputSealError<String>> {
@@ -349,6 +353,15 @@ fn genuine_capture_fixture_retains_signed_root_and_complete_empty_and_transfer_s
             transfer,
             |state, mut block, _recording, mut source, hash| {
                 assert_eq!(state.committed_height(), 1);
+                assert_eq!(
+                    state
+                        .world
+                        .parameters
+                        .view()
+                        .require_crypto_policy()
+                        .unwrap(),
+                    &crate::sumeragi::test_chain::crypto_fixture_policy(),
+                );
                 assert_eq!(
                     source.header().prev_block_hash(),
                     state.latest_block_hash_fast()
@@ -384,7 +397,7 @@ fn genuine_capture_fixture_retains_signed_root_and_complete_empty_and_transfer_s
 /// Exercise original ordinary or mandatory quota custody with a real producer.
 /// The mandatory branch is the genuine height-two expired governance-lock sweep;
 /// its returned hash is read from that applied purpose's retained transcript.
-pub(crate) fn with_native_capture_quota_source<T>(
+pub fn with_native_capture_quota_source<T>(
     protocol: bool,
     action: impl FnOnce(&State, Box<StateBlock<'_>>, ExecWitnessGuard, SignedBlock, Hash) -> T,
 ) -> T {
@@ -429,8 +442,8 @@ pub(crate) fn with_native_capture_quota_source<T>(
         setup.commit_world_overlay_for_testing().unwrap();
     }
     with_native_state_sources(
-        state,
-        alice,
+        &(state),
+        &(alice),
         &[0],
         |state, block, recording, source, ordinary_hashes| {
             assert_eq!(block.fastpq_transcripts.len(), 1);
@@ -469,7 +482,7 @@ fn genuine_capture_fixture_mandatory_source_is_original_expired_lock_work() {
 /// Exercise refusal through the actual retained native producer and exact quorum.
 /// Inspection can tamper only before certification. A rejected attempt cannot
 /// replace its original result, durably append H2, or publish its State overlay.
-pub(crate) fn assert_native_publication_refuses(
+pub fn assert_native_publication_refuses(
     with_transfer: bool,
     inspect: impl for<'borrow, 'state> FnOnce(
         crate::sumeragi::executor::PendingExecutionView<'borrow, 'state>,
@@ -480,7 +493,7 @@ pub(crate) fn assert_native_publication_refuses(
 }
 
 /// A refused mutable projection preserves the genuine pending execution and its finality path.
-pub(crate) fn assert_native_publication_preserved(
+pub fn assert_native_publication_preserved(
     with_transfer: bool,
     inspect: impl for<'borrow, 'state> FnOnce(
         crate::sumeragi::executor::PendingExecutionView<'borrow, 'state>,
@@ -576,7 +589,7 @@ fn native_publication_refuses_original_source_public_content_substitution() {
 
 /// Execute a genuine transfer under a signed nondefault dataspace root.
 /// Both native routing and physical asset scope originate in the actual signed genesis.
-pub(crate) fn with_native_capture_dataspace_source<T>(
+pub fn with_native_capture_dataspace_source<T>(
     action: impl FnOnce(&State, Box<StateBlock<'_>>, ExecWitnessGuard, SignedBlock, Hash) -> T,
 ) -> T {
     use crate::sumeragi::{
@@ -584,7 +597,7 @@ pub(crate) fn with_native_capture_dataspace_source<T>(
         test_chain::{CertifiedTestChain, TestChainConfig},
     };
     use iroha_data_model::{
-        NetworkId, Registrable,
+        NetworkId,
         asset::{Asset, AssetBalanceScope},
         block::consensus::{RootFeePolicy, SumeragiRootScope},
         nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
@@ -677,15 +690,19 @@ pub(crate) fn with_native_capture_dataspace_source<T>(
         None,
     )
     .unwrap();
-    with_native_state_sources(state, alice, &[1], |state, block, guard, source, hashes| {
-        assert_eq!(hashes.len(), 1);
-        action(state, block, guard, source, hashes[0])
-    })
+    with_native_state_sources(
+        &(state),
+        &(alice),
+        &[1],
+        |state, block, guard, source, hashes| {
+            assert_eq!(hashes.len(), 1);
+            action(state, block, guard, source, hashes[0])
+        },
+    )
 }
 
 /// Signed root and funded Alice transfer source for actual native publication controls.
-pub(crate) fn native_publication_chain()
--> (crate::sumeragi::test_chain::CertifiedTestChain, AssetId) {
+pub fn native_publication_chain() -> (crate::sumeragi::test_chain::CertifiedTestChain, AssetId) {
     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
     let (component, alice, _) = component_fixture();
     let nexus = component.nexus_snapshot();

@@ -43,6 +43,8 @@ pub fn sync_direct_directory(path: &Path) -> io::Result<()> {
 
 #[cfg(unix)]
 fn sync_unix_directory(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
     let named_before = fs::symlink_metadata(path)?;
     if !metadata_is_direct_directory(&named_before) {
         return Err(invalid_directory(
@@ -50,7 +52,6 @@ fn sync_unix_directory(path: &Path) -> io::Result<()> {
         ));
     }
 
-    use std::os::unix::fs::OpenOptionsExt as _;
     let mut options = fs::OpenOptions::new();
     options
         .read(true)

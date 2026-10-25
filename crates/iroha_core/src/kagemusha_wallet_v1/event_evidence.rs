@@ -110,7 +110,7 @@ pub(super) fn key(digest: Digest) -> KagemushaWalletLedgerKeyV1 {
 
 /// Preserve real local refusal separately from invalid retained event data.
 #[derive(Debug)]
-pub(crate) enum PreparationError {
+pub enum PreparationError {
     Invalid(String),
     Deferred(ExecutionDeferred),
 }
@@ -127,7 +127,7 @@ fn allocation(error: ChargedBufferError) -> PreparationError {
         }
     }
 }
-fn invalid(error: impl ToString) -> PreparationError {
+fn invalid(error: &(impl ToString + ?Sized)) -> PreparationError {
     PreparationError::Invalid(error.to_string())
 }
 fn codec(error: norito::Error) -> PreparationError {
@@ -159,7 +159,7 @@ fn load_digest(event: &EventBox) -> Option<Digest> {
 ///
 /// Must run after the final deterministic event-producing effects and before
 /// witness/World-root capture. No publication event may have been appended.
-pub(crate) fn retain(
+pub fn retain(
     world: &mut WorldBlock<'_>,
     height: u64,
     budget: &AllocationBudget,
@@ -172,7 +172,7 @@ pub(crate) fn retain(
     if loads == 0 {
         return Ok(());
     }
-    if height < 2 || u64::try_from(events.len()).map_err(invalid)? > (1_u64 << 32) {
+    if height < 2 || u64::try_from(events.len()).map_err(|error| invalid(&error))? > (1_u64 << 32) {
         return Err(invalid(
             "Load event geometry exceeds the canonical proof index",
         ));
@@ -198,7 +198,7 @@ pub(crate) fn retain(
                 MerkleError::AllocationUnavailable => {
                     PreparationError::Deferred(ivm::ExecutionDeferral::AllocationUnavailable.into())
                 }
-                other => invalid(other),
+                other => invalid(&(other)),
             }
         })?;
     drop(leaves);
@@ -209,7 +209,7 @@ pub(crate) fn retain(
         let Some(receipt_digest) = load_digest(event) else {
             continue;
         };
-        let index = u32::try_from(index).map_err(invalid)?;
+        let index = u32::try_from(index).map_err(|error| invalid(&error))?;
         let path = tree
             .proof_siblings(index)
             .ok_or_else(|| invalid("Load event index differs"))?;
@@ -219,7 +219,7 @@ pub(crate) fn retain(
             root: *commitment.root(),
             count: commitment.leaf_count(),
             index,
-            depth: u8::try_from(path.len()).map_err(invalid)?,
+            depth: u8::try_from(path.len()).map_err(|error| invalid(&error))?,
             siblings: [None; DEPTH],
         };
         if usize::from(record.depth) > DEPTH {
@@ -229,7 +229,9 @@ pub(crate) fn retain(
             *slot = sibling;
         }
         let selected = key(receipt_digest);
-        record.validate(&selected).map_err(invalid)?;
+        record
+            .validate(&selected)
+            .map_err(|error| invalid(&error))?;
         let measured = norito::canonical_frame_len(&record).map_err(codec)?;
         if measured > CAP {
             return Err(invalid("Load event path frame exceeds its fixed bound"));
@@ -245,12 +247,12 @@ pub(crate) fn retain(
         if writer.position() != measured as u64 {
             return Err(invalid("Load event frame extent differs"));
         }
-        if let Some(prior) = world.kagemusha_wallet_ledger.get(&selected) {
-            if prior != &bytes {
-                return Err(invalid(
-                    "Load event identity already belongs to another stream",
-                ));
-            }
+        if let Some(prior) = world.kagemusha_wallet_ledger.get(&selected)
+            && prior != &bytes
+        {
+            return Err(invalid(
+                "Load event identity already belongs to another stream",
+            ));
         }
         rows.push_reserved(PreparedRow {
             key: selected,

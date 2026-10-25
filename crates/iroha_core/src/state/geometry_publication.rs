@@ -115,8 +115,7 @@ impl State {
         if original.raw.is_none() {
             let cleanup = releases
                 .as_mut()
-                .map(|releases| &mut releases.geometry)
-                .unwrap_or(&mut local_releases);
+                .map_or(&mut local_releases, |releases| &mut releases.geometry);
             let scoped_lease = geometry_scoped_lease(&self.kura, original_lease, cleanup)?;
             let lease = original_lease
                 .or(scoped_lease.as_deref())
@@ -182,8 +181,7 @@ impl State {
     fn finish_lane_geometry_publication(
         &self,
         current: &LaneConfig,
-        incarnations: &BTreeMap<LaneId, Hash>,
-        activation_heights: &BTreeMap<LaneId, u64>,
+        (incarnations, activation_heights): (&BTreeMap<LaneId, Hash>, &BTreeMap<LaneId, u64>),
         lineage_root: Hash,
         configured_baseline: Option<Hash>,
         original_lease: Option<&crate::kura::KuraPublicationLease<'_>>,
@@ -210,7 +208,7 @@ impl State {
                 || !original
                     .tiered
                     .as_ref()
-                    .is_some_and(|tiered| tiered.is_applied())
+                    .is_some_and(tiered::TieredGeometryAttempt::is_applied)
                 || !original.cursors_updated
             {
                 return Err(LaneLifecycleError::Storage(
@@ -220,8 +218,7 @@ impl State {
             }
             let cleanup = releases
                 .as_mut()
-                .map(|releases| &mut releases.geometry)
-                .unwrap_or(&mut local_releases);
+                .map_or(&mut local_releases, |releases| &mut releases.geometry);
             let scoped_lease = geometry_scoped_lease(&self.kura, original_lease, cleanup)?;
             let lease = original_lease
                 .or(scoped_lease.as_deref())
@@ -271,10 +268,8 @@ impl State {
 
     fn rollback_owned_lane_geometry(
         &self,
-        previous: &LaneConfig,
-        current: &LaneConfig,
-        incarnations: &BTreeMap<LaneId, Hash>,
-        activation_heights: &BTreeMap<LaneId, u64>,
+        (previous, current): (&LaneConfig, &LaneConfig),
+        (incarnations, activation_heights): (&BTreeMap<LaneId, Hash>, &BTreeMap<LaneId, u64>),
         lineage_root: Hash,
         replaced: &BTreeSet<LaneId>,
         transition_height: u64,
@@ -298,7 +293,11 @@ impl State {
                 "rollback differs from its original geometry owner".to_owned(),
             ));
         }
-        if let Some(error) = original.raw.as_ref().and_then(|raw| raw.recovery_refusal()) {
+        if let Some(error) = original
+            .raw
+            .as_ref()
+            .and_then(crate::kura::RawGeometryAttempt::recovery_refusal)
+        {
             return Err(LaneLifecycleError::GeometryStorage(error));
         }
         // Finish a pending apply write before choosing reversal; the raw owner
@@ -404,9 +403,7 @@ impl PreparedCommittedLaneGeometry<'_> {
         )?;
         self.state
             .finish_lane_geometry_publication(
-                &update.updated_lane_config,
-                &update.updated_lane_incarnations,
-                &update.updated_lane_incarnation_activation_heights,
+                &update.updated_lane_config,(&update.updated_lane_incarnations, &update.updated_lane_incarnation_activation_heights),
                 request.updated_lineage_root,
                 None,
                 Some(lease),

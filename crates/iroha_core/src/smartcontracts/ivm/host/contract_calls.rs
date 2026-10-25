@@ -5,7 +5,7 @@ use iroha_data_model::smart_contract::manifest::EntryPointKind;
 use ivm::value_record;
 use ivm_abi::contract_call::{ContractCallBindingV1, MAX_CONTRACT_CALL_BINDING_BYTES_V1};
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     /// Check the fixed public descriptors before reserving the caller's gas escrow.
     pub(super) fn quote_contract_call_descriptors(vm: &IVM) -> Result<usize, ivm::VMError> {
         for register in 10..=15 {
@@ -242,6 +242,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 error,
             ));
         }
+        self.enter_attachment_child()
+            .map_err(|error| meter(boundary_gas, error))?;
         let snapshot = self.snapshot_nested_contract_call();
         self.authority = caller.contract_subject.clone();
         self.execution_class = if is_view {
@@ -316,13 +318,23 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let total_gas = boundary_gas.saturating_add(child_bill);
         match result {
             Ok(outcome) => {
+                let custody = self
+                    .finish_attachment_child(!matches!(outcome, NestedContractCallOutcome::Commit));
+                let outcome = if custody.is_err() {
+                    NestedContractCallOutcome::Rollback
+                } else {
+                    outcome
+                };
                 self.finish_nested_contract_call(snapshot, outcome)
                     .map_err(|error| meter(total_gas, error))?;
+                custody.map_err(|error| meter(total_gas, error))?;
                 // r10..r15 remain the immutable caller descriptors. Only the reserved
                 // result table and its newly materialized values become visible.
                 Ok(total_gas)
             }
             Err(error) => {
+                let _ = self.finish_attachment_child(true);
+                self.abort_attachment_attempt();
                 let rollback =
                     self.finish_nested_contract_call(snapshot, NestedContractCallOutcome::Rollback);
                 if error.execution_deferral().is_some() {

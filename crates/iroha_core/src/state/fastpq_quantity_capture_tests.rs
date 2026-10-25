@@ -31,11 +31,20 @@ fn fixture_with_bob_balance(
     definition: AssetDefinitionId,
     bob_balance: Option<Quantity>,
 ) -> (State, AssetId, AssetId) {
+    // Initial accounts precede signed genesis; its policy remains uninitialized.
     let mut state = State::new_for_testing(
-        World::default(),
+        World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&ALICE_ID),
+            ],
+            [],
+        ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    assert!(state.world.parameters.view().crypto_policy().is_none());
     let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
     fees.base_fee = Quantity::zero();
     fees.per_byte_fee = Quantity::zero();
@@ -58,12 +67,6 @@ fn fixture_with_bob_balance(
     {
         let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
         let mut transaction = setup.transaction_for_callback_testing();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
         Register::domain(Domain::new(domain))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
@@ -164,6 +167,10 @@ fn quantity_fixture_preserves_balances_and_original_authenticated_network_root()
     let view = state.view();
     assert_eq!(view.height(), 1);
     assert_eq!(view.kura().blocks_count(), 1);
+    assert_eq!(
+        view.world.parameters().require_crypto_policy().unwrap(),
+        &crate::sumeragi::test_chain::crypto_fixture_policy(),
+    );
     let parent = view.latest_block_hash().expect("original quantity genesis");
     assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
     assert_eq!(
@@ -751,7 +758,7 @@ fn body_and_real_pipeline_fee_replace_one_complete_entry_counter() {
     use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
     use iroha_data_model::transaction::{FeeChargeKind, FeeChargeLimit};
     use iroha_primitives::numeric::Numeric;
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let (state, alice, bob) = fixture();
     {
         let mut setup = state.block(quantity_successor_header(&state));
@@ -1071,7 +1078,7 @@ fn actual_signed_sponsor_debit_captures_exact_custody_balance_and_supply() {
         nexus::FeeSponsorVaultKey,
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let (state, custody, program_id, instruction) = sponsored_burn_fixture();
     let (source, call) = source_with_fee(
         &state,
@@ -1499,7 +1506,7 @@ fn prepare_owned_test_mint(
             &ALICE_ID,
             call,
             Hash::new(b"quantity-write-owner-regression"),
-            vec![FastpqExecutionEffectKindV1::Mint(change)],
+            &[FastpqExecutionEffectKindV1::Mint(change)],
         )
         .expect("retained original source admits exact next mint")
 }
@@ -3228,11 +3235,20 @@ fn account_removal_without_balance_does_not_invent_a_zero_burn() {
 /// Original setup precedes the authentic signed genesis, including each lifecycle
 /// and derived index. The source under test is a real signed native instruction.
 fn retirement_fixture() -> (State, DomainId, Vec<AssetId>, AssetDefinitionId, AssetId) {
+    // Initial accounts precede signed genesis; its policy remains uninitialized.
     let mut state = State::new_for_testing(
-        World::default(),
+        World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&ALICE_ID),
+            ],
+            [],
+        ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    assert!(state.world.parameters.view().crypto_policy().is_none());
     let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
     fees.base_fee = Quantity::zero();
     fees.per_byte_fee = Quantity::zero();
@@ -3273,11 +3289,6 @@ fn retirement_fixture() -> (State, DomainId, Vec<AssetId>, AssetDefinitionId, As
     {
         let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
         let mut transaction = setup.transaction_for_callback_testing();
-        for account in [&*ALICE_ID, &*BOB_ID] {
-            Register::account(Account::new(account.clone()))
-                .execute(&ALICE_ID, &mut transaction)
-                .unwrap();
-        }
         for id in [&domain, &other_domain] {
             Register::domain(Domain::new(id.clone()))
                 .execute(&ALICE_ID, &mut transaction)
@@ -4908,8 +4919,7 @@ fn mandatory_journal_runtime_error_without_writes_preserves_empty_scope_and_roll
                 transaction.apply_with_quantity_candidate(Ok(prepared), |_| {
                     Err(InstructionExecutionError::InvariantViolation(
                         "original business refusal before writes".into(),
-                    )
-                    .into())
+                    ))
                 });
             assert!(result.is_err());
             assert_eq!(
@@ -4972,8 +4982,7 @@ fn mandatory_journal_caught_partial_write_marks_typed_gap_only_when_original_ove
                         .unwrap();
                     Err(InstructionExecutionError::InvariantViolation(
                         "original failure after one actual port".into(),
-                    )
-                    .into())
+                    ))
                 });
             assert!(result.is_err());
             assert_eq!(
@@ -5027,8 +5036,7 @@ fn mandatory_journal_complete_effect_survives_caught_late_error_and_rolls_back_w
                     apply_owned_test_mint(state, alice);
                     Err(InstructionExecutionError::InvariantViolation(
                         "original later nonquantity refusal".into(),
-                    )
-                    .into())
+                    ))
                 });
             assert!(result.is_err());
             let applied = *transaction

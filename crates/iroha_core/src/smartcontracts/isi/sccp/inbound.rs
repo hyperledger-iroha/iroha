@@ -218,13 +218,12 @@ pub fn execute_submit_inbound(
 ) -> Result<(), Error> {
     let (network, revision) = (instruction.network, instruction.revision);
     let world = &*state_transaction.world;
-    let params = store::parameters::get(world)
-        .clone()
+    let params = (*store::parameters::get(world))
         .ok_or_else(|| refuse("SCCP does not exist on this network"))?;
     let deployment = store::routes::get(world, &network)
         .and_then(|route| route.revisions.get(&revision))
         .filter(|record| record.activation != SccpRouteActivationV1::Staged)
-        .map(|record| record.deployment.clone())
+        .map(|record| record.deployment)
         .ok_or_else(|| refuse(format_args!("revision {revision} does not accept proofs")))?;
     let payload = decode_inbound_payload(network, revision, &instruction.payload)?;
     let lane = payload

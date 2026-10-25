@@ -479,9 +479,11 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
     } else {
         (root_name.as_slice(), &root_key, root_ski.as_slice())
     };
-    let leaf_serial = maximum_shape
-        .then_some(MAXIMUM_LEAF_SERIAL_V1.as_slice())
-        .unwrap_or(CANONICAL_LEAF_SERIAL_V1.as_slice());
+    let leaf_serial = if maximum_shape {
+        MAXIMUM_LEAF_SERIAL_V1.as_slice()
+    } else {
+        CANONICAL_LEAF_SERIAL_V1.as_slice()
+    };
     let extended_key_usages = if maximum_copy_shape {
         vec![
             PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
@@ -722,9 +724,12 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
             || resource_shape.disclosed_value_lengths
                 != [
                     2,
-                    ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
-                    ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
-                    ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
+                    u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                        .expect("fixed attribute bound fits u16"),
+                    u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                        .expect("fixed attribute bound fits u16"),
+                    u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                        .expect("fixed attribute bound fits u16"),
                 ]
             || resource_shape.maximum_disclosed_value_bytes as usize
                 != ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1
@@ -915,6 +920,7 @@ fn authoritative_state_v1(
     certificate_policy: PrivacyZkX509CertificatePolicyRecordV1,
     crl: PrivacyZkX509CrlRecordV1,
 ) -> Result<PrivacyZkX509AuthoritativeStateV1, &'static str> {
+    let policy_id = certificate_policy.policy_id;
     let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
     commitments.insert(
         PrivacyCommitmentKeyV1::zk_x509_trust_anchor_revision(
@@ -932,11 +938,8 @@ fn authoritative_state_v1(
             certificate_policy.record_epoch,
         )
         .map_err(|_| "release policy revision key failed")?,
-        PrivacyStateItemRecordV1::zk_x509_certificate_policy_governance(
-            certificate_policy.clone(),
-            1,
-        )
-        .map_err(|_| "release policy state record failed")?,
+        PrivacyStateItemRecordV1::zk_x509_certificate_policy_governance(certificate_policy, 1)
+            .map_err(|_| "release policy state record failed")?,
     );
     commitments.insert(
         PrivacyCommitmentKeyV1::zk_x509_crl_current(crl.trust_anchor_id, crl.certificate_policy_id)
@@ -985,7 +988,7 @@ fn authoritative_state_v1(
     );
     load_privacy_zk_x509_authoritative_state_v1(
         trust_anchor.trust_anchor_id,
-        certificate_policy.policy_id,
+        policy_id,
         PrivacyConsensusLimitsV1::taira_default().retained_root_count,
         &commitments.view(),
         &roots.view(),
@@ -1285,7 +1288,7 @@ mod tests {
             reference_statement_context_v1(),
             TRUSTED_BLOCK_TIMESTAMP_MS + 1_000,
             network_wallet,
-            crl.clone(),
+            crl,
         )
         .expect("signed network release CRL successor fixture");
         let successor_crl = successor.authoritative_state.crl_record();
@@ -1338,9 +1341,12 @@ mod tests {
             fixture.resource_shape.disclosed_value_lengths,
             [
                 2,
-                ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
-                ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
-                ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
+                u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                    .expect("fixed attribute bound fits u16"),
+                u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                    .expect("fixed attribute bound fits u16"),
+                u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                    .expect("fixed attribute bound fits u16"),
             ]
         );
         assert_eq!(

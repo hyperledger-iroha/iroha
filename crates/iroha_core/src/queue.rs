@@ -313,7 +313,7 @@ fn resolve_routing_plan_against_nexus_at_height(
 }
 
 /// Validate the physical route against the applied catalog and the next proposal height.
-/// Native logical lane selection is independently derived from World.sumeragi_lanes.
+/// Native logical lane selection is independently derived from `World.sumeragi_lanes`.
 fn resolve_routing_plan_for_queue_admission(
     plan: RoutingPlan,
     nexus: &Nexus,
@@ -742,11 +742,13 @@ fn sponsored_charge_totals(
     }
     Ok(totals)
 }
+type RelayLeaseReservationMaps = (BTreeMap<Hash, Quantity>, BTreeMap<Hash, Quantity>);
+
 fn relay_lease_reservation_maps(
     program_id: &FeeSponsorProgramId,
     sponsor_charges: &BTreeMap<AssetDefinitionId, Quantity>,
     relay_leases: BTreeMap<AssetDefinitionId, FeeSponsorRelayLeaseCapacity>,
-) -> Result<(BTreeMap<Hash, Quantity>, BTreeMap<Hash, Quantity>), Error> {
+) -> Result<RelayLeaseReservationMaps, Error> {
     let mut relay_lease_charges = BTreeMap::<Hash, Quantity>::new();
     let mut relay_lease_remaining = BTreeMap::<Hash, Quantity>::new();
     for (asset_definition_id, selection) in relay_leases {
@@ -1667,12 +1669,8 @@ impl Queue {
         iroha_logger::error!(tx = %hash, stage, reason = %reason, "queue admission identity is inconsistent");
         self.publish_backpressure_state(self.active_len(), telemetry);
     }
-    fn pending_status(
-        &self,
-        tx: &CheckedTransaction<'static>,
-        state_view: &StateView<'_>,
-    ) -> Result<bool, String> {
-        Ok(!tx.is_in_blockchain(state_view) && !self.is_expired(tx.as_accepted()))
+    fn pending_status(&self, tx: &CheckedTransaction<'static>, state_view: &StateView<'_>) -> bool {
+        !tx.is_in_blockchain(state_view) && !self.is_expired(tx.as_accepted())
     }
 
     /// The signed transaction whose SCCP exemption admission classifies: the transaction of an
@@ -3315,23 +3313,10 @@ impl Queue {
             .map(|entry| entry.value().clone())
             .collect::<Vec<_>>();
         let mut pending = Vec::with_capacity(tracked.len());
-        let mut pending_status_fault = None;
         for tx in tracked {
-            match self.pending_status(tx.as_ref(), state_view) {
-                Ok(true) => pending.push(tx),
-                Ok(false) => {}
-                Err(reason) => {
-                    pending_status_fault.get_or_insert_with(|| (tx.hash_as_entrypoint(), reason));
-                }
+            if self.pending_status(tx.as_ref(), state_view) {
+                pending.push(tx);
             }
-        }
-        if let Some((hash, reason)) = pending_status_fault {
-            self.mark_accepted_work_validation_fault(
-                hash,
-                "global_candidate_expiry_registry",
-                &reason,
-                None,
-            );
         }
         pending
     }
@@ -3403,15 +3388,14 @@ impl Queue {
                     },
                 );
             let class = if cfg!(all(test, sumeragi_core_mutation = "HC346")) || needs_sccp_time {
-                let committed_time_ms = match sccp_committed_time_ms {
-                    Some(original) => original,
-                    None => {
-                        let original =
-                            crate::smartcontracts::isi::sccp::hold::committed_time_ms(state_view)
-                                .ok()?;
-                        sccp_committed_time_ms = Some(original);
-                        original
-                    }
+                let committed_time_ms = if let Some(original) = sccp_committed_time_ms {
+                    original
+                } else {
+                    let original =
+                        crate::smartcontracts::isi::sccp::hold::committed_time_ms(state_view)
+                            .ok()?;
+                    sccp_committed_time_ms = Some(original);
+                    original
                 };
                 crate::smartcontracts::isi::sccp::admission::exempt_class_of_entrypoint(
                     state_view.world(),
@@ -4236,154 +4220,154 @@ impl Queue {
             || format!("lane-{}", lane_id.as_u32()),
             |status| status.alias.clone(),
         );
-        if let Some(status) = manifest_status {
-            if status.governance.is_some()
-                && let Some(policy_rules) = status.rules()
-            {
-                let authority_rules = manifest_authority_rules.as_ref().unwrap_or(policy_rules);
-                let alias = status.alias.clone();
-                let allows_multisig_envelope_authority = match checked.as_accepted().executable() {
-                    Some(Executable::Instructions(instructions)) => {
-                        instructions_allow_multisig_envelope_authority(instructions)
+        if let Some(status) = manifest_status
+            && status.governance.is_some()
+            && let Some(policy_rules) = status.rules()
+        {
+            let authority_rules = manifest_authority_rules.as_ref().unwrap_or(policy_rules);
+            let alias = status.alias.clone();
+            let allows_multisig_envelope_authority = match checked.as_accepted().executable() {
+                Some(Executable::Instructions(instructions)) => {
+                    instructions_allow_multisig_envelope_authority(instructions)
+                }
+                Some(
+                    Executable::ContractCall(_)
+                    | Executable::IvmProved(_)
+                    | Executable::Ivm(_)
+                    | Executable::Batch(_),
+                )
+                | None => false,
+            };
+            let governance_sensitive =
+                Self::tx_requires_manifest_validator_gating(policy_rules, &checked);
+            if governance_sensitive {
+                let manifest_validators = if authority_rules.validators.is_empty() {
+                    None
+                } else {
+                    match Self::canonical_manifest_validators(&alias, authority_rules) {
+                        Ok(validators) => Some(validators),
+                        Err(err) => {
+                            #[cfg(feature = "telemetry")]
+                            telemetry_handle.record_manifest_admission("malformed_validators");
+                            return Err(Self::refused(err, checked));
+                        }
                     }
-                    Some(
-                        Executable::ContractCall(_)
-                        | Executable::IvmProved(_)
-                        | Executable::Ivm(_)
-                        | Executable::Batch(_),
-                    )
-                    | None => false,
                 };
-                let governance_sensitive =
-                    Self::tx_requires_manifest_validator_gating(policy_rules, &checked);
-                if governance_sensitive {
-                    let manifest_validators = if authority_rules.validators.is_empty() {
-                        None
-                    } else {
-                        match Self::canonical_manifest_validators(&alias, authority_rules) {
-                            Ok(validators) => Some(validators),
-                            Err(err) => {
-                                #[cfg(feature = "telemetry")]
-                                telemetry_handle.record_manifest_admission("malformed_validators");
-                                return Err(Self::refused(err, checked));
-                            }
+                if manifest_validators.is_some() && checked.as_ref().authority_opt().is_none() {
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle.record_manifest_admission("missing_authority");
+                    return Err(Self::refused(
+                        Error::GovernanceNotPermitted {
+                            alias: alias.clone(),
+                            reason:
+                                "authority-free transactions cannot satisfy lane validator gating"
+                                    .to_string(),
+                        },
+                        checked,
+                    ));
+                }
+                if let Some(authority) = checked.as_ref().authority_opt()
+                    && let Some(validators) = manifest_validators.as_ref()
+                    && !allows_multisig_envelope_authority
+                {
+                    let authority_i105 = match authority.canonical_i105() {
+                        Ok(value) => value,
+                        Err(err) => {
+                            return Err(Self::refused(
+                                Self::enforcement_error(
+                                    &alias,
+                                    format!(
+                                        "failed to encode authority `{authority}` as i105: {err}"
+                                    ),
+                                ),
+                                checked,
+                            ));
                         }
                     };
-                    if manifest_validators.is_some() && checked.as_ref().authority_opt().is_none() {
+                    if !validators.contains(&authority_i105) {
+                        iroha_logger::warn!(
+                            lane = %alias,
+                            authority = %authority,
+                            "rejecting transaction not signed by governance validator"
+                        );
                         #[cfg(feature = "telemetry")]
-                        telemetry_handle.record_manifest_admission("missing_authority");
+                        telemetry_handle.record_manifest_admission("non_validator_authority");
                         return Err(Self::refused(
                             Error::GovernanceNotPermitted {
                                 alias: alias.clone(),
-                                reason: "authority-free transactions cannot satisfy lane validator gating"
-                                    .to_string(),
+                                reason: "authority not part of lane validator set".to_string(),
                             },
                             checked,
                         ));
                     }
-                    if let Some(authority) = checked.as_ref().authority_opt()
-                        && let Some(validators) = manifest_validators.as_ref()
-                        && !allows_multisig_envelope_authority
-                    {
-                        let authority_i105 = match authority.canonical_i105() {
-                            Ok(value) => value,
-                            Err(err) => {
-                                return Err(Self::refused(
-                                    Self::enforcement_error(
-                                        &alias,
-                                        format!(
-                                            "failed to encode authority `{authority}` as i105: {err}"
-                                        ),
-                                    ),
-                                    checked,
-                                ));
-                            }
-                        };
-                        if !validators.contains(&authority_i105) {
-                            iroha_logger::warn!(
-                                lane = %alias,
-                                authority = %authority,
-                                "rejecting transaction not signed by governance validator"
-                            );
+                }
+                let quorum_required = !allows_multisig_envelope_authority
+                    && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+                    && !authority_rules.validators.is_empty();
+                let quorum_result =
+                    Self::enforce_manifest_quorum(&alias, authority_rules, &checked);
+                if quorum_required {
+                    match quorum_result {
+                        Ok(()) => {
                             #[cfg(feature = "telemetry")]
-                            telemetry_handle.record_manifest_admission("non_validator_authority");
-                            return Err(Self::refused(
-                                Error::GovernanceNotPermitted {
-                                    alias: alias.clone(),
-                                    reason: "authority not part of lane validator set".to_string(),
-                                },
-                                checked,
-                            ));
+                            telemetry_handle.record_manifest_quorum_enforcement("satisfied");
+                        }
+                        Err(err) => {
+                            #[cfg(feature = "telemetry")]
+                            telemetry_handle.record_manifest_quorum_enforcement("rejected");
+                            #[cfg(feature = "telemetry")]
+                            telemetry_handle.record_manifest_admission("quorum_rejected");
+                            return Err(Self::refused(err, checked));
                         }
                     }
-                    let quorum_required = !allows_multisig_envelope_authority
-                        && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
-                        && !authority_rules.validators.is_empty();
-                    let quorum_result =
-                        Self::enforce_manifest_quorum(&alias, authority_rules, &checked);
-                    if quorum_required {
-                        match quorum_result {
-                            Ok(()) => {
-                                #[cfg(feature = "telemetry")]
-                                telemetry_handle.record_manifest_quorum_enforcement("satisfied");
-                            }
-                            Err(err) => {
-                                #[cfg(feature = "telemetry")]
-                                telemetry_handle.record_manifest_quorum_enforcement("rejected");
-                                #[cfg(feature = "telemetry")]
-                                telemetry_handle.record_manifest_admission("quorum_rejected");
-                                return Err(Self::refused(err, checked));
-                            }
-                        }
-                    } else if let Err(err) = quorum_result {
-                        #[cfg(feature = "telemetry")]
-                        telemetry_handle.record_manifest_admission("quorum_rejected");
-                        return Err(Self::refused(err, checked));
+                } else if let Err(err) = quorum_result {
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle.record_manifest_admission("quorum_rejected");
+                    return Err(Self::refused(err, checked));
+                }
+            }
+            let protected_namespace_result =
+                Self::enforce_manifest_protected_namespaces(&alias, policy_rules, &checked);
+            let protected_namespace_applied = match protected_namespace_result {
+                Ok(applied) => applied,
+                Err(err) => {
+                    #[cfg(feature = "telemetry")]
+                    if !policy_rules.protected_namespaces.is_empty() {
+                        telemetry_handle.record_protected_namespace_enforcement("rejected");
                     }
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle.record_manifest_admission("protected_namespace_rejected");
+                    return Err(Self::refused(err, checked));
                 }
-                let protected_namespace_result =
-                    Self::enforce_manifest_protected_namespaces(&alias, policy_rules, &checked);
-                let protected_namespace_applied = match protected_namespace_result {
-                    Ok(applied) => applied,
-                    Err(err) => {
-                        #[cfg(feature = "telemetry")]
-                        if !policy_rules.protected_namespaces.is_empty() {
-                            telemetry_handle.record_protected_namespace_enforcement("rejected");
-                        }
-                        #[cfg(feature = "telemetry")]
-                        telemetry_handle.record_manifest_admission("protected_namespace_rejected");
-                        return Err(Self::refused(err, checked));
-                    }
-                };
-                #[cfg(feature = "telemetry")]
-                if protected_namespace_applied {
-                    telemetry_handle.record_protected_namespace_enforcement("allowed");
+            };
+            #[cfg(feature = "telemetry")]
+            if protected_namespace_applied {
+                telemetry_handle.record_protected_namespace_enforcement("allowed");
+            }
+            #[cfg(not(feature = "telemetry"))]
+            let _ = protected_namespace_applied;
+            let runtime_hook_result =
+                Self::enforce_runtime_upgrade_hook(&alias, policy_rules, &checked);
+            let runtime_hook_applied = match runtime_hook_result {
+                Ok(applied) => applied,
+                Err(err) => {
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle
+                        .record_manifest_hook_enforcement("runtime_upgrade", "rejected");
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle.record_manifest_admission("runtime_hook_rejected");
+                    return Err(Self::refused(err, checked));
                 }
-                #[cfg(not(feature = "telemetry"))]
-                let _ = protected_namespace_applied;
-                let runtime_hook_result =
-                    Self::enforce_runtime_upgrade_hook(&alias, policy_rules, &checked);
-                let runtime_hook_applied = match runtime_hook_result {
-                    Ok(applied) => applied,
-                    Err(err) => {
-                        #[cfg(feature = "telemetry")]
-                        telemetry_handle
-                            .record_manifest_hook_enforcement("runtime_upgrade", "rejected");
-                        #[cfg(feature = "telemetry")]
-                        telemetry_handle.record_manifest_admission("runtime_hook_rejected");
-                        return Err(Self::refused(err, checked));
-                    }
-                };
-                #[cfg(feature = "telemetry")]
-                if runtime_hook_applied {
-                    telemetry_handle.record_manifest_hook_enforcement("runtime_upgrade", "allowed");
-                }
-                #[cfg(not(feature = "telemetry"))]
-                let _ = runtime_hook_applied;
-                #[cfg(feature = "telemetry")]
-                {
-                    manifest_allowed = true;
-                }
+            };
+            #[cfg(feature = "telemetry")]
+            if runtime_hook_applied {
+                telemetry_handle.record_manifest_hook_enforcement("runtime_upgrade", "allowed");
+            }
+            #[cfg(not(feature = "telemetry"))]
+            let _ = runtime_hook_applied;
+            #[cfg(feature = "telemetry")]
+            {
+                manifest_allowed = true;
             }
         }
         // Keep proof verification on the same manifest cut used by this
@@ -4541,6 +4525,10 @@ impl Queue {
             pending_teu,
         })
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failed enqueue returns the original admission notifications and refusal without another allocation"
+    )]
     fn enqueue_prepared_admissions(
         &self,
         prepared: Vec<PreparedQueueAdmission>,
@@ -4747,7 +4735,10 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state_view: StateView,
     ) -> Result<RoutingDecision, Failure> {
-        self.push_with_lane_in_view(tx, &state_view)
+        let result = self.push_with_lane_in_view(tx, &state_view);
+        // This owned admission API releases the snapshot guards before returning.
+        drop(state_view);
+        result
     }
     /// Push transaction into queue with a shared [`StateView`] snapshot.
     ///
@@ -4794,7 +4785,10 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state_view: StateView,
     ) -> Result<(), Failure> {
-        self.push_in_view(tx, &state_view)
+        let result = self.push_in_view(tx, &state_view);
+        // This owned admission API releases the snapshot guards before returning.
+        drop(state_view);
+        result
     }
     /// Pushes an accepted transaction into the queue with a shared [`StateView`] snapshot.
     ///
@@ -5011,34 +5005,37 @@ impl Queue {
         telemetry: Option<&StateTelemetry>,
     ) -> BackpressureState {
         let snapshot = self.pressure_snapshot_with_tracked_count(tracked_tx_count);
-        let state = if let Some(ledger) = self.resident_accounting.get() {
-            ledger
-                .faulted
-                .store(self.admission_faulted(), Ordering::Release);
-            ledger.publish_backpressure()
-        } else {
-            let state = snapshot.into_backpressure();
-            let _ = self.backpressure_tx.send_if_modified(|current| {
-                if *current == state {
-                    false
-                } else {
-                    *current = state;
-                    true
-                }
-            });
-            state
-        };
+        let state = self.resident_accounting.get().map_or_else(
+            || {
+                let state = snapshot.into_backpressure();
+                let _ = self.backpressure_tx.send_if_modified(|current| {
+                    if *current == state {
+                        false
+                    } else {
+                        *current = state;
+                        true
+                    }
+                });
+                state
+            },
+            |ledger| {
+                ledger
+                    .faulted
+                    .store(self.admission_faulted(), Ordering::Release);
+                ledger.publish_backpressure()
+            },
+        );
         #[cfg(feature = "telemetry")]
         if let Some(tel) = telemetry {
             crate::telemetry::record_state_tx_queue_backpressure(
                 tel,
-                snapshot.queued_tx_count as u64,
-                self.capacity.get() as u64,
-                snapshot.retained_bytes,
-                snapshot.max_retained_bytes.get(),
-                snapshot.saturated_by_count,
-                snapshot.saturated_by_bytes,
-                snapshot.saturated_by_age,
+                (snapshot.queued_tx_count as u64, self.capacity.get() as u64),
+                (snapshot.retained_bytes, snapshot.max_retained_bytes.get()),
+                (
+                    snapshot.saturated_by_count,
+                    snapshot.saturated_by_bytes,
+                    snapshot.saturated_by_age,
+                ),
                 snapshot.oldest_queued_tx_age_ms,
             );
         }
@@ -5199,8 +5196,8 @@ impl Queue {
         }
         self.publish_teu_backlog_metric_keys(
             telemetry,
-            [info.lane_id].into_iter(),
-            [(info.lane_id, info.dataspace_id)].into_iter(),
+            [info.lane_id],
+            [(info.lane_id, info.dataspace_id)],
         );
     }
     #[cfg(feature = "telemetry")]
@@ -5264,7 +5261,7 @@ impl Queue {
             let aggregate = self
                 .lane_teu_pending
                 .get(&lane_id)
-                .map(|entry| entry.value().clone())
+                .map(|entry| *entry.value())
                 .unwrap_or_default();
             let limits = self.nexus_limits.read().for_lane(lane_id);
             let committed = aggregate.teu.min(limits.teu_capacity);
@@ -5289,7 +5286,7 @@ impl Queue {
             let aggregate = self
                 .dataspace_teu_pending
                 .get(&(lane_id, dataspace_id))
-                .map(|entry| entry.value().clone())
+                .map(|entry| *entry.value())
                 .unwrap_or_default();
             telemetry.record_nexus_scheduler_dataspace_teu(
                 lane_id,
@@ -6868,7 +6865,7 @@ pub mod tests {
                     &time_source,
                     vec![InstructionBox::from(Log::new(
                         Level::INFO,
-                        format!("autoscale shard candidate {idx}").into(),
+                        format!("autoscale shard candidate {idx}"),
                     ))],
                     Metadata::default(),
                 )
@@ -7031,7 +7028,7 @@ pub mod tests {
                     &time_source,
                     vec![InstructionBox::from(Log::new(
                         Level::INFO,
-                        format!("future autoscale shard candidate {idx}").into(),
+                        format!("future autoscale shard candidate {idx}"),
                     ))],
                     Metadata::default(),
                 )
@@ -7190,7 +7187,7 @@ pub mod tests {
                     &time_source,
                     vec![InstructionBox::from(Log::new(
                         Level::INFO,
-                        format!("physical scale-in candidate {idx}").into(),
+                        format!("physical scale-in candidate {idx}"),
                     ))],
                     Metadata::default(),
                 )
@@ -7281,9 +7278,7 @@ pub mod tests {
             *self.decision.write() = Err(dataspace_id);
         }
         fn current(&self) -> Result<RoutingDecision, RoutingResolveError> {
-            self.decision
-                .read()
-                .clone()
+            (*self.decision.read())
                 .map_err(|dataspace_id| RoutingResolveError::UnknownDataspace { dataspace_id })
         }
     }
@@ -9536,10 +9531,10 @@ pub mod tests {
                     .expect("installed route");
                 route.revisions.get_mut(&1).expect("revision").liability = 100 * ONE_XOR;
                 store::routes::insert(&mut stx, network, route).expect("backing liability");
-                let mut parameters = store::parameters::get(&*stx.world).clone().expect("SCCP");
+                let mut parameters = (*store::parameters::get(&*stx.world)).expect("SCCP");
                 parameters.max_exempt_transactions_per_block = 1;
                 parameters.enabled = false;
-                store::parameters::set(&mut stx, Some(parameters.clone()));
+                store::parameters::set(&mut stx, Some(parameters));
                 for (nonce, signer) in recipients.iter().enumerate() {
                     let recipient = AccountId::new(signer.public_key().clone());
                     recipients::ensure_registered(&mut stx, &recipient).expect("recipient");
@@ -10267,7 +10262,7 @@ pub mod tests {
             .collect::<Vec<_>>();
         let hashes = transactions
             .iter()
-            .map(|tx| tx.hash_as_entrypoint())
+            .map(super::super::tx::AcceptedTransaction::hash_as_entrypoint)
             .collect::<Vec<_>>();
         for tx in transactions {
             queue.push(tx, state.view()).expect("push transaction");

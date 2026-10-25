@@ -449,7 +449,7 @@ fn finished_speculation(bytes: Vec<u8>) -> SpeculativeSendV1 {
         source: [2; 32],
         request: [8; 32],
         nonce: [9; 32],
-        sigma: SpeculativeSigmaV1::for_test(statement, bytes),
+        sigma: SpeculativeSigmaV1::for_test(&statement, bytes),
     }
 }
 

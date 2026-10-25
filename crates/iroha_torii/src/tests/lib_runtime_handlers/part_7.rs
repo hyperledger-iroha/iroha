@@ -1588,7 +1588,7 @@ async fn resolve_hosted_http_runtime_target_balances_across_distinct_healthy_hos
                 None,
             ),
         ],
-        vec![hosted_http_runtime_replica_plan(
+        &[hosted_http_runtime_replica_plan(
             &temp.path().join("service-canary"),
             1,
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -2072,7 +2072,7 @@ async fn resolve_hosted_http_runtime_target_rejects_snapshot_without_peer_identi
             Some("http://127.0.0.1:18080"),
             Some(101),
         )],
-        Vec::new(),
+        &[],
         None,
         Some(hosted_http_service_lease_state(
             iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
@@ -2117,7 +2117,7 @@ async fn resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer
             Some("http://127.0.0.1:18080"),
             Some(101),
         )],
-        vec![hosted_http_runtime_replica_plan(
+        &[hosted_http_runtime_replica_plan(
             &temp.path().join("service-canary"),
             1,
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -2228,7 +2228,7 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
         Vec::new(),
-        Vec::new(),
+        &[],
         Some(local_peer_id.to_string()),
         Some(hosted_http_service_lease_state(
             iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,

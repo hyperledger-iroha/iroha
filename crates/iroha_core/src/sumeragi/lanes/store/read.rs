@@ -27,11 +27,19 @@ pub(super) fn record_error(error: LaneRecordError) -> Attempt<io::Error> {
     }
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 pub(in crate::sumeragi) enum RecordPoll {
     Absent,
     Pending(ByteAdmissionError),
     Ready(LaneRecord),
 }
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum RecordState {
     Absent,
     Reading(ArtifactRead),
@@ -140,7 +148,7 @@ impl ReadRecord {
     }
 }
 
-/// BodyReader's caller independently selects the source; no claimed QC config is consulted.
+/// `BodyReader`'s caller independently selects the source; no claimed QC config is consulted.
 pub(super) struct LaneBodyRead {
     source: AvailabilitySource,
     read: ReadRecord,

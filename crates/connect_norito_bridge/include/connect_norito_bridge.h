@@ -562,6 +562,28 @@ int32_t iroha_privacy_validate_exact12_fixture_bundle_v1(
 
 void iroha_privacy_free_buffer(uint8_t* ptr);
 
+// ---------------- X.509 public ownership-signing preparation ----------------
+// Input is canonical Norito PrivacyStatementV1 with the X.509 variant, <=262144 bytes.
+// Success returns the exact public message and its 32-byte SHA-256 digest. Message
+// signers hash the message once; prehash signers use the digest. Normalize the
+// resulting P-256 signature to low-s fixed 64-byte r || s for witness construction.
+// No subject key enters this API. This does not authenticate State, prove, pair
+// a host, submit a transaction, or establish network readiness.
+// Free BOTH output buffers with iroha_privacy_free_buffer. Every failure sets
+// both outputs to null/zero. Output destinations must be writable and disjoint.
+// Status: 0 success; -1 null pointer; -2 empty; -3 oversized; -4 noncanonical,
+// malformed or wrong-schema frame; -5 wrong protocol; -6 preparation failure;
+// -10 allocation failure; -100 internal failure.
+#define IROHA_ZK_X509_SIGNING_STATEMENT_MAX_BYTES_V1 262144UL
+int32_t connect_norito_zk_x509_prepare_ownership_signing_v1(
+    const uint8_t* statement_ptr,
+    unsigned long statement_len,
+    uint8_t** out_message,
+    unsigned long* out_message_len,
+    uint8_t** out_digest,
+    unsigned long* out_digest_len);
+
+
 // ---------------- Envelope helpers ----------------
 int32_t connect_norito_encode_envelope_sign_request_tx(
     uint64_t seq,

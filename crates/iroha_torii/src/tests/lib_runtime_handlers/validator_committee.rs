@@ -93,7 +93,7 @@ async fn validator_committee_status_serves_exact_finality_and_closed_queries() {
         "target_epoch=2&target_epoch=3",
     ] {
         use axum::extract::FromRequestParts as _;
-        let (mut parts, _) = axum::http::Request::builder()
+        let (mut parts, ()) = axum::http::Request::builder()
             .uri(format!("/v1/nexus/validator-committee?{query}"))
             .body(())
             .unwrap()

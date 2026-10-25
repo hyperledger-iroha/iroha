@@ -2,6 +2,7 @@
 //! Exact storage/finality and byte admission are exercised by Core's reader tests.
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::nexus::AxtPolicySnapshot;
 use iroha_data_model::{
     block::{builder::BlockBuilder, execution_output::*, output_budget::ExecutionOutputLimits},
     events::{
@@ -14,6 +15,7 @@ use iroha_data_model::{
     },
     trigger::DataTriggerStep,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Signer, network and invoked contract of the carrier's sealed contract call.
 fn carrier_identity() -> (
@@ -126,15 +128,15 @@ fn carrier_with_context(
         .set_execution_outputs(
             rows,
             1,
-            Default::default(),
+            BTreeMap::default(),
             vec![],
-            Default::default(),
-            Default::default(),
+            AxtPolicySnapshot::default(),
+            BTreeSet::default(),
             &ExecutionOutputLimits {
                 max_outputs: 4,
                 max_output_bytes: 65536,
-                max_total_output_bytes: 262144,
-                max_executed_wire_bytes: 1048576,
+                max_total_output_bytes: 262_144,
+                max_executed_wire_bytes: 1_048_576,
             },
         )
         .unwrap();
@@ -447,15 +449,15 @@ fn native_emission_projection_binds_full_historical_record_and_coordinates() {
         .set_execution_outputs(
             rows,
             1,
-            Default::default(),
+            BTreeMap::default(),
             vec![],
-            Default::default(),
-            Default::default(),
+            AxtPolicySnapshot::default(),
+            BTreeSet::default(),
             &ExecutionOutputLimits {
                 max_outputs: 4,
                 max_output_bytes: 65536,
-                max_total_output_bytes: 262144,
-                max_executed_wire_bytes: 1048576,
+                max_total_output_bytes: 262_144,
+                max_executed_wire_bytes: 1_048_576,
             },
         )
         .unwrap();
@@ -527,10 +529,10 @@ fn anonymous_history_never_fabricates_a_signer_or_account_activity() {
                 completions: vec![],
             })],
             0,
-            Default::default(),
+            BTreeMap::default(),
             vec![],
-            Default::default(),
-            Default::default(),
+            AxtPolicySnapshot::default(),
+            BTreeSet::default(),
             &ExecutionOutputLimits {
                 max_outputs: 4,
                 max_output_bytes: 65_536,

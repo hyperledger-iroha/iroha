@@ -5,7 +5,7 @@ use iroha_allocation::RetainedPayload;
 use iroha_primitives::numeric::{ChargedQuantity, QuantityAccumulator};
 
 /// Move-only action vector and every nested key, account and quantity allocation.
-pub(crate) struct FundedPenaltyActions(RetainedPayload<Vec<NposPenaltyAction>>);
+pub struct FundedPenaltyActions(RetainedPayload<Vec<NposPenaltyAction>>);
 
 impl FundedPenaltyActions {
     /// Admit the empty graph in the same pool as nonempty penalty preparation.
@@ -99,11 +99,11 @@ impl ActionDemand {
                 for offender in &material.offenders {
                     demand.slash(&offender.validator)?;
                 }
-            } else if let Some((_, peer, _, _)) = &pending.0.5 {
-                if let Some(locators) = snapshot.validator_map.get(peer.public_key()) {
-                    for locator in locators {
-                        demand.slash(locator.validator())?;
-                    }
+            } else if let Some((_, peer, _, _)) = &pending.0.5
+                && let Some(locators) = snapshot.validator_map.get(peer.public_key())
+            {
+                for locator in locators {
+                    demand.slash(locator.validator())?;
                 }
             }
         }
@@ -153,6 +153,7 @@ pub(super) struct ActionBuilder {
 }
 
 /// Borrowed immutable fields; copying them does not copy the original graphs.
+#[derive(Clone, Copy)]
 pub(super) struct SlashFields<'a> {
     pub(super) evidence_key: Hash,
     pub(super) signer: u32,

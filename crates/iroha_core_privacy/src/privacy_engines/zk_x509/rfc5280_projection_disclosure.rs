@@ -104,7 +104,7 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     let oid = fixed[FIX_OID_QUERY];
     let value = disclosure.sub(subject).sub(oid);
     let live = row[BASE_D];
-    let half = A::from_base(F((GOLDILOCKS_MODULUS_V1 + 1) / 2));
+    let half = A::from_base(F(GOLDILOCKS_MODULUS_V1.div_ceil(2)));
     let oid_last = fixed[FIX_OID_OFFSET]
         .mul(fixed[FIX_OID_OFFSET].sub(A::ONE))
         .mul(half);
@@ -216,7 +216,6 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     output
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 pub(super) struct Source<'a> {
     pub(super) subject: &'a ZkX509Rfc5280NodeProvenanceV1,
@@ -225,7 +224,6 @@ pub(super) struct Source<'a> {
     pub(super) bytes: &'a [u8],
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn sources(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<[Option<Source<'_>>; 4], ZkX509Rfc5280StarkErrorV1> {
@@ -338,7 +336,6 @@ pub(super) fn sources(
     Ok(result)
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_row(
     row: &mut ZkX509Rfc5280StarkBaseRowV1,
     source: &Source<'_>,
@@ -430,7 +427,6 @@ pub(super) fn populate_row(
     Ok(())
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn byte_multiplicity(
     sources: &[Option<Source<'_>>; 4],
     document: usize,
@@ -448,7 +444,6 @@ pub(super) fn byte_multiplicity(
         })
         .count()
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn node_multiplicity(
     sources: &[Option<Source<'_>>; 4],
     document: usize,

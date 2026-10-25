@@ -18,6 +18,7 @@ use iroha_data_model::{
         ANONYMOUS_BALLOT_ENTRYPOINT_WIRE_MAX_BYTES_V1, AnonymousBallotRejectionV1,
         CanonicalAnonymousBallotEnvelopeV1, digests::verify_stamp_v1,
     },
+    nexus::AxtPolicySnapshot,
     transaction::{
         TransactionEntrypoint, error::TransactionRejectionReason, signed::TransactionResult,
     },
@@ -53,7 +54,7 @@ fn install(block: &mut SignedBlock, result: TransactionResult) {
             0,
             BTreeMap::new(),
             vec![],
-            Default::default(),
+            AxtPolicySnapshot::default(),
             BTreeSet::new(),
             &ExecutionOutputLimits {
                 max_outputs: 1,
@@ -237,7 +238,7 @@ fn identical_genuine_ballots_keep_verified_duplicate_results_in_canonical_block(
             0,
             BTreeMap::new(),
             vec![],
-            Default::default(),
+            AxtPolicySnapshot::default(),
             BTreeSet::new(),
             &ExecutionOutputLimits {
                 max_outputs: 2,
@@ -294,7 +295,7 @@ fn anonymous_block_refuses_ordinary_rejection_without_mutating_the_proposal() {
             0,
             BTreeMap::new(),
             vec![],
-            Default::default(),
+            AxtPolicySnapshot::default(),
             BTreeSet::new(),
             &ExecutionOutputLimits {
                 max_outputs: 1,

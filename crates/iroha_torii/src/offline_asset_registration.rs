@@ -1,7 +1,7 @@
 //! Current committed registration projection for the independently trusted retail issuer.
 //!
 //! This read is not an ownership certificate or native enrollment capability. All fields
-//! come from one StateView; absent registration-incarnation evidence is never synthesized.
+//! come from one `StateView`; absent registration-incarnation evidence is never synthesized.
 
 use super::*;
 use iroha_data_model::{asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1};
@@ -85,7 +85,7 @@ pub async fn handler(
     AxPath(asset_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let context = "v1/assets/definitions/{asset}/registration";
-    let visibility = torii_dataspace_context_from_headers(&app, &headers, &method, &uri, context)?;
+    let caller = torii_one_shot_caller_from_headers(&app, &headers, &method, &uri, context)?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         check_access(&app, &headers, Some(remote.ip()), context).await?;
     }
@@ -94,8 +94,9 @@ pub async fn handler(
     let asset = canonical_asset(&asset_raw)?;
     let view = app.state.view();
     let world = view.world();
-    if !visibility
-        .current_visibility()
+    // Visibility is resolved once, from the view that serves the projection.
+    if !caller
+        .dataspace_visibility_in(&view)
         .allows_asset_definition(world, &asset)
     {
         return Err(routing::explorer_not_found());

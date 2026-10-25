@@ -16,7 +16,7 @@ mod doctor_account_tests {
                 ])
                 .unwrap(),
             );
-        MockResponse::json(200, json::to_value(&capabilities).unwrap())
+        MockResponse::json(200, &json::to_value(&capabilities).unwrap())
     }
     pub(super) fn faucet_response() -> MockResponse {
         let _profile = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
@@ -28,7 +28,7 @@ mod doctor_account_tests {
             asset_definition_id: DEFAULT_GAS_ASSET_ID.parse().unwrap(),
             amount: Quantity::from(100_u32),
         };
-        MockResponse::json(200, json::to_value(&policy).unwrap())
+        MockResponse::json(200, &json::to_value(&policy).unwrap())
     }
     #[test]
     fn doctor_wallet_discovery_is_unsigned_and_mandatory_in_both_scopes() {
@@ -105,7 +105,7 @@ mod doctor_account_tests {
                     if capabilities {
                         body.as_object_mut()
                             .unwrap()
-                            .insert("default_signing".to_owned(), Value::from("secp256k1"));
+                            .insert("allowed_signing".to_owned(), Value::Array(Vec::new()));
                     } else {
                         body.as_object_mut()
                             .unwrap()
@@ -119,6 +119,14 @@ mod doctor_account_tests {
             let requests = finish_mock(server);
             assert_eq!(report_status(&report), Some("fail"));
             if capabilities {
+                let check = doctor_check(&report, "account_capabilities");
+                assert_eq!(check["ok"].as_bool(), Some(false));
+                assert_eq!(
+                    check["detail"].as_str(),
+                    Some(
+                        "account_capabilities: network does not advertise a canonical account signing policy"
+                    )
+                );
                 assert!(
                     !requests
                         .iter()

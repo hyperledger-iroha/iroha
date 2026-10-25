@@ -188,7 +188,6 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     result
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn private_count(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<usize, ZkX509Rfc5280StarkErrorV1> {
@@ -211,7 +210,6 @@ pub(super) fn private_count(
     Ok(count)
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn byte_multiplicity(
     trace: &ZkX509Rfc5280TraceV1,
     document: usize,
@@ -226,7 +224,6 @@ pub(super) fn byte_multiplicity(
         .count()
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn oid_index(
     trace: &ZkX509Rfc5280TraceV1,
     value: ZkX509Rfc5280NodeProvenanceV1,
@@ -256,7 +253,6 @@ fn oid_index(
         .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_rows(
     trace: &ZkX509Rfc5280TraceV1,
     rows: &mut PrivateTableV1<ZkX509Rfc5280StarkBaseRowV1>,
@@ -316,7 +312,11 @@ pub(super) fn populate_rows(
             row[BASE_IS_WRITE] = F(u64::from(offset == 0));
             row[BASE_STRICT] = F(u64::from(remaining == 0));
             row[BASE_INVERSE] = F(u64::from(offset)).inverse_or_zero_canonical_v1();
-            write_u8_bits_v1(&mut row, BASE_SMALL_BITS, (length - 1) as u8);
+            write_u8_bits_v1(
+                &mut row,
+                BASE_SMALL_BITS,
+                u8::try_from(length - 1).map_err(|_| ZkX509Rfc5280StarkErrorV1::Semantic)?,
+            );
             push_family_row_v1(rows, row)?;
             state = after;
         }
@@ -327,7 +327,6 @@ pub(super) fn populate_rows(
     Ok(())
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn profile_multiplicity(
     rows: &PrivateTableV1<ZkX509Rfc5280StarkBaseRowV1>,
     entry: ZkX509Rfc5280ProfileByteEntryV1,

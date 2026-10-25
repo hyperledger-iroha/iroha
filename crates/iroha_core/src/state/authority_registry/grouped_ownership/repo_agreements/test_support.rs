@@ -79,6 +79,11 @@ pub(in crate::state) fn corrupt(
 trait Geometry: mv::Key {
     fn units(&self) -> u64;
 }
+impl<G: Geometry, K: Geometry> Geometry for (G, K) {
+    fn units(&self) -> u64 {
+        self.0.units() + self.1.units()
+    }
+}
 impl Geometry for RepoAgreementId {
     fn units(&self) -> u64 {
         self.name().as_ref().len() as u64
@@ -153,16 +158,24 @@ fn lookup_cost<'a, K: Geometry, V: mv::Value>(
             .map(|(_, value)| value),
     )
 }
-fn member_cost(members: &BTreeSet<RepoAgreementId>, key: &RepoAgreementId) -> u64 {
-    members
-        .iter()
-        .map(|candidate| 1 + key.units() + candidate.units())
-        .sum()
+fn require_cost<G: Geometry, K: Geometry>(
+    groups: &impl RawStorageImages<(G, K), ()>,
+    image: GroupImage,
+    group: &G,
+    member: &K,
+) -> u64 {
+    visit_cost(groups, image)
+        + logical(groups, image)
+            .into_iter()
+            .map(|((candidate_group, candidate_member), ())| {
+                group.units() + candidate_group.units() + member.units() + candidate_member.units()
+            })
+            .sum::<u64>()
 }
 fn group_cost<G: Geometry>(
     rows: &impl RawStorageImages<RepoAgreementId, RepoAgreement>,
-    groups: &impl RawStorageImages<G, BTreeSet<RepoAgreementId>>,
-    projection: impl for<'a> Fn(&'a RepoAgreement) -> Option<&'a G>,
+    groups: &impl RawStorageImages<(G, RepoAgreementId), ()>,
+    project: impl for<'a> Fn(&'a RepoAgreement) -> Option<&'a G>,
     option: u64,
 ) -> u64 {
     let mut total = 0;
@@ -170,22 +183,18 @@ fn group_cost<G: Geometry>(
         total += visit_cost(rows, image);
         for (id, record) in logical(rows, image) {
             total += option;
-            if let Some(group) = projection(record) {
-                let (cost, members) = lookup_cost(groups, image, group);
-                total += cost + members.map_or(0, |members| member_cost(members, id));
+            if let Some(group) = project(record) {
+                total += require_cost(groups, image, group, id);
             }
         }
         total += visit_cost(groups, image);
-        for (group, members) in logical(groups, image) {
-            total += 1;
-            for id in members {
-                let (cost, record) = lookup_cost(rows, image, id);
-                total += 1 + cost;
-                if let Some(record) = record {
-                    total += option;
-                    if let Some(projected) = projection(record) {
-                        total += projected.units() + group.units();
-                    }
+        for ((group, id), ()) in logical(groups, image) {
+            let (cost, record) = lookup_cost(rows, image, id);
+            total += cost;
+            if let Some(record) = record {
+                total += option;
+                if let Some(projected) = project(record) {
+                    total += projected.units() + group.units();
                 }
             }
         }
@@ -194,9 +203,9 @@ fn group_cost<G: Geometry>(
 }
 pub(in crate::state) fn full_work(
     rows: &impl RawStorageImages<RepoAgreementId, RepoAgreement>,
-    initiators: &impl RawStorageImages<AccountId, BTreeSet<RepoAgreementId>>,
-    counterparties: &impl RawStorageImages<AccountId, BTreeSet<RepoAgreementId>>,
-    custodians: &impl RawStorageImages<AccountId, BTreeSet<RepoAgreementId>>,
+    initiators: &impl RawStorageImages<(AccountId, RepoAgreementId), ()>,
+    counterparties: &impl RawStorageImages<(AccountId, RepoAgreementId), ()>,
+    custodians: &impl RawStorageImages<(AccountId, RepoAgreementId), ()>,
 ) -> u64 {
     group_cost(rows, initiators, |r| Some(r.initiator()), 0)
         + group_cost(rows, counterparties, |r| Some(r.counterparty()), 0)

@@ -139,7 +139,7 @@ fn apply_implicit_creation_fee(
                 state_transaction,
                 authority,
                 created_account,
-                payer_asset_id,
+                &(payer_asset_id),
                 fee.amount.clone(),
             )?;
         }
@@ -251,19 +251,18 @@ pub(super) fn ensure_receiving_account(
     if policy.mode != AccountAdmissionMode::ImplicitReceive {
         return Err(AccountAdmissionError::ImplicitAccountCreationDisabled.into());
     }
-    if let Some((asset_def_id, amount)) = value_hint {
-        if let Some(required) = policy.min_initial_amount_for(asset_def_id) {
-            if amount < required {
-                return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
-                    AccountAdmissionMinInitialAmountUnsatisfied {
-                        asset_definition: asset_def_id.clone(),
-                        required: required.clone(),
-                        provided: amount.clone(),
-                    },
-                )
-                .into());
-            }
-        }
+    if let Some((asset_def_id, amount)) = value_hint
+        && let Some(required) = policy.min_initial_amount_for(asset_def_id)
+        && amount < required
+    {
+        return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
+            AccountAdmissionMinInitialAmountUnsatisfied {
+                asset_definition: asset_def_id.clone(),
+                required: required.clone(),
+                provided: amount.clone(),
+            },
+        )
+        .into());
     }
     let max_creations = policy.max_implicit_creations_per_tx();
     if state_transaction.implicit_account_creations_in_tx >= max_creations {
@@ -364,7 +363,7 @@ mod tests {
         _domain_id: DomainId,
         authority: &AccountId,
     ) -> iroha_data_model::account::Account {
-        iroha_data_model::account::NewAccount::new(account_id.clone()).build(authority)
+        iroha_data_model::account::NewAccount::new(account_id).build(authority)
     }
     fn test_state(mut world: World, policy: AccountAdmissionPolicy) -> State {
         let custom = policy.into_custom_parameter();

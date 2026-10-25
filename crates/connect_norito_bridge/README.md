@@ -197,3 +197,16 @@ platform-inapplicable codes as protocol errors. Closing the handle only releases
 before an immutable digest selection, and nothing is returned until both are durable; a missing
 selected original is refused. Recovery may complete a missing selection for a present valid
 original. This local mechanism does not establish protection against complete filesystem rollback.
+
+### X.509 ownership-signing preparation
+
+`connect_norito_zk_x509_prepare_ownership_signing_v1` and its Kotlin JNI adapter accept
+one bounded canonical Norito `PrivacyStatementV1::IrohaZkX509StarkP256V1` and
+return the ordinary native holder's exact public signing message and SHA-256
+digest. A P-256/SHA-256 message signer signs the message; a prehash signer signs
+the digest. Signing the digest with a message signer hashes twice and fails
+ownership verification. Normalize the signature to low-s fixed 64-byte `r || s`
+for the witness constructor. The subject signing key stays with the caller.
+Both C output buffers use `iroha_privacy_free_buffer`; failure publishes neither.
+This signing preparation does not authenticate governance State or provide
+proving, paired-host transport, transaction submission, or release qualification.

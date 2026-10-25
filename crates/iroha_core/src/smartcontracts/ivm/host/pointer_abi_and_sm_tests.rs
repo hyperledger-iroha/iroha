@@ -136,7 +136,7 @@ fn pointer_abi_transfer_asset_enqueues_isi() {
         None,
     );
     let view = state.view();
-    let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(from.clone());
+    let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> = CoreHostImpl::new(from.clone());
     host.set_query_state(&view);
     // Set arg registers to pointers and amount
     vm.set_register(10, ptr_from);

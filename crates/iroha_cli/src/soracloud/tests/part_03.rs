@@ -444,17 +444,19 @@ fn prepared_inrou_pin_preserves_exact_sponsor_fee_identity() {
                 ),
             ),
         ]);
-        let (proof_status, body) = match proof {
-            Some(body) => ("200 OK", body),
-            None => (
-                "404 Not Found",
-                norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
-                    "transaction_details_not_found",
-                    "The exact committed transaction proof is not available.",
-                ))
-                .unwrap(),
-            ),
-        };
+        let (proof_status, body) = proof.map_or_else(
+            || {
+                (
+                    "404 Not Found",
+                    norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
+                        "transaction_details_not_found",
+                        "The exact committed transaction proof is not available.",
+                    ))
+                    .unwrap(),
+                )
+            },
+            |body| ("200 OK", body),
+        );
         routes.insert(
             "/v1/pipeline/transactions/details".to_owned(),
             MockHttpResponse {
@@ -806,7 +808,6 @@ fn read_mock_http_request(stream: &mut TcpStream) -> CapturedHttpRequest {
                     break;
                 }
                 thread::sleep(Duration::from_millis(10));
-                continue;
             }
             Err(error) if mock_http_connection_closed(&error) => {
                 break;
@@ -857,7 +858,6 @@ fn read_mock_http_request(stream: &mut TcpStream) -> CapturedHttpRequest {
                     break;
                 }
                 thread::sleep(Duration::from_millis(10));
-                continue;
             }
             Err(error) if mock_http_connection_closed(&error) => {
                 break;
@@ -1572,15 +1572,17 @@ fn direct_service_mutation_output_keeps_one_exact_authoritative_snapshot() {
     let key_pair = soracloud_fixture_key_pair(0x34);
     let authority = AccountId::new(key_pair.public_key().clone());
     let response = build_service_mutation_output(
-        mock_soracloud_submission_receipt(&authority, &key_pair),
+        &mock_soracloud_submission_receipt(&authority, &key_pair),
         &status,
         "echo_console",
         "Upgrade",
     )
     .expect("build exact service mutation response");
     let output = build_direct_service_mutation_output(
-        Path::new("container_manifest.json"),
-        Path::new("service_manifest.json"),
+        ServiceManifestPaths {
+            container_manifest: Path::new("container_manifest.json"),
+            service_manifest: Path::new("service_manifest.json"),
+        },
         ServiceWorkspacePlan {
             service_name: "echo_console".to_owned(),
             execution_plane: "HttpService".to_owned(),
@@ -1607,16 +1609,18 @@ fn direct_service_mutation_output_keeps_one_exact_authoritative_snapshot() {
         MutationMode::Upgrade,
         "http://127.0.0.1:8080",
         false,
-        None,
-        ServiceBundlePublishOutput {
-            service_name: "echo_console".to_owned(),
-            bundle_file: "service.tgz".to_owned(),
-            content_cid: "bcanary".to_owned(),
-            manifest_digest_hex: "aa".repeat(32),
-            bundle_hash: Hash::new(b"service bundle").to_string(),
-            note: "published".to_owned(),
+        ServiceMutationPublication {
+            public_discovery: None,
+            bundle: ServiceBundlePublishOutput {
+                service_name: "echo_console".to_owned(),
+                bundle_file: "service.tgz".to_owned(),
+                content_cid: "bcanary".to_owned(),
+                manifest_digest_hex: "aa".repeat(32),
+                bundle_hash: Hash::new(b"service bundle").to_string(),
+                note: "published".to_owned(),
+            },
+            inrou_guest_images: Vec::new(),
         },
-        Vec::new(),
         response,
     );
     assert_eq!(
@@ -1630,13 +1634,13 @@ fn direct_service_mutation_output_keeps_one_exact_authoritative_snapshot() {
         output
             .response
             .get("active_rollout")
-            .is_some_and(|v| v.is_null())
+            .is_some_and(norito::json::native::Value::is_null)
     );
     assert!(
         output
             .response
             .get("last_rollout")
-            .is_some_and(|v| v.is_null())
+            .is_some_and(norito::json::native::Value::is_null)
     );
     assert!(
         output

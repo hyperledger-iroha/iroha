@@ -196,8 +196,9 @@ pub(super) struct Schedule {
 }
 impl Schedule {
     pub(super) fn new(vm: u8, first: u32) -> Option<Self> {
-        first.checked_add(CLOCK_SLOTS as u32)?;
-        let scan_end = SCAN_START as u32 + (2 * return_copyback::CELLS - 1) as u32;
+        first.checked_add(u32::try_from(CLOCK_SLOTS).expect("fixed port schedule fits u32"))?;
+        let scan_end = u32::try_from(SCAN_START).expect("fixed port schedule fits u32")
+            + u32::try_from(2 * return_copyback::CELLS - 1).expect("fixed port schedule fits u32");
         let dispatch_offsets = [
             0,
             1,
@@ -257,7 +258,7 @@ impl Schedule {
                 self.first + 20,
                 self.first + 21,
             ],
-            self.first + SCAN_START as u32,
+            self.first + u32::try_from(SCAN_START).expect("fixed port schedule fits u32"),
         )
         .expect("validated fixed scan geometry")
     }
@@ -270,17 +271,15 @@ impl Schedule {
         if (SCAN_START..SCAN_START + 2 * return_copyback::CELLS).contains(&offset) {
             let index = offset - SCAN_START;
             let cell = packets.scan.get(index / 2);
-            return if index % 2 == 0 {
+            return if index.is_multiple_of(2) {
                 &cell.child
             } else {
                 &cell.copyback
             };
         }
-        if let Some(index) = self
-            .clocks
-            .iter()
-            .position(|clock| *clock == self.first + offset as u32)
-        {
+        if let Some(index) = self.clocks.iter().position(|clock| {
+            *clock == self.first + u32::try_from(offset).expect("bounded circuit index")
+        }) {
             return packets.producer(index).expect("fixed producer");
         }
         assert!(offset < CLOCK_SLOTS);
@@ -295,6 +294,10 @@ pub(super) struct OriginalPackets {
     scan: Scan,
 }
 impl OriginalPackets {
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "The constructor adopts original packet storage into the zeroizing owner"
+    )]
     pub(super) fn candidate(
         dispatch: private_dispatch::OriginalPackets,
         extra: [[F; packet::WIDTH]; EXTRA_PORTS],
@@ -314,7 +317,7 @@ impl OriginalPackets {
         } else if index < PORTS {
             let index = index - FIXED_PORTS;
             let cell = self.scan.get(index / 2);
-            Some(if index % 2 == 0 {
+            Some(if index.is_multiple_of(2) {
                 &cell.child
             } else {
                 &cell.copyback
@@ -369,7 +372,11 @@ fn append_control_residues<'a>(
         &packets.dispatch,
     );
     let callables = program.callables();
-    let (child, selected, absolute) = callables.select_child(program.fetch(witness.dispatch));
+    let (child, selected, absolute) = callables.select_child(
+        crate::execution_proofs::ivm_step_air::machine_bus::private_dispatch::Program::fetch(
+            witness.dispatch,
+        ),
+    );
     out.push(selected.sub(decoded.child));
     for (target, absolute) in decoded.target.iter().zip(absolute) {
         out.push(decoded.child.mul(*target).sub(absolute));

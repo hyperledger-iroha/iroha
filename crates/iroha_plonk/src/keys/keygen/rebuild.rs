@@ -319,7 +319,7 @@ pub fn keygen_pk_from_vk_v2_cancellable<C: PastaCurve, Ci: Circuit<C::ScalarExt>
         params,
         synthesized,
         verifier,
-        profile,
+        &profile,
         coset_cache,
         cancellation,
     )
@@ -327,7 +327,7 @@ pub fn keygen_pk_from_vk_v2_cancellable<C: PastaCurve, Ci: Circuit<C::ScalarExt>
 
 /// Check immutable seal, verifier and parameter identities before any witness allocation.
 /// The returned profile carries no new source authority; source tables are still checked.
-pub(crate) fn validate_rebuild_profile_v2_cancellable<C: PastaCurve>(
+pub fn validate_rebuild_profile_v2_cancellable<C: PastaCurve>(
     params: &PinnedParams<C>,
     verifier: &SourceBoundViewV2<'_, C>,
     coset_cache: CosetCachePolicy,
@@ -367,7 +367,7 @@ pub(crate) fn validate_rebuild_profile_v2_cancellable<C: PastaCurve>(
 /// Reconstruct from one completed synthesis after its advice moved to a wiping owner.
 /// This repeats immutable preflight rather than trusting the caller's earlier check.
 /// Exact descriptor, fixed/selector/copy/sigma and opaque seal checks are unchanged.
-pub(crate) fn keygen_pk_from_synthesized_v2_cancellable<C: PastaCurve>(
+pub fn keygen_pk_from_synthesized_v2_cancellable<C: PastaCurve>(
     params: &PinnedParams<C>,
     synthesized: crate::frontend::Synthesized<C::ScalarExt>,
     verifier: &SourceBoundViewV2<'_, C>,
@@ -381,7 +381,7 @@ pub(crate) fn keygen_pk_from_synthesized_v2_cancellable<C: PastaCurve>(
         params,
         synthesized,
         verifier,
-        profile,
+        &profile,
         coset_cache,
         cancellation,
     )
@@ -391,7 +391,7 @@ fn rebuild_checked_synthesis<C: PastaCurve>(
     params: &PinnedParams<C>,
     synthesized: crate::frontend::Synthesized<C::ScalarExt>,
     verifier: &SourceBoundViewV2<'_, C>,
-    profile: KeygenConfigV2,
+    profile: &KeygenConfigV2,
     coset_cache: CosetCachePolicy,
     cancellation: Option<&CancellationToken>,
 ) -> Result<ProvingKey<C>, RebuildError> {
@@ -407,7 +407,7 @@ fn rebuild_checked_synthesis<C: PastaCurve>(
         selectors,
         &permutation,
         &profile.layout_options(),
-        Some(&profile),
+        Some(profile),
         cancellation,
     )?;
     drop(permutation);

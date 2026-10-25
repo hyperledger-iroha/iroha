@@ -83,7 +83,7 @@ fn failing_body() -> Vec<InstructionBox> {
 
 #[test]
 fn plain_and_batch_business_rejection_charge_the_same_actual_direct_basis() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     for batch in [false, true] {
         let (state, asset) = priced_fixture(None);
         let source = carrier(
@@ -130,7 +130,7 @@ fn plain_and_batch_business_rejection_charge_the_same_actual_direct_basis() {
 
 #[test]
 fn fee_only_settlement_does_not_charge_completed_work_again_at_the_block_limit() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let body = failing_body();
     let gas = crate::gas::meter_instructions(&body, &crate::gas::DEFAULT_ZK_GAS)
         .expect("gas quote must complete for this fixture");
@@ -169,7 +169,7 @@ fn fee_only_settlement_does_not_charge_completed_work_again_at_the_block_limit()
 
 #[test]
 fn fee_admission_failure_has_no_business_fee_record_or_applied_fragment() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let (state, asset) = priced_fixture(None);
     let source = carrier(
         &state,
@@ -199,7 +199,7 @@ fn fee_admission_failure_has_no_business_fee_record_or_applied_fragment() {
 
 #[test]
 fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let (state, asset) = priced_fixture(None);
     let callback: TriggerId = "fee_data_callback".parse().unwrap();
     {
@@ -278,7 +278,7 @@ fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis
 
 #[test]
 fn healthy_output_overflow_drops_both_business_and_its_staged_fee() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let (state, asset) = priced_fixture(Some(32_768));
     {
         let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
@@ -356,7 +356,7 @@ fn sccp_keeper_advance() -> Vec<InstructionBox> {
 
 #[test]
 fn a_failed_sccp_exempt_transaction_is_charged_within_its_signed_intent() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     // A keeper advance is eligible whenever SCCP exists; this one fails at execution because
     // no light client is installed. One instruction: base fee 1 + one instruction at 1.
     for (limit, balance_after) in [(Some(2_u32), 8_u32), (Some(1), 10), (None, 10)] {
@@ -394,7 +394,7 @@ fn a_failed_sccp_exempt_transaction_is_charged_within_its_signed_intent() {
 
 #[test]
 fn an_sccp_shape_that_is_not_eligible_pays_the_ordinary_fee() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     // Without SCCP in the parent World nothing is exempt: a keeper advance is an ordinary
     // transaction, quoted at admission and charged on failure like any other.
     let (state, asset) = priced_fixture(None);
@@ -439,7 +439,7 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
         smartcontracts::ivm::cache::IvmCache, tx::AcceptedTransaction,
     };
     use iroha_model_base::topology::LaneId;
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     for mutation in 0..11 {
         let (state, asset) = priced_fixture(None);
         let entry = input(&state, failing_body(), payment(&asset, 3), false);
@@ -491,7 +491,7 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
                 &mut failed,
                 &mut cache,
                 route,
-                policy_route,
+                &(policy_route),
                 None,
             )
             .is_err()
@@ -524,7 +524,6 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
             ))
             .expect("admit pending fee policy without replacing the captured basis");
         match mutation {
-            0 => {}
             1 => fee.current_tx_hash = None,
             2 => fee.tx_call_hash = None,
             3 => fee.current_entrypoint_index = Some(1),
@@ -541,7 +540,7 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
                     BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, 3, 0).hash(),
                 )
             }
-            10 => {}
+            0 | 10 => {}
             _ => unreachable!(),
         }
         let result = basis.settle(
@@ -590,7 +589,7 @@ fn actual_raw_vm_rejection_retains_and_charges_consumed_work_once() {
         executor::fault::{IvmFaultKindV1, IvmFaultPositionV1, IvmInvocationSelectorV1},
         transaction::{IvmBytecode, error::TransactionRejectionReason},
     };
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let (state, asset) = priced_fixture(None);
     let mut program = ivm::ProgramMetadata {
         max_cycles: 1_000,
@@ -656,7 +655,7 @@ fn actual_raw_vm_rejection_retains_and_charges_consumed_work_once() {
 fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry() {
     use iroha_data_model::transaction::IvmBytecode;
     use ivm::error::ExecutionDeferral;
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     for reason in [
         ExecutionDeferral::AllocationUnavailable,
         ExecutionDeferral::ActiveMemoryCapacity,
@@ -762,7 +761,7 @@ fn fee_decoder_refusal_preserves_original_attempt_and_fresh_retry(sccp: bool) {
     use crate::state::output_capacity::producer::network::fee_decode_test_scope;
     use ivm::error::ExecutionDeferral;
 
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let (state, asset) = priced_fixture(None);
     if sccp {
         commit_sccp_parameters(&state);

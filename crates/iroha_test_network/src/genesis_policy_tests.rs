@@ -46,15 +46,19 @@ fn fixture_with_instructions(
         entries,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
         config::chain_id(),
-        config::test_network_crypto_admission_policy(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-        None,
-        config::default_test_network_staking_policy(),
+        crate::config::GenesisPolicyConfig {
+            genesis_crypto: crate::config::test_network_crypto_admission_policy(),
+            da_proof_policies: None,
+            nexus_config: None,
+            zk_config: None,
+            consensus_handshake_meta: None,
+            consensus_mode_override: None,
+            confidential_policy_hash: Some(
+                iroha_core::state::default_genesis_confidential_policy_hash(),
+            ),
+            preview_cadence_ms: None,
+            ..Default::default()
+        },
     )
 }
 
@@ -130,7 +134,16 @@ fn generated_policy_binding_pins_each_original_network_without_candidate_testing
         }
         networks.push(network);
         config::preexecute_genesis_with_runtime_config(
-            candidate, &account, &topology, &key, None, None, None, None,
+            candidate,
+            &account,
+            &topology,
+            &key,
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: None,
+                nexus_config: None,
+                zk_config: None,
+                runtime_config: None,
+            },
         )
     })
     .expect("each strict execution must use its own original signed genesis identity");
@@ -166,7 +179,16 @@ fn generated_policy_binding_executes_strictly_and_preserves_original_manifest_in
         execute_generated_genesis(proposal, manifest, &key, true, |candidate| {
             calls += 1;
             config::preexecute_genesis_with_runtime_config(
-                candidate, &account, &topology, &key, None, None, None, None,
+                candidate,
+                &account,
+                &topology,
+                &key,
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: None,
+                    nexus_config: None,
+                    zk_config: None,
+                    runtime_config: None,
+                },
             )
         })
         .expect("new fixture must bind the actual policies and pass strict native execution");
@@ -226,7 +248,16 @@ fn generated_policy_binding_executes_strictly_and_preserves_original_manifest_in
         "rebinding must preserve every other manifest field"
     );
     let (_, replayed) = config::preexecute_genesis_with_runtime_config(
-        &executed, &account, &topology, &key, None, None, None, None,
+        &executed,
+        &account,
+        &topology,
+        &key,
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config: None,
+            nexus_config: None,
+            zk_config: None,
+            runtime_config: None,
+        },
     )
     .expect("the complete signed result must independently validate");
     assert_eq!(replayed, staged);
@@ -244,7 +275,16 @@ fn supplied_policy_commitments_are_never_rebound() {
         calls += 1;
         assert_eq!(candidate.0.encode_wire().unwrap(), original);
         config::preexecute_genesis_with_runtime_config(
-            candidate, &account, &topology, &key, None, None, None, None,
+            candidate,
+            &account,
+            &topology,
+            &key,
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: None,
+                nexus_config: None,
+                zk_config: None,
+                runtime_config: None,
+            },
         )
     })
     .expect_err("explicit signed commitments must be validated without rebinding");
@@ -307,7 +347,16 @@ fn strict_genesis_rejection_preserves_actual_output_index_and_cause() {
     let original_wire = proposal.0.encode_wire().unwrap();
     let before = config::genesis_preexecution_count();
     let report = config::preexecute_genesis_with_runtime_config(
-        &proposal, &account, &topology, &key, None, None, None, None,
+        &proposal,
+        &account,
+        &topology,
+        &key,
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config: None,
+            nexus_config: None,
+            zk_config: None,
+            runtime_config: None,
+        },
     )
     .expect_err("a duplicate domain must fail original execution before policy discovery");
     assert_eq!(config::genesis_preexecution_count(), before + 1);

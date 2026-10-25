@@ -49,6 +49,10 @@ use super::*;
 ///     tx.crypto = std::sync::Arc::new((*tx.crypto).clone());
 /// }
 /// ```
+#[expect(
+    clippy::manual_non_exhaustive,
+    reason = "The private field confines construction to this module, including within this crate"
+)]
 pub struct StaticExecutionPolicy {
     /// Oracle execution settings from the original construction.
     pub oracle: iroha_config::parameters::actual::Oracle,
@@ -60,7 +64,7 @@ pub struct StaticExecutionPolicy {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement rules from the original construction.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    // Prevent construction of a foreign bundle through a public struct literal.
+    // Keep construction in this module, including from other modules in this crate.
     _original: (),
 }
 

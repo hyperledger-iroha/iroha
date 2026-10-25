@@ -155,14 +155,13 @@ impl Fixture {
         let policy = asset_uid::policy(tx.world(), &self.definition, &[7; 32])
             .unwrap()
             .unwrap();
-        asset_uid::holdings(tx.world(), &policy, &Default::default()).unwrap()
+        asset_uid::holdings(tx.world(), &policy, &std::collections::BTreeMap::default()).unwrap()
     }
     fn balance(&self, tx: &StateTransaction<'_, '_>, account: &AccountId) -> Quantity {
         tx.world
             .assets
             .get(&self.asset(account))
-            .map(|v| v.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |v| v.as_ref().clone())
     }
     fn escrow(&self, label: &str, amount: u32, expiry: u64) -> OpenConditionalEscrow {
         OpenConditionalEscrow::new(

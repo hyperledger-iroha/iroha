@@ -57,10 +57,8 @@ pub(super) fn certificate_failure(error: &CertificateAdmissionError) -> Publicat
             )
         }
         // No pool release can enlarge this unchanged prepaid parent.
-        CertificateAdmissionError::ControlAllocation(PrepaidSharedError::Reservation(_)) => {
-            PublicationError::RecoveryRequired(error.to_string())
-        }
-        CertificateAdmissionError::ForeignBudget => {
+        CertificateAdmissionError::ControlAllocation(PrepaidSharedError::Reservation(_))
+        | CertificateAdmissionError::ForeignBudget => {
             PublicationError::RecoveryRequired(error.to_string())
         }
     }
@@ -146,10 +144,9 @@ pub(super) fn witness_failure(
         ByteAdmissionError::ControlAllocation(PrepaidSharedError::Allocator { .. }) => {
             ExecutionDeferral::AllocationUnavailable.into()
         }
-        ByteAdmissionError::ControlAllocation(PrepaidSharedError::Reservation(_)) => {
-            return PublicationError::RecoveryRequired(error.to_string());
-        }
-        ByteAdmissionError::Length { .. } | ByteAdmissionError::ForeignBudget => {
+        ByteAdmissionError::ControlAllocation(PrepaidSharedError::Reservation(_))
+        | ByteAdmissionError::Length { .. }
+        | ByteAdmissionError::ForeignBudget => {
             return PublicationError::RecoveryRequired(error.to_string());
         }
     };
@@ -160,6 +157,10 @@ pub(super) fn witness_failure(
 /// Changed predecessors require another authenticated acquisition; their observation
 /// never authorizes reuse. An impossible pool demand has no release source and may
 /// require local policy changes. Malformed custody and poisoned owners require recovery.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 pub(super) fn validation_failure(
     error: BlockValidationError,
 ) -> Result<PublicationError, BlockValidationError> {
@@ -180,7 +181,7 @@ pub(super) fn validation_failure(
             ));
         }
         BlockValidationError::NativeHistory(original) => {
-            return Ok(super::parent_native_source_error(original));
+            return Ok(super::parent_native_source_error(&original));
         }
         BlockValidationError::NativeSourceChanged { .. } => {
             return Ok(if cfg!(all(test, sumeragi_core_mutation = "HC98")) {

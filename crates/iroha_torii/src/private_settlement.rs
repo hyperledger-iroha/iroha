@@ -7,7 +7,7 @@
 
 #[path = "private_settlement_context.rs"]
 mod context;
-pub(crate) use context::handler as handler_context;
+pub use context::handler as handler_context;
 
 use crate::{JsonBody, NoritoJson, SharedAppState, app_auth::VerifiedCanonicalRequest};
 use axum::{
@@ -55,7 +55,7 @@ use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementPhaseCertificateResponseV1, PrivateSettlementPhaseCertificatesResponseV1,
     PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
 };
-use std::{path::PathBuf, str::FromStr as _, sync::Arc, time::Duration};
+use std::{str::FromStr as _, sync::Arc, time::Duration};
 
 /// Kura-relative owner-only directory for encrypted private-settlement sidecars.
 pub const PRIVATE_SETTLEMENT_SIDECAR_DIRECTORY_V1: &str = "private-settlement-sidecars-v1";
@@ -136,7 +136,7 @@ impl PrivateSettlementToriiRuntimeV1 {
     /// leaves every private-settlement route fail-closed until a Strict restart.
     pub(crate) fn open(
         state: &iroha_core::state::State,
-        kura_root: PathBuf,
+        kura_root: &std::path::Path,
         emergency_fast: bool,
         availability_signer: Option<Arc<PrivateSettlementAvailabilitySignerV1>>,
         phase_signer: Option<Arc<PrivateSettlementPhaseSignerV1>>,
@@ -531,7 +531,7 @@ async fn run_private_settlement_finality_reconciliation_v1(
     loop {
         tokio::select! {
             biased;
-            _ = shutdown_signal.receive() => return Ok(()),
+            () = shutdown_signal.receive() => return Ok(()),
             _ = ticker.tick() => {
                 if shutdown_signal.is_sent() {
                     return Ok(());
@@ -548,7 +548,7 @@ async fn run_private_settlement_finality_reconciliation_v1(
 
 /// Start the fail-closed local finality reconciler under the Torii shutdown tree.
 pub fn spawn_private_settlement_finality_reconciliation_v1(
-    runtime: PrivateSettlementToriiRuntimeV1,
+    runtime: &PrivateSettlementToriiRuntimeV1,
     state: Arc<iroha_core::state::State>,
     shutdown_signal: ShutdownSignal,
 ) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
@@ -2216,7 +2216,8 @@ mod tests {
         let receipt = iroha_data_model::nexus::PrivateSettlementReceiptV1 {
             version: AtomicPrivateSettlementV1::VERSION,
             manifest,
-            authority_catalog: Default::default(),
+            authority_catalog:
+                iroha_data_model::nexus::PrivateSettlementAuthorityCatalogV1::default(),
             legs: Vec::new(),
             finalized_height: 12,
         };

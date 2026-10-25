@@ -53,10 +53,8 @@ fn lane_reference_publication_adds_exact_instances_and_refuses_physical_retireme
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
     )
     .expect("journal exact lane2 creation");
@@ -87,10 +85,8 @@ fn lane_reference_publication_adds_exact_instances_and_refuses_physical_retireme
     kura.apply_lane_geometry_transition(
         &extended,
         &retired,
-        &extended_incarnations,
-        &retired_incarnations,
-        &extended_activations,
-        &retired_activations,
+        (&extended_incarnations, &retired_incarnations),
+        (&extended_activations, &retired_activations),
         &BTreeSet::new(),
     )
     .expect_err("removal cannot substitute for original native release authority");
@@ -158,10 +154,11 @@ fn blank_kura_reference_publication_uses_only_isolated_storage() {
     kura.apply_lane_geometry_transition(
         &initial,
         &lane_config,
-        &initial_incarnations,
-        &extended_incarnations,
-        &BTreeMap::from([(LaneId::SINGLE, 0)]),
-        &BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]),
+        (&initial_incarnations, &extended_incarnations),
+        (
+            &BTreeMap::from([(LaneId::SINGLE, 0)]),
+            &BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]),
+        ),
         &BTreeSet::new(),
     )
     .expect("publish exact reference under the isolated Kura root");
@@ -170,10 +167,10 @@ fn blank_kura_reference_publication_uses_only_isolated_storage() {
         extended_incarnations[&LaneId::new(1)]
     );
     let published = kura.lane_storage_entry(LaneId::new(1)).unwrap();
-    assert!(published.blocks_dir(&kura.store_root()).is_dir());
+    assert!(published.blocks_dir(kura.store_root()).is_dir());
     assert!(
         published
-            .blocks_dir(&kura.store_root())
+            .blocks_dir(kura.store_root())
             .join(COUNT_FILE_NAME)
             .is_file()
     );
@@ -443,10 +440,8 @@ fn lane_instance_creation_conflict_preserves_storage_and_reference_authority() {
         .apply_lane_geometry_transition(
             &initial,
             &extended,
-            &initial_incarnations,
-            &incarnations,
-            &initial_activations,
-            &activations,
+            (&initial_incarnations, &incarnations),
+            (&initial_activations, &activations),
             &BTreeSet::new(),
         )
         .expect_err("occupied target must fail before a creation intent is published");
@@ -493,10 +488,8 @@ fn lane_alias_changes_preserve_instance_and_canonical_storage() {
     kura.apply_lane_geometry_transition(
         &initial,
         &updated,
-        &incarnations,
-        &incarnations,
-        &activations,
-        &activations,
+        (&incarnations, &incarnations),
+        (&activations, &activations),
         &BTreeSet::new(),
     )
     .expect("alias-only geometry has no storage work");
@@ -534,10 +527,8 @@ fn lane_alias_changes_preserve_instance_and_canonical_storage() {
         .apply_lane_geometry_transition_at_height(
             &updated,
             &replacement,
-            &incarnations,
-            &replacement_incarnations,
-            &activations,
-            &replacement_activations,
+            (&incarnations, &replacement_incarnations),
+            (&activations, &replacement_activations),
             &BTreeSet::from([LaneId::SINGLE]),
             1,
         )
@@ -670,14 +661,12 @@ fn wait_for_block_hash(kura: &Arc<Kura>, height: usize, expected: HashOf<BlockHe
     loop {
         {
             let mut store = kura.block_store.lock();
-            if let Ok(count) = store.read_index_count() {
-                if count > target_index as u64 {
-                    if let Ok(hashes) = store.read_block_hashes(target_index as u64, 1) {
-                        if hashes.first().copied() == Some(expected) {
-                            return;
-                        }
-                    }
-                }
+            if let Ok(count) = store.read_index_count()
+                && count > target_index as u64
+                && let Ok(hashes) = store.read_block_hashes(target_index as u64, 1)
+                && hashes.first().copied() == Some(expected)
+            {
+                return;
             }
         }
         let now = Instant::now();

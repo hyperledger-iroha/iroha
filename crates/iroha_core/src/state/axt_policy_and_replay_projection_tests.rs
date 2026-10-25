@@ -41,7 +41,7 @@ state_test! { sync state_block_axt_policy_snapshot_reads_block_scope
     let_row! { entry = AxtPolicyEntry { manifest_root: [0x66; 32], target_lane: LaneId::new(2), active_handle_era: 5, next_handle_counter: 4, current_slot: 99, } };
     {
         let_row! { lane_catalog = LaneCatalog::new( nonzero!(3_u32), vec![LaneConfig { id: entry.target_lane, dataspace_id: dsid, alias: "block-scope-axt".into(), ..LaneConfig::default() }], ) .expect("block-scope AXT lane catalog") };
-        configure_axt_fixture_lane_catalog(&mut state, lane_catalog);
+        configure_axt_fixture_lane_catalog(&mut state, &lane_catalog);
     }
     let mut block = state.block(header);
     block.world.axt_policies.insert(dsid, entry);

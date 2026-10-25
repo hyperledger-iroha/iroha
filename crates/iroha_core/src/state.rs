@@ -909,7 +909,7 @@ mod threshold_key_lifecycle_certificate_tests {
         );
     }
 
-    fn schedule_world(entries: [Vec<PeerId>; 3], first_height: u64) -> World {
+    fn schedule_world(entries: &[Vec<PeerId>; 3], first_height: u64) -> World {
         use crate::sumeragi::schedule::{
             ChainParamsRecord, ConsensusSchedule, RetainedConsensusSchedule, ScheduledConfig,
             ScheduledSlot,
@@ -980,7 +980,7 @@ mod threshold_key_lifecycle_certificate_tests {
     fn scheduled_committee_order_survives_commit_topology_rotation() {
         let (certificate, keys, roster) = certified_fixture();
         let certificate = sign_at_height(certificate, &keys, 2);
-        let world = schedule_world([roster.clone(), roster.clone(), roster.clone()], 1);
+        let world = schedule_world(&([roster.clone(), roster.clone(), roster.clone()]), 1);
         let scheduled = threshold_key_lifecycle_roster_v1(&world.view(), 2)
             .expect("the schedule holds height two");
         assert_eq!(scheduled, roster);
@@ -1012,7 +1012,7 @@ mod threshold_key_lifecycle_certificate_tests {
     fn lifecycle_roster_is_the_scheduled_committee_of_exactly_that_height() {
         let (_, _, roster) = certified_fixture();
         let successor = roster.clone();
-        let world = schedule_world([roster.clone(), roster.clone(), successor.clone()], 5);
+        let world = schedule_world(&([roster.clone(), roster.clone(), successor.clone()]), 5);
         assert_eq!(
             threshold_key_lifecycle_roster_v1(&world.view(), 6),
             Ok(roster)
@@ -1029,7 +1029,7 @@ mod threshold_key_lifecycle_certificate_tests {
             );
         }
         assert!(threshold_key_lifecycle_roster_v1(&World::new().view(), 1).is_err());
-        let empty = schedule_world([Vec::new(), Vec::new(), Vec::new()], 1);
+        let empty = schedule_world(&([Vec::new(), Vec::new(), Vec::new()]), 1);
         assert!(threshold_key_lifecycle_roster_v1(&empty.view(), 2).is_err());
     }
 
@@ -1038,7 +1038,7 @@ mod threshold_key_lifecycle_certificate_tests {
         let (certificate, keys, roster) = certified_fixture();
         let network = certificate.network_id;
         let state = State::new_with_chain_and_network_id_for_testing(
-            schedule_world([roster.clone(), roster.clone(), roster.clone()], 1),
+            schedule_world(&([roster.clone(), roster.clone(), roster.clone()]), 1),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             iroha_model_base::chain::ChainId::from("lifecycle-admission"),
@@ -1500,7 +1500,8 @@ mod world_commit;
 mod world_journals;
 pub(crate) mod world_projection;
 pub use world_projection::world_state_accumulator::{
-    ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError, WorldStateVerificationError,
+    NativeZkX509StateV1, ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError,
+    WorldStateVerificationError,
 };
 
 /// Exercise actual World capture while retaining journals through a test observation.
@@ -1878,6 +1879,10 @@ pub struct BlockHashIter<'a> {
     inner: BlockHashIterInner<'a>,
     remaining: usize,
 }
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Native block-hash iteration borrows original tree or slice storage without allocating iterator backing"
+)]
 enum BlockHashIterInner<'a> {
     Tree(
         concread::bptree::RangeIter<
@@ -2273,6 +2278,10 @@ pub struct BlockHashesTransaction<'a> {
     base: &'a dyn BlockHashRead,
 }
 impl BlockHashesTransaction<'_> {
+    #[expect(
+        clippy::unused_self,
+        reason = "Applying consumes the read-only transaction projection with the enclosing transaction"
+    )]
     pub(crate) fn apply(self) {}
 }
 /// A retained immutable committed generation or read-only mapped journal.
@@ -2812,7 +2821,7 @@ pub enum MergeLedgerCommitError {
     /// Unused high bits in the final signer bitmap byte were set.
     #[error("merge ledger qc signer bitmap has non-zero padding bits")]
     MergeQCBitmapPadding,
-    /// Merge QC signer PoPs do not exactly match the signer bitmap.
+    /// Merge QC signer `PoPs` do not exactly match the signer bitmap.
     #[error(
         "merge ledger qc signer PoP mismatch at position {position}: expected={expected:?}, actual={actual:?}"
     )]
@@ -2827,7 +2836,7 @@ pub enum MergeLedgerCommitError {
     /// A signer proof of possession was invalid.
     #[error("merge ledger qc signer {signer} has an invalid BLS proof of possession")]
     MergeQCSignerPopInvalid {
-        /// Signer index whose PoP failed.
+        /// Signer index whose `PoP` failed.
         signer: u32,
     },
     /// Merge QC does not carry exactly the canonical signer count.
@@ -2994,10 +3003,9 @@ impl EvidencePreparationError {
     /// Invalid bytes, protocol/default limits and stale or copied diagnostics are
     /// preparation invariants; numeric fields cannot grant retry or construct custody.
     pub(crate) fn from_decode_attempt(error: norito::core::DecodeAttemptError) -> Self {
-        match error.into_local_refusal() {
-            Ok(original) => Self::DecodeResource(original),
-            Err(_) => Self::Invariant,
-        }
+        error
+            .into_local_refusal()
+            .map_or_else(|_| Self::Invariant, Self::DecodeResource)
     }
 
     /// Original pool release observation, available only for temporary contention.
@@ -3017,7 +3025,7 @@ pub enum LaneLifecycleError {
     /// Original finite-pool, allocator or decoder refusal while preparing catalog or privacy owners.
     #[error(transparent)]
     ParameterDeferred(crate::execution_attempt::ExecutionDeferred),
-    /// The original committed NPoS policy is invalid or its local read is unfinished.
+    /// The original committed `NPoS` policy is invalid or its local read is unfinished.
     #[error(transparent)]
     NposPolicy(#[from] crate::execution_attempt::ExecutionAttemptError<String>),
     /// Process-local evidence preparation cannot fund one complete prune and penalty plan.
@@ -4032,9 +4040,9 @@ pub struct WorldData {
     pub(crate) state_accumulator: Cell<world_projection::WorldStateAccumulator>,
     /// Registered domains.
     pub(crate) domains: Storage<DomainId, Domain>,
-    /// Read-side index from domain owner account to owned domain ids.
+    /// Read-side `(owner, domain)` membership rows for owned domain ids.
     #[norito(skip)]
-    pub(crate) domains_by_owner: Storage<AccountId, BTreeSet<DomainId>>,
+    pub(crate) domains_by_owner: Storage<(AccountId, DomainId), ()>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     #[norito(skip)]
     pub(crate) kaigi_relay_registry: Storage<AccountId, DomainId>,
@@ -4176,7 +4184,7 @@ pub struct WorldData {
         iroha_data_model::oracle::OracleChangeId,
         iroha_data_model::oracle::OracleChangeProposal,
     >,
-    /// Retained DeFi oracle attestations keyed by domain and subject id.
+    /// Retained `DeFi` oracle attestations keyed by domain and subject id.
     pub(crate) defi_oracle_attestations:
         Storage<DefiOracleAttestationKey, Vec<DefiOracleAttestation>>,
     /// Twitter follow binding attestations keyed by binding digest.
@@ -4234,7 +4242,7 @@ pub struct WorldData {
     /// Number of funded game sessions retaining each asset definition.
     #[norito(skip)]
     pub(crate) game_asset_references: Storage<AssetDefinitionId, u32>,
-    /// Native SoraNet VPN leases.
+    /// Native `SoraNet` VPN leases.
     pub(crate) vpn_leases: Storage<[u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     #[norito(skip)]
@@ -4469,7 +4477,7 @@ pub struct WorldData {
         Storage<MusubiMaintainerDirectoryKeyV1, MusubiMaintainerDirectoryEntryV1>,
     /// Immutable release records and their mutable governance projections.
     pub(crate) musubi_releases: Storage<MusubiReleaseIdV1, MusubiReleaseRecordV1>,
-    /// Canonical source archive commitments keyed by ArchiveId.
+    /// Canonical source archive commitments keyed by `ArchiveId`.
     pub(crate) musubi_archives: Storage<ArchiveId, MusubiArchiveRecordV1>,
     /// Finalized signer/session pin-outbox high-waters keyed by publisher account.
     pub(crate) musubi_pin_outbox_high_waters: Storage<AccountId, MusubiPinOutboxHighWaterV1>,
@@ -4479,14 +4487,14 @@ pub struct WorldData {
     /// Renewable archive locations ordered by archive and location identity.
     pub(crate) musubi_archive_locations:
         Storage<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
-    /// Exact one-to-one reverse index from a SoraFS pin manifest to its Musubi location.
+    /// Exact one-to-one reverse index from a `SoraFS` pin manifest to its Musubi location.
     pub(crate) musubi_locations_by_pin: Storage<ManifestDigest, MusubiPinLocationReferenceV1>,
     /// Exact one-to-one reverse index from a replication order to its Musubi location.
     pub(crate) musubi_locations_by_replication_order:
         Storage<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>,
     /// Ordered provider/location reverse index supporting exact provider-prefix ranges.
     pub(crate) musubi_locations_by_provider: Storage<MusubiProviderLocationKeyV1, ()>,
-    /// Finalized aggregate archive availability keyed by ArchiveId.
+    /// Finalized aggregate archive availability keyed by `ArchiveId`.
     pub(crate) musubi_archive_availability: Storage<ArchiveId, MusubiArchiveAvailabilityV1>,
     /// Reverse references from archives to every active or yanked release that binds them.
     pub(crate) musubi_archive_reverse_references:
@@ -4645,15 +4653,15 @@ pub struct WorldData {
     pub(crate) soradns_history_len: Cell<u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: Storage<RepoAgreementId, RepoAgreement>,
-    /// Repo agreement ids keyed by initiating account.
+    /// Repo agreement membership rows keyed by initiating account.
     #[norito(skip)]
-    pub(crate) repo_agreements_by_initiator: Storage<AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by counterparty account.
+    pub(crate) repo_agreements_by_initiator: Storage<(AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by counterparty account.
     #[norito(skip)]
-    pub(crate) repo_agreements_by_counterparty: Storage<AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by custodian account.
+    pub(crate) repo_agreements_by_counterparty: Storage<(AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by custodian account.
     #[norito(skip)]
-    pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
+    pub(crate) repo_agreements_by_custodian: Storage<(AccountId, RepoAgreementId), ()>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: Storage<SettlementId, SettlementReceipt>,
     /// Native bond records keyed by the bond asset definition.
@@ -4732,7 +4740,7 @@ pub struct WorldData {
     ///
     /// It creates no consensus obligation: no pulse is demanded, vetoed or checked against it.
     /// TODO: rename and re-scope with the governance due-item iterator when timed-OVN is
-    /// retired (specs/parliament_private_ballot_design.md 12.2 step 4).
+    /// retired (`specs/parliament_private_ballot_design.md` 12.2 step 4).
     #[norito(skip)]
     pub(crate) parliament_required_beacon_pulse_slots:
         Storage<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
@@ -5023,9 +5031,9 @@ pub struct WorldBlockFields<'world> {
         StorageField<'world, DomainId, Vec<HashOf<DomainEndorsement>>>,
     /// Registered domains.
     pub(crate) domains: StorageField<'world, DomainId, Domain>,
-    /// Read-side index from domain owner account to owned domain ids.
+    /// Read-side `(owner, domain)` membership rows for owned domain ids.
     #[norito(skip)]
-    pub(crate) domains_by_owner: StorageField<'world, AccountId, BTreeSet<DomainId>>,
+    pub(crate) domains_by_owner: StorageField<'world, (AccountId, DomainId), ()>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     #[norito(skip)]
     pub(crate) kaigi_relay_registry: StorageField<'world, AccountId, DomainId>,
@@ -5182,7 +5190,7 @@ pub struct WorldBlockFields<'world> {
         iroha_data_model::oracle::OracleChangeId,
         iroha_data_model::oracle::OracleChangeProposal,
     >,
-    /// Retained DeFi oracle attestations.
+    /// Retained `DeFi` oracle attestations.
     pub(crate) defi_oracle_attestations:
         StorageField<'world, DefiOracleAttestationKey, Vec<DefiOracleAttestation>>,
     /// Twitter follow binding attestations keyed by binding digest.
@@ -5240,7 +5248,7 @@ pub struct WorldBlockFields<'world> {
     /// Number of funded game sessions retaining each asset definition.
     #[norito(skip)]
     pub(crate) game_asset_references: StorageField<'world, AssetDefinitionId, u32>,
-    /// Native SoraNet VPN leases.
+    /// Native `SoraNet` VPN leases.
     pub(crate) vpn_leases: StorageField<'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     #[norito(skip)]
@@ -5676,18 +5684,16 @@ pub struct WorldBlockFields<'world> {
     pub(crate) soradns_history_len: CellField<'world, u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: StorageField<'world, RepoAgreementId, RepoAgreement>,
-    /// Repo agreement ids keyed by initiating account.
+    /// Repo agreement membership rows keyed by initiating account.
     #[norito(skip)]
-    pub(crate) repo_agreements_by_initiator:
-        StorageField<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by counterparty account.
+    pub(crate) repo_agreements_by_initiator: StorageField<'world, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by counterparty account.
     #[norito(skip)]
     pub(crate) repo_agreements_by_counterparty:
-        StorageField<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by custodian account.
+        StorageField<'world, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by custodian account.
     #[norito(skip)]
-    pub(crate) repo_agreements_by_custodian:
-        StorageField<'world, AccountId, BTreeSet<RepoAgreementId>>,
+    pub(crate) repo_agreements_by_custodian: StorageField<'world, (AccountId, RepoAgreementId), ()>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageField<'world, SettlementId, SettlementReceipt>,
     /// Native bond records keyed by the bond asset definition.
@@ -5772,7 +5778,7 @@ pub struct WorldBlockFields<'world> {
     ///
     /// It creates no consensus obligation: no pulse is demanded, vetoed or checked against it.
     /// TODO: rename and re-scope with the governance due-item iterator when timed-OVN is
-    /// retired (specs/parliament_private_ballot_design.md 12.2 step 4).
+    /// retired (`specs/parliament_private_ballot_design.md` 12.2 step 4).
     #[norito(skip)]
     pub(crate) parliament_required_beacon_pulse_slots:
         StorageField<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
@@ -6704,7 +6710,7 @@ pub struct WorldTransaction<'block, 'world> {
     /// Exact transfers authorized by a verified native conversion operation.
     pub(crate) retail_fee_exempt_payments:
         Vec<(AssetId, AccountId, iroha_primitives::numeric::Quantity)>,
-    /// Exact intrinsic deductions awaiting source-bound FastPQ capture in mutation order.
+    /// Exact intrinsic deductions awaiting source-bound `FastPQ` capture in mutation order.
     pub(crate) retail_fee_pending_transcripts: Vec<(
         AccountId,
         iroha_crypto::Hash,
@@ -6772,8 +6778,8 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, DomainId, Vec<HashOf<DomainEndorsement>>>,
     /// Registered domains.
     pub(crate) domains: StorageTransaction<'block, DomainId, Domain>,
-    /// Read-side index from domain owner account to owned domain ids.
-    pub(crate) domains_by_owner: StorageTransaction<'block, AccountId, BTreeSet<DomainId>>,
+    /// Read-side `(owner, domain)` membership rows for owned domain ids.
+    pub(crate) domains_by_owner: StorageTransaction<'block, (AccountId, DomainId), ()>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     pub(crate) kaigi_relay_registry: StorageTransaction<'block, AccountId, DomainId>,
     /// Derived reverse index from raw Kaigi account references to typed metadata locations.
@@ -6926,7 +6932,7 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::oracle::OracleChangeId,
         iroha_data_model::oracle::OracleChangeProposal,
     >,
-    /// Retained DeFi oracle attestations.
+    /// Retained `DeFi` oracle attestations.
     pub(crate) defi_oracle_attestations:
         StorageTransaction<'block, DefiOracleAttestationKey, Vec<DefiOracleAttestation>>,
     /// Twitter follow binding attestations keyed by binding digest.
@@ -6977,7 +6983,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) game_account_references: StorageTransaction<'block, AccountId, u32>,
     /// Number of funded game sessions retaining each asset definition.
     pub(crate) game_asset_references: StorageTransaction<'block, AssetDefinitionId, u32>,
-    /// Native SoraNet VPN leases.
+    /// Native `SoraNet` VPN leases.
     pub(crate) vpn_leases: StorageTransaction<'block, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     pub(crate) vpn_active_lease_by_account: StorageTransaction<'block, AccountId, [u8; 32]>,
@@ -7416,15 +7422,15 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) soradns_history_len: CellTransaction<'block, 'world, u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: StorageTransaction<'block, RepoAgreementId, RepoAgreement>,
-    /// Repo agreement ids keyed by initiating account.
+    /// Repo agreement membership rows keyed by initiating account.
     pub(crate) repo_agreements_by_initiator:
-        StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by counterparty account.
+        StorageTransaction<'block, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by counterparty account.
     pub(crate) repo_agreements_by_counterparty:
-        StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by custodian account.
+        StorageTransaction<'block, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by custodian account.
     pub(crate) repo_agreements_by_custodian:
-        StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
+        StorageTransaction<'block, (AccountId, RepoAgreementId), ()>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageTransaction<'block, SettlementId, SettlementReceipt>,
     /// Native bond records keyed by the bond asset definition.
@@ -7494,7 +7500,7 @@ pub struct WorldTransaction<'block, 'world> {
     ///
     /// It creates no consensus obligation: no pulse is demanded, vetoed or checked against it.
     /// TODO: rename and re-scope with the governance due-item iterator when timed-OVN is
-    /// retired (specs/parliament_private_ballot_design.md 12.2 step 4).
+    /// retired (`specs/parliament_private_ballot_design.md` 12.2 step 4).
     pub(crate) parliament_required_beacon_pulse_slots:
         StorageTransaction<'block, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Certified governance attempts keyed by their exact enactment height.
@@ -8101,7 +8107,7 @@ impl<'block> WorldTransaction<'block, '_> {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn insert_asset_definition_entry(
         &mut self,
-        definition_id: AssetDefinitionId,
+        definition_id: &AssetDefinitionId,
         definition: AssetDefinition,
     ) -> Option<AssetDefinition> {
         let owner = definition.owned_by().clone();
@@ -8110,12 +8116,14 @@ impl<'block> WorldTransaction<'block, '_> {
             .confidential_policy()
             .pending_transition()
             .as_ref()
-            .map(|transition| transition.effective_height());
+            .map(
+                iroha_data_model::asset::definition::ConfidentialPolicyTransition::effective_height,
+            );
         let previous = self
             .asset_definitions
             .insert(definition_id.clone(), definition);
         self.update_inserted_asset_definition_indexes(
-            &definition_id,
+            definition_id,
             &owner,
             domain_context,
             next_transition_height,
@@ -8128,26 +8136,26 @@ impl<'block> WorldTransaction<'block, '_> {
     /// derives and installs the new incarnation in this same World transaction.
     fn register_empty_asset_definition_entry(
         &mut self,
-        definition_id: AssetDefinitionId,
+        definition_id: &AssetDefinitionId,
         definition: AssetDefinition,
     ) -> Result<(), Error> {
-        if self.axt_asset_incarnations.get(&definition_id).is_some()
+        if self.axt_asset_incarnations.get(definition_id).is_some()
             || self
                 .asset_definition_asset_counts
-                .get(&definition_id)
+                .get(definition_id)
                 .is_some()
-            || index_members(&self.asset_definition_assets, &definition_id)
+            || index_members(&self.asset_definition_assets, definition_id)
                 .next()
                 .is_some()
-            || index_members(&self.asset_definition_holders, &definition_id)
+            || index_members(&self.asset_definition_holders, definition_id)
                 .next()
                 .is_some()
-            || index_members(&self.asset_definition_nonzero_holders, &definition_id)
+            || index_members(&self.asset_definition_nonzero_holders, definition_id)
                 .next()
                 .is_some()
             || self
                 .asset_definition_direct_homes
-                .get(&definition_id)
+                .get(definition_id)
                 .is_some()
         {
             return Err(Error::InvariantViolation(
@@ -8161,11 +8169,13 @@ impl<'block> WorldTransaction<'block, '_> {
             .confidential_policy()
             .pending_transition()
             .as_ref()
-            .map(|transition| transition.effective_height());
+            .map(
+                iroha_data_model::asset::definition::ConfidentialPolicyTransition::effective_height,
+            );
         self.asset_definitions
             .register_empty_definition(definition_id.clone(), definition)?;
         self.update_inserted_asset_definition_indexes(
-            &definition_id,
+            definition_id,
             &owner,
             domain_context,
             next_transition_height,
@@ -8424,35 +8434,24 @@ impl<'block> WorldTransaction<'block, '_> {
     }
     /// Record domain ownership in the read-side owner index.
     pub(crate) fn track_domain_owner(&mut self, domain_id: &DomainId, owner: &AccountId) {
-        if let Some(domains) = self.domains_by_owner.get_mut(owner) {
-            domains.insert(domain_id.clone());
-        } else {
-            self.domains_by_owner
-                .insert(owner.clone(), BTreeSet::from([domain_id.clone()]));
-        }
+        insert_index_member(&mut self.domains_by_owner, owner, domain_id);
     }
     /// Drop domain ownership from the read-side owner index.
     pub(crate) fn untrack_domain_owner(&mut self, domain_id: &DomainId, owner: &AccountId) {
-        let remove_owner_entry = self.domains_by_owner.get_mut(owner).is_some_and(|domains| {
-            domains.remove(domain_id);
-            domains.is_empty()
-        });
-        if remove_owner_entry {
-            self.domains_by_owner.remove(owner.clone());
-        }
+        remove_index_member(&mut self.domains_by_owner, owner, domain_id);
     }
     /// Insert a domain and keep the owner index consistent.
     pub(crate) fn insert_domain_entry(
         &mut self,
-        domain_id: DomainId,
+        domain_id: &DomainId,
         domain: Domain,
     ) -> Option<Domain> {
         let owner = domain.owned_by().clone();
         let previous = self.domains.insert(domain_id.clone(), domain);
         if let Some(previous) = previous.as_ref() {
-            self.untrack_domain_owner(&domain_id, previous.owned_by());
+            self.untrack_domain_owner(domain_id, previous.owned_by());
         }
-        self.track_domain_owner(&domain_id, &owner);
+        self.track_domain_owner(domain_id, &owner);
         previous
     }
     /// Remove a domain and keep the owner index consistent.
@@ -8490,15 +8489,15 @@ impl<'block> WorldTransaction<'block, '_> {
     /// Insert an NFT and keep the owner index consistent.
     pub(crate) fn insert_nft_entry(
         &mut self,
-        nft_id: NftId,
+        nft_id: &NftId,
         nft_value: NftValue,
     ) -> Option<NftValue> {
         let owner = nft_value.owned_by.clone();
         let previous = self.nfts.insert(nft_id.clone(), nft_value);
         if let Some(previous) = previous.as_ref() {
-            self.untrack_nft_owner(&nft_id, &previous.owned_by);
+            self.untrack_nft_owner(nft_id, &previous.owned_by);
         }
-        self.track_nft_owner(&nft_id, &owner);
+        self.track_nft_owner(nft_id, &owner);
         previous
     }
     /// Remove an NFT and keep the owner index consistent.
@@ -8558,7 +8557,7 @@ impl<'block> WorldTransaction<'block, '_> {
     /// Insert an RWA lot and keep the owner index consistent.
     pub(crate) fn insert_rwa_entry(
         &mut self,
-        rwa_id: RwaId,
+        rwa_id: &RwaId,
         rwa_value: RwaValue,
     ) -> Option<RwaValue> {
         let owner = rwa_value.owned_by.clone();
@@ -8566,13 +8565,13 @@ impl<'block> WorldTransaction<'block, '_> {
         let is_frozen = rwa_value.is_frozen;
         let previous = self.rwas.insert(rwa_id.clone(), rwa_value);
         if let Some(previous) = previous.as_ref() {
-            self.untrack_rwa_owner(&rwa_id, &previous.owned_by);
-            self.untrack_rwa_status(&rwa_id, &previous.status);
-            self.untrack_rwa_frozen(&rwa_id, previous.is_frozen);
+            self.untrack_rwa_owner(rwa_id, &previous.owned_by);
+            self.untrack_rwa_status(rwa_id, &previous.status);
+            self.untrack_rwa_frozen(rwa_id, previous.is_frozen);
         }
-        self.track_rwa_owner(&rwa_id, &owner);
-        self.track_rwa_status(&rwa_id, &status);
-        self.track_rwa_frozen(&rwa_id, is_frozen);
+        self.track_rwa_owner(rwa_id, &owner);
+        self.track_rwa_status(rwa_id, &status);
+        self.track_rwa_frozen(rwa_id, is_frozen);
         previous
     }
     /// Move an existing RWA lot id between owner index buckets.
@@ -8644,14 +8643,14 @@ impl<'block> WorldTransaction<'block, '_> {
     /// Insert a native asset escrow and keep derived indexes consistent.
     pub(crate) fn insert_asset_escrow_entry(
         &mut self,
-        record: AssetEscrowRecord,
+        record: &AssetEscrowRecord,
     ) -> Result<Option<AssetEscrowRecord>, Error> {
-        let scope = asset_escrow_scope::prepare_insert(self, &record)?;
+        let scope = asset_escrow_scope::prepare_insert(self, record)?;
         let previous = self.asset_escrows.insert(record.id, record.clone());
         if let Some(previous) = previous.as_ref() {
             self.untrack_asset_escrow_indexes(previous);
         }
-        self.track_asset_escrow_indexes(&record);
+        self.track_asset_escrow_indexes(record);
         scope.apply(self);
         Ok(previous)
     }
@@ -8762,46 +8761,36 @@ impl<'block> WorldTransaction<'block, '_> {
     /// Insert or replace a VPN lease and atomically maintain all derived indexes.
     pub(crate) fn put_vpn_lease(
         &mut self,
-        record: VpnLeaseRecordV1,
+        record: &VpnLeaseRecordV1,
     ) -> Result<Option<VpnLeaseRecordV1>, String> {
-        Self::validate_vpn_lease_quote_projection(&record)?;
-        self.ensure_active_vpn_claims_available(&record)?;
+        Self::validate_vpn_lease_quote_projection(record)?;
+        self.ensure_active_vpn_claims_available(record)?;
         let previous = self.vpn_leases.get(&record.lease_id).cloned();
         if let Some(previous) = previous.as_ref() {
-            validate_vpn_lease_transition(previous, &record)?;
+            validate_vpn_lease_transition(previous, record)?;
         }
         let previous = self.vpn_leases.insert(record.lease_id, record.clone());
         if let Some(previous) = previous.as_ref() {
             self.untrack_active_vpn_lease(previous);
             self.untrack_settled_vpn_lease(previous);
         }
-        self.track_active_vpn_lease(&record);
-        self.track_settled_vpn_lease(&record);
+        self.track_active_vpn_lease(record);
+        self.track_settled_vpn_lease(record);
         Ok(previous)
     }
     fn track_repo_agreement_index(
-        storage: &mut StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
+        storage: &mut StorageTransaction<'block, (AccountId, RepoAgreementId), ()>,
         account_id: &AccountId,
         agreement_id: &RepoAgreementId,
     ) {
-        if let Some(agreements) = storage.get_mut(account_id) {
-            agreements.insert(agreement_id.clone());
-        } else {
-            storage.insert(account_id.clone(), BTreeSet::from([agreement_id.clone()]));
-        }
+        insert_index_member(storage, account_id, agreement_id);
     }
     fn untrack_repo_agreement_index(
-        storage: &mut StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
+        storage: &mut StorageTransaction<'block, (AccountId, RepoAgreementId), ()>,
         account_id: &AccountId,
         agreement_id: &RepoAgreementId,
     ) {
-        let remove_entry = storage.get_mut(account_id).is_some_and(|agreements| {
-            agreements.remove(agreement_id);
-            agreements.is_empty()
-        });
-        if remove_entry {
-            storage.remove(account_id.clone());
-        }
+        remove_index_member(storage, account_id, agreement_id);
     }
     /// Record a repo agreement in all read-side indexes.
     pub(crate) fn track_repo_agreement_indexes(&mut self, agreement: &RepoAgreement) {
@@ -8846,7 +8835,7 @@ impl<'block> WorldTransaction<'block, '_> {
     /// Insert a repo agreement and keep derived indexes consistent.
     pub(crate) fn insert_repo_agreement_entry(
         &mut self,
-        agreement: RepoAgreement,
+        agreement: &RepoAgreement,
     ) -> Option<RepoAgreement> {
         let previous = self
             .repo_agreements
@@ -8854,7 +8843,7 @@ impl<'block> WorldTransaction<'block, '_> {
         if let Some(previous) = previous.as_ref() {
             self.untrack_repo_agreement_indexes(previous);
         }
-        self.track_repo_agreement_indexes(&agreement);
+        self.track_repo_agreement_indexes(agreement);
         previous
     }
     /// Remove a repo agreement and keep derived indexes consistent.
@@ -8878,13 +8867,13 @@ impl<'block> WorldTransaction<'block, '_> {
     /// Insert a proof record and keep derived proof indexes consistent.
     pub(crate) fn insert_proof_record(
         &mut self,
-        record: iroha_data_model::proof::ProofRecord,
+        record: &iroha_data_model::proof::ProofRecord,
     ) -> Option<iroha_data_model::proof::ProofRecord> {
         let previous = self.proofs.insert(record.id.clone(), record.clone());
         if let Some(previous) = previous.as_ref() {
             self.untrack_proof_status_index(previous);
         }
-        self.track_proof_status_index(&record);
+        self.track_proof_status_index(record);
         previous
     }
     /// Remove a proof record and keep derived proof indexes consistent.
@@ -8905,13 +8894,13 @@ impl<'block> WorldTransaction<'block, '_> {
     pub fn bind_asset_definition_alias(
         &mut self,
         definition_id: &AssetDefinitionId,
-        alias: AssetDefinitionAlias,
+        alias: &AssetDefinitionAlias,
         lease_expiry_ms: Option<u64>,
         grace_until_ms: Option<u64>,
         bound_at_ms: u64,
     ) -> Result<(), Error> {
         validate_alias_lease_window(lease_expiry_ms, grace_until_ms, bound_at_ms)?;
-        if let Some(existing_definition) = self.asset_definition_aliases.get(&alias).cloned()
+        if let Some(existing_definition) = self.asset_definition_aliases.get(alias).cloned()
             && existing_definition != *definition_id
         {
             return Err(Error::InvariantViolation(
@@ -8922,7 +8911,7 @@ impl<'block> WorldTransaction<'block, '_> {
             .asset_definition_alias_bindings
             .get(definition_id)
             .cloned()
-            && existing_binding.alias != alias
+            && &existing_binding.alias != alias
         {
             self.asset_definition_aliases
                 .remove(existing_binding.alias.clone());
@@ -9052,8 +9041,8 @@ pub struct WorldView<'world> {
     pub(crate) state_accumulator: CellView<'world, world_projection::WorldStateAccumulator>,
     /// Registered domains.
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
-    /// Read-side index from domain owner account to owned domain ids.
-    pub(crate) domains_by_owner: StorageView<'world, AccountId, BTreeSet<DomainId>>,
+    /// Read-side `(owner, domain)` membership rows for owned domain ids.
+    pub(crate) domains_by_owner: StorageView<'world, (AccountId, DomainId), ()>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     pub(crate) kaigi_relay_registry: StorageView<'world, AccountId, DomainId>,
     /// Derived reverse index from raw Kaigi account references to typed metadata locations.
@@ -9182,7 +9171,7 @@ pub struct WorldView<'world> {
         iroha_data_model::oracle::OracleChangeId,
         iroha_data_model::oracle::OracleChangeProposal,
     >,
-    /// Retained DeFi oracle attestations.
+    /// Retained `DeFi` oracle attestations.
     pub(crate) defi_oracle_attestations:
         StorageView<'world, DefiOracleAttestationKey, Vec<DefiOracleAttestation>>,
     /// Twitter follow binding attestations keyed by binding digest.
@@ -9231,7 +9220,7 @@ pub struct WorldView<'world> {
     pub(crate) game_account_references: StorageView<'world, AccountId, u32>,
     /// Number of funded game sessions retaining each asset definition.
     pub(crate) game_asset_references: StorageView<'world, AssetDefinitionId, u32>,
-    /// Native SoraNet VPN leases.
+    /// Native `SoraNet` VPN leases.
     pub(crate) vpn_leases: StorageView<'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     pub(crate) vpn_active_lease_by_account: StorageView<'world, AccountId, [u8; 32]>,
@@ -9792,15 +9781,13 @@ pub struct WorldView<'world> {
     pub(crate) soradns_history_len: CellView<'world, u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: StorageView<'world, RepoAgreementId, RepoAgreement>,
-    /// Repo agreement ids keyed by initiating account.
-    pub(crate) repo_agreements_by_initiator:
-        StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by counterparty account.
+    /// Repo agreement membership rows keyed by initiating account.
+    pub(crate) repo_agreements_by_initiator: StorageView<'world, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by counterparty account.
     pub(crate) repo_agreements_by_counterparty:
-        StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by custodian account.
-    pub(crate) repo_agreements_by_custodian:
-        StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
+        StorageView<'world, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by custodian account.
+    pub(crate) repo_agreements_by_custodian: StorageView<'world, (AccountId, RepoAgreementId), ()>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageView<'world, SettlementId, SettlementReceipt>,
     /// Native bond records keyed by the bond asset definition.
@@ -9868,7 +9855,7 @@ pub struct WorldView<'world> {
     ///
     /// It creates no consensus obligation: no pulse is demanded, vetoed or checked against it.
     /// TODO: rename and re-scope with the governance due-item iterator when timed-OVN is
-    /// retired (specs/parliament_private_ballot_design.md 12.2 step 4).
+    /// retired (`specs/parliament_private_ballot_design.md` 12.2 step 4).
     pub(crate) parliament_required_beacon_pulse_slots:
         StorageView<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Certified governance attempts keyed by their exact enactment height.
@@ -10834,7 +10821,7 @@ impl GovernanceProposalRecord {
             ) => None,
         }
     }
-    /// Access the SoraFS provider-owner action when the proposal represents SoraFS governance.
+    /// Access the `SoraFS` provider-owner action when the proposal represents `SoraFS` governance.
     pub fn as_sorafs_provider_governance(
         &self,
     ) -> Option<&iroha_data_model::governance::types::SorafsProviderGovernanceProposal> {
@@ -11062,30 +11049,28 @@ fn update_oracle_change_pipeline(
             .stages
             .iter_mut()
             .find(|stage| stage.stage == OracleChangeStage::Intake)
+            && intake.started_at.is_none()
         {
-            if intake.started_at.is_none() {
-                intake.started_at = Some(now_h);
-                intake.deadline = oracle_stage_deadline(OracleChangeStage::Intake, cfg, now_h);
-            }
+            intake.started_at = Some(now_h);
+            intake.deadline = oracle_stage_deadline(OracleChangeStage::Intake, cfg, now_h);
         }
-        let mut emit_update = false;
-        if let Some(stage) = rec.current_stage_mut() {
-            if stage.failure.is_none() && stage.is_pending() {
-                if let Some(deadline) = stage.deadline {
-                    if now_h > deadline {
-                        stage.failure = Some(OracleChangeStageFailure::DeadlineMissed);
-                        rec.status = OracleChangeStatus::Failed(
-                            iroha_data_model::oracle::OracleChangeFailure {
-                                stage: stage.stage,
-                                reason: OracleChangeStageFailure::DeadlineMissed,
-                                at: now_h,
-                            },
-                        );
-                        emit_update = true;
-                    }
-                }
-            }
-        }
+        let emit_update = if let Some(stage) = rec.current_stage_mut()
+            && stage.failure.is_none()
+            && stage.is_pending()
+            && let Some(deadline) = stage.deadline
+            && now_h > deadline
+        {
+            stage.failure = Some(OracleChangeStageFailure::DeadlineMissed);
+            rec.status =
+                OracleChangeStatus::Failed(iroha_data_model::oracle::OracleChangeFailure {
+                    stage: stage.stage,
+                    reason: OracleChangeStageFailure::DeadlineMissed,
+                    at: now_h,
+                });
+            true
+        } else {
+            false
+        };
         if emit_update {
             let (stage_id, approvals, rejections, evidence_hashes) = rec.current_stage().map_or(
                 (OracleChangeStage::Enactment, 0, 0, Vec::new()),
@@ -11635,7 +11620,7 @@ const PIPELINE_AUTO_WORKER_MAX: usize = 8;
 fn resolve_pipeline_worker_threads(configured: usize) -> usize {
     if configured == 0 {
         let detected = std::thread::available_parallelism()
-            .map(|count| count.get())
+            .map(std::num::NonZero::get)
             .unwrap_or(1);
         detected.clamp(PIPELINE_AUTO_WORKER_MIN, PIPELINE_AUTO_WORKER_MAX)
     } else {
@@ -11787,12 +11772,12 @@ impl StatelessValidationCache {
             return;
         }
         if let Some(entry) = self.entries.remove(&key) {
-            self.lru.remove(&(entry.order, key.clone()));
+            self.lru.remove(&(entry.order, key));
         }
         self.trim_to(self.cap - 1);
         let order = self.next_order();
         self.entries.insert(
-            key.clone(),
+            key,
             StatelessValidationCacheEntry {
                 order,
                 expires_at_ms,
@@ -12018,10 +12003,10 @@ impl DaShardCursorJournalPersistor {
                         }
                         guard.take()
                     };
-                    if let Some(journal) = journal {
-                        if let Err(err) = journal.persist() {
-                            warn!(?err, "failed to persist DA shard cursor journal");
-                        }
+                    if let Some(journal) = journal
+                        && let Err(err) = journal.persist()
+                    {
+                        warn!(?err, "failed to persist DA shard cursor journal");
                     }
                 }
             }) {
@@ -12321,11 +12306,12 @@ struct ViewLockContentionLog {
 }
 impl ViewLockContentionLog {
     fn should_emit(&mut self, now: Instant, cooldown: Duration) -> Option<u64> {
-        if let Some(last_warn_at) = self.last_warn_at {
-            if cooldown > Duration::ZERO && now.saturating_duration_since(last_warn_at) < cooldown {
-                self.suppressed = self.suppressed.saturating_add(1);
-                return None;
-            }
+        if let Some(last_warn_at) = self.last_warn_at
+            && cooldown > Duration::ZERO
+            && now.saturating_duration_since(last_warn_at) < cooldown
+        {
+            self.suppressed = self.suppressed.saturating_add(1);
+            return None;
         }
         self.last_warn_at = Some(now);
         Some(std::mem::take(&mut self.suppressed))
@@ -12504,8 +12490,16 @@ pub struct State {
     /// Startup directory restoration retains its original filesystem operation plan.
     tiered_startup_geometry: Option<TieredStartupGeometry>,
     /// Lock serializing complete block commits across fallible pre-publication work.
+    #[expect(
+        clippy::struct_field_names,
+        reason = "State commit fencing must remain distinct from per-field publication locks"
+    )]
     state_commit_lock: Arc<PublicationMutex>,
     /// Lock serializing writer commit phases that mutate several state components.
+    #[expect(
+        clippy::struct_field_names,
+        reason = "State generation writes must remain distinct from per-field publication locks"
+    )]
     state_write_lock: PublicationMutex,
     /// Even generation means no writer is committing; odd generation means retry full state views.
     view_generation: AtomicU64,
@@ -12859,6 +12853,10 @@ pub(crate) mod view_acquisition;
 pub use view_acquisition::StateViewError;
 
 /// Original executing State fields, jointly retired by their enclosing owner.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent block journals retain their own completion and refusal observations"
+)]
 pub struct StateBlockFields<'state> {
     /// Source-authenticated initial policy retained only by its original genesis overlay.
     pub(crate) genesis_crypto_policy:
@@ -12915,6 +12913,8 @@ pub struct StateBlockFields<'state> {
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
+    /// Validated confidential-root projection for this immutable view or untouched block.
+    ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache,
     /// Pipeline execution preferences for this block.
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Nexus configuration snapshot for this block.
@@ -13063,7 +13063,7 @@ pub struct StateBlockFields<'state> {
     pending_nexus_fee_receipt_source_ids: BTreeSet<[u8; 32]>,
     /// Whether deterministic start-of-block effects have already been applied.
     start_of_block_effects_applied: bool,
-    /// Exact finality-owned NPoS bundle applied before ordinary execution.
+    /// Exact finality-owned `NPoS` bundle applied before ordinary execution.
     applied_npos_consensus_effects_hash:
         Option<HashOf<iroha_data_model::consensus::NposConsensusEffects>>,
     /// Whether the permanent AXT counter ratchets reflect the final policy identity.
@@ -13215,7 +13215,7 @@ impl<'state> StateBlock<'state> {
     pub fn world(&self) -> &WorldBlock<'state> {
         &self.world
     }
-    /// Apply one exact NPoS finality bundle on the pristine pre-lifecycle overlay.
+    /// Apply one exact `NPoS` finality bundle on the pristine pre-lifecycle overlay.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_pristine_npos_consensus_effects(
         &mut self,
@@ -13866,10 +13866,10 @@ impl<'state> StateBlock<'state> {
                 if !public_lane_validator_record_matches_key(key, record) {
                     return None;
                 }
-                if let PublicLaneValidatorStatus::PendingActivation(target_height) = record.status {
-                    if target_height <= block_height {
-                        return Some((key.clone(), record.status.clone()));
-                    }
+                if let PublicLaneValidatorStatus::PendingActivation(target_height) = record.status
+                    && target_height <= block_height
+                {
+                    return Some((key.clone(), record.status));
                 }
                 None
             })
@@ -14509,6 +14509,8 @@ pub struct StateTransaction<'block, 'state> {
     accounts_snapshot_cache: OnceCell<Arc<Vec<AccountId>>>,
     /// Parent projection, reusable only while election storage has no block edits.
     ivm_elections_cache: &'block ivm_elections::SnapshotCache,
+    /// Parent projection, reusable only while confidential trees have no block edits.
+    ivm_zk_roots_cache: &'block ivm_zk_roots::SnapshotCache,
 }
 
 impl std::ops::Deref for StateTransaction<'_, '_> {
@@ -14703,13 +14705,13 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
     }
     /// Stage block fee amount so telemetry only reflects committed transactions.
     #[cfg(feature = "telemetry")]
-    pub(crate) fn stage_block_fee_amount(&mut self, delta_amount: Quantity) {
+    pub(crate) fn stage_block_fee_amount(&mut self, delta_amount: &Quantity) {
         if delta_amount.is_zero() {
             return;
         }
         self.pending_block_fee_amount = self
             .pending_block_fee_amount
-            .checked_add(&delta_amount)
+            .checked_add(delta_amount)
             .expect("block fee amount exceeds supported numeric bounds")
     }
 }
@@ -14760,6 +14762,8 @@ pub struct StateView<'state> {
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
+    /// Validated confidential-root projection for this immutable view or untouched block.
+    ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache,
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
@@ -14830,6 +14834,8 @@ pub struct StateQueryView<'state> {
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
+    /// Validated confidential-root projection for this immutable view or untouched block.
+    ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache,
     /// State telemetry.
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
@@ -14868,10 +14874,10 @@ fn time_trigger_action_requires_clock_progress(
     }
     match action.filter.0 {
         ExecutionTime::PreCommit => true,
-        ExecutionTime::Schedule(schedule) => match schedule.period_ms {
-            Some(period_ms) => period_ms != 0,
-            None => u128::from(schedule.start_ms) >= parent_creation_time.as_millis(),
-        },
+        ExecutionTime::Schedule(schedule) => schedule.period_ms.map_or_else(
+            || u128::from(schedule.start_ms) >= parent_creation_time.as_millis(),
+            |period_ms| period_ms != 0,
+        ),
     }
 }
 impl<'state> StateView<'state> {
@@ -15057,12 +15063,11 @@ pub(crate) fn consensus_key_pop_for_public_key(
     let pk_label = public_key.to_string();
     if let Some(ids) = snapshot.consensus_keys_by_pk().get(&pk_label) {
         for id in ids {
-            if let Some(record) = snapshot.consensus_keys().get(id) {
-                if record.public_key == *public_key {
-                    if let Some(pop) = record.pop.as_ref() {
-                        return Some(pop.clone());
-                    }
-                }
+            if let Some(record) = snapshot.consensus_keys().get(id)
+                && record.public_key == *public_key
+                && let Some(pop) = record.pop.as_ref()
+            {
+                return Some(pop.clone());
             }
         }
     }
@@ -15434,7 +15439,7 @@ pub(crate) fn live_consensus_key_pop_for_peer(
 ) -> Option<Vec<u8>> {
     live_consensus_key_pop_for_peer_matching_role(snapshot, peer_id, block_height, None)
 }
-/// Fetch the stored PoP for a peer's live key with one exact consensus role.
+/// Fetch the stored `PoP` for a peer's live key with one exact consensus role.
 pub(crate) fn live_consensus_key_pop_for_peer_with_role(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
@@ -15443,7 +15448,7 @@ pub(crate) fn live_consensus_key_pop_for_peer_with_role(
 ) -> Option<Vec<u8>> {
     live_consensus_key_pop_for_peer_matching_role(snapshot, peer_id, block_height, Some(&role))
 }
-/// Fetch a live PoP for the exact role accepted on one lane.
+/// Fetch a live `PoP` for the exact role accepted on one lane.
 pub(crate) fn live_consensus_key_pop_for_peer_on_lane(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
@@ -15634,12 +15639,10 @@ where
             ) {
                 continue;
             }
-            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+            let meets_min = crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
                 &monetary.min_validator_stake,
-            ) else {
-                continue;
-            };
+            );
             if !meets_min {
                 continue;
             }
@@ -15695,12 +15698,10 @@ where
             )
         })
         .filter_map(|record| {
-            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+            let meets_min = crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
                 &monetary.min_validator_stake,
-            ) else {
-                return None;
-            };
+            );
             if !meets_min {
                 return None;
             }
@@ -17275,6 +17276,8 @@ pub type IvmElectionsSnapshot = BTreeMap<String, (u32, bool, Vec<u128>)>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("invalid IVM election snapshot")]
 pub struct InvalidIvmElectionSnapshot;
+pub(crate) mod ivm_zk_roots;
+pub use ivm_zk_roots::{InvalidIvmZkRootsSnapshot, IvmZkRootsSnapshot, IvmZkTreeRoots};
 #[cfg(test)]
 mod sumeragi_timing_tests {
     use super::*;
@@ -18136,6 +18139,10 @@ mod custom_parameter_tests {
 /// Detached, per-transaction delta for the source-owned transparent-transfer fast path.
 /// Every other mutation falls back to sequential execution.
 #[cfg(test)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Parallel transfer arrays retain the same names as their source transaction journals"
+)]
 pub(crate) struct DetachedStateTransactionDelta {
     // SoA: transparent asset-quantity transfers.
     asset_transfer_source_ids: Vec<iroha_data_model::asset::AssetId>,
@@ -18143,7 +18150,7 @@ pub(crate) struct DetachedStateTransactionDelta {
     asset_transfer_amounts: Vec<Quantity>,
 }
 #[cfg(test)]
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Copy)]
 /// Transaction context needed when replaying a detached delta into a live block.
 pub(crate) struct DetachedMergeContext {
     /// Hash used as the transaction call hash while recording per-transaction data.
@@ -18243,9 +18250,8 @@ impl DetachedStateTransactionDelta {
         self.asset_transfer_destination_accounts.push(destination);
         self.asset_transfer_amounts.push(amount);
     }
-    /// Check whether `authority` may modify metadata for `nft_id` under the current delta.
+    /// Check whether `authority` may modify metadata for `nft_id` in the current World.
     pub(crate) fn can_modify_nft_metadata(
-        &self,
         world: &impl WorldReadOnly,
         authority: &AccountId,
         nft_id: &NftId,
@@ -18269,17 +18275,16 @@ impl DetachedStateTransactionDelta {
         }
         let roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
         for role in roles {
-            if let Some(role_def) = world.roles().get(&role) {
-                if role_def.permissions.iter().any(|perm| perm == &target_perm) {
-                    return Ok(true);
-                }
+            if let Some(role_def) = world.roles().get(&role)
+                && role_def.permissions.iter().any(|perm| perm == &target_perm)
+            {
+                return Ok(true);
             }
         }
         Ok(false)
     }
-    /// Check whether `authority` may modify metadata for `account_id` under the current delta.
+    /// Check whether `authority` may modify metadata for `account_id` in the current World.
     pub(crate) fn can_modify_account_metadata(
-        &self,
         world: &impl WorldReadOnly,
         authority: &AccountId,
         account_id: &AccountId,
@@ -18330,10 +18335,10 @@ impl DetachedStateTransactionDelta {
         }
         let roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
         for role in roles {
-            if let Some(role_def) = world.roles().get(&role) {
-                if role_def.permissions.iter().any(|perm| perm == &target_perm) {
-                    return Ok(true);
-                }
+            if let Some(role_def) = world.roles().get(&role)
+                && role_def.permissions.iter().any(|perm| perm == &target_perm)
+            {
+                return Ok(true);
             }
         }
         Ok(false)
@@ -19071,10 +19076,9 @@ impl World {
         if let Some(existing_contract) = self.contract_aliases.view().get(&alias).cloned()
             && existing_contract != *contract_address
         {
-            return Err((Error::InvariantViolation(
+            return Err(Error::InvariantViolation(
                 format!("contract alias `{alias}` is already bound").into(),
-            ))
-            .into());
+            ));
         }
         self.contract_alias_bindings.insert(
             contract_address.clone(),
@@ -19090,13 +19094,14 @@ impl World {
         Ok(())
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Register an active validator consensus key with a PoP for deterministic tests.
+    /// Register an active validator consensus key with a `PoP` for deterministic tests.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn register_validator_pop_for_testing(&mut self, public_key: PublicKey, pop: Vec<u8>) {
         let id = derive_validator_key_id(&public_key);
+        let pk = public_key.to_string();
         let record = ConsensusKeyRecord {
             id: id.clone(),
-            public_key: public_key.clone(),
+            public_key,
             pop: Some(pop),
             activation_height: 0,
             expiry_height: None,
@@ -19105,7 +19110,6 @@ impl World {
         };
         let mut block = self.block();
         block.consensus_keys.insert(id.clone(), record);
-        let pk = public_key.to_string();
         let mut by_pk = block
             .consensus_keys_by_pk
             .get(&pk)
@@ -19128,7 +19132,7 @@ impl World {
     pub fn account_permissions_mut_for_testing(&mut self) -> &mut Storage<AccountId, Permissions> {
         &mut self.account_permissions
     }
-    /// Provides mutable access to SoraFS provider-owner bindings for tests and API scaffolding.
+    /// Provides mutable access to `SoraFS` provider-owner bindings for tests and API scaffolding.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn provider_owners_mut_for_testing(&mut self) -> &mut Storage<ProviderId, AccountId> {
         &mut self.provider_owners
@@ -19359,14 +19363,14 @@ impl World {
         &mut self.soracloud_runtime_receipts
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to SoraFS pin manifests for tests and API scaffolding.
+    /// Provides mutable access to `SoraFS` pin manifests for tests and API scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
     ) -> &mut Storage<ManifestDigest, PinManifestRecord> {
         &mut self.pin_manifests
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to SoraFS replication orders for tests and API scaffolding.
+    /// Provides mutable access to `SoraFS` replication orders for tests and API scaffolding.
     pub fn replication_orders_mut_for_testing(
         &mut self,
     ) -> &mut Storage<ReplicationOrderId, ReplicationOrderRecord> {
@@ -20087,12 +20091,16 @@ impl World {
             clippy::zero_sized_map_values,
             reason = "Both current and undo maps rebuild the authoritative Storage<K, ()> transition index without changing its journal representation"
         )]
+        type ConfidentialPolicySchedule =
+            (BTreeMap<(u64, AssetDefinitionId), ()>, BTreeMap<u64, u32>);
+
         fn derive<'a>(
             definitions: impl Iterator<Item = (&'a AssetDefinitionId, &'a AssetDefinition)>,
-        ) -> core::result::Result<
-            (BTreeMap<(u64, AssetDefinitionId), ()>, BTreeMap<u64, u32>),
-            String,
-        > {
+        ) -> core::result::Result<ConfidentialPolicySchedule, String> {
+            #[expect(
+                clippy::zero_sized_map_values,
+                reason = "Reconstruct the existing Storage<K, ()> current and undo map representation"
+            )]
             let mut transitions = BTreeMap::new();
             let mut counts = BTreeMap::<u64, u32>::new();
             for (definition_id, definition) in definitions {
@@ -20141,7 +20149,7 @@ impl World {
     }
     fn rebuild_domain_owner_index(&mut self) {
         self.domains_by_owner =
-            ownership_index_restore::grouped(&self.domains.history(), |_, domain| {
+            ownership_index_restore::members(&self.domains.history(), |_, domain| {
                 Some(domain.owned_by().clone())
             });
     }
@@ -20288,8 +20296,8 @@ impl World {
             if session.liability != expected_liability {
                 return Err("native game liability differs from retained original stakes".into());
             }
-            if !session.liability.is_zero() {
-                if self
+            if !session.liability.is_zero()
+                && self
                     .asset_definitions
                     .view()
                     .get(&session.asset_definition)
@@ -20297,11 +20305,10 @@ impl World {
                         definition.balance_scope_policy()
                             != iroha_data_model::asset::AssetBalancePolicy::Global
                     })
-                {
-                    return Err(
-                        "funded V1 game stakes require an existing globally scoped asset".into(),
-                    );
-                }
+            {
+                return Err(
+                    "funded V1 game stakes require an existing globally scoped asset".into(),
+                );
             }
             let balance_id = iroha_data_model::asset::AssetId::of(
                 session.asset_definition.clone(),
@@ -20311,8 +20318,7 @@ impl World {
                 .assets
                 .view()
                 .get(&balance_id)
-                .map(|balance| balance.as_ref().clone())
-                .unwrap_or_else(Quantity::zero);
+                .map_or_else(Quantity::zero, |balance| balance.as_ref().clone());
             if custody_balance != session.liability {
                 return Err("native game custody balance differs from its exact liability".into());
             }
@@ -20411,13 +20417,13 @@ impl World {
         let (by_initiator, by_counterparty, by_custodian) = {
             let history = self.repo_agreements.history();
             (
-                ownership_index_restore::grouped(&history, |_, agreement| {
+                ownership_index_restore::members(&history, |_, agreement| {
                     Some(agreement.initiator().clone())
                 }),
-                ownership_index_restore::grouped(&history, |_, agreement| {
+                ownership_index_restore::members(&history, |_, agreement| {
                     Some(agreement.counterparty().clone())
                 }),
-                ownership_index_restore::grouped(&history, |_, agreement| {
+                ownership_index_restore::members(&history, |_, agreement| {
                     agreement.custodian().clone()
                 }),
             )
@@ -20837,9 +20843,7 @@ fn derive_account_scope_directory_entry(
     world: &(impl WorldReadOnly + ?Sized),
     account_id: &AccountId,
 ) -> Option<AccountScopeDirectoryEntry> {
-    let Some(account) = world.accounts().get(account_id) else {
-        return None;
-    };
+    let account = world.accounts().get(account_id)?;
     let aliases = world.bound_account_aliases(account_id);
     let bindings = account
         .as_ref()
@@ -21006,8 +21010,8 @@ macro_rules! world_ro_accessors {
             cell_ref peers: Peers;
             /// Domain storage (read-only).
             storage domains: DomainId => Domain;
-            /// Domain owner index (read-only).
-            storage domains_by_owner: AccountId => BTreeSet<DomainId>;
+            /// Domain owner membership rows (read-only).
+            storage domains_by_owner: (AccountId, DomainId) => ();
             /// Kaigi relay account to authoritative metadata domain index (read-only).
             storage kaigi_relay_registry: AccountId => DomainId;
             /// Raw Kaigi account reference to typed metadata locations index (read-only).
@@ -21140,7 +21144,7 @@ macro_rules! world_ro_accessors {
             storage oracle_changes:
                 iroha_data_model::oracle::OracleChangeId =>
                 iroha_data_model::oracle::OracleChangeProposal;
-            /// Retained DeFi oracle attestations keyed by domain and subject id.
+            /// Retained `DeFi` oracle attestations keyed by domain and subject id.
             storage defi_oracle_attestations:
                 DefiOracleAttestationKey => Vec<DefiOracleAttestation>;
             /// Twitter follow binding attestations keyed by binding digest.
@@ -21445,12 +21449,12 @@ macro_rules! world_ro_accessors {
         world_ro_accessors!(@items $mode;
             /// Repo agreement registry (read-only).
             storage repo_agreements: RepoAgreementId => RepoAgreement;
-            /// Repo agreement ids keyed by initiating account (read-only).
-            storage repo_agreements_by_initiator: AccountId => BTreeSet<RepoAgreementId>;
-            /// Repo agreement ids keyed by counterparty account (read-only).
-            storage repo_agreements_by_counterparty: AccountId => BTreeSet<RepoAgreementId>;
-            /// Repo agreement ids keyed by custodian account (read-only).
-            storage repo_agreements_by_custodian: AccountId => BTreeSet<RepoAgreementId>;
+            /// Repo agreement membership rows keyed by initiating account (read-only).
+            storage repo_agreements_by_initiator: (AccountId, RepoAgreementId) => ();
+            /// Repo agreement membership rows keyed by counterparty account (read-only).
+            storage repo_agreements_by_counterparty: (AccountId, RepoAgreementId) => ();
+            /// Repo agreement membership rows keyed by custodian account (read-only).
+            storage repo_agreements_by_custodian: (AccountId, RepoAgreementId) => ();
             /// Successful settlement receipts (read-only).
             storage settlement_receipts: SettlementId => SettlementReceipt;
             /// Native bond records (read-only).
@@ -21991,10 +21995,7 @@ pub trait WorldReadOnly {
         &'a self,
         owner: &AccountId,
     ) -> impl Iterator<Item = &'a Domain> + use<'a, Self> {
-        self.domains_by_owner()
-            .get(owner)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
+        index_members(self.domains_by_owner(), owner)
             .filter_map(|domain_id| self.domains().get(domain_id))
     }
     /// Collect the account's dataspace -> domain hierarchy from primary label
@@ -22021,10 +22022,10 @@ pub trait WorldReadOnly {
         &self,
         account_id: &AccountId,
     ) -> Result<BTreeMap<DataSpaceId, BTreeSet<DomainId>>, ParseError> {
-        match self.account_scope_entry(account_id) {
-            Some(entry) => entry.hierarchy(self.dataspace_catalog()),
-            None => Ok(BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())])),
-        }
+        self.account_scope_entry(account_id).map_or_else(
+            || Ok(BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())])),
+            |entry| entry.hierarchy(self.dataspace_catalog()),
+        )
     }
     /// Collect the dataspaces linked to the account.
     ///
@@ -22213,11 +22214,10 @@ pub trait WorldReadOnly {
             Some(binding) if binding.alias == *alias && !binding.is_grace_expired_at(now_ms) => {
                 Some(definition_id)
             }
-            Some(_) => None,
             // First-release asset aliases are valid only together with their
             // consensus-persisted lease record. Treat an index-only entry as
             // corrupt state instead of silently reviving a legacy binding.
-            None => None,
+            Some(_) | None => None,
         }
     }
     #[cfg(test)]
@@ -22242,11 +22242,10 @@ pub trait WorldReadOnly {
             Some(binding) if binding.alias == *alias && !binding.is_grace_expired_at(now_ms) => {
                 Some(contract_address)
             }
-            Some(_) => None,
             // First-release contract aliases are valid only together with their
             // consensus-persisted lease record.  Treat an index-only entry as
             // corrupt state instead of silently reviving a legacy binding.
-            None => None,
+            Some(_) | None => None,
         }
     }
     /// Iterate concrete asset identifiers tracked for an asset definition.
@@ -22861,14 +22860,14 @@ impl<'world> WorldBlock<'world> {
         &mut self.peers
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Mutable pin-manifest registry accessor used by tests that need committed SoraFS state.
+    /// Mutable pin-manifest registry accessor used by tests that need committed `SoraFS` state.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
     ) -> &mut StorageBlock<'world, ManifestDigest, PinManifestRecord> {
         &mut self.pin_manifests
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Mutable replication-order registry accessor used by tests that need committed SoraFS state.
+    /// Mutable replication-order registry accessor used by tests that need committed `SoraFS` state.
     pub fn replication_orders_mut_for_testing(
         &mut self,
     ) -> &mut StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord> {
@@ -23253,11 +23252,13 @@ impl WorldTransaction<'_, '_> {
         account_id: &AccountId,
         label: &AccountAlias,
     ) {
-        let mut remove_entry = false;
-        if let Some(labels) = self.account_aliases_by_account.get_mut(account_id) {
-            labels.remove(label);
-            remove_entry = labels.is_empty();
-        }
+        let remove_entry = self
+            .account_aliases_by_account
+            .get_mut(account_id)
+            .is_some_and(|labels| {
+                labels.remove(label);
+                labels.is_empty()
+            });
         if remove_entry {
             self.account_aliases_by_account.remove(account_id.clone());
         }
@@ -23367,40 +23368,33 @@ impl WorldTransaction<'_, '_> {
     }
     fn refresh_account_scope_directory_entry(&mut self, account_id: &AccountId) {
         let previous = self.account_scope_directory.get(account_id).cloned();
-        match derive_account_scope_directory_entry(self, account_id) {
-            Some(entry) => {
-                self.replace_account_scope_accounts_index_entry(
-                    account_id,
-                    previous.as_ref(),
-                    Some(&entry),
-                );
-                self.account_scope_directory
-                    .insert(account_id.clone(), entry);
-            }
-            None => {
-                self.replace_account_scope_accounts_index_entry(
-                    account_id,
-                    previous.as_ref(),
-                    None,
-                );
-                self.account_scope_directory.remove(account_id.clone());
-            }
+        if let Some(entry) = derive_account_scope_directory_entry(self, account_id) {
+            self.replace_account_scope_accounts_index_entry(
+                account_id,
+                previous.as_ref(),
+                Some(&entry),
+            );
+            self.account_scope_directory
+                .insert(account_id.clone(), entry);
+        } else {
+            self.replace_account_scope_accounts_index_entry(account_id, previous.as_ref(), None);
+            self.account_scope_directory.remove(account_id.clone());
         }
     }
     pub(crate) fn insert_account_alias_binding(
         &mut self,
-        label: AccountAlias,
-        account_id: AccountId,
+        label: &AccountAlias,
+        account_id: &AccountId,
     ) -> Option<AccountId> {
         let previous = self
             .account_aliases
             .insert(label.clone(), account_id.clone());
         if let Some(previous_account) = previous.as_ref() {
-            self.remove_account_alias_from_reverse_index(previous_account, &label);
+            self.remove_account_alias_from_reverse_index(previous_account, label);
             self.refresh_account_scope_directory_entry(previous_account);
         }
-        self.add_account_alias_to_reverse_index(&account_id, &label);
-        self.refresh_account_scope_directory_entry(&account_id);
+        self.add_account_alias_to_reverse_index(account_id, label);
+        self.refresh_account_scope_directory_entry(account_id);
         previous
     }
     pub(crate) fn remove_account_alias_binding(
@@ -24610,9 +24604,8 @@ impl WorldTransaction<'_, '_> {
         match self.timed_ovn_evidence.get(&ballot_attempt_id) {
             Some(previous) if previous == &state => return Ok(()),
             Some(previous) if state.is_direct_successor_of(previous) => {}
-            Some(_) => return Err(TimedOvnEvidenceError::InvalidLifecycleTransition),
             None if matches!(&state, TimedOvnLifecycleStateV1::Registered(_)) => {}
-            None => return Err(TimedOvnEvidenceError::InvalidLifecycleTransition),
+            Some(_) | None => return Err(TimedOvnEvidenceError::InvalidLifecycleTransition),
         }
         if is_fresh_registration {
             if !self.tle_key_session_eligible_for_new_ballots(key_session_id, current_height) {
@@ -25706,11 +25699,10 @@ impl WorldTransaction<'_, '_> {
             ));
         }
         let ambient_dataspace = self.current_dataspace_id;
-        let compatible_requested_dataspace =
-            requested_dataspace.filter(|requested| match ambient_dataspace {
-                None => true,
-                Some(ambient) => ambient == DataSpaceId::UNIVERSAL || ambient == *requested,
-            });
+        let compatible_requested_dataspace = requested_dataspace.filter(|requested| {
+            ambient_dataspace
+                .is_none_or(|ambient| ambient == DataSpaceId::UNIVERSAL || ambient == *requested)
+        });
         let expected_scope = match definition.balance_scope_policy() {
             AssetBalancePolicy::Global => AssetBalanceScope::Global,
             AssetBalancePolicy::DataspaceRestricted => dataspace_hint
@@ -25725,8 +25717,10 @@ impl WorldTransaction<'_, '_> {
                 })?,
         };
         match (id.scope(), &expected_scope) {
-            (AssetBalanceScope::Global, AssetBalanceScope::Global) => {}
-            (AssetBalanceScope::Global, AssetBalanceScope::Dataspace(_)) => {}
+            (
+                AssetBalanceScope::Global,
+                AssetBalanceScope::Global | AssetBalanceScope::Dataspace(_),
+            ) => {}
             (AssetBalanceScope::Dataspace(_), AssetBalanceScope::Global) => {
                 return Err(Error::InvariantViolation(
                     "global assets cannot be addressed with dataspace scope".into(),
@@ -26856,7 +26850,6 @@ impl State {
         self.insert_sanitized_pin_intents(block_height, intents, rejected, context, &positions)
     }
     fn ingest_committed_pin_intents_from_kura_into(
-        &self,
         nexus: &iroha_config::parameters::actual::Nexus,
         store: &mut DaPinStore,
         shard_cursors: &DaShardCursorIndex,
@@ -27802,10 +27795,11 @@ impl State {
         mut world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
-        exact_durable_height: usize,
-        process_runtime: ProcessRuntimeInstallation,
-        chain_id: iroha_model_base::chain::ChainId,
-        network_id: iroha_data_model::NetworkId,
+        (exact_durable_height, process_runtime): (usize, ProcessRuntimeInstallation),
+        (chain_id, network_id): (
+            iroha_model_base::chain::ChainId,
+            iroha_data_model::NetworkId,
+        ),
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> core::result::Result<Self, MergeLedgerCommitError> {
         #[cfg(not(all(test, sumeragi_core_mutation = "HC385")))]
@@ -28077,7 +28071,6 @@ impl State {
             )),
             finality_prefix_checkpoints:
                 crate::sumeragi::certified_chain::FinalityPrefixCheckpoints::new(),
-            ivm_execution_budget: execution_budget.clone(),
             pipeline_ivm_prepared_cache: PublicationRwLock::try_new(
                 PreparedContractCache::with_execution_budget(pipeline_cache_size, execution_budget.clone()),
                 &execution_budget,
@@ -28365,6 +28358,7 @@ impl State {
             publication_notify: tokio::sync::Notify::new(),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
             native_pending_evidence: parking_lot::Mutex::new(crate::sumeragi::evidence::NativeEvidencePool::default()),
+            ivm_execution_budget: execution_budget,
         };
         #[cfg(feature = "telemetry")]
         {
@@ -28513,7 +28507,8 @@ impl State {
         drop(activation_heights);
         drop(incarnations);
         drop(nexus);
-        self.install_unchecked_lane_manifests_in_publication(&manifests);
+        self.install_unchecked_lane_manifests_in_publication(&manifests)
+            .expect("publish active lane manifests in the original State fixture pool");
     }
     #[cfg(test)]
     fn replace_active_lane_markers_for_tests(&self) {
@@ -28690,10 +28685,8 @@ impl State {
             world,
             kura,
             query_handle,
-            exact_durable_height,
-            ProcessRuntimeInstallation::Install,
-            chain_id,
-            network_id,
+            (exact_durable_height, ProcessRuntimeInstallation::Install),
+            (chain_id, network_id),
             #[cfg(feature = "telemetry")]
             telemetry,
         )?;
@@ -28792,10 +28785,8 @@ impl State {
             world,
             kura,
             query_handle,
-            exact_durable_height,
-            ProcessRuntimeInstallation::Preserve,
-            chain_id,
-            network_id,
+            (exact_durable_height, ProcessRuntimeInstallation::Preserve),
+            (chain_id, network_id),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         )?;
@@ -29223,6 +29214,10 @@ impl State {
     /// # Errors
     /// Returns a transaction-block error if the commit path fails while flushing block state.
     #[cfg(any(test, feature = "bench"))]
+    #[expect(
+        clippy::result_large_err,
+        reason = "State refusal retains original validation and allocation causes inline without allocating an error box"
+    )]
     pub fn commit_heavy_world_accounts_for_bench(
         &self,
         block_height: NonZeroU64,
@@ -29245,7 +29240,7 @@ impl State {
     ///
     /// Contention waits on its original release observation after all failed
     /// acquisition owners have retired. Permanent and finite-capacity refusals
-    /// remain errors of this infallible caller; ordinary production uses try_block.
+    /// remain errors of this infallible caller; ordinary production uses `try_block`.
     #[allow(clippy::too_many_lines)]
     #[cfg(any(
         test,
@@ -29261,7 +29256,7 @@ impl State {
             }
         }
         loop {
-            let release = match self.try_block(curr_block.clone()) {
+            let release = match self.try_block(curr_block) {
                 Ok(block) => return block,
                 Err(
                     StateBlockStartError::Storage(StateStorageAdmissionError::World(
@@ -29878,8 +29873,8 @@ impl State {
                 super::state::GovernanceReferendumMode::Zk => {
                     if let Some(e) = wtx.elections.get(&rid) {
                         if e.finalized && e.tally.len() >= 2 {
-                            approve = u128::from(e.tally[0]);
-                            reject = u128::from(e.tally[1]);
+                            approve = e.tally[0];
+                            reject = e.tally[1];
                             abstain = e.tally.get(2).copied().map_or(0, u128::from);
                         } else {
                             decision_ready = false;
@@ -30112,8 +30107,8 @@ impl State {
             .world
             .confidential_policy_transition_index
             .iter()
-            .take_while(|(key, _)| key.0 <= now_h)
-            .map(|(key, _)| key.1.clone())
+            .take_while(|(key, ())| key.0 <= now_h)
+            .map(|(key, ())| key.1.clone())
             .collect();
         if !pending_assets.is_empty() {
             let mut stx = sb.try_transaction()?;
@@ -30311,8 +30306,8 @@ impl State {
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Insert or replace a native VPN lease directly for deterministic test setup.
-    pub fn insert_vpn_lease_for_testing(&self, record: VpnLeaseRecordV1) {
-        validate_vpn_lease_network(&record, &self.network_id)
+    pub fn insert_vpn_lease_for_testing(&self, record: &VpnLeaseRecordV1) {
+        validate_vpn_lease_network(record, &self.network_id)
             .expect("test VPN lease must belong to this exact network");
         let mut world = self.world.block();
         {
@@ -30510,6 +30505,7 @@ impl State {
             query_ledger_time_ms,
             accounts_snapshot_cache: SyncOnceCell::new(),
             ivm_elections_cache: ivm_elections::SnapshotCache::new(),
+            ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
             pipeline: crate::pipeline_validity_policy::effective_pipeline(
@@ -30678,10 +30674,8 @@ impl State {
         Option<iroha_data_model::block::SharedSignedBlock>,
         crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
     > {
-        match self.block_height_by_hash(hash) {
-            Some(height) => self.block_by_height(height),
-            None => Ok(None),
-        }
+        self.block_height_by_hash(hash)
+            .map_or_else(|| Ok(None), |height| self.block_by_height(height))
     }
     /// Latest committed block header from the state cache.
     ///
@@ -30689,7 +30683,7 @@ impl State {
     /// latest committed header for contextual validation.
     #[track_caller]
     pub fn latest_block_header_fast(&self) -> Option<BlockHeader> {
-        self.latest_block_header.read().clone()
+        *self.latest_block_header.read()
     }
     /// Latest authenticated committed block creation time.
     ///
@@ -30699,7 +30693,7 @@ impl State {
     #[must_use]
     pub fn latest_block_creation_time_ms_fast(&self) -> Option<u64> {
         let latest_hash = self.latest_block_hash_fast();
-        let cached_header = self.latest_block_header.read().clone();
+        let cached_header = *self.latest_block_header.read();
         self.latest_block_creation_time_ms_from_header(latest_hash, cached_header.as_ref())
     }
     fn latest_block_creation_time_ms_from_header(
@@ -31108,11 +31102,9 @@ impl State {
                 // instead of entering a second blocking State reader on this event path.
                 crate::smartcontracts::isi::tx::read_finalized_execution_carrier(
                     &self.kura,
-                    self.chain_id_ref(),
-                    *self.network_id_ref(),
+                    (self.chain_id_ref(), *self.network_id_ref()),
                     &hashes,
-                    height,
-                    expected,
+                    (height, expected),
                     max_work,
                     max_bytes,
                     &budget,
@@ -31124,8 +31116,7 @@ impl State {
                     &self.kura,
                     self.chain_id_ref(),
                     *self.network_id_ref(),
-                    height,
-                    expected,
+                    (height, expected),
                     max_work,
                     max_bytes,
                 )?
@@ -31244,11 +31235,9 @@ impl State {
         })?;
         let carrier = crate::smartcontracts::isi::tx::read_finalized_execution_carrier(
             &self.kura,
-            self.chain_id_ref(),
-            *self.network_id_ref(),
+            (self.chain_id_ref(), *self.network_id_ref()),
             &hashes,
-            height,
-            expected,
+            (height, expected),
             max_work,
             max_bytes,
             budget,
@@ -31661,7 +31650,7 @@ impl State {
             let block_hashes = self.block_hashes.try_view_retaining(&mut releases.hashes)?;
             let block_hashes_wait = block_hashes_start.elapsed();
             let latest_hash = block_hashes.last().copied();
-            let cached_header = releases.header.try_read_or_wait()?.clone();
+            let cached_header = *releases.header.try_read_or_wait()?;
 
             let nexus_start = Instant::now();
             let canonical_runtime = self.canonical_runtime.view();
@@ -31767,7 +31756,7 @@ impl State {
                 self.fraud_monitoring.clone(),
                 world.parameters.get(),
             );
-            return Ok(StateView {
+            Ok(StateView {
                 publication_generation: generation_after,
                 canonical_runtime,
                 canonical_runtime_predecessor,
@@ -31787,6 +31776,7 @@ impl State {
                 query_ledger_time_ms,
                 accounts_snapshot_cache: SyncOnceCell::new(),
                 ivm_elections_cache: ivm_elections::SnapshotCache::new(),
+                ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),
                 #[cfg(feature = "telemetry")]
                 telemetry: &self.telemetry,
                 pipeline,
@@ -31805,7 +31795,7 @@ impl State {
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
                 created_at: Instant::now(),
-            });
+            })
         }
     }
     fn prune_lane_lifecycle_world_block_state_for_lanes(
@@ -31975,7 +31965,7 @@ impl State {
         if lanes_to_reset.is_empty() {
             return;
         }
-        self.reset_lane_scoped_runtime_indexes(lanes_to_reset, releases);
+        Self::reset_lane_scoped_runtime_indexes(lanes_to_reset, releases);
         if publish_process_runtime {
             self.publish_lane_scoped_runtime_reset(lanes_to_reset);
             if releases.hydrated.read().is_some() {
@@ -31984,7 +31974,6 @@ impl State {
         }
     }
     fn reset_lane_scoped_runtime_indexes(
-        &self,
         lanes_to_reset: &BTreeSet<LaneId>,
         releases: &mut LaneLifecycleReleases<'_>,
     ) {
@@ -32037,7 +32026,10 @@ impl State {
     /// Install an arbitrary registry for isolated tests and fixture generation.
     /// This method is absent from ordinary shipping binaries.
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn install_lane_manifests_for_testing(&self, manifests: &LaneManifestRegistryHandle) -> LanePrivacyRegistry {
+    pub fn install_lane_manifests_for_testing(
+        &self,
+        manifests: &LaneManifestRegistryHandle,
+    ) -> LanePrivacyRegistry {
         self.install_unchecked_lane_manifests_in_publication(manifests)
             .expect("fixture privacy projection fits the original State pool")
     }
@@ -32047,26 +32039,25 @@ impl State {
     ) -> Result<LanePrivacyRegistry, LaneLifecycleError> {
         let pool = self.ivm_execution_budget();
         pool.with_deferred_refund_notifications(|_| {
-        let privacy = LanePrivacyRegistry::try_from_manifest_registry(manifests, &pool)
-            .map_err(LaneLifecycleError::ParameterDeferred)?;
-        let manifests = Arc::clone(manifests);
-        let mut publication_notice = self.state_view_publication();
-        let mut releases = LaneLifecycleReleases::new(self);
-        let mut state_write_release = self.state_write_lock.defer_notifications();
-        let _state_write_lock = state_write_release.lock();
-        let publication = publication_notice.begin();
-        self.install_prepared_lane_manifests_in_publication(
-            manifests,
-            privacy.clone(),
-            &publication,
-            &mut releases,
-        );
-        Ok(privacy)
+            let privacy = LanePrivacyRegistry::try_from_manifest_registry(manifests, &pool)
+                .map_err(LaneLifecycleError::ParameterDeferred)?;
+            let manifests = Arc::clone(manifests);
+            let mut publication_notice = self.state_view_publication();
+            let mut releases = LaneLifecycleReleases::new(self);
+            let mut state_write_release = self.state_write_lock.defer_notifications();
+            let _state_write_lock = state_write_release.lock();
+            let publication = publication_notice.begin();
+            Self::install_prepared_lane_manifests_in_publication(
+                manifests,
+                privacy.clone(),
+                &publication,
+                &mut releases,
+            );
+            Ok(privacy)
         })
     }
     /// Publish manifest and privacy projections inside one existing State generation.
     fn install_prepared_lane_manifests_in_publication(
-        &self,
         manifests: LaneManifestRegistryHandle,
         privacy: LanePrivacyRegistry,
         _publication: &StateViewGenerationWriteGuard<'_>,
@@ -32186,9 +32177,8 @@ impl State {
         nexus_staking_authority_lane_at_height(lane_id, &nexus, self.lane_authority_height())
     }
     fn lane_authority_height(&self) -> u64 {
-        self.latest_block_header_fast()
-            .map(|header| header.height().get())
-            .unwrap_or_else(|| {
+        self.latest_block_header_fast().map_or_else(
+            || {
                 self.world
                     .view()
                     .consensus_keys()
@@ -32196,7 +32186,9 @@ impl State {
                     .map(|(_, record)| record.activation_height)
                     .max()
                     .unwrap_or(0)
-            })
+            },
+            |header| header.height().get(),
+        )
     }
     /// Return live explicit manifest validator bindings configured for a lane, if any.
     pub fn manifest_lane_validator_bindings(
@@ -33430,16 +33422,17 @@ impl State {
             );
         } else {
             self.apply_lane_geometry_updates(
-                &previous_lane_config,
-                &nexus.lane_config,
-                &previous_lane_incarnations,
-                &updated_lane_incarnations,
-                &previous_lane_incarnation_activation_heights,
-                &updated_lane_incarnation_activation_heights,
-                &previous_lane_incarnation_lineage,
-                &updated_lane_incarnation_lineage,
-                &geometry_replaced_lane_ids,
-                current_block_height,
+                (&previous_lane_config, &nexus.lane_config),
+                (&previous_lane_incarnations, &updated_lane_incarnations),
+                (
+                    &previous_lane_incarnation_activation_heights,
+                    &updated_lane_incarnation_activation_heights,
+                ),
+                (
+                    &previous_lane_incarnation_lineage,
+                    &updated_lane_incarnation_lineage,
+                ),
+                (&geometry_replaced_lane_ids, current_block_height),
                 &mut releases,
             )?;
             if let Err(failure) = self.mark_lane_geometry_catalog_published(
@@ -33460,9 +33453,11 @@ impl State {
                 self.rollback_lane_geometry_updates(
                     &previous_lane_config,
                     &nexus.lane_config,
-                    &previous_lane_incarnations,
-                    &previous_lane_incarnation_activation_heights,
-                    &previous_lane_incarnation_lineage,
+                    (
+                        &previous_lane_incarnations,
+                        &previous_lane_incarnation_activation_heights,
+                        &previous_lane_incarnation_lineage,
+                    ),
                     &geometry_replaced_lane_ids,
                     current_block_height,
                     &mut releases,
@@ -33722,12 +33717,10 @@ impl State {
         if !stale_permission_holders.is_empty() {
             let mut tx = self.world.account_permissions.block();
             for holder in stale_permission_holders {
-                let remove_entry = if let Some(permissions) = tx.get_mut(&holder) {
+                let remove_entry = tx.get_mut(&holder).is_some_and(|permissions| {
                     permissions.retain(|permission| !is_stale_dataspace_permission(permission));
                     permissions.is_empty()
-                } else {
-                    false
-                };
+                });
                 if remove_entry {
                     tx.remove(holder);
                 }
@@ -33794,237 +33787,256 @@ impl State {
     ) -> core::result::Result<(), LaneLifecycleError> {
         let pool = self.ivm_execution_budget();
         pool.with_deferred_refund_notifications(|_| {
-        const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
-        let mut publication_notice = self.state_view_publication();
-        let mut releases = LaneLifecycleReleases::new(self);
-        let mut commit_release = self.state_commit_lock.defer_notifications();
-        let mut lifecycle_release = self.lane_lifecycle_lock.defer_notifications();
-        let mut write_release = self.state_write_lock.defer_notifications();
-        let lanes_to_reset = {
-            // A prebuilt StateBlock owns these MV writers before it takes the
-            // commit fence. Wait for that original owner before taking State
-            // fences, then consume this replacement inside the same visibility
-            // boundary. It must not survive into the World cleanup below.
-            let runtime = self.acquire_canonical_runtime_replacement();
-            let _state_commit_lock = commit_release.lock();
-            let _lifecycle_lock = lifecycle_release.lock();
-            let current_block_height = self.block_hashes.view().len() as u64;
-            let mut effective_plan = plan.clone();
-            if allow_autoscale_managed_changes && !effective_plan.additions.is_empty() {
-                for addition in &effective_plan.additions {
-                    if !lane_uses_reserved_autoscale_metadata(addition) {
-                        return Err(LaneLifecycleError::AutoscaleAddUnmanagedLane(addition.id));
+            const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
+            let mut publication_notice = self.state_view_publication();
+            let mut releases = LaneLifecycleReleases::new(self);
+            let mut commit_release = self.state_commit_lock.defer_notifications();
+            let mut lifecycle_release = self.lane_lifecycle_lock.defer_notifications();
+            let mut write_release = self.state_write_lock.defer_notifications();
+            let lanes_to_reset = {
+                // A prebuilt StateBlock owns these MV writers before it takes the
+                // commit fence. Wait for that original owner before taking State
+                // fences, then consume this replacement inside the same visibility
+                // boundary. It must not survive into the World cleanup below.
+                let runtime = self.acquire_canonical_runtime_replacement();
+                let _state_commit_lock = commit_release.lock();
+                let _lifecycle_lock = lifecycle_release.lock();
+                let current_block_height = self.block_hashes.view().len() as u64;
+                let mut effective_plan = plan.clone();
+                if allow_autoscale_managed_changes && !effective_plan.additions.is_empty() {
+                    for addition in &effective_plan.additions {
+                        if !lane_uses_reserved_autoscale_metadata(addition) {
+                            return Err(LaneLifecycleError::AutoscaleAddUnmanagedLane(addition.id));
+                        }
+                        ensure_autoscale_managed_lane_shape(addition)?;
                     }
-                    ensure_autoscale_managed_lane_shape(addition)?;
-                }
-                let proposal_height = current_block_height.checked_add(1).ok_or(
-                    LaneLifecycleError::AutoscaleProposalHeightOverflow(
-                        effective_plan.additions[0].id,
-                    ),
-                )?;
-                let nexus = self.nexus_snapshot().clone();
-                let manifests = releases.manifests.read().clone();
-                let world = self.world.view_retaining(&mut releases.world);
-                for addition in &mut effective_plan.additions {
-                    #[cfg(test)]
-                    if self.commit_topology_snapshot().is_empty()
-                        && matches!(decode_autoscale_lane_committee(addition), Ok(Some(_)))
-                    {
-                        // Most state unit tests install geometry without a live
-                        // consensus actor. Their fixture lane already carries a
-                        // fully validated deterministic pin.
-                        let committee = decode_autoscale_lane_committee(addition)
-                            .expect("checked synthetic pin decoding")
-                            .expect("checked synthetic pin presence");
-                        validate_autoscale_lane_committee_pops(&committee).map_err(|reason| {
-                            LaneLifecycleError::InvalidAutoscaleManagedLane {
-                                lane: addition.id,
-                                reason,
-                            }
-                        })?;
-                        continue;
-                    }
-                    State::pin_new_autoscale_lane_committee_from_sources(
-                        &world,
-                        &self.network_id,
-                        manifests.as_ref(),
-                        &nexus,
-                        addition,
-                        proposal_height,
+                    let proposal_height = current_block_height.checked_add(1).ok_or(
+                        LaneLifecycleError::AutoscaleProposalHeightOverflow(
+                            effective_plan.additions[0].id,
+                        ),
                     )?;
+                    let nexus = self.nexus_snapshot().clone();
+                    let manifests = releases.manifests.read().clone();
+                    let world = self.world.view_retaining(&mut releases.world);
+                    for addition in &mut effective_plan.additions {
+                        #[cfg(test)]
+                        if self.commit_topology_snapshot().is_empty()
+                            && matches!(decode_autoscale_lane_committee(addition), Ok(Some(_)))
+                        {
+                            // Most state unit tests install geometry without a live
+                            // consensus actor. Their fixture lane already carries a
+                            // fully validated deterministic pin.
+                            let committee = decode_autoscale_lane_committee(addition)
+                                .expect("checked synthetic pin decoding")
+                                .expect("checked synthetic pin presence");
+                            validate_autoscale_lane_committee_pops(&committee).map_err(
+                                |reason| LaneLifecycleError::InvalidAutoscaleManagedLane {
+                                    lane: addition.id,
+                                    reason,
+                                },
+                            )?;
+                            continue;
+                        }
+                        State::pin_new_autoscale_lane_committee_from_sources(
+                            &world,
+                            &self.network_id,
+                            manifests.as_ref(),
+                            &nexus,
+                            addition,
+                            proposal_height,
+                        )?;
+                    }
                 }
-            }
-            let plan = &effective_plan;
-            let previous_lane_incarnations = self.lane_incarnations_snapshot();
-            let previous_lane_incarnation_lineage = self.lane_incarnation_lineage_snapshot();
-            let previous_lane_incarnation_activation_heights =
-                self.lane_incarnation_activation_heights_snapshot();
-            let committing_header_hash =
-                synthetic_lane_lifecycle_header_hash(&self.network_id, current_block_height, plan);
-            let compliance_engine = self.lane_compliance.read().clone();
-            let (lifecycle_update, updated_lane_manifests) = {
-                let nexus = self.nexus_snapshot();
-                ensure_lane_lifecycle_compliance_ready(&nexus, compliance_engine.as_deref(), plan)?;
-                let lifecycle_update = prepare_lane_lifecycle_update(
-                    &nexus,
-                    &previous_lane_incarnations,
-                    &previous_lane_incarnation_lineage,
-                    &previous_lane_incarnation_activation_heights,
+                let plan = &effective_plan;
+                let previous_lane_incarnations = self.lane_incarnations_snapshot();
+                let previous_lane_incarnation_lineage = self.lane_incarnation_lineage_snapshot();
+                let previous_lane_incarnation_activation_heights =
+                    self.lane_incarnation_activation_heights_snapshot();
+                let committing_header_hash = synthetic_lane_lifecycle_header_hash(
                     &self.network_id,
-                    committing_header_hash,
+                    current_block_height,
                     plan,
-                    current_block_height,
-                    allow_autoscale_managed_changes,
-                )?;
-                let world = self.world.view_retaining(&mut releases.world);
-                ensure_homed_dataspaces_keep_lanes(&world, &lifecycle_update.updated_catalog)?;
-                let mut prospective_nexus = nexus.clone();
-                prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
-                prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
-                ensure_live_shared_dataspace_staking_owner_is_not_reset(
-                    &world,
-                    &nexus,
-                    &prospective_nexus,
+                );
+                let compliance_engine = self.lane_compliance.read().clone();
+                let (lifecycle_update, updated_lane_manifests) = {
+                    let nexus = self.nexus_snapshot();
+                    ensure_lane_lifecycle_compliance_ready(
+                        &nexus,
+                        compliance_engine.as_deref(),
+                        plan,
+                    )?;
+                    let lifecycle_update = prepare_lane_lifecycle_update(
+                        &nexus,
+                        (
+                            &previous_lane_incarnations,
+                            &previous_lane_incarnation_lineage,
+                            &previous_lane_incarnation_activation_heights,
+                        ),
+                        &self.network_id,
+                        committing_header_hash,
+                        plan,
+                        current_block_height,
+                        allow_autoscale_managed_changes,
+                    )?;
+                    let world = self.world.view_retaining(&mut releases.world);
+                    ensure_homed_dataspaces_keep_lanes(&world, &lifecycle_update.updated_catalog)?;
+                    let mut prospective_nexus = nexus.clone();
+                    prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
+                    prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
+                    ensure_live_shared_dataspace_staking_owner_is_not_reset(
+                        &world,
+                        &nexus,
+                        &prospective_nexus,
+                        &lifecycle_update.lanes_to_reset,
+                        current_block_height,
+                    )?;
+                    let updated_lane_manifests = rebind_lane_manifests_for_lifecycle(
+                        releases.manifests.read().as_ref(),
+                        &lifecycle_update.updated_catalog,
+                        &nexus.governance,
+                    )?;
+                    (lifecycle_update, updated_lane_manifests)
+                };
+                let updated_lane_privacy = LanePrivacyRegistry::try_from_manifest_registry(
+                    &updated_lane_manifests,
+                    &self.ivm_execution_budget(),
+                )
+                .map_err(LaneLifecycleError::ParameterDeferred)?;
+                let active_reset_lanes = Self::active_reset_lanes(
                     &lifecycle_update.lanes_to_reset,
-                    current_block_height,
+                    &lifecycle_update.updated_lane_config,
+                );
+                let reset_height = current_block_height;
+                self.apply_lane_geometry_updates(
+                    (
+                        &lifecycle_update.previous_lane_config,
+                        &lifecycle_update.updated_lane_config,
+                    ),
+                    (
+                        &lifecycle_update.previous_lane_incarnations,
+                        &lifecycle_update.updated_lane_incarnations,
+                    ),
+                    (
+                        &lifecycle_update.previous_lane_incarnation_activation_heights,
+                        &lifecycle_update.updated_lane_incarnation_activation_heights,
+                    ),
+                    (
+                        &lifecycle_update.previous_lane_incarnation_lineage,
+                        &lifecycle_update.updated_lane_incarnation_lineage,
+                    ),
+                    (&lifecycle_update.replaced_lane_ids, current_block_height),
+                    &mut releases,
                 )?;
-                let updated_lane_manifests = rebind_lane_manifests_for_lifecycle(
-                    releases.manifests.read().as_ref(),
-                    &lifecycle_update.updated_catalog,
-                    &nexus.governance,
-                )?;
-                (lifecycle_update, updated_lane_manifests)
-            };
-            let updated_lane_privacy = LanePrivacyRegistry::try_from_manifest_registry(
-                &updated_lane_manifests,
-                &self.ivm_execution_budget(),
-            ).map_err(LaneLifecycleError::ParameterDeferred)?;
-            let active_reset_lanes = Self::active_reset_lanes(
-                &lifecycle_update.lanes_to_reset,
-                &lifecycle_update.updated_lane_config,
-            );
-            let reset_height = current_block_height;
-            self.apply_lane_geometry_updates(
-                &lifecycle_update.previous_lane_config,
-                &lifecycle_update.updated_lane_config,
-                &lifecycle_update.previous_lane_incarnations,
-                &lifecycle_update.updated_lane_incarnations,
-                &lifecycle_update.previous_lane_incarnation_activation_heights,
-                &lifecycle_update.updated_lane_incarnation_activation_heights,
-                &lifecycle_update.previous_lane_incarnation_lineage,
-                &lifecycle_update.updated_lane_incarnation_lineage,
-                &lifecycle_update.replaced_lane_ids,
-                current_block_height,
-                &mut releases,
-            )?;
-            if let Err(failure) = self.mark_lane_geometry_catalog_published(
-                &lifecycle_update.updated_lane_config,
-                &lifecycle_update.updated_lane_incarnations,
-                &lifecycle_update.updated_lane_incarnation_activation_heights,
-                &lifecycle_update.updated_lane_incarnation_lineage,
-                None,
-                &mut releases,
-            ) {
-                let LaneGeometryCatalogPublicationFailure {
-                    error,
-                    rollback_safe,
-                } = failure;
-                if !rollback_safe {
+                if let Err(failure) = self.mark_lane_geometry_catalog_published(
+                    &lifecycle_update.updated_lane_config,
+                    &lifecycle_update.updated_lane_incarnations,
+                    &lifecycle_update.updated_lane_incarnation_activation_heights,
+                    &lifecycle_update.updated_lane_incarnation_lineage,
+                    None,
+                    &mut releases,
+                ) {
+                    let LaneGeometryCatalogPublicationFailure {
+                        error,
+                        rollback_safe,
+                    } = failure;
+                    if !rollback_safe {
+                        return Err(error);
+                    }
+                    self.rollback_lane_geometry_updates(
+                        &lifecycle_update.previous_lane_config,
+                        &lifecycle_update.updated_lane_config,
+                        (
+                            &lifecycle_update.previous_lane_incarnations,
+                            &lifecycle_update.previous_lane_incarnation_activation_heights,
+                            &lifecycle_update.previous_lane_incarnation_lineage,
+                        ),
+                        &lifecycle_update.replaced_lane_ids,
+                        current_block_height,
+                        &mut releases,
+                    )
+                    .map_err(|rollback| {
+                        LaneLifecycleError::Storage(format!(
+                            "{error}; lane geometry rollback also failed: {rollback}"
+                        ))
+                    })?;
                     return Err(error);
                 }
-                self.rollback_lane_geometry_updates(
-                    &lifecycle_update.previous_lane_config,
-                    &lifecycle_update.updated_lane_config,
-                    &lifecycle_update.previous_lane_incarnations,
-                    &lifecycle_update.previous_lane_incarnation_activation_heights,
-                    &lifecycle_update.previous_lane_incarnation_lineage,
-                    &lifecycle_update.replaced_lane_ids,
-                    current_block_height,
-                    &mut releases,
-                )
-                .map_err(|rollback| {
-                    LaneLifecycleError::Storage(format!(
-                        "{error}; lane geometry rollback also failed: {rollback}"
-                    ))
-                })?;
-                return Err(error);
-            }
-            let lanes_to_reset = lifecycle_update.lanes_to_reset.clone();
-            {
-                let state_write_lock_wait_start = Instant::now();
-                let _state_write_lock = write_release.lock();
-                let state_write_lock_wait = state_write_lock_wait_start.elapsed();
-                let state_write_lock_hold_start = Instant::now();
-                let _view_generation = publication_notice.begin();
+                let lanes_to_reset = lifecycle_update.lanes_to_reset.clone();
                 {
-                    let mut nexus = self
-                        .canonical_runtime
-                        .view()
-                        .nexus_projection(&releases.nexus.read())
-                        .expect("persisted canonical runtime must be valid");
-                    nexus.lane_catalog = lifecycle_update.updated_catalog;
-                    nexus.lane_config = lifecycle_update.updated_lane_config;
-                    Self::install_canonical_runtime_projection_with_owner(
-                        runtime,
-                        &nexus,
-                        &lifecycle_update.updated_lane_incarnation_lineage,
-                        &self.autoscale_sample_history_snapshot(),
-                    )?;
-                }
-                self.install_prepared_lane_manifests_in_publication(
-                    updated_lane_manifests,
-                    updated_lane_privacy,
-                    &_view_generation,
-                    &mut releases,
-                );
-                if !lanes_to_reset.is_empty() {
-                    self.reset_lane_scoped_runtime_state(&lanes_to_reset, true, &mut releases);
-                    self.record_da_lane_reset_watermarks(
-                        &active_reset_lanes,
-                        reset_height,
+                    let state_write_lock_wait_start = Instant::now();
+                    let _state_write_lock = write_release.lock();
+                    let state_write_lock_wait = state_write_lock_wait_start.elapsed();
+                    let state_write_lock_hold_start = Instant::now();
+                    let _view_generation = publication_notice.begin();
+                    {
+                        let mut nexus = self
+                            .canonical_runtime
+                            .view()
+                            .nexus_projection(&releases.nexus.read())
+                            .expect("persisted canonical runtime must be valid");
+                        nexus.lane_catalog = lifecycle_update.updated_catalog;
+                        nexus.lane_config = lifecycle_update.updated_lane_config;
+                        Self::install_canonical_runtime_projection_with_owner(
+                            runtime,
+                            &nexus,
+                            &lifecycle_update.updated_lane_incarnation_lineage,
+                            &self.autoscale_sample_history_snapshot(),
+                        )?;
+                    }
+                    Self::install_prepared_lane_manifests_in_publication(
+                        updated_lane_manifests,
+                        updated_lane_privacy,
+                        &_view_generation,
                         &mut releases,
                     );
-                }
-                let state_write_lock_hold = state_write_lock_hold_start.elapsed();
-                if state_write_lock_wait >= STATE_VIEW_LOCK_THRESHOLD
-                    || state_write_lock_hold >= STATE_VIEW_LOCK_THRESHOLD
-                {
-                    debug!(
-                        state_write_lock_wait_us = state_write_lock_wait.as_micros(),
-                        state_write_lock_hold_us = state_write_lock_hold.as_micros(),
-                        "state write lock held (lane lifecycle)"
-                    );
-                }
-            }
-            lanes_to_reset
-        };
-        if !lanes_to_reset.is_empty() {
-            self.prune_da_pin_intent_world_indexes_for_lanes(&lanes_to_reset);
-            self.prune_public_lane_economic_state_for_lanes(&lanes_to_reset);
-        }
-        if refresh_axt_policies {
-            let _ = self.refresh_axt_policies_from_directory();
-        }
-        #[cfg(feature = "telemetry")]
-        {
-            let nexus = self.nexus_snapshot();
-            self.telemetry
-                .set_nexus_catalogs(&nexus.lane_catalog, &nexus.dataspace_catalog);
-            if let Some(event) = self.telemetry.record_nexus_config_diff(&nexus) {
-                match norito::json::to_string(&event) {
-                    Ok(payload) => {
-                        iroha_logger::telemetry!(msg = "nexus.config.diff", event = payload);
+                    if !lanes_to_reset.is_empty() {
+                        self.reset_lane_scoped_runtime_state(&lanes_to_reset, true, &mut releases);
+                        self.record_da_lane_reset_watermarks(
+                            &active_reset_lanes,
+                            reset_height,
+                            &mut releases,
+                        );
                     }
-                    Err(err) => {
-                        iroha_logger::error!(
-                            ?err,
-                            "failed to serialize nexus config diff event for telemetry log"
+                    let state_write_lock_hold = state_write_lock_hold_start.elapsed();
+                    if state_write_lock_wait >= STATE_VIEW_LOCK_THRESHOLD
+                        || state_write_lock_hold >= STATE_VIEW_LOCK_THRESHOLD
+                    {
+                        debug!(
+                            state_write_lock_wait_us = state_write_lock_wait.as_micros(),
+                            state_write_lock_hold_us = state_write_lock_hold.as_micros(),
+                            "state write lock held (lane lifecycle)"
                         );
                     }
                 }
+                lanes_to_reset
+            };
+            if !lanes_to_reset.is_empty() {
+                self.prune_da_pin_intent_world_indexes_for_lanes(&lanes_to_reset);
+                self.prune_public_lane_economic_state_for_lanes(&lanes_to_reset);
             }
-        }
-        Ok(())
+            if refresh_axt_policies {
+                let _ = self.refresh_axt_policies_from_directory();
+            }
+            #[cfg(feature = "telemetry")]
+            {
+                let nexus = self.nexus_snapshot();
+                self.telemetry
+                    .set_nexus_catalogs(&nexus.lane_catalog, &nexus.dataspace_catalog);
+                if let Some(event) = self.telemetry.record_nexus_config_diff(&nexus) {
+                    match norito::json::to_string(&event) {
+                        Ok(payload) => {
+                            iroha_logger::telemetry!(msg = "nexus.config.diff", event = payload);
+                        }
+                        Err(err) => {
+                            iroha_logger::error!(
+                                ?err,
+                                "failed to serialize nexus config diff event for telemetry log"
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(())
         })
     }
     /// Apply an internally managed autoscale lifecycle plan in a test fixture.
@@ -34072,16 +34084,23 @@ impl State {
     }
     fn apply_lane_geometry_updates(
         &self,
-        previous: &iroha_config::parameters::actual::LaneConfig,
-        current: &iroha_config::parameters::actual::LaneConfig,
-        previous_incarnations: &BTreeMap<LaneId, Hash>,
-        current_incarnations: &BTreeMap<LaneId, Hash>,
-        previous_activation_heights: &BTreeMap<LaneId, u64>,
-        current_activation_heights: &BTreeMap<LaneId, u64>,
-        previous_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
-        current_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
-        replaced_lane_ids: &BTreeSet<LaneId>,
-        transition_height: u64,
+        (previous, current): (
+            &iroha_config::parameters::actual::LaneConfig,
+            &iroha_config::parameters::actual::LaneConfig,
+        ),
+        (previous_incarnations, current_incarnations): (
+            &BTreeMap<LaneId, Hash>,
+            &BTreeMap<LaneId, Hash>,
+        ),
+        (previous_activation_heights, current_activation_heights): (
+            &BTreeMap<LaneId, u64>,
+            &BTreeMap<LaneId, u64>,
+        ),
+        (previous_lineage, current_lineage): (
+            &BTreeMap<LaneId, LaneIncarnationLineage>,
+            &BTreeMap<LaneId, LaneIncarnationLineage>,
+        ),
+        (replaced_lane_ids, transition_height): (&BTreeSet<LaneId>, u64),
         releases: &mut LaneLifecycleReleases<'_>,
     ) -> Result<(), LaneLifecycleError> {
         let request = crate::kura::GeometryBindingRequest {
@@ -34141,8 +34160,7 @@ impl State {
     ) -> Result<(), LaneGeometryCatalogPublicationFailure> {
         self.finish_lane_geometry_publication(
             lane_config,
-            incarnations,
-            activation_heights,
+            (incarnations, activation_heights),
             lane_incarnation_lineage_root(&self.network_id, lineage),
             configured_baseline,
             None,
@@ -34153,18 +34171,18 @@ impl State {
         &self,
         previous: &iroha_config::parameters::actual::LaneConfig,
         current: &iroha_config::parameters::actual::LaneConfig,
-        previous_incarnations: &BTreeMap<LaneId, Hash>,
-        previous_activation_heights: &BTreeMap<LaneId, u64>,
-        previous_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
+        (previous_incarnations, previous_activation_heights, previous_lineage): (
+            &LaneIncarnations,
+            &LaneActivationHeights,
+            &LaneLineage,
+        ),
         replaced_lane_ids: &BTreeSet<LaneId>,
         transition_height: u64,
         releases: &mut LaneLifecycleReleases<'_>,
     ) -> Result<(), LaneLifecycleError> {
         self.rollback_owned_lane_geometry(
-            previous,
-            current,
-            previous_incarnations,
-            previous_activation_heights,
+            (previous, current),
+            (previous_incarnations, previous_activation_heights),
             lane_incarnation_lineage_root(&self.network_id, previous_lineage),
             replaced_lane_ids,
             transition_height,
@@ -34292,9 +34310,11 @@ impl State {
         let derivation_header_hash = block_header_hash;
         let mut expected_update = prepare_lane_lifecycle_update(
             &prospective_nexus,
-            &lane_incarnations,
-            &lane_incarnation_lineage,
-            &lane_incarnation_activation_heights,
+            (
+                &lane_incarnations,
+                &lane_incarnation_lineage,
+                &lane_incarnation_activation_heights,
+            ),
             &self.network_id,
             derivation_header_hash,
             &pending.plan,
@@ -34632,7 +34652,7 @@ impl State {
         let Some(max_disk) = nexus
             .storage
             .effective_local_budget_bytes
-            .map(|budget| budget.get())
+            .map(iroha_config::base::util::Bytes::get)
         else {
             return;
         };
@@ -34784,6 +34804,10 @@ impl State {
         self.world.validate_plain_governance_tally_capacity()
     }
 }
+type LaneIncarnations = BTreeMap<LaneId, Hash>;
+type LaneActivationHeights = BTreeMap<LaneId, u64>;
+type LaneLineage = BTreeMap<LaneId, LaneIncarnationLineage>;
+
 include!("state/lane_lifecycle_support.rs");
 include!("state/geometry_publication.rs");
 include!("state/runtime_catalog.rs");
@@ -34791,9 +34815,11 @@ include!("state/runtime_catalog_startup.rs");
 include!("state/runtime_catalog_commit.rs");
 fn prepare_lane_lifecycle_update(
     nexus: &iroha_config::parameters::actual::Nexus,
-    previous_lane_incarnations: &BTreeMap<LaneId, Hash>,
-    previous_lane_incarnation_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
-    previous_lane_incarnation_activation_heights: &BTreeMap<LaneId, u64>,
+    (
+        previous_lane_incarnations,
+        previous_lane_incarnation_lineage,
+        previous_lane_incarnation_activation_heights,
+    ): (&LaneIncarnations, &LaneLineage, &LaneActivationHeights),
     network_id: &iroha_data_model::NetworkId,
     committing_header_hash: HashOf<BlockHeader>,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
@@ -34897,9 +34923,11 @@ fn prepare_lane_lifecycle_update(
         committing_header_hash,
         &nexus.lane_catalog,
         &updated_catalog,
-        previous_lane_incarnations,
-        previous_lane_incarnation_activation_heights,
-        previous_lane_incarnation_lineage,
+        (
+            previous_lane_incarnations,
+            previous_lane_incarnation_activation_heights,
+            previous_lane_incarnation_lineage,
+        ),
         plan,
     )?;
     let updated_lane_incarnation_activation_heights =
@@ -36249,6 +36277,13 @@ pub trait StateReadOnly: WorldStateSnapshot {
     ) -> Result<Arc<IvmElectionsSnapshot>, InvalidIvmElectionSnapshot> {
         ivm_elections::project(self.world().elections())
     }
+    /// Validated confidential-root projection for IVM state reads.
+    ///
+    /// # Errors
+    /// Rejects confidential tree metadata that contradicts its commitment count or profile.
+    fn ivm_zk_roots_snapshot(&self) -> Result<Arc<IvmZkRootsSnapshot>, InvalidIvmZkRootsSnapshot> {
+        ivm_zk_roots::project(self.world().zk_assets().iter())
+    }
     /// Resolve the exact canonical `3f+1` committee for a lane/dataspace route
     /// at an explicit consensus height.
     ///
@@ -36330,10 +36365,10 @@ pub trait StateReadOnly: WorldStateSnapshot {
         Option<iroha_data_model::block::SharedSignedBlock>,
         crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
     > {
-        match self.height().checked_sub(1).and_then(NonZeroUsize::new) {
-            Some(height) => self.block_by_height(height),
-            None => Ok(None),
-        }
+        self.height()
+            .checked_sub(1)
+            .and_then(NonZeroUsize::new)
+            .map_or_else(|| Ok(None), |height| self.block_by_height(height))
     }
     /// Get a reference to the latest block. Returns none if genesis is not committed.
     ///
@@ -36349,10 +36384,8 @@ pub trait StateReadOnly: WorldStateSnapshot {
         Option<iroha_data_model::block::SharedSignedBlock>,
         crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
     > {
-        match NonZeroUsize::new(self.height()) {
-            Some(height) => self.block_by_height(height),
-            None => Ok(None),
-        }
+        NonZeroUsize::new(self.height())
+            .map_or_else(|| Ok(None), |height| self.block_by_height(height))
     }
     /// Visit every canonical slot in the chain from `start`.
     ///
@@ -36520,6 +36553,9 @@ macro_rules! impl_state_ro {
             }
             fn ivm_elections_snapshot(&self) -> Result<Arc<IvmElectionsSnapshot>, InvalidIvmElectionSnapshot> {
                 ivm_elections::cached_snapshot(&self.ivm_elections_cache, &self.world)
+            }
+            fn ivm_zk_roots_snapshot(&self) -> Result<Arc<IvmZkRootsSnapshot>, InvalidIvmZkRootsSnapshot> {
+                ivm_zk_roots::cached_snapshot(&self.ivm_zk_roots_cache, &self.world)
             }
             fn accounts_snapshot(&self) -> Arc<Vec<AccountId>> {
                 Arc::clone(self.accounts_snapshot_cache.get_or_init(|| {
@@ -36782,11 +36818,9 @@ fn compute_vk_set_hash_from_statuses_at_height(
         .iter()
         .filter(|(id, rec)| {
             let status = statuses.get(*id).copied().unwrap_or(rec.status);
-            if let Some(height) = height {
+            height.map_or(matches!(status, ConfidentialStatus::Active), |height| {
                 params_effective(status, rec.activation_height, rec.withdraw_height, height)
-            } else {
-                matches!(status, ConfidentialStatus::Active)
-            }
+            })
         })
         .collect();
     if entries.is_empty() {
@@ -38019,11 +38053,11 @@ fn autoscale_ratio_permille(value: f64) -> u64 {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(test)]
-struct AutoscaleThresholds {
-    scale_out_latency_permille: u64,
-    scale_in_latency_permille: u64,
-    scale_out_utilization_permille: u64,
-    scale_in_utilization_permille: u64,
+struct AutoscaleThresholdsPermille {
+    out_latency: u64,
+    in_latency: u64,
+    out_utilization: u64,
+    in_utilization: u64,
 }
 #[cfg(test)]
 fn autoscale_threshold_permille(value: f64) -> Option<u64> {
@@ -38036,24 +38070,23 @@ fn autoscale_threshold_permille(value: f64) -> Option<u64> {
 #[cfg(test)]
 fn autoscale_thresholds_permille(
     autoscale: &iroha_config::parameters::actual::Autoscale,
-) -> Option<AutoscaleThresholds> {
-    let scale_out_latency_permille =
-        autoscale_threshold_permille(autoscale.scale_out_latency_ratio)?;
-    let scale_in_latency_permille = autoscale_threshold_permille(autoscale.scale_in_latency_ratio)?;
-    let scale_out_utilization_permille =
+) -> Option<AutoscaleThresholdsPermille> {
+    let out_latency_permille = autoscale_threshold_permille(autoscale.scale_out_latency_ratio)?;
+    let in_latency_permille = autoscale_threshold_permille(autoscale.scale_in_latency_ratio)?;
+    let out_utilization_permille =
         autoscale_threshold_permille(autoscale.scale_out_utilization_ratio)?;
-    let scale_in_utilization_permille =
+    let in_utilization_permille =
         autoscale_threshold_permille(autoscale.scale_in_utilization_ratio)?;
-    if scale_in_latency_permille >= scale_out_latency_permille
-        || scale_in_utilization_permille >= scale_out_utilization_permille
+    if in_latency_permille >= out_latency_permille
+        || in_utilization_permille >= out_utilization_permille
     {
         return None;
     }
-    Some(AutoscaleThresholds {
-        scale_out_latency_permille,
-        scale_in_latency_permille,
-        scale_out_utilization_permille,
-        scale_in_utilization_permille,
+    Some(AutoscaleThresholdsPermille {
+        out_latency: out_latency_permille,
+        in_latency: in_latency_permille,
+        out_utilization: out_utilization_permille,
+        in_utilization: in_utilization_permille,
     })
 }
 #[cfg(test)]
@@ -38293,6 +38326,10 @@ impl StateReadOnlyWithTransactions for StateBlock<'_> {
         &self.transactions
     }
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "State refusal retains original validation and allocation causes inline without allocating an error box"
+)]
 impl<'state> StateBlock<'state> {
     /// Number of committed fragments (transactions and triggers) recorded in this block.
     #[must_use]
@@ -38588,13 +38625,9 @@ impl<'state> StateBlock<'state> {
                 // Authority loss is a terminal local capture failure. Latch it without
                 // draining a recorder that may now belong to another execution.
                 state.require_original_execution_recorder()?;
-                let mut witness =
-                    match crate::exec_witness::drain_exec_witness_checked(|transcripts| {
-                        source_inventory.verify_finalized_transcript_map(transcripts)
-                    }) {
-                        Ok(witness) => witness,
-                        Err(error) => return Err(error.into()),
-                    };
+                let mut witness = crate::exec_witness::drain_exec_witness_checked(|transcripts| {
+                    source_inventory.verify_finalized_transcript_map(transcripts)
+                })?;
                 let receiver_height = state._curr_block.height().get();
                 // Commit the complete protected validation-fee registry selection
                 // at every height. A finality proof for this fixed synthetic write
@@ -38812,13 +38845,13 @@ impl<'state> StateBlock<'state> {
     /// Reject stale output extraction even when capture has not been called again.
     fn guard_captured_exec_witness(&mut self) -> bool {
         self.observe_quantity_block_journals();
-        let source_inventory = match self.verified_fastpq_source_inventory_for_capture() {
-            Ok(inventory) => inventory,
-            Err(_) => {
+        let source_inventory =
+            if let Ok(inventory) = self.verified_fastpq_source_inventory_for_capture() {
+                inventory
+            } else {
                 self.clear_cached_exec_witness();
                 return false;
-            }
-        };
+            };
         if let Err(error) = self.verify_cached_ordinary_witness_content(&source_inventory) {
             self.reject_fastpq_witness_content(error);
             return false;
@@ -38991,10 +39024,7 @@ impl<'state> StateBlock<'state> {
             self.execution_output_plan.is_none(),
             "component callback fixtures cannot replace an admitted block owner"
         );
-        let hash = self
-            .transaction()
-            .direct_execution_identity()
-            .expect("component callback root has a bounded direct execution slot");
+        let hash = self.transaction().direct_execution_identity();
         self.transaction_for_fastpq_testing(hash)
     }
     /// Explicit bounded E owner for direct component fixtures, before borrowing State.
@@ -39079,9 +39109,10 @@ impl<'state> StateBlock<'state> {
         #[cfg(not(feature = "telemetry"))]
         let _ = ingest_event_telemetry;
         let callback_journal =
-            callback_journal::CallbackJournal::new(self.callback_output_byte_limit());
-        let contract_event_journal =
-            contract_event_journal::ContractEventJournal::new(self.callback_output_byte_limit());
+            callback_journal::CallbackJournal::new(Ok(self.callback_output_byte_limit()));
+        let contract_event_journal = contract_event_journal::ContractEventJournal::new(Ok(
+            self.callback_output_byte_limit()
+        ));
         let fields = self.fields.as_mut().expect("original executing State");
         let axt_current_slot =
             current_axt_slot_from_block(&fields._curr_block, fields.nexus.axt.slot_length_ms);
@@ -39289,6 +39320,7 @@ impl<'state> StateBlock<'state> {
             last_mintable: None,
             accounts_snapshot_cache: OnceCell::new(),
             ivm_elections_cache: &fields.ivm_elections_cache,
+            ivm_zk_roots_cache: &fields.ivm_zk_roots_cache,
         })
     }
     #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
@@ -39484,7 +39516,7 @@ impl<'state> StateBlock<'state> {
         events
     }
     /// Apply the effects of a block the Sumeragi core committed (`specs/sumeragi.md` §6.8):
-    /// `committee` is `C_h` of the lag-2 schedule, which the certified CommitQC was verified
+    /// `committee` is `C_h` of the lag-2 schedule, which the certified `CommitQC` was verified
     /// against, so it is the block's topology.
     ///
     /// # Errors
@@ -39828,11 +39860,11 @@ impl<'state> StateBlock<'state> {
         Ok((time_event, max_time_trigger_invocations))
     }
     fn time_trigger_nft_seq_base(block_height: u64, invocation_index: usize) -> u64 {
-        let height_part = u32::try_from(block_height).unwrap_or(u32::MAX) as u128;
-        let index_part = u32::try_from(invocation_index).unwrap_or(u32::MAX) as u128;
+        let height_part = u128::from(u32::try_from(block_height).unwrap_or(u32::MAX));
+        let index_part = u128::from(u32::try_from(invocation_index).unwrap_or(u32::MAX));
         let combined = (height_part << 32) | index_part;
         let base = combined << 8;
-        u64::try_from(base).unwrap_or(u64::MAX & !0xFF)
+        u64::try_from(base).unwrap_or(!0xFF)
     }
     /// Create time event using previous and current blocks.
     fn create_time_event(&self, block_header: &BlockHeader) -> TimeEvent {
@@ -40169,7 +40201,7 @@ mod public_lane_slash_observability_staging_tests {
                 asset_id: "scratch#fee".to_owned(),
             });
             #[cfg(feature = "telemetry")]
-            transaction.stage_block_fee_amount(Quantity::from(4_u64));
+            transaction.stage_block_fee_amount(&(Quantity::from(4_u64)));
             transaction.stage_public_lane_slash_observability(
                 lane_id,
                 PublicLaneValidatorStatus::Active,
@@ -41995,7 +42027,7 @@ impl StateTransaction<'_, '_> {
     /// Register one complete all-Prepare barrier as durable global control locks.
     pub(crate) fn apply_private_settlement_prepare_locks_v1(
         &mut self,
-        barrier: iroha_data_model::nexus::PrivateSettlementPrepareBarrierV1,
+        barrier: &iroha_data_model::nexus::PrivateSettlementPrepareBarrierV1,
     ) -> core::result::Result<
         PrivateSettlementGlobalStateOutcomeV1,
         PrivateSettlementGlobalStateErrorV1,
@@ -42052,7 +42084,7 @@ impl StateTransaction<'_, '_> {
             &self.world.private_settlement_staged_locks,
             &self.world.private_settlement_receipts,
             &self.world.private_settlement_aborts,
-            &barrier,
+            barrier,
             current_height,
         )?;
         let Some(plan) = plan else {
@@ -42299,9 +42331,11 @@ impl StateTransaction<'_, '_> {
         }
         let lifecycle_update = prepare_lane_lifecycle_update(
             &self.nexus,
-            &self.lane_incarnations,
-            &self.lane_incarnation_lineage,
-            &self.lane_incarnation_activation_heights,
+            (
+                &self.lane_incarnations,
+                &self.lane_incarnation_lineage,
+                &self.lane_incarnation_activation_heights,
+            ),
             &self.network_id,
             self._curr_block.hash(),
             &payload.plan,
@@ -42332,7 +42366,8 @@ impl StateTransaction<'_, '_> {
         let updated_lane_privacy = LanePrivacyRegistry::try_from_manifest_registry(
             updated_lane_manifests.as_ref(),
             self.world.sccp_committee_generations.allocation_budget(),
-        ).map_err(LaneLifecycleError::ParameterDeferred)?;
+        )
+        .map_err(LaneLifecycleError::ParameterDeferred)?;
         self.lane_manifests = Arc::clone(&updated_lane_manifests);
         self.lane_privacy_registry = updated_lane_privacy.clone();
         self.world.mark_axt_lane_incarnation_transitions(
@@ -42663,13 +42698,10 @@ impl StateTransaction<'_, '_> {
     ) -> Result<(u32, u64, crate::privacy::PrivacyBlockBudgetV1), Error> {
         if action_index != self.privacy_actions_in_tx {
             return Err(Error::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    format!(
-                        "privacy action index mismatch: expected {}, got {action_index}",
-                        self.privacy_actions_in_tx
-                    )
-                    .into(),
-                ),
+                InvalidParameterError::SmartContract(format!(
+                    "privacy action index mismatch: expected {}, got {action_index}",
+                    self.privacy_actions_in_tx
+                )),
             ));
         }
         let limits = *self.privacy_budget_after_block.limits();
@@ -42700,9 +42732,9 @@ impl StateTransaction<'_, '_> {
         reservation
             .reserve(0, encoded_action_bytes)
             .map_err(|error| {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!("privacy admission budget rejected action: {error}").into(),
-                ))
+                Error::InvalidParameter(InvalidParameterError::SmartContract(format!(
+                    "privacy admission budget rejected action: {error}"
+                )))
             })?;
         reservation.commit();
         Ok((next_actions, next_bytes, next_block_budget))
@@ -43061,7 +43093,7 @@ impl StateTransaction<'_, '_> {
     /// deliberately excludes execution results, so proposal execution and
     /// validation/Kura replay derive the same identity. Applying a transaction
     /// advances the fragment before another transaction can commit in the same block.
-    pub(crate) fn direct_execution_identity(&self) -> Result<iroha_crypto::Hash, &'static str> {
+    pub(crate) fn direct_execution_identity(&self) -> iroha_crypto::Hash {
         let block_header_hash = self._curr_block.hash();
         let fragment = u64::try_from(*self.committed_fragments).unwrap_or(u64::MAX);
         let mut preimage = Vec::from(&b"iroha:direct-execution:v1\0"[..]);
@@ -43073,7 +43105,7 @@ impl StateTransaction<'_, '_> {
                 .unwrap_or(u64::MAX)
                 .to_le_bytes(),
         );
-        Ok(iroha_crypto::Hash::new(preimage))
+        iroha_crypto::Hash::new(preimage)
     }
     /// Return a deterministic execution identity and fresh ordinal for a lifecycle transition.
     ///
@@ -43083,10 +43115,9 @@ impl StateTransaction<'_, '_> {
     pub(crate) fn next_lifecycle_transition_seed(
         &mut self,
     ) -> Result<(iroha_crypto::Hash, u64), &'static str> {
-        let execution_identity = match self.tx_call_hash {
-            Some(call_hash) => call_hash,
-            None => self.direct_execution_identity()?,
-        };
+        let execution_identity = self
+            .tx_call_hash
+            .unwrap_or_else(|| self.direct_execution_identity());
         let ordinal = self.lifecycle_transition_ordinal;
         self.lifecycle_transition_ordinal = ordinal
             .checked_add(1)
@@ -43095,7 +43126,7 @@ impl StateTransaction<'_, '_> {
     }
     /// Apply finality-owned world changes without creating an execution fragment.
     ///
-    /// This path is intentionally narrower than [`Self::apply`]: NPoS effects
+    /// This path is intentionally narrower than [`Self::apply`]: `NPoS` effects
     /// may update only WSV and their block-commit observability buffer. They do
     /// not advance transaction identities, gas, settlement, FASTPQ, or any
     /// other ordinary-execution accumulator. Unsupported quantity observations
@@ -44410,7 +44441,7 @@ impl StateTransaction<'_, '_> {
                             .expect("block creation timestamp must fit into u64");
                     let default_nft_seq_base = self._curr_block.height().get().saturating_mul(256);
                     let mut nft_seq_base = nft_seq_base_override.unwrap_or(default_nft_seq_base);
-                    for item in items.iter() {
+                    for item in items {
                         match item {
                             iroha_data_model::transaction::ExecutableBatchItem::Instruction(
                                 instruction,
@@ -44430,21 +44461,22 @@ impl StateTransaction<'_, '_> {
                                 let ivm_cache = self.ivm_cache;
                                 let resolved = {
                                     let mut cache = ivm_cache.lock();
-                                    executor
-                                        .resolve_contract_invocation(self, invocation, &mut cache)?
+                                    crate::executor::Executor::resolve_contract_invocation(
+                                        self, invocation, &mut cache,
+                                    )?
                                 };
                                 debug_assert!(
                                     ivm_cache.try_lock().is_some(),
                                     "trigger IVM cache must be released before guest effects apply"
                                 );
-                                let outcome = executor.execute_resolved_contract_invocation(
+                                let outcome = crate::executor::Executor::execute_resolved_contract_invocation(
                                     self,
                                     authority,
                                     invocation,
                                     resolved,
-                                    remaining,
-                                    logical_time_ms,
+                                    (remaining, logical_time_ms),
                                     Some((id, nft_seq_base)),
+                                    None,
                                 )?;
                                 executed_instructions.extend(outcome.executed_instructions);
                                 batch_gas_used = batch_gas_used.saturating_add(outcome.gas_used);
@@ -44625,8 +44657,7 @@ impl StateTransaction<'_, '_> {
                     vm.set_program_counter(entrypoint_pc).map_err(|err| {
                         let selector = contract_call_context
                             .runtime_context()
-                            .map(|runtime| runtime.entrypoint)
-                            .unwrap_or_else(|| "main".to_owned());
+                            .map_or_else(|| "main".to_owned(), |runtime| runtime.entrypoint);
                         ValidationFail::NotPermitted(format!(
                             "contract entrypoint `{selector}` resolved to invalid pc: {err}"
                         ))
@@ -44908,9 +44939,7 @@ impl StateTransaction<'_, '_> {
                                 vm.set_register(1, code_len);
                                 vm.set_program_counter(entrypoint_pc).map_err(|err| {
                             let selector = contract_call_context
-                                .runtime_context()
-                                .map(|runtime| runtime.entrypoint)
-                                .unwrap_or_else(|| "main".to_owned());
+                                .runtime_context().map_or_else(|| "main".to_owned(), |runtime| runtime.entrypoint);
                             ValidationFail::NotPermitted(format!(
                                 "contract entrypoint `{selector}` resolved to invalid pc: {err}"
                             ))
@@ -45082,7 +45111,7 @@ impl StateTransaction<'_, '_> {
         authority: &AccountId,
     ) -> Result<ExecutionStep, ValidationFail> {
         let executor = self.world.executor.clone();
-        for instruction in instructions.iter() {
+        for instruction in &instructions {
             executor.execute_instruction(self, authority, instruction.clone())?;
         }
         Ok(instructions.into())
@@ -45178,6 +45207,8 @@ mod account_rekey_restore;
 mod account_scope_restore;
 mod alias_index_restore;
 mod alias_lease;
+#[cfg(test)]
+mod derived_index_write_cost_tests;
 use alias_lease::validate_alias_lease_window;
 mod asset_index_restore;
 pub(crate) mod contract_subject_restore;
@@ -45423,6 +45454,7 @@ impl SnapshotNexusRuntime {
         }
     }
 }
+// TODO: publish only after a finalized accumulated root and restricted read ACL.
 #[path = "state/asset_context_keys.rs"]
 pub(crate) mod asset_context_keys;
 #[path = "state/asset_escrow_scope.rs"]
@@ -45435,7 +45467,6 @@ pub(crate) mod asset_uid;
 pub(crate) mod asset_uid_enrollment;
 #[path = "state/asset_uid_reader.rs"]
 pub(crate) mod asset_uid_reader;
-// TODO: publish only after a finalized accumulated root and restricted read ACL.
 #[cfg(test)]
 #[path = "state/retail_contract_state_snapshot.rs"]
 mod retail_contract_state_snapshot;

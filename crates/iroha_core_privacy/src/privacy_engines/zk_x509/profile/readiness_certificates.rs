@@ -150,6 +150,10 @@ pub struct ZkX509ResourceEnvironmentV1<'a> {
 }
 /// Reviewed isolation and process ceilings, distinct from observations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the resource certificate records independently required process isolation controls"
+)]
 pub struct ZkX509ResourceProcessLimitsV1 {
     /// Reviewed wall-clock ceiling, in milliseconds.
     pub elapsed_ceiling_millis: u64,
@@ -310,7 +314,8 @@ fn canonical_soundness_certificate_v1(
         main_fri: fri_theorem_certificate_v1(
             ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
             ZK_X509_FRI_ROUNDS_V1,
-            ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2() as u8,
+            u8::try_from(ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2())
+                .expect("fixed profile value fits u8"),
             ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1,
         ),
         ca_fri: fri_theorem_certificate_v1(
@@ -321,11 +326,15 @@ fn canonical_soundness_certificate_v1(
         ),
         goldilocks_modulus: ZK_X509_GOLDILOCKS_MODULUS_V1,
         rfc_event_bound: ZK_X509_RFC5280_STARK_RELATION_EVENT_BOUND_V1 as u64,
-        rfc_relation_count: ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1 as u16,
-        rfc_challenge_lanes: ZK_X509_RFC5280_STARK_BUS_LANES_V1 as u8,
+        rfc_relation_count: u16::try_from(ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1)
+            .expect("fixed profile value fits u16"),
+        rfc_challenge_lanes: u8::try_from(ZK_X509_RFC5280_STARK_BUS_LANES_V1)
+            .expect("fixed profile value fits u8"),
         p256_factor_bound: P256_PERMUTATION_FACTOR_CARDINALITY_BOUND_V1 as u64,
-        p256_argument_count: P256_X5S1_PERMUTATION_ARGUMENTS_V1 as u16,
-        p256_challenge_lanes: P256_PERMUTATION_CHALLENGE_LANES_V1 as u8,
+        p256_argument_count: u16::try_from(P256_X5S1_PERMUTATION_ARGUMENTS_V1)
+            .expect("fixed profile value fits u16"),
+        p256_challenge_lanes: u8::try_from(P256_PERMUTATION_CHALLENGE_LANES_V1)
+            .expect("fixed profile value fits u8"),
         sha_memory_numerator: ZK_X509_SHA_WORD_MEMORY_COLLISION_NUMERATOR_V1,
         sha_memory_equalities: SHA_MEMORY_EQUALITIES_V1,
         sha_memory_challenge_lanes: ZK_X509_SHA_COLLISION_LANES_V1,
@@ -511,8 +520,9 @@ fn validate_soundness_certificate_payload_v1(
     let main = validate_fri_certificate_v1(
         certificate.main_fri,
         ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
-        ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2() as u8,
-        ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2() as u8,
+        ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2().to_le_bytes()[0],
+        u8::try_from(ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2())
+            .expect("fixed profile value fits u8"),
         ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1,
         ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1,
     )?;

@@ -20,7 +20,7 @@ enum ProposalIdentity {
 
 /// One proposal's retained original semantic QC, reusable only for the same source and pool.
 #[derive(Default)]
-pub(crate) struct ParentServiceQcPreparation {
+pub struct ParentServiceQcPreparation {
     original: Option<(
         ProposalIdentity,
         ChargedShared<ChargedBuffer<u8>>,
@@ -224,7 +224,7 @@ fn custody_error(error: QcCustodyError) -> ParentServiceError {
 /// Initial component-fixture admission through the existing complete model decoder.
 /// Production proposals arrive through the retained signed-RS16 worker owner instead.
 #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
-pub(crate) fn admit_parent_service_fixture(
+pub fn admit_parent_service_fixture(
     proposal: &mut SignedBlock,
     pool: &AllocationBudget,
 ) -> Result<(), ParentServiceError> {
@@ -277,12 +277,14 @@ pub(crate) fn admit_parent_service_fixture(
 }
 
 #[cfg(test)]
+type AdmissionProbe = Box<dyn FnOnce(&ChargedShared<ChargedBuffer<u8>>, &AllocationBudget)>;
+#[cfg(test)]
 thread_local! {
-    static ADMISSION_PROBE: std::cell::RefCell<Option<Box<dyn FnOnce(&ChargedShared<ChargedBuffer<u8>>, &AllocationBudget)>>> = const { std::cell::RefCell::new(None) };
+    static ADMISSION_PROBE: std::cell::RefCell<Option<AdmissionProbe>> = const { std::cell::RefCell::new(None) };
 }
 /// Observe the actual paid-control/bitmap admission boundary without supplying a refusal.
 #[cfg(test)]
-pub(crate) struct ParentServiceQcAdmissionProbe;
+pub struct ParentServiceQcAdmissionProbe;
 #[cfg(test)]
 impl Drop for ParentServiceQcAdmissionProbe {
     fn drop(&mut self) {
@@ -293,7 +295,7 @@ impl Drop for ParentServiceQcAdmissionProbe {
 }
 /// Register one read-only observer; a test may occupy real credit in the original pool.
 #[cfg(test)]
-pub(crate) fn observe_parent_service_qc_admission(
+pub fn observe_parent_service_qc_admission(
     observer: impl FnOnce(&ChargedShared<ChargedBuffer<u8>>, &AllocationBudget) + 'static,
 ) -> ParentServiceQcAdmissionProbe {
     ADMISSION_PROBE.with(|slot| {

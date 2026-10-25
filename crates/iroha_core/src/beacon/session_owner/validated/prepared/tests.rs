@@ -119,7 +119,7 @@ fn prepared_seal_refuses_foreign_graph_and_invalid_transcript_without_consuming_
     assert_eq!(foreign_budget.reserved_bytes(), 0);
     let mut bad = fixture.session.record().clone();
     bad.transcript_hash[0] ^= 1;
-    let mut bad_binding = fixture.binding.clone();
+    let mut bad_binding = fixture.binding;
     bad_binding.transcript_hash = bad.transcript_hash;
     let bad = retain_canonical_session(&bad, &budget).unwrap();
     let bad_pointer = bad.get().public_shares.as_ptr();

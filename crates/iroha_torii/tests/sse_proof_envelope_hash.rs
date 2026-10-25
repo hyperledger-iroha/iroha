@@ -15,7 +15,7 @@ async fn sse_filters_by_proof_envelope_hash() {
         "/v1/events/sse",
         get({
             let events = events.clone();
-            move |q| async move { iroha_torii::handle_v1_events_sse_for_tests(events, q) }
+            move |q| async move { iroha_torii::handle_v1_events_sse_for_tests(&(events), q) }
         }),
     );
     // Filter by envelope hash (hex, 64 chars)
@@ -24,7 +24,7 @@ async fn sse_filters_by_proof_envelope_hash() {
         iroha_torii::json_entry("op", "eq"),
         iroha_torii::json_entry(
             "args",
-            iroha_torii::json_array(vec!["proof_envelope_hash", want_hex.as_str()]),
+            &iroha_torii::json_array(vec!["proof_envelope_hash", want_hex.as_str()]),
         ),
     ]);
     let filter = iroha_torii::filter::FilterExpr::from_json_value(filter_value)

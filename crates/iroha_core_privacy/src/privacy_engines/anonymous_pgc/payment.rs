@@ -85,9 +85,9 @@ impl<'a> AnonymousPgcPaymentStatementV1<'a> {
         current_balance_ciphertexts: &'a [TwistedElGamalCiphertextV1],
         recipient_count: usize,
         pool_invariant: AnonymousPgcPoolInvariantV1,
-        transcript_binding: TranscriptBindingV1<'a>,
+        transcript_binding: &TranscriptBindingV1<'a>,
     ) -> Result<Self, AnonymousPgcError> {
-        super::validate_binding(&transcript_binding)?;
+        super::validate_binding(transcript_binding)?;
         let count = public_keys.len();
         if !PGC_PAYMENT_ANONYMITY_SET_SIZES_V1.contains(&count) {
             return Err(AnonymousPgcError::InvalidPaymentAnonymitySetSize { count });
@@ -133,7 +133,7 @@ impl<'a> AnonymousPgcPaymentStatementV1<'a> {
             current_balance_ciphertexts,
             recipient_count,
             pool_invariant,
-            transcript_binding,
+            transcript_binding: *transcript_binding,
             memo_and_ledger_digest,
         })
     }
@@ -2490,7 +2490,7 @@ mod tests {
         }
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             for (index, byte) in destination.iter_mut().take(19).enumerate() {
-                *byte = index as u8;
+                *byte = index.to_le_bytes()[0];
             }
             Err(RngError::new(
                 "injected partial Anonymous-PGC payment entropy failure",
@@ -2661,7 +2661,7 @@ mod tests {
                 &self.current_balances,
                 self.recipient_count,
                 self.pool_invariant(),
-                binding(),
+                &binding(),
             )
             .expect("payment statement")
         }
@@ -3110,7 +3110,7 @@ mod tests {
             &wrong_current,
             fixture.recipient_count,
             fixture.pool_invariant(),
-            binding(),
+            &binding(),
         )
         .expect("statement");
         assert!(verify_payment(&wrong_current_statement, &proof).is_err());
@@ -3122,7 +3122,7 @@ mod tests {
             &fixture.current_balances,
             fixture.recipient_count,
             fixture.pool_invariant(),
-            binding(),
+            &binding(),
         )
         .expect("statement");
         assert!(verify_payment(&reordered_statement, &proof).is_err());
@@ -3134,7 +3134,7 @@ mod tests {
             &fixture.current_balances,
             fixture.recipient_count,
             fixture.pool_invariant(),
-            changed_binding,
+            &changed_binding,
         )
         .expect("statement");
         assert!(verify_payment(&changed_statement, &proof).is_err());
@@ -3152,7 +3152,7 @@ mod tests {
                 &fixture.current_balances,
                 fixture.recipient_count,
                 changed_invariant,
-                binding(),
+                &binding(),
             )
             .expect("changed pool invariant statement");
             assert_ne!(
@@ -3238,7 +3238,7 @@ mod tests {
             &cancelling_current,
             fixture.recipient_count,
             fixture.pool_invariant(),
-            binding(),
+            &binding(),
         )
         .expect("statement accepts individual canonical inputs");
         assert!(matches!(
@@ -3269,7 +3269,7 @@ mod tests {
                 &fixture.current_balances[..15],
                 2,
                 fixture.pool_invariant(),
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::InvalidPaymentAnonymitySetSize { count: 15 })
         ));
@@ -3280,7 +3280,7 @@ mod tests {
                 &fixture.current_balances,
                 2,
                 fixture.pool_invariant(),
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::PaymentLengthMismatch { .. })
         ));
@@ -3291,7 +3291,7 @@ mod tests {
                 &fixture.current_balances,
                 0,
                 fixture.pool_invariant(),
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::InvalidPaymentRecipientCount { .. })
         ));
@@ -3304,7 +3304,7 @@ mod tests {
                 &fixture.current_balances,
                 2,
                 fixture.pool_invariant(),
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::PaymentKeysNotStrictlyIncreasing)
         ));

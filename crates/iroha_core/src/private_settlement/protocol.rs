@@ -27,7 +27,7 @@ use thiserror::Error;
 use crate::state::{StateReadOnly, WorldReadOnly, peer_has_live_consensus_key_for_role};
 
 /// Reserved digest carried by Prepare bodies before the all-leg barrier exists.
-pub(crate) fn private_settlement_reserved_prepared_bundle_digest_v1() -> Hash {
+pub fn private_settlement_reserved_prepared_bundle_digest_v1() -> Hash {
     Hash::prehashed([0; Hash::LENGTH])
 }
 
@@ -39,7 +39,7 @@ pub(crate) fn private_settlement_reserved_prepared_bundle_digest_v1() -> Hash {
 /// data-model digest includes every signed Prepare body but normalizes away the
 /// signer bitmap and aggregate signature, so quorum-equivalent exact 3-of-4
 /// certificates cannot fork the bundle during crash recovery.
-pub(crate) fn private_settlement_prepared_bundle_digest_v1(
+pub fn private_settlement_prepared_bundle_digest_v1(
     manifest: &AtomicPrivateSettlementV1,
     authority_catalog: &PrivateSettlementAuthorityCatalogV1,
     deltas: &[PrivateSettlementDeltaV1],
@@ -66,14 +66,14 @@ pub(crate) fn private_settlement_prepared_bundle_digest_v1(
 
 #[cfg(test)]
 /// Construct the canonical, self-digesting complete all-Prepare barrier.
-pub(crate) fn private_settlement_prepare_barrier_v1(
+pub fn private_settlement_prepare_barrier_v1(
     manifest: AtomicPrivateSettlementV1,
-    authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+    authority_catalog: &[PrivateSettlementCommitteeAuthorityV1],
     deltas: Vec<PrivateSettlementDeltaV1>,
     prepare_certificates: Vec<PrivateSettlementPhaseCertificateV1>,
 ) -> Result<PrivateSettlementPrepareBarrierV1, PrivateSettlementProtocolErrorV1> {
     let authority_catalog =
-        PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &authority_catalog)
+        PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, authority_catalog)
             .map_err(|_| PrivateSettlementProtocolErrorV1::Binding)?;
     let prepared_bundle_digest = private_settlement_prepared_bundle_digest_v1(
         &manifest,
@@ -94,7 +94,7 @@ pub(crate) fn private_settlement_prepare_barrier_v1(
 }
 
 /// Verify every component and self-digest of an exact complete Prepare barrier.
-pub(crate) fn validate_private_settlement_prepare_barrier_v1(
+pub fn validate_private_settlement_prepare_barrier_v1(
     barrier: &PrivateSettlementPrepareBarrierV1,
 ) -> Result<(), PrivateSettlementProtocolErrorV1> {
     barrier
@@ -161,7 +161,7 @@ pub struct PrivateSettlementCommitteeAuthorityErrorV1;
 ///
 /// Physical lane catalogs describe deployment and never grant execution authority.
 /// Pool mutation and participant certificates share this exact committed-record check.
-pub(crate) fn native_private_settlement_route_v1(
+pub fn native_private_settlement_route_v1(
     lanes: &SumeragiLaneState,
     route: PrivateSettlementRouteV1,
     authority_height: u64,
@@ -175,7 +175,7 @@ pub(crate) fn native_private_settlement_route_v1(
 /// This is the authorization boundary behind restricted upload, Prepare, and
 /// global receipt application. In addition to validating the supplied BLS
 /// keys and proofs of possession, it requires the exact canonical ordered
-/// validator roster and PoPs pinned by the native committed lane record at
+/// validator roster and `PoPs` pinned by the native committed lane record at
 /// `authority_context_height`, the exact active lane incarnation, and the V1
 /// four-validator/`f = 1` geometry. Every member must also hold a live
 /// purpose-specific [`ConsensusKeyRole::Committee`] key at that height.
@@ -215,7 +215,7 @@ pub fn validate_private_settlement_committee_authority_v1(
     clippy::large_types_passed_by_value,
     reason = "the complete phase body is transferred into the signed vote"
 )]
-pub(crate) fn sign_private_settlement_phase_vote_v1(
+pub fn sign_private_settlement_phase_vote_v1(
     body: PrivateSettlementPhaseBodyV1,
     signer: &iroha_crypto::KeyPair,
 ) -> Result<PrivateSettlementPhaseVoteV1, PrivateSettlementProtocolErrorV1> {
@@ -233,7 +233,7 @@ pub(crate) fn sign_private_settlement_phase_vote_v1(
 }
 
 /// Construct the sole phase body admissible for one manifest leg.
-pub(crate) fn private_settlement_phase_body_v1(
+pub fn private_settlement_phase_body_v1(
     manifest: &AtomicPrivateSettlementV1,
     delta: &PrivateSettlementDeltaV1,
     authority: &PrivateSettlementCommitteeAuthorityV1,
@@ -294,7 +294,7 @@ pub(crate) fn private_settlement_phase_body_v1(
     clippy::large_types_passed_by_value,
     reason = "the returned certificate owns the validated phase body"
 )]
-pub(crate) fn aggregate_private_settlement_phase_votes_v1(
+pub fn aggregate_private_settlement_phase_votes_v1(
     body: PrivateSettlementPhaseBodyV1,
     authority_catalog_index: u8,
     authority: &PrivateSettlementCommitteeAuthorityV1,
@@ -364,7 +364,7 @@ pub(crate) fn aggregate_private_settlement_phase_votes_v1(
 }
 
 /// Verify one exact-three-of-four participant phase certificate.
-pub(crate) fn verify_private_settlement_phase_certificate_v1(
+pub fn verify_private_settlement_phase_certificate_v1(
     certificate: &PrivateSettlementPhaseCertificateV1,
     expected_authority_catalog_index: u8,
     authority: &PrivateSettlementCommitteeAuthorityV1,
@@ -413,8 +413,8 @@ pub(crate) fn verify_private_settlement_phase_certificate_v1(
     .map_err(|_| PrivateSettlementProtocolErrorV1::Certificate)
 }
 
-/// Validate every receipt binding, authority PoP, and phase aggregate.
-pub(crate) fn verify_private_settlement_receipt_v1(
+/// Validate every receipt binding, authority `PoP`, and phase aggregate.
+pub fn verify_private_settlement_receipt_v1(
     receipt: &PrivateSettlementReceiptV1,
 ) -> Result<(), PrivateSettlementProtocolErrorV1> {
     receipt
@@ -470,7 +470,7 @@ pub(crate) fn verify_private_settlement_receipt_v1(
 
 /// Redacted protocol error safe for logs and public API responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub(crate) enum PrivateSettlementProtocolErrorV1 {
+pub enum PrivateSettlementProtocolErrorV1 {
     /// Canonical Norito encoding failed.
     #[error("private-settlement protocol encoding failed")]
     CanonicalEncoding,
@@ -799,7 +799,7 @@ mod tests {
             .iter()
             .map(|leg| leg.prepare.clone())
             .collect::<Vec<_>>();
-        let authorities = (0..receipt.manifest.legs.len())
+        let authorities: Vec<_> = (0..receipt.manifest.legs.len())
             .map(|index| {
                 receipt
                     .authority_catalog
@@ -809,7 +809,7 @@ mod tests {
             .collect();
         let barrier = private_settlement_prepare_barrier_v1(
             receipt.manifest.clone(),
-            authorities,
+            &authorities,
             deltas,
             prepares,
         )

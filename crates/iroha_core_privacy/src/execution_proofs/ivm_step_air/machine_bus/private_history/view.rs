@@ -22,10 +22,10 @@ pub(in super::super) struct Segment<'a> {
 }
 impl<'a> Segment<'a> {
     pub(in super::super) fn new(
-        base: [&'a [F]; ROW_WIDTH],
+        base: &[&'a [F]; ROW_WIDTH],
         aux: [&'a [F]; permutation::WIDTH],
     ) -> Self {
-        Self { base, aux }
+        Self { base: *base, aux }
     }
 }
 
@@ -122,8 +122,7 @@ impl<'a> View<'a> {
         };
         append_residues(
             out,
-            &rows.current,
-            &rows.next,
+            (&rows.current, &rows.next),
             &rows.aux,
             &rows.next_aux,
             &self.schedule.fixed(index).expect("validated history row"),
@@ -154,11 +153,11 @@ mod tests {
         let challenges = permutation::Challenges::testing(E::ONE, E::ONE);
         base[3] = &column[..column.len() - 1];
         assert!(matches!(
-            View::new(schedule, [Segment::new(base, aux)], &challenges),
+            View::new(schedule, [Segment::new(&base, aux)], &challenges),
             Err(ShapeError::ColumnLength)
         ));
         base[3] = &column;
-        let view = View::new(schedule, [Segment::new(base, aux)], &challenges).unwrap();
+        let view = View::new(schedule, [Segment::new(&base, aux)], &challenges).unwrap();
         assert_eq!(view.contains_window(8087, 8297), Ok(()));
         assert_eq!(view.contains_window(8088, 8297), Err(ShapeError::Window));
         assert_eq!(

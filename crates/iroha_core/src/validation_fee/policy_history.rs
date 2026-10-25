@@ -13,7 +13,7 @@ type Attempt<T> = Result<T, ExecutionAttemptError<String>>;
 /// Authenticate a checkpoint from its original committed fee corpus on restoration.
 /// Finality authenticates that source snapshot; recursively opening every older snapshot would
 /// turn a bounded restart check into lifetime work and is neither necessary nor permitted.
-pub(crate) fn validate_retained_history(
+pub fn validate_retained_history(
     state: &impl StateReadOnly,
     registry: &ValidationFeePolicyRegistryV1,
     restored_height: u64,
@@ -136,7 +136,7 @@ fn compact(stx: &mut StateTransaction<'_, '_>) -> Attempt<bool> {
 }
 
 /// Run one atomic native compaction pass with constant archive count and a bounded hot registry.
-pub(crate) fn process(block: &mut StateBlock<'_>) -> Result<(), ExecutionOutputAttemptError> {
+pub fn process(block: &mut StateBlock<'_>) -> Result<(), ExecutionOutputAttemptError> {
     let mut stx = block.try_transaction()?;
     let result = compact(&mut stx);
     stx.require_storage_admission()?;

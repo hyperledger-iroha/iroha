@@ -46,19 +46,19 @@ fn phase_context(
     authority
         .checkpoint_context(
             clock,
-            phase,
-            1,
+            (phase, 1),
             signer,
-            "software-provider",
-            7,
-            Hash::new(output).into(),
-            input,
-            if phase == 1 {
-                [0; 32]
-            } else {
-                Hash::new(previous).into()
-            },
-            Hash::new(intent).into(),
+            ("software-provider", 7),
+            (
+                Hash::new(output).into(),
+                input,
+                if phase == 1 {
+                    [0; 32]
+                } else {
+                    Hash::new(previous).into()
+                },
+                Hash::new(intent).into(),
+            ),
         )
         .unwrap()
 }
@@ -82,11 +82,8 @@ impl Original {
                 &self.public,
                 1,
                 &self.keys[0],
-                "software-provider",
-                7,
-                self.accepted_hash,
-                self.accepted_head,
-                intent,
+                ("software-provider", 7),
+                (self.accepted_hash, self.accepted_head, intent),
             )
             .unwrap()
     }
@@ -235,7 +232,7 @@ fn actual_native_h4_aggregate_stays_original_until_explicit_retirement_and_resto
         .shares
         .as_slice()
         .iter()
-        .map(|share| share.components_for_authenticated_encryption())
+        .map(iroha_crypto::threshold_bls::DasRenPrivateShare::components_for_authenticated_encryption)
         .collect::<Vec<_>>();
 
     let before = budget.reserved_bytes();
@@ -269,7 +266,7 @@ fn actual_native_h4_aggregate_stays_original_until_explicit_retirement_and_resto
             .shares
             .as_slice()
             .iter()
-            .map(|share| share.components_for_authenticated_encryption())
+            .map(iroha_crypto::threshold_bls::DasRenPrivateShare::components_for_authenticated_encryption)
             .collect::<Vec<_>>(),
         parts
     );
@@ -420,11 +417,12 @@ fn aggregate_checked_context_refuses_nonfinal_native_tip_zero_intent_and_changed
                 &original.public,
                 1,
                 &original.keys[0],
-                "software-provider",
-                7,
-                original.accepted_hash,
-                original.accepted_head,
-                original.intent_hash
+                ("software-provider", 7),
+                (
+                    original.accepted_hash,
+                    original.accepted_head,
+                    original.intent_hash
+                )
             )
             .is_err()
     );
@@ -456,11 +454,8 @@ fn aggregate_checked_context_refuses_nonfinal_native_tip_zero_intent_and_changed
             &original.public,
             1,
             &original.keys[0],
-            "software-provider",
-            7,
-            [0x77; 32],
-            original.accepted_head,
-            original.intent_hash,
+            ("software-provider", 7),
+            ([0x77; 32], original.accepted_head, original.intent_hash),
         )
         .unwrap();
     assert!(
@@ -595,7 +590,7 @@ fn aggregate_restore_refuses_foreign_public_pool_and_actual_scalar_allocator_bef
     ));
     assert_eq!(foreign.reserved_bytes(), 0);
     let mut result = None;
-    let (_, refused) = refuse_one_layout_during(
+    let ((), refused) = refuse_one_layout_during(
         Layout::array::<zeroize::Zeroizing<[[u8; 32]; 3]>>(1).unwrap(),
         || {
             result = Some(PreparedGlobalBeaconAggregateRestoreV1::new(

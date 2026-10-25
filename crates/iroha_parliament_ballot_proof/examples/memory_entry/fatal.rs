@@ -130,6 +130,7 @@ impl Page {
         // observer reads concurrently. Initialization also touches the page.
         unsafe { result.control.write(Control::new()) };
         // OwnedFd closes here; the shared mapping keeps the unlinked file live.
+        drop(fd);
         Ok(result)
     }
 }

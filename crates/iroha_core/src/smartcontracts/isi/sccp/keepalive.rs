@@ -161,6 +161,10 @@ pub fn next_progress_at_ms(world: &(impl WorldReadOnly + ?Sized)) -> Option<u64>
 /// K5 admission before ordinary fee handling, including one pending key per authority.
 /// # Errors
 /// Rejects malformed, future, no-longer-due or dependency-unavailable carriers.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 pub fn admit(
     world: &(impl WorldReadOnly + ?Sized),
     payload: &TransactionPayload,

@@ -12,6 +12,10 @@ use iroha_sumeragi::{
 use crate::sumeragi::durable_artifact::{BodyReadError, BodyReadJob, BodyReadPoll, BodyReader};
 
 /// One retained acquisition outcome; absence is distinct from all resource and data errors.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 pub enum StoredProgress {
     /// The independently requested source was genuinely absent in this store.
     Absent,
@@ -34,6 +38,10 @@ pub enum StoredError {
     Completed,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum Stage {
     Reading(Box<dyn BodyReadJob>),
     Restoring(BodyRestoration),

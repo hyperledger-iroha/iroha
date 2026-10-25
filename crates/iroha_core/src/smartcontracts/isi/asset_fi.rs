@@ -155,18 +155,17 @@ impl Execute for SetAssetFiLinkV1 {
                 "owner approval refers to a revoked or changed FI reference",
             ));
         }
-        if let Some(controller) = &value.controller {
-            if tx.world.contract_instances.get(controller).is_none()
+        if let Some(controller) = &value.controller
+            && (tx.world.contract_instances.get(controller).is_none()
                 || tx
                     .world
                     .contract_subject_addresses
                     .get(&controller.subject_id())
-                    != Some(controller)
-            {
-                return Err(asset_fi::reject(
-                    "owner FI link requires an existing exact contract instance",
-                ));
-            }
+                    != Some(controller))
+        {
+            return Err(asset_fi::reject(
+                "owner FI link requires an existing exact contract instance",
+            ));
         }
         let bytes = asset_uid::encode(&value)?;
         tx.world.smart_contract_state.insert(
@@ -341,13 +340,23 @@ impl crate::smartcontracts::ValidQuery for iroha_data_model::query::asset_fi::Fi
     }
 }
 
-impl crate::smartcontracts::ValidQuery for iroha_data_model::query::asset_fi::FindAssetFiTransferReceiptV1 {
-    fn execute(self, _filter: iroha_data_model::query::dsl::CompoundPredicate<iroha_data_model::asset::fi_link::AssetFiTransferReceiptV1>,
-        _state: &impl crate::state::StateReadOnly)
-        -> Result<impl Iterator<Item = iroha_data_model::asset::fi_link::AssetFiTransferReceiptV1>, iroha_data_model::query::error::QueryExecutionFail>
-    {
+impl crate::smartcontracts::ValidQuery
+    for iroha_data_model::query::asset_fi::FindAssetFiTransferReceiptV1
+{
+    fn execute(
+        self,
+        _filter: iroha_data_model::query::dsl::CompoundPredicate<
+            iroha_data_model::asset::fi_link::AssetFiTransferReceiptV1,
+        >,
+        _state: &impl crate::state::StateReadOnly,
+    ) -> Result<
+        impl Iterator<Item = iroha_data_model::asset::fi_link::AssetFiTransferReceiptV1>,
+        iroha_data_model::query::error::QueryExecutionFail,
+    > {
         Err::<core::iter::Empty<iroha_data_model::asset::fi_link::AssetFiTransferReceiptV1>, _>(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "FI receipt requires bounded ordinary native query admission".into()))
+                "FI receipt requires bounded ordinary native query admission".into(),
+            ),
+        )
     }
 }

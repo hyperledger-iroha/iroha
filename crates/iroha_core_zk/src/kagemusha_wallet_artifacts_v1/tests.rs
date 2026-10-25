@@ -5,6 +5,7 @@ use iroha_data_model::isi::{
     InstructionBox,
     kagemusha_wallet::{KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1},
 };
+use iroha_pasta::msm::MemoryBudget;
 
 #[test]
 #[ignore = "genuine complete k12/k16 native verifier inventory; run optimized"]
@@ -225,7 +226,7 @@ fn retained_ledger_history_verifies_under_verifier_admission() {
                         .unwrap();
                 activation.verify(verifier.scheme()).unwrap();
                 verifier
-                    .verify_package_proofs(&activation.bootstrap, Default::default())
+                    .verify_package_proofs(&activation.bootstrap, MemoryBudget::default())
                     .unwrap();
                 activations += 1;
                 eprintln!("HISTORICAL_ACTIVATION_VERIFIED {}", path.display());
@@ -261,7 +262,7 @@ fn structural_pack() -> VerifierPackV1 {
                 enabled_controls: *mask,
                 artifact: ArtifactOriginalV1 {
                     descriptor: vec![*tag],
-                    verifying_key: vec![*mask as u8 + 1],
+                    verifying_key: vec![u8::try_from(*mask).unwrap() + 1],
                 },
             })
             .collect(),

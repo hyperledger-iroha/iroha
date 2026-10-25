@@ -1924,12 +1924,12 @@ fn get_asset_definition_id_emits_asset_definition_syscall() {
 }
 #[path = "controlled_asset_lock_tests.rs"]
 mod controlled_asset_lock_tests;
-#[path = "uid_holding_quote_tests.rs"]
-mod uid_holding_quote_tests;
 #[path = "fi_link_revision_tests.rs"]
 mod fi_link_revision_tests;
 #[path = "same_uid_tests.rs"]
 mod same_uid_tests;
+#[path = "uid_holding_quote_tests.rs"]
+mod uid_holding_quote_tests;
 
 #[test]
 fn native_escrow_builtins_emit_escrow_syscalls() {
@@ -2643,7 +2643,7 @@ kotoage fn main() authorize(FixtureAccess) {{
   ledger::domain::transfer(source: owner, domain: domain_id, destination: recipient);
   ledger::account::register(account: owner);
   ledger::account::unregister(account: recipient);
-  ledger::asset::register(asset_definition: asset, name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
+  ledger::asset::register(asset_definition: asset, name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once, owning_domain: DomainId::parse("default.universal"));
   ledger::asset::mint(account: owner, asset_definition: asset, amount: 7);
   ledger::asset::unregister(asset_definition: asset);
   ledger::domain::register(domain: domain_id);
@@ -2651,7 +2651,7 @@ kotoage fn main() authorize(FixtureAccess) {{
   ledger::domain::transfer(source: owner, domain: domain_id, destination: recipient);
   ledger::account::register(account: recipient);
   ledger::account::unregister(account: owner);
-  ledger::asset::register(asset_definition: asset, name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
+  ledger::asset::register(asset_definition: asset, name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once, owning_domain: DomainId::parse("default.universal"));
   ledger::asset::mint(account: owner, asset_definition: asset, amount: 3);
   ledger::asset::unregister(asset_definition: asset);
 }}
@@ -5611,6 +5611,7 @@ kotoage fn main() authorize(AssetAdmin) {{
     name: "ROSE",
     spec: NumericSpec::integer(),
     mintable: Mintable::Once,
+    owning_domain: DomainId::parse("default.universal"),
   );
   ledger::asset::mint(
     account: AccountId::parse("{account_literal}"),
@@ -5629,6 +5630,12 @@ kotoage fn main() authorize(AssetAdmin) {{
     let hints = manifest
         .access_set_hints
         .expect("expected access_set_hints");
+    assert!(
+        hints
+            .read_keys
+            .contains(&"domain:default.universal".to_owned())
+    );
+    assert!(hints.read_keys.contains(&DOMAIN_WILDCARD_KEY.to_owned()));
     assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(hints.write_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
@@ -5657,6 +5664,7 @@ kotoage fn main() authorize(AssetAdmin) {{
     name: "ROSE",
     spec: NumericSpec::integer(),
     mintable: Mintable::Once,
+    owning_domain: DomainId::parse("default.universal"),
   );
   ledger::role::register(role: Name::parse("minter"), permissions: Json::parse("{{\"perms\":[\"mint_asset:{asset_literal}\"]}}"));
   ledger::role::grant(account: context::authority(), role: Name::parse("minter"));
@@ -7433,7 +7441,7 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
         ),
         (
             Builtin::RegisterAsset,
-            "ledger::asset::register(asset_definition, name, spec: NumericSpec::fractional(2), mintable: Mintable::Limited(3))",
+            "ledger::asset::register(asset_definition, name, spec: NumericSpec::fractional(2), mintable: Mintable::Limited(3), owning_domain: DomainId::parse(\"default.universal\"))",
         ),
         (
             Builtin::UnregisterAsset,

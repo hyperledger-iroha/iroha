@@ -57,11 +57,8 @@ fn division_retains_native_security_geometry_and_degree_with_maximum_attempted_t
         assert_eq!(segment.profile_constraint_count_v1(), 3_369);
         assert_eq!(segment.profile_fixed_width_v1(), 10);
         let fixed = segment.profile_fixed_columns_v1().unwrap();
-        for row in 0..TRACE_SIZE {
-            assert_eq!(
-                fixed[OUT_OF_GAS][row],
-                F(u64::from(out_of_gas && row == MAX_STEPS - 1))
-            );
+        for (row, &gas_flag) in fixed[OUT_OF_GAS].iter().enumerate().take(TRACE_SIZE) {
+            assert_eq!(gas_flag, F(u64::from(out_of_gas && row == MAX_STEPS - 1)));
             assert_eq!(
                 fixed[ASSERTION_FAILED][row],
                 F(u64::from(!out_of_gas && row == MAX_STEPS - 1))
@@ -115,8 +112,8 @@ fn native_stark_proves_maximum_division_segment_and_binds_exact_trap_reason_gas_
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             segment.steps,
-            segment.before,
-            segment.after,
+            &segment.before,
+            &segment.after,
             other,
         )
         .unwrap();
@@ -132,8 +129,8 @@ fn native_stark_proves_maximum_division_segment_and_binds_exact_trap_reason_gas_
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 segment.steps,
-                segment.before,
-                after,
+                &segment.before,
+                &after,
                 segment.outcome,
             )
             .unwrap();
@@ -146,8 +143,8 @@ fn native_stark_proves_maximum_division_segment_and_binds_exact_trap_reason_gas_
         let changed = ScalarSegment::new(
             ivm::prepare_contract(Arc::from(artifact)).unwrap(),
             segment.steps,
-            segment.before,
-            segment.after,
+            &segment.before,
+            &segment.after,
             segment.outcome,
         )
         .unwrap();

@@ -468,8 +468,10 @@ fn stark_air_width_limit_is_enforced() {
     let bytes = norito::to_bytes(&env).expect("encode");
     let trace_width = env.proof.air.as_ref().expect("AIR section").trace_width as usize;
     assert!(trace_width > 1, "sample AIR trace must have width");
-    let mut limits = StarkVerifierLimits::default();
-    limits.max_air_width = trace_width - 1;
+    let limits = StarkVerifierLimits {
+        max_air_width: trace_width - 1,
+        ..StarkVerifierLimits::default()
+    };
     assert!(
         !verify_stark_fri_envelope_with_limits(&bytes, &limits)
             .expect("verification attempt must complete for this semantic fixture"),

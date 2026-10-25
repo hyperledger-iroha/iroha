@@ -1,4 +1,4 @@
-//! Actual TxOverlay admission, executor authorization and execution of atomic settlements.
+//! Actual `TxOverlay` admission, executor authorization and execution of atomic settlements.
 
 use super::*;
 use crate::state::{State, StateBlock, World};

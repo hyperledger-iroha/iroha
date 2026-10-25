@@ -1,13 +1,18 @@
 //! Original pending-policy relation shared by the seven-owner definition check.
 //!
 //! Both original indexes remain retained through canonical encoding. The shared
-//! body borrows exact native maps, never zk_assets or a reconstructed projection.
+//! body borrows exact native maps, never `zk_assets` or a reconstructed projection.
 //! This is not finalized State authority or physical scratch funding.
 
 use super::asset_definitions::{
     AssetDefinitionWork, AssetWorkKey, equal, lookup, prepay_asset_definition_id, visit_original,
 };
 use super::*;
+
+type ConfidentialPolicyOriginals<'a, 'world> = (
+    &'a CommittedStorageView<'world, (u64, AssetDefinitionId), ()>,
+    &'a CommittedStorageView<'world, u64, u32>,
+);
 use crate::state::authority_registry::original_images::RawStorageImages;
 use iroha_data_model::asset::{
     AssetDefinition, AssetDefinitionId, definition::AssetConfidentialPolicy,
@@ -35,12 +40,7 @@ impl<'world> RetainedConfidentialPolicies<'world> {
                 .try_committed_view_nonblocking()?,
         })
     }
-    pub(super) fn originals(
-        &self,
-    ) -> (
-        &CommittedStorageView<'world, (u64, AssetDefinitionId), ()>,
-        &CommittedStorageView<'world, u64, u32>,
-    ) {
+    pub(super) fn originals(&self) -> ConfidentialPolicyOriginals<'_, 'world> {
         (&self.transitions, &self.counts)
     }
 
@@ -169,18 +169,17 @@ pub(super) fn validate_original_confidential_policies(
             visit_original(definitions, image, work, |_, definition, work| {
                 let policy = definition.confidential_policy();
                 prepay_policy(policy, work)?;
-                if let Some(transition) = policy.pending_transition() {
-                    if equal(&transition.effective_height(), height, work)? {
-                        work.prepay(4)?;
-                        expected =
-                            expected
-                                .checked_add(1)
-                                .ok_or(GroupedOwnershipError::Source {
-                                    table: "world.asset_definitions",
-                                    image,
-                                    reason: "confidential-policy transition count overflow",
-                                })?;
-                    }
+                if let Some(transition) = policy.pending_transition()
+                    && equal(&transition.effective_height(), height, work)?
+                {
+                    work.prepay(4)?;
+                    expected = expected
+                        .checked_add(1)
+                        .ok_or(GroupedOwnershipError::Source {
+                            table: "world.asset_definitions",
+                            image,
+                            reason: "confidential-policy transition count overflow",
+                        })?;
                 }
                 Ok(())
             })?;

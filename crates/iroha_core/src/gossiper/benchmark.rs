@@ -172,8 +172,11 @@ impl HotPathFixture {
     }
 
     /// Run the production inbound worker's route, duplicate, decode and admission path.
+    /// A deferred attempt would measure a refusal, so it fails the sample instead.
     pub fn receive(&self, batch: TransactionGossip) {
-        self.gossiper.handle_transaction_gossip_owned(batch);
+        self.gossiper
+            .admit_transaction_gossip(&batch)
+            .expect("benchmark gossip admission completes without deferral");
     }
 
     /// Time only keyed queue cleanup after an authenticated commit has identified inputs.

@@ -238,15 +238,13 @@ impl StateParameters {
             if !is_genesis
                 && !cfg!(all(test, sumeragi_core_mutation = "HC399"))
                 && let Some(previous) = previous
-            {
-                if previous.fee_asset_id != next.fee_asset_id
+                && (previous.fee_asset_id != next.fee_asset_id
                     || previous.sponsor_vault_custody_account_id
-                        != next.sponsor_vault_custody_account_id
-                {
-                    return Err(norito::Error::Message(
-                        "root fee currency and sponsor custody are immutable after genesis".into(),
-                    ));
-                }
+                        != next.sponsor_vault_custody_account_id)
+            {
+                return Err(norito::Error::Message(
+                    "root fee currency and sponsor custody are immutable after genesis".into(),
+                ));
             }
             Ok(())
         })
@@ -484,7 +482,7 @@ fn canonical_asset(value: &str, field: &str) -> Result<AssetDefinitionId, String
 }
 
 /// Decode a committed canonical receiver without consulting node address prefixes.
-pub(crate) fn receiver_id(value: &str) -> Result<AccountId, norito::Error> {
+pub fn receiver_id(value: &str) -> Result<AccountId, norito::Error> {
     let decode = || AccountAddress::parse_encoded(value, None)?.to_account_id();
     decode().map_err(receiver_error)
 }
@@ -586,7 +584,7 @@ fn rate_volatility(value: Option<&str>) -> Result<GasVolatility, norito::Error> 
 ///
 /// Returns false for another parameter, or an error for malformed fee policy.
 #[cfg(test)]
-pub(crate) fn validate_parameter(custom: &CustomParameter) -> Result<bool, norito::Error> {
+pub fn validate_parameter(custom: &CustomParameter) -> Result<bool, norito::Error> {
     apply_parameter(&mut Gas::default(), custom)
 }
 
@@ -604,7 +602,7 @@ fn apply_parameter(gas: &mut Gas, custom: &CustomParameter) -> Result<bool, nori
 ///
 /// A malformed carried value is an error; it never selects local configuration
 /// or silently falls back to a default.
-pub(crate) fn from_parameters(parameters: &Parameters) -> Result<Gas, norito::Error> {
+pub fn from_parameters(parameters: &Parameters) -> Result<Gas, norito::Error> {
     let mut policy = Gas::default();
     let [technical_id, assets_id, rates_id] = parameter_ids();
     if let Some(value) = parameters.custom().get(&technical_id) {
@@ -623,7 +621,7 @@ pub(crate) fn from_parameters(parameters: &Parameters) -> Result<Gas, norito::Er
 ///
 /// This helper authors parameters; it is never a runtime configuration fallback.
 #[cfg(any(test, feature = "iroha-core-tests"))]
-pub(crate) fn parameters_for_testing(gas: Gas) -> [iroha_data_model::parameter::Parameter; 3] {
+pub fn parameters_for_testing(gas: Gas) -> [iroha_data_model::parameter::Parameter; 3] {
     use iroha_data_model::parameter::Parameter;
     let rates = gas
         .units_per_gas

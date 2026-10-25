@@ -34,7 +34,7 @@ pub async fn handler_staking_preparation(
                     &view, request,
                 )
                 .map_err(staking_preparation_error)?;
-            Ok(crate::utils::respond_with_format(payload, format))
+            Ok(crate::utils::respond_with_format(&(payload), format))
         })
         .await?;
     proof_response_with_exact_egress(

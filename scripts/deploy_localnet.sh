@@ -18,7 +18,7 @@ usage() {
 Usage: deploy_localnet.sh [OPTIONS]
 
 Builds `kagami`, `iroha3d`, and `iroha`, generates a fresh localnet, starts peers,
-waits for readiness, and verifies the built-in KAGEMUSHA V1 asset alias.
+waits for readiness, and verifies the built-in XOR fee asset alias.
 
 Options:
   --iroha-dir <DIR>          Workspace root (default: repo root)
@@ -45,9 +45,9 @@ Options:
   --release                  Build and run release binaries
   --no-build                 Skip cargo build and require prebuilt binaries
   --no-sample-asset          Do not include kagami's extra sample asset
-  --asset-id <ID>            Built-in KAGEMUSHA V1 asset id to verify (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
-  --asset-name <NAME>        Built-in KAGEMUSHA V1 asset name to verify (default: usd)
-  --asset-alias <ALIAS>      Built-in KAGEMUSHA V1 alias to verify (default: usd#wonderland.universal)
+  --asset-id <ID>            Built-in XOR fee asset id to verify (default: 6TEAJqbb8oEPmLncoNiMRbLEK6tw)
+  --asset-name <NAME>        Built-in XOR fee asset name to verify (default: XOR)
+  --asset-alias <ALIAS>      Built-in XOR fee alias to verify (default: xor#universal)
   --telemetry-profile <NAME> Set telemetry_profile in generated peer configs (e.g., extended)
   --timeout <SECS>           Seconds to wait for readiness (default: 30)
   --force                    Remove existing out-dir before regenerating
@@ -91,9 +91,9 @@ BIND_HOST="127.0.0.1"
 PUBLIC_HOST="127.0.0.1"
 PROFILE="debug"
 SAMPLE_ASSET=true
-ASSET_ID="7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
-ASSET_NAME="usd"
-ASSET_ALIAS="usd#wonderland.universal"
+ASSET_ID="6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+ASSET_NAME="XOR"
+ASSET_ALIAS="xor#universal"
 TELEMETRY_PROFILE=""
 TIMEOUT_SECS=30
 FORCE=false
@@ -492,7 +492,7 @@ done
 
 echo "Generating localnet in $OUT_DIR..."
 KAGAMI_ARGS=(
-  localnet
+  localnet generate
   --out-dir "$OUT_DIR"
   --peers "$PEERS"
   --seed "$SEED"
@@ -727,129 +727,7 @@ if [[ -n "$LOGGER_LEVEL" || -n "$LOGGER_FILTER" ]]; then
   done
 fi
 
-echo "Applying localnet faucet gas admission in peer configs..."
-for cfg in "$OUT_DIR"/peer*.toml; do
-  [[ -f "$cfg" ]] || continue
-  "$PYTHON_BIN" - "$cfg" <<'PY'
-import json
-import os
-import re
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-lines = path.read_text().splitlines()
-
-
-def extract_config_value(section_name: str, key: str) -> str | None:
-    in_section = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_section = stripped.strip("[]") == section_name
-            continue
-        if not in_section or not stripped.startswith(f"{key} "):
-            continue
-        _, raw = stripped.split("=", 1)
-        raw = raw.strip()
-        if raw.startswith('"') and raw.endswith('"'):
-            return raw[1:-1]
-        return raw
-    return None
-
-
-asset = extract_config_value("torii.faucet", "asset_definition_id")
-if not asset:
-    sys.exit("could not find localnet faucet asset id")
-
-assets = []
-
-
-def add_asset(value):
-    if not value:
-        return
-    value = value.strip().strip('"').strip("'")
-    if value and value not in assets:
-        assets.append(value)
-
-
-for extra in re.split(r"[,\s]+", os.environ.get("IROHA_LOCALNET_EXTRA_GAS_ASSETS", "")):
-    add_asset(extra)
-add_asset(asset)
-
-pipeline_start = None
-for index, line in enumerate(lines):
-    if line.strip() == "[pipeline.gas]":
-        pipeline_start = index
-        break
-
-if pipeline_start is None:
-    lines.extend(["", "[pipeline.gas]", f"accepted_assets = {json.dumps(assets)}"])
-else:
-    pipeline_end = len(lines)
-    for index in range(pipeline_start + 1, len(lines)):
-        stripped = lines[index].strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            pipeline_end = index
-            break
-
-    accepted_index = None
-    for index in range(pipeline_start + 1, pipeline_end):
-        if lines[index].strip().startswith("accepted_assets"):
-            accepted_index = index
-            break
-
-    if accepted_index is None:
-        lines.insert(pipeline_start + 1, f"accepted_assets = {json.dumps(assets)}")
-    else:
-        for existing in re.findall(r'"([^"]+)"', lines[accepted_index]):
-            add_asset(existing)
-        prefix = lines[accepted_index].split("[", 1)[0]
-        lines[accepted_index] = f"{prefix}{json.dumps(assets)}"
-
-
-def has_unit_table_for(candidate: str) -> bool:
-    in_unit_table = False
-    current_unit_has_asset = False
-    for line in lines + ["[end]"]:
-        stripped = line.strip()
-        if stripped == "[[pipeline.gas.units_per_gas]]":
-            if in_unit_table and current_unit_has_asset:
-                return True
-            in_unit_table = True
-            current_unit_has_asset = False
-            continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            if in_unit_table and current_unit_has_asset:
-                return True
-            in_unit_table = False
-            current_unit_has_asset = False
-            continue
-        if in_unit_table:
-            match = re.match(r'asset\s*=\s*"([^"]+)"', stripped)
-            if match and match.group(1) == candidate:
-                current_unit_has_asset = True
-    return False
-
-
-for candidate in assets:
-    if has_unit_table_for(candidate):
-        continue
-    lines.extend(
-        [
-            "",
-            "[[pipeline.gas.units_per_gas]]",
-            f"asset = {json.dumps(candidate)}",
-            "units_per_gas = 0",
-            'twap_local_per_xor = "1"',
-            'liquidity_profile = "tier1"',
-            'volatility_class = "stable"',
-        ]
-    )
-
-path.write_text("\n".join(lines) + "\n")
-PY
-done
+# Fee policy is committed in the generated genesis, never injected into node config.
 
 echo "Starting Iroha peers..."
 cd "$OUT_DIR"
@@ -911,7 +789,7 @@ echo "Consensus readiness was established through bounded public /status; inspec
 
 CFG="$OUT_DIR/client.toml"
 echo ""
-echo "Verifying built-in KAGEMUSHA V1 alias $ASSET_ALIAS..."
+echo "Verifying built-in XOR fee alias $ASSET_ALIAS..."
 asset_alias_request="$(printf '{\"alias\":\"%s\"}' "$ASSET_ALIAS")"
 asset_alias_response="$(
   curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
@@ -919,7 +797,7 @@ asset_alias_response="$(
     -d "$asset_alias_request" \
     "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/assets/aliases/resolve"
 )" || {
-  echo "Failed to resolve built-in KAGEMUSHA V1 alias $ASSET_ALIAS." >&2
+  echo "Failed to resolve built-in XOR fee alias $ASSET_ALIAS." >&2
   exit 1
 }
 ASSET_ALIAS_RESPONSE="$asset_alias_response" \
@@ -945,5 +823,5 @@ echo ""
 echo "Iroha localnet is running in $OUT_DIR."
 echo "CLI binary: $CLI_BIN"
 echo "Client config: $CFG"
-echo "Built-in KAGEMUSHA V1 asset: $ASSET_NAME ($ASSET_ID) alias $ASSET_ALIAS"
+echo "Built-in XOR fee asset: $ASSET_NAME ($ASSET_ID) alias $ASSET_ALIAS"
 echo "To stop: cd $OUT_DIR && ./stop.sh"

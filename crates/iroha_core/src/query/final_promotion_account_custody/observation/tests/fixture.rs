@@ -131,7 +131,7 @@ impl Fixture {
             ),
         };
         assert_eq!(
-            f.commit(1_000, vec![f.sign(configure.into(), 1, 1_000)], true, true),
+            f.commit(1_000, &[f.sign(configure.into(), 1, 1_000)], true, true),
             [true]
         );
         let current = f.snapshot();
@@ -161,7 +161,7 @@ impl Fixture {
         assert_eq!(
             f.commit(
                 enrolled_at,
-                vec![f.sign(enroll.into(), 1, enrolled_at)],
+                &[f.sign(enroll.into(), 1, enrolled_at)],
                 true,
                 true
             ),
@@ -242,17 +242,17 @@ impl Fixture {
     pub(super) fn commit(
         &mut self,
         now: u64,
-        transactions: Vec<SignedTransaction>,
+        transactions: &[SignedTransaction],
         membership: bool,
         finality: bool,
     ) -> Vec<bool> {
         let outcomes = if finality {
-            chain_fixture::commit(&mut self.chain, now, transactions.clone())
+            chain_fixture::commit(&mut self.chain, now, transactions.to_vec())
         } else {
-            chain_fixture::commit_uncertified(&mut self.chain, now, transactions.clone())
+            chain_fixture::commit_uncertified(&mut self.chain, now, transactions.to_vec())
         };
         if !membership {
-            chain_fixture::misplace_membership(&self.chain, &transactions);
+            chain_fixture::misplace_membership(&self.chain, transactions);
         }
         outcomes
     }

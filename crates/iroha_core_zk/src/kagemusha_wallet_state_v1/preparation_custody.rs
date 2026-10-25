@@ -309,6 +309,14 @@ pub struct PreparationCustodyV1<'a> {
     refresh: Option<KagemushaWalletPolicyUpdateKindV1>,
 }
 
+/// Manifest-selected lookup roots and the locally retained blacklist for one preparation.
+pub(super) struct PreparationSelectionV1 {
+    pub(super) issued: IndexRoot,
+    pub(super) anchors: IndexRoot,
+    pub(super) epochs: IndexRoot,
+    pub(super) blacklist: Option<manifest::LocalBlacklistV1>,
+}
+
 impl<'a> PreparationCustodyV1<'a> {
     pub(super) fn snapshot(&self) -> SourceCustodyV1 {
         SourceCustodyV1 {
@@ -326,11 +334,14 @@ impl<'a> PreparationCustodyV1<'a> {
         state: &KagemushaWalletStateV1,
         kind: KagemushaWalletOperationKindV1,
         refresh: Option<KagemushaWalletPolicyUpdateKindV1>,
-        issued: IndexRoot,
-        anchors: IndexRoot,
-        epochs: IndexRoot,
-        blacklist: Option<manifest::LocalBlacklistV1>,
+        selection: PreparationSelectionV1,
     ) -> Result<Self, Error> {
+        let PreparationSelectionV1 {
+            issued,
+            anchors,
+            epochs,
+            blacklist,
+        } = selection;
         selected.require(store, state)?;
         let maps = PreparationMapsV1::new(store, &selected.maps, state, kind, refresh)?;
         Ok(Self {

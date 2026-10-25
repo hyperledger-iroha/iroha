@@ -29,6 +29,10 @@ impl ProposalRecovery {
 }
 
 impl Worker<'_> {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn admit_built_payload(
         &mut self,
         payload: PayloadBytes,
@@ -110,6 +114,10 @@ impl Worker<'_> {
         Ok(BuiltPayload { payload, admission })
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn recover_proposal_admission(
         &mut self,
         body: &AvailableBody,

@@ -114,10 +114,7 @@ fn native_open_authorization_binds_every_exact_original_and_source_role() {
         &manifest,
         &slot,
         &marker,
-        &credential,
-        &certificate,
-        &account_original,
-        &[7, 8],
+        [&credential, &certificate, &account_original, &[7, 8]],
     );
     let signature = Signature::try_new(key.private_key(), &message).unwrap();
     authorize_account(&owner, &message, signature.payload()).unwrap();
@@ -127,90 +124,63 @@ fn native_open_authorization_binds_every_exact_original_and_source_role() {
             &manifest,
             &slot,
             &marker,
-            &credential,
-            &certificate,
-            &account_original,
-            &[7, 9],
+            [&credential, &certificate, &account_original, &[7, 9]],
         ),
         open_message(
             &[37; 32],
             &manifest,
             &slot,
             &marker,
-            &credential,
-            &certificate,
-            &account_original,
-            &[7, 8],
+            [&credential, &certificate, &account_original, &[7, 8]],
         ),
         open_message(
             &nonce,
             &[41; 32],
             &slot,
             &marker,
-            &credential,
-            &certificate,
-            &account_original,
-            &[7, 8],
+            [&credential, &certificate, &account_original, &[7, 8]],
         ),
         open_message(
             &nonce,
             &manifest,
             &KagemushaWalletSlotIdV1([43; 32]),
             &marker,
-            &credential,
-            &certificate,
-            &account_original,
-            &[7, 8],
+            [&credential, &certificate, &account_original, &[7, 8]],
         ),
         open_message(
             &nonce,
             &manifest,
             &slot,
             &[47; 32],
-            &credential,
-            &certificate,
-            &account_original,
-            &[7, 8],
+            [&credential, &certificate, &account_original, &[7, 8]],
         ),
         open_message(
             &nonce,
             &manifest,
             &slot,
             &marker,
-            &[1, 2, 4],
-            &certificate,
-            &account_original,
-            &[7, 8],
+            [&[1, 2, 4], &certificate, &account_original, &[7, 8]],
         ),
         open_message(
             &nonce,
             &manifest,
             &slot,
             &marker,
-            &credential,
-            &[4, 6],
-            &account_original,
-            &[7, 8],
+            [&credential, &[4, 6], &account_original, &[7, 8]],
         ),
         open_message(
             &nonce,
             &manifest,
             &slot,
             &marker,
-            &certificate,
-            &credential,
-            &account_original,
-            &[7, 8],
+            [&certificate, &credential, &account_original, &[7, 8]],
         ),
         open_message(
             &nonce,
             &manifest,
             &slot,
             &marker,
-            &credential[..2],
-            &[3, 4, 5],
-            &account_original,
-            &[7, 8],
+            [&credential[..2], &[3, 4, 5], &account_original, &[7, 8]],
         ),
     ] {
         assert_ne!(changed, message);
@@ -222,10 +192,7 @@ fn native_open_authorization_binds_every_exact_original_and_source_role() {
         &manifest,
         &slot,
         &marker,
-        &credential,
-        &certificate,
-        &foreign_original,
-        &[7, 8],
+        [&credential, &certificate, &foreign_original, &[7, 8]],
     );
     assert_ne!(other_message, message);
     assert!(authorize_account(&other, &message, signature.payload()).is_err());
@@ -285,10 +252,7 @@ fn account_refusal_and_retry_reuse_exact_original_challenge() {
         &[79; 32],
         &KagemushaWalletSlotIdV1([83; 32]),
         &[89; 32],
-        &[1, 2],
-        &[3, 4],
-        &account_original,
-        &[5, 6],
+        [&[1, 2], &[3, 4], &account_original, &[5, 6]],
     );
     let signature = Signature::try_new(key.private_key(), &challenge).unwrap();
     let owner = Box::new((account, challenge.clone()));
@@ -438,8 +402,7 @@ fn refused_actual_account_read_retains_same_move_only_intake_allocation() {
     let (retained, error) = norito::with_decode_limits_scope(limits, || {
         retain_checked(retained, |original| account(original, &digest))
     })
-    .err()
-    .expect("real decoder refusal");
+    .expect_err("real decoder refusal");
     assert!(matches!(error, Error::DecodeResource(_)));
     assert_eq!(core::ptr::from_ref(&*retained), identity);
     let (retained, decoded) =
@@ -450,6 +413,8 @@ fn refused_actual_account_read_retains_same_move_only_intake_allocation() {
 
 #[test]
 fn nested_preparation_refusals_keep_original_owner_and_semantic_fallbacks() {
+    use crate::kagemusha_wallet_proofs_v1::Error as ProofError;
+    use crate::kagemusha_wallet_state_v1::Error as StateError;
     let bytes = norito::encode_canonical(&vec![7u8; 128]).unwrap();
     let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
     let captured = norito::with_decode_limits_scope(limits, || {
@@ -461,8 +426,6 @@ fn nested_preparation_refusals_keep_original_owner_and_semantic_fallbacks() {
     .unwrap_err()
     .into_local_refusal()
     .unwrap();
-    use crate::kagemusha_wallet_proofs_v1::Error as ProofError;
-    use crate::kagemusha_wallet_state_v1::Error as StateError;
     let expected = captured.clone();
     let proof = ProofError::preparation_read(StateError::DecodeResource(captured));
     let intake = Error::preparation(proof, "installed preparation source");

@@ -58,7 +58,7 @@ fn signer(bytes: &[u8]) -> Result<SumeragiLaneSignerCustody, norito::Error> {
 
 /// Exact original row with fixed-size lifecycle metadata and borrowed sparse signer bytes.
 /// Only `LanePayload` constructs this view after authenticating its complete original payload.
-pub(crate) struct LaneCustodyView<'a> {
+pub struct LaneCustodyView<'a> {
     // The model's fence methods are reused without copying its signer backing. All original
     // signer values are separately checked below; this private empty vector is never exposed.
     fences: SumeragiLaneCustody,

@@ -13,7 +13,7 @@ use ivm::{IVM, VMError, error::ExecutionDeferral};
 const FUNDED_BYTES: usize = 128 * 1024 * 1024;
 
 /// Complete an authenticated root call before trusted fixture mutation.
-pub(crate) fn funded_return_vm() -> (IVM, AllocationBudget) {
+pub fn funded_return_vm() -> (IVM, AllocationBudget) {
     let budget = AllocationBudget::new(FUNDED_BYTES);
     let mut vm = IVM::try_new_with_memory_budget(100_000, &budget).expect("fund root VM");
     let program = kotodama_lang::compiler::Compiler::new()
@@ -31,7 +31,7 @@ pub(crate) fn funded_return_vm() -> (IVM, AllocationBudget) {
 ///
 /// No mock injection or substitute pool creates the refusal. The successful
 /// count is observed through actual loads, bounded for this tiny fixture.
-pub(crate) fn leave_read_slots(vm: &IVM, budget: &AllocationBudget, spare_reads: usize) -> VMError {
+pub fn leave_read_slots(vm: &IVM, budget: &AllocationBudget, spare_reads: usize) -> VMError {
     vm.memory.clear_tracking();
     budget.set_limit_bytes(budget.reserved_bytes());
     let mut capacity = 0;
@@ -68,7 +68,7 @@ fn leaf(kind: EntrypointValueKindV1) -> EntrypointValueTypeV1 {
 
 /// Compare every field of the exact VM variants exercised by these fixtures.
 /// Original allocation equality includes its retained pool/release identity.
-pub(crate) fn assert_same_return_error(actual: &VMError, expected: &VMError) {
+pub fn assert_same_return_error(actual: &VMError, expected: &VMError) {
     match (actual, expected) {
         (VMError::AllocationDeferred(actual), VMError::AllocationDeferred(expected)) => {
             assert_eq!(actual, expected);

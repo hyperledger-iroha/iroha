@@ -147,18 +147,14 @@ mod signed_attachment_refusal {
                 .get_sample_count();
             let error = context
                 .with(|| match mode {
-                    0 => routing::accept_transaction_for_ingress(
-                        app.state.clone(),
-                        input,
-                        &app.telemetry,
-                    ),
+                    0 => routing::accept_transaction_for_ingress(&app.state, input, &app.telemetry),
                     1 => routing::accept_decoded_signed_transaction_for_ingress(
-                        app.state.clone(),
+                        &app.state,
                         decoded,
                         &app.telemetry,
                     ),
                     _ => routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
-                        app.state.clone(),
+                        &app.state,
                         decoded,
                         &app.telemetry,
                         precheck.single_ed25519_prechecked,
@@ -205,40 +201,40 @@ mod signed_attachment_refusal {
             .await;
             drop(captured);
             assert_eq!(outer_pool.reserved_bytes(), 0);
-            let retried = DecodedVersionedSignedTransaction::decode_versioned(&wire).unwrap();
-            retried
+            let decoded = DecodedVersionedSignedTransaction::decode_versioned(&wire).unwrap();
+            decoded
                 .signed()
                 .validate_signed_attachments_v1()
                 .expect("same signed source completes structural checking after release");
-            retried
+            decoded
                 .signed()
                 .verify_signature()
-                .expect("unchanged carrier retains its genuine signature");
-            assert_eq!(retried.signed().encode_versioned(), wire);
-            assert_eq!(retried.signed().signature(), &signature);
-            let rejection = routing::accept_decoded_signed_transaction_for_ingress(
-                app.state.clone(),
-                retried,
+                .expect("same signed source retains valid authorization");
+            assert_eq!(decoded.signed().encode_versioned(), wire);
+            assert_eq!(decoded.signed().signature(), &signature);
+            let error = routing::accept_decoded_signed_transaction_for_ingress(
+                &app.state,
+                decoded,
                 &app.telemetry,
             )
-            .expect_err("retry reaches the missing consuming-route verdict after release");
-            assert!(
-                matches!(
-                    &rejection,
-                    Error::AcceptTransaction(AcceptTransactionFail::SignedAttachments(
-                        SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 }
-                    ))
-                ),
-                "expected deterministic unsupported-operation verdict, got {rejection:?}"
-            );
+            .expect_err("retry reaches the current missing consuming-route refusal");
+            assert!(matches!(
+                &error,
+                Error::AcceptTransaction(AcceptTransactionFail::SignedAttachments(
+                    SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 }
+                ))
+            ));
+            assert_eq!(error.status_code(), StatusCode::BAD_REQUEST);
             assert_eq!(tx.encode_versioned(), wire);
-            // Local retry completes; no route consumes this proof carrier as authority.
+            assert_eq!(tx.signature(), &signature);
+            // Retrying completes validation; an unsupported operation stays rejected.
             unchanged_receipts(&app, &tx);
         }
     }
     #[tokio::test]
     async fn signed_attachment_worker_moves_original_and_releases_compute_without_receipt() {
         let (app, tx, wire) = fixture();
+        let signature = tx.signature().clone();
         let capacity = app.transaction_ingress_compute_inflight.available_permits();
         let permit =
             try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)
@@ -252,7 +248,7 @@ mod signed_attachment_refusal {
             run_transaction_ingress_compute_job(permit, "fixture_worker_failed", move || {
                 norito::with_decode_limits_scope(narrow(), || {
                     routing::accept_decoded_signed_transaction_for_ingress(
-                        state, decoded, &telemetry,
+                        &state, decoded, &telemetry,
                     )
                 })
             })
@@ -270,29 +266,28 @@ mod signed_attachment_refusal {
         decoded
             .signed()
             .validate_signed_attachments_v1()
-            .expect("caller-owned unchanged signed source completes structural retry");
+            .expect("caller-owned signed source completes structural checking after release");
         decoded
             .signed()
             .verify_signature()
-            .expect("worker retry retains its genuine signature");
+            .expect("caller-owned signed source retains valid authorization");
         assert_eq!(decoded.signed().encode_versioned(), wire);
-        assert_eq!(decoded.signed().signature(), tx.signature());
-        let rejection = routing::accept_decoded_signed_transaction_for_ingress(
-            app.state.clone(),
+        assert_eq!(decoded.signed().signature(), &signature);
+        let error = routing::accept_decoded_signed_transaction_for_ingress(
+            &app.state,
             decoded,
             &app.telemetry,
         )
-        .expect_err("worker retry reaches the deterministic missing-route verdict");
-        assert!(
-            matches!(
-                &rejection,
-                Error::AcceptTransaction(AcceptTransactionFail::SignedAttachments(
-                    SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 }
-                ))
-            ),
-            "expected deterministic unsupported-operation verdict, got {rejection:?}"
-        );
+        .expect_err("caller-owned retry reaches the current missing consuming-route refusal");
+        assert!(matches!(
+            &error,
+            Error::AcceptTransaction(AcceptTransactionFail::SignedAttachments(
+                SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 }
+            ))
+        ));
+        assert_eq!(error.status_code(), StatusCode::BAD_REQUEST);
         assert_eq!(tx.encode_versioned(), wire);
+        assert_eq!(tx.signature(), &signature);
         unchanged_receipts(&app, &tx);
     }
 
@@ -367,9 +362,8 @@ mod signed_attachment_refusal {
         .with_instructions([Log::new(Level::INFO, "malformed intent".into())])
         .with_signed_attachments(SignedAttachmentPlanV1::new().declare())
         .sign(key.private_key());
-        let error =
-            routing::accept_transaction_for_ingress(app.state.clone(), malformed, &app.telemetry)
-                .expect_err("completed schema violation stays rejected");
+        let error = routing::accept_transaction_for_ingress(&app.state, malformed, &app.telemetry)
+            .expect_err("completed schema violation stays rejected");
         assert!(matches!(
             &error,
             Error::AcceptTransaction(AcceptTransactionFail::SignedAttachments(

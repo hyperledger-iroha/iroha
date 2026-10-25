@@ -197,7 +197,7 @@ fn bind_account_label_in_dataspace(
         .set_label(Some(label.clone()));
     state_transaction
         .world
-        .insert_account_alias_binding(label.clone(), account_id.clone());
+        .insert_account_alias_binding(&(label.clone()), &(account_id.clone()));
     state_transaction.world.replace_account_rekey_record(
         iroha_data_model::account::rekey::AccountRekeyRecord::new(
             label.clone(),
@@ -430,44 +430,45 @@ fn initial_executor_runs_multisig_flow() {
         })
         .expect("original singleton multisig registration input");
     let original_wire = source.canonical_wire().expect("original signed carrier");
-    let authenticated = crate::block::authenticate_genesis_block_intents(source, &signer1_id)
-        .expect("authenticate the original multisig genesis signer");
-    let mut initial_crypto = Some(
-        authenticated
-            .initial_crypto_policy(source)
-            .expect("select the sole original signed crypto policy"),
-    );
-    let expected_crypto = initial_crypto
-        .as_ref()
-        .expect("retained original crypto capability")
+    let original = crate::block::authenticate_genesis_block_intents(source, &signer1_id)
+        .expect("authenticate original multisig genesis policies");
+    let expected_crypto = original
+        .initial_crypto_policy(source)
+        .expect("select original signed crypto policy")
         .inspect(Clone::clone);
+    let mut policies = Some(
+        original
+            .initial_policies(source)
+            .expect("select policies from original signed genesis"),
+    );
     let generation = prepared.state.state_view_generation();
+    // The same recorder owns pristine policy installation and the tested instruction.
     let (mut block, recording) = prepared
         .state
         .block_with_recorded_pristine_carrier_stage(
             source,
             |overlay| {
-                crate::block::genesis_crypto_policy::GenesisCryptoPolicy::install(
-                    &mut initial_crypto,
+                crate::block::genesis_policies::GenesisPolicies::install(
+                    &mut policies,
                     source,
                     overlay,
                     &prepared.state,
                     generation,
                 )
+                .map_err(|error| error.to_string())
             },
-            |error| {
-                crate::block::BlockValidationError::InvalidGenesis(
-                    crate::block::InvalidGenesisError::CryptoPolicy(error),
-                )
-            },
+            |error| error,
         )
         .expect("capture original multisig bootstrap carrier");
-    assert!(initial_crypto.is_none());
+    block
+        .require_original_execution_recorder()
+        .expect("original recorder owns installed genesis policies");
+    assert!(policies.is_none());
     assert_eq!(
         block
             .crypto_admission_policy()
             .expect("authenticated overlay policy"),
-        &expected_crypto
+        &expected_crypto,
     );
     let mut state_transaction = block
         .transaction_for_original_genesis_testing(source, index, &signer1_id, &instruction)
@@ -523,6 +524,9 @@ fn initial_executor_runs_multisig_flow() {
         assert_eq!(actual_weight, *expected_weight);
     }
     drop(state_transaction);
+    block
+        .require_original_execution_recorder()
+        .expect("original recorder retained through multisig assertions");
     drop(block);
     drop(recording);
     assert_eq!(prepared.state.committed_height(), 0);
@@ -561,8 +565,8 @@ fn component_world_for_multisig(mut world: World) -> World {
 fn multisig_component_fixture_authors_crypto_without_claiming_genesis() {
     let authority = new_account_id(&checked_keypair());
     let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-    let original_max_tx_bytes = world.parameters().transaction().max_tx_bytes;
-    assert!(world.parameters().require_crypto_policy().is_err());
+    let original_max_tx_bytes = world.parameters.view().transaction().max_tx_bytes;
+    assert!(world.parameters.view().require_crypto_policy().is_err());
     let state = State::new_with_chain(
         component_world_for_multisig(world),
         Kura::blank_kura_for_testing(),

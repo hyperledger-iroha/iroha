@@ -1,4 +1,4 @@
-//! Alias proof caching policy and evaluation helpers for SoraFS gateways.
+//! Alias proof caching policy and evaluation helpers for `SoraFS` gateways.
 #[cfg(feature = "app_api")]
 use crate::sorafs::registry::{GovernanceSummary, ManifestLineageSummary};
 use http::header::HeaderValue;

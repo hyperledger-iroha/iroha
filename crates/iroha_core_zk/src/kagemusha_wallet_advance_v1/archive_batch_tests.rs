@@ -409,7 +409,7 @@ fn conflicting_restage_fails_at_put_without_io() {
 }
 
 /// One drain whose P0 finds the disk state `place` left at the second staged record.
-fn drain_conflict(seed: u8, place: &dyn Fn(&DeviceV1, &Slot, &[u8; 32], &[u8]), expected: Error) {
+fn drain_conflict(seed: u8, place: &impl Fn(&DeviceV1, &Slot, &[u8; 32], &[u8]), expected: Error) {
     let (device, _, slot, _) = bootstrapped_device(Policy::NotRequired, seed);
     let mut provider = device.open();
     provider.status(&slot).expect("verified");

@@ -220,7 +220,7 @@ mod initial_publication_admission {
                         .world()
                         .account_permissions()
                         .get(&account(seed))
-                        .is_none_or(|permissions| permissions.is_empty())
+                        .is_none_or(std::collections::BTreeSet::is_empty)
                 );
             }
             f.applied(

@@ -272,6 +272,10 @@ impl Expansion<'_> {
     }
     /// Consume the original expansion after native proposal-wire validation, preserving
     /// the original proposal on refusal and moving the exact lane step into execution.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(crate) fn apply(
         self,
         proposal: SignedBlock,
@@ -521,7 +525,7 @@ fn expand_from_view<'state>(
 }
 
 /// The work identity checked by global static validation. This is distinct from
-/// the original carrier hash retained in LaneResult and Expansion.
+/// the original carrier hash retained in `LaneResult` and Expansion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum MergeWorkIdentity {
     Signed(HashOf<SignedTransaction>),

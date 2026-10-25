@@ -374,7 +374,6 @@ impl Fields {
 
 impl NativeFoldWorkerV1 {
     fn owner(
-        &self,
         preparation: &PreparationV1<'_>,
         custody: &mut FoldCustodyV1<'_>,
         predecessor: bool,
@@ -464,25 +463,25 @@ impl NativeFoldWorkerV1 {
             fold_metrics::stage(FoldStageV1::Q);
             self.sources
                 .import_q_cancellable(route, checkpoints, originals, self.read, token)
-                .map_err(artifact)?;
+                .map_err(|error| artifact(&error))?;
         } else if checkpoints < stages {
             let position = checkpoints - q_count;
             if position % 2 == 1 {
                 fold_metrics::stage(FoldStageV1::W);
                 self.sources
                     .import_w_cancellable(route, position / 2, originals, self.read, token)
-                    .map_err(artifact)?;
+                    .map_err(|error| artifact(&error))?;
             } else {
                 fold_metrics::stage(FoldStageV1::A);
                 self.sources
                     .import_a_cancellable(route, position / 2, originals, self.read, token)
-                    .map_err(artifact)?;
+                    .map_err(|error| artifact(&error))?;
             }
         } else {
             fold_metrics::stage(FoldStageV1::Omega);
             self.sources
                 .import_omega_cancellable(originals, self.read, token)
-                .map_err(artifact)?;
+                .map_err(|error| artifact(&error))?;
         }
         cancellation.check()
     }
@@ -630,9 +629,9 @@ impl NativeFoldWorkerV1 {
         super::retention::count(|counts| counts.derivations += 1);
         let preparation = proof(PreparationV1::new(&self.installed))?
             .with_cancellation(cancellation.prover_token());
-        let owner = self.owner(&preparation, custody, false)?;
+        let owner = Self::owner(&preparation, custody, false)?;
         let current = if predecessor.is_some() {
-            Some(self.owner(&preparation, custody, true)?)
+            Some(Self::owner(&preparation, custody, true)?)
         } else {
             None
         };
@@ -1047,7 +1046,7 @@ mod tests {
                 assert_eq!(
                     incoming_send_selector(&payment).unwrap(),
                     2 + if carried_controls <= 3 {
-                        carried_controls as u8
+                        u8::try_from(carried_controls).expect("two-bit controls")
                     } else {
                         0
                     }

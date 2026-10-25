@@ -10,7 +10,7 @@ use iroha_data_model::governance::anonymous_ballot::{
 };
 
 /// Canonical structural input only: these public proof bytes and nonce are not valid evidence.
-pub(crate) fn entrypoint() -> TransactionEntrypoint {
+pub fn entrypoint() -> TransactionEntrypoint {
     let envelope = AnonymousBallotEnvelopeV1 {
         network_id: crate::unit_test_support::synthetic_network_id("anonymous representation"),
         ballot: AnonymousBallotV1 {

@@ -1,7 +1,7 @@
 //! Direct commit refusal must retire original State writers before membership wakes.
 //!
-//! Register beneath acquisition_fixture_tests to reuse the actual four-validator
-//! fixture. This exercises public StateBlock::commit, not a test commit surrogate.
+//! Register beneath `acquisition_fixture_tests` to reuse the actual four-validator
+//! fixture. This exercises public `StateBlock::commit`, not a test commit surrogate.
 
 use super::fixture;
 use crate::pipeline_gas_policy::RetainedStateParameters;

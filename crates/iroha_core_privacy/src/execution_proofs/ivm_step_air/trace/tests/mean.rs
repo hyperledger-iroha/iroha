@@ -54,7 +54,9 @@ fn mean_matches_interpreter_full_width_signed_rounding_aliases_r0_and_gas() {
                     let completed = gas >= 2;
                     let mut expected = segment.before.registers;
                     if completed && rd != 0 {
-                        expected[usize::from(rd)] = ((a + b) / 2) as u64;
+                        expected[usize::from(rd)] = i64::try_from(i128::midpoint(a, b))
+                            .expect("signed word mean")
+                            .cast_unsigned();
                     }
                     assert_eq!(segment.after.registers, expected);
                     assert_eq!(segment.after.tags, segment.before.tags);
@@ -138,8 +140,8 @@ fn mean_rejects_forged_workspace_reads_result_gas_cycles_and_outcomes() {
             ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                tagged,
-                segment.after,
+                &tagged,
+                &segment.after,
                 segment.outcome
             )
             .is_err()
@@ -164,8 +166,8 @@ fn mean_cycle_carry_is_three_on_success_and_zero_before_gas_failure() {
             let segment = ScalarSegment::new(
                 original.contract.clone(),
                 1,
-                records[0].before,
-                records[0].after,
+                &records[0].before,
+                &records[0].after,
                 original.outcome,
             )
             .unwrap();
@@ -181,8 +183,8 @@ fn mean_cycle_carry_is_three_on_success_and_zero_before_gas_failure() {
         if let Ok(segment) = ScalarSegment::new(
             original.contract.clone(),
             1,
-            wrong[0].before,
-            wrong[0].after,
+            &wrong[0].before,
+            &wrong[0].after,
             original.outcome,
         ) {
             assert!(segment.witness_rows(&wrong).is_err());
@@ -193,7 +195,7 @@ fn mean_cycle_carry_is_three_on_success_and_zero_before_gas_failure() {
     let mut after = segment.after;
     before.cycles = u64::MAX - 1;
     after.cycles = 1;
-    assert!(ScalarSegment::new(segment.contract, 1, before, after, segment.outcome).is_err());
+    assert!(ScalarSegment::new(segment.contract, 1, &before, &after, segment.outcome).is_err());
 }
 
 #[test]
@@ -226,8 +228,8 @@ fn mean_native_cycle_policy_allows_last_crossing_and_refuses_next_attempt() {
     let segment = ScalarSegment::new(
         prepared.clone(),
         1,
-        record.before,
-        record.after,
+        &record.before,
+        &record.after,
         SegmentOutcome::Continue,
     )
     .unwrap();
@@ -247,8 +249,8 @@ fn mean_native_cycle_policy_allows_last_crossing_and_refuses_next_attempt() {
     let invented = ScalarSegment::new(
         prepared,
         2,
-        record.before,
-        final_state,
+        &record.before,
+        &final_state,
         SegmentOutcome::Continue,
     )
     .unwrap();
@@ -299,7 +301,7 @@ fn mean_native_gas_failure_keeps_cycles_and_cannot_follow_a_limit_crossing() {
                 SegmentOutcome::Continue
             };
             let segment =
-                ScalarSegment::new(prepared.clone(), 1, record.before, record.after, outcome)
+                ScalarSegment::new(prepared.clone(), 1, &record.before, &record.after, outcome)
                     .unwrap();
             assert_rows(
                 &segment,
@@ -311,8 +313,8 @@ fn mean_native_gas_failure_keeps_cycles_and_cannot_follow_a_limit_crossing() {
                 let invented = ScalarSegment::new(
                     prepared,
                     2,
-                    record.before,
-                    record.after,
+                    &record.before,
+                    &record.after,
                     SegmentOutcome::OutOfGas,
                 );
                 if limit == 1 {
@@ -450,7 +452,11 @@ fn mean_maximum_profile_fits_unchanged_caps_and_degree_four() {
         assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
         assert_eq!(
             measured_maximum_affine_degree_v1(
-                [0xb1 + tail_gas as u8; 32],
+                [0xb1 + u8::from_le_bytes(
+                    u64::to_le_bytes(tail_gas)[..1]
+                        .try_into()
+                        .expect("low-byte width")
+                ); 32],
                 [ROW_WIDTH, ROW_WIDTH, 0, 0, FIXED_WIDTH],
                 3,
                 4,
@@ -480,8 +486,8 @@ fn native_stark_proves_maximum_mean_and_binds_registers_gas_cycles_pc_outcome_co
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 segment.steps,
-                segment.before,
-                after,
+                &segment.before,
+                &after,
                 segment.outcome,
             )
             .unwrap();
@@ -491,8 +497,8 @@ fn native_stark_proves_maximum_mean_and_binds_registers_gas_cycles_pc_outcome_co
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 segment.steps,
-                segment.before,
-                segment.after,
+                &segment.before,
+                &segment.after,
                 SegmentOutcome::AssertionFailed,
             )
             .unwrap();
@@ -506,8 +512,8 @@ fn native_stark_proves_maximum_mean_and_binds_registers_gas_cycles_pc_outcome_co
         let changed = ScalarSegment::new(
             ivm::prepare_contract(Arc::from(artifact)).unwrap(),
             segment.steps,
-            segment.before,
-            segment.after,
+            &segment.before,
+            &segment.after,
             segment.outcome,
         )
         .unwrap();

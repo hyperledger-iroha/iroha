@@ -64,7 +64,7 @@ fn prepared_four_and_thirty_one_phase_banks_decode_and_seal_without_late_allocat
                 .unwrap();
         assert_eq!(
             local.input_frame_bounds(),
-            frames.each_ref().map(|frame| frame.len())
+            frames.each_ref().map(std::vec::Vec::len)
         );
         let verifier = local.prepare_final_session_verifier().unwrap();
         drop(local);

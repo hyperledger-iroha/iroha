@@ -35,7 +35,7 @@ fn bound_writer_replay_requires_exact_main_registration_and_clears_private_rows(
     };
     zeroize::Zeroize::zeroize(&mut row);
     assert!(
-        flatten_writer_aux_v1(row)
+        flatten_writer_aux_v1(&row)
             .iter()
             .all(|value| *value == F::ZERO)
     );
@@ -52,7 +52,7 @@ fn bound_writer_replay_requires_exact_main_registration_and_clears_private_rows(
 fn bound_execution_terminal_replay_matches_independent_construction_and_rejects_mutations() {
     let mut base = p256_main_base_source_fixture_for_test_v1().unwrap();
     let token = super::tests::main_post_base_v1(83);
-    let mut bound = base.bind_v1(token).unwrap();
+    let mut bound = base.bind_v1(&token).unwrap();
     let retained = bound.allocated_payload_bytes_v1();
     for index in 0..P256_X5S1_SIGNATURES_V1 {
         let registration =

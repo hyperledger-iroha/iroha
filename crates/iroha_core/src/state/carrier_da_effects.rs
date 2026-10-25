@@ -32,6 +32,10 @@ impl PreparedDaCommitmentEffects {
     /// Capture only from the validated candidate's post-lifecycle projection.
     /// Retired-lane identities remain reserved, while a recreated lane hides
     /// evidence at or before its authenticated incarnation activation height.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Refusal returns the original retained owner without an additional fallible error allocation"
+    )]
     pub(super) fn try_prepare(
         pending: PendingDaCommitmentBundle,
         nexus: &iroha_config::parameters::actual::Nexus,
@@ -213,18 +217,17 @@ impl PreparedDaCommitmentEffects {
 
 // Each descriptor array has at most one entry per original bundle row. All
 // exact backing layouts are admitted together before any allocation is made.
+type ProjectionBuffers = (
+    ChargedBuffer<DaCommitmentKey>,
+    ChargedBuffer<DaCommitmentKey>,
+    ChargedBuffer<usize>,
+    ChargedBuffer<usize>,
+);
+
 fn reserve_projection(
     count: usize,
     budget: &AllocationBudget,
-) -> Result<
-    (
-        ChargedBuffer<DaCommitmentKey>,
-        ChargedBuffer<DaCommitmentKey>,
-        ChargedBuffer<usize>,
-        ChargedBuffer<usize>,
-    ),
-    ExecutionDeferred,
-> {
+) -> Result<ProjectionBuffers, ExecutionDeferred> {
     let keys = Layout::array::<DaCommitmentKey>(count)
         .map_err(|_| ExecutionDeferred::from(AllocationRefusal::DemandOverflow))?;
     let positions = Layout::array::<usize>(count)

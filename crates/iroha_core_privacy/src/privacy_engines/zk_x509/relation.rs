@@ -16,7 +16,7 @@ use super::{
     },
     codec::ZkX509WitnessV1,
     errors::ZkX509RelationErrorV1,
-    merkle::{hash_frame_v1, verify_ca_membership_v1},
+    merkle::{encode_hash_frame_v1, hash_frame_v1, verify_ca_membership_v1},
     presentation::{certificate_path_presentation_bounds_v1, crl_presentation_bounds_v1},
     profile::{
         ZK_X509_ATTRIBUTE_DOMAIN_V1, ZK_X509_NULLIFIER_DOMAIN_V1, ZK_X509_OWNERSHIP_DOMAIN_V1,
@@ -37,6 +37,8 @@ use p256::ecdsa::{
     Signature as P256Signature, VerifyingKey as P256VerifyingKey,
     signature::{Verifier as _, hazmat::PrehashVerifier as _},
 };
+use sha2::{Digest as _, Sha256};
+
 const KEY_USAGE_DIGITAL_SIGNATURE: u16 = 1 << 0;
 const KEY_USAGE_CONTENT_COMMITMENT: u16 = 1 << 1;
 const KEY_USAGE_KEY_ENCIPHERMENT: u16 = 1 << 2;
@@ -171,10 +173,7 @@ fn validate_witness_statement_shape_v1(
     witness: &ZkX509WitnessV1,
 ) -> Result<(), ZkX509RelationErrorV1> {
     if !(2..=3).contains(&witness.certificate_chain_der.len())
-        || witness
-            .certificate_chain_der
-            .iter()
-            .any(|certificate| certificate.is_empty())
+        || witness.certificate_chain_der.iter().any(Vec::is_empty)
         || witness.attribute_openings.len() != statement.disclosed_attributes.len()
         || witness
             .attribute_openings
@@ -207,8 +206,7 @@ fn validate_certificate_path_v1(
     {
         return Err(ZkX509RelationErrorV1::InvalidCertificatePath);
     }
-    for index in 1..chain.len() {
-        let ca = &chain[index];
+    for (index, ca) in chain.iter().enumerate().skip(1) {
         let subordinate_ca_count =
             u32::try_from(index - 1).map_err(|_| ZkX509RelationErrorV1::InvalidCertificatePath)?;
         if !ca.extensions.basic_constraints.ca
@@ -291,11 +289,7 @@ fn validate_complete_crl_v1(
     }
     verify_p256_sha256_signature_v1(issuer.public_key, crl.tbs_der, crl.signature_der)
         .map_err(|_| ZkX509RelationErrorV1::InvalidCrl)?;
-    if crl
-        .revoked_serials
-        .iter()
-        .any(|serial| *serial == leaf.serial)
-    {
+    if crl.revoked_serials.contains(&leaf.serial) {
         return Err(ZkX509RelationErrorV1::CertificateRevoked);
     }
     Ok(())
@@ -375,16 +369,22 @@ fn validate_attribute_projections_v1(
     }
     Ok(())
 }
-fn derive_ownership_challenge_digest_v1(
+pub(super) fn derive_ownership_challenge_digest_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<[u8; 32], ZkX509RelationErrorV1> {
+    Ok(Sha256::digest(derive_ownership_signing_message_v1(statement)?).into())
+}
+/// Encode the sole public signing message shared by message and prehash signers.
+pub(super) fn derive_ownership_signing_message_v1(
+    statement: &IrohaZkX509StarkP256StatementV1,
+) -> Result<Vec<u8>, ZkX509RelationErrorV1> {
     let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .digest()
         .map_err(|_| ZkX509RelationErrorV1::StatementEncoding)?;
     let account = norito::to_bytes(&statement.wallet_account)
         .map_err(|_| ZkX509RelationErrorV1::StatementEncoding)?;
     let relation_version = ZK_X509_RELATION_VERSION_V1.to_be_bytes();
-    Ok(hash_frame_v1(
+    Ok(encode_hash_frame_v1(
         ZK_X509_OWNERSHIP_DOMAIN_V1,
         &[
             ZK_X509_SUITE_V1,
@@ -933,15 +933,15 @@ pub(crate) mod tests {
     }
     #[test]
     fn p256_signature_and_public_key_encodings_reject_adversarial_boundaries() {
-        let key = p256_key(9);
-        let signature: P256Signature = key.sign(b"strict P-256 encoding");
-        validate_ecdsa_signature_der_v1(signature.to_der().as_bytes())
-            .expect("canonical signature");
         const P256_ORDER: [u8; 32] = [
             0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2,
             0xfc, 0x63, 0x25, 0x51,
         ];
+        let key = p256_key(9);
+        let signature: P256Signature = key.sign(b"strict P-256 encoding");
+        validate_ecdsa_signature_der_v1(signature.to_der().as_bytes())
+            .expect("canonical signature");
         let mut order_integer = vec![0];
         order_integer.extend_from_slice(&P256_ORDER);
         for malformed in [
@@ -1032,7 +1032,7 @@ pub(crate) mod tests {
     fn complete_crl_entry_count_and_revocation_times_are_bounded() {
         let issuer = name(&[(OID_COMMON_NAME, 0x0c, b"Iroha Test Root")]);
         let issuer_key = p256_key(1);
-        let serials = (10..10 + ZK_X509_MAX_CRL_ENTRIES_V1 as u64 + 1).collect::<Vec<_>>();
+        let serials = (10..=10 + ZK_X509_MAX_CRL_ENTRIES_V1 as u64).collect::<Vec<_>>();
         let oversized = crl(&issuer, &issuer_key, &[0x31; 20], 7, &serials);
         assert_eq!(
             parse_crl_v1(&oversized).map(|_| ()),
@@ -1475,7 +1475,7 @@ pub(crate) mod tests {
     fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
         let mut encoded = vec![tag];
         if contents.len() < 128 {
-            encoded.push(contents.len() as u8);
+            encoded.push(u8::try_from(contents.len()).expect("short-form DER length"));
         } else {
             let bytes = contents.len().to_be_bytes();
             let first = bytes

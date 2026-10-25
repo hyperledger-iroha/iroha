@@ -132,7 +132,7 @@ fn prove(
 }
 
 fn set_enabled(stx: &mut StateTransaction<'_, '_>, enabled: bool) {
-    let mut params = store::parameters::get(&*stx.world).clone().expect("SCCP");
+    let mut params = (*store::parameters::get(&*stx.world)).expect("SCCP");
     params.enabled = enabled;
     store::parameters::set(stx, Some(params));
 }

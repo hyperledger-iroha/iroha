@@ -301,13 +301,13 @@ impl<'a> OfflineCompilerV1<'a> {
         circuit: &S,
     ) -> Result<iroha_plonk::keys::SourceBoundVerifyingKeyV2<C>, CompilationErrorV1> {
         #[cfg(test)]
-        if let Some(rows) = &mut self.mask_rows {
-            if !rows.contains(record) {
-                return source(
-                    rows.import(record, original, binding, params, circuit, self.config),
-                    CompilationPhaseV1::StrictOriginalImport,
-                );
-            }
+        if let Some(rows) = &mut self.mask_rows
+            && !rows.contains(record)
+        {
+            return source(
+                rows.import(record, original, binding, params, circuit, self.config),
+                CompilationPhaseV1::StrictOriginalImport,
+            );
         }
         // Repeated closure imports still check the exact circuit and every VK
         // commitment. A captured row set never substitutes for native admission.
@@ -873,7 +873,7 @@ mod tests;
 #[path = "compiler/full_catalog.rs"]
 mod full_catalog;
 #[cfg(test)]
-pub(crate) use full_catalog::{
+pub use full_catalog::{
     open_pinned_engineering_finality_sources, open_pinned_engineering_wallet_sources,
     reopen_pinned_engineering_wallet_sources,
 };

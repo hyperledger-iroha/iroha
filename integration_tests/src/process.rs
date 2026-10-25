@@ -267,6 +267,13 @@ struct ProcessTree {
     job: windows_process::Job,
 }
 impl ProcessTree {
+    #[cfg_attr(
+        not(windows),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "Windows job creation is fallible; callers share the same result contract on every platform"
+        )
+    )]
     fn for_std_child(child: &std::process::Child) -> io::Result<Self> {
         #[cfg(windows)]
         {
@@ -326,12 +333,12 @@ fn terminate_tokio_child(tree: &ProcessTree, child: &mut tokio::process::Child) 
 #[cfg(unix)]
 #[allow(unsafe_code)]
 fn terminate_unix_process_group(child_id: u32) -> io::Result<()> {
-    let process_group = i32::try_from(child_id)
-        .map_err(|_| io::Error::other(format!("process id {child_id} does not fit pid_t")))?;
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
     const SIGKILL: i32 = 9;
+    let process_group = i32::try_from(child_id)
+        .map_err(|_| io::Error::other(format!("process id {child_id} does not fit pid_t")))?;
     if unsafe { kill(-process_group, SIGKILL) } == 0 {
         Ok(())
     } else {

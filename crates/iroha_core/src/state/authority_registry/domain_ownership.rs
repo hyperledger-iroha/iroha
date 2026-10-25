@@ -12,11 +12,11 @@ use iroha_model_base::domain::DomainId;
 #[cfg(test)]
 use mv::storage::StorageReadOnly;
 use mv::{PublicationPreparationError, storage::CommittedStorageView};
-use std::{collections::BTreeSet, convert::Infallible};
+use std::convert::Infallible;
 
 /// The image in which a secondary index differs from its canonical source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OwnershipImage {
+pub enum OwnershipImage {
     /// Published current rows.
     Current,
     /// Rows reconstructed from the exact original undo map.
@@ -25,18 +25,16 @@ pub(crate) enum OwnershipImage {
 
 /// The exact relation violated by one retained owner index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OwnershipMismatch {
-    /// A canonical domain is absent from its owner's bucket.
+pub enum OwnershipMismatch {
+    /// A canonical domain has no membership row under its stored owner.
     MissingDomain,
-    /// A bucket has no logical members and should not exist.
-    EmptyBucket,
-    /// A bucket member is absent from canonical domains or belongs elsewhere.
+    /// A membership row names an absent domain or a domain owned by another account.
     ForeignDomain,
 }
 
 /// Local traversal refusal and source corruption are separate outcomes.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum DomainOwnershipError {
+pub enum DomainOwnershipError {
     /// Exhaustion grants no validity verdict; retry with an admitted larger bound.
     #[error("domain-owner derivation exceeds its local work bound")]
     WorkLimit,
@@ -63,7 +61,7 @@ impl From<PublicationPreparationError<Infallible>> for DomainOwnershipError {
 pub(super) struct CheckedDomainOwnership<'world> {
     world: &'world World,
     domains: CommittedStorageView<'world, DomainId, Domain>,
-    owners: CommittedStorageView<'world, AccountId, BTreeSet<DomainId>>,
+    owners: CommittedStorageView<'world, (AccountId, DomainId), ()>,
 }
 
 impl<'world> CheckedDomainOwnership<'world> {
@@ -116,7 +114,7 @@ impl<'world> CheckedDomainOwnership<'world> {
 /// Local descriptor for one single Ed25519 owner at maximum existing domain text.
 /// Wider controllers and quadratic cuts may require a larger admitted allowance;
 /// this is never a controller, ledger row, gas or validity limit.
-pub(super) const DOMAIN_OWNER_WORK_PER_ROW: u64 = 12 + 8 * (34 + 2 * 63);
+pub(super) const DOMAIN_OWNER_WORK_PER_ROW: u64 = 8 + 8 * (34 + 2 * 63);
 
 struct Work(u64);
 impl Work {
@@ -134,6 +132,12 @@ impl Work {
 // It cannot construct the error String that AccountId/PublicKey Ord may create.
 trait WorkKey: mv::Key {
     fn prepay(&self, work: &mut Work) -> Result<(), DomainOwnershipError>;
+}
+impl<G: WorkKey, K: WorkKey> WorkKey for (G, K) {
+    fn prepay(&self, work: &mut Work) -> Result<(), DomainOwnershipError> {
+        self.0.prepay(work)?;
+        self.1.prepay(work)
+    }
 }
 impl WorkKey for DomainId {
     fn prepay(&self, work: &mut Work) -> Result<(), DomainOwnershipError> {
@@ -195,14 +199,14 @@ fn visit_original<'a, K: WorkKey, V: mv::Value>(
     Ok(())
 }
 
-/// Check the complete original domain/bucket relation over both native images.
+/// Check the complete original domain/membership-row relation over both native images.
 ///
 /// The sealed inputs are only retained committed or original frozen MV owners.
 /// No account existence, embedded record-id or execution authority rule is added.
 /// Work refusal grants no validity verdict; every advance/equality is prepaid.
 pub(in crate::state) fn validate_original_domain_ownership(
     domains: &impl RawStorageImages<DomainId, Domain>,
-    owners: &impl RawStorageImages<AccountId, BTreeSet<DomainId>>,
+    owners: &impl RawStorageImages<(AccountId, DomainId), ()>,
     max_work: u64,
 ) -> Result<(), DomainOwnershipError> {
     let mut work = Work(max_work);
@@ -210,13 +214,10 @@ pub(in crate::state) fn validate_original_domain_ownership(
         let corrupt = |mismatch| DomainOwnershipError::Corrupt { image, mismatch };
         visit_original(domains, image, &mut work, |id, domain, work| {
             let mut found = false;
-            visit_original(owners, image, work, |owner, members, work| {
+            visit_original(owners, image, work, |(owner, member), (), work| {
                 let owner_matches = equal(domain.owned_by(), owner, work)?;
-                let mut members = members.iter();
-                while let Some(member) = next_physical(&mut members, work)? {
-                    let domain_matches = equal(id, member, work)?;
-                    found |= owner_matches && domain_matches;
-                }
+                let domain_matches = equal(id, member, work)?;
+                found |= owner_matches && domain_matches;
                 Ok(())
             })?;
             if !found {
@@ -224,22 +225,16 @@ pub(in crate::state) fn validate_original_domain_ownership(
             }
             Ok(())
         })?;
-        visit_original(owners, image, &mut work, |owner, members, work| {
-            if members.is_empty() {
-                return Err(corrupt(OwnershipMismatch::EmptyBucket));
-            }
-            let mut members = members.iter();
-            while let Some(member) = next_physical(&mut members, work)? {
-                let mut found = false;
-                visit_original(domains, image, work, |id, domain, work| {
-                    let domain_matches = equal(id, member, work)?;
-                    let owner_matches = equal(domain.owned_by(), owner, work)?;
-                    found |= domain_matches && owner_matches;
-                    Ok(())
-                })?;
-                if !found {
-                    return Err(corrupt(OwnershipMismatch::ForeignDomain));
-                }
+        visit_original(owners, image, &mut work, |(owner, member), (), work| {
+            let mut found = false;
+            visit_original(domains, image, work, |id, domain, work| {
+                let domain_matches = equal(id, member, work)?;
+                let owner_matches = equal(domain.owned_by(), owner, work)?;
+                found |= domain_matches && owner_matches;
+                Ok(())
+            })?;
+            if !found {
+                return Err(corrupt(OwnershipMismatch::ForeignDomain));
             }
             Ok(())
         })?;
@@ -252,10 +247,9 @@ fn before<'a, K: mv::Key, V: mv::Value>(
     view: &'a CommittedStorageView<'_, K, V>,
     key: &K,
 ) -> Option<&'a V> {
-    match view.undo().get(key) {
-        Some(prior) => prior.as_ref(),
-        None => view.current().get(key),
-    }
+    view.undo()
+        .get(key)
+        .map_or_else(|| view.current().get(key), |prior| prior.as_ref())
 }
 
 #[cfg(test)]

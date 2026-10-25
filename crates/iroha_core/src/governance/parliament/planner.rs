@@ -159,10 +159,7 @@ impl ParliamentAttemptStateV1 {
                     state.consume_sortition_pulse_batch(
                         id,
                         request_ids,
-                        session,
-                        pulse_height,
-                        pulse_id,
-                        seed,
+                        (session, pulse_height, pulse_id, seed),
                         network_id,
                         governance,
                     )
@@ -456,7 +453,7 @@ impl ParliamentAttemptStateV1 {
             let mut trial = state.clone();
             if !records_capacity_evidence
                 && trial
-                    .register_sortition_request_batch(id, requests.clone(), candidate_snapshot)
+                    .register_sortition_request_batch(id, requests.clone(), &(candidate_snapshot))
                     .is_ok()
                 && trial.validate().is_ok()
             {

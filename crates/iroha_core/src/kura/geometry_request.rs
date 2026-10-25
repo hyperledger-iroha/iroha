@@ -1,6 +1,6 @@
 // Exact native geometry input and original namespace creation custody.
 
-pub(crate) struct GeometryBindingRequest<'a> {
+pub struct GeometryBindingRequest<'a> {
     pub previous: &'a LaneConfig,
     pub updated: &'a LaneConfig,
     pub previous_incarnations: &'a BTreeMap<LaneId, Hash>,

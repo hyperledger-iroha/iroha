@@ -35,7 +35,7 @@ seiyaku Callee { permission AssetOps;
 ",
         1,
     );
-    grant_asset_ops_to_account(&state, &authority, caller.subject_id());
+    grant_asset_ops_to_account(&state, &authority, &(caller.subject_id()));
     (state, authority, caller, target_contract)
 }
 
@@ -50,7 +50,7 @@ fn nested_call_funding_refuses_without_effects_then_retries() {
         &caller,
         &target_contract,
         "write",
-        Json::new(()),
+        &(Json::new(())),
         cache.clone(),
     );
     let error = refused.expect_err("cold nested execution cannot fit a zero pool");
@@ -81,7 +81,7 @@ fn nested_call_funding_refuses_without_effects_then_retries() {
         &caller,
         &target_contract,
         "write",
-        Json::new(()),
+        &(Json::new(())),
         cache.clone(),
     );
     let cold_gas = success.expect("same invocation retries after local capacity returns");
@@ -107,7 +107,7 @@ fn nested_call_funding_refuses_without_effects_then_retries() {
         &caller,
         &target_contract,
         "write",
-        Json::new(()),
+        &(Json::new(())),
         cache.clone(),
     );
     let error = refused.expect_err("zero pool refuses original nested allocation custody");
@@ -162,7 +162,7 @@ fn nested_call_funding_refuses_without_effects_then_retries() {
         &caller,
         &target_contract,
         "write",
-        Json::new(()),
+        &(Json::new(())),
         cache.clone(),
     );
     assert_eq!(
@@ -197,7 +197,7 @@ fn prepaid_nested_return_is_released_when_child_effects_roll_back() {
         &caller,
         &target_contract,
         "fail_after_write",
-        Json::new(()),
+        &(Json::new(())),
         cache.clone(),
     );
     let error = result.expect_err("callee aborts after staging its write");
@@ -263,12 +263,7 @@ fn prepare_imported_return_fixture(
     // authenticates its World before any instance or ordinary call exists.
     let config = crate::validation_fee::tests::validation_fee_payout_config(authority, 0);
     let state = Box::new(signed_contract_host_state(config));
-    grant_named_permission_to_account(
-        &state,
-        authority,
-        authority.clone(),
-        "CanManageSmartContractCode",
-    );
+    grant_named_permission_to_account(&state, authority, authority, "CanManageSmartContractCode");
     assert!(state.committed_height() >= 1);
     let xor = state
         .view()
@@ -445,7 +440,8 @@ fn fund_imported_return_fixture(fixture: &ImportedReturnFixture) {
 #[inline(never)]
 fn snapshot_imported_return_fixture(fixture: &ImportedReturnFixture) -> ImportedReturnSnapshot {
     let state = &fixture.state;
-    let before = {
+
+    {
         let view = state.view();
         (
             view.world()
@@ -469,9 +465,7 @@ fn snapshot_imported_return_fixture(fixture: &ImportedReturnFixture) -> Imported
                 .map(|(id, value)| (id.clone(), value.clone()))
                 .collect::<Vec<_>>(),
         )
-    };
-
-    before
+    }
 }
 
 #[inline(never)]
@@ -566,8 +560,7 @@ fn sign_imported_return_call(
 fn execute_imported_return_call(
     fixture: &ImportedReturnFixture,
     before: &ImportedReturnSnapshot,
-    label: &str,
-    valid: bool,
+    (label, valid): (&str, bool),
     signed: iroha_data_model::transaction::SignedTransaction,
     child_hash: Hash,
     child_ordinal: u32,
@@ -862,8 +855,7 @@ fn signed_imported_wrong_returns_roll_back_child_root_and_real_xor_principal() {
         execute_imported_return_call(
             &fixture,
             &before,
-            label,
-            valid,
+            (label, valid),
             signed,
             child_hash,
             child_ordinal,

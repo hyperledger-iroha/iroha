@@ -14,11 +14,13 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
         ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
-        0,
-        3,
-        6,
-        native_columns.len(),
-        3,
+        aggregate::MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: native_columns.len(),
+            mask_degree: 3,
+        },
         &initial_indices,
         &mut replayable_rng,
         |column| Ok(native_columns[column].clone()),
@@ -29,11 +31,13 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
         ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
-        0,
-        3,
-        6,
-        native_columns.len(),
-        3,
+        aggregate::MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: native_columns.len(),
+            mask_degree: 3,
+        },
         &initial_indices,
         &mut retained_rng,
         |column| Ok(native_columns[column].clone()),
@@ -78,11 +82,13 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
         ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
-        0,
-        3,
-        6,
-        mutated_columns.len(),
-        3,
+        aggregate::MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: mutated_columns.len(),
+            mask_degree: 3,
+        },
         &initial_indices,
         &mut mutation_rng,
         |column| Ok(mutated_columns[column].clone()),
@@ -312,9 +318,10 @@ fn der_reduced_deep_coefficient_accumulator_matches_pointwise_oracle_and_rejects
             .expect("coefficient-accumulated LDE")
         })
         .collect::<Vec<_>>();
-    for index in 0..lde_size {
-        let x =
-            F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(u128::try_from(index).expect("LDE index")));
+    let query_points = (0..lde_size).map(|index| {
+        F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(u128::try_from(index).expect("LDE index")))
+    });
+    for (index, x) in query_points.enumerate() {
         let query_point = E::from_base(x);
         let current_inverse = query_point
             .sub(deep_point)
@@ -440,7 +447,7 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
     let shape = ZkX509DerStarkShapeV1;
     let mut rng = StdRng::from_seed([0xD3; 32]);
     let prove_started = std::time::Instant::now();
-    let proof = build_zk_x509_der_segmented_stark_proof_v1_with_rng(&shape, &[&document], &mut rng)
+    let proof = build_zk_x509_der_segmented_stark_proof_v1_with_rng(shape, &[&document], &mut rng)
         .expect("native log19 DER proof");
     let prove_elapsed = prove_started.elapsed();
     let digest: [u8; 32] = Sha256::digest(&proof).into();
@@ -568,11 +575,11 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
         "reference log19 DER proof exceeded its 1.8 MB release ceiling"
     );
     let first_verify_started = std::time::Instant::now();
-    verify_zk_x509_der_segmented_stark_v1(&shape, &proof)
+    verify_zk_x509_der_segmented_stark_v1(shape, &proof)
         .expect("native log19 DER first verification");
     let first_verify_elapsed = first_verify_started.elapsed();
     let repeat_verify_started = std::time::Instant::now();
-    verify_zk_x509_der_segmented_stark_v1(&shape.clone(), &proof)
+    verify_zk_x509_der_segmented_stark_v1(shape, &proof)
         .expect("native log19 DER repeat verification");
     let repeat_verify_elapsed = repeat_verify_started.elapsed();
     let fixed_evaluations_after_valid =
@@ -594,16 +601,16 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
         .expect("inner aggregate proof");
     let mut trailing = proof.clone();
     trailing.push(0);
-    assert!(verify_zk_x509_der_segmented_stark_v1(&shape, &trailing).is_err());
+    assert!(verify_zk_x509_der_segmented_stark_v1(shape, &trailing).is_err());
     let mut draft_magic = proof.clone();
     draft_magic[..4].copy_from_slice(b"X5D2");
-    assert!(verify_zk_x509_der_segmented_stark_v1(&shape, &draft_magic).is_err());
+    assert!(verify_zk_x509_der_segmented_stark_v1(shape, &draft_magic).is_err());
     let mut mistyped_claim = proof.clone();
     mistyped_claim[12] ^= 1;
-    assert!(verify_zk_x509_der_segmented_stark_v1(&shape, &mistyped_claim).is_err());
+    assert!(verify_zk_x509_der_segmented_stark_v1(shape, &mistyped_claim).is_err());
     let mut wrong_lane = proof.clone();
     wrong_lane[14] ^= 1;
-    assert!(verify_zk_x509_der_segmented_stark_v1(&shape, &wrong_lane).is_err());
+    assert!(verify_zk_x509_der_segmented_stark_v1(shape, &wrong_lane).is_err());
     for claim_index in 0..DER_PROOF_CLAIM_COUNT_V1 {
         let mut changed_claims = claims;
         if claim_index < ZK_X509_DER_STARK_BUS_LANES_V1 {
@@ -616,7 +623,7 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
         let changed = encode_der_segmented_proof_envelope_v1(changed_claims, aggregate_bytes)
             .expect("mutated claim envelope");
         assert!(
-            verify_zk_x509_der_segmented_stark_v1(&shape, &changed).is_err(),
+            verify_zk_x509_der_segmented_stark_v1(shape, &changed).is_err(),
             "terminal claim {claim_index} must be transcript- and AIR-bound"
         );
     }
@@ -624,8 +631,8 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
     changed_private_shape.parser_rows += 1;
     assert_ne!(changed_private_shape, private_shape);
     assert_eq!(
-        der_public_digest_v1(&shape).expect("fixed public digest"),
-        der_public_digest_v1(&ZkX509DerStarkShapeV1).expect("fixed public digest")
+        der_public_digest_v1(shape).expect("fixed public digest"),
+        der_public_digest_v1(ZkX509DerStarkShapeV1).expect("fixed public digest")
     );
     let mut mutations = Vec::new();
     let mut changed = aggregate.clone();
@@ -685,7 +692,7 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
         let outer =
             encode_der_segmented_proof_envelope_v1(claims, &inner).expect("mutated outer proof");
         assert!(
-            verify_zk_x509_der_segmented_stark_v1(&shape, &outer).is_err(),
+            verify_zk_x509_der_segmented_stark_v1(shape, &outer).is_err(),
             "aggregate layer mutation {index} must reject"
         );
     }
@@ -1435,7 +1442,7 @@ fn value_execution_writer_private_terminal_requires_local_recurrence_under_coord
         registration,
         identity,
         &fixed,
-        p256_aggregate_challenges_fixture(),
+        &p256_aggregate_challenges_fixture(),
         super::super::p256_aggregate_adapter::P256PrivateLinkFamilyV1::ChainTerminal,
     );
 }
@@ -1443,17 +1450,16 @@ fn value_execution_writer_private_terminal_requires_local_recurrence_under_coord
 fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     fn evaluate(
         material: &P256OpenedMaterialV1,
-        challenges: P256AggregateChallengesV1,
+        challenges: &P256AggregateChallengesV1,
         alphas: &[Vec<Vec<E>>],
         mixes: &[Vec<FriMixV1>],
         lde_root: F,
-        query_index: usize,
-        lane: usize,
+        (query_index, lane): (usize, usize),
         trace_groups: &[aggregate::AggregateOpenedTraceGroupV1],
     ) -> Result<aggregate::AggregateExpectedOpeningV1, AggregateStarkErrorV1> {
         let mut evaluator = P256OpenedRowEvaluatorV1 {
             material,
-            challenges,
+            challenges: *challenges,
             alphas,
             mixes,
             lde_root,
@@ -1528,12 +1534,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
         .expect("common LDE root");
     evaluate(
         &material,
-        challenges,
+        &challenges,
         &alphas,
         &mixes,
         lde_root,
-        query_index,
-        0,
+        (query_index, 0),
         &trace_groups,
     )
     .expect("well-shaped opened evaluation");
@@ -1556,12 +1561,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     assert!(
         evaluate(
             &material,
-            challenges,
+            &challenges,
             &alphas,
             &mixes,
             lde_root,
-            query_index + 1,
-            0,
+            (query_index + 1, 0),
             &trace_groups,
         )
         .is_err(),
@@ -1570,12 +1574,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     assert!(
         evaluate(
             &material,
-            challenges,
+            &challenges,
             &alphas,
             &mixes,
             lde_root,
-            query_index,
-            SECURITY_LANES,
+            (query_index, SECURITY_LANES),
             &trace_groups,
         )
         .is_err()
@@ -1585,12 +1588,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     assert!(
         evaluate(
             &material,
-            invalid_challenges,
+            &invalid_challenges,
             &alphas,
             &mixes,
             lde_root,
-            query_index,
-            0,
+            (query_index, 0),
             &trace_groups,
         )
         .is_err()
@@ -1600,12 +1602,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     assert!(
         evaluate(
             &material,
-            challenges,
+            &challenges,
             &alphas,
             &mixes,
             lde_root,
-            query_index,
-            0,
+            (query_index, 0),
             &short_groups,
         )
         .is_err()
@@ -1615,12 +1616,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     assert!(
         evaluate(
             &material,
-            challenges,
+            &challenges,
             &alphas,
             &mixes,
             lde_root,
-            query_index,
-            0,
+            (query_index, 0),
             &short_base,
         )
         .is_err()
@@ -1630,12 +1630,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     assert!(
         evaluate(
             &material,
-            challenges,
+            &challenges,
             &alphas,
             &mixes,
             lde_root,
-            query_index,
-            0,
+            (query_index, 0),
             &short_aux,
         )
         .is_err()
@@ -1645,12 +1644,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     assert!(
         evaluate(
             &material,
-            challenges,
+            &challenges,
             &short_alphas,
             &mixes,
             lde_root,
-            query_index,
-            0,
+            (query_index, 0),
             &trace_groups,
         )
         .is_err()
@@ -1660,12 +1658,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     assert!(
         evaluate(
             &material,
-            challenges,
+            &challenges,
             &short_residue_alphas,
             &mixes,
             lde_root,
-            query_index,
-            0,
+            (query_index, 0),
             &trace_groups,
         )
         .is_err()
@@ -1675,12 +1672,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     assert!(
         evaluate(
             &material,
-            challenges,
+            &challenges,
             &alphas,
             &short_mixes,
             lde_root,
-            query_index,
-            0,
+            (query_index, 0),
             &trace_groups,
         )
         .is_err()
@@ -1690,12 +1686,11 @@ fn p256_opened_material_and_evaluator_reject_every_shape_boundary() {
     assert!(
         evaluate(
             &material,
-            challenges,
+            &challenges,
             &alphas,
             &short_base_mix,
             lde_root,
-            query_index,
-            0,
+            (query_index, 0),
             &trace_groups,
         )
         .is_err()
@@ -1824,7 +1819,7 @@ fn standalone_der_oods_checks_all_terminal_claims_against_independent_lagrange_f
             &layout,
             &deep,
             point,
-            challenges,
+            &challenges,
             ZkX509DerStarkPublicTerminalsV1,
             claims,
             &alphas,
@@ -1841,7 +1836,7 @@ fn standalone_der_oods_checks_all_terminal_claims_against_independent_lagrange_f
                 &layout,
                 &deep,
                 point,
-                challenges,
+                &challenges,
                 ZkX509DerStarkPublicTerminalsV1,
                 wrong_claims,
                 &alphas,
@@ -1868,7 +1863,7 @@ fn standalone_der_oods_checks_all_terminal_claims_against_independent_lagrange_f
         &layout,
         &deep,
         point,
-        challenges,
+        &challenges,
         ZkX509DerStarkPublicTerminalsV1,
         claims,
         &alphas,
@@ -1885,7 +1880,7 @@ fn standalone_der_oods_checks_all_terminal_claims_against_independent_lagrange_f
                 &layout,
                 &changed,
                 point,
-                challenges,
+                &challenges,
                 ZkX509DerStarkPublicTerminalsV1,
                 claims,
                 &alphas,
@@ -1907,7 +1902,7 @@ fn standalone_der_oods_checks_all_terminal_claims_against_independent_lagrange_f
                 &layout,
                 &zero_composition,
                 malformed,
-                challenges,
+                &challenges,
                 ZkX509DerStarkPublicTerminalsV1,
                 claims,
                 &zero_alphas,
@@ -1921,7 +1916,7 @@ fn standalone_der_oods_checks_all_terminal_claims_against_independent_lagrange_f
             &layout,
             &deep,
             point,
-            challenges,
+            &challenges,
             ZkX509DerStarkPublicTerminalsV1,
             claims,
             &alphas,

@@ -372,7 +372,7 @@ fn prepare_runtime_catalog_parameters(
 
 impl StateTransaction<'_, '_> {
     /// Prepare the native lane policy from the same authenticated manifest authority as the
-    /// physical catalog. Nothing is staged until every lane and live PoP has been admitted.
+    /// physical catalog. Nothing is staged until every lane and live `PoP` has been admitted.
     fn runtime_catalog_native_lane_policy(
         &self,
         additions: &[iroha_data_model::nexus::LaneConfig],
@@ -615,10 +615,7 @@ impl StateTransaction<'_, '_> {
             &plan,
         )?;
         let mut lifecycle_update = prepare_lane_lifecycle_update(
-            &prospective_nexus,
-            &self.lane_incarnations,
-            &self.lane_incarnation_lineage,
-            &self.lane_incarnation_activation_heights,
+            &prospective_nexus,(&self.lane_incarnations, &self.lane_incarnation_lineage, &self.lane_incarnation_activation_heights),
             &self.network_id,
             self._curr_block.hash(),
             &plan,

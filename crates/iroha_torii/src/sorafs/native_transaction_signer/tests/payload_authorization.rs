@@ -238,7 +238,7 @@ fn all_native_facades_sign_every_allowed_action_without_rewriting_payload() {
         let provider = Arc::new(TestProvider::new(
             role,
             "provider://native/allowed",
-            0xB0 + index as u8,
+            0xB0 + u8::try_from(index).expect("bounded fixture or protocol constant fits u8"),
         ));
         let sign = qualified_fixture(&provider, crate::signed_query_test_network_id());
         let account = provider.authority();
@@ -339,7 +339,7 @@ fn every_native_facade_rejects_other_roles_and_wrappers_before_all_provider_call
         let provider = Arc::new(TestProvider::new(
             role,
             "provider://native/rejected",
-            0xD0 + index as u8,
+            0xD0 + u8::try_from(index).expect("bounded fixture or protocol constant fits u8"),
         ));
         let sign = qualified_fixture(&provider, crate::signed_query_test_network_id());
         let account = provider.authority();
@@ -389,7 +389,7 @@ fn every_native_facade_rejects_foreign_and_genesis_networks_before_all_provider_
         let provider = Arc::new(TestProvider::new(
             role,
             "provider://native/network",
-            0xE0 + index as u8,
+            0xE0 + u8::try_from(index).expect("bounded fixture or protocol constant fits u8"),
         ));
         let sign = qualified_fixture(&provider, crate::signed_query_test_network_id());
         let account = provider.authority();

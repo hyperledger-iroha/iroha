@@ -78,7 +78,7 @@ impl Fixture {
         append_residues(
             &mut output,
             self.schedule,
-            &self.row,
+            self.row,
             &self.selection,
             Ports {
                 counter: &self.ports[0],
@@ -256,7 +256,9 @@ fn coherent_parent_substitution_fails_the_same_typed_history() {
             .iter_mut()
             .enumerate()
             .flat_map(|(step, fixture)| {
-                fixture.schedule.clocks = core::array::from_fn(|slot| (3 * step + slot) as u32);
+                fixture.schedule.clocks = core::array::from_fn(|slot| {
+                    u32::try_from(3 * step + slot).expect("bounded fixture value")
+                });
                 fixture
                     .ports
                     .iter_mut()

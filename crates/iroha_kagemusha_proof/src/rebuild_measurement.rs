@@ -227,7 +227,7 @@ impl RepeatSchedule {
     }
 
     fn order(self, measured_pair: usize) -> [&'static str; 2] {
-        if self.separate_first == (measured_pair % 2 == 0) {
+        if self.separate_first == measured_pair.is_multiple_of(2) {
             ["separate", "fused"]
         } else {
             ["fused", "separate"]
@@ -279,7 +279,7 @@ fn repeat_schedule_is_opt_in_bounded_and_balances_both_orders() {
 /// Explicit test-only repeat settings add a checked warmup pair and alternating
 /// measured pairs. Returns the actual additional proof count, including warmups.
 /// The caller uses it only to keep its fixture completion summary accurate.
-pub(crate) fn compare<C, Ci, S>(
+pub fn compare<C, Ci, S>(
     label: &str,
     params: &PinnedParams<C>,
     metadata: &SourceBoundViewV2<'_, C>,
@@ -296,7 +296,7 @@ where
     S: Circuit<C::ScalarExt>,
 {
     assert!(
-        !cfg!(debug_assertions),
+        !std::hint::black_box(cfg!(debug_assertions)),
         "run real-family measurement with --release"
     );
     let repeated = RepeatSchedule::from_environment();

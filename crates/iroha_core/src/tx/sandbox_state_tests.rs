@@ -640,7 +640,7 @@ impl Sandbox {
             let instructions =
                 transfers_batched::<N_INSTRUCTIONS>(src, quantity_per_instruction, dest);
             TransactionBuilder::new(
-                self.state.network_id_ref().clone(),
+                *self.state.network_id_ref(),
                 GENESIS_ACCOUNT.id.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

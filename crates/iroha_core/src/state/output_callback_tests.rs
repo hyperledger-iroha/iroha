@@ -147,7 +147,7 @@ fn execute_nested_input(
     let call = Hash::from(input.execution_call_hash());
     assert_eq!(transaction.tx_call_hash, Some(call));
     assert_eq!(transaction.current_tx_hash, Some(signed.hash()));
-    for instruction in instructions.iter() {
+    for instruction in instructions {
         instruction
             .clone()
             .execute(signed.authority(), transaction)

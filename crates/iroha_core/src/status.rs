@@ -831,12 +831,6 @@ pub fn nexus_staking_snapshot() -> NexusStakingSnapshot {
     lanes.sort_by_key(|lane| lane.lane_id.as_u32());
     NexusStakingSnapshot { lanes }
 }
-/// Shared lock for tests that mutate global Nexus fee state.
-#[cfg(test)]
-pub(crate) fn nexus_fee_test_lock() -> &'static NexusFeeTestLock {
-    static LOCK: NexusFeeTestLock = NexusFeeTestLock;
-    &LOCK
-}
 #[cfg(test)]
 /// Clear Nexus economics snapshots (test-only helper).
 pub fn reset_nexus_economics_for_tests() {

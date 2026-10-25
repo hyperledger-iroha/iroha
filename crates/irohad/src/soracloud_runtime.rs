@@ -832,8 +832,8 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
                 )
             })?;
         let accepted = {
-            let world = self.state.world_view();
-            crate::accept_internal_transaction(tx, self.state.network_id_ref(), &world)
+            let parameters = self.state.transaction_admission_parameters();
+            crate::accept_internal_transaction(tx, self.state.network_id_ref(), &parameters)
         }
         .wrap_err_with(|| format!("accept internal Soracloud runtime mutation at `{endpoint}`"))?;
         self.queue

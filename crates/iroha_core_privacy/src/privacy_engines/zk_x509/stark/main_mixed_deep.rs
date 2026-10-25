@@ -321,15 +321,14 @@ impl MainMixedDeepQuotientV1 {
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        if let (Some(owner), Some(powers)) = (&self.retained, &points.retained) {
-            if owner.points != powers.points
+        if let (Some(owner), Some(powers)) = (&self.retained, &points.retained)
+            && (owner.points != powers.points
                 || owner
                     .coefficients
                     .iter()
-                    .any(|column| column.len() != powers.powers[0].len())
-            {
-                return Err(ZkX509StarkErrorV1::ProfileMismatch);
-            }
+                    .any(|column| column.len() != powers.powers[0].len()))
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         for (input, _, _) in columns {
             points.validate_input_v1(*input)?;
@@ -413,10 +412,10 @@ impl MainMixedDeepQuotientV1 {
         if expected_native != 0 {
             self.native.accumulate_v1(expected_native, accumulator)?;
         }
-        if let Some(retained) = self.retained {
-            if expected_retained != 0 {
-                retained.accumulate_v1(expected_retained, accumulator)?;
-            }
+        if let Some(retained) = self.retained
+            && expected_retained != 0
+        {
+            retained.accumulate_v1(expected_retained, accumulator)?;
         }
         Ok(())
     }

@@ -1,6 +1,6 @@
 //! Exact identity indexes checked against their original retained account images.
 //!
-//! Identifiers are stored protocol values; this owner imposes no AccountId hash
+//! Identifiers are stored protocol values; this owner imposes no `AccountId` hash
 //! relation. The committed and frozen owners use one complete prepaid relation.
 //! TODO: consume every checked authority through complete State/Kura
 //! publication before supplying finalized execution anchors.
@@ -19,7 +19,7 @@ use std::convert::Infallible;
 
 /// The original logical image containing an inconsistent identity relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum IdentityImage {
+pub enum IdentityImage {
     /// Current committed accounts and indexes.
     Current,
     /// Previous image reconstructed through each original undo map.
@@ -28,7 +28,7 @@ pub(crate) enum IdentityImage {
 
 /// Failed identity relation, without account or identifier values in diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum IdentityMismatch {
+pub enum IdentityMismatch {
     /// Opaque identifiers require an explicit universal identifier.
     OpaqueWithoutUaid,
     /// An account's universal identifier lacks its exact inverse row.
@@ -45,7 +45,7 @@ pub(crate) enum IdentityMismatch {
 
 /// Operational refusal is distinct from malformed authoritative membership.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum IdentityOwnershipError {
+pub enum IdentityOwnershipError {
     /// Retry with a larger locally admitted work allowance.
     #[error("account-identity derivation exceeds its local work bound")]
     WorkLimit,

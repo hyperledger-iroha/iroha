@@ -40,7 +40,9 @@ fn referendum_open_and_close_by_height() {
     .expect("explicit governance component signing algorithm");
     world
         .set_parameter_for_testing(
-            policy.into_parameter().expect("canonical component signing policy"),
+            policy
+                .into_parameter()
+                .expect("canonical component signing policy"),
         )
         .expect("admit the governance component's original policy");
     let mut state = State::new_for_testing(world, kura, query_handle);

@@ -32,6 +32,10 @@ pub const ZK_X509_P256_PUBLIC_KEY_ALGORITHM_IDENTIFIER_DER_V1: &[u8] = &[
 ];
 /// Resource limits applied while validating one DER document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "each field is an independent upper bound on DER parser resources"
+)]
 pub struct ZkX509DerLimitsV1 {
     /// Maximum complete input bytes.
     pub(crate) max_document_bytes: usize,
@@ -660,7 +664,7 @@ mod tests {
     #[test]
     fn definite_minimal_lengths_are_the_only_lengths_admitted() {
         let mut long_form = vec![0x30, 0x81, 0x80, 0x04, 0x7e];
-        long_form.extend(core::iter::repeat(0_u8).take(126));
+        long_form.extend(std::iter::repeat_n(0_u8, 126));
         single(&long_form).expect("minimal 128-byte long form");
         assert_eq!(single(&[0x04]), Err(ZkX509DerErrorV1::TruncatedLength));
         assert_eq!(
@@ -691,7 +695,7 @@ mod tests {
             0x04,
             0x80 | u8::try_from(length_octets).expect("small width"),
         ];
-        overflowing.extend(core::iter::repeat(0xff).take(length_octets));
+        overflowing.extend(std::iter::repeat_n(0xff, length_octets));
         assert_eq!(single(&overflowing), Err(ZkX509DerErrorV1::LengthOverflow));
         assert_eq!(
             single(&[0x04, 0x83, 0x01, 0x00, 0x00]),

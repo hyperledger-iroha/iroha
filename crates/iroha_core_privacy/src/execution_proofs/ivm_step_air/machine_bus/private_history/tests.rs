@@ -48,8 +48,7 @@ fn failures(bus: &PublicPacketBus, columns: &[Vec<F>]) -> usize {
             let mut output = Vec::new();
             append_residues(
                 &mut output,
-                &row,
-                &next,
+                (&row, &next),
                 &aux_row,
                 &aux_next,
                 &schedule.fixed(*index).unwrap(),
@@ -120,9 +119,7 @@ fn coherent_history_cannot_replace_an_original_committed_producer_tuple() {
     // the original semantic producer port in the shared relation.
     assert!(failures(&original, &forged.columns()) > 0);
     let mut missing = original.columns();
-    for index in PHASES * 2..PHASES * 3 {
-        missing[NOTE_COPY_WIDTH_V1 + ORDERED + packet::ENABLED][index] = F::ZERO;
-    }
+    missing[NOTE_COPY_WIDTH_V1 + ORDERED + packet::ENABLED][PHASES * 2..PHASES * 3].fill(F::ZERO);
     assert!(failures(&original, &missing) > 0);
 }
 
@@ -161,8 +158,10 @@ fn private_producer_and_count_binding_preserve_degree_four() {
                 let mut output = Vec::new();
                 append_residues(
                     &mut output,
-                    row[..ROW_WIDTH].try_into().unwrap(),
-                    next.try_into().unwrap(),
+                    (
+                        row[..ROW_WIDTH].try_into().unwrap(),
+                        next.try_into().unwrap(),
+                    ),
                     aux,
                     next_aux,
                     fixed.try_into().unwrap(),

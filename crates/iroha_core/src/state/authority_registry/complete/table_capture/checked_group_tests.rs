@@ -146,7 +146,7 @@ fn actual_catalog_rejects_corrupt_group_indexes_at_both_cuts_before_allocation()
             // without source rows. The predecessor case repairs only the tip.
             use crate::state::authority_registry::grouped_ownership::{
                 asset_definition_test_support as definitions, escrow_test_support as escrow,
-                nft_rwa_test_support as nft_rwa,
+                nft_rwa_test_support as nft_rwa, repo_agreement_test_support as repo,
             };
             macro_rules! corrupt {
                 ($field:ident, $key:expr, $value:expr, $mismatch:expr) => {{
@@ -181,9 +181,9 @@ fn actual_catalog_rejects_corrupt_group_indexes_at_both_cuts_before_allocation()
                 ),
                 "world.repo_agreements" => corrupt!(
                     repo_agreements_by_initiator,
-                    ALICE_ID.clone(),
-                    BTreeSet::new(),
-                    GroupMismatch::EmptyGroup
+                    (ALICE_ID.clone(), repo::id()),
+                    (),
+                    GroupMismatch::ForeignMember
                 ),
                 "world.asset_definitions" => corrupt!(
                     asset_definitions_by_owner,

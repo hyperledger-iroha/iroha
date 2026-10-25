@@ -242,7 +242,7 @@ impl PorCoordinator {
     /// so reads fail closed until startup reconciliation installs a complete checkpoint.
     pub(crate) fn apply_authoritative_update(
         &self,
-        update: PorStatusAuthorityUpdateV1,
+        update: &PorStatusAuthorityUpdateV1,
     ) -> Result<(), PorCoordinatorError> {
         let validation_error = if update.generation == 0 {
             Some("status generation must be non-zero".to_owned())
@@ -285,17 +285,17 @@ impl PorCoordinator {
                     .removed_challenge_ids
                     .iter()
                     .all(|removed| !current.statuses.contains_key(removed));
-                let status_is_exact_or_archived = match current.statuses.get(&challenge_id) {
-                    Some(retained) => retained == &update.status,
-                    None => {
+                let status_is_exact_or_archived = current.statuses.get(&challenge_id).map_or_else(
+                    || {
                         update.removed_challenge_ids.is_empty()
                             && !matches!(
                                 update.status.status,
                                 PorChallengeOutcome::AwaitingProof
                                     | PorChallengeOutcome::ProofSubmitted
                             )
-                    }
-                };
+                    },
+                    |retained| retained == &update.status,
+                );
                 return if removals_already_absent && status_is_exact_or_archived {
                     // The node may authenticate an exact replay from its
                     // checkpoint-pinned archive after rolling retention has
@@ -813,13 +813,14 @@ impl PorCoordinator {
         #[cfg(not(test))]
         let authoritative = Some(authoritative);
         #[cfg(test)]
-        let indexes = authoritative
-            .map(|projection| &projection.indexes)
-            .unwrap_or_else(|| {
+        let indexes = authoritative.map_or_else(
+            || {
                 legacy_indexes
                     .as_deref()
                     .expect("legacy PoR indexes exist without an authoritative projection")
-            });
+            },
+            |projection| &projection.indexes,
+        );
         let selection_digest = por_status_selection_digest(filter);
         let after_anchor =
             Self::validate_page_cursor(cursor, indexes.generation, selection_digest)?;
@@ -932,13 +933,14 @@ impl PorCoordinator {
         #[cfg(not(test))]
         let authoritative = Some(authoritative);
         #[cfg(test)]
-        let indexes = authoritative
-            .map(|projection| &projection.indexes)
-            .unwrap_or_else(|| {
+        let indexes = authoritative.map_or_else(
+            || {
                 legacy_indexes
                     .as_deref()
                     .expect("legacy PoR indexes exist without an authoritative projection")
-            });
+            },
+            |projection| &projection.indexes,
+        );
         let selection_digest = por_export_selection_digest(range);
         let after_anchor =
             Self::validate_page_cursor(cursor, indexes.generation, selection_digest)?;
@@ -1259,13 +1261,14 @@ impl PorCoordinator {
         #[cfg(not(test))]
         let authoritative = Some(authoritative);
         #[cfg(test)]
-        let indexes = authoritative
-            .map(|projection| &projection.indexes)
-            .unwrap_or_else(|| {
+        let indexes = authoritative.map_or_else(
+            || {
                 legacy_indexes
                     .as_deref()
                     .expect("legacy PoR indexes exist without an authoritative projection")
-            });
+            },
+            |projection| &projection.indexes,
+        );
         let status_keys = indexes
             .canonical
             .range((
@@ -1281,21 +1284,29 @@ impl PorCoordinator {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             statuses.push(self.status_for_indexed_id(authoritative, challenge_id)?);
         }
-        let challenges_total = statuses.len() as u32;
-        let challenges_verified = statuses
-            .iter()
-            .filter(|s| matches!(s.status, PorChallengeOutcome::Verified))
-            .count() as u32;
-        let challenges_failed = statuses
-            .iter()
-            .filter(|s| {
-                matches!(
-                    s.status,
-                    PorChallengeOutcome::Failed | PorChallengeOutcome::Repaired
-                )
-            })
-            .count() as u32;
-        let forced_challenges = statuses.iter().filter(|s| s.forced).count() as u32;
+        let challenges_total = u32::try_from(statuses.len())
+            .expect("PoR report counts are bounded by MAX_POR_COORDINATOR_RECORDS");
+        let challenges_verified = u32::try_from(
+            statuses
+                .iter()
+                .filter(|s| matches!(s.status, PorChallengeOutcome::Verified))
+                .count(),
+        )
+        .expect("PoR report counts are bounded by MAX_POR_COORDINATOR_RECORDS");
+        let challenges_failed = u32::try_from(
+            statuses
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.status,
+                        PorChallengeOutcome::Failed | PorChallengeOutcome::Repaired
+                    )
+                })
+                .count(),
+        )
+        .expect("PoR report counts are bounded by MAX_POR_COORDINATOR_RECORDS");
+        let forced_challenges = u32::try_from(statuses.iter().filter(|s| s.forced).count())
+            .expect("PoR report counts are bounded by MAX_POR_COORDINATOR_RECORDS");
         let mut provider_map: BTreeMap<[u8; 32], ProviderStats> = BTreeMap::new();
         for status in &statuses {
             let entry = provider_map.entry(status.provider_id).or_default();
@@ -1344,7 +1355,8 @@ impl PorCoordinator {
                 };
                 Some(PorProviderSummaryV1 {
                     provider_id: *provider_id,
-                    manifest_count: stats.manifests.len() as u32,
+                    manifest_count: u32::try_from(stats.manifests.len())
+                        .expect("PoR report counts are bounded by MAX_POR_COORDINATOR_RECORDS"),
                     challenges,
                     successes,
                     failures,

@@ -217,7 +217,7 @@ mod tests {
             vec![7, 2, 7, 3],
             vec![8, 7, 6, 5, 4, 3, 2, 1],
         ];
-        for case in cases.iter_mut() {
+        for case in &mut cases {
             let mut scalar_vec = case.clone();
             let scalar_len = scalar::sort_dedup_u32(&mut scalar_vec);
             scalar_vec.truncate(scalar_len);

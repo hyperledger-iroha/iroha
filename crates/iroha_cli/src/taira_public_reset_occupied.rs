@@ -127,7 +127,7 @@ pub(super) fn validate_prior_binding(
                 }
             }
             "validator_unit" => {
-                if entry.path != format!("/etc/systemd/system/{}", systemd_unit) {
+                if entry.path != format!("/etc/systemd/system/{systemd_unit}") {
                     return Err(eyre!(
                         "occupied validator unit is not its exact systemd fragment"
                     ));
@@ -137,7 +137,7 @@ pub(super) fn validate_prior_binding(
         }
     }
     let daemon = prior.artifact("iroha3d")?;
-    let stable = format!("{}/current/bin/iroha3d_taira", service_root);
+    let stable = format!("{service_root}/current/bin/iroha3d_taira");
     let stable_resolves_to_daemon =
         daemon.path == format!("{}/bin/iroha3d_taira", prior.release_root);
     let has_fresh_assertion =
@@ -146,7 +146,7 @@ pub(super) fn validate_prior_binding(
     if !(prior.argv.len() == 4 || has_fresh_assertion)
         || !(prior.argv[0] == daemon.path || (prior.argv[0] == stable && stable_resolves_to_daemon))
         || prior.argv[1] != "--config"
-        || prior.argv[2] != format!("{}/current/config/{config_name}", service_root)
+        || prior.argv[2] != format!("{service_root}/current/config/{config_name}")
         || prior.argv[3] != "--sora"
     {
         return Err(eyre!(
@@ -230,19 +230,20 @@ pub(super) fn process_binding(
                     .into_owned(),
                 "--sora".to_owned(),
             ],
-            config: active
-                .as_ref()
-                .map(|binding| binding.config.clone())
-                .unwrap_or_else(|| PathBuf::from(&initial_config.remote_path)),
-            config_sha256: active
-                .as_ref()
-                .map(|binding| binding.config_sha256.clone())
-                .unwrap_or_else(|| initial_config.sha256.clone()),
+            config: active.as_ref().map_or_else(
+                || PathBuf::from(&initial_config.remote_path),
+                |binding| binding.config.clone(),
+            ),
+            config_sha256: active.as_ref().map_or_else(
+                || initial_config.sha256.clone(),
+                |binding| binding.config_sha256.clone(),
+            ),
             genesis: PathBuf::from(&artifact(&validator.artifacts, "genesis")?.remote_path),
             genesis_sha256: artifact(&validator.artifacts, "genesis")?.sha256.clone(),
-            unit_sha256: active
-                .map(|binding| binding.unit_sha256)
-                .unwrap_or_else(|| validator.systemd_unit_sha256.clone()),
+            unit_sha256: active.map_or_else(
+                || validator.systemd_unit_sha256.clone(),
+                |binding| binding.unit_sha256,
+            ),
         })
     } else {
         validate_occupied_binding(validator)?;
@@ -573,7 +574,14 @@ pub(super) fn install_validator_unit(admitted: &HostAdmission) -> Result<()> {
     verify_occupied_artifact_at(prior, &backup, 0o600)?;
     let candidate = artifact(&validator.artifacts, "validator_unit")?;
     let published = classify_unit_publication(&current_unit_hash(destination)?, &intent)?;
-    if !published {
+    if published {
+        sync_existing_file_publication(
+            destination,
+            &candidate.sha256,
+            destination.parent().unwrap(),
+            sync_directory,
+        )?;
+    } else {
         require_unit_stopped(&validator.systemd_unit, admitted.action_deadline)?;
         publish_unit_bytes_with(
             Path::new(&candidate.remote_path),
@@ -582,13 +590,6 @@ pub(super) fn install_validator_unit(admitted: &HostAdmission) -> Result<()> {
             &prior.sha256,
             false,
             || ensure_action_deadline(admitted),
-            sync_directory,
-        )?;
-    } else {
-        sync_existing_file_publication(
-            destination,
-            &candidate.sha256,
-            destination.parent().unwrap(),
             sync_directory,
         )?;
     }
@@ -1060,7 +1061,7 @@ mod tests {
     #[test]
     fn occupied_runtime_cleanup_preserves_every_prior_artifact_root() {
         let validator = split_validator();
-        let target = HostTarget::Validator(validator.clone());
+        let target = HostTarget::Validator(Box::new(validator.clone()));
         for entry in &validator.admitted_release().unwrap().artifacts {
             let root = Path::new(&entry.path).parent().unwrap();
             assert!(
@@ -1313,7 +1314,11 @@ mod tests {
         let staging = directory
             .path()
             .join(".installed.service.public-reset-forward.next");
-        fs::write(&staging, vec![b'x'; candidate.size as usize]).unwrap();
+        fs::write(
+            &staging,
+            vec![b'x'; usize::try_from(candidate.size).expect("fixture value fits usize")],
+        )
+        .unwrap();
         assert!(
             publish_unit_bytes_with(
                 Path::new(&candidate.local_path),

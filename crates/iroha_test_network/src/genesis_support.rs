@@ -176,10 +176,12 @@ pub fn sign_prepared_genesis_from_config(
         &genesis_account,
         &topology,
         key_pair,
-        None,
-        None,
-        None,
-        Some(&parsed_config),
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config: None,
+            nexus_config: None,
+            zk_config: None,
+            runtime_config: Some(&parsed_config),
+        },
     )
     .wrap_err("pre-execute canonical prepared genesis")?;
     if !unresolved_hash_replaced && block.hash() != config.genesis_expected_hash {
@@ -257,10 +259,12 @@ pub fn prepare_unpublished_genesis_from_config(
                 &account,
                 &topology,
                 key_pair,
-                None,
-                None,
-                None,
-                Some(&parsed_config),
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: None,
+                    nexus_config: None,
+                    zk_config: None,
+                    runtime_config: Some(&parsed_config),
+                },
             )
         },
     )
@@ -521,10 +525,12 @@ mod tests {
                 &account,
                 &topology,
                 key,
-                None,
-                None,
-                None,
-                Some(&config),
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: None,
+                    nexus_config: None,
+                    zk_config: None,
+                    runtime_config: Some(&config),
+                },
             ),
         )
         .expect("derive actual fixture commitments from native execution");
@@ -548,10 +554,12 @@ mod tests {
             &account,
             &topology,
             key,
-            None,
-            None,
-            None,
-            Some(&config),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: None,
+                nexus_config: None,
+                zk_config: None,
+                runtime_config: Some(&config),
+            },
         )
         .expect("final fixture must pass the strict native validator without rebinding");
         assert_eq!(actual, staged);

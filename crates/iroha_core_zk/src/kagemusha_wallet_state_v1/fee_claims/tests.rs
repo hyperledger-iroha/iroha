@@ -105,10 +105,10 @@ fn exact_finalized_payout_binds_native_scope_and_row_and_survives_growth() {
     assert!(verify_payout(&scheme, native.chain_id(), [2; 32], &claim(), &wrong_block).is_err());
     assert!(verify_payout(&scheme, "other-chain", [2; 32], &claim(), &evidence).is_err());
     assert!(verify_payout(&scheme, native.chain_id(), [9; 32], &claim(), &evidence).is_err());
-    let mut foreign = scheme.clone();
+    let mut foreign = scheme;
     foreign.relation_id[0] ^= 1;
     assert!(verify_payout(&foreign, native.chain_id(), [2; 32], &claim(), &evidence).is_err());
-    foreign = scheme.clone();
+    foreign = scheme;
     foreign.network_id[0] ^= 1;
     assert!(verify_payout(&foreign, native.chain_id(), [2; 32], &claim(), &evidence).is_err());
     for mutation in 0..5 {
@@ -147,10 +147,8 @@ fn acknowledgement_retries_reverify_and_never_delete_before_durable_payout() {
         payout: payout(),
     };
     for failure in 0..3 {
-        let mut wallet = super::super::tests::synthetic_payout_wallet(
-            scheme.clone(),
-            native.chain_id().to_owned(),
-        );
+        let mut wallet =
+            super::super::tests::synthetic_payout_wallet(scheme, native.chain_id().to_owned());
         let (old, mut manifest) = wallet.manifest().unwrap();
         manifest.claims = manifest
             .claims
@@ -345,10 +343,10 @@ fn fee_transport_encoding_fits_existing_cap_at_large_original_boundaries() {
         super::super::tests::fixture("KagemushaWalletFeeClaimV1");
     // Encoding capacity only: opaque proof padding is not genuine proof evidence, and the
     // enlarged account is not the fixture's authorized schedule beneficiary.
-    let mut low = 1;
-    let mut high = 10_035;
+    let mut low = 1_usize;
+    let mut high = 10_035_usize;
     while high - low > 1 {
-        let next = (low + high) / 2;
+        let next = low.midpoint(high);
         claim.payment.send.step_proof.bytes.resize(next, 0);
         if archive::encode(&claim.payment).unwrap().len() <= 10_034 {
             low = next;

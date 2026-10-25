@@ -79,7 +79,9 @@ impl MainDigestJoinPlanV1 {
                 .get(call_index)
                 .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
             let expected_role = match signature {
-                0..=2 => ZkX509ShaCallRoleV1::CertificateTbs(signature as u8),
+                0..=2 => ZkX509ShaCallRoleV1::CertificateTbs(
+                    u8::try_from(signature).expect("certificate signature ordinal fits u8"),
+                ),
                 3 => ZkX509ShaCallRoleV1::CrlTbs,
                 _ => ZkX509ShaCallRoleV1::Projection(6),
             };
@@ -159,14 +161,12 @@ impl MainDigestJoinPlanV1 {
         })
     }
 
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) fn source_v1(&self, signature: usize) -> Result<ColumnV1, ZkX509StarkErrorV1> {
         self.blocks
             .get(signature)
             .map(|b| b.source)
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) fn target_v1(&self, signature: usize) -> Result<ColumnV1, ZkX509StarkErrorV1> {
         self.blocks
             .get(signature)
@@ -264,7 +264,6 @@ impl MainDigestJoinPlanV1 {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainDigestJoinPlanV1 {
     fn weighted_coefficients_v1(
         &self,
@@ -448,7 +447,10 @@ mod tests {
                 let message = if dummy {
                     vec![]
                 } else {
-                    vec![signature as u8 + 19; 35 + signature]
+                    vec![
+                        u8::try_from(signature).expect("fixture value fits u8") + 19;
+                        35 + signature
+                    ]
                 };
                 let digest: [u8; 32] = Sha256::digest(&message).into();
                 if dummy {
@@ -494,7 +496,8 @@ mod tests {
     #[test]
     fn digest_packing_rejects_endianness_reduction_wrong_map_and_every_opening_mutation() {
         let plan = plan_v1(4);
-        let digest = core::array::from_fn(|i| 255 - i as u8);
+        let digest =
+            core::array::from_fn(|i| 255 - u8::try_from(i).expect("fixture value fits u8"));
         let (source, target) = byte_case_v1(&plan, 0, digest);
         let quotient = plan.quotient_v1(0, &source, &target).unwrap();
         let z = E::canonical([31, 5, 17, 2]).unwrap();
@@ -544,7 +547,7 @@ mod tests {
                 1 => changed.blocks[0].scale = changed.blocks[0].scale.mul(plan.byte_step),
                 2 => changed.blocks[0].start = changed.blocks[0].start.mul(b.step),
                 _ => changed.byte_step = changed.byte_step.inv().unwrap(),
-            };
+            }
             assert!(changed.quotient_v1(0, &source, &target).is_err());
         }
         assert!(plan.weighted_coefficients_v1(&[]).is_err());
@@ -575,7 +578,7 @@ mod tests {
                 4 => changed.blocks[0].power = 8,
                 5 => changed.blocks[0].scale = changed.blocks[0].scale.add(F::ONE),
                 _ => changed.byte_step = F::ONE,
-            };
+            }
             assert_ne!(state(changed), expected);
         }
     }

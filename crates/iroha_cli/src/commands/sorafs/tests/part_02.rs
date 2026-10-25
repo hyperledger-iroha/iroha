@@ -233,8 +233,8 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             |_client, transaction| {
                 let instruction = moderation_finalization_from_transaction(transaction);
                 tallied.push((
-                    instruction.case_id().to_string(),
-                    instruction.round_id().to_string(),
+                    instruction.case_id().clone(),
+                    instruction.round_id().clone(),
                 ));
                 Ok(transaction.hash())
             },
@@ -1183,12 +1183,12 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
     }
     }
 fn moderation_operator_canary_fixture_json(
-    value: Value,
+    value: &Value,
 ) -> Result<ModerationOperatorCanaryHttpResponse> {
     Ok(ModerationOperatorCanaryHttpResponse {
         status: StatusCode::OK,
         content_type: Some("application/json".to_string()),
-        body: norito::json::to_vec(&value)?,
+        body: norito::json::to_vec(value)?,
     })
 }
 fn moderation_operator_canary_fixture_response(
@@ -1203,10 +1203,12 @@ fn moderation_operator_canary_fixture_response(
         assert_compact! { path.contains(&format!("/quarantine/{quarantine_id_hex}/")); "unexpected canary quarantine route: {path}" };
     }
     if path.ends_with("/healthz") || path.ends_with("/v1/sorafs/moderation/operator-panel/status") {
-        return moderation_operator_canary_fixture_json(norito::json!({
-            "schema": "sorafs.moderation.quarantine.operator_service.status.v1",
-            "status": "ready"
-        }));
+        return moderation_operator_canary_fixture_json(
+            &(norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_service.status.v1",
+                "status": "ready"
+            })),
+        );
     }
     if path.ends_with("/v1/sorafs/moderation/operator-panel/ui") {
         return Ok(ModerationOperatorCanaryHttpResponse {
@@ -1242,39 +1244,47 @@ fn moderation_operator_canary_fixture_response(
                 "next_actions": []
             })
         };
-        return moderation_operator_canary_fixture_json(value);
+        return moderation_operator_canary_fixture_json(&(value));
     }
     if path.ends_with("/bridge-plan") {
-        return moderation_operator_canary_fixture_json(norito::json!({
-            "schema": (bridge_schema),
-            "payload_bytes_included": false,
-            "private_payloads_included": false,
-            "actions": []
-        }));
+        return moderation_operator_canary_fixture_json(
+            &(norito::json!({
+                "schema": (bridge_schema),
+                "payload_bytes_included": false,
+                "private_payloads_included": false,
+                "actions": []
+            })),
+        );
     }
     if path.ends_with("/juror-plan") {
-        return moderation_operator_canary_fixture_json(norito::json!({
-            "schema": "sorafs.moderation.quarantine.juror_plan.v1",
-            "payload_bytes_included": false,
-            "private_payloads_included": false,
-            "ballots": []
-        }));
+        return moderation_operator_canary_fixture_json(
+            &(norito::json!({
+                "schema": "sorafs.moderation.quarantine.juror_plan.v1",
+                "payload_bytes_included": false,
+                "private_payloads_included": false,
+                "ballots": []
+            })),
+        );
     }
     if path.ends_with("/juror-notifications") {
-        return moderation_operator_canary_fixture_json(norito::json!({
-            "schema": "sorafs.moderation.quarantine.juror_notifications.v1",
-            "payload_bytes_included": false,
-            "private_payloads_included": false,
-            "notifications": []
-        }));
+        return moderation_operator_canary_fixture_json(
+            &(norito::json!({
+                "schema": "sorafs.moderation.quarantine.juror_notifications.v1",
+                "payload_bytes_included": false,
+                "private_payloads_included": false,
+                "notifications": []
+            })),
+        );
     }
     if path.ends_with("/commit-reveal-status") {
-        return moderation_operator_canary_fixture_json(norito::json!({
-            "schema": "sorafs.moderation.quarantine.commit_reveal_status.v1",
-            "payload_bytes_included": false,
-            "private_payloads_included": false,
-            "ballots": []
-        }));
+        return moderation_operator_canary_fixture_json(
+            &(norito::json!({
+                "schema": "sorafs.moderation.quarantine.commit_reveal_status.v1",
+                "payload_bytes_included": false,
+                "private_payloads_included": false,
+                "ballots": []
+            })),
+        );
     }
     panic!("unexpected canary route: {url}");
 }
@@ -1418,7 +1428,7 @@ macro_rules! moderation_operator_panel_fixture {
 fn fixture_moderation_operator_service(
     quarantine_id: [u8; 16],
     expected_limit: Option<u32>,
-    body: Value,
+    body: &Value,
 ) -> ModerationOperatorService {
     let args = ModerationQuarantineOperatorServeArgs {
         listen: "127.0.0.1:0".to_string(),
@@ -1430,7 +1440,7 @@ fn fixture_moderation_operator_service(
             expected_quarantine_id_hex: encode(quarantine_id),
             expected_limit,
             status: StatusCode::OK,
-            body: norito::json::to_vec(&body).expect("fixture operator-panel JSON"),
+            body: norito::json::to_vec(body).expect("fixture operator-panel JSON"),
         }),
         "http://torii.test/".to_string(),
         "operator@moderation".to_string(),
@@ -1492,12 +1502,12 @@ struct FixtureModerationOperatorMutationSource {
     body: Vec<u8>,
 }
 impl FixtureModerationOperatorMutationSource {
-    fn response(&self) -> Result<Response<Vec<u8>>> {
-        Ok(Response::builder()
+    fn response(&self) -> Response<Vec<u8>> {
+        Response::builder()
             .status(self.status)
             .header("Content-Type", "application/json")
             .body(self.body.clone())
-            .unwrap())
+            .unwrap()
     }
 }
 impl ModerationOperatorWorkflowSource for FixtureModerationOperatorMutationSource {
@@ -1518,7 +1528,7 @@ impl ModerationOperatorWorkflowSource for FixtureModerationOperatorMutationSourc
         assert_eq!(request.reviewed_by, "operator@moderation");
         assert_eq!(request.reviewed_at_unix, Some(1_800_000_310));
         assert_eq!(request.notes, Some("reviewed through service"));
-        self.response()
+        Ok(self.response())
     }
     fn post_release(
         &self,
@@ -1530,7 +1540,7 @@ impl ModerationOperatorWorkflowSource for FixtureModerationOperatorMutationSourc
         assert_eq!(request.release_authority, "release@moderation");
         assert_eq!(request.released_at_unix, Some(1_800_000_320));
         assert_eq!(request.notes, Some("released through service"));
-        self.response()
+        Ok(self.response())
     }
     fn post_appeal_handoff(
         &self,
@@ -1542,14 +1552,14 @@ impl ModerationOperatorWorkflowSource for FixtureModerationOperatorMutationSourc
         let value: Value = norito::json::from_slice(payload).expect("handoff payload JSON");
         assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
         assert!(!String::from_utf8_lossy(payload).contains("payload_b64"));
-        self.response()
+        Ok(self.response())
     }
 }
 fn fixture_moderation_operator_mutation_service(
     quarantine_id: [u8; 16],
     expected_kind: &'static str,
     status: StatusCode,
-    body: Value,
+    body: &Value,
 ) -> ModerationOperatorService {
     let args = ModerationQuarantineOperatorServeArgs {
         listen: "127.0.0.1:0".to_string(),
@@ -1561,7 +1571,7 @@ fn fixture_moderation_operator_mutation_service(
             expected_quarantine_id_hex: encode(quarantine_id),
             expected_kind,
             status,
-            body: norito::json::to_vec(&body).expect("fixture mutation response JSON"),
+            body: norito::json::to_vec(body).expect("fixture mutation response JSON"),
         }),
         "http://torii.test/".to_string(),
         "operator@moderation".to_string(),
@@ -1602,18 +1612,18 @@ fn handle_moderation_operator_raw_request_with_csrf(
 fn assert_moderation_operator_payload_rejected(
     quarantine_id: [u8; 16],
     request: String,
-    quarantine_id_hex: String,
+    quarantine_id_hex: &str,
 ) {
     let service = fixture_moderation_operator_service(
         quarantine_id,
         None,
-        moderation_operator_panel_fixture! {
+        &(moderation_operator_panel_fixture! {
             quarantine_id_hex;
             "case_count": 1_u64,
             "returned_case_count": 1_u64,
             "cases": [(fixture_payload_bearing_finalized_moderation_case())],
             "next_actions": []
-        },
+        }),
     );
     let response = handle_moderation_operator_raw_request(&service, request);
     assert_eq!(response.status, StatusCode::BAD_GATEWAY);
@@ -1627,10 +1637,10 @@ fn moderation_operator_service_routes_operator_panel_with_query_limit() {
     let service = fixture_moderation_operator_service(
         quarantine_id,
         Some(7),
-        moderation_operator_panel_fixture! {
+        &(moderation_operator_panel_fixture! {
             quarantine_id_hex;
             "next_actions": []
-        },
+        }),
     );
     let response = handle_moderation_operator_raw_request(
         &service,
@@ -1649,7 +1659,7 @@ fn moderation_operator_service_builds_bridge_plan_without_payload() {
     let service = fixture_moderation_operator_service(
         quarantine_id,
         Some(5),
-        moderation_operator_panel_fixture! {
+        &(moderation_operator_panel_fixture! {
             quarantine_id_hex;
             "case_count": 0_u64,
             "returned_case_count": 0_u64,
@@ -1659,7 +1669,7 @@ fn moderation_operator_service_builds_bridge_plan_without_payload() {
                 "route": "/v1/sorafs/moderation/quarantine/review",
                 "required": true
             }]
-        },
+        }),
     );
     let response = handle_moderation_operator_raw_request(
         &service,
@@ -1683,7 +1693,7 @@ fn moderation_operator_service_builds_juror_plan_without_payload() {
     let service = fixture_moderation_operator_service(
         quarantine_id,
         Some(2),
-        moderation_operator_panel_fixture! {
+        &(moderation_operator_panel_fixture! {
             quarantine_id_hex;
             "case_count": 1_u64,
             "returned_case_count": 1_u64,
@@ -1696,7 +1706,7 @@ fn moderation_operator_service_builds_juror_plan_without_payload() {
                 )
             )],
             "next_actions": []
-        },
+        }),
     );
     let response = handle_moderation_operator_raw_request(
         &service,
@@ -1732,7 +1742,7 @@ fn moderation_operator_service_builds_juror_notifications_without_payload() {
     let service = fixture_moderation_operator_service(
         quarantine_id,
         Some(3),
-        moderation_operator_panel_fixture! {
+        &(moderation_operator_panel_fixture! {
             quarantine_id_hex;
             "case_count": 1_u64,
             "returned_case_count": 1_u64,
@@ -1749,7 +1759,7 @@ fn moderation_operator_service_builds_juror_notifications_without_payload() {
                 )
             )],
             "next_actions": []
-        },
+        }),
     );
     let response = handle_moderation_operator_raw_request(
         &service,
@@ -1787,7 +1797,7 @@ fn moderation_operator_service_builds_commit_reveal_status_without_payload() {
     let service = fixture_moderation_operator_service(
         quarantine_id,
         Some(3),
-        moderation_operator_panel_fixture! {
+        &(moderation_operator_panel_fixture! {
             quarantine_id_hex;
             "case_count": 1_u64,
             "returned_case_count": 1_u64,
@@ -1804,7 +1814,7 @@ fn moderation_operator_service_builds_commit_reveal_status_without_payload() {
                 )
             )],
             "next_actions": []
-        },
+        }),
     );
     let response = handle_moderation_operator_raw_request(
         &service,
@@ -1846,7 +1856,7 @@ fn moderation_operator_service_rejects_juror_plan_payload_bytes() {
         format!(
             "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan HTTP/1.1\r\nHost: local\r\n\r\n"
         ),
-        quarantine_id_hex,
+        &(quarantine_id_hex),
     );
 }
 fn moderation_operator_service_rejects_juror_notifications_payload_bytes() {
@@ -1857,7 +1867,7 @@ fn moderation_operator_service_rejects_juror_notifications_payload_bytes() {
         format!(
             "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications HTTP/1.1\r\nHost: local\r\n\r\n"
         ),
-        quarantine_id_hex,
+        &(quarantine_id_hex),
     );
 }
 fn moderation_operator_service_rejects_commit_reveal_status_payload_bytes() {
@@ -1868,7 +1878,7 @@ fn moderation_operator_service_rejects_commit_reveal_status_payload_bytes() {
         format!(
             "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status HTTP/1.1\r\nHost: local\r\n\r\n"
         ),
-        quarantine_id_hex,
+        &(quarantine_id_hex),
     );
 }
 fn moderation_operator_service_rejects_payload_b64_from_upstream() {
@@ -1877,11 +1887,11 @@ fn moderation_operator_service_rejects_payload_b64_from_upstream() {
     let service = fixture_moderation_operator_service(
         quarantine_id,
         None,
-        moderation_operator_panel_fixture! {
+        &(moderation_operator_panel_fixture! {
             quarantine_id_hex;
             "payload_b64": "c2hvdWxkLW5vdC1sZWFr",
             "next_actions": []
-        },
+        }),
     );
     let response = handle_moderation_operator_raw_request(
         &service,
@@ -1961,7 +1971,7 @@ fn moderation_operator_read_rejects_trailing_bytes_after_declared_body() {
 }
 fn moderation_operator_service_serves_browser_ui() {
     let quarantine_id = [0xA1_u8; 16];
-    let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
+    let service = fixture_moderation_operator_service(quarantine_id, None, &(norito::json!({})));
     let response = handle_moderation_operator_raw_request(
         &service,
         "GET / HTTP/1.1\r\nHost: local\r\n\r\n".to_string(),
@@ -1982,7 +1992,7 @@ fn moderation_operator_service_serves_browser_ui() {
 }
 fn moderation_operator_service_status_lists_browser_ui_route() {
     let quarantine_id = [0xA2_u8; 16];
-    let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
+    let service = fixture_moderation_operator_service(quarantine_id, None, &(norito::json!({})));
     let response = handle_moderation_operator_raw_request(
         &service,
         "GET /v1/sorafs/moderation/operator-panel/status HTTP/1.1\r\nHost: local\r\n\r\n"
@@ -2003,7 +2013,7 @@ fn moderation_operator_service_status_lists_browser_ui_route() {
 }
 fn moderation_operator_service_rejects_browser_ui_request_body() {
     let quarantine_id = [0xA3_u8; 16];
-    let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
+    let service = fixture_moderation_operator_service(quarantine_id, None, &(norito::json!({})));
     let response = handle_moderation_operator_raw_request(
         &service,
         "GET /v1/sorafs/moderation/operator-panel/ui HTTP/1.1\r\nHost: local\r\nContent-Length: 2\r\n\r\n{}"
@@ -2019,7 +2029,7 @@ fn moderation_operator_service_rejects_mutation_without_csrf_token() {
         quarantine_id,
         "review",
         StatusCode::ACCEPTED,
-        norito::json!({ "status": "must_not_be_called" }),
+        &(norito::json!({ "status": "must_not_be_called" })),
     );
     let body = r#"{"notes":"missing token"}"#;
     let response = handle_moderation_operator_raw_request_without_csrf(
@@ -2040,7 +2050,7 @@ fn moderation_operator_service_rejects_mutation_with_wrong_csrf_token() {
         quarantine_id,
         "review",
         StatusCode::ACCEPTED,
-        norito::json!({ "status": "must_not_be_called" }),
+        &(norito::json!({ "status": "must_not_be_called" })),
     );
     let body = r#"{"notes":"wrong token"}"#;
     let response = handle_moderation_operator_raw_request_without_csrf(
@@ -2061,10 +2071,10 @@ fn moderation_operator_service_forwards_review_with_default_actor() {
         quarantine_id,
         "review",
         StatusCode::ACCEPTED,
-        norito::json!({
+        &(norito::json!({
             "schema": "sorafs.moderation.quarantine.review.v1",
             "status": "reviewed"
-        }),
+        })),
     );
     let body = r#"{"reviewed_at_unix":1800000310,"notes":"reviewed through service"}"#;
     let response = handle_moderation_operator_raw_request(
@@ -2085,10 +2095,10 @@ fn moderation_operator_service_forwards_release_with_explicit_authority() {
         quarantine_id,
         "release",
         StatusCode::ACCEPTED,
-        norito::json!({
+        &(norito::json!({
             "schema": "sorafs.moderation.quarantine.release.v1",
             "status": "released"
-        }),
+        })),
     );
     let body = r#"{"release_authority":"release@moderation","released_at_unix":1800000320,"notes":"released through service"}"#;
     let response = handle_moderation_operator_raw_request(
@@ -2109,10 +2119,10 @@ fn moderation_operator_service_forwards_appeal_handoff_payload() {
         quarantine_id,
         "appeal-handoff",
         StatusCode::OK,
-        norito::json!({
+        &(norito::json!({
             "schema": "sorafs.moderation.quarantine.appeal_handoff.v1",
             "status": "handoff_ready"
-        }),
+        })),
     );
     let body = r#"{"class":"content","backlog":3,"evidence_size_mb":8}"#;
     let response = handle_moderation_operator_raw_request(
@@ -2133,7 +2143,7 @@ fn moderation_operator_service_rejects_mutation_payload_bytes() {
         quarantine_id,
         "appeal-handoff",
         StatusCode::OK,
-        norito::json!({ "status": "must_not_be_called" }),
+        &(norito::json!({ "status": "must_not_be_called" })),
     );
     let body = r#"{"class":"content","payload_b64":"c2hvdWxkLW5vdC1sZWFr"}"#;
     let response = handle_moderation_operator_raw_request(

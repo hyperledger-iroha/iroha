@@ -1,3 +1,9 @@
+/// Row JSON budget and the bounded size estimator used to charge it.
+type JsonItemsBudget<T> = (
+    usize,
+    fn(&T, usize) -> Result<usize, norito::json::BoundedJsonError>,
+);
+
 impl ValidSingularQuery for FindMusubiExactPackageV1 {
     fn execute(
         &self,
@@ -689,7 +695,7 @@ fn archive_retention_decision(
             active_releases,
             yanked_releases,
             taken_down_releases,
-            storage: Some(storage.clone()),
+            storage: Some(*storage),
         },
     )?;
     decision.validate().map_err(query_invalid)?;
@@ -1130,10 +1136,7 @@ fn paginate_for_caller_with_json_items_budget<T>(
     query_hash: MusubiQueryHashV1,
     snapshot: MusubiRegistrySnapshotV1,
     expected_caller: Option<&AccountId>,
-    json_items_budget: Option<(
-        usize,
-        fn(&T, usize) -> Result<usize, norito::json::BoundedJsonError>,
-    )>,
+    json_items_budget: Option<JsonItemsBudget<T>>,
 ) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1>
 where
     T: norito::json::JsonSerialize + norito::core::NoritoSerialize,

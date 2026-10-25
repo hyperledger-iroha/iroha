@@ -102,11 +102,7 @@ pub(crate) mod tests {
     use iroha_primitives::numeric::Quantity;
     use std::num::NonZeroU64;
 
-    pub(crate) fn lane_record(
-        peer: &PeerId,
-        lane: LaneId,
-        stake: u64,
-    ) -> PublicLaneValidatorRecord {
+    pub fn lane_record(peer: &PeerId, lane: LaneId, stake: u64) -> PublicLaneValidatorRecord {
         let validator = AccountId::new(peer.public_key().clone());
         PublicLaneValidatorRecord {
             lane_id: lane,
@@ -123,7 +119,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn lane_hash_world(records: &[(LaneId, PeerId, u64)]) -> State {
+    pub fn lane_hash_world(records: &[(LaneId, PeerId, u64)]) -> State {
         let world = World::default();
         {
             let mut block = world.block();
@@ -154,7 +150,7 @@ pub(crate) mod tests {
         )
     }
 
-    pub(crate) fn genesis_header() -> BlockHeader {
+    pub fn genesis_header() -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
             None,

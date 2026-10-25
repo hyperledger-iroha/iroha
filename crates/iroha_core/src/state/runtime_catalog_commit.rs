@@ -195,10 +195,7 @@ impl StateBlock<'_> {
             &pending.plan,
         )?;
         let mut expected = prepare_lane_lifecycle_update(
-            &prospective,
-            &incarnations,
-            &lineage,
-            &activation_heights,
+            &prospective,(&incarnations, &lineage, &activation_heights),
             &self.network_id,
             self._curr_block.hash(),
             &pending.plan,

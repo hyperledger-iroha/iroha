@@ -66,18 +66,30 @@ fn query_conversion_error_does_not_infer_a_reject_code_header() {
 
 #[test]
 fn anonymous_ballot_unavailable_is_not_a_transaction_rejection() {
+    let original = iroha_core::tx::AcceptTransactionFail::AnonymousBallotUnavailable
+        .into_execution_deferred()
+        .expect("missing anonymous verifier is an unfinished local attempt");
+    assert_eq!(
+        original.reason(),
+        ivm::error::ExecutionDeferral::VerifierInitializationUnavailable
+    );
     let error = super::Error::AcceptTransaction(
         iroha_core::tx::AcceptTransactionFail::AnonymousBallotUnavailable,
     );
     assert_eq!(error.status_code(), StatusCode::SERVICE_UNAVAILABLE);
     let response = error.into_response();
+    assert_eq!(response.headers()[axum::http::header::RETRY_AFTER], "1");
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(response.headers().get("x-iroha-reject-code").is_none());
     let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
         .expect("collect body")
         .to_bytes();
     let envelope = norito::decode_from_bytes::<super::ErrorEnvelope>(&body).unwrap();
-    assert_eq!(envelope.code(), "anonymous_ballot_unavailable");
+    assert_eq!(envelope.code(), "transaction_admission_deferred");
+    assert_eq!(
+        envelope.details.as_ref().unwrap().retry_after_seconds,
+        Some(1)
+    );
     assert!(
         envelope
             .details

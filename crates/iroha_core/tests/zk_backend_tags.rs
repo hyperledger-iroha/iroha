@@ -4,16 +4,14 @@
 //! Backend tag acceptance tests for ZK attachments (pre-verify path).
 //! - Trusted-setup families (e.g., `groth16/*`) are rejected at VK admission.
 //! - Native PIPA-R curve mismatch is rejected at VK admission.
-#[path = "common/zk_components.rs"]
-mod zk_components;
+use crate::test_world;
+use crate::zk_components;
 use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
 use iroha_core_zk::test_utils::native_confidential_fixture_envelope;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 use zk_components::execute_isi_component;
-#[path = "common/world_fixture.rs"]
-mod test_world;
 fn new_block_ctx() -> (State, iroha_data_model::block::BlockHeader) {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
@@ -37,7 +35,7 @@ fn vk_record(
         schema_hash,
         iroha_core_zk::hash_vk(&vk_box),
     );
-    record.vk_len = vk_box.bytes.len() as u32;
+    record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture length fits u32");
     record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     record.key = Some(vk_box);
     record.gas_schedule_id = Some("native_pipa_r_default".into());
@@ -70,7 +68,7 @@ fn trusted_setup_backend_label_is_unsupported() {
         ),
     }
     .into();
-    let err = execute_isi_component(&mut stx, &authority, reg_vk)
+    let err = execute_isi_component(&mut stx, &authority, &(reg_vk))
         .expect_err("trusted-setup VK backend should be rejected at admission");
     let msg = format!("{err:?}");
     assert!(
@@ -107,7 +105,7 @@ fn native_curve_mismatch_rejected_at_vk_admission() {
         ),
     }
     .into();
-    let err = execute_isi_component(&mut stx, &authority, reg_vk)
+    let err = execute_isi_component(&mut stx, &authority, &(reg_vk))
         .expect_err("curve mismatch should be rejected at VK admission");
     let msg = format!("{err:?}");
     assert!(

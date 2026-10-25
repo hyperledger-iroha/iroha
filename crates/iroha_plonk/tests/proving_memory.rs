@@ -125,10 +125,10 @@ impl<F: PastaField> Circuit<F> for Wide {
                 enabled * (a[5].clone() + a[6].clone() - a[7].clone()),
             ]
         });
-        for index in 0..3 {
+        for (index, &column) in advice.iter().take(3).enumerate() {
             meta.lookup(format!("range {index}"), |cells| {
                 let enabled = cells.query_selector(range);
-                let value = cells.query_advice(advice[index], Rotation::cur());
+                let value = cells.query_advice(column, Rotation::cur());
                 vec![(enabled * value, table)]
             });
         }

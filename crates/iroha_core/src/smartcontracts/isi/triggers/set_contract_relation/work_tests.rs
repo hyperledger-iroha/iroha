@@ -131,8 +131,8 @@ fn setup_refuses_before_native_construction_and_has_independent_positive_control
             assert_eq!(work.observed.setup, 1);
         }
     }
-    assert_eq!(CURSOR_SETUP, 29 * usize::BITS as u64 + 44);
-    assert_eq!(CURSOR_NEXT, 17 * usize::BITS as u64 + 26);
+    assert_eq!(CURSOR_SETUP, 29 * u64::from(usize::BITS) + 44);
+    assert_eq!(CURSOR_NEXT, 17 * u64::from(usize::BITS) + 26);
 }
 #[test]
 fn complete_utf8_comparison_bytes_and_hash_comparison_refuse_before_eq() {
@@ -486,7 +486,8 @@ fn singleton_and_empty_literals_cover_actual_geometry_native_terminals_and_reset
     };
     let pool = AllocationBudget::new(16 * 1024 * 1024);
     // Independent fixed-control sum1004, plus23 native setups and19 next calls.
-    let exact = 23 * (29 * usize::BITS as u64 + 44) + 19 * (17 * usize::BITS as u64 + 26) + 1004;
+    let exact =
+        23 * (29 * u64::from(usize::BITS) + 44) + 19 * (17 * u64::from(usize::BITS) + 26) + 1004;
     if usize::BITS == 64 {
         assert_eq!(exact, 65870);
         assert_eq!(

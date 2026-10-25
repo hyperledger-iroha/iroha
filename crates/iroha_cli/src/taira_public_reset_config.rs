@@ -112,7 +112,9 @@ fn torii_rate_config_amend_unix(
         Ok(())
     };
     check()?;
-    let source = inherited_config(retained.as_raw_fd() as u32)?;
+    let source = inherited_config(
+        u32::try_from(retained.as_raw_fd()).expect("owned descriptor is nonnegative"),
+    )?;
     check()?;
     let text = std::str::from_utf8(&source).map_err(|_| eyre!("validator config is not UTF-8"))?;
     let mut table: toml::Table =
@@ -384,11 +386,11 @@ pub(super) struct ConfigRebase {
     output: PathBuf,
 }
 
-/// Rebase an inline client NetworkId, or project a checked Torii root without changing it.
+/// Rebase an inline client `NetworkId`, or project a checked Torii root without changing it.
 ///
 /// Route projection consumes an inherited read-only descriptor and checks its original path.
 /// The paired routes must come from explicit owner-approved public metadata. Use the same
-/// checked NetworkId twice and a fresh file in a separate existing 0700 directory:
+/// checked `NetworkId` twice and a fresh file in a separate existing 0700 directory:
 ///
 /// ```text
 /// iroha --machine taira public-reset client-config-rebase --config-fd 3 \
@@ -404,7 +406,7 @@ pub(super) struct ConfigRebase {
 /// source-relative key, namespace-proof, queue and witness references retain their source
 /// base when the new profile is written elsewhere. A public `network_id_file` is accepted
 /// only by this route-only operation: native code retains its owner-controlled descriptor,
-/// checks exactly one canonical NetworkId plus LF against the explicit unchanged identity,
+/// checks exactly one canonical `NetworkId` plus LF against the explicit unchanged identity,
 /// and anchors its original source path absolutely. That public identity file remains a live
 /// dependency and must stay under custody during later use. Extends and competing inline/file
 /// sources are refused. Inline network-only rebinding retains its separate existing policy.
@@ -423,7 +425,7 @@ pub(super) struct ClientConfigRebase {
     /// Exact current loopback HTTP or public HTTPS DNS root; paired with --torii-url and original provenance.
     #[arg(long, value_name = "URL", requires = "torii_url", value_parser = canonical_client_torii_url)]
     expected_torii_url: Option<String>,
-    /// Project only the Torii route while keeping the exact current NetworkId.
+    /// Project only the Torii route while keeping the exact current `NetworkId`.
     #[arg(long, value_name = "URL", requires_all = ["expected_torii_url", "config_source_path"], value_parser = canonical_client_torii_url)]
     torii_url: Option<String>,
     /// Absolute original profile path; metadata/provenance only, never reopened for its body.
@@ -719,7 +721,7 @@ fn retain_client_source_directories(source: &Path) -> Result<Vec<RetainedClientS
     retain_client_input_directories(source, true)
 }
 
-/// Public NetworkId files may use safe shared parents; private profiles require mode0700.
+/// Public `NetworkId` files may use safe shared parents; private profiles require mode0700.
 #[cfg(unix)]
 fn retain_client_input_directories(
     source: &Path,
@@ -970,7 +972,7 @@ fn project_client_config(
     check()?;
     // Read through the retained descriptor, not the caller's mutable descriptor number.
     let source = crate::client_config::read_inherited_private_file(
-        retained.as_raw_fd() as u32,
+        u32::try_from(retained.as_raw_fd()).expect("owned descriptor is nonnegative"),
         MAX_CONFIG_BYTES,
         "client config",
     )?;
@@ -1115,21 +1117,21 @@ fn write_projected_client_private(
         check_output()?;
         Ok(())
     })();
-    if result.is_err() {
-        if let Ok(named) = rustix::fs::openat(
+    if result.is_err()
+        && let Ok(named) = rustix::fs::openat(
             &directory,
             name,
             OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
-        ) {
-            let named = File::from(named);
-            let ours = file.metadata()?;
-            let current = named.metadata()?;
-            if current.is_file() && (current.dev(), current.ino()) == (ours.dev(), ours.ino()) {
-                rustix::fs::unlinkat(&directory, name, AtFlags::empty())
-                    .map_err(|_| eyre!("cannot remove refused owned client projection"))?;
-                directory.sync_all()?;
-            }
+        )
+    {
+        let named = File::from(named);
+        let ours = file.metadata()?;
+        let current = named.metadata()?;
+        if current.is_file() && (current.dev(), current.ino()) == (ours.dev(), ours.ino()) {
+            rustix::fs::unlinkat(&directory, name, AtFlags::empty())
+                .map_err(|_| eyre!("cannot remove refused owned client projection"))?;
+            directory.sync_all()?;
         }
     }
     result
@@ -1410,6 +1412,21 @@ mod tests {
 
     #[test]
     fn torii_rate_amendment_preserves_non_budget_values_and_optional_service_absence() {
+        fn compare(old: &toml::Table, new: &toml::Table, prefix: &str, budgets: &Map) {
+            for (field, value) in old {
+                let path = if prefix.is_empty() {
+                    field.clone()
+                } else {
+                    format!("{prefix}.{field}")
+                };
+                if let Some(nested) = value.as_table() {
+                    compare(nested, new[field].as_table().unwrap(), &path, budgets);
+                } else if !budgets.contains_key(&path) {
+                    assert_eq!(value, &new[field], "{path}");
+                }
+            }
+        }
+
         let mut table: toml::Table = toml::from_str(
             "private_key='fixture-secret-not-runtime'\n[torii]\npreauth_cooldown_ms=250\napi_tokens=['fixture-token']\nproof_egress_bytes_per_sec=2048\n[torii.push]\nrate_limit_enabled=false\n[torii.operator_auth]\nenabled=false\n[content]\nmax_egress_bytes_per_second=1024\n[sorafs.gateway.rate_limit]\nwindow='2s'\nban='1s'\n",
         ).unwrap();
@@ -1447,20 +1464,7 @@ mod tests {
         );
         assert!(!budgets.contains_key("torii.recipient_lookup.requests_per_minute"));
         // Every preexisting leaf except an explicit request budget remains identical.
-        fn compare(old: &toml::Table, new: &toml::Table, prefix: &str, budgets: &Map) {
-            for (field, value) in old {
-                let path = if prefix.is_empty() {
-                    field.clone()
-                } else {
-                    format!("{prefix}.{field}")
-                };
-                if let Some(nested) = value.as_table() {
-                    compare(nested, new[field].as_table().unwrap(), &path, budgets);
-                } else if !budgets.contains_key(&path) {
-                    assert_eq!(value, &new[field], "{path}");
-                }
-            }
-        }
+
         compare(&retained, &table, "", &budgets);
         let mut optional: toml::Table = toml::from_str("[torii.recipient_lookup]\nrequests_per_minute=30\npolicy_id='cbuae_aed_sbp_pkr'\nrequest_timeout_ms=4000\nroutes=[]\n").unwrap();
         amend_request_rates(
@@ -1591,7 +1595,7 @@ mod tests {
         fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
         let file = File::open(&source).unwrap();
         let args = ToriiRateConfigAmend {
-            config_fd: file.as_raw_fd() as u32,
+            config_fd: u32::try_from(file.as_raw_fd()).expect("owned descriptor is nonnegative"),
             config_source_path: source.clone(),
             rate_per_second: 1_000_000,
             burst: 10_000_000,
@@ -1646,7 +1650,8 @@ mod tests {
             fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
             let file = File::open(&source).unwrap();
             let args = ToriiRateConfigAmend {
-                config_fd: file.as_raw_fd() as u32,
+                config_fd: u32::try_from(file.as_raw_fd())
+                    .expect("owned descriptor is nonnegative"),
                 config_source_path: source.clone(),
                 rate_per_second: 1_000_000,
                 burst: 10_000_000,
@@ -1664,7 +1669,7 @@ mod tests {
         .unwrap();
         let file = File::open(&source).unwrap();
         let mut args = ToriiRateConfigAmend {
-            config_fd: file.as_raw_fd() as u32,
+            config_fd: u32::try_from(file.as_raw_fd()).expect("owned descriptor is nonnegative"),
             config_source_path: source.clone(),
             rate_per_second: 1_000_000,
             burst: 10_000_000,
@@ -1936,7 +1941,7 @@ password = "fixture-password-not-runtime"
     ) -> ClientConfigRebase {
         use std::os::fd::AsRawFd as _;
         ClientConfigRebase {
-            config_fd: fd.as_raw_fd() as u32,
+            config_fd: u32::try_from(fd.as_raw_fd()).expect("owned descriptor is nonnegative"),
             expected_network_id: network,
             network_id: network,
             expected_torii_url: Some("http://127.0.0.1:8080".into()),
@@ -2559,7 +2564,7 @@ password = "fixture-password-not-runtime"
         let output_path = projected_dir.join("client.toml");
         let command = super::super::PublicReset {
             command: super::super::PublicResetCommand::ClientConfigRebase(ClientConfigRebase {
-                config_fd: fd.as_raw_fd() as u32,
+                config_fd: u32::try_from(fd.as_raw_fd()).expect("owned descriptor is nonnegative"),
                 expected_network_id: network,
                 network_id: network,
                 expected_torii_url: Some("http://127.0.0.1:8080".into()),
@@ -2620,7 +2625,7 @@ password = "fixture-password-not-runtime"
         let fd = File::open(&source).unwrap();
         let output = projected_dir.join("projected.toml");
         let mut args = ClientConfigRebase {
-            config_fd: fd.as_raw_fd() as u32,
+            config_fd: u32::try_from(fd.as_raw_fd()).expect("owned descriptor is nonnegative"),
             expected_network_id: network,
             network_id: network,
             expected_torii_url: Some("http://127.0.0.1:8080".into()),
@@ -2743,7 +2748,7 @@ password = "fixture-password-not-runtime"
         let output = root.join("projected.toml");
         let parent_before = fs::symlink_metadata(&root).unwrap();
         let args = ClientConfigRebase {
-            config_fd: fd.as_raw_fd() as u32,
+            config_fd: u32::try_from(fd.as_raw_fd()).expect("owned descriptor is nonnegative"),
             expected_network_id: network,
             network_id: network,
             expected_torii_url: Some("http://127.0.0.1:8080".into()),
@@ -2987,7 +2992,8 @@ password = "fixture-password-not-runtime"
         let output = root.join("rebound.toml");
         let command = super::super::PublicReset {
             command: super::super::PublicResetCommand::ClientConfigRebase(ClientConfigRebase {
-                config_fd: file.as_raw_fd() as u32,
+                config_fd: u32::try_from(file.as_raw_fd())
+                    .expect("owned descriptor is nonnegative"),
                 expected_network_id: old,
                 network_id: next,
                 expected_torii_url: None,
@@ -3030,7 +3036,7 @@ password = "fixture-password-not-runtime"
         let file = File::open(&source).unwrap();
         let output = root.join("rebound.toml");
         let mut args = ClientConfigRebase {
-            config_fd: file.as_raw_fd() as u32,
+            config_fd: u32::try_from(file.as_raw_fd()).expect("owned descriptor is nonnegative"),
             expected_network_id: next,
             network_id: old,
             expected_torii_url: None,
@@ -3351,7 +3357,8 @@ password = "fixture-password-not-runtime"
         let key = iroha_crypto::KeyPair::try_from_seed(vec![0x54; 32], Algorithm::Ed25519).unwrap();
         let command = super::super::PublicReset {
             command: super::super::PublicResetCommand::ConfigRebase(ConfigRebase {
-                config_fd: file.as_raw_fd() as u32,
+                config_fd: u32::try_from(file.as_raw_fd())
+                    .expect("owned descriptor is nonnegative"),
                 expected_genesis_file: PathBuf::from("/retained/genesis.nrt"),
                 genesis_file: PathBuf::from("/installed/genesis.nrt"),
                 expected_network_id: None,
@@ -3391,7 +3398,8 @@ password = "fixture-password-not-runtime"
             fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
             let file = File::open(&source).unwrap();
             let error = config_rebase(&ConfigRebase {
-                config_fd: file.as_raw_fd() as u32,
+                config_fd: u32::try_from(file.as_raw_fd())
+                    .expect("owned descriptor is nonnegative"),
                 expected_genesis_file: PathBuf::from("/wrong/path"),
                 genesis_file: PathBuf::from("/installed/genesis.nrt"),
                 expected_network_id: None,
@@ -3406,14 +3414,34 @@ password = "fixture-password-not-runtime"
         fs::write(&source, FIXTURE).unwrap();
         fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
         let file = File::open(&source).unwrap();
-        assert!(inherited_config(file.as_raw_fd() as u32).is_err());
+        assert!(
+            inherited_config(
+                u32::try_from(file.as_raw_fd()).expect("owned descriptor is nonnegative")
+            )
+            .is_err()
+        );
         fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
         fs::hard_link(&source, directory.path().join("linked.toml")).unwrap();
-        assert!(inherited_config(file.as_raw_fd() as u32).is_err());
+        assert!(
+            inherited_config(
+                u32::try_from(file.as_raw_fd()).expect("owned descriptor is nonnegative")
+            )
+            .is_err()
+        );
         let directory_fd = File::open(directory.path()).unwrap();
-        assert!(inherited_config(directory_fd.as_raw_fd() as u32).is_err());
+        assert!(
+            inherited_config(
+                u32::try_from(directory_fd.as_raw_fd()).expect("owned descriptor is nonnegative")
+            )
+            .is_err()
+        );
         let (reader, _writer) = std::os::unix::net::UnixStream::pair().unwrap();
-        assert!(inherited_config(reader.as_raw_fd() as u32).is_err());
+        assert!(
+            inherited_config(
+                u32::try_from(reader.as_raw_fd()).expect("owned descriptor is nonnegative")
+            )
+            .is_err()
+        );
         assert!(inherited_config(2).is_err());
         assert!(!output.exists());
     }
@@ -3429,7 +3457,7 @@ password = "fixture-password-not-runtime"
         let mut source = File::open(&path).unwrap();
         source.seek(std::io::SeekFrom::Start(9)).unwrap();
         rustix::io::fcntl_setfd(&source, rustix::io::FdFlags::empty()).unwrap();
-        let fd = source.as_raw_fd() as u32;
+        let fd = u32::try_from(source.as_raw_fd()).expect("owned descriptor is nonnegative");
         assert_eq!(inherited_config(fd).unwrap().as_slice(), FIXTURE);
         assert_eq!(source.stream_position().unwrap(), 9);
         assert!(
@@ -3443,7 +3471,10 @@ password = "fixture-password-not-runtime"
                 .write(true)
                 .open(&path)
                 .unwrap();
-            let error = inherited_config(writable.as_raw_fd() as u32).unwrap_err();
+            let error = inherited_config(
+                u32::try_from(writable.as_raw_fd()).expect("owned descriptor is nonnegative"),
+            )
+            .unwrap_err();
             assert!(error.to_string().contains("read-only"));
         }
         fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();

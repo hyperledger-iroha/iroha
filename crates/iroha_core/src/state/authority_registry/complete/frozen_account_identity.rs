@@ -1,9 +1,9 @@
-//! Exact account identity inverses over the original frozen StateBlock.
+//! Exact account identity inverses over the original frozen `StateBlock`.
 //!
 //! Both original images share the committed identity relation. Implicit accounts
-//! remain valid; no AccountId hash, controller validity, alias/metadata or
+//! remain valid; no `AccountId` hash, controller validity, alias/metadata or
 //! execution predicate is added. TODO: join all scoped encoders, canonical cells,
-//! relations and authenticated history in the sole StatePublication owner before
+//! relations and authenticated history in the sole `StatePublication` owner before
 //! claiming complete predecessor coherence, State authority or finality.
 
 use super::{CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits};
@@ -58,9 +58,13 @@ impl<'frozen> Original<'frozen> {
 ///
 /// `None` refuses incomplete, foreign, released or mixed acquisition sources.
 /// All three original borrows and their State pool survive validation and paired
-/// encoding. Local refusal leaves the same StateBlock available for retry; no
+/// encoding. Local refusal leaves the same `StateBlock` available for retry; no
 /// State view, target refresh, caller pool or replacement row source is acquired.
 /// Success grants no complete State root, execution or private-row authority.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,

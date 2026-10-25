@@ -76,7 +76,8 @@ fn rfc_sha_channels_match_actual_producer_for_every_disclosure_count() {
                 // different endpoint, capacity and tuple address.
                 assert_ne!(
                     consumer.message_channel,
-                    (5 + 2 * disclosed_attributes + 22) as u32
+                    u32::try_from(5 + 2 * disclosed_attributes + 22)
+                        .expect("protocol-bounded index fits u32")
                 );
             } else {
                 let length = channels.next().expect("length producer");
@@ -99,6 +100,11 @@ fn rfc_sha_channels_match_actual_producer_for_every_disclosure_count() {
 
 #[test]
 fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
+    use crate::privacy_engines::zk_x509::rfc5280_stark::ZkX509ShaUnionCentersV1;
+    // Raw SHA word/value rows populate base column zero. Fixed-column selector
+    // indices are a separate address space and must not select this probe.
+    const NATIVE_WORD_COLUMN: usize = 0;
+
     use crate::privacy_engines::zk_x509::{
         main_assembly::build_zk_x509_main_trace_assembly_v1,
         relation::{
@@ -129,7 +135,11 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
     let pre_aux = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
         [0x71; 32],
         assembly.verifier_profile.compiled_profile_digest,
-        core::array::from_fn(|index| zk_x509_test_digest384_v1(index as u8 + 1)),
+        core::array::from_fn(|index| {
+            zk_x509_test_digest384_v1(
+                u8::try_from(index).expect("protocol-bounded index fits u8") + 1,
+            )
+        }),
     );
     let binding = derive_zk_x509_credential_pre_aux_binding_v1(
         pre_aux,
@@ -160,24 +170,25 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
             segment,
         )
         .unwrap();
-        original_sources.push(base.bind_v1(binding).unwrap());
+        original_sources.push(base.bind_v1(&binding).unwrap());
     }
     let original_sources: [ZkX509ShaBatchSegmentAuxSourceV1<'_>; 4] = original_sources
         .try_into()
         .unwrap_or_else(|_| panic!("four actual SHA source owners"));
-    use crate::privacy_engines::zk_x509::rfc5280_stark::ZkX509ShaUnionCentersV1;
-    assert!(ZkX509ShaUnionCentersV1::from_bound_sources_v1(&original_sources, changed_ca).is_err());
+    assert!(
+        ZkX509ShaUnionCentersV1::from_bound_sources_v1(&original_sources, &changed_ca).is_err()
+    );
     assert!(
         original_sources[1]
-            .rfc_union_air_terminals_v1(binding, 0)
+            .rfc_union_air_terminals_v1(&binding, 0)
             .is_err()
     );
     let (wrong_provider_centers, _) =
-        ZkX509ShaUnionCentersV1::from_bound_sources_v1(&original_sources, binding).unwrap();
+        ZkX509ShaUnionCentersV1::from_bound_sources_v1(&original_sources, &binding).unwrap();
     assert!(
         ZkX509Rfc5280StarkColumnProviderV1::new_v1(
             &assembly.rfc_base,
-            changed_ca,
+            &changed_ca,
             wrong_provider_centers,
         )
         .is_err(),
@@ -186,11 +197,11 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
     // A rejected owner is consumed and cleared. Recover the positive path from
     // the actual retained original sources, never by cloning or forging centers.
     let (centers, original_ca) =
-        ZkX509ShaUnionCentersV1::from_bound_sources_v1(&original_sources, binding).unwrap();
+        ZkX509ShaUnionCentersV1::from_bound_sources_v1(&original_sources, &binding).unwrap();
     // Provider consumes an owner from this exact opaque X5B1 phase, never a
     // public endpoint tuple or test-only fixture centers.
     let rfc =
-        ZkX509Rfc5280StarkColumnProviderV1::new_v1(&assembly.rfc_base, binding, centers).unwrap();
+        ZkX509Rfc5280StarkColumnProviderV1::new_v1(&assembly.rfc_base, &binding, centers).unwrap();
     let roles = [
         ZkX509Rfc5280OutputRoleV1::CertificateTbsSha,
         ZkX509Rfc5280OutputRoleV1::CrlTbsP256Message,
@@ -207,7 +218,7 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
         .unwrap();
         let trace = bind_zk_x509_sha_batch_call_base_with_initial_products_v1(
             source,
-            binding,
+            &binding,
             &ZkX509ShaSegmentProductStateV1::one_v1(),
         )
         .unwrap();
@@ -231,14 +242,12 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
             );
         }
     }
+    let fixed = ZkX509ShaBatchFixedProviderV1::new_v1(assembly.sha_schedule.shape()).unwrap();
     let mut segments = Vec::new();
     let mut ca_calls = Vec::new();
     let mut boundary_rows = Vec::new();
     let mut column = zeroize::Zeroizing::new(vec![F::ZERO; ZK_X509_SHA_SEGMENT_ROWS_V1]);
-    // Raw SHA word/value rows populate base column zero. Fixed-column selector
-    // indices are a separate address space and must not select this probe.
-    const NATIVE_WORD_COLUMN: usize = 0;
-    for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
+    for (segment, &active) in ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1.iter().enumerate() {
         let mut source = ZkX509ShaBatchSegmentBaseSourceV1::new_v1(
             &assembly.sha_schedule,
             &assembly.sha_witnesses,
@@ -257,7 +266,6 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
             <[u8; 32]>::from(hash.finalize())
         };
         let base_before = fingerprint(&column);
-        let active = ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1[segment];
         let indices = [
             0,
             1,
@@ -275,9 +283,9 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
                 fixed,
             }
         });
-        let mut bound = source.bind_v1(binding).unwrap();
+        let mut bound = source.bind_v1(&binding).unwrap();
         bound
-            .replay_base_column_v1(segment, NATIVE_WORD_COLUMN, &mut column)
+            .replay_base_column_v1(&fixed, segment, NATIVE_WORD_COLUMN, &mut column)
             .unwrap();
         assert_eq!(
             fingerprint(&column),
@@ -338,7 +346,13 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
         "the actual maximum fixture must test original products beyond zero or identity placeholders"
     );
     for (segment, rows) in boundary_rows.iter().enumerate() {
-        assert_actual_sha_cyclic_boundaries_v1(segment, rows, binding, segment as u8, &ca_calls);
+        assert_actual_sha_cyclic_boundaries_v1(
+            segment,
+            rows,
+            &binding,
+            u8::try_from(segment).expect("protocol-bounded index fits u8"),
+            &ca_calls,
+        );
     }
     for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
         assert_eq!(

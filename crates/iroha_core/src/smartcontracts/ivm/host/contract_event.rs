@@ -25,7 +25,7 @@ use ivm::{IVM, VMError, value_record::capture_value_record_funded};
 /// One complete emission and its original allocation ledgers, moved together.
 ///
 /// The field order guarantees all canonical allocations die before their credits.
-pub(crate) struct OwnedContractEmission {
+pub struct OwnedContractEmission {
     pub(crate) value: ContractEmissionV1,
     pub(crate) metadata_charges: ChargedBuffer<AllocationCharge>,
     pub(crate) value_charges: ChargedBuffer<AllocationCharge>,
@@ -103,7 +103,7 @@ fn allocation() -> VMError {
 
 /// Fixture metadata demand, excluding the retained charge ledger and payload backing.
 #[cfg(test)]
-pub(crate) fn metadata_allocation_bytes(
+pub fn metadata_allocation_bytes(
     contract: &ContractAddress,
     caller: &AccountId,
     definition: &ContractEventDescriptorV1,
@@ -231,9 +231,7 @@ impl Construction {
                 EntrypointValueTypeNodeV1::Tuple(value) => EntrypointValueTypeNodeV1::Tuple(*value),
                 EntrypointValueTypeNodeV1::Option => EntrypointValueTypeNodeV1::Option,
                 EntrypointValueTypeNodeV1::Result => EntrypointValueTypeNodeV1::Result,
-                EntrypointValueTypeNodeV1::List(value) => {
-                    EntrypointValueTypeNodeV1::List(value.clone())
-                }
+                EntrypointValueTypeNodeV1::List(value) => EntrypointValueTypeNodeV1::List(*value),
                 EntrypointValueTypeNodeV1::Leaf(value) => EntrypointValueTypeNodeV1::Leaf(*value),
                 EntrypointValueTypeNodeV1::Unit => EntrypointValueTypeNodeV1::Unit,
                 // Authenticated event schemas exclude cursors recursively.
@@ -253,7 +251,7 @@ impl Construction {
 /// Capture an authenticated source declaration, immutable origin and live public payload.
 /// The caller quotes/debits work and output capacity before calling this materializer.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn capture(
+pub fn capture(
     vm: &IVM,
     budget: &AllocationBudget,
     contract: &ContractAddress,

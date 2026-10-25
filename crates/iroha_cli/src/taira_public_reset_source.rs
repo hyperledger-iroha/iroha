@@ -6,8 +6,8 @@ use std::{
     process::{Child, ChildStdin, ChildStdout, Stdio},
 };
 
-const SYMLINK_MODE: u16 = 0o120000;
-const GITLINK_MODE: u16 = 0o160000;
+const SYMLINK_MODE: u16 = 0o120_000;
+const GITLINK_MODE: u16 = 0o160_000;
 const MAX_LINK_BYTES: usize = 4096;
 
 // One process serves the whole source tree. Requests and responses are
@@ -117,7 +117,7 @@ fn read_blob_digest(reader: &mut impl Read, object: &str, expected_size: u64) ->
     }
     let mut digest = Sha256::new();
     let mut remaining = expected_size;
-    let mut buffer = [0; 64 * 1024];
+    let mut buffer = vec![0; 64 * 1024].into_boxed_slice();
     while remaining != 0 {
         let count = usize::try_from(remaining.min(buffer.len() as u64))?;
         reader

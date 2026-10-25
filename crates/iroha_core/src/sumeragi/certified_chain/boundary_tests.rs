@@ -1,6 +1,6 @@
 //! Historical certification transcripts with genuine BLS votes and threshold pulses.
 //! These fixtures verify exact BLS quorums and authenticated scheduling transitions.
-//! They do not execute NPoS State transitions or establish monetary qualification.
+//! They do not execute `NPoS` State transitions or establish monetary qualification.
 
 use super::*;
 use crate::state::WorldReadOnly as _;

@@ -104,9 +104,7 @@ fn private_bit_counts_ignore_all_encoded_rs2_bytes_but_keep_original_source_tag(
         assert!(!wrong_tag.accepts(&program));
         let mut extra = fixture.clone();
         extra.0.packets.fields[SCALAR_RIGHT] = event(
-            Space::Register,
-            0,
-            255,
+            (Space::Register, 0, 255),
             0,
             0,
             false,

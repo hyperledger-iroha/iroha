@@ -9,7 +9,6 @@
 //! Assembly is not proof verification. Native reference validation here is a
 //! prover-side differential invariant; the independent aggregate verifier
 //! enforces the committed numeric constraints.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::{PrivateTableV1, zeroize_fields_v1, zeroize_words_v1};
 
 use super::{
@@ -333,7 +332,7 @@ fn projection_witness_v1(
     for certificate in &trace.certificates {
         projection.chain_spki_der.push(certificate.spki_der.clone());
     }
-    projection.leaf_serial = leaf.serial.clone();
+    projection.leaf_serial.clone_from(&leaf.serial);
     Ok(projection)
 }
 fn erase_assembly_byte_rows_v1(rows: &mut [Vec<u8>]) {
@@ -537,11 +536,11 @@ fn p256_witness_v1(
     signature_der: &[u8],
     digest_be: [u8; 32],
 ) -> Result<P256EcdsaWitnessV1, ZkX509MainAssemblyErrorV1> {
-    let (public_key_x_be, public_key_y_be) = public_key_words_v1(public_key)?;
+    let (public_key_abscissa, public_key_ordinate) = public_key_words_v1(public_key)?;
     let (r_be, s_be) = strict_signature_words_v1(signature_der)?;
     Ok(P256EcdsaWitnessV1 {
-        public_key_x_be,
-        public_key_y_be,
+        public_key_x_be: public_key_abscissa,
+        public_key_y_be: public_key_ordinate,
         r_be,
         s_be,
         digest_be,
@@ -552,12 +551,12 @@ fn p256_witness_rs_v1(
     signature_rs: &[u8; 64],
     digest_be: [u8; 32],
 ) -> Result<P256EcdsaWitnessV1, ZkX509MainAssemblyErrorV1> {
-    let (public_key_x_be, public_key_y_be) = public_key_words_v1(public_key)?;
+    let (public_key_abscissa, public_key_ordinate) = public_key_words_v1(public_key)?;
     let signature =
         P256Signature::from_slice(signature_rs).map_err(|_| ZkX509MainAssemblyErrorV1::Source)?;
     Ok(P256EcdsaWitnessV1 {
-        public_key_x_be,
-        public_key_y_be,
+        public_key_x_be: public_key_abscissa,
+        public_key_y_be: public_key_ordinate,
         r_be: signature.r().to_bytes().into(),
         s_be: signature.s().to_bytes().into(),
         digest_be,
@@ -606,7 +605,7 @@ fn build_p256_material_v1(
     selected
         .try_reserve_exact(P256_SIGNATURES_V1)
         .map_err(|_| ZkX509MainAssemblyErrorV1::Resource)?;
-    for slot in 0..2 {
+    for (slot, sha_witness) in sha_witnesses.iter().take(2).enumerate() {
         let certificate = trace
             .certificates
             .get(slot)
@@ -615,7 +614,7 @@ fn build_p256_material_v1(
         selected.push(p256_witness_v1(
             &signer.public_key,
             &certificate.signature.encoded,
-            sha_witnesses[slot].digest,
+            sha_witness.digest,
         )?);
     }
     let slot_2_active = certificate_slot_2_active_v1(trace)?;
@@ -793,7 +792,7 @@ pub fn build_zk_x509_main_trace_assembly_v1(
         ZkX509CaAccumulatorStatementV1 {
             governed_root: *statement.ca_membership_root.as_bytes(),
         },
-        ZkX509CaAccumulatorWitnessV1 {
+        &ZkX509CaAccumulatorWitnessV1 {
             root_spki_der,
             path: witness.ca_membership_path,
         },

@@ -430,11 +430,18 @@ pub trait VegaMdlFigure9VerifierArtifactSourceV1: Send + Sync {
     fn artifact_manifest(&self) -> &VegaMdlFigure9ArtifactManifestV1;
 
     /// Lend the exact canonical verifier-key bytes for one callback.
+    ///
+    /// # Errors
+    /// Returns an artifact-source error if the canonical verifier bytes cannot be lent, or propagates the consumer error.
     fn with_verifier_key(
         &self,
         consume: &mut dyn FnMut(&[u8]) -> Result<(), VegaMdlFigure9ArtifactSourceErrorV1>,
     ) -> Result<(), VegaMdlFigure9ArtifactSourceErrorV1>;
 }
+
+/// Consumer of one authenticated proving/verifying artifact pair.
+pub type VegaMdlArtifactConsumerV1<'a> =
+    &'a mut (dyn FnMut(&[u8], &[u8]) -> Result<(), VegaMdlFigure9ArtifactSourceErrorV1> + 'a);
 
 /// Prover source of one immutable, mutually bound Figure 9 PK/VK pair.
 ///
@@ -446,9 +453,12 @@ pub trait VegaMdlFigure9ProverArtifactSourceV1: Send + Sync {
     fn artifact_manifest(&self) -> &VegaMdlFigure9ArtifactManifestV1;
 
     /// Lend the exact canonical proving-key and verifier-key bytes together.
+    ///
+    /// # Errors
+    /// Returns an artifact-source error if the canonical key pair cannot be lent together, or propagates the consumer error.
     fn with_prover_artifacts(
         &self,
-        consume: &mut dyn FnMut(&[u8], &[u8]) -> Result<(), VegaMdlFigure9ArtifactSourceErrorV1>,
+        consume: VegaMdlArtifactConsumerV1<'_>,
     ) -> Result<(), VegaMdlFigure9ArtifactSourceErrorV1>;
 }
 

@@ -334,8 +334,11 @@ impl AdmissionRegistry {
     #[must_use]
     pub fn len(&self) -> usize {
         if let Some(state) = &self.native_state {
-            return iroha_core::query::provider_admission::retained_provider_count_v1(&state.view())
-                .unwrap_or(MAX_ADMISSION_ENVELOPES as u64) as usize;
+            return usize::try_from(
+                iroha_core::query::provider_admission::retained_provider_count_v1(&state.view())
+                    .unwrap_or(MAX_ADMISSION_ENVELOPES as u64),
+            )
+            .unwrap_or(MAX_ADMISSION_ENVELOPES);
         }
         self.by_provider.len()
     }

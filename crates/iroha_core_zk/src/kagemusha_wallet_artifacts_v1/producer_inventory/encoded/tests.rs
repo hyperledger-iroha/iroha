@@ -204,11 +204,11 @@ fn encoded_rejects_symlink_and_path_replacement_even_with_buffered_output() {
         Err(Error::Inventory)
     ));
     let error = reader.read(&mut [0; 1]).unwrap_err();
-    assert!(
-        error
-            .get_ref()
-            .is_some_and(|e| e.is::<OriginalCustodyFailure>())
-    );
+    assert!(error.get_ref().is_some_and(
+        <dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static>::is::<
+            OriginalCustodyFailure,
+        >
+    ));
     std::fs::remove_file(root.path().join(&name)).unwrap();
     symlink(root.path().join("retained-old"), root.path().join(&name)).unwrap();
     assert!(source.open_original(identity.sha256).is_err());

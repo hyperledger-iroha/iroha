@@ -30,7 +30,7 @@ fn single(
     attempted(
         &[enc::encode_rr(
             wide::arithmetic::GCD,
-            destination as u8,
+            u8::try_from(destination).expect("bounded fixture value"),
             6,
             7,
         )],
@@ -282,8 +282,8 @@ fn gcd_cycle_limit_allows_last_crossing_and_rejects_a_later_attempt() {
     let segment = ScalarSegment::new(
         prepared.clone(),
         1,
-        first.before,
-        first.after,
+        &first.before,
+        &first.after,
         SegmentOutcome::Continue,
     )
     .unwrap();
@@ -297,8 +297,8 @@ fn gcd_cycle_limit_allows_last_crossing_and_rejects_a_later_attempt() {
     let invented = ScalarSegment::new(
         prepared,
         2,
-        first.before,
-        invented_after,
+        &first.before,
+        &invented_after,
         SegmentOutcome::Continue,
     )
     .unwrap();
@@ -398,8 +398,8 @@ fn native_stark_proves_maximum_gcd_microsteps_and_rejects_boundary_and_schedule_
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             segment.steps,
-            segment.before,
-            after,
+            &segment.before,
+            &after,
             segment.outcome,
         )
         .unwrap();

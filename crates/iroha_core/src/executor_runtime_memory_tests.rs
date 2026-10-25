@@ -334,7 +334,7 @@ fn executor_refund_callbacks_wait_for_pool_and_enclosing_writer_on_success_and_u
                     let _outer = observer
                         .outer
                         .lock()
-                        .unwrap_or_else(|error| error.into_inner());
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     if unwind {
                         with_executor_runtime_pool(&loaded.runtime_pool, |pool| {
                             pool.clear_storage();

@@ -1,8 +1,6 @@
 #[test]
 fn fee_enabled_single_transfer_uses_canonical_output_owner() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-single-transfer-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -148,9 +146,7 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
 }
 #[test]
 fn fee_enabled_account_metadata_uses_canonical_output_owner() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-non-transfer-fallback-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -268,9 +264,7 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
 }
 #[test]
 fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-insufficient-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -434,9 +428,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
 }
 #[test]
 fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-data-trigger-fallback-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -934,9 +926,7 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
 }
 #[test]
 fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_missing() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-missing-fee-asset-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1095,9 +1085,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
 }
 #[test]
 fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_work() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-same-asset-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1222,9 +1210,7 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
 }
 #[test]
 fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_prior_success() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-shared-fee-balance-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1408,17 +1394,14 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     assert_eq!(
         assets
             .get(&payer_fee_asset)
-            .map(|asset| asset.0.clone())
-            .unwrap_or_else(Quantity::zero),
+            .map_or_else(Quantity::zero, |asset| asset.0.clone()),
         Quantity::zero(),
         "only the accepted transaction may consume the available fee balance"
     );
 }
 #[test]
 fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-transfer-then-fail-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1591,9 +1574,7 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
 }
 #[test]
 fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-sequence-admission-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1801,9 +1782,7 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
 }
 #[test]
 fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_mutation() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("legacy-fee-sponsor-metadata-default-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1911,9 +1890,7 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
 }
 #[test]
 fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("legacy-fee-sponsor-metadata-configured-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -2027,9 +2004,7 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
 }
 #[test]
 fn local_configuration_cannot_mutate_committed_fee_policy_or_balances() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-invalid-fee-asset-test");
     let (payer_id, _payer_keypair) = gen_account_in("wonderland");
@@ -2165,9 +2140,7 @@ fn local_configuration_cannot_mutate_committed_fee_policy_or_balances() {
 
 #[test]
 fn rejected_data_trigger_execution_still_charges_nexus_fee() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("rejected-trigger-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");

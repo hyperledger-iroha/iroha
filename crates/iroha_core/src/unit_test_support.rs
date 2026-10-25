@@ -4,7 +4,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{NetworkId, block::BlockHeader};
 
 /// Build a deterministic exact network identity for protocol fixtures.
-pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
+pub fn synthetic_network_id(seed: &str) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         seed.as_bytes(),
     )))
@@ -14,7 +14,7 @@ pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
 ///
 /// Call before saturating that pool or acquiring the physical guard whose release
 /// is observed. This helper allocates no fallback pool and preserves pool identity.
-pub(crate) fn release_registration(
+pub fn release_registration(
     budget: &iroha_allocation::AllocationBudget,
 ) -> iroha_allocation::release::ReleaseRegistration {
     use iroha_allocation::release::ReleaseRegistration;
@@ -31,7 +31,7 @@ pub(crate) fn release_registration(
 ///
 /// Returns `true` in the parent after the child completes exactly once, and
 /// `false` in the child so the caller executes its original assertions.
-pub(crate) fn run_in_isolated_harness(exact: &str) -> bool {
+pub fn run_in_isolated_harness(exact: &str) -> bool {
     const CHILD: &str = "IROHA_CORE_ISOLATED_UNIT_TEST_CHILD";
     if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new(exact)) {
         return false;
@@ -91,7 +91,7 @@ fn isolated_harness_diagnostic(output: &str) -> String {
 ///
 /// Only the typed busy result is retried. Semantic, resource and verification
 /// failures remain immediate test failures, and the request never changes.
-pub(crate) fn prove_axt_bound_batch_when_available(
+pub fn prove_axt_bound_batch_when_available(
     batch: &fastpq_prover::TransitionBatch,
     binding: &iroha_data_model::nexus::AxtFastpqBinding,
 ) -> Vec<u8> {

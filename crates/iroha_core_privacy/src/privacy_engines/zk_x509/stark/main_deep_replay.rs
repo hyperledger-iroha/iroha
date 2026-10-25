@@ -329,9 +329,7 @@ mod stack_tests {
                         .try_for_each(|(index, pair)| {
                             pair.fill(E::from_base(F(index as u64 + 53)));
                             if index == 1 {
-                                if unwind {
-                                    panic!("injected opening worker unwind");
-                                }
+                                assert!(!unwind, "injected opening worker unwind");
                                 return Err(());
                             }
                             Ok(())

@@ -211,8 +211,7 @@ fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
             .expect_err("one-bit proof mutation");
     assert_eq!(
         smart_contract_parameter_message(&error),
-        "privacy proof admission rejected: native Anonymous-PGC verification failed: \
-             Anonymous-PGC payment proof equation failed",
+        "privacy PGC payment verification failed: Anonymous-PGC payment proof equation failed",
         "unexpected typed proof rejection: {error:?}"
     );
     assert_eq!(

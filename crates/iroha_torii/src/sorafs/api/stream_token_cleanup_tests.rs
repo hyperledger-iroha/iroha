@@ -339,7 +339,7 @@ async fn queued_admission_expiry_prevents_signer_observer_and_gateway_provider_w
     tokio::select! {
         biased;
         result = &mut admission => panic!("occupied worker gate unexpectedly completed: {result:?}"),
-        _ = tokio::time::sleep(std::time::Duration::from_millis(30)) => {}
+        () = tokio::time::sleep(std::time::Duration::from_millis(30)) => {}
     }
     drop(occupied);
     let response = admission

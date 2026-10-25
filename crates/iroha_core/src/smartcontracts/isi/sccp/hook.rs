@@ -161,6 +161,10 @@ fn prepare_anchor<'a>(
     }))
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 fn local_or_degraded<T>(
     result: Result<T, GenerationError>,
     failure: &mut Option<SccpFinalityDegradedReasonV1>,
@@ -199,6 +203,10 @@ fn degrade(stx: &mut StateTransaction<'_, '_>, height: u64, reason: SccpFinality
 /// # Errors
 /// Dense-leaf violations retain their execution-invariant error. Storage and allocation
 /// refusal retain their original retry owner. Generation/anchor inconsistency only degrades.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 pub fn finalize_block(
     state_block: &mut StateBlock<'_>,
     header: &BlockHeader,
@@ -232,7 +240,9 @@ pub fn finalize_block(
     if failure.is_some() {
         draft = None;
     }
-    let generation_demand = draft.as_ref().map_or(Ok(0), |draft| draft.demand());
+    let generation_demand = draft
+        .as_ref()
+        .map_or(Ok(0), super::generations::GenerationDraft::demand);
     let mut generation_demand = local_or_degraded(generation_demand, &mut failure)?.unwrap_or(0);
     if failure.is_some() {
         draft = None;
@@ -342,7 +352,7 @@ pub(crate) mod observed {
 
     /// Test-only owned value snapshot; production custody never depends on observation.
     #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(crate) struct HeightInputsSnapshot {
+    pub struct HeightInputsSnapshot {
         /// Observed mode.
         pub(crate) mode: iroha_data_model::parameter::system::ConsensusMode,
         /// Observed executing height.
@@ -399,7 +409,7 @@ pub(crate) mod observed {
     }
 
     /// Retain observations for one exact original proposal across execution threads.
-    pub(crate) struct HeaderCalls {
+    pub struct HeaderCalls {
         header: HashOf<BlockHeader>,
     }
 
@@ -422,7 +432,7 @@ pub(crate) mod observed {
     }
 
     /// Observe a proposal until the returned guard is dropped, including on unwind.
-    pub(crate) fn for_header(header: &BlockHeader) -> HeaderCalls {
+    pub fn for_header(header: &BlockHeader) -> HeaderCalls {
         let header = header.hash();
         let mut headers = HEADERS.lock();
         let std::collections::btree_map::Entry::Vacant(entry) = headers.entry(header) else {
@@ -433,7 +443,7 @@ pub(crate) mod observed {
     }
 
     /// Take the `(height, inputs)` of every SCCP finalizer call on this thread so far.
-    pub(crate) fn take() -> Calls {
+    pub fn take() -> Calls {
         CALLS.with(|calls| core::mem::take(&mut *calls.borrow_mut()))
     }
 }
@@ -644,7 +654,7 @@ mod tests {
         let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
         let parameters = SccpParametersV1::taira_default();
         chain.setup_world_at(2_000, |stx| {
-            store::parameters::set(stx, Some(parameters.clone()));
+            store::parameters::set(stx, Some(parameters));
             store::liability_clock::set(stx, 1_000);
         });
         let time = 10 * parameters.committee_validity_ms;

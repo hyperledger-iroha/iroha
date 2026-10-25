@@ -33,8 +33,10 @@ use core::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ff::Field;
+#[cfg(test)]
+use iroha_pasta::PastaField;
 use iroha_pasta::{
-    PastaCurve, PastaField,
+    PastaCurve,
     msm::MsmError,
     params::{ParamsError, ParamsIpa},
 };
@@ -365,6 +367,7 @@ pub fn fold_evaluation<F: Field>(x: F, challenges: &[F]) -> F {
 }
 
 /// `<a, b>`.
+#[cfg(test)]
 pub(crate) fn inner_product<F: PastaField>(a: &[F], b: &[F]) -> F {
     a.iter().zip(b).fold(F::ZERO, |acc, (x, y)| acc + *x * y)
 }

@@ -780,7 +780,7 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
                     staker: validator_account_id.clone(),
                     bonded: Quantity::from(1_u64),
                     pending_unbonds: BTreeMap::new(),
-                    metadata: Default::default(),
+                    metadata: iroha_model_base::metadata::Metadata::default(),
                 },
             );
             stake_tx.apply();

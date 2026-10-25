@@ -43,6 +43,10 @@ pub enum TryReadError {
     /// Local snapshot read-buffer allocation admission refused: {0}
     PayloadAllocation(#[source] iroha_allocation::AllocationRefusal),
     /// The allocator could not supply {requested_bytes} prepaid snapshot payload bytes
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc field placeholders must retain their exact format syntax"
+    )]
     PayloadAllocatorFailure {
         /// Exact requested byte allocation; no buffer was installed.
         requested_bytes: usize,
@@ -224,6 +228,10 @@ pub(super) enum TryWriteError {
     /// Local snapshot read-buffer allocation admission refused: {0}
     PayloadAllocation(#[source] iroha_allocation::AllocationRefusal),
     /// The allocator could not supply {requested_bytes} prepaid snapshot payload bytes
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc field placeholders must retain their exact format syntax"
+    )]
     PayloadAllocatorFailure {
         /// Exact requested byte allocation; original generation evidence remains valid.
         requested_bytes: usize,

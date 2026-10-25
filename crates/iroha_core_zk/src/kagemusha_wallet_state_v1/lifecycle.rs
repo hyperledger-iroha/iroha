@@ -18,7 +18,7 @@ pub(super) use dispatch::intake::{
     DRAFT_OBJECTS as INTAKE_DRAFT_OBJECTS,
 };
 mod intent;
-pub(crate) use intent::ArchiveIntentV1;
+pub use intent::ArchiveIntentV1;
 pub use intent::NativeIntentV1;
 
 /// Upper bound for a persisted native preparation plan, including exact local originals.

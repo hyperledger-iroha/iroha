@@ -311,8 +311,8 @@ fn read_errors_map_to_http_statuses() {
 #[tokio::test]
 async fn immutable_responses_carry_validators_per_representation() {
     let headers = HeaderMap::new();
-    let json = respond_immutable(Some(&json_accept()), &headers, SccpReadLimitsV1::v1());
-    let norito = respond_immutable(Some(&norito_accept()), &headers, SccpReadLimitsV1::v1());
+    let json = respond_immutable(Some(&json_accept()), &headers, &SccpReadLimitsV1::v1());
+    let norito = respond_immutable(Some(&norito_accept()), &headers, &SccpReadLimitsV1::v1());
     let json_tag = json.headers()[header::ETAG].clone();
     let norito_tag = norito.headers()[header::ETAG].clone();
     assert_ne!(json_tag, norito_tag, "ETags bind the representation");
@@ -326,7 +326,7 @@ async fn immutable_responses_carry_validators_per_representation() {
     let mut conditional = HeaderMap::new();
     conditional.insert(header::IF_NONE_MATCH, json_tag.clone());
     let not_modified =
-        respond_immutable(Some(&json_accept()), &conditional, SccpReadLimitsV1::v1());
+        respond_immutable(Some(&json_accept()), &conditional, &SccpReadLimitsV1::v1());
     assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
     assert_eq!(not_modified.headers()[header::ETAG], json_tag);
     assert!(body(not_modified).await.is_empty());
@@ -337,14 +337,18 @@ async fn immutable_response_validator_refuses_changed_representation_or_body() {
     let original = respond_immutable(
         Some(&json_accept()),
         &HeaderMap::new(),
-        SccpReadLimitsV1::v1(),
+        &SccpReadLimitsV1::v1(),
     );
     assert_eq!(original.status(), StatusCode::OK);
     let original_tag = original.headers()[header::ETAG].clone();
     let mut conditional = HeaderMap::new();
     conditional.insert(header::IF_NONE_MATCH, original_tag.clone());
 
-    let norito = respond_immutable(Some(&norito_accept()), &conditional, SccpReadLimitsV1::v1());
+    let norito = respond_immutable(
+        Some(&norito_accept()),
+        &conditional,
+        &SccpReadLimitsV1::v1(),
+    );
     assert_eq!(norito.status(), StatusCode::OK);
     assert_ne!(norito.headers()[header::ETAG], original_tag);
     assert_eq!(norito.headers()[header::VARY], "Accept");
@@ -353,7 +357,7 @@ async fn immutable_response_validator_refuses_changed_representation_or_body() {
     let mut changed = SccpReadLimitsV1::v1();
     changed.recent_messages += 1;
     let expected = norito::json::to_vec(&changed).expect("changed representation");
-    let json = respond_immutable(Some(&json_accept()), &conditional, changed);
+    let json = respond_immutable(Some(&json_accept()), &conditional, &changed);
     assert_eq!(json.status(), StatusCode::OK);
     assert_ne!(json.headers()[header::ETAG], original_tag);
     assert_eq!(json.headers()[header::VARY], "Accept");
@@ -744,7 +748,7 @@ async fn capabilities_list_paths_profiles_and_limits() {
     )
     .unwrap();
     let capabilities: SccpCapabilitiesV1 =
-        decode(respond(Some(&norito_accept()), offered.data().clone())).await;
+        decode(respond(Some(&norito_accept()), offered.data())).await;
     assert_eq!(capabilities.limits, SccpReadLimitsV1::v1());
     assert_eq!(capabilities.profiles.len(), 3);
     for route in iroha_torii_shared::route_catalog::sccp::ROUTES {
@@ -775,7 +779,7 @@ where
         .uri(uri)
         .body(())
         .expect("request");
-    let (mut parts, _) = request.into_parts();
+    let (mut parts, ()) = request.into_parts();
     crate::NoritoStringQuery::<T>::from_request_parts(&mut parts, &())
         .await
         .map(|crate::NoritoStringQuery(query)| query)
@@ -933,7 +937,7 @@ async fn committee_routes_report_current_records_and_reject_zero_or_absent_gener
                 peer_id: peer.clone(),
                 stake_account: validator,
                 initial_stake: amount.clone(),
-                metadata: Default::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
                 monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
                     source,
                     AssetId::new(definition.clone(), escrow.clone()),
@@ -1092,7 +1096,7 @@ async fn history_error_responses_release_query_admission_before_body_read() {
             99,
             None,
             json_accept(),
-            history_read_error(read::SccpHistoryReadError::MissingCommitment),
+            history_read_error(&(read::SccpHistoryReadError::MissingCommitment)),
         ),
         (10, Some("3"), unsupported, unsupported_response),
     ] {

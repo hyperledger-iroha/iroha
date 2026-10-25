@@ -78,7 +78,7 @@ fn fi_current_assertion_is_owner_only_exact_at_cut_and_observes_stale_relationsh
         bad.execute(&f.owner, &mut tx)
             .expect_err("mismatched assertion must reject");
     }
-    let stale = AssetFiContextTargetV1::Transfer {
+    let outdated = AssetFiContextTargetV1::Transfer {
         instruction: iroha_data_model::isi::asset_fi::TransferToLinkedFiV1 {
             asset_definition_id: f.definition.clone(),
             account_id: f.first.clone(),
@@ -91,10 +91,10 @@ fn fi_current_assertion_is_owner_only_exact_at_cut_and_observes_stale_relationsh
         expected_fi_revision: 3,
         expected_attestation_revision: 3,
     };
-    assertion(&tx, stale.clone(), floor)
+    assertion(&tx, outdated.clone(), floor)
         .execute(&f.owner, &mut tx)
         .unwrap();
-    let mut mismatched = assertion(&tx, stale, floor);
+    let mut mismatched = assertion(&tx, outdated, floor);
     if let AssetFiContextTargetV1::Transfer {
         expected_fi_revision,
         ..

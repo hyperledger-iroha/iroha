@@ -28,6 +28,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 /// Command-line arguments exposed by the `izanami` binary.
 #[derive(Debug, Parser, Clone)]
 #[command(author, version, about = "Izanami chaosnet orchestrator for Iroha", long_about = None)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent CLI switches are parsed as separate flags rather than mutually exclusive states."
+)]
 pub struct IzanamiArgs {
     /// Launch interactive TUI to configure a run.
     #[arg(long)]
@@ -626,6 +630,15 @@ impl NexusProfile {
     /// Load the embedded Sora profile and expose both typed values and a TOML layer.
     pub fn sora_defaults() -> Result<Self> {
         const DEFAULT_CONFIG: &str = include_str!("../../../defaults/nexus/config.toml");
+        const VALIDATOR_PRIVATE_KEY_FILE: &str = "/run/secrets/iroha/nexus-validator-private-key";
+        const VALIDATOR_PROJECTION_PRIVATE_KEY: &str =
+            "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F";
+        const SORANET_TRANSPORT_PRIVATE_KEY_FILE: &str =
+            "/run/secrets/iroha/nexus-soranet-transport-private-key";
+        const STREAMING_PRIVATE_KEY_FILE: &str =
+            "/run/secrets/iroha/nexus-streaming-identity-private-key";
+        const EXPECTED_HASH_FILE: &str = "/run/iroha/genesis.expected_hash";
+
         let config_str = DEFAULT_CONFIG.replace("\\0", "");
         let mut raw_table: Table = toml::from_str(&config_str)
             .map_err(|err| eyre!("failed to parse embedded nexus config: {err}"))?;
@@ -638,13 +651,7 @@ impl NexusProfile {
         // The checked-in profile deliberately keeps every private identity file-backed. Verify
         // those operator-owned sources exactly, then substitute deterministic in-memory keys only
         // for this typed Nexus/Sumeragi projection; none are copied into `config_layer`.
-        const VALIDATOR_PRIVATE_KEY_FILE: &str = "/run/secrets/iroha/nexus-validator-private-key";
-        const VALIDATOR_PROJECTION_PRIVATE_KEY: &str =
-            "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F";
-        const SORANET_TRANSPORT_PRIVATE_KEY_FILE: &str =
-            "/run/secrets/iroha/nexus-soranet-transport-private-key";
-        const STREAMING_PRIVATE_KEY_FILE: &str =
-            "/run/secrets/iroha/nexus-streaming-identity-private-key";
+
         if raw_table.contains_key("private_key") {
             return Err(eyre!(
                 "embedded Nexus signing profile must source its validator private key from the operator-owned file"
@@ -766,7 +773,7 @@ impl NexusProfile {
             );
             raw_table.insert("torii".to_string(), Value::Table(torii));
         }
-        const EXPECTED_HASH_FILE: &str = "/run/iroha/genesis.expected_hash";
+
         let genesis = raw_table
             .get_mut("genesis")
             .and_then(Value::as_table_mut)
@@ -855,14 +862,14 @@ fn derive_bootstrap_public_lanes(nexus: &ActualNexus) -> Vec<LaneId> {
     owners
 }
 fn normalize_lane_metadata(raw: &mut Table) {
-    if let Some(nexus) = raw.get_mut("nexus").and_then(Value::as_table_mut) {
-        if let Some(Value::Array(lanes)) = nexus.get_mut("lane_catalog") {
-            for lane in lanes {
-                if let Some(table) = lane.as_table_mut() {
-                    table
-                        .entry("metadata".to_string())
-                        .or_insert(Value::Table(Table::new()));
-                }
+    if let Some(nexus) = raw.get_mut("nexus").and_then(Value::as_table_mut)
+        && let Some(Value::Array(lanes)) = nexus.get_mut("lane_catalog")
+    {
+        for lane in lanes {
+            if let Some(table) = lane.as_table_mut() {
+                table
+                    .entry("metadata".to_string())
+                    .or_insert(Value::Table(Table::new()));
             }
         }
     }
@@ -1145,7 +1152,7 @@ fn lane_rule_to_value(
     }
     let mut matcher = Table::new();
     if let Some(account) = &rule.matcher.account {
-        matcher.insert("account".to_string(), Value::String(account.to_string()));
+        matcher.insert("account".to_string(), Value::String(account.clone()));
     }
     if let Some(instruction) = &rule.matcher.instruction {
         matcher.insert(

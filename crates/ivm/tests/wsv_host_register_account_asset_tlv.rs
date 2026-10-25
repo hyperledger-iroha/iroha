@@ -59,7 +59,6 @@ fn register_account_and_asset_then_mint() {
     // Grant required permissions
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     // Predeclare asset id to grant mint permission
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -106,6 +105,11 @@ fn register_account_and_asset_then_mint() {
     vm.set_register(11, Memory::INPUT_START + ad.len() as u64 + 8);
     vm.set_register(12, 0);
     vm.set_register(13, 0);
+    let domain_offset = ad.len() as u64 + display_name.len() as u64 + 16;
+    vm.memory
+        .preload_input(domain_offset, &dom)
+        .expect("preload owning domain");
+    vm.set_register(14, Memory::INPUT_START + domain_offset);
     let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
     vm.load_program(&prog_ad).unwrap();
     vm.run().expect("register asset def");
@@ -144,7 +148,6 @@ fn register_asset_rejects_name_pointer_without_explicit_definition_id() {
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

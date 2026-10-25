@@ -15,7 +15,7 @@ fn instruction_self_registers_authority(
     let maybe_registration = instruction
         .as_any()
         .downcast_ref::<iroha_data_model::isi::Register<Account>>()
-        .map(|register| register.object())
+        .map(iroha_data_model::isi::Register::object)
         .or_else(|| {
             instruction
                 .as_any()
@@ -76,9 +76,7 @@ pub fn allows_unregistered_authority(executable: &Executable, authority: &Accoun
         || crate::smartcontracts::isi::sccp::admission::allows_unregistered_authority(executable)
 }
 
-pub(crate) fn instructions_allow_multisig_envelope_authority(
-    instructions: &[InstructionBox],
-) -> bool {
+pub fn instructions_allow_multisig_envelope_authority(instructions: &[InstructionBox]) -> bool {
     !instructions.is_empty()
         && instructions.iter().all(|instruction| {
             matches!(

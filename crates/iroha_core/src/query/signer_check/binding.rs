@@ -73,7 +73,7 @@ impl<E: From<Error>> From<ExecutionAttemptError<Error>> for NativeCheckBindingEr
     }
 }
 
-pub(crate) struct BindingScope<'a> {
+pub struct BindingScope<'a> {
     pub(crate) state: &'a State,
     pub(crate) round: &'a mut NativeCheckRoundV1,
     pub(crate) instruction: NativeCustodyCheckRefV1<'a>,
@@ -84,13 +84,13 @@ pub(crate) struct BindingScope<'a> {
 }
 
 /// Opaque continuation marker; only this owner can retry its already-spent round.
-pub(crate) struct SignedCheckAttempt {
+pub struct SignedCheckAttempt {
     entry: SignedCheckOwner,
     started: bool,
 }
 /// Immutable signed owner; allocated pin custody retains every graph charge through native
 /// finality/current-row verification. Other purpose owners retain their existing moved graphs.
-pub(crate) enum SignedCheckOwner {
+pub enum SignedCheckOwner {
     Ordinary(TransactionEntrypoint),
     AllocatedPin(AllocatedPinTransactionV1),
 }
@@ -133,7 +133,7 @@ impl SignedCheckAttempt {
     }
 }
 
-pub(crate) struct BindingFailure<P, E> {
+pub struct BindingFailure<P, E> {
     pub(crate) prepared: P,
     pub(crate) signed: SignedCheckAttempt,
     pub(crate) error: NativeCheckBindingErrorV1<E>,
@@ -167,7 +167,11 @@ impl BoundChainId {
     }
 }
 
-pub(crate) fn bind_signed_check_v1<P, E: From<Error>>(
+#[expect(
+    clippy::result_large_err,
+    reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+)]
+pub fn bind_signed_check_v1<P, E: From<Error>>(
     mut prepared: P,
     mut attempt: SignedCheckAttempt,
     scope: for<'a> fn(&'a mut P) -> Result<BindingScope<'a>, Error>,

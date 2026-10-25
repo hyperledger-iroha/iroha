@@ -459,7 +459,7 @@ fn event_hold_transitions_respect_floor_and_emit_once_in_canonical_revision_orde
     let mut block = chain.state().block(header);
     let mut stx = block.transaction_for_callback_testing();
     let mut route = sample_route(SccpNetworkV1::EthereumMainnet);
-    let mut future_revision = route.revisions.get(&1).unwrap().clone();
+    let mut future_revision = *route.revisions.get(&1).unwrap();
     future_revision.revision = 2;
     future_revision.forgery_floor = 2;
     route.revisions.insert(2, future_revision);

@@ -28,7 +28,9 @@ impl Census {
         Self
     }
     fn finish(self) -> Vec<usize> {
-        CLEARS.with(|slot| slot.borrow_mut().take().unwrap())
+        let cleared = CLEARS.with(|slot| slot.borrow_mut().take().unwrap());
+        drop(self);
+        cleared
     }
 }
 impl Drop for Census {
@@ -191,7 +193,9 @@ fn worker_errors_choose_lowest_position_and_failed_rows_release_no_commitment() 
                     .reduce(|| None, first_error_v1)
             });
         assert_eq!(actual, Some((3, AggregateStarkErrorV1::NonCanonicalField)));
-        let catalog = context().catalog_v1();
+        let catalog =
+            crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1(
+            );
         let domain = context()
             .domain_v1(&catalog, b"leaf", b"vector-row-leaf", 0, 0, 0)
             .unwrap();
@@ -228,7 +232,7 @@ fn parallel_partial_finalization_clears_tile_on_worker_error_and_worker_panic() 
                 .build()
                 .unwrap()
                 .install(|| {
-                    let catalog = context().catalog_v1();
+                    let catalog = crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
                     let domain = context()
                         .domain_v1(&catalog, b"leaf", b"rows", 0, 0, 0)
                         .unwrap();
@@ -238,7 +242,7 @@ fn parallel_partial_finalization_clears_tile_on_worker_error_and_worker_panic() 
                             let mut stream = prefix
                                 .last_field_stream_at_with_counter(i, 0, &[], 8)
                                 .unwrap();
-                            stream.update(&[i as u8; 8]).unwrap();
+                            stream.update(&[i.to_le_bytes()[0]; 8]).unwrap();
                             stream
                         })
                         .collect::<Vec<_>>();
@@ -307,9 +311,10 @@ fn bounded_workspace_shape_and_released_replay_reservation_are_explicit() {
 #[test]
 #[ignore = "native22 byte-exact scalar/tree frontier and row-finalize stage diagnostic; run --release"]
 fn native22_streamed_hash_prefix_and_tile_match_scalar_tree_with_stage_timings() {
-    crate::test_support::require_no_debug_assertions("run with --release");
     const ROWS: usize = 1 << 22;
     const WIDTH: usize = 8;
+
+    crate::test_support::require_no_debug_assertions("run with --release");
     let columns = (0..WIDTH)
         .map(|c| {
             (0..ROWS)

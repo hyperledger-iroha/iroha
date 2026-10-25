@@ -7,11 +7,11 @@ use iroha_data_model::{
 };
 
 /// Stable source key used by the relation controls.
-pub(crate) fn id() -> VerifyingKeyId {
+pub fn id() -> VerifyingKeyId {
     VerifyingKeyId::new("stark/fri", "key")
 }
 /// Minimal record; the inverse does not enforce the separate verifier admission policy.
-pub(crate) fn record() -> VerifyingKeyRecord {
+pub fn record() -> VerifyingKeyRecord {
     VerifyingKeyRecord::new(
         1,
         "circuit",
@@ -22,7 +22,7 @@ pub(crate) fn record() -> VerifyingKeyRecord {
     )
 }
 /// Identical current and predecessor images with one exact inverse.
-pub(crate) fn world() -> World {
+pub fn world() -> World {
     let mut world = World::default();
     let value = record();
     world
@@ -32,7 +32,7 @@ pub(crate) fn world() -> World {
     world
 }
 /// Restore a correct current inverse while retaining the previous corrupted pair.
-pub(crate) fn repair_current(world: &World, previous_index_keys: &[(String, u32)]) {
+pub fn repair_current(world: &World, previous_index_keys: &[(String, u32)]) {
     let mut index = world.verifying_keys_by_circuit.block();
     for key in previous_index_keys {
         index.remove(key.clone());

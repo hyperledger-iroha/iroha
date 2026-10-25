@@ -15,6 +15,8 @@ mod private_settlement;
 mod reserve_account;
 #[path = "world_state_snapshot/reserve_policy.rs"]
 mod reserve_policy;
+#[path = "world_state_snapshot/zk_x509.rs"]
+mod zk_x509;
 use super::world_state_cut::CutCapsule;
 use super::*;
 use crate::{
@@ -35,6 +37,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::state_path::StatePath;
 use std::alloc::Layout;
+pub use zk_x509::NativeZkX509StateV1;
 
 /// A complete World snapshot either retains the original local refusal or rejects its claim.
 #[derive(Debug, thiserror::Error)]
@@ -83,6 +86,9 @@ pub enum WorldStateSnapshotError {
         /// Height of the original stable applied State view; not remote proof authority.
         observed_height: u64,
     },
+    /// Original retained X.509 policy backing or custody refusal.
+    #[error("World snapshot X.509 retained State: {0}")]
+    ZkX509Retention(#[from] iroha_core_privacy::privacy_state::PrivacyZkX509StateRetentionErrorV1),
     /// The certified cut, its typed originals or its bounded encoding was invalid.
     #[error("{0}")]
     Invalid(String),
@@ -1132,7 +1138,7 @@ mod cut_observation_tests {
         }
         let original = chain.committed(2);
         let view = chain.state().view();
-        let error: WorldStateSnapshotError = require_cut(&view, &original).unwrap_err().into();
+        let error: WorldStateSnapshotError = require_cut(&view, &original).unwrap_err();
         assert!(matches!(
             error,
             WorldStateSnapshotError::CutChanged {
@@ -1183,12 +1189,14 @@ fn admission_originals<'a>(
     Ok((bytes, previous))
 }
 
+type StreamTokenOriginals<'a> = (&'a Vec<u8>, &'a Vec<u8>);
+
 fn stream_token_originals<'a>(
     snapshot: &WorldStateSnapshotV1,
     world: &'a WorldBlock<'_>,
     provider: iroha_data_model::sorafs::capacity::ProviderId,
     budget: &AllocationBudget,
-) -> Result<Option<(&'a Vec<u8>, &'a Vec<u8>)>, String> {
+) -> Result<Option<StreamTokenOriginals<'a>>, String> {
     use crate::query::stream_token_custody::{head_key, height_key, read_active, record_key};
     // Current/predecessor controls, enrollment and key-first-use validation have
     // at most eight concurrent 256 KiB bounded decode/encode workspaces.

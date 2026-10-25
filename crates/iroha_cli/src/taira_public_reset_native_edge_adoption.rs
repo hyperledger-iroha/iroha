@@ -30,7 +30,7 @@ const MAX_REQUEST: u64 = 128 * 1024;
 const MAX_JOURNALS: usize = 32;
 
 #[derive(clap::Args, Debug)]
-pub(crate) struct AuthorizeNativeEdgeOwner {
+pub struct AuthorizeNativeEdgeOwner {
     /// Closed public request whose exact bytes the independent owner approves.
     #[arg(long, value_name = "PATH")]
     request: PathBuf,
@@ -49,7 +49,7 @@ pub(crate) struct AuthorizeNativeEdgeOwner {
 }
 
 #[derive(clap::Args, Debug)]
-pub(crate) struct AdoptNativeEdgeOwner {
+pub struct AdoptNativeEdgeOwner {
     /// Exact independently approved public request.
     #[arg(long, value_name = "PATH")]
     request: PathBuf,
@@ -273,11 +273,13 @@ fn read_request(path: &Path, expected: &str) -> Result<(PublicPin, AdoptionReque
             "native adoption request changed from its independent pin"
         ));
     }
-    let request = json::from_slice(&pin.bytes(MAX_REQUEST as usize)?)?;
+    let request = json::from_slice(
+        &pin.bytes(usize::try_from(MAX_REQUEST).expect("bounded input limit fits usize"))?,
+    )?;
     Ok((pin, request))
 }
 
-pub(crate) fn authorize<W: Write>(args: &AuthorizeNativeEdgeOwner, output: &mut W) -> Result<()> {
+pub fn authorize<W: Write>(args: &AuthorizeNativeEdgeOwner, output: &mut W) -> Result<()> {
     let (request_pin, request) = read_request(&args.request, &args.expected_request_sha256)?;
     let expected = claims(&request, &args.expected_request_sha256)?;
     let mut trusted = PublicPin::open(&args.trusted_public_key, 16 * 1024, true)?;
@@ -423,7 +425,7 @@ fn lock_reference(
     })
 }
 
-pub(crate) fn adopt<W: Write>(args: &AdoptNativeEdgeOwner, output: &mut W) -> Result<()> {
+pub fn adopt<W: Write>(args: &AdoptNativeEdgeOwner, output: &mut W) -> Result<()> {
     let (_, _, _, native_home) = native_account()?;
     let fixed_custody = Path::new(&native_home).join(".local/share/iroha/taira/public-reset-v1");
     if std::env::current_exe()? != fixed_custody.join("dispatcher/iroha") {
@@ -498,7 +500,10 @@ pub(crate) fn adopt<W: Write>(args: &AdoptNativeEdgeOwner, output: &mut W) -> Re
         host_pair_sha256: expected.host_pair_sha256.clone(),
     };
     let lease_raw = json::to_json(&lease)?.into_bytes();
-    let existing = operation.read("progress.json", MAX_REQUEST as usize);
+    let existing = operation.read(
+        "progress.json",
+        usize::try_from(MAX_REQUEST).expect("bounded input limit fits usize"),
+    );
     let resumed = existing.is_ok();
     let now = now_unix_ms()?;
     if !resumed && (now < request.not_before_unix_ms || now > request.expires_at_unix_ms) {
@@ -550,7 +555,8 @@ pub(crate) fn adopt<W: Write>(args: &AdoptNativeEdgeOwner, output: &mut W) -> Re
     retain_exact(
         &operation,
         "request.json",
-        &request_pin.bytes(MAX_REQUEST as usize)?,
+        &request_pin
+            .bytes(usize::try_from(MAX_REQUEST).expect("bounded input limit fits usize"))?,
     )?;
     retain_exact(&operation, "authorization.json", &raw_authorization)?;
     retain_exact(
@@ -642,12 +648,14 @@ pub(crate) fn adopt<W: Write>(args: &AdoptNativeEdgeOwner, output: &mut W) -> Re
     let packet = adoption_packet(
         &request,
         &authorization_sha256,
-        &operation,
-        &edge,
-        &lock,
-        &host_lock,
-        &pins,
-        &plan_pin,
+        AdoptionCustody {
+            operation: &operation,
+            edge: &edge,
+            lock: &lock,
+            host_lock: &host_lock,
+            pins: &pins,
+            source_plan: &plan_pin,
+        },
         deadline,
     )?;
     let mut inherited = vec![&lock, &host_lock];
@@ -789,17 +797,31 @@ fn open_opaque_incident(
     }
 }
 
+#[derive(Clone, Copy)]
+struct AdoptionCustody<'a> {
+    operation: &'a PrivateDirectory,
+    edge: &'a PrivateDirectory,
+    lock: &'a File,
+    host_lock: &'a File,
+    pins: &'a [PublicPin],
+    source_plan: &'a PublicPin,
+}
+
 fn adoption_packet(
     request: &AdoptionRequestV1,
     authorization_sha256: &str,
-    operation: &PrivateDirectory,
-    edge: &PrivateDirectory,
-    lock: &File,
-    host_lock: &File,
-    pins: &[PublicPin],
-    source_plan: &PublicPin,
+    custody: AdoptionCustody<'_>,
     deadline: Instant,
 ) -> Result<AdoptionAdmissionV1> {
+    let AdoptionCustody {
+        operation,
+        edge,
+        lock,
+        host_lock,
+        pins,
+        source_plan,
+    } = custody;
+
     let native = &request.hosts.native_edge;
     let started = canonical_parent_start(&run_host_command(
         "/bin/ps",
@@ -912,11 +934,10 @@ fn release_adoption_lease(edge: &PrivateDirectory, expected: &[u8]) -> Result<()
         Err(error) => return Err(error.into()),
         Ok(_) => {}
     }
-    let mut lease = match PublicPin::open(&path, MAX_REQUEST, true) {
-        Ok(pin) => pin,
-        Err(error) => return Err(error),
-    };
-    if lease.bytes(MAX_REQUEST as usize)? != expected {
+    let mut lease = PublicPin::open(&path, MAX_REQUEST, true)?;
+    if lease.bytes(usize::try_from(MAX_REQUEST).expect("bounded input limit fits usize"))?
+        != expected
+    {
         return Err(eyre!(
             "native adoption cannot release another durable host lease"
         ));

@@ -1,4 +1,4 @@
-//! Production qualification boundary for native SoraFS transaction signers.
+//! Production qualification boundary for native `SoraFS` transaction signers.
 //!
 //! Runtime credentials and private keys remain outside configuration and Torii. This module binds
 //! each injected signer to one immutable non-secret expected identity, probes that identity twice
@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 mod payload_authorization;
 pub use payload_authorization::sorafs_native_transaction_payload_matches_role_v1;
-/// One isolated native SoraFS transaction-signing role.
+/// One isolated native `SoraFS` transaction-signing role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum SorafsNativeTransactionSignerRoleV1 {
@@ -124,7 +124,7 @@ impl SorafsNativeTransactionSignerBindingV1 {
             .validate()
             .map_err(|_| SorafsNativeTransactionSignerBindingErrorV1::InvalidQualification)?;
         validate_public_key_algorithm(&public_key)
-            .map_err(|_| SorafsNativeTransactionSignerBindingErrorV1::UnsupportedKeyAlgorithm)?;
+            .map_err(|()| SorafsNativeTransactionSignerBindingErrorV1::UnsupportedKeyAlgorithm)?;
         if AccountId::new(public_key.clone()) != authority {
             return Err(SorafsNativeTransactionSignerBindingErrorV1::AuthorityKeyMismatch);
         }
@@ -225,7 +225,7 @@ pub trait SorafsNativeTransactionSignerProviderV1: Send + Sync {
         SorafsNativeTransactionSignerProbeErrorV1,
     >;
 }
-/// Runtime-only signer used by the durable SoraFS proof-outcome forwarder.
+/// Runtime-only signer used by the durable `SoraFS` proof-outcome forwarder.
 ///
 /// Implementations use qualified deployment-owned signing infrastructure. The signer is
 /// intentionally given only a fully constructed payload and no transaction queue capability,
@@ -262,7 +262,7 @@ pub enum SoraFsProofOutcomeSigningError {
     /// Provider identity, key, revision, or policy changed around signing.
     QualificationChanged,
 }
-/// Runtime-only signer used by the durable native SoraFS repair forwarder.
+/// Runtime-only signer used by the durable native `SoraFS` repair forwarder.
 ///
 /// Implementations receive only a fully constructed fee-quoted payload and cannot submit it. Before
 /// a signing claim is consumed, the worker reconciles finalized repair state and checks the exact
@@ -295,7 +295,7 @@ pub enum SoraFsRepairTransactionSigningError {
     /// Provider identity, key, revision, or policy changed around signing.
     QualificationChanged,
 }
-/// Runtime-only signer used by the durable native SoraFS reserve/rent forwarder.
+/// Runtime-only signer used by the durable native `SoraFS` reserve/rent forwarder.
 ///
 /// The signer receives only a fully constructed fee-quoted payload and has no
 /// access to Torii ingress or the durable outbox. The worker first reconciles
@@ -329,7 +329,7 @@ pub enum SoraFsReserveTransactionSigningError {
     /// Provider identity, key, revision, or policy changed around signing.
     QualificationChanged,
 }
-/// Runtime-only signer used by the durable native SoraFS orderbook forwarder.
+/// Runtime-only signer used by the durable native `SoraFS` orderbook forwarder.
 ///
 /// The signer receives only a fully constructed fee-quoted payload and has no
 /// access to Torii ingress or the durable outbox. The supervised worker

@@ -414,7 +414,7 @@ fn run_on_snapshot_with_mode_arc_inner(
                 live_query_store,
                 &view,
                 authority,
-                Arc::downgrade(state),
+                &(Arc::downgrade(state)),
                 stored_start_budget,
             )
             .map_err(SnapshotQueryError::Execution)?,

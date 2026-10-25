@@ -2,7 +2,7 @@ mod public_artifact_tests {
     //! Public immutable artifact creation with separate privileged and owner-scoped mutations.
     use super::*;
     world_test!(artifact_registry_and_pending_uploads_are_dataspace_scoped {
-        blank_test_state_transaction!(state, block, stx);
+        component_test_state_transaction!(state, block, stx);
         bootstrap_alice_account(&mut stx);
         let (code, manifest) = minimal_contract_artifact();
         let hash = manifest.code_hash.expect("artifact hash");
@@ -30,7 +30,7 @@ mod public_artifact_tests {
     world_test!(contract_manifest_is_immutable_for_registered_code_hash {
         let manifest_signing =
             crate::manifest_signing_test_support::ManifestSigningFixture::new();
-        blank_test_state_transaction!(state, block, stx);
+        component_test_state_transaction!(state, block, stx);
         bootstrap_alice_account(&mut stx);
         let signer_one = checked_keypair_with_algorithm(Algorithm::Ed25519);
         let signer_two = checked_keypair_with_algorithm(Algorithm::Ed25519);
@@ -83,7 +83,7 @@ mod public_artifact_tests {
     world_test!(contract_binding_mutations_require_runtime_lifecycle_authority {
         let manifest_signing =
             crate::manifest_signing_test_support::ManifestSigningFixture::new();
-        blank_test_state_transaction!(state, block, stx);
+        component_test_state_transaction!(state, block, stx);
         Register::account(Account::new(ALICE_ID.clone()))
             .expect_execute(&ALICE_ID, &mut stx, "seed authority");
         let attacker = AccountId::new(checked_keypair().public_key().clone());

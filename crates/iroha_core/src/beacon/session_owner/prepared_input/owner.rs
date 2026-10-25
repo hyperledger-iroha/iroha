@@ -72,7 +72,7 @@ impl Destination for Snapshot {
         self.finish()
     }
 }
-impl Destination for session::Session {
+impl Destination for session::PreparedSession {
     type Record = GlobalThresholdBeaconKeySessionV1;
     fn decode(
         &mut self,
@@ -338,7 +338,7 @@ impl PreparedGlobalThresholdBeaconDkgPublicationV1 {
 pub struct PreparedGlobalThresholdBeaconDkgInputsV1 {
     commitments: Bank<Snapshot>,
     deliveries: Bank<Snapshot>,
-    final_session: Bank<session::Session>,
+    final_session: Bank<session::PreparedSession>,
     workspace: PreparedDecodeWorkspace,
     session: GlobalThresholdBeaconDkgSessionV1,
     budget: AllocationBudget,
@@ -369,7 +369,7 @@ impl PreparedGlobalThresholdBeaconDkgInputsV1 {
             SnapshotPhase::Deliveries,
             budget,
         )?);
-        let final_session = Bank::new(session::Session::new(session, roster, budget)?);
+        let final_session = Bank::new(session::PreparedSession::new(session, roster, budget)?);
         let mut reservation = budget
             .try_reserve_layouts(PreparedDecodeWorkspace::allocation_layouts())
             .map_err(crate::beacon::GlobalThresholdBeaconSessionError::from)?;
@@ -499,7 +499,7 @@ impl PreparedGlobalThresholdBeaconDkgInputsV1 {
 /// owner. Codec validity grants no native authority: the caller must replay the
 /// actual finalized proof and pass the retained graph to the existing verifier.
 pub struct PreparedGlobalThresholdBeaconFinalSessionInputV1 {
-    final_session: Bank<session::Session>,
+    final_session: Bank<session::PreparedSession>,
     workspace: PreparedDecodeWorkspace,
     session: GlobalThresholdBeaconDkgSessionV1,
     budget: AllocationBudget,
@@ -515,7 +515,7 @@ impl PreparedGlobalThresholdBeaconFinalSessionInputV1 {
         roster: &[PeerId],
         budget: &AllocationBudget,
     ) -> Result<Self, GlobalThresholdBeaconInputErrorV1> {
-        let final_session = Bank::new(session::Session::new(session, roster, budget)?);
+        let final_session = Bank::new(session::PreparedSession::new(session, roster, budget)?);
         let mut reservation = budget
             .try_reserve_layouts(PreparedDecodeWorkspace::allocation_layouts())
             .map_err(crate::beacon::GlobalThresholdBeaconSessionError::from)?;
@@ -535,7 +535,7 @@ impl PreparedGlobalThresholdBeaconFinalSessionInputV1 {
         self.final_session
             .prepared
             .as_ref()
-            .map(session::Session::extraction_scaffolding_bytes)
+            .map(session::PreparedSession::extraction_scaffolding_bytes)
             .expect("the original final-session destination must still be prepared")
     }
 

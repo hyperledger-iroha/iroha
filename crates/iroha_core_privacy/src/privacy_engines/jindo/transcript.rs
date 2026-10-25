@@ -54,19 +54,19 @@ impl JindoSignedMonomialChallengeV1 {
     pub const fn is_negative(self) -> bool {
         self.exponent_mod_2d >= 1024
     }
-    pub(crate) fn polynomial(&self, moduli: [JindoPrimeModulusV1; 2]) -> JindoRnsPolynomialV1 {
+    pub(crate) fn polynomial(self, moduli: [JindoPrimeModulusV1; 2]) -> JindoRnsPolynomialV1 {
         let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
         coefficients[usize::from(self.coefficient_index())] =
             if self.is_negative() { -1 } else { 1 };
-        JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, moduli)
+        JindoRnsPolynomialV1::from_balanced_coefficients(&coefficients, moduli)
     }
-    pub(crate) fn inner_polynomial(&self) -> JindoRnsPolynomialV1 {
+    pub(crate) fn inner_polynomial(self) -> JindoRnsPolynomialV1 {
         self.polynomial(JINDO_INNER_MODULI_V1)
     }
-    pub(crate) fn outer_polynomial(&self) -> JindoRnsPolynomialV1 {
+    pub(crate) fn outer_polynomial(self) -> JindoRnsPolynomialV1 {
         self.polynomial(JINDO_OUTER_MODULI_V1)
     }
-    pub(crate) const fn encoded(&self) -> [u8; 2] {
+    pub(crate) const fn encoded(self) -> [u8; 2] {
         self.exponent_mod_2d.to_be_bytes()
     }
 }
@@ -249,7 +249,7 @@ mod tests {
         let mut transcript = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
         let exponents = core::array::from_fn::<_, 4, _>(|ordinal| {
             transcript
-                .monomial_challenge(b"alpha", ordinal as u32)
+                .monomial_challenge(b"alpha", u32::try_from(ordinal).expect("fixture ordinal"))
                 .unwrap()
                 .canonical_exponent()
         });

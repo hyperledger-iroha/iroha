@@ -153,7 +153,6 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     output
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_source_node(
     row: &mut ZkX509Rfc5280StarkBaseRowV1,
 ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
@@ -180,7 +179,6 @@ pub(super) fn populate_source_node(
     Ok(())
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_fixed_byte(
     row: &mut ZkX509Rfc5280StarkBaseRowV1,
     previous: &mut u64,

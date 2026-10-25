@@ -174,6 +174,7 @@ pub trait PastaCurve:
     /// Crate-internal: the capability token cannot be constructed outside
     /// `iroha_pasta`. Public callers use the identity-safe addition operators.
     #[doc(hidden)]
+    #[must_use]
     fn add_mixed_finite_internal(&self, rhs: &Self::AffineExt, token: sealed::Internal) -> Self;
 }
 

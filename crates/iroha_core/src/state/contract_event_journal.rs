@@ -24,6 +24,10 @@ pub(super) enum DrainedContractEvents {
 }
 
 /// Move-only staging; callbacks append to this owner instead of their own output rows.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Overflow, semantic rejection, local refusal and consumption are independent sticky observations"
+)]
 pub(super) struct ContractEventJournal {
     maximum_bytes: Result<u64, String>,
     call: Option<Hash>,
@@ -259,17 +263,19 @@ impl ContractEventJournal {
             Err(error) => {
                 // Retain the identical graph and shell charge on local refusal;
                 // retry never refunds/reacquires any payload reservation.
-                Err(match error {
-                    ContractEmissionAdmissionErrorV1::Shared(
+                Err(
+                    if let ContractEmissionAdmissionErrorV1::Shared(
                         SharedFromChargeError::Allocator { .. },
-                    ) => ExecutionAttemptError::Deferred(
-                        ivm::ExecutionDeferral::AllocationUnavailable.into(),
-                    ),
-                    _ => {
+                    ) = error
+                    {
+                        ExecutionAttemptError::Deferred(
+                            ivm::ExecutionDeferral::AllocationUnavailable.into(),
+                        )
+                    } else {
                         self.refused = true;
                         invariant()
-                    }
-                })
+                    },
+                )
             }
         }
     }

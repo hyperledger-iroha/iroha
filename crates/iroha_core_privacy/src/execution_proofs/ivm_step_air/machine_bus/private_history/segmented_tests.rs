@@ -61,7 +61,7 @@ impl Fixture {
             (0..2).map(|segment| {
                 let range = segment * size..(segment + 1) * size;
                 Segment::new(
-                    core::array::from_fn(|column| {
+                    &core::array::from_fn(|column| {
                         &self.base[NOTE_COPY_WIDTH_V1 + column][range.clone()]
                     }),
                     core::array::from_fn(|column| &self.aux[column][range.clone()]),
@@ -167,7 +167,7 @@ fn bounded_segment_inventory_and_absolute_maximum_clock_are_checked() {
     );
     let column = vec![F::ZERO; schedule.segment_size()];
     let segment = Segment::new(
-        [column.as_slice(); ROW_WIDTH],
+        &[column.as_slice(); ROW_WIDTH],
         [column.as_slice(); permutation::WIDTH],
     );
     let challenges = permutation::Challenges::testing(E::ONE, E::ONE);
@@ -182,7 +182,7 @@ fn bounded_segment_inventory_and_absolute_maximum_clock_are_checked() {
         ));
     }
     let malformed = Segment::new(
-        [&column[..column.len() - 1]; ROW_WIDTH],
+        &[&column[..column.len() - 1]; ROW_WIDTH],
         [column.as_slice(); permutation::WIDTH],
     );
     assert!(matches!(

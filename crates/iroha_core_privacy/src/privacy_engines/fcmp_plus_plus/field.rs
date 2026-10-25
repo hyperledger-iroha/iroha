@@ -203,6 +203,10 @@ impl SecretCycleScalarCanonicalityStateV1 {
             greater_update: Choice::from(0),
         }
     }
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Borrowing secret inputs keeps raw copies inside the explicit zeroizing owner boundary."
+    )]
     fn observe_byte_v1(&mut self, byte: &u8, modulus_byte: &u8) {
         self.prefix_decided = self.less | self.greater;
         self.prefix_equal = !self.prefix_decided;

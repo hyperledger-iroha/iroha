@@ -1,4 +1,4 @@
-//! Original LaneExecutor results and real BLS quorum controls for historical lane evidence.
+//! Original `LaneExecutor` results and real BLS quorum controls for historical lane evidence.
 
 use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use std::{collections::BTreeSet, io, sync::Arc, time::Duration};
@@ -75,10 +75,10 @@ impl LaneTransactions for NoTransactions {
         Ok((Vec::new(), ()))
     }
 
-    fn retain_prefix(&self, _: &mut Self::Lease, _: usize) {}
+    fn retain_prefix(&self, (): &mut Self::Lease, _: usize) {}
     fn lease_is_current(
         &self,
-        _: &Self::Lease,
+        (): &Self::Lease,
         _: &iroha_allocation::AllocationBudget,
     ) -> Result<bool, crate::sumeragi::driver::traits::PublicationError> {
         Ok(true)
@@ -227,12 +227,12 @@ impl Fixture {
         let block = authored.body;
         let shared: SharedCrypto = crypto.clone();
         let mut executor = LaneExecutor::<_, _, NoTransactions>::begin_recover(
-            record.clone(),
-            config,
-            lane_instance(&*crypto, &network, CHAIN, &record),
-            Arc::clone(&anchors),
-            StatelessChecks::new(network),
-            None,
+            (
+                record.clone(),
+                config,
+                lane_instance(&*crypto, &network, CHAIN, &record),
+            ),
+            (Arc::clone(&anchors), StatelessChecks::new(network), None),
             Hash32(prior.block_hash),
             Arc::new(EmptyStore),
             shared,
@@ -314,8 +314,7 @@ impl Fixture {
             &*self.anchors,
             &LaneChainView::default(),
             &self.prior,
-            &self.body,
-            &self.qc,
+            (&self.body, &self.qc),
         )
     }
 }
@@ -405,8 +404,7 @@ fn anchor_history_refusal_retains_exact_source_through_lane_evidence_retry() {
             &anchors,
             &LaneChainView::default(),
             &fixture.prior,
-            &fixture.body,
-            &fixture.qc,
+            (&fixture.body, &fixture.qc),
         )
     };
     let pointer = fixture.body.payload().as_slice().as_ptr();
@@ -435,8 +433,7 @@ fn unavailable_anchor_is_distinct_from_bad_admission_or_bad_certificate() {
             &missing,
             &LaneChainView::default(),
             &fixture.prior,
-            &fixture.body,
-            &fixture.qc
+            (&fixture.body, &fixture.qc)
         ),
         Err(LaneEntryError::UnavailableAnchor)
     ));
@@ -457,8 +454,7 @@ fn unavailable_anchor_is_distinct_from_bad_admission_or_bad_certificate() {
             &*fixture.anchors,
             &history,
             &fixture.prior,
-            &fixture.body,
-            &fixture.qc
+            (&fixture.body, &fixture.qc)
         ),
         Err(LaneEntryError::Admission(AdmissionError::Duplicate(0)))
     ));

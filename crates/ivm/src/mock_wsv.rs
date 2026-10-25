@@ -87,6 +87,7 @@ struct AssetDefinition {
     mintable: Mintable,
     total_supply: Quantity,
     owner: AccountId,
+    owning_domain: Option<DomainId>,
 }
 impl AssetDefinition {
     fn new(name: String, spec: NumericSpec, mintable: Mintable, owner: AccountId) -> Self {
@@ -96,6 +97,7 @@ impl AssetDefinition {
             mintable,
             total_supply: Quantity::zero(),
             owner,
+            owning_domain: None,
         }
     }
 }
@@ -240,6 +242,10 @@ pub enum PermissionToken {
     TransferAsset(AssetDefinitionId),
     /// Permission to transfer one exact owner/dataspace balance bucket.
     TransferAssetBucket(AssetId),
+    /// Execute one exact trigger.
+    ExecuteTrigger(Name),
+    /// Modify metadata of one exact trigger.
+    ModifyTriggerMetadata(Name),
     /// Permission to set transfer availability for one exact account and asset definition.
     SetAssetTransferAvailability {
         account: AccountId,
@@ -336,7 +342,7 @@ impl Default for Account {
 ///   tag at `SMARTCONTRACT_EXECUTE_INSTRUCTION (0xA0)`, matching the production V1 ABI.
 #[derive(Clone, Default)]
 pub struct MockWorldStateView {
-    domains: HashMap<DomainId, ()>,
+    domains: HashMap<DomainId, AccountId>,
     domain_accounts: HashMap<DomainId, HashSet<AccountId>>,
     accounts: HashMap<AccountId, Account>,
     permissions: HashMap<AccountId, HashSet<PermissionToken>>,
@@ -348,6 +354,7 @@ pub struct MockWorldStateView {
     nfts: HashMap<NftId, NftRecord>,
     peers: HashSet<Peer>,
     triggers: HashMap<String, bool>,
+    trigger_authorities: HashMap<String, AccountId>,
     roles: HashMap<String, HashSet<PermissionToken>>,
     role_assignments: HashMap<AccountId, HashSet<String>>, // account subject -> role names
     // ZK (shielded) state
@@ -399,6 +406,7 @@ impl MockWorldStateView {
             nfts: HashMap::new(),
             peers: HashSet::new(),
             triggers: HashMap::new(),
+            trigger_authorities: HashMap::new(),
             roles: HashMap::new(),
             role_assignments: HashMap::new(),
             zk_assets: HashMap::new(),
@@ -1035,7 +1043,27 @@ impl MockWorldStateView {
         if !self.has_permission(caller, &PermissionToken::RegisterDomain) {
             return false;
         }
-        self.domains.insert(id, ()).is_none()
+        if self.domains.contains_key(&id) {
+            return false;
+        }
+        self.domains.insert(id, caller.clone());
+        true
+    }
+    /// Transfer an existing domain only under its current owner authority.
+    pub fn transfer_domain(
+        &mut self,
+        caller: &AccountId,
+        id: &DomainId,
+        destination: AccountId,
+    ) -> bool {
+        let Some(owner) = self.domains.get_mut(id) else {
+            return false;
+        };
+        if owner != caller {
+            return false;
+        }
+        *owner = destination;
+        true
     }
     /// Unregister a domain if it exists and has no accounts, assets, or NFTs.
     pub fn unregister_domain(&mut self, id: &DomainId) -> bool {
@@ -1046,7 +1074,11 @@ impl MockWorldStateView {
             .get(id)
             .is_some_and(|subjects| !subjects.is_empty());
         let has_nfts = self.nfts.keys().any(|nft_id| nft_id.domain() == id);
-        if has_accounts || has_nfts {
+        let has_assets = self
+            .asset_definitions
+            .values()
+            .any(|definition| definition.owning_domain.as_ref() == Some(id));
+        if has_accounts || has_nfts || has_assets {
             return false;
         }
         self.domain_accounts.remove(id);
@@ -1119,8 +1151,8 @@ impl MockWorldStateView {
             mintable,
         )
     }
-    /// Register an asset definition with the display name, numeric spec and
-    /// mintability a contract supplied through `REGISTER_ASSET`.
+    /// Seed an asset definition in fixture state with its display name, numeric
+    /// spec and mintability. Runtime registration uses an explicit owned domain.
     pub fn register_asset_definition_with_spec(
         &mut self,
         caller: &AccountId,
@@ -1141,6 +1173,28 @@ impl MockWorldStateView {
             id,
             AssetDefinition::new(name, spec, mintable, caller.clone()),
         );
+        true
+    }
+    /// Register a contract-created definition under an explicitly owned domain.
+    /// A fixture-wide registration permission cannot supply domain ownership.
+    pub fn register_asset_definition_in_domain(
+        &mut self,
+        caller: &AccountId,
+        id: AssetDefinitionId,
+        name: String,
+        spec: NumericSpec,
+        mintable: Mintable,
+        owning_domain: DomainId,
+    ) -> bool {
+        if self.domains.get(&owning_domain) != Some(caller)
+            || iroha_data_model::asset::definition::validate_asset_name(&name).is_err()
+            || self.asset_definitions.contains_key(&id)
+        {
+            return false;
+        }
+        let mut definition = AssetDefinition::new(name, spec, mintable, caller.clone());
+        definition.owning_domain = Some(owning_domain);
+        self.asset_definitions.insert(id, definition);
         true
     }
     /// Display name, numeric spec and mintability recorded for an asset definition.
@@ -3745,6 +3799,9 @@ impl IVMHost for WsvHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let name = parse_json_string(tlv.payload, &["name"])?;
+                self.wsv
+                    .trigger_authorities
+                    .insert(name.clone(), self.caller.clone());
                 self.wsv.triggers.insert(name, true);
                 Ok(Self::mutation_gas(0))
             }
@@ -3757,6 +3814,7 @@ impl IVMHost for WsvHost {
                 }
                 let name = self.decode_name_payload(tlv.payload)?;
                 if self.wsv.triggers.remove(name.as_ref()).is_some() {
+                    self.wsv.trigger_authorities.remove(name.as_ref());
                     Ok(Self::mutation_gas(0))
                 } else {
                     Err(VMError::PermissionDenied)
@@ -3771,6 +3829,14 @@ impl IVMHost for WsvHost {
                 }
                 let name = self.decode_name_payload(tlv.payload)?;
                 let enable = vm.register(11) != 0;
+                if self.wsv.trigger_authorities.get(name.as_ref()) != Some(&self.caller)
+                    && !self.wsv.has_permission(
+                        &self.caller,
+                        &PermissionToken::ModifyTriggerMetadata(name.clone()),
+                    )
+                {
+                    return Err(VMError::PermissionDenied);
+                }
                 if let Some(e) = self.wsv.triggers.get_mut(name.as_ref()) {
                     *e = enable;
                     Ok(Self::mutation_gas(0))
@@ -3910,7 +3976,7 @@ impl IVMHost for WsvHost {
             }
             syscalls::SYSCALL_REGISTER_ASSET => {
                 // r10 = &AssetDefinitionId, r11 = &Blob UTF-8 display name,
-                // r12 = numeric-spec word, r13 = mintability word, decoded by the
+                // r12 = numeric-spec word, r13 = mintability word, r14 = &DomainId, decoded by the
                 // data-model `ivm_registration` decoder shared with CoreHost.
                 let id = match vm.validate_tlv(vm.register(10)) {
                     Ok(tlv) => match tlv.type_id {
@@ -3928,12 +3994,14 @@ impl IVMHost for WsvHost {
                 }
                 let registration =
                     decode_asset_registration(name_tlv.payload, vm.register(12), vm.register(13))?;
-                if self.wsv.register_asset_definition_with_spec(
+                let owning_domain = self.decode_domain_reg(vm, 14)?;
+                if self.wsv.register_asset_definition_in_domain(
                     &self.caller,
                     id,
                     registration.name,
                     registration.spec,
                     registration.mintable,
+                    owning_domain,
                 ) {
                     Ok(Self::mutation_gas(0))
                 } else {
@@ -4216,54 +4284,84 @@ impl IVMHost for WsvHost {
                     alias_input_len.saturating_add(payload.len()),
                 ))
             }
-            syscalls::SYSCALL_GRANT_PERMISSION => {
-                if !self
-                    .wsv
-                    .has_permission(&self.caller, &PermissionToken::ManagePermissions)
-                {
-                    return Err(VMError::PermissionDenied);
-                }
-                // r10=&AccountId (subject), r11=&Name(permission)
+            syscalls::SYSCALL_GRANT_PERMISSION | syscalls::SYSCALL_REVOKE_PERMISSION => {
                 let subject = self.decode_account_subject_reg(vm, 10)?;
-                // Decode permission token from TLV in r11
-                let token = {
-                    let v = vm.register(11);
-                    if crate::dev_env::debug_wsv_enabled() {
-                        eprintln!("[wsv.grant_permission] reg=r11 ptr=0x{v:08x}");
+                let pointer =
+                    crate::core_host::CoreHost::resolve_code_tlv_addr(vm, vm.register(11));
+                let tlv = vm.validate_tlv(pointer)?;
+                let token = match tlv.type_id {
+                    PointerType::Name => {
+                        if !self
+                            .wsv
+                            .has_permission(&self.caller, &PermissionToken::ManagePermissions)
+                        {
+                            return Err(VMError::PermissionDenied);
+                        }
+                        parse_permission_name_payload(tlv.payload)?
                     }
-                    let tlv = vm.validate_tlv(v)?;
-                    if crate::dev_env::debug_wsv_enabled() {
-                        eprintln!(
-                            "[wsv.grant_permission] tlv type={:?} len={}",
-                            tlv.type_id,
-                            tlv.payload.len()
-                        );
+                    PointerType::Json => {
+                        // Match native exact source-owner delegation. A lifecycle owner or
+                        // generic mock management grant cannot spend another account's bucket.
+                        let value = parse_json_value(tlv.payload)?;
+                        let permission: iroha_data_model::permission::Permission =
+                            njson::from_value(value).map_err(|_| VMError::NoritoInvalid)?;
+                        match permission.name() {
+                            "CanTransferAsset" => {
+                                #[derive(norito::derive::JsonDeserialize)]
+                                #[norito(deny_unknown_fields)]
+                                struct TransferPayload {
+                                    asset: AssetId,
+                                }
+                                let payload: TransferPayload = permission
+                                    .payload()
+                                    .try_into_any_norito()
+                                    .map_err(|_| VMError::NoritoInvalid)?;
+                                if payload.asset.account() != &self.caller {
+                                    return Err(VMError::PermissionDenied);
+                                }
+                                PermissionToken::TransferAssetBucket(payload.asset)
+                            }
+                            "CanExecuteTrigger" | "CanModifyTriggerMetadata" => {
+                                #[derive(norito::derive::JsonDeserialize)]
+                                #[norito(deny_unknown_fields)]
+                                struct TriggerPayload {
+                                    trigger: Name,
+                                }
+                                let payload: TriggerPayload = permission
+                                    .payload()
+                                    .try_into_any_norito()
+                                    .map_err(|_| VMError::NoritoInvalid)?;
+                                if self.wsv.trigger_authorities.get(payload.trigger.as_ref())
+                                    != Some(&self.caller)
+                                {
+                                    return Err(VMError::PermissionDenied);
+                                }
+                                if permission.name() == "CanExecuteTrigger" {
+                                    PermissionToken::ExecuteTrigger(payload.trigger)
+                                } else {
+                                    PermissionToken::ModifyTriggerMetadata(payload.trigger)
+                                }
+                            }
+                            _ => return Err(VMError::PermissionDenied),
+                        }
                     }
-                    if tlv.type_id != PointerType::Name {
-                        return Err(VMError::NoritoInvalid);
-                    }
-                    parse_permission_name_payload(tlv.payload)?
+                    _ => return Err(VMError::NoritoInvalid),
                 };
-                self.wsv.grant_permission(&subject, token);
-                Ok(Self::mutation_gas(0))
-            }
-            syscalls::SYSCALL_REVOKE_PERMISSION => {
-                if !self
-                    .wsv
-                    .has_permission(&self.caller, &PermissionToken::ManagePermissions)
-                {
-                    return Err(VMError::PermissionDenied);
+                if tlv.type_id == PointerType::Json {
+                    let exists = self
+                        .wsv
+                        .permissions
+                        .get(&MockWorldStateView::account_subject(&subject))
+                        .is_some_and(|permissions| permissions.contains(&token));
+                    if exists == (number == syscalls::SYSCALL_GRANT_PERMISSION) {
+                        return Err(VMError::PermissionDenied);
+                    }
                 }
-                let subject = self.decode_account_subject_reg(vm, 10)?;
-                let token = {
-                    let v = vm.register(11);
-                    let tlv = vm.validate_tlv(v)?;
-                    if tlv.type_id != PointerType::Name {
-                        return Err(VMError::NoritoInvalid);
-                    }
-                    parse_permission_name_payload(tlv.payload)?
-                };
-                self.wsv.revoke_permission(&subject, &token);
+                if number == syscalls::SYSCALL_GRANT_PERMISSION {
+                    self.wsv.grant_permission(&subject, token);
+                } else {
+                    self.wsv.revoke_permission(&subject, &token);
+                }
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION
@@ -4400,6 +4498,11 @@ impl IVMHost for WsvHost {
                     0 => AssetBalanceScope::Global,
                     _ => AssetBalanceScope::Dataspace(self.decode_dataspace_reg(vm, 14)?),
                 };
+                // Every definition modeled by this fixture host has Global policy.
+                // Like the native host, reject an explicit scope even when it is 0.
+                if scope != AssetBalanceScope::Global {
+                    return Err(VMError::PermissionDenied);
+                }
                 let transfers_external_bucket = MockWorldStateView::account_subject(&from_id)
                     != MockWorldStateView::account_subject(&self.caller);
                 if transfers_external_bucket {
@@ -4486,10 +4589,11 @@ impl IVMHost for WsvHost {
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_TRANSFER_DOMAIN => {
-                // r10=&DomainId, r11=&AccountId(to). This mock host validates TLVs
-                // and returns success; ownership is not tracked in MockWorldStateView.
-                let _dom = self.decode_domain_reg(vm, 10)?;
-                let _to = self.decode_account_subject_reg(vm, 11)?;
+                let domain = self.decode_domain_reg(vm, 10)?;
+                let destination = self.decode_account_subject_reg(vm, 11)?;
+                if !self.wsv.transfer_domain(&self.caller, &domain, destination) {
+                    return Err(VMError::PermissionDenied);
+                }
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
@@ -6627,12 +6731,12 @@ mod tests_null_decode {
         );
     }
     #[test]
-    fn scoped_transfer_requires_the_exact_contract_subject_source_bucket() {
+    fn global_transfer_requires_the_exact_contract_subject_source_bucket() {
         fn invoke(
             grant_to_app: bool,
             grant_source_matches: bool,
-            grant_dataspace: u64,
-            requested_dataspace: u64,
+            grant_dataspace: Option<u64>,
+            requested_dataspace: Option<u64>,
         ) -> Result<u64, VMError> {
             let source = test_account_id(
                 "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
@@ -6668,7 +6772,9 @@ mod tests_null_decode {
             let permission = PermissionToken::TransferAssetBucket(AssetId::with_scope(
                 asset.clone(),
                 granted_source,
-                AssetBalanceScope::Dataspace(DataSpaceId::new(grant_dataspace)),
+                grant_dataspace.map_or(AssetBalanceScope::Global, |id| {
+                    AssetBalanceScope::Dataspace(DataSpaceId::new(id))
+                }),
             ));
             wsv.grant_permission(
                 if grant_to_app {
@@ -6708,28 +6814,36 @@ mod tests_null_decode {
             let quantity_ptr = vm
                 .alloc_input_tlv(&make_tlv(PointerType::Quantity, &quantity))
                 .expect("allocate quantity");
-            let dataspace =
-                norito::to_bytes(&DataSpaceId::new(requested_dataspace)).expect("encode dataspace");
-            let dataspace_ptr = vm
-                .alloc_input_tlv(&make_tlv(PointerType::DataSpaceId, &dataspace))
-                .expect("allocate dataspace");
+            let dataspace_ptr = if let Some(id) = requested_dataspace {
+                let dataspace = norito::to_bytes(&DataSpaceId::new(id)).expect("encode dataspace");
+                vm.alloc_input_tlv(&make_tlv(PointerType::DataSpaceId, &dataspace))
+                    .expect("allocate dataspace")
+            } else {
+                0
+            };
             vm.set_register(13, quantity_ptr);
             vm.set_register(14, dataspace_ptr);
             call_syscall(&mut vm, syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
         }
         assert!(matches!(
-            invoke(true, true, 10, 10),
+            invoke(true, true, None, None),
             Err(VMError::PermissionDenied)
         ));
         assert!(matches!(
-            invoke(false, false, 10, 10),
+            invoke(false, false, None, None),
             Err(VMError::PermissionDenied)
         ));
         assert!(matches!(
-            invoke(false, true, 11, 10),
+            invoke(false, true, Some(11), None),
             Err(VMError::PermissionDenied)
         ));
-        assert!(invoke(false, true, 10, 10).is_ok());
+        for dataspace in [0, 10] {
+            assert!(matches!(
+                invoke(false, true, Some(dataspace), Some(dataspace)),
+                Err(VMError::PermissionDenied)
+            ));
+        }
+        assert!(invoke(false, true, None, None).is_ok());
     }
     #[test]
     fn pointer_from_norito_accepts_full_width_int() {
@@ -7851,7 +7965,11 @@ mod tests_asset_registration_and_scope {
         let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
         let subject = host.caller_subject();
         host.wsv
-            .grant_permission(&subject, PermissionToken::RegisterAssetDefinition);
+            .grant_permission(&subject, PermissionToken::RegisterDomain);
+        assert!(
+            host.wsv
+                .register_domain(&subject, DomainId::try_new("default", "universal").unwrap())
+        );
         host
     }
 
@@ -7875,7 +7993,41 @@ mod tests_asset_registration_and_scope {
         vm.set_register(11, name_ptr);
         vm.set_register(12, spec_word);
         vm.set_register(13, mintable_word);
+        let domain = DomainId::try_new("default", "universal").unwrap();
+        let domain_ptr = vm
+            .alloc_input_tlv(&tlv(
+                PointerType::DomainId,
+                &norito::to_bytes(&domain).unwrap(),
+            ))
+            .unwrap();
+        vm.set_register(14, domain_ptr);
         host.syscall(syscalls::SYSCALL_REGISTER_ASSET, &mut vm)
+    }
+
+    #[test]
+    fn register_asset_requires_exact_existing_domain_ownership() {
+        let domain = DomainId::try_new("default", "universal").unwrap();
+        for foreign in [false, true] {
+            let mut host = registering_host();
+            let caller = host.caller_subject();
+            // The retired fixture permission cannot bypass immutable home authority.
+            host.wsv
+                .grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+            if foreign {
+                let other = test_account_id(
+                    "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+                    "wonderland",
+                );
+                assert!(host.wsv.transfer_domain(&caller, &domain, other));
+            } else {
+                assert!(host.wsv.unregister_domain(&domain));
+            }
+            assert!(matches!(
+                register(&mut host, b"Rose", 0, 0),
+                Err(VMError::PermissionDenied)
+            ));
+            assert!(host.wsv.asset_definition_registration(&asset()).is_none());
+        }
     }
 
     #[test]
@@ -7893,6 +8045,19 @@ mod tests_asset_registration_and_scope {
         assert_eq!(
             host.wsv.asset_definition_registration(&asset()),
             Some(("Rose", spec, mintable))
+        );
+        assert_eq!(
+            host.wsv
+                .asset_definitions
+                .get(&asset())
+                .unwrap()
+                .owning_domain,
+            Some(DomainId::try_new("default", "universal").unwrap())
+        );
+        assert!(
+            !host
+                .wsv
+                .unregister_domain(&DomainId::try_new("default", "universal").unwrap())
         );
     }
 

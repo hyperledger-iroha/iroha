@@ -158,14 +158,14 @@ impl DaIngestServerAssignmentV1 {
         };
         let signing_bytes = assignment.signing_bytes()?;
         assignment.assignment_signature = Signature::try_new(signer.private_key(), &signing_bytes)
-            .map_err(|err| std::io::Error::new(ErrorKind::Other, err))?;
+            .map_err(std::io::Error::other)?;
         Ok(assignment)
     }
 
     fn signing_bytes(&self) -> std::io::Result<Vec<u8>> {
         let mut unsigned = self.clone();
         unsigned.assignment_signature = receipt_signature_placeholder();
-        to_bytes(&unsigned).map_err(|err| std::io::Error::new(ErrorKind::Other, err))
+        to_bytes(&unsigned).map_err(std::io::Error::other)
     }
 }
 
@@ -1009,7 +1009,7 @@ impl ReplayCursorStore {
         let journal_path = replay_cursor_journal_path(&path);
         let recovery = read_cursor_journal(&journal_path, max_lane_epochs)?;
         for record in recovery.records {
-            state.apply_journal_record(record, max_lane_epochs)?;
+            state.apply_journal_record(&(record), max_lane_epochs)?;
         }
         state.journal_records = recovery.record_count;
         state.checkpoint_pending = state.journal_records >= max_lane_epochs.get();
@@ -1183,7 +1183,7 @@ impl ReplayCursorStore {
         let recovery = read_cursor_journal(&journal_path, self.max_lane_epochs)
             .wrap_err("failed to recover DA replay cursor journal after an interrupted record")?;
         for record in recovery.records {
-            guard.apply_journal_record(record, self.max_lane_epochs)?;
+            guard.apply_journal_record(&(record), self.max_lane_epochs)?;
         }
         let journal =
             open_cursor_journal(&journal_path, recovery.valid_bytes, recovery.had_torn_tail)?;
@@ -1292,21 +1292,21 @@ impl ReplayCursorStore {
                 file_path.display()
             )
         })?;
-        if let Some(parent) = file_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                validate_replay_cursor_dir_no_follow(parent).wrap_err_with(|| {
-                    format!(
-                        "failed to inspect DA replay snapshot directory at {}",
-                        parent.display()
-                    )
-                })?;
-                sync_dir(parent).wrap_err_with(|| {
-                    format!(
-                        "failed to sync DA replay snapshot directory at {}",
-                        parent.display()
-                    )
-                })?;
-            }
+        if let Some(parent) = file_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            validate_replay_cursor_dir_no_follow(parent).wrap_err_with(|| {
+                format!(
+                    "failed to inspect DA replay snapshot directory at {}",
+                    parent.display()
+                )
+            })?;
+            sync_dir(parent).wrap_err_with(|| {
+                format!(
+                    "failed to sync DA replay snapshot directory at {}",
+                    parent.display()
+                )
+            })?;
         }
         Ok(())
     }
@@ -1829,15 +1829,15 @@ fn promote_replay_cursor_temp(tmp_path: &Path, file_path: &Path) -> eyre::Result
             });
         }
     }
-    if let Some(parent) = file_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            sync_dir(parent).wrap_err_with(|| {
-                format!(
-                    "failed to sync DA replay cursor directory after temp promotion at {}",
-                    parent.display()
-                )
-            })?;
-        }
+    if let Some(parent) = file_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        sync_dir(parent).wrap_err_with(|| {
+            format!(
+                "failed to sync DA replay cursor directory after temp promotion at {}",
+                parent.display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -2316,7 +2316,7 @@ impl DaReceiptLog {
         &self,
         lane_epoch: LaneEpoch,
         sequence: u64,
-        receipt: DaIngestReceipt,
+        receipt: &DaIngestReceipt,
         fingerprint: ReplayFingerprint,
     ) -> eyre::Result<ReceiptInsertOutcome> {
         if receipt.lane_id != lane_epoch.lane_id || receipt.epoch != lane_epoch.epoch {
@@ -2331,11 +2331,11 @@ impl DaReceiptLog {
                 "DA receipt log is not durable; refusing to acknowledge ingest without a receipt file"
             ));
         }
-        validate_receipt_fingerprint(&receipt, &fingerprint)?;
-        validate_receipt_resource_bounds(&receipt)?;
-        verify_receipt_signature(&receipt, sequence, &self.signer_public_key)
+        validate_receipt_fingerprint(receipt, &fingerprint)?;
+        validate_receipt_resource_bounds(receipt)?;
+        verify_receipt_signature(receipt, sequence, &self.signer_public_key)
             .wrap_err("DA receipt signature verification failed")?;
-        let encoded = encode_stored_da_receipt(&receipt, sequence).map_err(|err| eyre!(err))?;
+        let encoded = encode_stored_da_receipt(receipt, sequence).map_err(|err| eyre!(err))?;
         let receipt_digest = *blake3::hash(&encoded).as_bytes();
         let manifest_hash = receipt.manifest_hash;
         let mut guard = self.lock_index();
@@ -2403,7 +2403,7 @@ impl DaReceiptLog {
                 observed: sequence,
             });
         }
-        let path = self.write_receipt_file(&receipt, sequence, &fingerprint, &encoded)?;
+        let path = self.write_receipt_file(receipt, sequence, &fingerprint, &encoded)?;
         self.cursor_store
             .record(lane_epoch, sequence)
             .wrap_err("failed to persist receipt cursor")?;
@@ -3007,7 +3007,7 @@ impl ReplayCursorState {
     }
     fn apply_journal_record(
         &mut self,
-        record: CursorJournalRecord,
+        record: &CursorJournalRecord,
         max_lane_epochs: NonZeroUsize,
     ) -> eyre::Result<()> {
         let lane_epoch = LaneEpoch::new(LaneId::from(record.lane_id), record.epoch);
@@ -3187,12 +3187,7 @@ fn allocate_artifact_temp_counter(counter: &AtomicU64) -> std::io::Result<u64> {
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)
         })
-        .map_err(|_| {
-            std::io::Error::new(
-                ErrorKind::Other,
-                "DA artifact temp suffix counter exhausted",
-            )
-        })
+        .map_err(|_| std::io::Error::other("DA artifact temp suffix counter exhausted"))
 }
 fn artifact_temp_suffix() -> std::io::Result<String> {
     let counter = allocate_artifact_temp_counter(&ARTIFACT_TEMP_COUNTER)?;
@@ -3352,7 +3347,7 @@ mod temp_artifact_tests {
             invalid_receipt.operator_signature =
                 signature_with_malformed_ed25519_r(&receipt.operator_signature, &replacement_r);
             let err = log
-                .append(lane_epoch, 1, invalid_receipt, test_fingerprint(0xB2))
+                .append(lane_epoch, 1, &(invalid_receipt), test_fingerprint(0xB2))
                 .expect_err("DA receipt log must reject malformed Ed25519 signature R");
             let message = format!("{err:?}");
             assert!(
@@ -3390,7 +3385,7 @@ mod temp_artifact_tests {
             let mut invalid_receipt = receipt.clone();
             invalid_receipt.operator_signature = Signature::from_bytes(&malformed_payload);
             let err = log
-                .append(lane_epoch, 1, invalid_receipt, test_fingerprint(0xB3))
+                .append(lane_epoch, 1, &(invalid_receipt), test_fingerprint(0xB3))
                 .expect_err("DA receipt log must reject malformed ML-DSA signature length");
             let message = format!("{err:?}");
             assert!(
@@ -3709,7 +3704,7 @@ mod temp_artifact_tests {
         .expect("initial receipt log");
         let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xCC);
         assert!(matches!(
-            log.append(lane_epoch, 0, receipt, test_fingerprint(0xCC))
+            log.append(lane_epoch, 0, &(receipt), test_fingerprint(0xCC))
                 .expect("append retired receipt"),
             ReceiptInsertOutcome::Stored { .. }
         ));
@@ -3756,7 +3751,7 @@ mod temp_artifact_tests {
         for (lane_epoch, marker) in [(retired, 0xC1), (retained, 0xC2)] {
             let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, marker);
             assert!(matches!(
-                log.append(lane_epoch, 0, receipt, test_fingerprint(marker))
+                log.append(lane_epoch, 0, &(receipt), test_fingerprint(marker))
                     .expect("append receipt"),
                 ReceiptInsertOutcome::Stored { .. }
             ));
@@ -3807,7 +3802,7 @@ mod temp_artifact_tests {
         let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xA1);
         assert!(
             matches!(
-                log.append(lane_epoch, 0, receipt.clone(), test_fingerprint(0xA1))
+                log.append(lane_epoch, 0, &(receipt), test_fingerprint(0xA1))
                     .expect("receipt append after caught panic"),
                 ReceiptInsertOutcome::Stored { .. }
             ),
@@ -3892,7 +3887,7 @@ mod temp_artifact_tests {
                 seed,
             );
             assert!(matches!(
-                log.append(lane_epoch, sequence, receipt, test_fingerprint(seed))
+                log.append(lane_epoch, sequence, &(receipt), test_fingerprint(seed))
                     .expect("append receipt"),
                 ReceiptInsertOutcome::Stored { .. }
             ));
@@ -3923,7 +3918,7 @@ fn encode_stored_da_receipt(receipt: &DaIngestReceipt, sequence: u64) -> std::io
         sequence,
         receipt: receipt.clone(),
     })
-    .map_err(|err| std::io::Error::new(ErrorKind::Other, err))?;
+    .map_err(std::io::Error::other)?;
     if encoded.len() > DA_RECEIPT_ARTIFACT_MAX_BYTES_V1 {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
@@ -4891,8 +4886,7 @@ pub(super) fn persist_pdp_commitment(
     let ticket_hex = hex::encode(storage_ticket.as_ref());
     let artifact_dir = create_ticket_artifact_dir(spool_dir, storage_ticket)?;
     let target_path = artifact_dir.join(PDP_COMMITMENT_ARTIFACT_FILE_NAME);
-    let encoded =
-        to_bytes(commitment).map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+    let encoded = to_bytes(commitment).map_err(std::io::Error::other)?;
     if let Some(path) =
         existing_artifact_path_if_matching(&target_path, &encoded, "PDP commitment artifact")?
     {
@@ -4944,8 +4938,7 @@ pub(super) fn persist_da_commitment_record(
         "da-commitment-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito"
     );
     let target_path = spool_dir.join(file_name);
-    let encoded =
-        to_bytes(record).map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+    let encoded = to_bytes(record).map_err(std::io::Error::other)?;
     if let Some(path) =
         existing_artifact_path_if_matching(&target_path, &encoded, "DA commitment artifact")?
     {
@@ -5023,8 +5016,7 @@ pub(super) fn persist_da_commitment_schedule_entry(
         record: record.clone(),
         pdp_commitment: pdp_commitment_bytes.to_vec(),
     };
-    let encoded =
-        to_bytes(&entry).map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+    let encoded = to_bytes(&entry).map_err(std::io::Error::other)?;
     if let Some(path) = existing_artifact_path_if_matching(
         &target_path,
         &encoded,
@@ -5091,8 +5083,7 @@ pub(super) fn persist_da_pin_intent(
         storage_ticket,
         fingerprint,
     );
-    let encoded =
-        to_bytes(intent).map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+    let encoded = to_bytes(intent).map_err(std::io::Error::other)?;
     if encoded.len() > DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1 {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
@@ -5175,8 +5166,7 @@ pub(super) fn persist_da_pin_scope(
         storage_ticket,
         fingerprint,
     );
-    let encoded =
-        to_bytes(scope).map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+    let encoded = to_bytes(scope).map_err(std::io::Error::other)?;
     if encoded.len() > DA_PIN_SCOPE_ARTIFACT_MAX_BYTES_V1 {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,

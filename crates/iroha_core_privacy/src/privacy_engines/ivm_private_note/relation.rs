@@ -195,6 +195,9 @@ impl PrivateInstructionV1 {
         ]
     }
     /// Decode one instruction and reject unknown opcodes.
+    ///
+    /// # Errors
+    /// Rejects an unknown opcode or an instruction with invalid operands or reserved bytes.
     pub fn from_bytes(
         bytes: [u8; PRIVATE_PROGRAM_INSTRUCTION_BYTES_V1],
     ) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
@@ -261,7 +264,8 @@ impl PrivateInstructionV1 {
         self.immediate
     }
     fn validate(self) -> Result<(), IvmPrivateNoteRelationErrorV1> {
-        let register_count = PRIVATE_PROGRAM_REGISTER_COUNT_V1 as u8;
+        let register_count =
+            u8::try_from(PRIVATE_PROGRAM_REGISTER_COUNT_V1).expect("register count fits u8");
         let register = |value: u8| value < register_count;
         let valid = match self.opcode {
             PrivateOpcodeV1::Halt => self == Self::HALT,
@@ -343,6 +347,9 @@ impl PrivateProgramV1 {
         &self.instructions
     }
     /// Validate the unique instruction encoding and post-halt padding.
+    ///
+    /// # Errors
+    /// Rejects invalid instruction encodings, control flow, or padding after the halt instruction.
     pub fn validate(&self) -> Result<(), IvmPrivateNoteRelationErrorV1> {
         let mut halted = false;
         for instruction in self.instructions {
@@ -506,7 +513,7 @@ impl IvmPrivateNoteInputWitnessV1 {
         note: PrivateNotePlaintextV1,
         spending_secret: [u8; 32],
         leaf_position: u32,
-        authentication_path: [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+        authentication_path: &[[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
     ) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
         validate_note(&note)?;
         if is_zero(&spending_secret) || authentication_path.iter().any(|sibling| is_zero(sibling)) {
@@ -519,7 +526,7 @@ impl IvmPrivateNoteInputWitnessV1 {
             note,
             spending_secret,
             leaf_position,
-            authentication_path,
+            authentication_path: *authentication_path,
         })
     }
     /// Construct one input under a crate-private relation profile.
@@ -527,7 +534,7 @@ impl IvmPrivateNoteInputWitnessV1 {
         note: PrivateNotePlaintextV1,
         spending_secret: [u8; 32],
         leaf_position: u32,
-        authentication_path: [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+        authentication_path: &[[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
         profile: PrivateNoteRelationProfileV1,
     ) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
         validate_input_note_v1(&note, profile)?;
@@ -541,7 +548,7 @@ impl IvmPrivateNoteInputWitnessV1 {
             note,
             spending_secret,
             leaf_position,
-            authentication_path,
+            authentication_path: *authentication_path,
         })
     }
     /// Borrow the committed plaintext.
@@ -560,6 +567,9 @@ impl IvmPrivateNoteInputWitnessV1 {
         &self.authentication_path
     }
     /// Derive the public commitment opened by this input witness.
+    ///
+    /// # Errors
+    /// Rejects invalid note fields or a commitment derivation failure.
     pub fn commitment_v1(&self) -> Result<PrivacyCommitmentV1, IvmPrivateNoteRelationErrorV1> {
         derive_note_commitment_v1(&self.note)
     }
@@ -574,6 +584,9 @@ impl IvmPrivateNoteInputWitnessV1 {
     ///
     /// The spending secret remains encapsulated by the redacted witness and is
     /// never returned to wallet adapters.
+    ///
+    /// # Errors
+    /// Rejects invalid statement or witness bindings and nullifier derivation failures.
     pub fn nullifier_v1(
         &self,
         statement: &IrohaIvmPrivateNoteStarkStatementV1,
@@ -949,6 +962,9 @@ pub fn derive_private_note_input_openings_commitment_v1(
     Ok(audit_input_openings_invocation_v1(notes)?.digest)
 }
 /// Derive the exact program identifier.
+///
+/// # Errors
+/// Rejects an invalid program or canonical identifier derivation failure.
 pub fn derive_private_program_id_v1(
     program: &PrivateProgramV1,
 ) -> Result<PrivacyProgramIdV1, IvmPrivateNoteRelationErrorV1> {
@@ -963,6 +979,9 @@ pub fn derive_private_program_id_v1(
     ))
 }
 /// Derive a note spending-authority digest from its secret.
+///
+/// # Errors
+/// Rejects a zero spending secret or an invalid derived authority digest.
 pub fn derive_note_authority_v1(
     spending_secret: &[u8; 32],
 ) -> Result<[u8; 32], IvmPrivateNoteRelationErrorV1> {
@@ -977,6 +996,9 @@ pub fn derive_note_authority_v1(
     .digest)
 }
 /// Derive the sole canonical note commitment.
+///
+/// # Errors
+/// Rejects invalid note fields or canonical commitment derivation failures.
 pub fn derive_note_commitment_v1(
     note: &PrivateNotePlaintextV1,
 ) -> Result<PrivacyCommitmentV1, IvmPrivateNoteRelationErrorV1> {
@@ -1027,6 +1049,9 @@ fn derive_note_commitment_with_memo_v1(
 /// The nullifier is deliberately independent of transaction context, action index, accumulator
 /// root/position, and execution epoch. A committed note therefore has one stable nullifier in its
 /// pool/program namespace and cannot acquire a fresh nullifier by being replayed in another action.
+///
+/// # Errors
+/// Rejects invalid statement, secret, nonce, or commitment bindings and nullifier derivation failures.
 pub fn derive_note_nullifier_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     spending_secret: &[u8; 32],
@@ -1531,7 +1556,7 @@ pub(super) fn validate_private_note_relation_with_profile_v1(
 /// Derive the same stable pool/program nullifier without manufacturing a full execution statement.
 /// # Errors
 /// Reserved-zero secret, rho or commitment, or a closed hash profile failure.
-pub(crate) fn derive_note_nullifier_for_namespace_v1(
+pub fn derive_note_nullifier_for_namespace_v1(
     pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
     program_id: iroha_data_model::privacy::PrivacyProgramIdV1,
     spending_secret: &[u8; 32],

@@ -82,7 +82,7 @@ async fn committed_retry_acknowledges_exact_carrier_without_requeueing() {
         let response = super::handler_post_transactions_batch(
             State(app.clone()),
             HeaderMap::new(),
-            transaction_batch_body_for_test(vec![wire.clone(), wire]),
+            transaction_batch_body_for_test(&(vec![wire.clone(), wire])),
         )
         .await
         .expect("batch ingress acknowledges both copies of the exact committed carrier");
@@ -244,9 +244,8 @@ async fn committed_retry_revalidates_expiry_and_current_signature_policy() {
     ])
     .expect("explicit committed policy excludes this Ed25519 signer");
     let pool = app.state.view().execution_budget();
-    let mut parameters =
-        iroha_core::state::parameter_cell_block_for_testing(&app.state.world)
-            .expect("fund the original parameter publication");
+    let mut parameters = iroha_core::state::parameter_cell_block_for_testing(&app.state.world)
+        .expect("fund the original parameter publication");
     iroha_core::state::set_parameter_cell_for_testing(
         &mut parameters,
         policy
@@ -281,14 +280,14 @@ async fn committed_retry_preserves_full_queue_and_authority_rate_reservation() {
         &key,
     );
     let accepted = routing::accept_transaction_for_ingress(
-        app.state.clone(),
+        &(app.state),
         TransactionEntrypoint::External(pending.clone()),
         &app.telemetry,
     )
     .unwrap();
     routing::push_accepted_transaction_for_ingress_with_routing_plan(
-        app.queue.clone(),
-        app.state.clone(),
+        &(app.queue),
+        &(app.state),
         accepted,
         None,
     )
@@ -324,7 +323,7 @@ async fn committed_retry_rechecks_route_after_history_authentication() {
         Some(RoutingDecision::new(LaneId::new(9), DataSpaceId::new(9))),
     );
     let accepted = routing::accept_transaction_for_ingress(
-        app.state.clone(),
+        &(app.state),
         TransactionEntrypoint::External(transaction),
         &app.telemetry,
     )

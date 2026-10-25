@@ -90,6 +90,48 @@ pub(crate) fn genesis_signing_count() -> usize {
     GENESIS_SIGNING_COUNT.with(std::cell::Cell::get)
 }
 
+/// Authored signed policies and optional runtime settings for test-network genesis.
+pub(crate) struct GenesisPolicyConfig {
+    pub(crate) genesis_crypto: CryptoAdmissionPolicyV1,
+    pub(crate) staking_policy: iroha_data_model::block::consensus::PublicLaneStakingPolicy,
+    pub(crate) da_proof_policies: Option<DaProofPolicyBundle>,
+    pub(crate) pipeline_config: Option<ActualPipeline>,
+    pub(crate) nexus_config: Option<ActualNexus>,
+    pub(crate) zk_config: Option<ActualZk>,
+    pub(crate) runtime_config: Option<ActualRoot>,
+    pub(crate) consensus_handshake_meta: Option<Parameter>,
+    pub(crate) consensus_mode_override: Option<SumeragiConsensusMode>,
+    pub(crate) confidential_policy_hash: Option<[u8; 32]>,
+    pub(crate) preview_cadence_ms: Option<std::num::NonZeroU64>,
+}
+
+impl Default for GenesisPolicyConfig {
+    fn default() -> Self {
+        Self {
+            genesis_crypto: test_network_crypto_admission_policy(),
+            staking_policy: default_test_network_staking_policy(),
+            da_proof_policies: None,
+            pipeline_config: None,
+            nexus_config: None,
+            zk_config: None,
+            runtime_config: None,
+            consensus_handshake_meta: None,
+            consensus_mode_override: None,
+            confidential_policy_hash: None,
+            preview_cadence_ms: None,
+        }
+    }
+}
+
+/// Borrowed runtime policies used during isolated genesis validation.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct GenesisRuntimeConfig<'a> {
+    pub(crate) pipeline_config: Option<&'a ActualPipeline>,
+    pub(crate) nexus_config: Option<&'a ActualNexus>,
+    pub(crate) zk_config: Option<&'a ActualZk>,
+    pub(crate) runtime_config: Option<&'a ActualRoot>,
+}
+
 /// Exact policy commitments derived by isolated genesis pre-execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StagedGenesisPolicyHashes {
@@ -267,15 +309,20 @@ pub(crate) fn genesis_unexecuted_with_keypair_and_post_topology(
         topology_entries,
         genesis_key_pair,
         chain_id(),
-        test_network_crypto_admission_policy(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-        None,
-        staking_policy,
+        crate::config::GenesisPolicyConfig {
+            genesis_crypto: test_network_crypto_admission_policy(),
+            staking_policy,
+            da_proof_policies: None,
+            nexus_config: None,
+            zk_config: None,
+            consensus_handshake_meta: None,
+            consensus_mode_override: None,
+            confidential_policy_hash: Some(
+                iroha_core::state::default_genesis_confidential_policy_hash(),
+            ),
+            preview_cadence_ms: None,
+            ..Default::default()
+        },
     )
     .0
 }
@@ -288,13 +335,17 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
-    genesis_crypto_policy: CryptoAdmissionPolicyV1,
-    da_proof_policies: Option<DaProofPolicyBundle>,
-    _nexus_config: Option<ActualNexus>,
-    zk_config: Option<ActualZk>,
-    consensus_handshake_meta: Option<Parameter>,
-    consensus_mode_override: Option<SumeragiConsensusMode>,
-    confidential_policy_hash: Option<[u8; 32]>,
+    crate::config::GenesisPolicyConfig {
+        genesis_crypto,
+        staking_policy,
+        da_proof_policies,
+        nexus_config: _nexus_config,
+        zk_config,
+        consensus_handshake_meta,
+        consensus_mode_override,
+        confidential_policy_hash,
+        ..
+    }: crate::config::GenesisPolicyConfig,
 ) -> GenesisBlock {
     genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
         extra_transactions,
@@ -303,17 +354,19 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         topology_entries,
         genesis_key_pair,
         chain_id,
-        genesis_crypto_policy,
-        da_proof_policies,
-        None,
-        _nexus_config,
-        zk_config,
-        None,
-        consensus_handshake_meta,
-        consensus_mode_override,
-        confidential_policy_hash,
-        None,
-        default_test_network_staking_policy(),
+        crate::config::GenesisPolicyConfig {
+            genesis_crypto,
+            staking_policy,
+            da_proof_policies,
+            pipeline_config: None,
+            nexus_config: _nexus_config,
+            zk_config,
+            runtime_config: None,
+            consensus_handshake_meta,
+            consensus_mode_override,
+            confidential_policy_hash,
+            preview_cadence_ms: None,
+        },
     )
     .0
 }
@@ -324,17 +377,19 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
-    genesis_crypto_policy: CryptoAdmissionPolicyV1,
-    da_proof_policies: Option<DaProofPolicyBundle>,
-    pipeline_config: Option<ActualPipeline>,
-    nexus_config: Option<ActualNexus>,
-    zk_config: Option<ActualZk>,
-    runtime_config: Option<ActualRoot>,
-    consensus_handshake_meta: Option<Parameter>,
-    consensus_mode_override: Option<SumeragiConsensusMode>,
-    confidential_policy_hash: Option<[u8; 32]>,
-    preview_cadence_ms: Option<std::num::NonZeroU64>,
-    staking_policy: iroha_data_model::block::consensus::PublicLaneStakingPolicy,
+    crate::config::GenesisPolicyConfig {
+        genesis_crypto,
+        staking_policy,
+        da_proof_policies,
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        runtime_config,
+        consensus_handshake_meta,
+        consensus_mode_override,
+        confidential_policy_hash,
+        preview_cadence_ms,
+    }: crate::config::GenesisPolicyConfig,
 ) -> (
     GenesisBlock,
     StagedGenesisPolicyHashes,
@@ -348,17 +403,19 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
         topology_entries,
         genesis_key_pair,
         chain_id,
-        genesis_crypto_policy,
-        da_proof_policies,
-        pipeline_config,
-        nexus_config,
-        zk_config,
-        runtime_config,
-        consensus_handshake_meta,
-        consensus_mode_override,
-        confidential_policy_hash,
-        preview_cadence_ms,
-        staking_policy,
+        crate::config::GenesisPolicyConfig {
+            genesis_crypto,
+            staking_policy,
+            da_proof_policies,
+            pipeline_config,
+            nexus_config,
+            zk_config,
+            runtime_config,
+            consensus_handshake_meta,
+            consensus_mode_override,
+            confidential_policy_hash,
+            preview_cadence_ms,
+        },
     )
 }
 fn strip_handshake_metadata_transactions(transactions: &mut [Vec<InstructionBox>]) {
@@ -444,13 +501,18 @@ fn build_minimal_genesis(
         topology_entries,
         genesis_key_pair,
         chain_id(),
-        test_network_crypto_admission_policy(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+        crate::config::GenesisPolicyConfig {
+            genesis_crypto: test_network_crypto_admission_policy(),
+            da_proof_policies: None,
+            nexus_config: None,
+            zk_config: None,
+            consensus_handshake_meta: None,
+            consensus_mode_override: None,
+            confidential_policy_hash: Some(
+                iroha_core::state::default_genesis_confidential_policy_hash(),
+            ),
+            ..Default::default()
+        },
     )
 }
 fn build_minimal_genesis_with_post_topology(
@@ -460,13 +522,17 @@ fn build_minimal_genesis_with_post_topology(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
-    genesis_crypto_policy: CryptoAdmissionPolicyV1,
-    da_proof_policies: Option<DaProofPolicyBundle>,
-    nexus_config: Option<ActualNexus>,
-    zk_config: Option<ActualZk>,
-    consensus_handshake_meta: Option<Parameter>,
-    consensus_mode_override: Option<SumeragiConsensusMode>,
-    confidential_policy_hash: Option<[u8; 32]>,
+    crate::config::GenesisPolicyConfig {
+        genesis_crypto,
+        staking_policy,
+        da_proof_policies,
+        nexus_config,
+        zk_config,
+        consensus_handshake_meta,
+        consensus_mode_override,
+        confidential_policy_hash,
+        ..
+    }: crate::config::GenesisPolicyConfig,
 ) -> GenesisBlock {
     build_minimal_genesis_with_post_topology_and_staged_hash(
         extra_transactions,
@@ -475,17 +541,19 @@ fn build_minimal_genesis_with_post_topology(
         topology_entries,
         genesis_key_pair,
         chain_id,
-        genesis_crypto_policy,
-        da_proof_policies,
-        None,
-        nexus_config,
-        zk_config,
-        None,
-        consensus_handshake_meta,
-        consensus_mode_override,
-        confidential_policy_hash,
-        None,
-        default_test_network_staking_policy(),
+        crate::config::GenesisPolicyConfig {
+            genesis_crypto,
+            staking_policy,
+            da_proof_policies,
+            pipeline_config: None,
+            nexus_config,
+            zk_config,
+            runtime_config: None,
+            consensus_handshake_meta,
+            consensus_mode_override,
+            confidential_policy_hash,
+            preview_cadence_ms: None,
+        },
     )
     .0
 }
@@ -496,17 +564,19 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
-    genesis_crypto_policy: CryptoAdmissionPolicyV1,
-    da_proof_policies: Option<DaProofPolicyBundle>,
-    pipeline_config: Option<ActualPipeline>,
-    nexus_config: Option<ActualNexus>,
-    zk_config: Option<ActualZk>,
-    runtime_config: Option<ActualRoot>,
-    consensus_handshake_meta: Option<Parameter>,
-    consensus_mode_override: Option<SumeragiConsensusMode>,
-    confidential_policy_hash: Option<[u8; 32]>,
-    preview_cadence_ms: Option<std::num::NonZeroU64>,
-    staking_policy: iroha_data_model::block::consensus::PublicLaneStakingPolicy,
+    crate::config::GenesisPolicyConfig {
+        genesis_crypto,
+        staking_policy,
+        da_proof_policies,
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        runtime_config,
+        consensus_handshake_meta,
+        consensus_mode_override,
+        confidential_policy_hash,
+        preview_cadence_ms,
+    }: crate::config::GenesisPolicyConfig,
 ) -> (
     GenesisBlock,
     StagedGenesisPolicyHashes,
@@ -537,15 +607,18 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
             topology_entries,
             genesis_key_pair,
             chain_id,
-            genesis_crypto_policy,
-            da_proof_policies,
-            nexus_config.clone(),
-            zk_config.clone(),
-            consensus_handshake_meta,
-            consensus_mode_override,
-            confidential_policy_hash,
-            preview_cadence_ms,
-            staking_policy,
+            crate::config::GenesisPolicyConfig {
+                genesis_crypto,
+                staking_policy,
+                da_proof_policies,
+                nexus_config: nexus_config.clone(),
+                zk_config: zk_config.clone(),
+                consensus_handshake_meta,
+                consensus_mode_override,
+                confidential_policy_hash,
+                preview_cadence_ms,
+                ..Default::default()
+            },
         );
     genesis_policy::execute_generated_genesis(
         block,
@@ -557,10 +630,12 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
                 proposal,
                 &genesis_account,
                 &topology_vec,
-                pipeline_config.as_ref(),
-                nexus_config.as_ref(),
-                zk_config.as_ref(),
-                runtime_config.as_ref(),
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: pipeline_config.as_ref(),
+                    nexus_config: nexus_config.as_ref(),
+                    zk_config: zk_config.as_ref(),
+                    runtime_config: runtime_config.as_ref(),
+                },
                 &display_chain,
             )?;
             Ok((resign_genesis(&validated, &genesis_key_pair), hashes))
@@ -582,15 +657,19 @@ fn build_minimal_genesis_unexecuted(
         topology_entries,
         genesis_key_pair,
         chain_id(),
-        test_network_crypto_admission_policy(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-        None,
-        default_test_network_staking_policy(),
+        crate::config::GenesisPolicyConfig {
+            genesis_crypto: test_network_crypto_admission_policy(),
+            da_proof_policies: None,
+            nexus_config: None,
+            zk_config: None,
+            consensus_handshake_meta: None,
+            consensus_mode_override: None,
+            confidential_policy_hash: Some(
+                iroha_core::state::default_genesis_confidential_policy_hash(),
+            ),
+            preview_cadence_ms: None,
+            ..Default::default()
+        },
     );
     (block, account, peers, key_pair)
 }
@@ -611,15 +690,18 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
-    genesis_crypto_policy: CryptoAdmissionPolicyV1,
-    da_proof_policies: Option<DaProofPolicyBundle>,
-    nexus_config: Option<ActualNexus>,
-    _zk_config: Option<ActualZk>,
-    consensus_handshake_meta: Option<Parameter>,
-    consensus_mode_override: Option<SumeragiConsensusMode>,
-    confidential_policy_hash: Option<[u8; 32]>,
-    preview_cadence_ms: Option<std::num::NonZeroU64>,
-    staking_policy: iroha_data_model::block::consensus::PublicLaneStakingPolicy,
+    crate::config::GenesisPolicyConfig {
+        genesis_crypto,
+        staking_policy,
+        da_proof_policies,
+        nexus_config,
+        zk_config: _zk_config,
+        consensus_handshake_meta,
+        consensus_mode_override,
+        confidential_policy_hash,
+        preview_cadence_ms,
+        ..
+    }: crate::config::GenesisPolicyConfig,
 ) -> (
     GenesisBlock,
     AccountId,
@@ -693,10 +775,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             chain.clone(),
             executor_path,
             ivm_dir.clone(),
-            genesis_crypto_policy,
+            genesis_crypto,
         )
     } else {
-        GenesisBuilder::new_without_executor(chain.clone(), ivm_dir.clone(), genesis_crypto_policy)
+        GenesisBuilder::new_without_executor(chain.clone(), ivm_dir.clone(), genesis_crypto)
     };
     let staking_accounts = [
         staking_policy.stake_escrow_account_id.clone(),
@@ -1094,10 +1176,12 @@ pub(crate) fn ensure_genesis_results(
         genesis_account,
         topology,
         genesis_key_pair,
-        None,
-        nexus_config,
-        zk_config,
-        None,
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config: None,
+            nexus_config,
+            zk_config,
+            runtime_config: None,
+        },
     );
 }
 pub(crate) fn ensure_genesis_results_with_runtime_config(
@@ -1105,10 +1189,12 @@ pub(crate) fn ensure_genesis_results_with_runtime_config(
     genesis_account: &AccountId,
     topology: &[PeerId],
     genesis_key_pair: &KeyPair,
-    pipeline_config: Option<&ActualPipeline>,
-    nexus_config: Option<&ActualNexus>,
-    zk_config: Option<&ActualZk>,
-    runtime_config: Option<&ActualRoot>,
+    crate::config::GenesisRuntimeConfig {
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        runtime_config,
+    }: crate::config::GenesisRuntimeConfig<'_>,
 ) {
     let has_results = block.0.has_results();
     let results_are_canonical = genesis_results_are_canonical(&block.0);
@@ -1134,10 +1220,12 @@ pub(crate) fn ensure_genesis_results_with_runtime_config(
         genesis_account,
         topology,
         genesis_key_pair,
-        pipeline_config,
-        nexus_config,
-        zk_config,
-        runtime_config,
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config,
+            nexus_config,
+            zk_config,
+            runtime_config,
+        },
     )
     .unwrap_or_else(|error| panic!("genesis pre-execution must succeed: {error:#}"));
     block.0 = executed;
@@ -1191,10 +1279,12 @@ fn populate_genesis_results(
         genesis_account,
         topology,
         genesis_key_pair,
-        None,
-        nexus_config,
-        zk_config,
-        None,
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config: None,
+            nexus_config,
+            zk_config,
+            runtime_config: None,
+        },
     )
     .map(|(block, _)| block)
 }
@@ -1203,20 +1293,24 @@ pub(crate) fn staged_genesis_policy_hashes(
     genesis_account: &AccountId,
     topology: &[PeerId],
     genesis_key_pair: &KeyPair,
-    pipeline_config: Option<&ActualPipeline>,
-    nexus_config: Option<&ActualNexus>,
-    zk_config: Option<&ActualZk>,
-    runtime_config: Option<&ActualRoot>,
+    crate::config::GenesisRuntimeConfig {
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        runtime_config,
+    }: crate::config::GenesisRuntimeConfig<'_>,
 ) -> Result<StagedGenesisPolicyHashes, Report> {
     preexecute_genesis_with_runtime_config(
         block,
         genesis_account,
         topology,
         genesis_key_pair,
-        pipeline_config,
-        nexus_config,
-        zk_config,
-        runtime_config,
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config,
+            nexus_config,
+            zk_config,
+            runtime_config,
+        },
     )
     .map(|(_, hashes)| hashes)
 }
@@ -1230,10 +1324,12 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     genesis_account: &AccountId,
     topology: &[PeerId],
     genesis_key_pair: &KeyPair,
-    pipeline_config: Option<&ActualPipeline>,
-    nexus_config: Option<&ActualNexus>,
-    zk_config: Option<&ActualZk>,
-    runtime_config: Option<&ActualRoot>,
+    crate::config::GenesisRuntimeConfig {
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        runtime_config,
+    }: crate::config::GenesisRuntimeConfig<'_>,
 ) -> Result<
     (
         iroha_data_model::block::SignedBlock,
@@ -1250,10 +1346,12 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
         block,
         genesis_account,
         topology,
-        pipeline_config,
-        nexus_config,
-        zk_config,
-        runtime_config,
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config,
+            nexus_config,
+            zk_config,
+            runtime_config,
+        },
     )?;
     Ok((resign_genesis(&validated, genesis_key_pair), hashes))
 }
@@ -1265,10 +1363,12 @@ pub(crate) fn validate_genesis_with_runtime_config(
     block: &GenesisBlock,
     genesis_account: &AccountId,
     topology: &[PeerId],
-    pipeline_config: Option<&ActualPipeline>,
-    nexus_config: Option<&ActualNexus>,
-    zk_config: Option<&ActualZk>,
-    runtime_config: Option<&ActualRoot>,
+    crate::config::GenesisRuntimeConfig {
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        runtime_config,
+    }: crate::config::GenesisRuntimeConfig<'_>,
 ) -> Result<
     (
         iroha_data_model::block::SignedBlock,
@@ -1284,10 +1384,12 @@ pub(crate) fn validate_genesis_with_runtime_config(
         block,
         genesis_account,
         topology,
-        pipeline_config,
-        nexus_config,
-        zk_config,
-        runtime_config,
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config,
+            nexus_config,
+            zk_config,
+            runtime_config,
+        },
         &display_chain,
     )
 }
@@ -1296,10 +1398,12 @@ fn validate_genesis_with_display_chain(
     block: &GenesisBlock,
     genesis_account: &AccountId,
     topology: &[PeerId],
-    pipeline_config: Option<&ActualPipeline>,
-    nexus_config: Option<&ActualNexus>,
-    zk_config: Option<&ActualZk>,
-    runtime_config: Option<&ActualRoot>,
+    crate::config::GenesisRuntimeConfig {
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        runtime_config,
+    }: crate::config::GenesisRuntimeConfig<'_>,
     display_chain: &ChainId,
 ) -> Result<
     (
@@ -1325,10 +1429,12 @@ fn validate_genesis_with_display_chain(
         block,
         genesis_account,
         topology,
-        pipeline_config,
-        nexus_config,
-        zk_config,
-        runtime_config,
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config,
+            nexus_config,
+            zk_config,
+            runtime_config,
+        },
         display_chain,
     )
 }
@@ -1337,10 +1443,12 @@ fn validate_genesis_on_current_thread(
     block: &GenesisBlock,
     genesis_account: &AccountId,
     topology: &[PeerId],
-    pipeline_config: Option<&ActualPipeline>,
-    nexus_config: Option<&ActualNexus>,
-    zk_config: Option<&ActualZk>,
-    runtime_config: Option<&ActualRoot>,
+    crate::config::GenesisRuntimeConfig {
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        runtime_config,
+    }: crate::config::GenesisRuntimeConfig<'_>,
     display_chain: &ChainId,
 ) -> Result<
     (
@@ -1949,15 +2057,19 @@ mod tests {
             entries,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
-            test_network_crypto_admission_policy(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-            None,
-            default_test_network_staking_policy(),
+            crate::config::GenesisPolicyConfig {
+                genesis_crypto: test_network_crypto_admission_policy(),
+                da_proof_policies: None,
+                nexus_config: None,
+                zk_config: None,
+                consensus_handshake_meta: None,
+                consensus_mode_override: None,
+                confidential_policy_hash: Some(
+                    iroha_core::state::default_genesis_confidential_policy_hash(),
+                ),
+                preview_cadence_ms: None,
+                ..Default::default()
+            },
         );
         let grant_phases = raw
             .transactions()
@@ -2052,15 +2164,19 @@ mod tests {
             entries.clone(),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
-            test_network_crypto_admission_policy(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-            None,
-            default_test_network_staking_policy(),
+            crate::config::GenesisPolicyConfig {
+                genesis_crypto: test_network_crypto_admission_policy(),
+                da_proof_policies: None,
+                nexus_config: None,
+                zk_config: None,
+                consensus_handshake_meta: None,
+                consensus_mode_override: None,
+                confidential_policy_hash: Some(
+                    iroha_core::state::default_genesis_confidential_policy_hash(),
+                ),
+                preview_cadence_ms: None,
+                ..Default::default()
+            },
         );
         assert_eq!(
             block.0.external_transactions().count(),
@@ -2119,15 +2235,19 @@ mod tests {
                 entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 super::chain_id(),
-                test_network_crypto_admission_policy(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-                None,
-                default_test_network_staking_policy(),
+                crate::config::GenesisPolicyConfig {
+                    genesis_crypto: test_network_crypto_admission_policy(),
+                    da_proof_policies: None,
+                    nexus_config: None,
+                    zk_config: None,
+                    consensus_handshake_meta: None,
+                    consensus_mode_override: None,
+                    confidential_policy_hash: Some(
+                        iroha_core::state::default_genesis_confidential_policy_hash(),
+                    ),
+                    preview_cadence_ms: None,
+                    ..Default::default()
+                },
             )
         }))
         .expect_err("the generator must refuse a twelfth caller-authored input");
@@ -2531,7 +2651,16 @@ mod tests {
                     SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 );
             let (executed, staged) = super::preexecute_genesis_with_runtime_config(
-                &block, &account, &peers, &key, None, None, None, None,
+                &block,
+                &account,
+                &peers,
+                &key,
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: None,
+                    nexus_config: None,
+                    zk_config: None,
+                    runtime_config: None,
+                },
             )
             .unwrap();
             assert!(
@@ -2587,10 +2716,12 @@ mod tests {
                 &genesis_account,
                 &topology_vec,
                 &genesis_key_pair,
-                Some(pipeline),
-                None,
-                Some(zk),
-                None,
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: Some(pipeline),
+                    nexus_config: None,
+                    zk_config: Some(zk),
+                    runtime_config: None,
+                },
             )
             .expect("genesis pre-execution should succeed")
         };
@@ -2682,15 +2813,19 @@ mod tests {
                 entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 super::chain_id(),
-                test_network_crypto_admission_policy(),
-                Some(policies),
-                None,
-                None,
-                None,
-                None,
-                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-                None,
-                default_test_network_staking_policy(),
+                crate::config::GenesisPolicyConfig {
+                    genesis_crypto: test_network_crypto_admission_policy(),
+                    da_proof_policies: Some(policies),
+                    nexus_config: None,
+                    zk_config: None,
+                    consensus_handshake_meta: None,
+                    consensus_mode_override: None,
+                    confidential_policy_hash: Some(
+                        iroha_core::state::default_genesis_confidential_policy_hash(),
+                    ),
+                    preview_cadence_ms: None,
+                    ..Default::default()
+                },
             );
         let (block, _) = super::genesis_fixture_policy::bind_proposal(
             block,
@@ -2846,15 +2981,20 @@ mod tests {
                 entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 super::chain_id(),
-                test_network_crypto_admission_policy(),
-                None,
-                Some(nexus.clone()),
-                None,
-                None,
-                Some(SumeragiConsensusMode::Npos),
-                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-                None,
-                authored_policy.clone(),
+                crate::config::GenesisPolicyConfig {
+                    genesis_crypto: test_network_crypto_admission_policy(),
+                    staking_policy: authored_policy.clone(),
+                    da_proof_policies: None,
+                    nexus_config: Some(nexus.clone()),
+                    zk_config: None,
+                    consensus_handshake_meta: None,
+                    consensus_mode_override: Some(SumeragiConsensusMode::Npos),
+                    confidential_policy_hash: Some(
+                        iroha_core::state::default_genesis_confidential_policy_hash(),
+                    ),
+                    preview_cadence_ms: None,
+                    ..Default::default()
+                },
             );
         let expected_rejection_index = block
             .0
@@ -3315,13 +3455,18 @@ mod tests {
             entries,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
-            expected.clone(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+            crate::config::GenesisPolicyConfig {
+                genesis_crypto: expected.clone(),
+                da_proof_policies: None,
+                nexus_config: None,
+                zk_config: None,
+                consensus_handshake_meta: None,
+                consensus_mode_override: None,
+                confidential_policy_hash: Some(
+                    iroha_core::state::default_genesis_confidential_policy_hash(),
+                ),
+                ..Default::default()
+            },
         );
         assert_eq!(embedded_crypto_policy(&block), expected);
     }
@@ -3515,15 +3660,19 @@ mod tests {
             entries,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
-            test_network_crypto_admission_policy(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-            None,
-            default_test_network_staking_policy(),
+            crate::config::GenesisPolicyConfig {
+                genesis_crypto: test_network_crypto_admission_policy(),
+                da_proof_policies: None,
+                nexus_config: None,
+                zk_config: None,
+                consensus_handshake_meta: None,
+                consensus_mode_override: None,
+                confidential_policy_hash: Some(
+                    iroha_core::state::default_genesis_confidential_policy_hash(),
+                ),
+                preview_cadence_ms: None,
+                ..Default::default()
+            },
         );
         let declared_hash = block
             .0

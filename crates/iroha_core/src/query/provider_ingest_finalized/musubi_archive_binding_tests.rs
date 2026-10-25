@@ -1,7 +1,7 @@
 use iroha_data_model::musubi::{MusubiArchiveCommitmentV1, MusubiContentDigestV1};
 fn bind_musubi_archive(archived: &mut ProviderIngestFinalizedArchivedOrderV1, seed: u8) {
     let commitment = MusubiArchiveCommitmentV1 {
-        root_cid: archived.pin_manifest.root_cid.clone(),
+        root_cid: archived.pin_manifest.root_cid,
         chunker: archived.pin_manifest.chunker.clone(),
         chunk_plan_digest: MusubiContentDigestV1::new(archived.pin_manifest.chunk_digest_sha3_256),
         por_root: MusubiContentDigestV1::new(archived.pin_manifest.por_root),

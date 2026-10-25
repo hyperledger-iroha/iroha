@@ -167,7 +167,7 @@ fn update(
     store_branch(world, node.path, node.depth, branch)
 }
 /// Update the cumulative wallet-head commitment atomically with a native head write.
-pub(crate) fn update_receipt_head_tree(
+pub fn update_receipt_head_tree(
     world: &mut WorldTransaction<'_, '_>,
     head: &RetailFeeReceiptHeadV1,
 ) -> Result<(), ExecutionAttemptError<String>> {
@@ -193,7 +193,7 @@ pub(crate) fn update_receipt_head_tree(
     Ok(())
 }
 /// Read the current cumulative commitment without scanning wallets or cold history.
-pub(crate) fn receipt_head_root(
+pub fn receipt_head_root(
     world: &impl WorldReadOnly,
 ) -> Result<Hash, ExecutionAttemptError<String>> {
     read_root(world)?

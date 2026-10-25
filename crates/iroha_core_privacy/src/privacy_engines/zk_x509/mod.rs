@@ -16,10 +16,8 @@
 pub(crate) mod accumulator_air;
 pub(crate) mod accumulator_stark;
 pub(crate) mod air;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod allocation_payload;
 mod certificate;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod codec;
 mod composition_masking;
 mod credential_joint;
@@ -37,8 +35,9 @@ pub mod errors;
 pub(crate) mod fixed_algebraic;
 pub(crate) mod fixed_algebraic_p256;
 pub(crate) mod fixed_algebraic_sha;
+/// Holder-owned private input and ordinary native credential proof construction.
+pub mod holder;
 pub(crate) mod io_air;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod main_assembly;
 pub(crate) mod main_io;
 pub(crate) mod merkle;
@@ -62,7 +61,6 @@ pub(crate) mod projection_air;
 mod proof_instance;
 #[cfg(test)]
 mod prover_observation;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[doc(hidden)]
 pub mod relation;
 pub(crate) mod rfc5280_stark;

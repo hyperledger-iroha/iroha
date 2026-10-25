@@ -98,7 +98,7 @@ impl fmt::Display for OpaqueDeferredAuthorityError {
 /// # Errors
 /// Any nested committee, monetary staking or `RecordSccpMessage` instruction, an unresolved
 /// approval, or an excessively deep proposal graph.
-pub(crate) fn reject_opaque_deferred_authority(
+pub fn reject_opaque_deferred_authority(
     instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Attempt<TransactionRejectionReason>> {
@@ -123,7 +123,7 @@ pub(crate) fn reject_opaque_deferred_authority(
     single_use_lifetimes,
     reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
 )]
-pub(crate) fn reject_opaque_instruction_authority<'a>(
+pub fn reject_opaque_instruction_authority<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Attempt<ValidationFail>> {
@@ -212,7 +212,7 @@ fn is_sccp_outbound_record(instruction: &InstructionBox) -> bool {
 /// multisig approval needs ledger state to resolve; the execution-time check
 /// ([`reject_opaque_instruction_authority`]) covers it. Graphs deeper than the traversal bound
 /// return `false` here and are refused by that check.
-pub(crate) fn trigger_executable_derives_sccp_outbound_record(executable: &Executable) -> bool {
+pub fn trigger_executable_derives_sccp_outbound_record(executable: &Executable) -> bool {
     executable_derives_sccp_outbound_record(executable, 0)
 }
 
@@ -446,17 +446,13 @@ mod tests {
 
     fn check(
         instructions: &[InstructionBox],
-        proposal: Option<Vec<InstructionBox>>,
+        proposal: Option<&[InstructionBox]>,
     ) -> Result<(), Attempt<OpaqueDeferredAuthorityError>> {
         reject_opaque_committee_operations_with(
             instructions,
             &mut std::collections::BTreeSet::new(),
             0,
-            &mut |_| {
-                Ok(proposal
-                    .clone()
-                    .map(|body| (iroha_test_samples::ALICE_ID.clone(), body)))
-            },
+            &mut |_| Ok(proposal.map(|body| (iroha_test_samples::ALICE_ID.clone(), body.to_vec()))),
         )
     }
 
@@ -506,14 +502,14 @@ mod tests {
         )
         .into();
         assert_eq!(
-            (check(core::slice::from_ref(&approval), Some(vec![sccp_record()])))
+            (check(core::slice::from_ref(&approval), Some(&[sccp_record()])))
                 .map_err(crate::execution_attempt::expect_completed_rejection),
             refused(0)
         );
         // This static outbound-value scan accepts other SCCP instructions. Public
         // panel operations separately require their exact direct signed execution frame.
         assert!(matches!(
-            check(&[approval], Some(vec![log("ordinary")])),
+            check(&[approval], Some(&[log("ordinary")])),
             Ok(())
         ));
         let others: Vec<InstructionBox> =

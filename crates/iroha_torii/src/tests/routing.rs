@@ -68,7 +68,7 @@ mod tests {
             default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![iroha_config::parameters::actual::LaneRoutingRule {
                 lane: LaneId::new(3),
-                dataspace: Some(DataSpaceId::new(6647857470246403404)),
+                dataspace: Some(DataSpaceId::new(6_647_857_470_246_403_404)),
                 matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
                     account: None,
                     instruction: Some("smartcontract::deploy".into()),
@@ -77,7 +77,7 @@ mod tests {
             }],
         };
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        let private_id = DataSpaceId::new(6647857470246403404);
+        let private_id = DataSpaceId::new(6_647_857_470_246_403_404);
         nexus.dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
@@ -147,7 +147,7 @@ mod tests {
             rules[0]
                 .get("dataspace_id")
                 .and_then(norito::json::Value::as_u64),
-            Some(6647857470246403404)
+            Some(6_647_857_470_246_403_404)
         );
         assert_eq!(
             rules[0]
@@ -741,7 +741,7 @@ mod tests {
             max_bytes: POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
             cursor: None,
         };
-        let status_page = super::handle_get_sorafs_por_status(coordinator.clone(), status_query)
+        let status_page = super::handle_get_sorafs_por_status(&(coordinator), &(status_query))
             .expect("status handler responds");
         assert_eq!(status_page.statuses.len(), 1);
         assert_eq!(
@@ -758,18 +758,17 @@ mod tests {
             cursor: None,
         };
         assert!(
-            super::handle_get_sorafs_por_status(coordinator.clone(), oversized_status_query)
-                .is_err()
+            super::handle_get_sorafs_por_status(&(coordinator), &(oversized_status_query)).is_err()
         );
         let export = super::handle_get_sorafs_por_export(
-            coordinator.clone(),
-            PorExportQueryDto {
+            &(coordinator),
+            &(PorExportQueryDto {
                 start_epoch: Some(challenge_a.epoch_id),
                 end_epoch: Some(challenge_a.epoch_id),
                 limit: 5,
                 max_bytes: POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
                 cursor: None,
-            },
+            }),
         )
         .expect("export handler responds");
         assert_eq!(export.page.statuses.len(), 1);
@@ -778,7 +777,7 @@ mod tests {
             challenge_a.challenge_id
         );
         let invalid_report_response = super::handle_get_sorafs_por_report(
-            coordinator.clone(),
+            &(coordinator),
             PorReportIsoWeek {
                 year: 9999,
                 week: 52,
@@ -791,7 +790,7 @@ mod tests {
             axum::http::StatusCode::BAD_REQUEST
         );
         let report = super::handle_get_sorafs_por_report(
-            coordinator.clone(),
+            &(coordinator),
             PorReportIsoWeek {
                 year: 2023,
                 week: 1,
@@ -1586,7 +1585,7 @@ mod event_stream_tests {
             status: TransactionStatus::Queued,
         }));
         let wanted_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
-            hash: wanted_hash.clone(),
+            hash: wanted_hash,
             block_height: None,
             lane_id: LaneId::new(0),
             dataspace_id: DataSpaceId::new(0),
@@ -1643,7 +1642,7 @@ mod event_stream_tests {
             };
         let sub = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
             TransactionEventFilter::default()
-                .for_hash(wanted_hash.clone())
+                .for_hash(wanted_hash)
                 .into(),
         )]);
         let sub_bytes = to_bytes(&sub).expect("encode subscription");

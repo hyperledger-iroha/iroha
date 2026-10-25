@@ -55,8 +55,8 @@ pub fn sort_triplets_gpu(triplets: &mut [AccessTriplet]) -> Result<(), GpuSortEr
         for (pos, triplet) in triplets.iter().enumerate() {
             let tx_idx_u32 =
                 u32::try_from(triplet.tx_index).map_err(|_| GpuSortError::TxIndexOverflow)?;
-            let hi_word = ((triplet.key as u64) << 32) | (tx_idx_u32 as u64);
-            let lo_word = ((triplet.flag as u64) << 32) | (pos as u64);
+            let hi_word = (u64::from(triplet.key) << 32) | u64::from(tx_idx_u32);
+            let lo_word = (u64::from(triplet.flag) << 32) | (pos as u64);
             hi.push(hi_word);
             lo.push(lo_word);
         }

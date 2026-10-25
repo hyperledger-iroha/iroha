@@ -326,7 +326,7 @@ fn parse_canonical_u64_decimal(field: &str, value: &str) -> Result<u64, String> 
 #[norito(deny_unknown_fields)]
 /// Request body for submitting a ZK ballot using BallotProof-style fields.
 pub struct ZkBallotV1Dto {
-    /// Authority submitting the ballot (AccountId string)
+    /// Authority submitting the ballot (`AccountId` string)
     pub authority: String,
     /// Exact genesis-derived network to build the transaction skeleton for.
     pub network_id: iroha_data_model::NetworkId,
@@ -358,7 +358,7 @@ pub struct ZkBallotV1Dto {
 #[norito_schema(name = "iroha_torii::gov::ZkBallotV1BallotProofDto")]
 #[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
-/// Request body that carries a BallotProof directly along with transaction context.
+/// Request body that carries a `BallotProof` directly along with transaction context.
 pub struct ZkBallotV1BallotProofDto {
     pub authority: String,
     /// Exact genesis-derived network to build the transaction skeleton for.
@@ -373,6 +373,10 @@ pub struct ZkBallotV1BallotProofDto {
 /// # Errors
 /// Returns `crate::Error::Query` for a foreign network, invalid authority, or invalid ballot
 /// fields. No transaction is submitted by this endpoint.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_gov_ballot_zk_v1(
     state: Arc<iroha_core::state::State>,
     authenticated_account: &iroha_data_model::account::AccountId,
@@ -461,19 +465,23 @@ pub async fn handle_gov_ballot_zk_v1(
         proof_b64: body.envelope_b64,
         public_inputs_json,
     };
-    let tx_instructions = vec![tx_instr_from_box(instr.into())];
+    let tx_instructions = vec![tx_instr_from_box(&(instr.into()))];
     Ok(JsonBody(BallotDraftResponse {
         drafted: true,
         tx_instructions,
     }))
 }
-/// POST /v1/gov/ballots/zk-v1/ballot-proof — accept BallotProof JSON and build instruction skeleton.
+/// POST /v1/gov/ballots/zk-v1/ballot-proof — accept `BallotProof` JSON and build instruction skeleton.
 ///
 /// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` for a foreign network, invalid authority, or invalid ballot
 /// fields. No transaction is submitted by this endpoint.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_gov_ballot_zk_v1_ballotproof(
     state: Arc<iroha_core::state::State>,
     authenticated_account: &iroha_data_model::account::AccountId,
@@ -561,7 +569,7 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         proof_b64,
         public_inputs_json,
     };
-    let tx_instructions = vec![tx_instr_from_box(instr.into())];
+    let tx_instructions = vec![tx_instr_from_box(&(instr.into()))];
     Ok(JsonBody(BallotDraftResponse {
         drafted: true,
         tx_instructions,
@@ -610,10 +618,6 @@ pub struct GovernanceTargetBodySizesV1 {
 }
 /// Public fail-closed governance configuration and route projection.
 #[derive(Debug, JsonSerialize)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "These advertised protocol capabilities are independent and may coexist."
-)]
 pub struct GovernanceCapabilitiesV1 {
     /// Stable projection schema identifier.
     pub schema: String,
@@ -759,8 +763,7 @@ pub async fn handle_gov_parliament_attempt_draft(
     }
     if body.attempt_sequence > MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
         return Err(crate::routing::conversion_error(format!(
-            "Parliament attempt sequence exceeds the V1 retry limit {}",
-            MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1
+            "Parliament attempt sequence exceeds the V1 retry limit {MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1}"
         )));
     }
     if let Some(reason) = body.proposal.first_release_exact_json_u64_invariant_error() {
@@ -772,7 +775,7 @@ pub async fn handle_gov_parliament_attempt_draft(
     };
     let proposal_content_id = instruction.proposal_content_id();
     let governance_attempt_id = instruction.governance_attempt_id();
-    let draft = tx_instr_from_box(instruction.into());
+    let draft = tx_instr_from_box(&(instruction.into()));
     Ok(JsonBody(ParliamentAttemptDraftResponseV1 {
         version: PARLIAMENT_API_VERSION_V1,
         proposal_content_id,
@@ -805,7 +808,7 @@ pub async fn handle_gov_parliament_transition_draft(
         governance_attempt_id,
         transition: body.transition,
     };
-    let draft = tx_instr_from_box(instruction.into());
+    let draft = tx_instr_from_box(&(instruction.into()));
     Ok(JsonBody(ParliamentTransitionDraftResponseV1 {
         version: PARLIAMENT_API_VERSION_V1,
         governance_attempt_id,
@@ -957,7 +960,7 @@ pub async fn handle_gov_parliament_attempt_read(
     Ok(JsonBody(ParliamentAttemptReadResponseV1 {
         version: PARLIAMENT_API_VERSION_V1,
         current_height: u64::try_from(view.height()).unwrap_or(u64::MAX),
-        attempt: attempt.attempt().clone(),
+        attempt: *attempt.attempt(),
         policy_version: attempt.policy_version(),
         required_bodies,
         body_states,
@@ -1014,13 +1017,17 @@ pub async fn handle_gov_citizen_draft(
         version: GOVERNANCE_CAPABILITIES_VERSION_V1,
         owner: body.owner,
         amount: amount.to_string(),
-        tx_instructions: vec![tx_instr_from_box(instruction.into())],
+        tx_instructions: vec![tx_instr_from_box(&(instruction.into()))],
     }))
 }
 /// GET /v1/gov/citizens — return the exact citizenship registry count.
 ///
 /// # Errors
 /// This handler never returns an error; an empty registry is represented as `total = 0`.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_gov_citizen_count(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<CitizenCountResponse>, crate::Error> {
@@ -1029,7 +1036,7 @@ pub async fn handle_gov_citizen_count(
         total: world.citizens().len().to_string(),
     }))
 }
-/// GET /v1/gov/citizens/{account_id} — read the citizenship registry entry for an account.
+/// GET /`v1/gov/citizens/{account_id`} — read the citizenship registry entry for an account.
 ///
 /// # Errors
 /// Returns a conversion error when the account id path segment is invalid.
@@ -1097,8 +1104,8 @@ pub struct TxInstr {
     pub wire_id: String,
     pub payload_hex: String,
 }
-fn tx_instr_from_box(boxed: iroha_data_model::isi::InstructionBox) -> TxInstr {
-    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
+fn tx_instr_from_box(boxed: &iroha_data_model::isi::InstructionBox) -> TxInstr {
+    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(boxed)
         .expect("governance skeleton must contain a registered instruction");
     TxInstr {
         wire_id: wire_id.to_owned(),
@@ -1170,16 +1177,16 @@ fn instruction_skeleton_for_propose(
     instr: &iroha_data_model::isi::governance::ProposeDeployContract,
 ) -> [GovernanceProposalInstructionDraftV1; 1] {
     let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
-    [governance_proposal_instruction_draft(boxed)]
+    [governance_proposal_instruction_draft(&(boxed))]
 }
 fn instruction_skeleton_for_sccp_route_governance_propose(
     instr: &iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
 ) -> [GovernanceProposalInstructionDraftV1; 1] {
     let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
-    [governance_proposal_instruction_draft(boxed)]
+    [governance_proposal_instruction_draft(&(boxed))]
 }
 fn governance_proposal_instruction_draft(
-    boxed: iroha_data_model::isi::InstructionBox,
+    boxed: &iroha_data_model::isi::InstructionBox,
 ) -> GovernanceProposalInstructionDraftV1 {
     let TxInstr {
         wire_id,
@@ -1241,10 +1248,13 @@ fn resolve_governance_contract_target(
         )),
         (Some(contract_address), None) => Ok(contract_address.clone()),
         (None, Some(contract_alias)) => {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
+            let now_ms = u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX);
             state
                 .world_view()
                 .contract_address_by_alias_at(contract_alias, now_ms)
@@ -1431,12 +1441,13 @@ fn governance_tally_from_view(
             .map_err(crate::routing::conversion_error)?;
         }
         iroha_core::state::GovernanceReferendumMode::Zk => {
-            if let Some(e) = world.elections().get(&rid) {
-                if e.finalized && e.tally.len() >= 2 {
-                    approve = e.tally[0];
-                    reject = e.tally[1];
-                    abstain = e.tally.get(2).copied().unwrap_or(0);
-                }
+            if let Some(e) = world.elections().get(&rid)
+                && e.finalized
+                && e.tally.len() >= 2
+            {
+                approve = e.tally[0];
+                reject = e.tally[1];
+                abstain = e.tally.get(2).copied().unwrap_or(0);
             }
         }
     }
@@ -1504,7 +1515,7 @@ pub async fn handle_gov_protected_set(
     let custom = CustomParameter::new(id, json);
     let isi = iroha_data_model::isi::SetParameter::new(Parameter::Custom(custom));
     let instruction: iroha_data_model::isi::InstructionBox = isi.into();
-    let tx_instructions = vec![tx_instr_from_box(instruction.clone())];
+    let tx_instructions = vec![tx_instr_from_box(&(instruction))];
     let signable_transaction_b64 = if let Some(authority) = body.authority.as_deref() {
         let authority_id = parse_canonical_authority_literal(
             state.as_ref(),
@@ -1811,7 +1822,7 @@ fn is_canonical_public_entrypoint_name(name: &str) -> bool {
             .iter()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
 }
-/// GET /v1/gov/contracts/{contract_address} — read a retained governance contract lifecycle.
+/// GET /`v1/gov/contracts/{contract_address`} — read a retained governance contract lifecycle.
 ///
 /// Missing addresses return the closed missing shape. Found addresses return the complete retained
 /// lifecycle even while inactive; only active records perform independent artifact, manifest, ABI,
@@ -2019,6 +2030,10 @@ pub async fn handle_gov_contract_get(
 /// # Errors
 /// Returns `crate::Error::Query` when the contract target, hashes, or ABI version fails
 /// validation.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_gov_propose_deploy(
     state: Arc<iroha_core::state::State>,
     NoritoJson(body): NoritoJson<DeployContractProposalDraftRequestV1>,
@@ -2080,6 +2095,10 @@ pub async fn handle_gov_propose_deploy(
 ///
 /// # Errors
 /// Returns `crate::Error::Query` (HTTP 400) when the proposal fails static validation.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_gov_propose_sccp_route_governance(
     state: Arc<iroha_core::state::State>,
     NoritoJson(body): NoritoJson<SccpRouteGovernanceProposalDraftRequestV1>,
@@ -2107,6 +2126,10 @@ pub async fn handle_gov_propose_sccp_route_governance(
 /// Returns a duplicate summary with HTTP 409 semantics when the proposal id already exists in committed
 /// state; callers must submit the resulting signed transaction through the normal Torii `/v1/pipeline/transactions`
 /// route.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_ministry_agenda_proposal_draft(
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
@@ -2137,7 +2160,7 @@ pub async fn handle_ministry_agenda_proposal_draft(
     let instr = iroha_data_model::isi::ministry::SubmitAgendaProposal {
         proposal: body.proposal.clone(),
     };
-    let tx_instructions = vec![tx_instr_from_box(instr.clone().into())];
+    let tx_instructions = vec![tx_instr_from_box(&(instr.clone().into()))];
     let signable_transaction_b64 = build_signable_transaction_b64(
         state.network_id_ref(),
         &authority_id,
@@ -2153,7 +2176,11 @@ pub async fn handle_ministry_agenda_proposal_draft(
         },
     ))
 }
-/// GET /v1/ministry/agenda/proposals/{proposal_id} — fetch a submitted Ministry agenda proposal record.
+/// GET /`v1/ministry/agenda/proposals/{proposal_id`} — fetch a submitted Ministry agenda proposal record.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_ministry_agenda_proposal_get(
     state: Arc<iroha_core::state::State>,
     proposal_id: axum::extract::Path<String>,
@@ -2181,6 +2208,10 @@ pub async fn handle_ministry_agenda_proposal_get(
 /// # Errors
 /// Returns `crate::Error::Query` when the ballot fields fail validation (direction, authority,
 /// owner, amount parsing, or exact network mismatch).
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_gov_ballot_plain_with_policy(
     state: Arc<iroha_core::state::State>,
     authenticated_account: &iroha_data_model::account::AccountId,
@@ -2234,7 +2265,7 @@ pub async fn handle_gov_ballot_plain_with_policy(
             _ => 2,
         },
     };
-    let tx_instructions = vec![tx_instr_from_box(instr.into())];
+    let tx_instructions = vec![tx_instr_from_box(&(instr.into()))];
     Ok(JsonBody(BallotDraftResponse {
         drafted: true,
         tx_instructions,

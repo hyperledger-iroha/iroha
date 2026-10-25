@@ -157,17 +157,17 @@ pub async fn dispatch(
     let (peer, _authenticated_via, payload, _bytes, transport) = message.into_parts();
     match payload {
         iroha_core::NetworkMessage::ToriiProxyRequest(request) => {
-            let proxy_memory = match try_acquire_torii_proxy_receiver_memory(app) {
-                Ok(reservation) => reservation,
-                Err(_) => {
-                    reject_incoming_torii_proxy_request_capacity(
-                        network,
-                        &peer,
-                        request.request_id,
-                        request.deadline_unix_ms,
-                    );
-                    return;
-                }
+            let proxy_memory = if let Ok(reservation) = try_acquire_torii_proxy_receiver_memory(app)
+            {
+                reservation
+            } else {
+                reject_incoming_torii_proxy_request_capacity(
+                    network,
+                    &peer,
+                    request.request_id,
+                    request.deadline_unix_ms,
+                );
+                return;
             };
             let work = RequestWork {
                 peer,

@@ -10,7 +10,7 @@ pub(in crate::state) mod musubi_rejection;
 use musubi_rejection::{ProjectionCut, ProjectionRejection, ProjectionTable};
 
 #[path = "deserialize_world_musubi_source_read.rs"]
-pub(crate) mod musubi_source_read;
+pub mod musubi_source_read;
 
 #[path = "deserialize_world_musubi_live.rs"]
 pub(in crate::state) mod musubi_live;
@@ -6149,16 +6149,27 @@ fn timed_ovn_phase_matches_ballot_status_v1(
     use iroha_data_model::governance::types::BallotAttemptStatusV1 as BallotStatus;
     use iroha_data_model::governance::types::ParliamentBallotFailureKindV1 as FailureKind;
     match (status, failure_kind) {
-        (BallotStatus::Registration, None) => phase == PersistedTimedOvnPhaseV1::Registered,
         (BallotStatus::SurvivorFreeze, None) => {
             phase == PersistedTimedOvnPhaseV1::RegistrationClosed
         }
-        (BallotStatus::TimedCommitment, None) => phase == PersistedTimedOvnPhaseV1::SurvivorsFrozen,
+        (BallotStatus::TimedCommitment, None)
+        | (
+            BallotStatus::NoResult | BallotStatus::Superseded,
+            Some(FailureKind::CommitmentDeadlineExpired),
+        ) => phase == PersistedTimedOvnPhaseV1::SurvivorsFrozen,
         (BallotStatus::AwaitingRelease | BallotStatus::Opening, None) => {
             phase == PersistedTimedOvnPhaseV1::Sealed
         }
-        (BallotStatus::Finalized, None) => phase == PersistedTimedOvnPhaseV1::Released,
-        (
+        (BallotStatus::Finalized, None)
+        | (
+            BallotStatus::NoResult,
+            Some(
+                FailureKind::ConfirmationJuryCapacityUnavailable
+                | FailureKind::RandomnessRedrawBudgetExhausted,
+            ),
+        ) => phase == PersistedTimedOvnPhaseV1::Released,
+        (BallotStatus::Registration, None)
+        | (
             BallotStatus::NoResult | BallotStatus::Superseded,
             Some(FailureKind::RegistrationDeadlineExpired),
         ) => phase == PersistedTimedOvnPhaseV1::Registered,
@@ -6168,19 +6179,8 @@ fn timed_ovn_phase_matches_ballot_status_v1(
         ) => phase == PersistedTimedOvnPhaseV1::RegistrationClosed,
         (
             BallotStatus::NoResult | BallotStatus::Superseded,
-            Some(FailureKind::CommitmentDeadlineExpired),
-        ) => phase == PersistedTimedOvnPhaseV1::SurvivorsFrozen,
-        (
-            BallotStatus::NoResult | BallotStatus::Superseded,
             Some(FailureKind::ReleasePulseUnavailable | FailureKind::OpeningDeadlineExpired),
         ) => phase == PersistedTimedOvnPhaseV1::Sealed,
-        (
-            BallotStatus::NoResult,
-            Some(
-                FailureKind::ConfirmationJuryCapacityUnavailable
-                | FailureKind::RandomnessRedrawBudgetExhausted,
-            ),
-        ) => phase == PersistedTimedOvnPhaseV1::Released,
         _ => false,
     }
 }
@@ -7696,6 +7696,31 @@ mod validation_fee_registry_restore_tests {
         );
         let (world, _) =
             registry_world_with_policy_network(REGISTRY_CANDIDATE_SEED, foreign_policy_network);
+        // Supply initialized structural parameter cuts without granting this
+        // rejected restore fixture native execution authority.
+        {
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("fund original fixture parameter cell");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("fixture crypto policy parameter"),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture crypto policy");
+            parameters.commit();
+        }
+        // An unchanged parameter commit retains the initialized current cut as
+        // its predecessor, matching the fixture's post-genesis history height.
+        crate::state::parameter_cell_block_for_testing(&world)
+            .expect("fund original predecessor parameter cell")
+            .commit();
+        validate_restored_crypto_policy(
+            &world,
+            usize::try_from(RESTORED_HEIGHT).expect("fixture height fits usize"),
+        )
+        .expect("fixture current and predecessor parameter cuts retain crypto policy");
         let block_hashes: Vec<HashOf<BlockHeader>> = (1..=RESTORED_HEIGHT)
             .map(|height| HashOf::from_untyped_unchecked(Hash::new(height.to_le_bytes())))
             .collect();
@@ -8120,7 +8145,7 @@ fn take_native_amx_participant(
         source
             .map(|source| crate::sumeragi::amx::RetainedNativeAmx::admit(source, budget))
             .transpose()
-            .map(|value| value.unwrap_or_default())
+            .map(std::option::Option::unwrap_or_default)
             .map_err(|error| match error {
                 local @ (crate::sumeragi::amx::NativeAmxAdmissionError::Admission(_)
                 | crate::sumeragi::amx::NativeAmxAdmissionError::Allocator { .. }
@@ -10150,7 +10175,8 @@ fn build_state(
         let privacy = LanePrivacyRegistry::try_from_manifest_registry(
             &projection.manifests,
             &state.ivm_execution_budget(),
-        ).map_err(MergeLedgerCommitError::ExecutionDeferred)?;
+        )
+        .map_err(MergeLedgerCommitError::ExecutionDeferred)?;
         *state.lane_manifests.get_mut() = projection.manifests;
         *state.lane_privacy_registry.get_mut() = privacy;
     }
@@ -10394,9 +10420,7 @@ fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::
 /// Decode and validate the World component without granting authenticated State
 /// history. This test-only helper returns a World, never an installed native tip.
 #[cfg(test)]
-pub(crate) fn decode_world_component_for_testing(
-    world: &World,
-) -> Result<World, StateRestoreError> {
+pub fn decode_world_component_for_testing(world: &World) -> Result<World, StateRestoreError> {
     let encoded = json::to_json(world)?;
     let ivm = IVM::new(0);
     parse_world(
@@ -11329,9 +11353,9 @@ mod decode_tests {
             .musubi_archive_availability
             .view()
             .get(&archive_id)
-            .cloned()
+            .copied()
             .expect("seeded availability row");
-        let mut stale = original.clone();
+        let mut stale = original;
         stale.active_locations = 1;
         stale
             .validate()
@@ -11970,7 +11994,7 @@ mod decode_tests {
             aborts
                 .iter()
                 .next()
-                .map(|(_, abort)| abort.clone())
+                .map(|(_, abort)| *abort)
                 .expect("finalized fixture abort")
         };
         let encoded = json::to_json(&world).expect("serialize finalized settlement World");
@@ -12944,7 +12968,7 @@ mod decode_tests {
             index_revision: 1,
         };
         let mut checkpoints = Storage::default();
-        checkpoints.insert(revision, checkpoint.clone());
+        checkpoints.insert(revision, checkpoint);
         let mut map = json::native::Map::new();
         map.insert(
             "musubi_resolver_index_checkpoints".to_owned(),

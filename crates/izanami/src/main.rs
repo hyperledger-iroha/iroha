@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
                 persistence::store_args(&updated_args)?;
                 config::init_tracing_with_filter(&config.log_filter);
                 persistence::store_config(&config)?;
-                chaos::IzanamiRunner::new(config).await?.run().await
+                Box::pin(chaos::IzanamiRunner::new(config).await?.run()).await
             }
             None => Ok(()),
         }
@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
         let config = config::ChaosConfig::try_from(args.clone())?;
         persistence::store_config(&config)?;
         config::init_tracing_with_filter(&config.log_filter);
-        chaos::IzanamiRunner::new(config).await?.run().await
+        Box::pin(chaos::IzanamiRunner::new(config).await?.run()).await
     }
 }
 fn merge_with_overrides(

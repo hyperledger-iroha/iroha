@@ -149,10 +149,10 @@ impl Shared {
                 .peers_gossiper
                 .gossip_trust(RetainedGossip::new((*data, peer), retention)),
             TimePing(ping) => {
-                iroha_core::time::handle_message(peer, TimePing(ping), &self.network);
+                iroha_core::time::handle_message(&(peer), TimePing(ping), &self.network);
             }
             TimePong(pong) => {
-                iroha_core::time::handle_message(peer, TimePong(pong), &self.network);
+                iroha_core::time::handle_message(&(peer), TimePong(pong), &self.network);
             }
             // The consensus driver's own route carries Sumeragi frames.
             Sumeragi(_) | ToriiProxyRequest(_) | ToriiProxyResponse(_) | Health | Connect(_) => {} // Dedicated subscribers (Torii, health) handle these.

@@ -11,7 +11,7 @@ const QUOTA_USAGE_KEY_PREFIX_V1: &str = "da_ingest_quota_v1/authority/";
 const QUOTA_USAGE_VERSION_V1: u8 = 1;
 const MAX_QUOTA_USAGE_BYTES: usize = 128;
 /// Transactional smart-contract-state writes prepared for one accepted block.
-pub(crate) type DaIngestQuotaWrites = BTreeMap<StatePath, Vec<u8>>;
+pub type DaIngestQuotaWrites = BTreeMap<StatePath, Vec<u8>>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::da::quota::DaIngestQuotaUsageV1")]
 struct DaIngestQuotaUsageV1 {
@@ -180,7 +180,7 @@ fn prepare_with_lookup(
 /// The returned writes must be committed through the same `WorldBlock` as the
 /// pin-intent indexes. Merely checking this function without applying its
 /// result would allow later blocks to reuse the same quota window.
-pub(crate) fn prepare_ingest_quota_writes(
+pub fn prepare_ingest_quota_writes(
     state: &impl StorageReadOnly<StatePath, Vec<u8>>,
     bundle: &DaPinIntentBundle,
     block_height: u64,

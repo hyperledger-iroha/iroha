@@ -93,7 +93,9 @@ impl<'a> Slot<'a> {
                 unreachable!()
             };
             let wait = self.target.history_release_wait();
-            let writer = match acquired.try_map_preserving_release(|a| a.validate()) {
+            let writer = match acquired
+                .try_map_preserving_release(concread::bptree::BptreeMapOwnedAcquisition::validate)
+            {
                 Ok(writer) => writer,
                 Err((acquired, error)) => {
                     self.phase = Some(Phase::Acquired(acquired));
@@ -101,7 +103,7 @@ impl<'a> Slot<'a> {
                 }
             };
             self.phase = Some(Phase::Preparing(
-                writer.map_preserving_release(|w| w.commit_slot()),
+                writer.map_preserving_release(concread::bptree::BptreeMapWriteTxn::commit_slot),
             ));
         }
         let wait = self.target.blocks.observe_reader_release();
@@ -132,7 +134,8 @@ impl<'a> Slot<'a> {
         self.prepared = false;
         self.phase = match self.phase.take() {
             Some(Phase::Acquired(acquired)) => {
-                let (work, writer) = acquired.release_deferred(|a| a.abort());
+                let (work, writer) =
+                    acquired.release_deferred(concread::bptree::BptreeMapOwnedAcquisition::abort);
                 self.writer_release = Some(writer);
                 Some(Phase::Original(work))
             }
@@ -154,7 +157,8 @@ impl<'a> Slot<'a> {
         let work = match self.phase.take().expect("original tree custody") {
             Phase::Original(work) => work,
             Phase::Acquired(acquired) => {
-                let (work, writer) = acquired.release_deferred(|a| a.abort());
+                let (work, writer) =
+                    acquired.release_deferred(concread::bptree::BptreeMapOwnedAcquisition::abort);
                 self.writer_release = Some(writer);
                 work
             }

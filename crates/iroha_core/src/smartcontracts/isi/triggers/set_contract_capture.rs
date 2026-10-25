@@ -10,7 +10,7 @@ use mv::storage::{CommittedStorageView, FrozenStorageImages};
 
 /// All five native original read owners, retained through check, encoding and final probes.
 /// Source readers drop before the fixed counter's original-pool refund notification.
-pub(crate) struct CheckedContracts<'set> {
+pub struct CheckedContracts<'set> {
     set: &'set Set,
     budget: &'set AllocationBudget,
     #[cfg(test)]
@@ -24,10 +24,14 @@ pub(crate) struct CheckedContracts<'set> {
 }
 #[path = "set_contract_capture/actions.rs"]
 mod actions;
-pub(crate) use actions::CheckedActions;
+pub use actions::CheckedActions;
 
 impl<'set> CheckedContracts<'set> {
     /// Retain the same five actual original readers before any semantic strategy runs.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn retain(
         set: &'set Set,
         budget: &'set AllocationBudget,
@@ -46,6 +50,10 @@ impl<'set> CheckedContracts<'set> {
         })
     }
     /// Retain and validate both actual published images before encoding any row.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(crate) fn capture(
         set: &'set Set,
         max_work: u64,
@@ -76,6 +84,10 @@ impl<'set> CheckedContracts<'set> {
         Ok(checked)
     }
     /// Materialize all five native probes before propagating any first refusal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(crate) fn matches_current(&self) -> Result<bool, TriggerContractError> {
         let data = self.data.try_matches_current(&self.set.data_triggers);
         #[cfg(test)]
@@ -122,6 +134,10 @@ impl<'set> CheckedContracts<'set> {
         Ok(data && pipeline && time && by_call && contracts)
     }
     /// Encode the exact checked original current rows while the counter and native owners live.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(crate) fn encode(
         &mut self,
         limits: LeafLimits,
@@ -214,6 +230,10 @@ impl<'frozen> FrozenContracts<'frozen> {
             strategy: None,
         })
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn encode(
         &mut self,
         limits: LeafLimits,
@@ -246,6 +266,10 @@ impl<'frozen> FrozenContracts<'frozen> {
 }
 impl SetBlock<'_> {
     /// Capture solely the actual ten-owner frozen context and five-source contract relation.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(crate) fn capture_frozen_contracts_authority_table(
         &self,
         original: &Set,

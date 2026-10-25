@@ -31,10 +31,10 @@ impl<const N: usize, const ROT: u32, const FUSED: bool> Arithmetic<N, ROT, FUSED
     fn expected(&self) -> Vec<Scalar> {
         let [a, b, c] = **self.values;
         let value = if N == 8 {
-            u64::from(
-                ((a as u32).wrapping_add(b as u32).wrapping_add(c as u32) ^ a as u32)
-                    .rotate_right(ROT),
-            )
+            let [a, b, c] = [a, b, c].map(|value| {
+                u32::try_from(value & u64::from(u32::MAX)).expect("masked 32-bit word")
+            });
+            u64::from((a.wrapping_add(b).wrapping_add(c) ^ a).rotate_right(ROT))
         } else {
             (a.wrapping_add(b).wrapping_add(c) ^ a).rotate_right(ROT)
         };
@@ -94,7 +94,7 @@ impl<const N: usize, const ROT: u32, const FUSED: bool> Circuit<Scalar>
                     let xor = words.xor(&sum, &a)?;
                     words.rotate_right(&xor, ROT)?
                 };
-                let expected_rows = 5 * N + usize::from(!FUSED && ROT % 4 != 0) * N;
+                let expected_rows = 5 * N + usize::from(!FUSED && !ROT.is_multiple_of(4)) * N;
                 assert_eq!(words.offset, expected_rows, "fixed layout row count");
                 Ok(output)
             },
@@ -108,7 +108,7 @@ impl<const N: usize, const ROT: u32, const FUSED: bool> Circuit<Scalar>
 
 fn assert_valid<const N: usize, const ROT: u32>(values: [u64; 3]) {
     let circuit = Arithmetic::<N, ROT>::new(values);
-    check(12, &circuit, vec![circuit.expected()])
+    check(12, &circuit, &[circuit.expected()])
         .expect("bounded layout")
         .into_result()
         .expect("all constraints hold");
@@ -143,7 +143,7 @@ fn compact_words_match_native_overflow_and_all_hash_rotations() {
 
 fn assert_fused<const N: usize, const ROT: u32>(values: [u64; 3]) {
     let circuit = Arithmetic::<N, ROT, true>::new(values);
-    check(12, &circuit, vec![circuit.expected()])
+    check(12, &circuit, &[circuit.expected()])
         .expect("layout")
         .into_result()
         .expect("all constraints hold");
@@ -175,7 +175,7 @@ fn fused_xor_rotation_matches_every_hash_rotation() {
             value: Scalar::from(value),
         }];
         assert!(
-            check(12, &circuit, vec![original.expected()])
+            check(12, &circuit, &[original.expected()])
                 .expect("layout")
                 .into_result()
                 .is_err()
@@ -211,13 +211,13 @@ fn compact_words_reject_direct_assignment_mutations() {
             column,
             value: Scalar::from(value),
         }];
-        let prover = check(12, &circuit, vec![original.expected()]).expect("layout");
+        let prover = check(12, &circuit, &[original.expected()]).expect("layout");
         assert!(prover.into_result().is_err(), "mutation survived: {label}");
     }
     let mut circuit = original.clone();
     circuit.forge_source = true;
     assert!(
-        check(12, &circuit, vec![original.expected()])
+        check(12, &circuit, &[original.expected()])
             .expect("layout")
             .into_result()
             .is_err()
@@ -225,7 +225,7 @@ fn compact_words_reject_direct_assignment_mutations() {
     let mut wrong_public = original.expected();
     wrong_public[0] += Scalar::ONE;
     assert!(
-        check(12, &original, vec![wrong_public])
+        check(12, &original, &[wrong_public])
             .expect("layout")
             .into_result()
             .is_err()
@@ -235,7 +235,7 @@ fn compact_words_reject_direct_assignment_mutations() {
 #[test]
 fn compact_words_reject_32_bit_input_overflow_before_assignment() {
     let circuit = Arithmetic::<8, 7>::new([u64::from(u32::MAX) + 1, 0, 0]);
-    assert!(check(12, &circuit, vec![vec![Scalar::ZERO; 8]]).is_err());
+    assert!(check(12, &circuit, &[vec![Scalar::ZERO; 8]]).is_err());
 }
 
 #[derive(Clone)]
@@ -289,7 +289,7 @@ fn compact_rotation_rejects_fractional_split_without_downstream_checks() {
         faults: Vec::new(),
         constant: false,
     };
-    check(12, &valid, vec![])
+    check(12, &valid, &[])
         .expect("layout")
         .into_result()
         .expect("all constraints hold");
@@ -328,7 +328,7 @@ fn compact_rotation_rejects_fractional_split_without_downstream_checks() {
         ],
         constant: false,
     };
-    let failures = check(12, &circuit, vec![])
+    let failures = check(12, &circuit, &[])
         .expect("layout")
         .into_result()
         .expect_err("fractional split cannot become a word token");
@@ -344,7 +344,7 @@ fn compact_constant_words_are_bound_to_their_cells() {
         faults: Vec::new(),
         constant: true,
     };
-    check(12, &circuit, vec![])
+    check(12, &circuit, &[])
         .expect("layout")
         .into_result()
         .expect("all constraints hold");
@@ -357,7 +357,7 @@ fn compact_constant_words_are_bound_to_their_cells() {
         constant: true,
     };
     assert!(
-        check(12, &circuit, vec![])
+        check(12, &circuit, &[])
             .expect("layout")
             .into_result()
             .is_err()
@@ -372,7 +372,7 @@ fn compact_owned_words_clear_on_success_error_and_unwind() {
         circuit.fail_after_load = fail;
         circuit.panic_after_load = panic;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            check(12, &circuit, vec![circuit.expected()])
+            check(12, &circuit, &[circuit.expected()])
         }));
         if panic {
             assert!(result.is_err());
@@ -623,7 +623,7 @@ impl Circuit<Scalar> for Compression {
 fn blake3_compression_matches_official_single_block_vectors() {
     for (length, expected) in COMPRESSION_KATS {
         let circuit = Compression::vector(length);
-        check(12, &circuit, vec![Compression::public(&expected)])
+        check(12, &circuit, &[Compression::public(&expected)])
             .expect("compression layout")
             .into_result()
             .expect("all constraints hold");
@@ -642,7 +642,7 @@ fn blake3_compression_rejects_changed_inputs_and_internal_field_assignments() {
             faults: Vec::new(),
         };
         assert!(
-            check(12, &circuit, vec![public.clone()])
+            check(12, &circuit, std::slice::from_ref(&public))
                 .expect("layout")
                 .into_result()
                 .is_err(),
@@ -660,7 +660,7 @@ fn blake3_compression_rejects_changed_inputs_and_internal_field_assignments() {
         let mut circuit = original.clone();
         circuit.faults = vec![Fault { row, column, value }];
         assert!(
-            check(12, &circuit, vec![public.clone()])
+            check(12, &circuit, std::slice::from_ref(&public))
                 .expect("layout")
                 .into_result()
                 .is_err(),

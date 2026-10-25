@@ -69,7 +69,7 @@ pub(super) enum SessionGraphError {
     PlanChanged,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub(in crate::beacon) struct Demand {
     bytes: usize,
     charges: usize,
@@ -141,10 +141,10 @@ pub(in crate::beacon) struct Construction<'a, 'r> {
 }
 impl Drop for Construction<'_, '_> {
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            if let Some(charges) = self.charges.take() {
-                std::mem::forget(charges);
-            }
+        if std::thread::panicking()
+            && let Some(charges) = self.charges.take()
+        {
+            std::mem::forget(charges);
         }
     }
 }

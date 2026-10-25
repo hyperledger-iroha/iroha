@@ -144,7 +144,6 @@ pub(super) fn stake_elected_validator_accounts(
                 &record.self_stake,
                 minimum_stake,
             )
-            .unwrap_or(false)
             || !world.peers().iter().any(|peer| peer == &record.peer_id)
             || !peer_has_live_consensus_key_for_lane(world, &record.peer_id, block_height, lane_id)
         {
@@ -189,7 +188,6 @@ pub(super) fn stake_elected_peer_ids(
                 &record.self_stake,
                 minimum_stake,
             )
-            .unwrap_or(false)
             || !world.peers().iter().any(|peer| peer == &record.peer_id)
             || !peer_has_live_consensus_key_for_lane(world, &record.peer_id, block_height, lane_id)
         {

@@ -330,7 +330,7 @@ mod ordinary_query_memory_tests {
                 .len();
             assert!(
                 crate::utils::respond_with_format_bounded(
-                    response.clone(),
+                    &(response),
                     ResponseFormat::Json,
                     exact,
                 )
@@ -338,7 +338,7 @@ mod ordinary_query_memory_tests {
             );
             assert!(matches!(
                 crate::utils::respond_with_format_bounded(
-                    response,
+                    &(response),
                     ResponseFormat::Json,
                     exact - 1,
                 ),
@@ -524,7 +524,7 @@ mod ordinary_query_memory_tests {
             signed_query_b64: "A"
                 .repeat(canonical_base64_max_len(envelope.route_body_bytes).saturating_add(1)),
         };
-        let response = decode_bounded_proof_query(dto, envelope)
+        let response = decode_bounded_proof_query(&(dto), envelope)
             .err()
             .expect("oversized proof input must fail before versioned decode");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -634,14 +634,12 @@ mod ordinary_query_memory_tests {
         let exact = norito::core::to_bytes(&value)
             .expect("encode fixture")
             .len();
-        assert!(crate::utils::respond_with_format_bounded(
-            value.clone(),
-            ResponseFormat::Norito,
-            exact,
-        )
-        .is_ok());
+        assert!(
+            crate::utils::respond_with_format_bounded(&(value), ResponseFormat::Norito, exact,)
+                .is_ok()
+        );
         assert!(matches!(
-            crate::utils::respond_with_format_bounded(value, ResponseFormat::Norito, exact - 1,),
+            crate::utils::respond_with_format_bounded(&(value), ResponseFormat::Norito, exact - 1,),
             Err(crate::utils::BoundedResponseEncodeError::BodyTooLarge { .. })
         ));
     }

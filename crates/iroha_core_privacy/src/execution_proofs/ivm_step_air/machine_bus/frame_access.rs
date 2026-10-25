@@ -69,11 +69,13 @@ impl Schedule {
 }
 
 /// Original committed request fields, derived by the complete instruction bank.
+#[derive(Clone, Copy)]
 pub(super) struct Request<'a> {
     pub(super) selected: F,
     pub(super) address: &'a [F; 4],
 }
 /// Original packets; all reads are joined into the same ordered machine history.
+#[derive(Clone, Copy)]
 pub(super) struct Ports<'a> {
     pub(super) active: &'a [F; packet::WIDTH],
     pub(super) descriptors: [&'a [F; packet::WIDTH]; 10],
@@ -209,8 +211,8 @@ pub(super) fn append_residues(
         }
         *result = bank[67];
     }
-    for flag in STACK..=RANGE_ERROR {
-        out.push(bit(row[flag]));
+    for &flag in &row[STACK..=RANGE_ERROR] {
+        out.push(bit(flag));
     }
     for (target, expected) in [
         (STACK, F::ONE.sub(less[0]).mul(F::ONE.sub(less[1]))),

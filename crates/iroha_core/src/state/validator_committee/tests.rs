@@ -39,21 +39,21 @@ use iroha_data_model::{
 use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 
-pub(crate) struct Fixture {
+pub struct Fixture {
     pub(crate) world: World,
     pub(crate) incumbent: ValidatorGenerationV1,
     pub(crate) authorization: ValidatorEpochAuthorizationV1,
     pub(crate) transition: ValidatorCommitteeTransitionV1,
 }
 
-pub(crate) fn fixture(size: usize) -> Fixture {
+pub fn fixture(size: usize) -> Fixture {
     fixture_with_selection_anchor(
         size,
         HashOf::from_untyped_unchecked(Hash::new(b"height-nine")),
     )
 }
 
-pub(crate) fn fixture_with_selection_anchor(
+pub fn fixture_with_selection_anchor(
     size: usize,
     selection_anchor: HashOf<iroha_data_model::block::BlockHeader>,
 ) -> Fixture {
@@ -64,7 +64,7 @@ pub(crate) fn fixture_with_selection_anchor(
 }
 
 /// Keep native proof fixtures bound to their actual signed genesis and fresh certified pulse.
-pub(crate) fn fixture_with_native_selection(
+pub fn fixture_with_native_selection(
     size: usize,
     network: iroha_data_model::NetworkId,
     selection_anchor: HashOf<iroha_data_model::block::BlockHeader>,

@@ -60,6 +60,7 @@ struct ValidationFeePayoutTerms {
     xor_scale: u32,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct OpaqueDeferredRuntimeOrigin<'a> {
     runtime_context: &'a crate::executor::ContractRuntimeExecutionContext,
     code_bytes: &'a [u8],
@@ -548,7 +549,7 @@ pub(crate) fn enforce_ivm_proved_completed_axt_admission(
     }
     let error = reject_ivm_proved_completed_axt_effects(completed_envelopes)
         .expect_err("non-zero completed AXT count must fail closed under active policy");
-    let rejection = admission_rejection(error);
+    let rejection = admission_rejection(&(error));
     match rejection {
         TransactionRejectionReason::Validation(fail) => Err(fail),
         _ => unreachable!("validation-fee admission rejection must be a validation failure"),
@@ -637,7 +638,10 @@ fn fee_attempt_rejection(
     state: &mut StateTransaction<'_, '_>,
     error: ExecutionAttemptError<ValidationFeeAdmissionError>,
 ) -> TransactionRejectionReason {
-    transaction_attempt_rejection(state, error.map_rejection(admission_rejection))
+    transaction_attempt_rejection(
+        state,
+        error.map_rejection(|error| admission_rejection(&error)),
+    )
 }
 
 pub(crate) fn active_policy(
@@ -696,7 +700,7 @@ fn validated_policy_registry(
 ) -> Result<Option<ValidationFeePolicyRegistryV1>, ExecutionAttemptError<TransactionRejectionReason>>
 {
     validated_policy_registry_in_world(&state_transaction.world)
-        .map_err(|error| error.map_rejection(admission_rejection))
+        .map_err(|error| error.map_rejection(|error| admission_rejection(&error)))
 }
 
 fn validated_policy_registry_in_world<W: WorldReadOnly + ?Sized>(
@@ -812,15 +816,15 @@ fn active_policy_from_validated_registry(
     };
     let policy = entry.policy.clone();
     if let Some(reason) = policy.policy_invariant_error() {
-        return Err(
-            (admission_rejection(ValidationFeeAdmissionError::InvalidPolicyInvariant(reason)))
-                .into(),
-        );
+        return Err((admission_rejection(
+            &(ValidationFeeAdmissionError::InvalidPolicyInvariant(reason)),
+        ))
+        .into());
     }
     validate_policy_network_id(&policy, &state_transaction.network_id)
-        .map_err(admission_rejection)?;
+        .map_err(|error| admission_rejection(&error))?;
     validate_treasury_payout_contract_subject(&policy, state_transaction)
-        .map_err(|error| error.map_rejection(admission_rejection))?;
+        .map_err(|error| error.map_rejection(|error| admission_rejection(&error)))?;
     Ok(Some(policy))
 }
 
@@ -1279,7 +1283,7 @@ fn validate_policy_network_id(
 
 /// Wrap a retained policy rejection only at the transaction admission boundary.
 pub(crate) fn admission_rejection(
-    error: ValidationFeeAdmissionError,
+    error: &ValidationFeeAdmissionError,
 ) -> TransactionRejectionReason {
     TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
         "validation-fee admission rejected transaction: {error}"
@@ -1426,9 +1430,9 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
     let scale = validation_fee_payout_xor_scale(stx, binding)
         .map_err(|error| fee_attempt_rejection(stx, error))?;
     let rewards_error = |error: iroha_data_model::isi::error::InstructionExecutionError| {
-        admission_rejection(ValidationFeeAdmissionError::InvalidPolicyRegistry(
-            error.to_string(),
-        ))
+        admission_rejection(
+            &(ValidationFeeAdmissionError::InvalidPolicyRegistry(error.to_string())),
+        )
     };
     let Some(offer) =
         crate::validation_fee_rewards::conversion_offer(stx, binding).map_err(rewards_error)?
@@ -1440,19 +1444,20 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
             u128::from(offer.sbd_minor),
             u32::from(lifecycle.ds_scale),
         )
-        .map_err(admission_rejection)?,
+        .map_err(|error| admission_rejection(&error))?,
         min_xor_out: quantity_from_minor_units_u128(offer.min_xor_minor, scale)
-            .map_err(admission_rejection)?,
+            .map_err(|error| admission_rejection(&error))?,
         xor_scale: scale,
     };
     if !validate_treasury_payout_effect_plan(groups, ordered, binding, &terms)
-        .map_err(admission_rejection)?
+        .map_err(|error| admission_rejection(&error))?
     {
         return Ok(OpaqueDeferredValidationOutcome::NoOp);
     }
-    let output = direct_conversion_transfer(&ordered[1].1).map_err(admission_rejection)?;
-    let output_minor =
-        quantity_to_minor_units_u128(&output.object, scale).map_err(admission_rejection)?;
+    let output =
+        direct_conversion_transfer(&ordered[1].1).map_err(|error| admission_rejection(&error))?;
+    let output_minor = quantity_to_minor_units_u128(&output.object, scale)
+        .map_err(|error| admission_rejection(&error))?;
     crate::validation_fee_rewards::reserve_conversion(stx, binding, &offer, output_minor)
         .map_err(rewards_error)?;
     stx.world.retail_fee_exempt_payments.push((

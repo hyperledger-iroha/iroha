@@ -629,18 +629,18 @@ impl DaShardCursorJournal {
                     lane_id: record.lane_id,
                 })?;
         let key = (shard_id, record.lane_id);
-        if let Some(current) = self.cursors.get(&key) {
-            if (record.epoch, record.sequence) <= (current.epoch, current.sequence) {
-                return Err(ShardCursorJournalError::Regression {
-                    lane_id: record.lane_id,
-                    shard_id,
-                    observed_epoch: record.epoch,
-                    observed_sequence: record.sequence,
-                    current_epoch: current.epoch,
-                    current_sequence: current.sequence,
-                    block_height,
-                });
-            }
+        if let Some(current) = self.cursors.get(&key)
+            && (record.epoch, record.sequence) <= (current.epoch, current.sequence)
+        {
+            return Err(ShardCursorJournalError::Regression {
+                lane_id: record.lane_id,
+                shard_id,
+                observed_epoch: record.epoch,
+                observed_sequence: record.sequence,
+                current_epoch: current.epoch,
+                current_sequence: current.sequence,
+                block_height,
+            });
         }
         let entry = LaneShardCursor {
             shard_id,
@@ -762,14 +762,14 @@ impl DaShardCursorJournal {
                 });
             }
         }
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                Self::validate_journal_parent_for_write(&self.path)?;
-                sync_dir(parent).map_err(|source| ShardCursorJournalError::Write {
-                    path: self.path.clone(),
-                    source,
-                })?;
-            }
+        if let Some(parent) = self.path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            Self::validate_journal_parent_for_write(&self.path)?;
+            sync_dir(parent).map_err(|source| ShardCursorJournalError::Write {
+                path: self.path.clone(),
+                source,
+            })?;
         }
         Ok(())
     }
@@ -1201,13 +1201,13 @@ impl DaShardCursorJournal {
                 });
             }
         }
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                sync_dir(parent).map_err(|source| ShardCursorJournalError::Write {
-                    path: path.to_path_buf(),
-                    source,
-                })?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            sync_dir(parent).map_err(|source| ShardCursorJournalError::Write {
+                path: path.to_path_buf(),
+                source,
+            })?;
         }
         Ok(())
     }

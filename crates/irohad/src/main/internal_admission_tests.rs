@@ -56,10 +56,18 @@ fn publish(world: &World, algorithm: Algorithm, max_bytes: u64) {
 fn internal_admission_requires_an_original_committed_crypto_policy() {
     let world = World::new();
     let view = world.view();
-    let error = accept_internal_transaction(transaction(), &network(), &view).unwrap_err();
+    let error = accept_internal_transaction(
+        transaction(),
+        &network(),
+        view.transaction_admission_parameters(),
+    )
+    .unwrap_err();
     assert_eq!(
-        error.to_string(),
-        "ordinary crypto policy has not been initialized by authenticated genesis"
+        error
+            .downcast_ref::<iroha_core::execution_attempt::ExecutionDeferred>()
+            .expect("missing policy is an unfinished attempt")
+            .reason(),
+        ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable
     );
     assert!(
         view.transaction_admission_parameters()
@@ -74,12 +82,22 @@ fn internal_admission_keeps_policy_and_limits_from_the_same_retained_view() {
     publish(&world, Algorithm::Ed25519, 131_072);
     let original = world.view();
     let signed = transaction();
-    accept_internal_transaction(signed.clone(), &network(), &original).unwrap();
+    accept_internal_transaction(
+        signed.clone(),
+        &network(),
+        original.transaction_admission_parameters(),
+    )
+    .unwrap();
 
     // Keep signing permitted so this observation reaches its committed byte limit.
     publish(&world, Algorithm::Ed25519, 1);
     let bounded = world.view();
-    let error = accept_internal_transaction(signed.clone(), &network(), &bounded).unwrap_err();
+    let error = accept_internal_transaction(
+        signed.clone(),
+        &network(),
+        bounded.transaction_admission_parameters(),
+    )
+    .unwrap_err();
     let Some(AcceptTransactionFail::TransactionLimit(failure)) =
         error.downcast_ref::<AcceptTransactionFail>()
     else {
@@ -90,11 +108,21 @@ fn internal_admission_keeps_policy_and_limits_from_the_same_retained_view() {
             && failure.reason.contains("exceeds limit 1 bytes"),
         "expected the committed one-byte limit, got {failure:?}"
     );
-    accept_internal_transaction(signed.clone(), &network(), &original).unwrap();
+    accept_internal_transaction(
+        signed.clone(),
+        &network(),
+        original.transaction_admission_parameters(),
+    )
+    .unwrap();
 
     publish(&world, Algorithm::Secp256k1, 262_144);
     let restricted = world.view();
-    let error = accept_internal_transaction(signed.clone(), &network(), &restricted).unwrap_err();
+    let error = accept_internal_transaction(
+        signed.clone(),
+        &network(),
+        restricted.transaction_admission_parameters(),
+    )
+    .unwrap_err();
     let Some(AcceptTransactionFail::SignatureVerification(failure)) =
         error.downcast_ref::<AcceptTransactionFail>()
     else {
@@ -104,7 +132,12 @@ fn internal_admission_keeps_policy_and_limits_from_the_same_retained_view() {
         failure.code(),
         SignatureRejectionCode::AlgorithmNotPermitted
     );
-    accept_internal_transaction(signed, &network(), &original).unwrap();
+    accept_internal_transaction(
+        signed,
+        &network(),
+        original.transaction_admission_parameters(),
+    )
+    .unwrap();
     assert_eq!(
         bounded
             .transaction_admission_parameters()

@@ -19,10 +19,10 @@ struct Observation {
 
 /// Shared fixed-size report: no key, proof, transcript or mutable signing API escapes.
 #[derive(Clone, Debug)]
-pub(crate) struct NativeBeaconReadiness(ChargedShared<Mutex<Option<Observation>>>);
+pub struct NativeBeaconReadiness(ChargedShared<Mutex<Option<Observation>>>);
 /// The original failed readiness-control admission, without a fabricated release source.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum NativeBeaconReadinessError {
+pub enum NativeBeaconReadinessError {
     /// Exact demand against the original State execution pool.
     #[error(transparent)]
     Admission(#[from] AllocationRefusal),

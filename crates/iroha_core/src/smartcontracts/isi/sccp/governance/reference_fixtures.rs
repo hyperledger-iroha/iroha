@@ -1,7 +1,6 @@
-//! Independent Rust producer of governance_v1.json using canonical codecs and Core heads.
+//! Independent Rust producer of `governance_v1.json` using canonical codecs and Core heads.
 
-#[path = "../../../../../../iroha_sccp/tests/reference_support/python_json.rs"]
-mod python_json;
+use crate::smartcontracts::isi::sccp::reference_fixture_support::python_json;
 
 use super::*;
 use crate::smartcontracts::isi::sccp::test_support::{blank_state, header};
@@ -91,9 +90,9 @@ fn row(
 ) -> Value {
     let network_id =
         NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([0x11; 32])));
-    let state = blank_state();
+    let world_state = blank_state();
     let header = header(1);
-    let mut block = state.block(header);
+    let mut block = world_state.block(header);
     let mut tx = block.transaction();
     for (subject, revision) in revisions {
         store::set_governance_revision(&mut tx, *subject, *revision);
@@ -123,9 +122,7 @@ fn row(
         Err(SccpGovernanceStaticError::ExceedsJsonSafeInteger { .. }) => "ExceedsJsonSafeInteger",
         other => panic!("unexpected static result {other:?}"),
     };
-    let attempt_outcome = if static_outcome != "Accepted" {
-        "NotAttempted"
-    } else {
+    let attempt_outcome = if static_outcome == "Accepted" {
         match preflight_rejection_in(&*tx.world, &proposal) {
             None => {
                 preflight_attempt(&tx, &proposal).expect("attempt");
@@ -137,6 +134,8 @@ fn row(
             }
             other => panic!("unexpected preflight result {other:?}"),
         }
+    } else {
+        "NotAttempted"
     };
     let kind = ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
         proposal: Box::new(proposal.clone()),

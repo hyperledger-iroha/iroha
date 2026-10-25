@@ -289,7 +289,10 @@ fn object_reads_accept_one_verified_copy_and_fail_closed() {
     archive.write_object(b"other node", 64).expect("other");
     let other = record_names(&device, &slot)
         .into_iter()
-        .find(|name| !other_before.contains(name) && !name.ends_with(".r"))
+        .find(|name| {
+            !other_before.contains(name)
+                && std::path::Path::new(name).extension() != Some(std::ffi::OsStr::new("r"))
+        })
         .expect("other primary");
     let foreign = device.fs.visible_file(&dir, &other).expect("other record");
     device.fs.place_unsynced(&dir, &names[0], &foreign);
@@ -385,7 +388,7 @@ fn archive_phase_objects_are_bounded() {
     phase
         .keep(
             [[0xff; 32]; 3],
-            &[0; KAGEMUSHA_WALLET_ARCHIVE_PHASE_OBJECT_MAX_V1 + 1],
+            &vec![0; KAGEMUSHA_WALLET_ARCHIVE_PHASE_OBJECT_MAX_V1 + 1],
         )
         .expect("oversized objects are ignored");
     assert!(

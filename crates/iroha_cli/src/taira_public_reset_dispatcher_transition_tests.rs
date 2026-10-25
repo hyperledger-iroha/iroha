@@ -6,7 +6,7 @@ use std::cell::Cell;
 mod copy;
 
 struct Fixture {
-    _temp: tempfile::TempDir,
+    temp: tempfile::TempDir,
     plan: Plan,
     bytes: Vec<u8>,
     root: PathBuf,
@@ -93,7 +93,7 @@ fn fixture() -> Fixture {
         host_identity_sha256: "b".repeat(64),
         hosts,
         trusted_public_key: evidence.clone(),
-        candidate: Candidate {
+        candidate: PreparedCandidate {
             commit: "c".repeat(40),
             tree: "d".repeat(40),
             signer_fingerprint: "E".repeat(40),
@@ -132,7 +132,7 @@ fn fixture() -> Fixture {
         .map(|i| format!("candidate guard {i}").into_bytes())
         .collect();
     Fixture {
-        _temp: temp,
+        temp,
         plan,
         bytes,
         root,
@@ -641,7 +641,7 @@ fn dispatcher_transition_accepts_only_complete_occupied_rollback() {
                     .unwrap()
                     .insert("status".into(), Value::String("rolling_back".into()));
             }
-        };
+        }
         assert!(
             admission::validate_rolled_back_records(&f.plan, &lease, &progress, &terminal).is_err(),
             "case {case}"
@@ -747,7 +747,7 @@ fn dispatcher_transition_staging_publication_crashes_resume_only_owned_prefixes(
 #[test]
 fn dispatcher_transition_inode_scan_rejects_alias_executable_own_fd_and_maps() {
     let f = fixture();
-    let proc = f._temp.path().join("process-fixture");
+    let proc = f.temp.path().join("process-fixture");
     let process = proc.join(std::process::id().to_string());
     file(&process.join("maps"), b"", 0o600);
     fs::create_dir(process.join("fd")).unwrap();
@@ -756,7 +756,7 @@ fn dispatcher_transition_inode_scan_rejects_alias_executable_own_fd_and_maps() {
     let check = || storage::no_references_at(&proc, meta.dev(), meta.ino());
     check().unwrap();
     // Hard-link pathnames and this process's own FD must still identify the old inode.
-    let alias = f._temp.path().join("alias");
+    let alias = f.temp.path().join("alias");
     fs::hard_link(source, &alias).unwrap();
     symlink(&alias, process.join("exe")).unwrap();
     assert!(check().is_err());
@@ -781,7 +781,7 @@ fn dispatcher_transition_inode_scan_rejects_alias_executable_own_fd_and_maps() {
 fn set(v: &mut Value, key: &str, value: Value) {
     v.as_object_mut().unwrap().insert(key.into(), value);
 }
-fn qualification_records() -> (Candidate, Vec<Value>) {
+fn qualification_records() -> (PreparedCandidate, Vec<Value>) {
     let mut c = fixture().plan.candidate;
     c.preparation.sha256 = "a".repeat(64);
     c.executable.sha256 = "b".repeat(64);

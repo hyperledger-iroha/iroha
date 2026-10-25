@@ -278,7 +278,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(())
     }
 
-    /// Retire only an authenticated stale ArchiveSent plan that Advance never selected.
+    /// Retire only an authenticated stale `ArchiveSent` plan that Advance never selected.
     /// The durable Entry keeps its exact request and stale capsule locator until every unlink
     /// succeeds. A crash therefore repeats these idempotent removals before replacing the plan.
     /// No selected completion, uncertain lookup or monetary operation can reach this path.
@@ -643,8 +643,8 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             if entry.capsule.is_some() != entry.operation.is_some() {
                 return Err(Error::WitnessLost("prepared operation mapping"));
             }
-            if let Some(operation) = entry.operation {
-                if let Some(completion) = self.retry_prepared_intent(
+            if let Some(operation) = entry.operation
+                && let Some(completion) = self.retry_prepared_intent(
                     &request,
                     &entry
                         .capsule
@@ -653,9 +653,9 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                         .capsule_commitment
                         .ok_or(Error::WitnessLost("prepared commitment"))?,
                     &operation,
-                )? {
-                    return Ok(completion);
-                }
+                )?
+            {
+                return Ok(completion);
             }
         }
         let (mut selected, mut manifest) = self.sync_manifest()?;
@@ -686,8 +686,8 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         if entry.capsule.is_some() != entry.operation.is_some() {
             return Err(Error::WitnessLost("prepared operation mapping"));
         }
-        if let Some(operation) = entry.operation {
-            if let Some(completion) = self.retry_prepared_intent(
+        if let Some(operation) = entry.operation
+            && let Some(completion) = self.retry_prepared_intent(
                 &request,
                 &entry
                     .capsule
@@ -696,9 +696,9 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                     .capsule_commitment
                     .ok_or(Error::WitnessLost("prepared commitment"))?,
                 &operation,
-            )? {
-                return Ok(completion);
-            }
+            )?
+        {
+            return Ok(completion);
         }
         let restoration = iroha_plonk::work_metrics::WorkTimer::start(
             iroha_plonk::work_metrics::WorkPhase::SourceRestore,
@@ -789,10 +789,12 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                 &map_state,
                 request.kind(),
                 refresh,
-                manifest.issued_requests,
-                manifest.direct_anchors,
-                manifest.finality_epochs,
-                manifest.blacklist.clone(),
+                crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+                    issued: manifest.issued_requests,
+                    anchors: manifest.direct_anchors,
+                    epochs: manifest.finality_epochs,
+                    blacklist: manifest.blacklist.clone(),
+                },
             )?;
             let prepared =
                 self.proofs
@@ -864,10 +866,10 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             let address = entry
                 .plan
                 .ok_or(Error::WitnessLost("prepared capsule plan"))?;
-            if let Some(previous) = manifest.capsule_plans.get(&mut self.archive, &capsule)? {
-                if previous != address {
-                    return Err(Error::WitnessLost("conflicting capsule plan"));
-                }
+            if let Some(previous) = manifest.capsule_plans.get(&mut self.archive, &capsule)?
+                && previous != address
+            {
+                return Err(Error::WitnessLost("conflicting capsule plan"));
             }
             manifest.capsule_plans =
                 manifest
@@ -889,6 +891,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         if current.capsule != source_digest {
             return Ok(Completion::NotPerformed(NotPerformed::StaleHead));
         }
+        drop(request);
         self.commit(frozen)
     }
 }

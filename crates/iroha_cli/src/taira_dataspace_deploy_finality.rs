@@ -17,7 +17,7 @@ use std::{
 };
 
 #[path = "taira_authenticated_height.rs"]
-pub(crate) mod authenticated_height;
+pub mod authenticated_height;
 
 #[path = "taira_dataspace_deploy_authority_replay.rs"]
 mod authority_replay;
@@ -136,7 +136,7 @@ fn peer_clients<C: RunContext>(
 /// Public target profile selected independently of the server's proof responses.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct TrustV1 {
+pub struct TrustV1 {
     /// Explicit network-operator pin; chain IDs are not encoded in signed genesis.
     pub(crate) chain: iroha_model_base::chain::ChainId,
     /// Explicit address-format pin selected with the network profile.
@@ -148,7 +148,7 @@ pub(crate) struct TrustV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct PeerV1 {
+pub struct PeerV1 {
     pub(crate) torii_origin: String,
     pub(crate) peer_id: PeerId,
     pub(crate) node_fingerprint: Hash,
@@ -580,11 +580,7 @@ impl<'a> Preflight<'a> {
             &source_tip.body.finality_proof,
             &source_tip.body.genesis_finality_proof,
             MAX_NEW_PROOFS,
-            |height, trial| {
-                clients[source_index]
-                    .get_next_sumeragi_finality_proof(height, trial)
-                    .map_err(Into::into)
-            },
+            |height, trial| clients[source_index].get_next_sumeragi_finality_proof(height, trial),
         )?;
         let verifier = self
             .prefix
@@ -828,7 +824,7 @@ fn verify_native_lane_snapshot(
     let expected_instance = iroha_core::sumeragi::lanes::lane_instance(
         &iroha_core::sumeragi::crypto::BlsCrypto::new(),
         &manifest.network_id,
-        &manifest.finality.chain.to_string(),
+        manifest.finality.chain.as_ref(),
         record,
     );
     require(
@@ -955,17 +951,16 @@ fn peer_attestation_progress<T>(read: Result<T>) -> Result<PeerRead<T>> {
     match read {
         Ok(value) => Ok(PeerRead::Verified(value)),
         Err(error) => {
-            if let Some(progress) =
-                error.downcast_ref::<iroha::client::BridgeFinalityAttestationTipMismatch>()
-            {
-                eprintln!(
-                    "dataspace deploy: validator {} finality pending: {progress}",
-                    progress.response().node_id
-                );
-                Ok(PeerRead::Pending)
-            } else {
-                Err(error)
-            }
+            let pending = error
+                .downcast_ref::<iroha::client::BridgeFinalityAttestationTipMismatch>()
+                .map(|progress| {
+                    eprintln!(
+                        "dataspace deploy: validator {} finality pending: {progress}",
+                        progress.response().node_id
+                    );
+                    PeerRead::Pending
+                });
+            pending.map_or_else(|| Err(error), Ok)
         }
     }
 }
@@ -973,8 +968,8 @@ fn peer_attestation_progress<T>(read: Result<T>) -> Result<PeerRead<T>> {
 fn peer_carrier_progress(
     state: &str,
     hash: &str,
-    global: &Option<PipelineTransactionStatusResponse>,
-    peer: &Option<PipelineTransactionStatusResponse>,
+    global: Option<&PipelineTransactionStatusResponse>,
+    peer: Option<&PipelineTransactionStatusResponse>,
     captured_tip: u64,
 ) -> Result<PeerRead<u64>> {
     // Validate both supplied responses before interpreting absence or a pending state.
@@ -1049,8 +1044,8 @@ fn verify_peer_state(
         let carrier_height = match peer_carrier_progress(
             &observed.state,
             &prepared.transaction_hash,
-            &observed.global_status,
-            &observed.peer_status,
+            (observed.global_status).as_ref(),
+            (observed.peer_status).as_ref(),
             height.get(),
         )? {
             PeerRead::Verified(height) => height,
@@ -1329,8 +1324,7 @@ fn complete<C: RunContext>(
     }
     let trust = completion
         .runtime_update
-        .map(|update| &update.trust)
-        .unwrap_or(&plan.manifest.finality);
+        .map_or(&plan.manifest.finality, |update| &update.trust);
     let challenge: [u8; 32] = rand::random();
     require(challenge != [0; 32], "random finality challenge is zero")?;
     let clients = peer_clients(context, trust, &completion.verification_origins)?
@@ -1384,11 +1378,7 @@ fn complete<C: RunContext>(
         &source_tip.body.genesis_finality_proof,
         deadline,
         MAX_NEW_PROOFS,
-        |height, trial| {
-            source
-                .get_next_sumeragi_finality_proof(height, trial)
-                .map_err(Into::into)
-        },
+        |height, trial| source.get_next_sumeragi_finality_proof(height, trial),
     )? {
         report.state = "verification_sync_pending".into();
         return Ok(());

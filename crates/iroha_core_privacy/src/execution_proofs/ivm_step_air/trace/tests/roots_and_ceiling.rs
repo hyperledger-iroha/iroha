@@ -27,10 +27,10 @@ fn assert_result(
     let outcome = result.err().unwrap_or(SegmentOutcome::Continue);
     let completed = !outcome.trapped();
     let mut registers = segment.before.registers;
-    if let Ok(value) = result {
-        if rd != 0 {
-            registers[usize::from(rd)] = value;
-        }
+    if let Ok(value) = result
+        && rd != 0
+    {
+        registers[usize::from(rd)] = value;
     }
     assert_eq!(segment.outcome, outcome);
     assert_eq!(segment.after.registers, registers);
@@ -86,7 +86,7 @@ fn isqrt_matches_native_square_boundaries_aliases_r0_unused_operand_and_gas() {
                 if gas >= 6 && rd != 0 {
                     assert!(u128::from(root) * u128::from(root) <= u128::from(source));
                     assert!(u128::from(root + 1) * u128::from(root + 1) > u128::from(source));
-                    assert!(root <= u64::from(u32::MAX));
+                    assert!(u32::try_from(root).is_ok());
                 }
                 assert_result(
                     &segment,
@@ -161,7 +161,12 @@ fn div_ceil_matches_native_all_signs_overflow_zero_aliases_r0_and_gas_precedence
                 } else if b == 0 || (a == i128::from(i64::MIN) && b == -1) {
                     Err(SegmentOutcome::AssertionFailed)
                 } else {
-                    Ok((a / b + i128::from(a % b != 0 && (a < 0) == (b < 0))) as u64)
+                    Ok(u64::from_le_bytes(
+                        i128::to_le_bytes(a / b + i128::from(a % b != 0 && (a < 0) == (b < 0)))
+                            [..8]
+                            .try_into()
+                            .expect("low-byte width"),
+                    ))
                 };
                 assert_result(&segment, rd, result, 12, 12);
                 assert_eq!(records[0].opcode_gas, Some(12));
@@ -223,8 +228,8 @@ fn changed_destination(
     let changed = ScalarSegment::new(
         segment.contract.clone(),
         1,
-        records[0].before,
-        records[0].after,
+        &records[0].before,
+        &records[0].after,
         segment.outcome,
     )
     .unwrap();
@@ -309,8 +314,8 @@ fn root_and_ceiling_exact_cycle_carries_and_limit_crossing_match_native_ordering
                 let segment = ScalarSegment::new(
                     original.contract.clone(),
                     1,
-                    records[0].before,
-                    records[0].after,
+                    &records[0].before,
+                    &records[0].after,
                     original.outcome,
                 )
                 .unwrap();
@@ -343,8 +348,8 @@ fn root_and_ceiling_exact_cycle_carries_and_limit_crossing_match_native_ordering
         let segment = ScalarSegment::new(
             prepared.clone(),
             1,
-            record.before,
-            record.after,
+            &record.before,
+            &record.after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -360,8 +365,8 @@ fn root_and_ceiling_exact_cycle_carries_and_limit_crossing_match_native_ordering
         let invented = ScalarSegment::new(
             prepared,
             2,
-            record.before,
-            final_state,
+            &record.before,
+            &final_state,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -446,7 +451,11 @@ fn nonlinear_scalar_maximum_geometry_preserves_cap_queries_and_degree_four() {
         assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
         assert_eq!(
             measured_maximum_affine_degree_v1(
-                [0xd0 + tail as u8; 32],
+                [0xd0 + u8::from_le_bytes(
+                    u64::to_le_bytes(tail)[..1]
+                        .try_into()
+                        .expect("low-byte width")
+                ); 32],
                 [ROW_WIDTH, ROW_WIDTH, 0, 0, FIXED_WIDTH],
                 3,
                 4,
@@ -476,8 +485,8 @@ fn native_stark_proves_nonlinear_maximum_trace_and_binds_boundaries_and_workspac
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 segment.steps,
-                segment.before,
-                after,
+                &segment.before,
+                &after,
                 segment.outcome,
             )
             .unwrap();
@@ -486,8 +495,8 @@ fn native_stark_proves_nonlinear_maximum_trace_and_binds_boundaries_and_workspac
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             segment.steps,
-            segment.before,
-            segment.after,
+            &segment.before,
+            &segment.after,
             if tail < 12 {
                 SegmentOutcome::AssertionFailed
             } else {

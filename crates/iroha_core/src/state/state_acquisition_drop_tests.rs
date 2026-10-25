@@ -1,6 +1,6 @@
 //! Actual State acquisition must jointly retire original World and membership writers.
 //!
-//! Register this child under acquisition_fixture_tests.rs to reuse its original
+//! Register this child under `acquisition_fixture_tests.rs` to reuse its original
 //! four-validator fixture without widening any production or test API.
 
 use super::fixture;

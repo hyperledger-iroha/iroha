@@ -19,7 +19,7 @@ use mv::storage::StorageReadOnly as _;
 
 /// Deterministic reasons L3 retains the original validator registration or its stake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReleaseBlocker {
+pub enum ReleaseBlocker {
     /// An original generation remains liable for the stake being released.
     LiabilityActive,
     /// An exact recorded SCCP offence still awaits its penalty.
@@ -37,7 +37,7 @@ pub(crate) enum ReleaseBlocker {
 /// # Errors
 /// Preserves original key-copy resource refusals. Inconsistent offence-to-record joins
 /// refuse as source invariants; they are never interpreted as absence or applied penalties.
-pub(crate) fn release_blocker<'a>(
+pub fn release_blocker<'a>(
     parent: impl OriginalRead<'a> + 'a,
     current: &(impl WorldReadOnly + ?Sized),
     validator: &PublicLaneValidatorRecord,
@@ -81,7 +81,7 @@ pub(crate) fn release_blocker<'a>(
 
 /// Probe only this generation's captured members, never permanent evidence history.
 /// Missing or substituted offence joins and original allocation refusals remain errors.
-pub(crate) fn generation_has_pending_penalty(
+pub fn generation_has_pending_penalty(
     current: &(impl WorldReadOnly + ?Sized),
     record: &super::generation_record::RetainedSccpGeneration,
     budget: &AllocationBudget,

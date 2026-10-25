@@ -385,7 +385,7 @@ fn catalog_payload(state: &State, keys: &[iroha_crypto::KeyPair]) -> NexusCatalo
 
 /// Build an additive request from the current retained catalog and original committee peers.
 /// The caller still submits this through normal accepted execution and certified publication.
-pub(crate) fn catalog_transition_for_testing(
+pub fn catalog_transition_for_testing(
     state: &State,
     descriptor: DataSpaceMetadata,
     manifest_hash: [u8; 32],

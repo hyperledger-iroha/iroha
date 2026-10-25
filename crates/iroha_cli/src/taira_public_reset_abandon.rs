@@ -30,10 +30,10 @@ fn validate_abandonment_source(state: &JournalV1) -> Result<()> {
         || state.edge_rollback_complete
         || state.rollback_next_validator != 0
         || !state.rollback_failures.is_empty()
-        || !state
+        || state
             .recovery_intent
             .as_ref()
-            .is_some_and(|intent| usize::from(intent.next_mutation) < intent.mutations.len())
+            .is_none_or(|intent| usize::from(intent.next_mutation) >= intent.mutations.len())
     {
         return Err(eyre!(
             "abandonment requires an unresolved canary with all four validators and an untouched edge"
@@ -80,22 +80,21 @@ impl DurableJournal {
         } else {
             None
         };
-        let receipt = match receipt {
-            Some(receipt) => receipt,
-            None => {
-                validate_abandonment_source(&current)?;
-                if sha256_hex(&current_bytes) != expected_sha256 {
-                    return Err(eyre!(
-                        "abandonment journal SHA-256 differs from the explicit expected digest"
-                    ));
-                }
-                AbandonmentReceiptV1 {
-                    schema: ABANDONMENT_SCHEMA_V1.to_owned(),
-                    action: "abandon_unproven_testnet_and_rollback".to_owned(),
-                    transaction_outcome: "unresolved".to_owned(),
-                    journal_sha256: expected_sha256.to_owned(),
-                    journal_json: String::from_utf8(current_bytes.clone())?,
-                }
+        let receipt = if let Some(receipt) = receipt {
+            receipt
+        } else {
+            validate_abandonment_source(&current)?;
+            if sha256_hex(&current_bytes) != expected_sha256 {
+                return Err(eyre!(
+                    "abandonment journal SHA-256 differs from the explicit expected digest"
+                ));
+            }
+            AbandonmentReceiptV1 {
+                schema: ABANDONMENT_SCHEMA_V1.to_owned(),
+                action: "abandon_unproven_testnet_and_rollback".to_owned(),
+                transaction_outcome: "unresolved".to_owned(),
+                journal_sha256: expected_sha256.to_owned(),
+                journal_json: String::from_utf8(current_bytes.clone())?,
             }
         };
         if receipt.schema != ABANDONMENT_SCHEMA_V1
@@ -115,8 +114,8 @@ impl DurableJournal {
             "recovery_pending" if receipt.journal_json.as_bytes() == current_bytes => {}
             "rolling_back" => {
                 let mut expected = original;
-                expected.status = "rolling_back".to_owned();
-                expected.phase = "rollback".to_owned();
+                "rolling_back".clone_into(&mut expected.status);
+                "rollback".clone_into(&mut expected.phase);
                 expected.recovery_intent = None;
                 expected.failure_summary =
                     stable_error_record("rollback", "forward", &eyre!(ABANDONMENT_REASON));

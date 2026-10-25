@@ -111,7 +111,7 @@ struct Triple {
 }
 
 /// The inline Queue mutex owns this exact charged fixed backing until Queue drop.
-/// No route, peer, StateView, queue clear or tip change resets it.
+/// No route, peer, `StateView`, queue clear or tip change resets it.
 pub(super) struct ForgeryIngressState {
     seen: ChargedBuffer<Triple>,
     last_refill: Instant,

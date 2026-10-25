@@ -53,7 +53,7 @@ impl Fixture {
                 Self::build_with_escrow(
                     20,
                     seated_citizen_instructions(),
-                    Some(crate::taira::parliament_seating::fixture_citizenship_escrow()),
+                    Some(&crate::taira::parliament_seating::fixture_citizenship_escrow()),
                 )
             })
             .clone()
@@ -75,7 +75,7 @@ impl Fixture {
     fn build_with_escrow(
         epoch: u64,
         instructions: Vec<iroha_data_model::isi::InstructionBox>,
-        citizenship_escrow: Option<AccountId>,
+        citizenship_escrow: Option<&AccountId>,
     ) -> Self {
         let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let genesis = key(101, Algorithm::Ed25519);
@@ -90,12 +90,14 @@ impl Fixture {
             })
             .collect();
         let staking = fixture_staking_policy();
-        let mut npos = iroha_data_model::parameter::system::SumeragiNposParameters::default();
-        npos.xor_asset_definition_id = staking.stake_asset_id.clone();
-        npos.max_validators = 4;
-        npos.epoch_length_blocks = NonZeroU64::new(epoch).unwrap();
-        npos.evidence_horizon_blocks = epoch;
-        npos.slashing_delay_blocks = 1;
+        let npos = iroha_data_model::parameter::system::SumeragiNposParameters {
+            xor_asset_definition_id: staking.stake_asset_id.clone(),
+            max_validators: 4,
+            epoch_length_blocks: NonZeroU64::new(epoch).unwrap(),
+            evidence_horizon_blocks: epoch,
+            slashing_delay_blocks: 1,
+            ..iroha_data_model::parameter::system::SumeragiNposParameters::default()
+        };
         npos.validate().unwrap();
         let mut builder = iroha_genesis::GenesisBuilder::new_without_executor(
             CHAIN_ID.into(),
@@ -137,9 +139,10 @@ impl Fixture {
         // policy commitments. Only the native validator's typed mismatch may supply
         // their actual values; the newly signed final fixture must pass unchanged.
         let (nexus_hash, execution_hash) =
-            execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref())
-                .map(|(_, nexus, execution, _)| (nexus, execution))
-                .unwrap_or_else(|derived_policies| derived_policies);
+            execute_fixture_genesis(&manifest, &genesis, citizenship_escrow).map_or_else(
+                |derived_policies| derived_policies,
+                |(_, nexus, execution, _)| (nexus, execution),
+            );
         let mut context = manifest.sumeragi_context_parameters();
         context.nexus_amx_context_hash = nexus_hash.into();
         context.execution_policy_hash = execution_hash.into();
@@ -148,7 +151,7 @@ impl Fixture {
             .with_consensus_meta()
             .expect("valid fixture consensus parameters");
         let (mut block, final_nexus_hash, final_execution_hash, nexus_context) =
-            execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref())
+            execute_fixture_genesis(&manifest, &genesis, citizenship_escrow)
                 .expect("newly signed fixture must reproduce both exact native policies");
         assert_eq!(nexus_hash, final_nexus_hash);
         assert_eq!(execution_hash, final_execution_hash);
@@ -293,11 +296,13 @@ fn seated_citizen_instructions() -> Vec<iroha_data_model::isi::InstructionBox> {
 // Exercise the same public Core validation/execution boundary as Kagami. A raw
 // GenesisBuilder proposal is not release evidence: only actual execution may
 // populate results and determine the two signed consensus context commitments.
+type FixtureGenesisResult = std::result::Result<(SignedBlock, Hash, Hash, Vec<u8>), (Hash, Hash)>;
+
 fn execute_fixture_genesis(
     manifest: &iroha_genesis::RawGenesisTransaction,
     key: &KeyPair,
     citizenship_escrow: Option<&AccountId>,
-) -> std::result::Result<(SignedBlock, Hash, Hash, Vec<u8>), (Hash, Hash)> {
+) -> FixtureGenesisResult {
     use iroha_config::{
         kura::InitMode,
         parameters::{actual, defaults},
@@ -393,8 +398,10 @@ fn execute_fixture_genesis(
         .validate_active_coverage_for_catalog(&nexus.lane_catalog)
         .unwrap();
     state.install_lane_manifests_for_testing(&std::sync::Arc::new(manifests));
-    let mut pipeline = actual::Pipeline::default();
-    pipeline.workers = 1;
+    let mut pipeline = actual::Pipeline {
+        workers: 1,
+        ..actual::Pipeline::default()
+    };
     pipeline.gas.tech_account_id = reprofile(&pipeline.gas.tech_account_id);
     state.set_pipeline(pipeline);
     state
@@ -464,13 +471,13 @@ fn execute_fixture_genesis(
     Ok((valid.into(), nexus_hash, execution_hash, nexus_context))
 }
 
-pub(crate) fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
+pub fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
     let fixture = Fixture::new();
     (fixture.block, fixture.genesis)
 }
 
 /// Reuse the exact executed genesis and independently checked native manifest binding.
-pub(crate) fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
+pub fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
     let fixture = Fixture::new();
     iroha_genesis::validate_prepared_genesis_bundle(
         &fixture.block.encode_wire().unwrap(),
@@ -482,7 +489,7 @@ pub(crate) fn deployment_validated_genesis_fixture() -> iroha_genesis::Validated
 }
 
 /// Execute and sign explicit active lane bindings with authority keys distinct from peer keys.
-pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
+pub fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
     static FIXTURE: std::sync::OnceLock<Fixture> = std::sync::OnceLock::new();
     let fixture = FIXTURE.get_or_init(|| {
         use iroha_data_model::{
@@ -553,7 +560,7 @@ fn native_fixture_rejects_changed_signed_policies_after_draft_binding() {
     );
     assert!(execute_fixture_genesis(&fixture.manifest, &fixture.genesis, None).is_ok());
     for change_execution in [true, false] {
-        let mut changed = bound.clone();
+        let mut changed = bound;
         let foreign = Hash::new(b"foreign signed fixture policy").into();
         if change_execution {
             changed.execution_policy_hash = foreign;

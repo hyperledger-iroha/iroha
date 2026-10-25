@@ -36,16 +36,24 @@ impl Operation {
         if self.immediate < 0 {
             F::ZERO.sub(F(u64::from(self.immediate.unsigned_abs())))
         } else {
-            F(self.immediate as u64)
+            F(u64::try_from(self.immediate).expect("nonnegative immediate"))
         }
     }
 }
 
 fn signed_field(value: i128) -> F {
     if value < 0 {
-        F::ZERO.sub(F((-value) as u64))
+        F::ZERO.sub(F(u64::from_le_bytes(
+            i128::to_le_bytes(-value)[..8]
+                .try_into()
+                .expect("low-byte width"),
+        )))
     } else {
-        F(value as u64)
+        F(u64::from_le_bytes(
+            i128::to_le_bytes(value)[..8]
+                .try_into()
+                .expect("low-byte width"),
+        ))
     }
 }
 
@@ -313,7 +321,14 @@ mod tests {
                 let mut vm = native(&[word, enc::encode_halt()]);
                 vm.set_register(3, address);
                 if store {
-                    vm.set_register(1, full as u64);
+                    vm.set_register(
+                        1,
+                        u64::from_le_bytes(
+                            u128::to_le_bytes(full)[..8]
+                                .try_into()
+                                .expect("low-byte width"),
+                        ),
+                    );
                     vm.set_register(usize::from(high), (full >> 64) as u64);
                 } else {
                     vm.memory.store_u128(address, full).unwrap();

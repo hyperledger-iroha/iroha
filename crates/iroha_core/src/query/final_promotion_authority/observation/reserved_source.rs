@@ -62,7 +62,10 @@ pub(super) fn authenticate_reserved_source(
     if row.reserved_origin.entry_hash != *entry_hash.as_ref()
         || source.network_id().map(|id| *id.as_bytes()) != Some(*view.network_id().as_bytes())
         || source.authority() != &row.reserved.authority
-        || view.transactions.get(&entry_hash).map(|index| index.get())
+        || view
+            .transactions
+            .get(&entry_hash)
+            .map(std::num::NonZero::get)
             != usize::try_from(height).ok()
     {
         return Err(Error::Execution.into());

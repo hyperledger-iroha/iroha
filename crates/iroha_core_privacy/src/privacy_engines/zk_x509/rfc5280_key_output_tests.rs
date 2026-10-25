@@ -12,7 +12,10 @@ fn key_row_fixture_v1(
     let ordinal = schedule
         .output_topology
         .iter()
-        .position(|entry| entry.channel == channel && entry.offset == offset as u32)
+        .position(|entry| {
+            entry.channel == channel
+                && entry.offset == u32::try_from(offset).expect("fixture value fits u32")
+        })
         .unwrap();
     let fixed = schedule
         .fixed_row(schedule.starts[ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize] + ordinal)
@@ -42,16 +45,22 @@ fn key_row_fixture_v1(
     (normalized_row_v1(row, &fixed), fixed)
 }
 fn row_value_for_bits_v1(offset: usize) -> u8 {
-    if offset == 0 { 4 } else { (17 + offset) as u8 }
+    if offset == 0 {
+        4
+    } else {
+        u8::try_from(17 + offset).expect("fixture value fits u8")
+    }
 }
 
 #[test]
 fn key_output_fixed_schedule_covers_exact_five_channels_and_all65_offsets() {
     for disclosed in 0..=4_u8 {
-        let mut shape = ZkX509Rfc5280StarkShapeV1::default();
-        shape.disclosed_attribute_count = disclosed;
+        let mut shape = ZkX509Rfc5280StarkShapeV1 {
+            disclosed_attribute_count: disclosed,
+            ..ZkX509Rfc5280StarkShapeV1::default()
+        };
         for i in 0..usize::from(disclosed) {
-            shape.disclosed_attribute_indices[i] = i as u8;
+            shape.disclosed_attribute_indices[i] = u8::try_from(i).expect("fixture value fits u8");
         }
         let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
         let mut counts = [0_usize; 5];
@@ -143,7 +152,7 @@ fn key_output_local_relation_covers_both_depths_all_slots_and_fp4_lift() {
                     &aux,
                     &aux,
                     &fixed,
-                    der_challenges_v1(),
+                    &der_challenges_v1(),
                     &challenges_v1(),
                     terminal_claims_v1(),
                 )
@@ -596,7 +605,7 @@ fn key_output_complete_source_multiplicity_and_auxiliary_replay_closes() {
             let column = PrivateTableV1::new(
                 build_zk_x509_rfc5280_stark_aux_column_v1(
                     &material,
-                    der_challenges_v1(),
+                    &der_challenges_v1(),
                     &challenges_v1(),
                     start + lane,
                     &ZkX509ShaUnionCentersV1::identity_fixture_v1(),

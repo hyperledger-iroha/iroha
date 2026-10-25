@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-//! HTTP handlers for SoraFS discovery endpoints.
+//! HTTP handlers for `SoraFS` discovery endpoints.
 mod stream_token_body;
 mod stream_token_enforcement;
 use axum::{
@@ -744,7 +744,7 @@ fn parse_hex_128bits(value: &str, field: &'static str) -> Result<[u8; 16], Respo
 }
 fn system_time_to_millis(time: SystemTime, field: &'static str) -> Result<u64, Response> {
     time.duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .map_err(|_| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1080,6 +1080,32 @@ fn prepare_alias_presentation(
     telemetry: &crate::routing::MaybeTelemetry,
     now_secs: u64,
 ) -> ApiResult<Value> {
+    fn insert_json_field(
+        map: &mut Map,
+        alias_label: &str,
+        key: &str,
+        value: Result<Value, json::Error>,
+    ) -> ApiResult<()> {
+        match value {
+            Ok(value) => {
+                map.insert(key.into(), value);
+                Ok(())
+            }
+            Err(err) => {
+                error!(
+                    alias = alias_label,
+                    ?err,
+                    "failed to serialize `{key}` field for alias response"
+                );
+                Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to serialize alias metadata",
+                )
+                .into())
+            }
+        }
+    }
+
     let base = match alias.to_json() {
         Ok(value) => value,
         Err(err) => {
@@ -1150,31 +1176,7 @@ fn prepare_alias_presentation(
             return Ok(other);
         }
     };
-    fn insert_json_field(
-        map: &mut Map,
-        alias_label: &str,
-        key: &str,
-        value: Result<Value, json::Error>,
-    ) -> ApiResult<()> {
-        match value {
-            Ok(value) => {
-                map.insert(key.into(), value);
-                Ok(())
-            }
-            Err(err) => {
-                error!(
-                    alias = alias_label,
-                    ?err,
-                    "failed to serialize `{key}` field for alias response"
-                );
-                Err(json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to serialize alias metadata",
-                )
-                .into())
-            }
-        }
-    }
+
     map.insert("cache_state".into(), Value::String(status_label.clone()));
     map.insert("status_label".into(), Value::String(status_label.clone()));
     insert_json_field(
@@ -1305,9 +1307,7 @@ fn build_cache_evaluation_json(
     );
     map.insert(
         "ttl_expires_at".into(),
-        optional_rfc3339(Some(evaluation.expires_at_unix))
-            .map(Value::String)
-            .unwrap_or(Value::Null),
+        optional_rfc3339(Some(evaluation.expires_at_unix)).map_or(Value::Null, Value::String),
     );
     map.insert(
         "ttl_expires_at_unix".into(),
@@ -1315,9 +1315,7 @@ fn build_cache_evaluation_json(
     );
     map.insert(
         "serve_until".into(),
-        optional_rfc3339(decision.serve_until_unix)
-            .map(Value::String)
-            .unwrap_or(Value::Null),
+        optional_rfc3339(decision.serve_until_unix).map_or(Value::Null, Value::String),
     );
     map.insert(
         "serve_until_unix".into(),
@@ -1349,15 +1347,12 @@ fn successor_evaluation_json(successor: &crate::sorafs::SuccessorAssessment) -> 
         successor
             .head_hex
             .as_ref()
-            .map(|hex| Value::String(hex.clone()))
-            .unwrap_or(Value::Null),
+            .map_or(Value::Null, |hex| Value::String(hex.clone())),
     );
     map.insert("approved".into(), Value::Bool(successor.approved));
     map.insert(
         "approved_at".into(),
-        optional_rfc3339(successor.approved_at_unix)
-            .map(Value::String)
-            .unwrap_or(Value::Null),
+        optional_rfc3339(successor.approved_at_unix).map_or(Value::Null, Value::String),
     );
     map.insert(
         "approved_at_unix".into(),
@@ -1407,9 +1402,7 @@ fn governance_evaluation_json(governance: &crate::sorafs::GovernanceAssessment) 
     );
     map.insert(
         "effective_at".into(),
-        optional_rfc3339(governance.effective_at_unix)
-            .map(Value::String)
-            .unwrap_or(Value::Null),
+        optional_rfc3339(governance.effective_at_unix).map_or(Value::Null, Value::String),
     );
     Value::Object(map)
 }
@@ -1713,7 +1706,7 @@ pub struct StreamTokenRequestDto {
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/transparency/tokens/verify`.
 pub struct TransparencyProofTokenVerifyRequestDto {
-    /// URL-safe base64 SoraFS proof-token frame.
+    /// URL-safe base64 `SoraFS` proof-token frame.
     pub token_b64: String,
     /// Hex-encoded Ed25519 verifying key for the gateway proof-token signer.
     pub verifying_key_hex: String,
@@ -1728,7 +1721,7 @@ pub struct TransparencyProofTokenVerifyRequestDto {
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/transparency/tokens/issuances`.
 pub struct TransparencyProofTokenIssuanceRequestDto {
-    /// URL-safe base64 SoraFS proof-token frame.
+    /// URL-safe base64 `SoraFS` proof-token frame.
     pub token_b64: String,
     /// Hex-encoded Ed25519 public key for the gateway proof-token signer.
     pub signer_key_hex: String,
@@ -1741,7 +1734,7 @@ pub struct TransparencyProofTokenIssuanceRequestDto {
 }
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by SoraFS moderation model registry admission endpoints.
+/// JSON payload accepted by `SoraFS` moderation model registry admission endpoints.
 pub struct ModerationModelRegistryManifestRequestDto {
     /// Standard base64 canonical Norito manifest payload.
     pub manifest_b64: String,
@@ -1800,7 +1793,7 @@ pub struct ModerationQuarantineObjectStoreRequestDto {
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 #[norito(deny_unknown_fields)]
-/// One raw metric contribution in a SoraFS privacy aggregate source event.
+/// One raw metric contribution in a `SoraFS` privacy aggregate source event.
 pub struct TransparencyPrivacyAggregateSourceMetricDto {
     /// Stable metric key.
     pub key: String,
@@ -1831,7 +1824,7 @@ pub struct TransparencyPrivacyAggregateSourceEventRequestDto {
 }
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// Public metadata key/value pair for SoraFS transparency aggregate publication.
+/// Public metadata key/value pair for `SoraFS` transparency aggregate publication.
 pub struct TransparencyLedgerMetadataDto {
     /// Metadata key.
     pub key: String,
@@ -2071,17 +2064,17 @@ pub struct StorageStateResponseDto {
     pub fetch_inflight: u64,
     /// Smoothed bytes-per-second served by fetch workers.
     pub fetch_bytes_per_sec: u64,
-    /// Number of PoR workers active.
+    /// Number of `PoR` workers active.
     pub por_inflight: u64,
-    /// Total PoR samples marked successful during the current window.
+    /// Total `PoR` samples marked successful during the current window.
     pub por_samples_success_total: u64,
-    /// Total PoR samples marked failed during the current window.
+    /// Total `PoR` samples marked failed during the current window.
     pub por_samples_failed_total: u64,
     /// Fetch queue utilisation (basis points).
     pub fetch_utilisation_bps: u32,
     /// Pin queue utilisation (basis points).
     pub pin_queue_utilisation_bps: u32,
-    /// PoR worker utilisation (basis points).
+    /// `PoR` worker utilisation (basis points).
     pub por_utilisation_bps: u32,
 }
 #[cfg(feature = "app_api")]
@@ -2090,7 +2083,7 @@ pub struct StorageStateResponseDto {
 pub struct PorIngestionProviderStatusDto {
     /// Hex-encoded provider identifier.
     pub provider_id_hex: String,
-    /// Outstanding PoR challenges for this manifest/provider pair.
+    /// Outstanding `PoR` challenges for this manifest/provider pair.
     pub pending_challenges: u64,
     /// Oldest epoch identifier currently pending.
     pub oldest_epoch_id: Option<u64>,
@@ -2622,10 +2615,11 @@ impl AliasListQuery {
                 format!("unknown SoraFS alias query parameter `{key}`"),
             ))),
         })?;
-        if query
-            .limit
-            .is_some_and(|limit| !(1..=MAX_LIST_LIMIT as u32).contains(&limit))
-        {
+        if query.limit.is_some_and(|limit| {
+            !(1..=u32::try_from(MAX_LIST_LIMIT)
+                .expect("bounded fixture or protocol constant fits u32"))
+                .contains(&limit)
+        }) {
             return Err(ResponseError::from(json_error(
                 StatusCode::BAD_REQUEST,
                 format!("SoraFS alias query limit must be within 1..={MAX_LIST_LIMIT}"),
@@ -2706,10 +2700,11 @@ impl ReplicationListQuery {
                 format!("unknown SoraFS replication query parameter `{key}`"),
             ))),
         })?;
-        if query
-            .limit
-            .is_some_and(|limit| !(1..=MAX_LIST_LIMIT as u32).contains(&limit))
-        {
+        if query.limit.is_some_and(|limit| {
+            !(1..=u32::try_from(MAX_LIST_LIMIT)
+                .expect("bounded fixture or protocol constant fits u32"))
+                .contains(&limit)
+        }) {
             return Err(ResponseError::from(json_error(
                 StatusCode::BAD_REQUEST,
                 format!("SoraFS replication query limit must be within 1..={MAX_LIST_LIMIT}"),
@@ -3017,7 +3012,10 @@ impl FinalizedOrderbookReadQuery {
         Ok(query)
     }
     fn limit(&self) -> u32 {
-        self.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32)
+        self.limit.unwrap_or_else(|| {
+            u32::try_from(DEFAULT_LIST_LIMIT)
+                .expect("bounded fixture or protocol constant fits u32")
+        })
     }
     fn expected_finalized_cursor(&self) -> Result<Option<OrderbookFinalizedCursorV1>, Response> {
         orderbook_finalized_cursor_from_query(
@@ -3091,7 +3089,10 @@ impl FinalizedOrderbookEventQuery {
         Ok(query)
     }
     fn limit(&self) -> u32 {
-        self.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32)
+        self.limit.unwrap_or_else(|| {
+            u32::try_from(DEFAULT_LIST_LIMIT)
+                .expect("bounded fixture or protocol constant fits u32")
+        })
     }
     fn expected_finalized_cursor(&self) -> Result<Option<OrderbookFinalizedCursorV1>, Response> {
         orderbook_finalized_cursor_from_query(
@@ -3208,7 +3209,10 @@ impl FinalizedRepairTaskQuery {
         Ok(query)
     }
     fn limit(&self) -> u32 {
-        self.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32)
+        self.limit.unwrap_or_else(|| {
+            u32::try_from(DEFAULT_LIST_LIMIT)
+                .expect("bounded fixture or protocol constant fits u32")
+        })
     }
     fn expected_finalized_cursor(&self) -> Result<Option<RepairFinalizedCursorV1>, Response> {
         repair_finalized_cursor_from_query(
@@ -3267,7 +3271,10 @@ impl FinalizedRepairEventQuery {
         Ok(query)
     }
     fn limit(&self) -> u32 {
-        self.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32)
+        self.limit.unwrap_or_else(|| {
+            u32::try_from(DEFAULT_LIST_LIMIT)
+                .expect("bounded fixture or protocol constant fits u32")
+        })
     }
     fn expected_finalized_cursor(&self) -> Result<Option<RepairFinalizedCursorV1>, Response> {
         repair_finalized_cursor_from_query(
@@ -3755,8 +3762,7 @@ pub(crate) async fn handle_get_sorafs_providers(
     let mut cache_guard = cache.write().await;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |duration| duration.as_secs());
     let pruned = cache_guard.prune_stale(now);
     if pruned > 0 {
         warn!(removed = pruned, "pruned stale SoraFS provider adverts");
@@ -3779,11 +3785,11 @@ pub(crate) async fn handle_get_sorafs_providers(
         }
     }
     let response = json_object(vec![
-        json_entry("count", total_count as u64),
-        json_entry("returned_count", providers.len() as u64),
-        json_entry("limit", limit as u64),
-        json_entry("truncated", truncated),
-        json_entry("providers", Value::Array(providers)),
+        json_entry("count", &(total_count as u64)),
+        json_entry("returned_count", &(providers.len() as u64)),
+        json_entry("limit", &(limit as u64)),
+        json_entry("truncated", &(truncated)),
+        json_entry("providers", &(Value::Array(providers))),
     ]);
     JsonBody(response).into_response()
 }
@@ -3826,24 +3832,24 @@ pub(crate) async fn handle_get_sorafs_governance_dag_dashboard(
     headers: HeaderMap,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        governance_dag_dashboard_response(state, headers)
+        governance_dag_dashboard_response(state, &headers)
     })
     .await
 }
-fn governance_dag_dashboard_response(state: &SharedAppState, headers: HeaderMap) -> Response {
+fn governance_dag_dashboard_response(state: &SharedAppState, headers: &HeaderMap) -> Response {
     let (index, metadata) = match load_governance_dag_mirror_index(state) {
         Ok(value) => value,
         Err(response) => return response,
     };
-    governance_dag_dashboard_response_from_index(index, metadata, headers)
+    governance_dag_dashboard_response_from_index(&(index), &(metadata), headers)
 }
 fn governance_dag_dashboard_response_from_index(
-    index: Value,
-    metadata: GovernanceDagSourceMetadata,
-    headers: HeaderMap,
+    index: &Value,
+    metadata: &GovernanceDagSourceMetadata,
+    headers: &HeaderMap,
 ) -> Response {
     let etag = governance_dag_representation_etag(&metadata.etag, "mirror-dashboard", &[]);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let blocks = index
@@ -3878,7 +3884,7 @@ fn governance_dag_dashboard_response_from_index(
         "schema".into(),
         Value::from("sorafs.governance_dag.dashboard.v1"),
     );
-    insert_governance_dag_source_metadata(&mut response, &metadata);
+    insert_governance_dag_source_metadata(&mut response, metadata);
     response.insert(
         "mirror_generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -3918,24 +3924,24 @@ pub(crate) async fn handle_get_sorafs_governance_dag_head(
     headers: HeaderMap,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        governance_dag_head_response(state, headers)
+        governance_dag_head_response(state, &headers)
     })
     .await
 }
-fn governance_dag_head_response(state: &SharedAppState, headers: HeaderMap) -> Response {
+fn governance_dag_head_response(state: &SharedAppState, headers: &HeaderMap) -> Response {
     let (index, metadata) = match load_governance_dag_mirror_index(state) {
         Ok(value) => value,
         Err(response) => return response,
     };
-    governance_dag_head_response_from_index(index, metadata, headers)
+    governance_dag_head_response_from_index(&(index), &(metadata), headers)
 }
 fn governance_dag_head_response_from_index(
-    index: Value,
-    metadata: GovernanceDagSourceMetadata,
-    headers: HeaderMap,
+    index: &Value,
+    metadata: &GovernanceDagSourceMetadata,
+    headers: &HeaderMap,
 ) -> Response {
     let etag = governance_dag_representation_etag(&metadata.etag, "mirror-head", &[]);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -3943,7 +3949,7 @@ fn governance_dag_head_response_from_index(
         "schema".into(),
         Value::from("sorafs.governance_dag.head.v1"),
     );
-    insert_governance_dag_source_metadata(&mut response, &metadata);
+    insert_governance_dag_source_metadata(&mut response, metadata);
     response.insert(
         "head".into(),
         index.get("head").cloned().unwrap_or(Value::Null),
@@ -3962,7 +3968,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_block(
     governance_dag_blocking_response(state, move |state| {
         governance_dag_lookup_response(
             state,
-            headers,
+            &headers,
             "block",
             "by_block_cid_hex",
             "sorafs.governance_dag.block.lookup.v1",
@@ -3979,7 +3985,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_node(
     governance_dag_blocking_response(state, move |state| {
         governance_dag_lookup_response(
             state,
-            headers,
+            &headers,
             "block",
             "by_node_cid_hex",
             "sorafs.governance_dag.node.lookup.v1",
@@ -3994,16 +4000,16 @@ pub(crate) async fn handle_get_sorafs_governance_dag_publish_index(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        governance_dag_publish_index_response(state, headers, raw_query)
+        governance_dag_publish_index_response(state, &(headers), raw_query.as_deref())
     })
     .await
 }
 fn governance_dag_publish_index_response(
     state: &SharedAppState,
-    headers: HeaderMap,
-    raw_query: Option<String>,
+    headers: &HeaderMap,
+    raw_query: Option<&str>,
 ) -> Response {
-    let limit = match parse_governance_lookup_limit(raw_query.as_deref()) {
+    let limit = match parse_governance_lookup_limit(raw_query) {
         Ok(limit) => limit,
         Err(err) => return err.into_response(),
     };
@@ -4023,7 +4029,7 @@ fn governance_dag_publish_index_response(
             Err(response) => return response,
         };
     let returned_entry_count = indexed_entry_count.min(limit);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -4077,7 +4083,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_publish_digest(
     governance_dag_blocking_response(state, move |state| {
         governance_publish_index_lookup_response(
             state,
-            headers,
+            &(headers),
             "sorafs.governance_dag.publish_index.digest.lookup.v1",
             "digest",
             "by_encoded_blake3",
@@ -4104,7 +4110,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_publish_kind(
     governance_dag_blocking_response(state, move |state| {
         governance_publish_index_lookup_response(
             state,
-            headers,
+            &(headers),
             "sorafs.governance_dag.publish_index.kind.lookup.v1",
             "payload_kind",
             "by_payload_kind",
@@ -4120,16 +4126,16 @@ pub(crate) async fn handle_get_sorafs_transparency_cycles(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        transparency_cycles_response(state, headers, raw_query)
+        transparency_cycles_response(state, &(headers), raw_query.as_deref())
     })
     .await
 }
 fn transparency_cycles_response(
     state: &SharedAppState,
-    headers: HeaderMap,
-    raw_query: Option<String>,
+    headers: &HeaderMap,
+    raw_query: Option<&str>,
 ) -> Response {
-    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query) {
         Ok(query) => query,
         Err(err) => return err.into_response(),
     };
@@ -4158,7 +4164,7 @@ fn transparency_cycles_response(
     };
     let published_cycle_count = cycles.len();
     let (cycles, truncated) = limit_governance_readback_values(cycles, limit);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -4204,7 +4210,7 @@ pub(crate) async fn handle_get_sorafs_transparency_cycle(
         Err(response) => return response,
     };
     governance_dag_blocking_response(state, move |state| {
-        transparency_cycle_publication_response(state, headers, &cycle_id_hex, None, limit)
+        transparency_cycle_publication_response(state, &(headers), &cycle_id_hex, None, limit)
     })
     .await
 }
@@ -4224,7 +4230,7 @@ pub(crate) async fn handle_get_sorafs_transparency_cycle_entry(
     governance_dag_blocking_response(state, move |state| {
         transparency_cycle_publication_response(
             state,
-            headers,
+            &(headers),
             &cycle_id_hex,
             Some(&entry_id_hex),
             DEFAULT_LIST_LIMIT,
@@ -4238,16 +4244,16 @@ pub(crate) async fn handle_get_sorafs_transparency_explorer(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        transparency_explorer_response(state, headers, raw_query)
+        transparency_explorer_response(state, &(headers), raw_query.as_deref())
     })
     .await
 }
 fn transparency_explorer_response(
     state: &SharedAppState,
-    headers: HeaderMap,
-    raw_query: Option<String>,
+    headers: &HeaderMap,
+    raw_query: Option<&str>,
 ) -> Response {
-    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query) {
         Ok(query) => query,
         Err(err) => return err.into_response(),
     };
@@ -4291,7 +4297,7 @@ fn transparency_explorer_response(
     let (cycles, truncated_cycles) = limit_governance_readback_values(cycles, limit);
     let (token_entries, truncated_proof_token_issuances) =
         limit_governance_readback_values(token_entries, limit);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -4372,16 +4378,16 @@ pub(crate) async fn handle_get_sorafs_transparency_token_issuances(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        transparency_token_issuances_response(state, headers, raw_query)
+        transparency_token_issuances_response(state, &(headers), raw_query.as_deref())
     })
     .await
 }
 fn transparency_token_issuances_response(
     state: &SharedAppState,
-    headers: HeaderMap,
-    raw_query: Option<String>,
+    headers: &HeaderMap,
+    raw_query: Option<&str>,
 ) -> Response {
-    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query) {
         Ok(query) => query,
         Err(err) => return err.into_response(),
     };
@@ -4410,7 +4416,7 @@ fn transparency_token_issuances_response(
     };
     let published_token_count = entries.len();
     let (entries, truncated) = limit_governance_readback_values(entries, limit);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -4720,71 +4726,75 @@ fn proof_token_issuance_ingest_json(
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.transparency.proof_token_issuance.ingest.v1"),
+            &(Value::from("sorafs.transparency.proof_token_issuance.ingest.v1")),
         ),
-        json_entry("status", Value::from("accepted")),
+        json_entry("status", &(Value::from("accepted"))),
         json_entry(
             "publication_status",
-            Value::from(if has_governance_publisher {
+            &(Value::from(if has_governance_publisher {
                 "published_to_local_governance_dag"
             } else {
                 "accepted_without_governance_publisher"
-            }),
+            })),
         ),
-        json_entry("token_id_hex", Value::from(encode(issuance.token_id))),
-        json_entry("issued_at_unix", Value::from(issuance.issued_at_unix)),
+        json_entry("token_id_hex", &(Value::from(encode(issuance.token_id)))),
+        json_entry("issued_at_unix", &(Value::from(issuance.issued_at_unix))),
         json_entry(
             "expires_at_unix",
-            issuance.expires_at_unix.map_or(Value::Null, Value::from),
+            &(issuance.expires_at_unix.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "moderation_action_code",
-            Value::from(u64::from(issuance.moderation_action_code)),
+            &(Value::from(u64::from(issuance.moderation_action_code))),
         ),
-        json_entry("signer_key_hex", Value::from(encode(issuance.signer_key))),
+        json_entry(
+            "signer_key_hex",
+            &(Value::from(encode(issuance.signer_key))),
+        ),
         json_entry(
             "token_blake3_hex",
-            Value::from(encode(issuance.token_blake3)),
+            &(Value::from(encode(issuance.token_blake3))),
         ),
         json_entry(
             "blinded_digest_hex",
-            Value::from(encode(issuance.blinded_digest)),
+            &(Value::from(encode(issuance.blinded_digest))),
         ),
         json_entry(
             "entry_ids",
-            Value::Array(
+            &(Value::Array(
                 issuance
                     .entry_ids
                     .iter()
                     .cloned()
                     .map(Value::from)
                     .collect(),
-            ),
+            )),
         ),
-        json_entry("entry_count", Value::from(issuance.entry_ids.len() as u64)),
+        json_entry(
+            "entry_count",
+            &(Value::from(issuance.entry_ids.len() as u64)),
+        ),
         json_entry(
             "evidence_digest_hex",
-            issuance
+            &(issuance
                 .evidence_digest
-                .map(|digest| Value::from(encode(digest)))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |digest| Value::from(encode(digest)))),
         ),
         json_entry(
             "policy_digest_hex",
-            issuance
+            &(issuance
                 .policy_digest
-                .map(|digest| Value::from(encode(digest)))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |digest| Value::from(encode(digest)))),
         ),
         json_entry(
             "metadata",
-            Value::Object(
+            &(Value::Object(
                 issuance
                     .metadata
                     .iter()
                     .map(|item| (item.key.clone(), Value::from(item.value.clone())))
                     .collect(),
-            ),
+            )),
         ),
     ])
 }
@@ -4829,36 +4839,36 @@ fn privacy_aggregate_source_event_ingest_json(
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.transparency.privacy_aggregate_source_event.ingest.v1"),
+            &(Value::from("sorafs.transparency.privacy_aggregate_source_event.ingest.v1")),
         ),
         json_entry(
             "status",
-            Value::from(match outcome {
+            &(Value::from(match outcome {
                 sorafs_node::PrivacySourceEventRecordOutcomeV1::Recorded => "recorded",
                 sorafs_node::PrivacySourceEventRecordOutcomeV1::AlreadyRecorded => {
                     "already_recorded"
                 }
-            }),
+            })),
         ),
-        json_entry("event_id", Value::from(event.event_id.clone())),
-        json_entry("occurred_at_unix", Value::from(event.occurred_at_unix)),
+        json_entry("event_id", &(Value::from(event.event_id.clone()))),
+        json_entry("occurred_at_unix", &(Value::from(event.occurred_at_unix))),
         json_entry(
             "population_label",
-            Value::from(event.population_label.clone()),
+            &(Value::from(event.population_label.clone())),
         ),
         json_entry(
             "population_digest_hex",
-            Value::from(encode(event.population_digest)),
+            &(Value::from(encode(event.population_digest))),
         ),
         json_entry(
             "subject_digest_hex",
-            Value::from(encode(event.subject_digest)),
+            &(Value::from(encode(event.subject_digest))),
         ),
         json_entry(
             "policy_digest_hex",
-            Value::from(encode(event.policy_digest)),
+            &(Value::from(encode(event.policy_digest))),
         ),
-        json_entry("metric_count", Value::from(event.metrics.len() as u64)),
+        json_entry("metric_count", &(Value::from(event.metrics.len() as u64))),
     ])
 }
 fn privacy_aggregate_publish_due_request_from_body(
@@ -4935,9 +4945,9 @@ fn insert_privacy_aggregate_window(
     response.insert(
         "window".into(),
         json_object(vec![
-            json_entry("cycle_start_unix", Value::from(window.cycle_start_unix)),
-            json_entry("cycle_end_unix", Value::from(window.cycle_end_unix)),
-            json_entry("due_at_unix", Value::from(window.due_at_unix)),
+            json_entry("cycle_start_unix", &(Value::from(window.cycle_start_unix))),
+            json_entry("cycle_end_unix", &(Value::from(window.cycle_end_unix))),
+            json_entry("due_at_unix", &(Value::from(window.due_at_unix))),
         ]),
     );
 }
@@ -4959,44 +4969,47 @@ fn privacy_aggregate_publication_summary_json(
     Ok(json_object(vec![
         json_entry(
             "cycle_id_hex",
-            Value::from(encode(publication.block.cycle_id)),
+            &(Value::from(encode(publication.block.cycle_id))),
         ),
         json_entry(
             "cycle_start_unix",
-            Value::from(publication.block.cycle_start_unix),
+            &(Value::from(publication.block.cycle_start_unix)),
         ),
         json_entry(
             "cycle_end_unix",
-            Value::from(publication.block.cycle_end_unix),
+            &(Value::from(publication.block.cycle_end_unix)),
         ),
         json_entry(
             "generated_at_unix",
-            Value::from(publication.block.generated_at_unix),
+            &(Value::from(publication.block.generated_at_unix)),
         ),
         json_entry(
             "entry_count",
-            Value::from(u64::from(publication.block.entry_count)),
+            &(Value::from(u64::from(publication.block.entry_count))),
         ),
-        json_entry("proof_count", Value::from(publication.proofs.len() as u64)),
+        json_entry(
+            "proof_count",
+            &(Value::from(publication.proofs.len() as u64)),
+        ),
         json_entry(
             "entry_root_hex",
-            Value::from(encode(publication.block.entry_root)),
+            &(Value::from(encode(publication.block.entry_root))),
         ),
-        json_entry("block_hash_hex", Value::from(encode(block_hash))),
+        json_entry("block_hash_hex", &(Value::from(encode(block_hash)))),
         json_entry(
             "publication_hash_hex",
-            Value::from(encode(publication_hash)),
+            &(Value::from(encode(publication_hash))),
         ),
         json_entry(
             "privacy_aggregates",
-            json::to_value(&publication.privacy_aggregates).map_err(|err| {
+            &(json::to_value(&publication.privacy_aggregates).map_err(|err| {
                 json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!(
                         "failed to encode SoraFS privacy aggregate publication payloads: {err}"
                     ),
                 )
-            })?,
+            })?),
         ),
     ]))
 }
@@ -5049,12 +5062,12 @@ fn transparency_proof_token_rate_limited_response(retry_after_secs: u64) -> Resp
     let mut response = (
         StatusCode::TOO_MANY_REQUESTS,
         JsonBody(json_object(vec![
-            json_entry("error", Value::from("rate_limited")),
+            json_entry("error", &(Value::from("rate_limited"))),
             json_entry(
                 "message",
-                Value::from("SoraFS transparency proof-token verification is rate-limited"),
+                &(Value::from("SoraFS transparency proof-token verification is rate-limited")),
             ),
-            json_entry("retry_after_secs", Value::from(retry_after_secs)),
+            json_entry("retry_after_secs", &(Value::from(retry_after_secs))),
         ])),
     )
         .into_response();
@@ -5085,16 +5098,16 @@ pub(crate) async fn handle_get_sorafs_appeal_finance_reports(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        appeal_finance_reports_response(state, headers, raw_query)
+        appeal_finance_reports_response(state, &(headers), raw_query.as_deref())
     })
     .await
 }
 fn appeal_finance_reports_response(
     state: &SharedAppState,
-    headers: HeaderMap,
-    raw_query: Option<String>,
+    headers: &HeaderMap,
+    raw_query: Option<&str>,
 ) -> Response {
-    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query) {
         Ok(query) => query,
         Err(err) => return err.into_response(),
     };
@@ -5123,7 +5136,7 @@ fn appeal_finance_reports_response(
     };
     let published_report_count = entries.len();
     let (entries, truncated) = limit_governance_readback_values(entries, limit);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -5203,16 +5216,16 @@ pub(crate) async fn handle_get_sorafs_appeal_finance_weekly_rollups(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        appeal_finance_weekly_rollups_response(state, headers, raw_query)
+        appeal_finance_weekly_rollups_response(state, &(headers), raw_query.as_deref())
     })
     .await
 }
 fn appeal_finance_weekly_rollups_response(
     state: &SharedAppState,
-    headers: HeaderMap,
-    raw_query: Option<String>,
+    headers: &HeaderMap,
+    raw_query: Option<&str>,
 ) -> Response {
-    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query) {
         Ok(query) => query,
         Err(err) => return err.into_response(),
     };
@@ -5238,7 +5251,7 @@ fn appeal_finance_weekly_rollups_response(
     let summary = appeal_finance_weekly_rollup_publish_summary(&entries);
     let published_rollup_count = entries.len();
     let (entries, truncated) = limit_governance_readback_values(entries, limit);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -5297,16 +5310,16 @@ pub(crate) async fn handle_get_sorafs_appeal_finance_settlement_receipts(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        appeal_finance_settlement_receipts_response(state, headers, raw_query)
+        appeal_finance_settlement_receipts_response(state, &(headers), raw_query.as_deref())
     })
     .await
 }
 fn appeal_finance_settlement_receipts_response(
     state: &SharedAppState,
-    headers: HeaderMap,
-    raw_query: Option<String>,
+    headers: &HeaderMap,
+    raw_query: Option<&str>,
 ) -> Response {
-    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query) {
         Ok(query) => query,
         Err(err) => return err.into_response(),
     };
@@ -5335,7 +5348,7 @@ fn appeal_finance_settlement_receipts_response(
     };
     let published_receipt_count = entries.len();
     let (entries, truncated) = limit_governance_readback_values(entries, limit);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -5402,7 +5415,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_car_queue(
     headers: HeaderMap,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        governance_car_queue_response(state, headers)
+        governance_car_queue_response(state, &(headers))
     })
     .await
 }
@@ -5460,13 +5473,13 @@ where
         )
     })?
 }
-fn governance_car_queue_response(state: &SharedAppState, headers: HeaderMap) -> Response {
+fn governance_car_queue_response(state: &SharedAppState, headers: &HeaderMap) -> Response {
     let (queue, metadata) = match load_governance_dag_car_queue(state) {
         Ok(value) => value,
         Err(response) => return response,
     };
     let etag = governance_dag_representation_etag(&metadata.etag, "car-queue", &[]);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -5511,7 +5524,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_car_queue_digest(
     governance_dag_blocking_response(state, move |state| {
         governance_car_queue_lookup_response(
             state,
-            headers,
+            &(headers),
             "sorafs.governance_dag.car_queue.digest.lookup.v1",
             "digest",
             "by_encoded_blake3",
@@ -5538,7 +5551,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_car_queue_kind(
     governance_dag_blocking_response(state, move |state| {
         governance_car_queue_lookup_response(
             state,
-            headers,
+            &(headers),
             "sorafs.governance_dag.car_queue.kind.lookup.v1",
             "payload_kind",
             "by_payload_kind",
@@ -5559,7 +5572,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_car_queue_archive(
             Err(response) => return response,
         };
     governance_dag_blocking_response(state, move |state| {
-        governance_car_queue_archive_lookup_response(state, headers, &car_archive_blake3)
+        governance_car_queue_archive_lookup_response(state, &(headers), &car_archive_blake3)
     })
     .await
 }
@@ -5568,11 +5581,11 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime(
     headers: HeaderMap,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        governance_dag_runtime_response(state, headers)
+        governance_dag_runtime_response(state, &(headers))
     })
     .await
 }
-fn governance_dag_runtime_response(state: &SharedAppState, headers: HeaderMap) -> Response {
+fn governance_dag_runtime_response(state: &SharedAppState, headers: &HeaderMap) -> Response {
     let (index, metadata) = match load_governance_dag_runtime_index(state) {
         Ok(value) => value,
         Err(response) => return response,
@@ -5584,7 +5597,7 @@ fn governance_dag_runtime_response(state: &SharedAppState, headers: HeaderMap) -
     };
     let (payload_kind_counts, first_sequence, last_sequence, last_published_at) =
         runtime_dag_block_summary(blocks);
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -5657,11 +5670,11 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_head(
     headers: HeaderMap,
 ) -> Response {
     governance_dag_blocking_response(state, move |state| {
-        governance_dag_runtime_head_response(state, headers)
+        governance_dag_runtime_head_response(state, &(headers))
     })
     .await
 }
-fn governance_dag_runtime_head_response(state: &SharedAppState, headers: HeaderMap) -> Response {
+fn governance_dag_runtime_head_response(state: &SharedAppState, headers: &HeaderMap) -> Response {
     let (index, metadata) = match load_governance_dag_runtime_index(state) {
         Ok(value) => value,
         Err(response) => return response,
@@ -5671,7 +5684,7 @@ fn governance_dag_runtime_head_response(state: &SharedAppState, headers: HeaderM
         Ok(value) => value,
         Err(response) => return response,
     };
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -5710,7 +5723,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_block(
     governance_dag_blocking_response(state, move |state| {
         governance_runtime_dag_block_lookup_response(
             state,
-            headers,
+            &(headers),
             "sorafs.governance_dag.runtime.block.lookup.v1",
             "block",
             "block_cid_hex",
@@ -5731,7 +5744,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_node(
     governance_dag_blocking_response(state, move |state| {
         governance_runtime_dag_block_lookup_response(
             state,
-            headers,
+            &(headers),
             "sorafs.governance_dag.runtime.node.lookup.v1",
             "node",
             "node_cid_hex",
@@ -5757,7 +5770,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_digest(
     governance_dag_blocking_response(state, move |state| {
         governance_runtime_dag_index_lookup_response(
             state,
-            headers,
+            &(headers),
             "sorafs.governance_dag.runtime.digest.lookup.v1",
             "digest",
             "by_encoded_blake3",
@@ -5784,7 +5797,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_kind(
     governance_dag_blocking_response(state, move |state| {
         governance_runtime_dag_index_lookup_response(
             state,
-            headers,
+            &(headers),
             "sorafs.governance_dag.runtime.kind.lookup.v1",
             "payload_kind",
             "by_payload_kind",
@@ -6243,6 +6256,16 @@ fn parse_governance_publication_state(
     canonical_bytes: &[u8],
     metadata: GovernanceDagSourceMetadata,
 ) -> Result<LoadedGovernancePublicationState, Response> {
+    const PUBLICATION_STATE_FIELDS: [&str; 7] = [
+        "schema",
+        "source",
+        "root",
+        "generation",
+        "generated_at",
+        "publish_index",
+        "car_queue",
+    ];
+
     let publication_state: Value = json::from_slice(canonical_bytes).map_err(|err| {
         warn!(error = %err, "failed to decode typed governance publication authority");
         json_error(
@@ -6256,15 +6279,7 @@ fn parse_governance_publication_state(
             "governance publication state root is not an object",
         )
     })?;
-    const PUBLICATION_STATE_FIELDS: [&str; 7] = [
-        "schema",
-        "source",
-        "root",
-        "generation",
-        "generated_at",
-        "publish_index",
-        "car_queue",
-    ];
+
     require_exact_map_fields(
         root,
         &PUBLICATION_STATE_FIELDS,
@@ -6460,13 +6475,6 @@ fn validate_governance_publication_labels(labels: &Map, context: &str) -> Result
     Ok(())
 }
 fn validate_governance_dag_publish_index(index: &Value) -> Result<(), Response> {
-    let context = "governance DAG publish index";
-    let index_object = index.as_object().ok_or_else(|| {
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{context} root is not an object"),
-        )
-    })?;
     const TOP_LEVEL_FIELDS: [&str; 9] = [
         "schema",
         "source",
@@ -6478,6 +6486,15 @@ fn validate_governance_dag_publish_index(index: &Value) -> Result<(), Response> 
         "by_payload_kind",
         "entries",
     ];
+
+    let context = "governance DAG publish index";
+    let index_object = index.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} root is not an object"),
+        )
+    })?;
+
     if index_object.len() != TOP_LEVEL_FIELDS.len()
         || !TOP_LEVEL_FIELDS
             .iter()
@@ -6524,13 +6541,6 @@ fn validate_governance_dag_publish_index(index: &Value) -> Result<(), Response> 
     let maximum_payload_bytes =
         u64::try_from(GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1).unwrap_or(u64::MAX);
     for (position, value) in entries.iter().enumerate() {
-        let entry_context = format!("{context} entry {position}");
-        let entry = value.as_object().ok_or_else(|| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{entry_context} is not an object"),
-            )
-        })?;
         const ENTRY_FIELDS: [&str; 10] = [
             "position",
             "payload_kind",
@@ -6543,6 +6553,15 @@ fn validate_governance_dag_publish_index(index: &Value) -> Result<(), Response> 
             "published_at_unix",
             "labels",
         ];
+
+        let entry_context = format!("{context} entry {position}");
+        let entry = value.as_object().ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{entry_context} is not an object"),
+            )
+        })?;
+
         if entry.len() != ENTRY_FIELDS.len()
             || !ENTRY_FIELDS.iter().all(|field| entry.contains_key(*field))
         {
@@ -6749,13 +6768,6 @@ fn load_governance_dag_car_queue(
     Ok((loaded.car_queue, loaded.metadata))
 }
 fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
-    let context = "governance DAG CAR queue";
-    let queue_object = queue.as_object().ok_or_else(|| {
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{context} root is not an object"),
-        )
-    })?;
     const QUEUE_FIELDS: [&str; 11] = [
         "schema",
         "source",
@@ -6769,6 +6781,15 @@ fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
         "by_car_archive_blake3",
         "segments",
     ];
+
+    let context = "governance DAG CAR queue";
+    let queue_object = queue.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} root is not an object"),
+        )
+    })?;
+
     require_exact_map_fields(queue_object, &QUEUE_FIELDS, context)?;
     if queue.get("source").and_then(Value::as_str) != Some("filesystem") {
         return Err(json_error(
@@ -6807,14 +6828,6 @@ fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
     let maximum_payload_bytes =
         u64::try_from(GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1).unwrap_or(u64::MAX);
     for (position, value) in segments.iter().enumerate() {
-        let segment_context = format!("{context} segment {position}");
-        let segment = value.as_object().ok_or_else(|| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{segment_context} is not an object"),
-            )
-        })?;
-        let status = required_map_string(segment, "status", &segment_context)?;
         const ASSEMBLED_SEGMENT_FIELDS: [&str; 23] = [
             "schema",
             "queue_position",
@@ -6840,6 +6853,16 @@ fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
             "files",
             "chunk_profile",
         ];
+
+        let segment_context = format!("{context} segment {position}");
+        let segment = value.as_object().ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{segment_context} is not an object"),
+            )
+        })?;
+        let status = required_map_string(segment, "status", &segment_context)?;
+
         if status != "assembled" {
             return Err(json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -7169,6 +7192,8 @@ fn validate_governance_dag_car_assembled_details(
     segment: &Map,
     context: &str,
 ) -> Result<(), Response> {
+    const PROFILE_FIELDS: [&str; 4] = ["min_size", "target_size", "max_size", "break_mask"];
+
     let car_size = required_map_u64(segment, "car_size", context)?;
     if car_size == 0 || car_size > GOVERNANCE_DAG_CAR_ARCHIVE_MAX_BYTES {
         return Err(json_error(
@@ -7228,6 +7253,8 @@ fn validate_governance_dag_car_assembled_details(
     let mut roles = BTreeSet::new();
     let mut described_payload_bytes = 0_u64;
     for (position, value) in files.iter().enumerate() {
+        const FILE_FIELDS: [&str; 4] = ["role", "path", "bytes", "blake3"];
+
         let file_context = format!("{context} file {position}");
         let file = value.as_object().ok_or_else(|| {
             json_error(
@@ -7235,7 +7262,7 @@ fn validate_governance_dag_car_assembled_details(
                 format!("{file_context} is not an object"),
             )
         })?;
-        const FILE_FIELDS: [&str; 4] = ["role", "path", "bytes", "blake3"];
+
         require_exact_map_fields(file, &FILE_FIELDS, &file_context)?;
         let role = required_map_string(file, "role", &file_context)?;
         let expected_path = match role.as_str() {
@@ -7324,7 +7351,7 @@ fn validate_governance_dag_car_assembled_details(
                 format!("{context} chunk profile is not an object"),
             )
         })?;
-    const PROFILE_FIELDS: [&str; 4] = ["min_size", "target_size", "max_size", "break_mask"];
+
     require_exact_map_fields(
         profile,
         &PROFILE_FIELDS,
@@ -7401,7 +7428,7 @@ fn governance_car_source_bindings(
         let path = required_map_string(file, "path", &file_context)?;
         let relative = validate_governance_dag_relative_path(&path, "CAR source file")?;
         let mut path_components = Vec::new();
-        for component in relative.iter() {
+        for component in &relative {
             let component = component.to_str().ok_or_else(|| {
                 json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -7503,12 +7530,6 @@ fn retained_governance_car_plan(
     bindings: &[GovernanceCarSourceBinding],
     context: &str,
 ) -> Result<CarBuildPlan, Response> {
-    let plan = plan_value.as_object().ok_or_else(|| {
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{context} retained plan is not an object"),
-        )
-    })?;
     const PLAN_FIELDS: [&str; 12] = [
         "schema",
         "source_publish_index_position",
@@ -7523,6 +7544,14 @@ fn retained_governance_car_plan(
         "chunk_profile",
         "chunks",
     ];
+
+    let plan = plan_value.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained plan is not an object"),
+        )
+    })?;
+
     require_exact_map_fields(plan, &PLAN_FIELDS, "governance CAR retained plan")?;
     if plan.get("schema").and_then(Value::as_str) != Some("sorafs.governance_dag.local_car_plan.v1")
         || required_map_u64(plan, "source_publish_index_position", context)?
@@ -7577,6 +7606,8 @@ fn retained_governance_car_plan(
     let mut chunks = Vec::with_capacity(chunk_count);
     let mut expected_offset = 0_u64;
     for (index, value) in chunks_value.iter().enumerate() {
+        const CHUNK_FIELDS: [&str; 4] = ["index", "offset", "length", "blake3"];
+
         let chunk_context = format!("{context} retained plan chunk {index}");
         let chunk = value.as_object().ok_or_else(|| {
             json_error(
@@ -7584,7 +7615,7 @@ fn retained_governance_car_plan(
                 format!("{chunk_context} is not an object"),
             )
         })?;
-        const CHUNK_FIELDS: [&str; 4] = ["index", "offset", "length", "blake3"];
+
         require_exact_map_fields(chunk, &CHUNK_FIELDS, &chunk_context)?;
         if required_map_u64(chunk, "index", &chunk_context)? != index as u64
             || required_map_u64(chunk, "offset", &chunk_context)? != expected_offset
@@ -8205,14 +8236,6 @@ fn verify_and_bind_governance_dag_runtime_index(
     index: &mut Value,
     head_bytes: &[u8],
 ) -> Result<(), Response> {
-    let root = governance_dag_root_dir(state)?;
-    let context = "governance DAG runtime index";
-    let index_object = index.as_object().ok_or_else(|| {
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG runtime index root is not an object",
-        )
-    })?;
     const RUNTIME_INDEX_FIELDS: [&str; 20] = [
         "schema",
         "source",
@@ -8235,6 +8258,16 @@ fn verify_and_bind_governance_dag_runtime_index(
         "by_payload_kind",
         "blocks",
     ];
+
+    let root = governance_dag_root_dir(state)?;
+    let context = "governance DAG runtime index";
+    let index_object = index.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG runtime index root is not an object",
+        )
+    })?;
+
     require_exact_map_fields(index_object, &RUNTIME_INDEX_FIELDS, context)?;
     if index.get("source").and_then(Value::as_str) != Some("filesystem")
         || index.get("root").and_then(Value::as_str) != Some(GOVERNANCE_DAG_LOGICAL_ROOT)
@@ -8268,13 +8301,6 @@ fn verify_and_bind_governance_dag_runtime_index(
     let mut by_payload_kind = Map::new();
     let mut total_bytes = 0_u64;
     for (position, value) in blocks.iter_mut().enumerate() {
-        let entry_context = format!("governance DAG runtime block {position}");
-        let entry = value.as_object_mut().ok_or_else(|| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{entry_context} is not an object"),
-            )
-        })?;
         const RUNTIME_BLOCK_FIELDS: [&str; 17] = [
             "position",
             "sequence",
@@ -8294,6 +8320,15 @@ fn verify_and_bind_governance_dag_runtime_index(
             "block_path",
             "published_at_unix",
         ];
+
+        let entry_context = format!("governance DAG runtime block {position}");
+        let entry = value.as_object_mut().ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{entry_context} is not an object"),
+            )
+        })?;
+
         require_exact_map_fields(entry, &RUNTIME_BLOCK_FIELDS, &entry_context)?;
         let position_u64 = u64::try_from(position).map_err(|_| {
             json_error(
@@ -8481,7 +8516,7 @@ fn governance_dag_root_dir_with_message(
 }
 fn governance_dag_lookup_response(
     state: &SharedAppState,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     query: &str,
     map_name: &str,
     schema: &str,
@@ -8496,19 +8531,25 @@ fn governance_dag_lookup_response(
         Err(response) => return response,
     };
     governance_dag_lookup_response_from_index(
-        index, metadata, headers, query, map_name, schema, cid_hex,
+        &(index),
+        &(metadata),
+        headers,
+        query,
+        map_name,
+        schema,
+        cid_hex,
     )
 }
 fn governance_dag_lookup_response_from_index(
-    index: Value,
-    metadata: GovernanceDagSourceMetadata,
-    headers: HeaderMap,
+    index: &Value,
+    metadata: &GovernanceDagSourceMetadata,
+    headers: &HeaderMap,
     query: &str,
     map_name: &str,
     schema: &str,
     cid_hex: String,
 ) -> Response {
-    let block = match governance_dag_mirror_lookup_block(&index, map_name, &cid_hex) {
+    let block = match governance_dag_mirror_lookup_block(index, map_name, &cid_hex) {
         Ok(Some(block)) => block,
         Ok(None) => {
             return json_error(
@@ -8523,12 +8564,12 @@ fn governance_dag_lookup_response_from_index(
         "mirror-lookup",
         &[schema, query, map_name, cid_hex.as_str()],
     );
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
     response.insert("schema".into(), Value::from(schema));
-    insert_governance_dag_source_metadata(&mut response, &metadata);
+    insert_governance_dag_source_metadata(&mut response, metadata);
     response.insert("query".into(), Value::from(query));
     response.insert("cid_hex".into(), Value::from(cid_hex));
     response.insert("found".into(), Value::from(true));
@@ -8680,7 +8721,7 @@ fn runtime_dag_block_summary(blocks: &[Value]) -> (Map, Option<u64>, Option<u64>
 }
 fn governance_runtime_dag_block_lookup_response(
     state: &SharedAppState,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     schema: &str,
     query: &str,
     field_name: &str,
@@ -8705,7 +8746,7 @@ fn governance_runtime_dag_block_lookup_response(
         "runtime-block-lookup",
         &[schema, query, field_name, cid_hex],
     );
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -8730,7 +8771,7 @@ fn governance_runtime_dag_lookup_block_by_field(
 }
 fn governance_runtime_dag_index_lookup_response(
     state: &SharedAppState,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     schema: &str,
     query: &str,
     map_name: &str,
@@ -8757,7 +8798,7 @@ fn governance_runtime_dag_index_lookup_response(
         "runtime-index-lookup",
         &[schema, query, map_name, key, limit_component.as_str()],
     );
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let count = blocks.len();
@@ -8832,7 +8873,7 @@ fn governance_runtime_dag_lookup_blocks(
 }
 fn governance_publish_index_lookup_response(
     state: &SharedAppState,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     schema: &str,
     query: &str,
     map_name: &str,
@@ -8859,7 +8900,7 @@ fn governance_publish_index_lookup_response(
         "publish-index-lookup",
         &[schema, query, map_name, key, limit_component.as_str()],
     );
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let count = entries.len();
@@ -9036,11 +9077,24 @@ fn transparency_cycle_index_summary(entry: &Value) -> Result<Value, Response> {
 }
 fn transparency_cycle_publication_response(
     state: &SharedAppState,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     cycle_id_hex: &str,
     entry_id_hex: Option<&str>,
     publication_limit: usize,
 ) -> Response {
+    enum SerializedTransparencyPublicationResponse {
+        Entry {
+            entry_id_hex: String,
+            block: Value,
+            proof: Value,
+        },
+        Cycle {
+            proof_count: usize,
+            returned_proof_count: usize,
+            publication: Value,
+        },
+    }
+
     let (index, metadata) = match load_governance_dag_publish_index(state) {
         Ok(value) => value,
         Err(response) => return response,
@@ -9097,18 +9151,7 @@ fn transparency_cycle_publication_response(
             &[cycle_id_hex, limit_component.as_str()],
         ),
     };
-    enum SerializedTransparencyPublicationResponse {
-        Entry {
-            entry_id_hex: String,
-            block: Value,
-            proof: Value,
-        },
-        Cycle {
-            proof_count: usize,
-            returned_proof_count: usize,
-            publication: Value,
-        },
-    }
+
     let serialized = if let Some((entry_id_hex, proof)) = selected_proof {
         let block = match json::to_value(&verified.publication.block) {
             Ok(value) => value,
@@ -9154,7 +9197,7 @@ fn transparency_cycle_publication_response(
             publication,
         }
     };
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -9177,8 +9220,7 @@ fn transparency_cycle_publication_response(
         verified
             .json_path
             .as_ref()
-            .map(|path| Value::from(path.clone()))
-            .unwrap_or(Value::Null),
+            .map_or(Value::Null, |path| Value::from(path.clone())),
     );
     response.insert(
         "encoded_blake3".into(),
@@ -9617,33 +9659,33 @@ fn proof_token_issuance_summary_json(summary: ProofTokenIssuancePublishSummary) 
     json_object(vec![
         json_entry(
             "latest_published_at_unix",
-            summary
+            &(summary
                 .latest_published_at_unix
-                .map_or(Value::Null, Value::from),
+                .map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "distinct_token_count",
-            Value::from(summary.distinct_token_count),
+            &(Value::from(summary.distinct_token_count)),
         ),
         json_entry(
             "distinct_signer_count",
-            Value::from(summary.distinct_signer_count),
+            &(Value::from(summary.distinct_signer_count)),
         ),
         json_entry(
             "bound_entry_count_total",
-            Value::from(summary.bound_entry_count_total),
+            &(Value::from(summary.bound_entry_count_total)),
         ),
         json_entry(
             "expiring_token_count",
-            Value::from(summary.expiring_token_count),
+            &(Value::from(summary.expiring_token_count)),
         ),
         json_entry(
             "evidence_digest_count",
-            Value::from(summary.evidence_digest_count),
+            &(Value::from(summary.evidence_digest_count)),
         ),
         json_entry(
             "action_code_counts",
-            Value::Object(summary.action_code_counts),
+            &(Value::Object(summary.action_code_counts)),
         ),
     ])
 }
@@ -10241,7 +10283,7 @@ fn appeal_finance_settlement_receipt_step_summary_empty() -> Map {
 }
 fn governance_car_queue_lookup_response(
     state: &SharedAppState,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     schema: &str,
     query: &str,
     map_name: &str,
@@ -10268,7 +10310,7 @@ fn governance_car_queue_lookup_response(
         "car-queue-lookup",
         &[schema, query, map_name, key, limit_component.as_str()],
     );
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let count = segments.len();
@@ -10288,7 +10330,7 @@ fn governance_car_queue_lookup_response(
 }
 fn governance_car_queue_archive_lookup_response(
     state: &SharedAppState,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     car_archive_blake3: &str,
 ) -> Response {
     let (queue, metadata) = match load_governance_dag_car_queue(state) {
@@ -10323,7 +10365,7 @@ fn governance_car_queue_archive_lookup_response(
         "car-queue-archive",
         &[car_archive_blake3],
     );
-    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+    if let Some(response) = governance_dag_not_modified_response(headers, &etag) {
         return response;
     }
     let mut response = Map::new();
@@ -10579,7 +10621,7 @@ fn reputation_authentication_required_response() -> Response {
     insert_reputation_stream_cache_headers(&mut response);
     response
 }
-/// Apply authenticated cache isolation to a SoraFS reputation route response.
+/// Apply authenticated cache isolation to a `SoraFS` reputation route response.
 pub(crate) fn finalize_reputation_route_response(response: Response) -> Response {
     let mut response = normalize_reputation_framework_error(response);
     if response.status().is_client_error() || response.status().is_server_error() {
@@ -10629,7 +10671,7 @@ fn reputation_response_is_json(response: &Response) -> bool {
                 .eq_ignore_ascii_case("application/json")
         })
 }
-/// Harden framework-generated SoraFS reputation route failures.
+/// Harden framework-generated `SoraFS` reputation route failures.
 pub(crate) async fn harden_reputation_route_responses(
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -10742,9 +10784,8 @@ pub(crate) async fn handle_get_sorafs_reputation_latest(
         };
         let etag = reputation_snapshot_etag(snapshot, limit);
         match authenticated_reputation_not_modified_response(&headers, &etag) {
-            Ok(Some(response)) => return response,
             Ok(None) => {}
-            Err(response) => return response,
+            Ok(Some(response)) | Err(response) => return response,
         }
         match reputation_snapshot_summary_json(snapshot, limit) {
             Ok(value) => authenticated_reputation_json_response(value, &etag),
@@ -10811,9 +10852,8 @@ pub(crate) async fn handle_get_sorafs_reputation_snapshot(
         };
         let etag = reputation_snapshot_etag(&snapshot, limit);
         match authenticated_reputation_not_modified_response(&headers, &etag) {
-            Ok(Some(response)) => return response,
             Ok(None) => {}
-            Err(response) => return response,
+            Ok(Some(response)) | Err(response) => return response,
         }
         match reputation_snapshot_summary_json(&snapshot, limit) {
             Ok(value) => authenticated_reputation_json_response(value, &etag),
@@ -10863,9 +10903,8 @@ pub(crate) async fn handle_get_sorafs_reputation_weights(
         };
         let etag = reputation_weights_etag(snapshot);
         match authenticated_reputation_not_modified_response(&headers, &etag) {
-            Ok(Some(response)) => return response,
             Ok(None) => {}
-            Err(response) => return response,
+            Ok(Some(response)) | Err(response) => return response,
         }
         match reputation_weights_json(snapshot) {
             Ok(value) => authenticated_reputation_json_response(value, &etag),
@@ -10913,9 +10952,8 @@ pub(crate) async fn handle_get_sorafs_reputation_events(
         let tip_sequence = projection.events.last().map_or(0, |event| event.sequence);
         let etag = reputation_events_etag(query.since, limit, tip_sequence, &events);
         match authenticated_reputation_not_modified_response(&headers, &etag) {
-            Ok(Some(response)) => return response,
             Ok(None) => {}
-            Err(response) => return response,
+            Ok(Some(response)) | Err(response) => return response,
         }
         match reputation_events_json(query.since, limit, &events) {
             Ok(value) => authenticated_reputation_json_response(value, &etag),
@@ -11135,9 +11173,8 @@ pub(crate) async fn handle_get_sorafs_reputation_provider(
         };
         let etag = reputation_provider_etag(snapshot, provider);
         match authenticated_reputation_not_modified_response(&headers, &etag) {
-            Ok(Some(response)) => return response,
             Ok(None) => {}
-            Err(response) => return response,
+            Ok(Some(response)) | Err(response) => return response,
         }
         match reputation_provider_response_json(snapshot, provider, &proof) {
             Ok(value) => authenticated_reputation_json_response(value, &etag),
@@ -11488,7 +11525,7 @@ pub(crate) async fn handle_post_sorafs_moderation_dead_letter_prepare(
     .await;
     let (resolution, signing_message, resolution_bytes) = match prepared {
         Ok(Ok(prepared)) => prepared,
-        Ok(Err(error)) => return moderation_orchestrator_error_response(error),
+        Ok(Err(error)) => return moderation_orchestrator_error_response(&(error)),
         Err(error) => {
             warn!(?error, "SoraFS moderation recovery prepare task failed");
             return json_error(
@@ -11584,7 +11621,7 @@ pub(crate) async fn handle_post_sorafs_moderation_dead_letter_apply(
         .await;
     match applied {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => return moderation_orchestrator_error_response(error),
+        Ok(Err(error)) => return moderation_orchestrator_error_response(&(error)),
         Err(error) => {
             warn!(?error, "SoraFS moderation recovery apply task failed");
             return json_error(
@@ -11905,7 +11942,7 @@ fn validate_moderation_signed_transaction(
     .ok_or_else(|| moderation_route_instruction_mismatch_response(route))?;
     action
         .validate_for_authority(transaction.authority())
-        .map_err(moderation_orchestrator_error_response)
+        .map_err(|value| moderation_orchestrator_error_response(&value))
 }
 fn moderation_route_instruction_mismatch_response(route: ModerationCommandRouteV1) -> Response {
     json_error(
@@ -11930,7 +11967,7 @@ const fn moderation_route_instruction_label(route: ModerationCommandRouteV1) -> 
         ModerationCommandRouteV1::FinalizeCase => "FinalizeSorafsModerationCase",
     }
 }
-fn moderation_orchestrator_error_response(error: ModerationOrchestratorError) -> Response {
+fn moderation_orchestrator_error_response(error: &ModerationOrchestratorError) -> Response {
     let (status, public_message, class) = match error {
         ModerationOrchestratorError::InvalidAction(_) => (
             StatusCode::BAD_REQUEST,
@@ -12075,19 +12112,22 @@ pub(crate) async fn handle_get_sorafs_moderation_ballots(
     JsonBody(json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.finalized_cases.v1"),
+            &(Value::from("sorafs.moderation.finalized_cases.v1")),
         ),
-        json_entry("source", Value::from("finalized_chain")),
-        json_entry("finalized_height", Value::from(snapshot.finalized_height)),
+        json_entry("source", &(Value::from("finalized_chain"))),
+        json_entry(
+            "finalized_height",
+            &(Value::from(snapshot.finalized_height)),
+        ),
         json_entry(
             "finalized_block_hash_hex",
-            Value::from(hex::encode(snapshot.finalized_block_hash)),
+            &(Value::from(hex::encode(snapshot.finalized_block_hash))),
         ),
-        json_entry("count", total_count as u64),
-        json_entry("returned_count", total_count.min(limit) as u64),
-        json_entry("limit", limit as u64),
-        json_entry("truncated", truncated),
-        json_entry("cases", Value::Array(cases)),
+        json_entry("count", &(total_count as u64)),
+        json_entry("returned_count", &(total_count.min(limit) as u64)),
+        json_entry("limit", &(limit as u64)),
+        json_entry("truncated", &(truncated)),
+        json_entry("cases", &(Value::Array(cases))),
     ]))
     .into_response()
 }
@@ -12127,19 +12167,25 @@ pub(crate) async fn handle_get_sorafs_moderation_ballot(
                 },
                 |projection| {
                     JsonBody(json_object(vec![
-                        json_entry("schema", Value::from("sorafs.moderation.finalized_case.v1")),
-                        json_entry("source", Value::from("finalized_chain")),
-                        json_entry("finalized_height", Value::from(snapshot.finalized_height)),
+                        json_entry(
+                            "schema",
+                            &(Value::from("sorafs.moderation.finalized_case.v1")),
+                        ),
+                        json_entry("source", &(Value::from("finalized_chain"))),
+                        json_entry(
+                            "finalized_height",
+                            &(Value::from(snapshot.finalized_height)),
+                        ),
                         json_entry(
                             "finalized_block_hash_hex",
-                            Value::from(hex::encode(snapshot.finalized_block_hash)),
+                            &(Value::from(hex::encode(snapshot.finalized_block_hash))),
                         ),
-                        json_entry("limit", limit as u64),
+                        json_entry("limit", &(limit as u64)),
                         json_entry(
                             "projection_arrays_truncated",
-                            Value::from(projection_arrays_truncated),
+                            &(Value::from(projection_arrays_truncated)),
                         ),
-                        json_entry("case", projection),
+                        json_entry("case", &(projection)),
                     ]))
                     .into_response()
                 },
@@ -12205,18 +12251,21 @@ pub(crate) async fn handle_get_sorafs_moderation_ballot_no_show_plan(
     JsonBody(json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.finalized_no_shows.v1"),
+            &(Value::from("sorafs.moderation.finalized_no_shows.v1")),
         ),
-        json_entry("source", Value::from("finalized_chain")),
-        json_entry("case_id", Value::from(case_id)),
-        json_entry("round_id", Value::from(round_id)),
-        json_entry("finalized_height", Value::from(snapshot.finalized_height)),
+        json_entry("source", &(Value::from("finalized_chain"))),
+        json_entry("case_id", &(Value::from(case_id))),
+        json_entry("round_id", &(Value::from(round_id))),
+        json_entry(
+            "finalized_height",
+            &(Value::from(snapshot.finalized_height)),
+        ),
         json_entry(
             "finalized_block_hash_hex",
-            Value::from(hex::encode(snapshot.finalized_block_hash)),
+            &(Value::from(hex::encode(snapshot.finalized_block_hash))),
         ),
-        json_entry("count", no_shows.len() as u64),
-        json_entry("no_shows", Value::Array(no_shows)),
+        json_entry("count", &(no_shows.len() as u64)),
+        json_entry("no_shows", &(Value::Array(no_shows))),
     ]))
     .into_response()
 }
@@ -12342,27 +12391,30 @@ pub(crate) async fn handle_get_sorafs_moderation_ballot_events(
         json_object(vec![
             json_entry(
                 "schema",
-                Value::from("sorafs.moderation.finalized_events.v1"),
+                &(Value::from("sorafs.moderation.finalized_events.v1")),
             ),
-            json_entry("source", Value::from("finalized_chain")),
-            json_entry("finalized_height", Value::from(snapshot.finalized_height)),
+            json_entry("source", &(Value::from("finalized_chain"))),
+            json_entry(
+                "finalized_height",
+                &(Value::from(snapshot.finalized_height)),
+            ),
             json_entry(
                 "finalized_block_hash_hex",
-                Value::from(hex::encode(snapshot.finalized_block_hash)),
+                &(Value::from(hex::encode(snapshot.finalized_block_hash))),
             ),
-            json_entry("after_sequence", Value::from(since)),
-            json_entry("limit", limit as u64),
-            json_entry("tip_sequence", Value::from(tip_sequence)),
+            json_entry("after_sequence", &(Value::from(since))),
+            json_entry("limit", &(limit as u64)),
+            json_entry("tip_sequence", &(Value::from(tip_sequence))),
             json_entry(
                 "has_more",
-                Value::from(
+                &(Value::from(
                     events
                         .last()
                         .is_some_and(|event| event.sequence < tip_sequence),
-                ),
+                )),
             ),
-            json_entry("next_after", next_after),
-            json_entry("events", Value::Array(encoded_events)),
+            json_entry("next_after", &(next_after)),
+            json_entry("events", &(Value::Array(encoded_events))),
         ]),
         &etag,
     )
@@ -12399,7 +12451,7 @@ pub(crate) async fn handle_get_sorafs_moderation_model_registry(
     let limit = normalize_moderation_read_limit(query.limit);
     let read_view = match state.sorafs_node.moderation_model_registry_read_view(limit) {
         Ok(read_view) => read_view,
-        Err(err) => return moderation_model_registry_error_response(err),
+        Err(err) => return moderation_model_registry_error_response(&(err)),
     };
     JsonBody(moderation_model_registry_snapshot_json(&read_view, limit)).into_response()
 }
@@ -12443,7 +12495,7 @@ pub(crate) async fn handle_post_sorafs_moderation_model_registry_repro_manifest(
             JsonBody(moderation_repro_registry_admission_json(&record)),
         )
             .into_response(),
-        Err(err) => moderation_model_registry_error_response(err),
+        Err(err) => moderation_model_registry_error_response(&(err)),
     }
 }
 pub(crate) async fn handle_post_sorafs_moderation_model_registry_corpus_manifest(
@@ -12486,7 +12538,7 @@ pub(crate) async fn handle_post_sorafs_moderation_model_registry_corpus_manifest
             JsonBody(moderation_corpus_registry_admission_json(&record)),
         )
             .into_response(),
-        Err(err) => moderation_model_registry_error_response(err),
+        Err(err) => moderation_model_registry_error_response(&(err)),
     }
 }
 pub(crate) async fn handle_get_sorafs_moderation_screening_results(
@@ -12503,7 +12555,7 @@ pub(crate) async fn handle_get_sorafs_moderation_screening_results(
     let limit = normalize_moderation_read_limit(query.limit);
     let read_view = match state.sorafs_node.moderation_screening_read_view(limit) {
         Ok(read_view) => read_view,
-        Err(err) => return moderation_screening_error_response(err),
+        Err(err) => return moderation_screening_error_response(&(err)),
     };
     JsonBody(moderation_screening_snapshot_json(&read_view, limit)).into_response()
 }
@@ -12531,7 +12583,7 @@ pub(crate) async fn handle_post_sorafs_moderation_screening_result(
             );
         }
     };
-    let request = match authenticated_moderation_screening_request_from_dto(request) {
+    let request = match authenticated_moderation_screening_request_from_dto(&(request)) {
         Ok(request) => request,
         Err(response) => return response,
     };
@@ -12563,7 +12615,7 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine(
     let limit = normalize_moderation_read_limit(query.limit);
     let read_view = match state.sorafs_node.moderation_quarantine_read_view(limit) {
         Ok(read_view) => read_view,
-        Err(err) => return moderation_screening_error_response(err),
+        Err(err) => return moderation_screening_error_response(&(err)),
     };
     JsonBody(moderation_quarantine_snapshot_json(&read_view, limit)).into_response()
 }
@@ -12603,7 +12655,7 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine_operator_panel(
         .moderation_quarantine_record(&quarantine_id)
     {
         Ok(record) => record,
-        Err(err) => return moderation_screening_error_response(err),
+        Err(err) => return moderation_screening_error_response(&(err)),
     };
     let Some(record) = record else {
         return json_error(
@@ -12616,7 +12668,7 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine_operator_panel(
         .moderation_quarantine_object_record(&quarantine_id)
     {
         Ok(object) => object,
-        Err(err) => return moderation_quarantine_object_error_response(err),
+        Err(err) => return moderation_quarantine_object_error_response(&(err)),
     };
     let finalized_snapshot = match cached_moderation_snapshot(&state) {
         Ok(snapshot) => snapshot,
@@ -12683,7 +12735,7 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_review(
             )),
         )
             .into_response(),
-        Err(err) => moderation_screening_error_response(err),
+        Err(err) => moderation_screening_error_response(&(err)),
     }
 }
 pub(crate) async fn handle_post_sorafs_moderation_quarantine_release(
@@ -12733,7 +12785,7 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_release(
             )),
         )
             .into_response(),
-        Err(err) => moderation_screening_error_response(err),
+        Err(err) => moderation_screening_error_response(&(err)),
     }
 }
 pub(crate) async fn handle_post_sorafs_moderation_quarantine_appeal_handoff(
@@ -12776,7 +12828,7 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_appeal_handoff(
         .moderation_quarantine_record(&quarantine_id)
     {
         Ok(record) => record,
-        Err(err) => return moderation_screening_error_response(err),
+        Err(err) => return moderation_screening_error_response(&(err)),
     };
     let Some(record) = record else {
         return json_error(
@@ -12852,13 +12904,13 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_appeal_handoff(
     }
     let config = policy.pricing();
     let quote_input = match appeal_quote_input(
-        AppealPricingQuoteRequestDto {
+        &(AppealPricingQuoteRequestDto {
             class: request.class.clone(),
             backlog: request.backlog,
             evidence_size_mb: request.evidence_size_mb,
             urgency: Some(request.urgency.clone()),
             panel_size: Some(request.panel_size),
-        },
+        }),
         config,
     ) {
         Ok(input) => input,
@@ -12945,7 +12997,7 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_object(
             JsonBody(moderation_quarantine_object_store_json(&record)),
         )
             .into_response(),
-        Err(err) => moderation_quarantine_object_error_response(err),
+        Err(err) => moderation_quarantine_object_error_response(&(err)),
     }
 }
 pub(crate) async fn handle_get_sorafs_moderation_quarantine_object(
@@ -12987,7 +13039,7 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine_object(
             );
             response
         }
-        Err(err) => moderation_quarantine_object_error_response(err),
+        Err(err) => moderation_quarantine_object_error_response(&(err)),
     }
 }
 macro_rules! orderbook_post_handler {
@@ -13289,7 +13341,7 @@ fn validate_orderbook_signed_transaction(
     let state_view = state.state.query_view();
     let policy = FindSorafsOrderbookPolicy
         .execute(&state_view)
-        .map_err(orderbook_finalized_query_error_response)?;
+        .map_err(|value| orderbook_finalized_query_error_response(&value))?;
     match validated.command {
         ValidatedSorafsOrderbookSubmissionCommandV1::SubmitOrder { policy_digest, .. }
         | ValidatedSorafsOrderbookSubmissionCommandV1::CancelOrder { policy_digest, .. } => {
@@ -13302,7 +13354,7 @@ fn validate_orderbook_signed_transaction(
             ensure_orderbook_policy_digest(policy_digest, policy.policy_digest)?;
             let channel = FindSorafsOrderbookChannelById::new(receipt.channel_id)
                 .execute(&state_view)
-                .map_err(orderbook_finalized_query_error_response)?;
+                .map_err(|value| orderbook_finalized_query_error_response(&value))?;
             if receipt.trade_id != channel.trade_id {
                 return Err(json_error(
                     StatusCode::CONFLICT,
@@ -13372,7 +13424,7 @@ fn ensure_orderbook_signature_matches_authority(
         ))
     }
 }
-fn orderbook_finalized_query_error_response(error: QueryExecutionFail) -> Response {
+fn orderbook_finalized_query_error_response(error: &QueryExecutionFail) -> Response {
     if matches!(error, QueryExecutionFail::Expired) {
         return json_error(
             StatusCode::CONFLICT,
@@ -13603,18 +13655,17 @@ pub(crate) async fn handle_get_sorafs_orderbook_book(
         let state_view = state.state.query_view();
         let status = match FindSorafsOrderbookStatus.execute(&state_view) {
             Ok(status) => status,
-            Err(error) => return orderbook_finalized_query_error_response(error),
+            Err(error) => return orderbook_finalized_query_error_response(&(error)),
         };
         let page = match FindSorafsOrderbookOrders::new(expected, None, after, limit)
             .execute(&state_view)
         {
             Ok(page) => page,
-            Err(error) => return orderbook_finalized_query_error_response(error),
+            Err(error) => return orderbook_finalized_query_error_response(&(error)),
         };
         orderbook_finalized_book_json(&status, &page)
             .map(JsonBody)
-            .map(IntoResponse::into_response)
-            .unwrap_or_else(orderbook_json_error)
+            .map_or_else(orderbook_json_error, IntoResponse::into_response)
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_BOOK, response)
 }
@@ -13633,7 +13684,7 @@ macro_rules! orderbook_page_handler {
                 let (expected, after, limit) = orderbook_finalized_read_args(raw_query.as_deref())?;
                 let page = ($query)(expected, after, limit)
                     .execute(&state.state.query_view())
-                    .map_err(orderbook_finalized_query_error_response)?;
+                    .map_err(|value| orderbook_finalized_query_error_response(&value))?;
                 Ok::<_, Response>(orderbook_finalized_page_response($key, &page))
             })()
             .unwrap_or_else(|response| response);
@@ -13659,9 +13710,11 @@ orderbook_page_handler!(
     "receipts",
     ORDERBOOK_ROUTE_RECEIPTS
 );
+type OrderbookFinalizedReadArgs = (Option<OrderbookFinalizedCursorV1>, Option<[u8; 32]>, u32);
+
 fn orderbook_finalized_read_args(
     raw_query: Option<&str>,
-) -> Result<(Option<OrderbookFinalizedCursorV1>, Option<[u8; 32]>, u32), Response> {
+) -> Result<OrderbookFinalizedReadArgs, Response> {
     let query =
         FinalizedOrderbookReadQuery::parse(raw_query).map_err(IntoResponse::into_response)?;
     Ok((
@@ -13678,13 +13731,13 @@ fn orderbook_finalized_book_json(
         json_entry("source", "finalized_chain"),
         json_entry(
             "status",
-            json::to_value(status)
-                .map_err(|error| format!("failed to encode orderbook status: {error}"))?,
+            &(json::to_value(status)
+                .map_err(|error| format!("failed to encode orderbook status: {error}"))?),
         ),
         json_entry(
             "orders",
-            json::to_value(page)
-                .map_err(|error| format!("failed to encode orderbook order page: {error}"))?,
+            &(json::to_value(page)
+                .map_err(|error| format!("failed to encode orderbook order page: {error}"))?),
         ),
     ]))
 }
@@ -13694,14 +13747,13 @@ fn orderbook_finalized_page_response<T: norito::json::JsonSerialize>(
 ) -> Response {
     let page = json::to_value(page)
         .map_err(|error| format!("failed to encode orderbook {key} page: {error}"));
-    page.map(|page| {
+    page.map_or_else(orderbook_json_error, |page| {
         JsonBody(json_object(vec![
             json_entry("source", "finalized_chain"),
-            json_entry(key, page),
+            json_entry(key, &page),
         ]))
         .into_response()
     })
-    .unwrap_or_else(orderbook_json_error)
 }
 fn orderbook_json_error(error: String) -> Response {
     json_error(StatusCode::INTERNAL_SERVER_ERROR, error)
@@ -13732,7 +13784,7 @@ pub(crate) async fn handle_get_sorafs_orderbook_events(
             .execute(&state_view)
         {
             Ok(page) => page,
-            Err(error) => return orderbook_finalized_query_error_response(error),
+            Err(error) => return orderbook_finalized_query_error_response(&(error)),
         };
         let etag = match orderbook_finalized_events_etag(&page) {
             Ok(etag) => etag,
@@ -13773,7 +13825,7 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_stream(
             .execute(&state_view)
         {
             Ok(page) => page,
-            Err(error) => return orderbook_finalized_query_error_response(error),
+            Err(error) => return orderbook_finalized_query_error_response(&(error)),
         };
         let event_stream = orderbook_finalized_event_stream(
             state.clone(),
@@ -13813,7 +13865,7 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_ws(
             .execute(&state_view)
         {
             Ok(page) => page,
-            Err(error) => return orderbook_finalized_query_error_response(error),
+            Err(error) => return orderbook_finalized_query_error_response(&(error)),
         };
         let stream_state = state.clone();
         let limit = query.limit();
@@ -13861,12 +13913,14 @@ pub(crate) async fn handle_get_sorafs_repair_status(
     let state_view = state.state.query_view();
     let status = match FindSorafsRepairStatus::new(expected).execute(&state_view) {
         Ok(status) => status,
-        Err(error) => return repair_finalized_query_error_response(error),
+        Err(error) => return repair_finalized_query_error_response(&(error)),
     };
     repair_finalized_status_json(&status)
         .map(JsonBody)
-        .map(IntoResponse::into_response)
-        .unwrap_or_else(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, error))
+        .map_or_else(
+            |error| json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+            IntoResponse::into_response,
+        )
 }
 pub(crate) async fn handle_get_sorafs_repair_tasks(
     State(state): State<SharedAppState>,
@@ -13891,12 +13945,14 @@ pub(crate) async fn handle_get_sorafs_repair_tasks(
     let page = match FindSorafsRepairTasks::new(expected, after, query.limit()).execute(&state_view)
     {
         Ok(page) => page,
-        Err(error) => return repair_finalized_query_error_response(error),
+        Err(error) => return repair_finalized_query_error_response(&(error)),
     };
     repair_finalized_task_page_json(&page)
         .map(JsonBody)
-        .map(IntoResponse::into_response)
-        .unwrap_or_else(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, error))
+        .map_or_else(
+            |error| json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+            IntoResponse::into_response,
+        )
 }
 pub(crate) async fn handle_get_sorafs_repair_task(
     State(state): State<SharedAppState>,
@@ -13923,12 +13979,12 @@ pub(crate) async fn handle_get_sorafs_repair_task(
     let state_view = state.state.query_view();
     let task = match FindSorafsRepairTask::new(ticket_id, expected).execute(&state_view) {
         Ok(task) => task,
-        Err(error) => return repair_finalized_query_error_response(error),
+        Err(error) => return repair_finalized_query_error_response(&(error)),
     };
-    repair_finalized_task_json(&task)
-        .map(JsonBody)
-        .map(IntoResponse::into_response)
-        .unwrap_or_else(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, error))
+    repair_finalized_task_json(&task).map(JsonBody).map_or_else(
+        |error| json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+        IntoResponse::into_response,
+    )
 }
 pub(crate) async fn handle_get_sorafs_repair_events(
     State(state): State<SharedAppState>,
@@ -13954,7 +14010,7 @@ pub(crate) async fn handle_get_sorafs_repair_events(
     let page =
         match FindSorafsRepairEvents::new(expected, after, query.limit()).execute(&state_view) {
             Ok(page) => page,
-            Err(error) => return repair_finalized_query_error_response(error),
+            Err(error) => return repair_finalized_query_error_response(&(error)),
         };
     let etag = match repair_finalized_events_etag(&page) {
         Ok(etag) => etag,
@@ -13993,7 +14049,7 @@ pub(crate) async fn handle_post_sorafs_appeal_pricing_quote(
 ) -> Response {
     let policy = &state.sorafs_appeal_finance_policy;
     let config = policy.pricing();
-    let input = match appeal_quote_input(req, config) {
+    let input = match appeal_quote_input(&(req), config) {
         Ok(input) => input,
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
     };
@@ -14029,7 +14085,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_settle(
         StatusCode::OK,
         JsonBody(appeal_finance_settlement_json(
             policy,
-            deposit_xor,
+            &deposit_xor,
             panel_size,
             verdict,
             &breakdown,
@@ -14196,26 +14252,29 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_submit_settlement(
         };
     match submit_appeal_finance_deposit_settlement_step(
         &state,
-        expected,
-        record,
+        &expected,
+        &record,
         finalized_cursor,
         &req.outcome,
         req.panel_size,
-    )
-    .await
-    {
+    ) {
         Ok((status, body)) => (status, JsonBody(body)).into_response(),
         Err(response) => response,
     }
 }
-async fn submit_appeal_finance_deposit_settlement_step(
+fn submit_appeal_finance_deposit_settlement_step(
     state: &SharedAppState,
-    expected: AppealFinanceDepositExpectation,
-    record: AssetEscrowRecord,
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
     finalized_cursor: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceFinalizedCursorV1,
     outcome: &str,
     panel_size: Option<u32>,
 ) -> Result<(StatusCode, Value), Response> {
+    use sorafs_node::appeal_finance_transaction_forwarder::{
+        AppealFinanceOperationV1, AppealFinanceTransactionContextV1,
+        AppealFinanceTransactionEnqueueResultV1,
+    };
+
     let policy = &state.sorafs_appeal_finance_policy;
     let config = policy.settlement();
     let deposit_xor =
@@ -14233,23 +14292,23 @@ async fn submit_appeal_finance_deposit_settlement_step(
         Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err.to_string())),
     };
     let reconciliation = match appeal_finance_deposit_settlement_reconciliation(
-        &expected, &record, policy, verdict, panel_size, &breakdown,
+        expected, record, policy, verdict, panel_size, &breakdown,
     ) {
         Ok(value) => value,
         Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err)),
     };
-    let execution =
-        match appeal_finance_deposit_settlement_execution(&expected, &record, &breakdown) {
-            Ok(value) => value,
-            Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err)),
-        };
+    let execution = match appeal_finance_deposit_settlement_execution(expected, record, &breakdown)
+    {
+        Ok(value) => value,
+        Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err)),
+    };
     if reconciliation.status == "settled" {
         return Ok((
             StatusCode::OK,
             appeal_finance_deposit_settlement_submission_json(
                 policy,
-                &expected,
-                &record,
+                expected,
+                record,
                 verdict,
                 panel_size,
                 &breakdown,
@@ -14269,8 +14328,8 @@ async fn submit_appeal_finance_deposit_settlement_step(
             StatusCode::CONFLICT,
             appeal_finance_deposit_settlement_submission_json(
                 policy,
-                &expected,
-                &record,
+                expected,
+                record,
                 verdict,
                 panel_size,
                 &breakdown,
@@ -14298,8 +14357,8 @@ async fn submit_appeal_finance_deposit_settlement_step(
             StatusCode::SERVICE_UNAVAILABLE,
             appeal_finance_deposit_settlement_submission_json(
                 policy,
-                &expected,
-                &record,
+                expected,
+                record,
                 verdict,
                 panel_size,
                 &breakdown,
@@ -14323,8 +14382,8 @@ async fn submit_appeal_finance_deposit_settlement_step(
             StatusCode::SERVICE_UNAVAILABLE,
             appeal_finance_deposit_settlement_submission_json(
                 policy,
-                &expected,
-                &record,
+                expected,
+                record,
                 verdict,
                 panel_size,
                 &breakdown,
@@ -14339,10 +14398,7 @@ async fn submit_appeal_finance_deposit_settlement_step(
             ),
         ));
     }
-    use sorafs_node::appeal_finance_transaction_forwarder::{
-        AppealFinanceOperationV1, AppealFinanceTransactionContextV1,
-        AppealFinanceTransactionEnqueueResultV1,
-    };
+
     let operation = match step.action {
         "drawdown_non_refund" => AppealFinanceOperationV1::Drawdown(DrawdownAssetLock::new(
             expected.escrow_id,
@@ -14397,8 +14453,8 @@ async fn submit_appeal_finance_deposit_settlement_step(
                 StatusCode::CONFLICT,
                 appeal_finance_deposit_settlement_submission_json(
                     policy,
-                    &expected,
-                    &record,
+                    expected,
+                    record,
                     verdict,
                     panel_size,
                     &breakdown,
@@ -14429,8 +14485,8 @@ async fn submit_appeal_finance_deposit_settlement_step(
         StatusCode::ACCEPTED,
         appeal_finance_deposit_settlement_submission_json(
             policy,
-            &expected,
-            &record,
+            expected,
+            record,
             verdict,
             panel_size,
             &breakdown,
@@ -14678,10 +14734,7 @@ mod appeal_finance_authoritative_outcome_tests {
                 true,
                 Some((1, [2; 32], 3)),
                 [
-                    (
-                        expected.clone(),
-                        AppealFinanceCommittedExternalOutcomeV1::Applied,
-                    ),
+                    (expected, AppealFinanceCommittedExternalOutcomeV1::Applied,),
                     (expected, AppealFinanceCommittedExternalOutcomeV1::Applied,),
                 ],
             ),
@@ -14696,10 +14749,7 @@ mod appeal_finance_authoritative_outcome_tests {
                 &applied,
                 true,
                 Some((7, [9; 32], 11)),
-                [(
-                    applied.clone(),
-                    AppealFinanceCommittedExternalOutcomeV1::Applied,
-                )],
+                [(applied, AppealFinanceCommittedExternalOutcomeV1::Applied,)],
             ),
             AppealFinanceAuthoritativeTransactionOutcomeV1::Applied {
                 block_height: 7,
@@ -14713,10 +14763,7 @@ mod appeal_finance_authoritative_outcome_tests {
                 &rejected,
                 true,
                 Some((8, [10; 32], 12)),
-                [(
-                    rejected.clone(),
-                    AppealFinanceCommittedExternalOutcomeV1::Rejected,
-                )],
+                [(rejected, AppealFinanceCommittedExternalOutcomeV1::Rejected,)],
             ),
             AppealFinanceAuthoritativeTransactionOutcomeV1::Rejected
         );
@@ -14788,15 +14835,14 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
     for delivery in pending {
         cursor.after_sequence = Some(delivery.sequence);
         scan.scanned = scan.scanned.saturating_add(1);
-        let request = match submitter
+        let request = if let Ok(request) = submitter
             .forwarder
             .operation_for_reconciliation(delivery.operation_id)
         {
-            Ok(request) => request,
-            Err(_) => {
-                scan.deferred = scan.deferred.saturating_add(1);
-                continue;
-            }
+            request
+        } else {
+            scan.deferred = scan.deferred.saturating_add(1);
+            continue;
         };
         if request.network_id != *state.state.network_id_ref()
             || request.chain_id != *state.chain_id
@@ -14874,36 +14920,33 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
         if let Some((applied_block_height, applied_block_hash, applied_block_timestamp_ms)) =
             exact_transaction_applied
         {
-            let receipt_ready = match &request.operation {
-                sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceOperationV1::Open(
+            let receipt_ready = if let sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceOperationV1::Open(
                     _,
-                ) => true,
-                _ => {
-                    let Some(post_record) = appeal_finance_exact_applied_post_record(
-                        &request,
-                        applied_block_timestamp_ms,
-                    ) else {
-                        if submitter
-                            .forwarder
-                            .mark_invalid_context(delivery.operation_id, finalized_cursor)
-                            .is_ok()
-                        {
-                            scan.dead_lettered = scan.dead_lettered.saturating_add(1);
-                        } else {
-                            scan.deferred = scan.deferred.saturating_add(1);
-                        }
-                        continue;
-                    };
-                    publish_finalized_appeal_finance_receipt(
-                        state,
-                        submitter,
-                        &request,
-                        &delivery,
-                        applied_block_height,
-                        applied_block_hash,
-                        &post_record,
-                    )
-                }
+                ) = &request.operation { true } else {
+                let Some(post_record) = appeal_finance_exact_applied_post_record(
+                    &request,
+                    applied_block_timestamp_ms,
+                ) else {
+                    if submitter
+                        .forwarder
+                        .mark_invalid_context(delivery.operation_id, finalized_cursor)
+                        .is_ok()
+                    {
+                        scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                    } else {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                    }
+                    continue;
+                };
+                publish_finalized_appeal_finance_receipt(
+                    state,
+                    submitter,
+                    &request,
+                    &delivery,
+                    applied_block_height,
+                    applied_block_hash,
+                    &post_record,
+                )
             };
             if !receipt_ready {
                 scan.deferred = scan.deferred.saturating_add(1);
@@ -15046,7 +15089,12 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                 let signer = match submitter.signer_for(&request.authority, finalized_cursor.height)
                 {
                     Ok(signer) => signer,
-                    Err(crate::SoraFsAppealFinanceSignerSelectionError::NotYetActive) => {
+                    Err(
+                        crate::SoraFsAppealFinanceSignerSelectionError::NotYetActive
+                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
+                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable
+                        | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
+                    ) => {
                         scan.deferred = scan.deferred.saturating_add(1);
                         continue;
                     }
@@ -15062,24 +15110,15 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                         }
                         continue;
                     }
-                    Err(
-                        crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
-                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable
-                        | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
-                    ) => {
-                        scan.deferred = scan.deferred.saturating_add(1);
-                        continue;
-                    }
                 };
-                let claimed = match submitter
+                let claimed = if let Ok(claimed) = submitter
                     .forwarder
                     .claim_for_signing(delivery.operation_id, finalized_cursor)
                 {
-                    Ok(claimed) => claimed,
-                    Err(_) => {
-                        scan.deferred = scan.deferred.saturating_add(1);
-                        continue;
-                    }
+                    claimed
+                } else {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    continue;
                 };
                 let signed_payload =
                     sign_sorafs_appeal_finance_delivery(state, &signer, &claimed).await;
@@ -15147,7 +15186,12 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                 };
                 match submitter.active_binding_for(&request.authority, finalized_cursor.height) {
                     Ok(_) => {}
-                    Err(crate::SoraFsAppealFinanceSignerSelectionError::NotYetActive) => {
+                    Err(
+                        crate::SoraFsAppealFinanceSignerSelectionError::NotYetActive
+                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
+                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable
+                        | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
+                    ) => {
                         scan.deferred = scan.deferred.saturating_add(1);
                         continue;
                     }
@@ -15161,14 +15205,6 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                         } else {
                             scan.deferred = scan.deferred.saturating_add(1);
                         }
-                        continue;
-                    }
-                    Err(
-                        crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
-                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable
-                        | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
-                    ) => {
-                        scan.deferred = scan.deferred.saturating_add(1);
                         continue;
                     }
                 }
@@ -15200,7 +15236,7 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     continue;
                 };
                 let hash = transaction.hash();
-                let queue_hash = external_hash(hash.clone());
+                let queue_hash = external_hash(hash);
                 let local_pending = state.queue.contains_pending_hash(queue_hash, &state.state);
                 let cache_kind =
                     crate::pipeline_status_local_entry(state, &hash).map(|(entry, _)| entry.kind);
@@ -15219,13 +15255,7 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                             }
                         }
                     }
-                    Some(
-                        AppealFinanceAuthoritativeTransactionOutcomeV1::Applied { .. }
-                        | AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable,
-                    )
-                    | None => {
-                        scan.deferred = scan.deferred.saturating_add(1);
-                    }
+
                     Some(AppealFinanceAuthoritativeTransactionOutcomeV1::Absent)
                         if matches!(
                             cache_kind,
@@ -15281,7 +15311,12 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                             }
                         }
                     }
-                    Some(AppealFinanceAuthoritativeTransactionOutcomeV1::Absent) => {
+                    Some(
+                        AppealFinanceAuthoritativeTransactionOutcomeV1::Applied { .. }
+                        | AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable
+                        | AppealFinanceAuthoritativeTransactionOutcomeV1::Absent,
+                    )
+                    | None => {
                         scan.deferred = scan.deferred.saturating_add(1);
                     }
                 }
@@ -15302,7 +15337,12 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                             }
                         }
                     }
-                    Err(crate::SoraFsAppealFinanceSignerSelectionError::NotYetActive) => {
+                    Err(
+                        crate::SoraFsAppealFinanceSignerSelectionError::NotYetActive
+                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
+                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable
+                        | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
+                    ) => {
                         scan.deferred = scan.deferred.saturating_add(1);
                     }
                     Err(crate::SoraFsAppealFinanceSignerSelectionError::NoActiveBinding) => {
@@ -15315,13 +15355,6 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                         } else {
                             scan.deferred = scan.deferred.saturating_add(1);
                         }
-                    }
-                    Err(
-                        crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
-                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable
-                        | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
-                    ) => {
-                        scan.deferred = scan.deferred.saturating_add(1);
                     }
                 }
             }
@@ -15508,7 +15541,7 @@ async fn submit_sorafs_appeal_finance_delivery(
         return AppealFinanceDeliverySubmitOutcomeV1::Deferred;
     };
     let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.state.clone(),
+        &(state.state),
         transaction.clone(),
         &state.telemetry,
     ) {
@@ -15548,8 +15581,8 @@ async fn submit_sorafs_appeal_finance_delivery(
     }
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
         match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
-            state.queue.clone(),
-            state.state.clone(),
+            &state.queue,
+            &state.state,
             accepted,
             Some(routing_plan),
         ) {
@@ -16098,15 +16131,14 @@ pub(crate) async fn run_sorafs_proof_outcome_forwarder_scan(
     cursor: &mut SorafsProofOutcomeForwarderCursorV1,
 ) -> SorafsProofOutcomeForwarderScanV1 {
     let mut scan = SorafsProofOutcomeForwarderScanV1::default();
-    let pending = match state.sorafs_node.pending_proof_outcome_deliveries_after(
+    let pending = if let Ok(pending) = state.sorafs_node.pending_proof_outcome_deliveries_after(
         cursor.after_sequence,
         SORAFS_PROOF_OUTCOME_FORWARDER_SCAN_LIMIT_V1,
     ) {
-        Ok(pending) => pending,
-        Err(_) => {
-            warn!("failed to load durable SoraFS proof-outcome deliveries");
-            return scan;
-        }
+        pending
+    } else {
+        warn!("failed to load durable SoraFS proof-outcome deliveries");
+        return scan;
     };
     for delivery in pending {
         cursor.after_sequence = Some(delivery.sequence);
@@ -16183,15 +16215,14 @@ pub(crate) async fn run_sorafs_proof_outcome_forwarder_scan(
                     );
                     continue;
                 }
-                let claimed = match state
+                let claimed = if let Ok(claimed) = state
                     .sorafs_node
                     .claim_proof_outcome_for_signing(delivery.operation_id, finalized_cursor)
                 {
-                    Ok(claimed) => claimed,
-                    Err(_) => {
-                        scan.deferred = scan.deferred.saturating_add(1);
-                        continue;
-                    }
+                    claimed
+                } else {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    continue;
                 };
                 let Some(transaction) =
                     sign_sorafs_proof_outcome_delivery(state, signer, &claimed).await
@@ -16202,18 +16233,21 @@ pub(crate) async fn run_sorafs_proof_outcome_forwarder_scan(
                     scan.deferred = scan.deferred.saturating_add(1);
                     continue;
                 };
-                match state.sorafs_node.store_signed_proof_outcome_transaction(
-                    delivery.operation_id,
-                    transaction.clone(),
-                ) {
-                    Ok(_) => scan.signed = scan.signed.saturating_add(1),
-                    Err(_) => {
-                        let _ = state
-                            .sorafs_node
-                            .release_proof_outcome_signing_claim(delivery.operation_id);
-                        scan.deferred = scan.deferred.saturating_add(1);
-                        continue;
-                    }
+                if state
+                    .sorafs_node
+                    .store_signed_proof_outcome_transaction(
+                        delivery.operation_id,
+                        transaction.clone(),
+                    )
+                    .is_ok()
+                {
+                    scan.signed = scan.signed.saturating_add(1)
+                } else {
+                    let _ = state
+                        .sorafs_node
+                        .release_proof_outcome_signing_claim(delivery.operation_id);
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    continue;
                 }
                 if submit_sorafs_proof_outcome_delivery(state, delivery.operation_id, transaction)
                     .await
@@ -16269,13 +16303,11 @@ pub(crate) async fn run_sorafs_proof_outcome_forwarder_scan(
                         scan.deferred = scan.deferred.saturating_add(1);
                     }
                     None if finalized_cursor.height > delivery.baseline_finalized_height => {
-                        match state.sorafs_node.mark_proof_outcome_finalized_absent(
+                        let _ = state.sorafs_node.mark_proof_outcome_finalized_absent(
                             delivery.operation_id,
                             finalized_cursor,
-                        ) {
-                            Ok(()) => scan.deferred = scan.deferred.saturating_add(1),
-                            Err(_) => scan.deferred = scan.deferred.saturating_add(1),
-                        }
+                        );
+                        scan.deferred = scan.deferred.saturating_add(1);
                     }
                     None => scan.deferred = scan.deferred.saturating_add(1),
                 }
@@ -16382,31 +16414,30 @@ async fn submit_sorafs_proof_outcome_delivery(
     operation_id: [u8; 32],
     transaction: SignedTransaction,
 ) -> bool {
-    let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.state.clone(),
+    let accepted = if let Ok(accepted) = crate::routing::accept_transaction_for_ingress(
+        &(state.state),
         transaction.clone(),
         &state.telemetry,
     ) {
-        Ok(accepted) => accepted,
-        Err(_) => {
-            let finalized_cursor = {
-                let view = state.state.query_view();
-                u64::try_from(view.block_hashes.len())
-                    .ok()
-                    .zip(view.block_hashes.last())
-                    .map(|(height, hash)| ProofOutcomeFinalizedCursorV1 {
-                        height,
-                        block_hash: *hash.as_ref(),
-                    })
-                    .filter(|cursor| cursor.height != 0 && cursor.block_hash != [0; 32])
-            };
-            if let Some(finalized_cursor) = finalized_cursor {
-                let _ = state
-                    .sorafs_node
-                    .mark_proof_outcome_transaction_rejected(operation_id, finalized_cursor);
-            }
-            return false;
+        accepted
+    } else {
+        let finalized_cursor = {
+            let view = state.state.query_view();
+            u64::try_from(view.block_hashes.len())
+                .ok()
+                .zip(view.block_hashes.last())
+                .map(|(height, hash)| ProofOutcomeFinalizedCursorV1 {
+                    height,
+                    block_hash: *hash.as_ref(),
+                })
+                .filter(|cursor| cursor.height != 0 && cursor.block_hash != [0; 32])
+        };
+        if let Some(finalized_cursor) = finalized_cursor {
+            let _ = state
+                .sorafs_node
+                .mark_proof_outcome_transaction_rejected(operation_id, finalized_cursor);
         }
+        return false;
     };
     let routing_plan = match state
         .queue
@@ -16431,8 +16462,8 @@ async fn submit_sorafs_proof_outcome_delivery(
     }
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
         match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
-            state.queue.clone(),
-            state.state.clone(),
+            &state.queue,
+            &state.state,
             accepted,
             Some(routing_plan),
         ) {
@@ -16687,9 +16718,7 @@ fn classify_exact_repair_delivery(
         RepairAuthoritativeTransactionOutcomeV1::Rejected => {
             RepairExactDeliveryDispositionV1::Rejected
         }
-        RepairAuthoritativeTransactionOutcomeV1::Unavailable => {
-            RepairExactDeliveryDispositionV1::Unavailable
-        }
+
         RepairAuthoritativeTransactionOutcomeV1::Absent if local_evidence_blocks_absence_retry => {
             RepairExactDeliveryDispositionV1::Pending
         }
@@ -16698,7 +16727,8 @@ fn classify_exact_repair_delivery(
         {
             RepairExactDeliveryDispositionV1::FinalizedAbsent
         }
-        RepairAuthoritativeTransactionOutcomeV1::Absent => {
+        RepairAuthoritativeTransactionOutcomeV1::Unavailable
+        | RepairAuthoritativeTransactionOutcomeV1::Absent => {
             RepairExactDeliveryDispositionV1::Unavailable
         }
     }
@@ -17764,15 +17794,14 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
     let mut scan = SorafsRepairTransactionForwarderScanV1::default();
     resume_sorafs_protocol_repair_handoffs(state, &mut scan);
     enqueue_sorafs_finalized_native_repair_work(state, cursor, &mut scan).await;
-    let pending = match state.sorafs_node.pending_repair_transactions_after(
+    let pending = if let Ok(pending) = state.sorafs_node.pending_repair_transactions_after(
         cursor.after_sequence,
         SORAFS_REPAIR_TRANSACTION_FORWARDER_SCAN_LIMIT_V1,
     ) {
-        Ok(pending) => pending,
-        Err(_) => {
-            warn!("failed to load durable native SoraFS repair transactions");
-            return scan;
-        }
+        pending
+    } else {
+        warn!("failed to load durable native SoraFS repair transactions");
+        return scan;
     };
     for delivery in pending {
         cursor.after_sequence = Some(delivery.sequence);
@@ -17838,7 +17867,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
             exact_transaction_hash
                 .as_ref()
                 .is_some_and(|transaction_hash| {
-                    let queue_hash = external_hash(transaction_hash.clone());
+                    let queue_hash = external_hash(*transaction_hash);
                     let queue_pending = state.queue.contains_pending_hash(queue_hash, &state.state);
                     let cache_kind = state
                         .pipeline_status_cache
@@ -17867,17 +17896,17 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
         };
         let (finalized_cursor, authority_is_authorized) = match reconciliation {
             RepairTransactionReconciliationV1::Finalized(finalized_cursor) => {
-                match state
+                if let Ok(()) = state
                     .sorafs_node
                     .mark_repair_transaction_semantic_finalized(
                         delivery.operation_id,
                         finalized_cursor,
-                    ) {
-                    Ok(()) => scan.finalized = scan.finalized.saturating_add(1),
-                    Err(_) => {
-                        scan.deferred = scan.deferred.saturating_add(1);
-                        warn!("failed to checkpoint a finalized native SoraFS repair operation");
-                    }
+                    )
+                {
+                    scan.finalized = scan.finalized.saturating_add(1)
+                } else {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    warn!("failed to checkpoint a finalized native SoraFS repair operation");
                 }
                 continue;
             }
@@ -18016,7 +18045,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
                     scan.deferred = scan.deferred.saturating_add(1);
                     continue;
                 }
-                let queue_hash = external_hash(transaction_hash.clone());
+                let queue_hash = external_hash(*transaction_hash);
                 let queue_pending_after_observation =
                     state.queue.contains_pending_hash(queue_hash, &state.state);
                 let cache_kind_after_observation = state
@@ -18172,32 +18201,31 @@ async fn submit_sorafs_repair_transaction(
     if transaction.network_id() != Some(state.state.network_id_ref()) {
         return false;
     }
-    let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.state.clone(),
+    let accepted = if let Ok(accepted) = crate::routing::accept_transaction_for_ingress(
+        &(state.state),
         transaction.clone(),
         &state.telemetry,
     ) {
-        Ok(accepted) => accepted,
-        Err(_) => {
-            let exact_transaction_bytes = state
-                .sorafs_node
-                .begin_repair_transaction_submission(operation_id);
-            if exact_transaction_bytes
-                .as_ref()
-                .is_ok_and(|exact| exact == &transaction_bytes)
-            {
-                if let Some(finalized_cursor) = current_sorafs_repair_finalized_cursor(state) {
-                    let _ = state
-                        .sorafs_node
-                        .mark_repair_transaction_rejected(operation_id, finalized_cursor);
-                }
-            } else if exact_transaction_bytes.is_ok() {
+        accepted
+    } else {
+        let exact_transaction_bytes = state
+            .sorafs_node
+            .begin_repair_transaction_submission(operation_id);
+        if exact_transaction_bytes
+            .as_ref()
+            .is_ok_and(|exact| exact == &transaction_bytes)
+        {
+            if let Some(finalized_cursor) = current_sorafs_repair_finalized_cursor(state) {
                 let _ = state
                     .sorafs_node
-                    .mark_repair_transaction_not_submitted(operation_id);
+                    .mark_repair_transaction_rejected(operation_id, finalized_cursor);
             }
-            return false;
+        } else if exact_transaction_bytes.is_ok() {
+            let _ = state
+                .sorafs_node
+                .mark_repair_transaction_not_submitted(operation_id);
         }
+        return false;
     };
     let routing_plan = match state
         .queue
@@ -18222,8 +18250,8 @@ async fn submit_sorafs_repair_transaction(
     }
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
         match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
-            state.queue.clone(),
-            state.state.clone(),
+            &state.queue,
+            &state.state,
             accepted,
             Some(routing_plan),
         ) {
@@ -18355,7 +18383,7 @@ fn finish_sorafs_moderation_maintenance_pass(
         Ok(Ok(pass)) => pass,
         Ok(Err(error)) => {
             runtime.finish_failure();
-            let response = moderation_orchestrator_error_response(error);
+            let response = moderation_orchestrator_error_response(&(error));
             warn!(
                 http_status = response.status().as_u16(),
                 "SoraFS finalized-chain moderation orchestrator worker failed closed",
@@ -18410,7 +18438,7 @@ fn finish_sorafs_moderation_maintenance_pass(
 ///
 /// Returns an error when the operational worker configuration and constructed runtime disagree.
 pub(crate) fn spawn_sorafs_moderation_orchestrator_worker(
-    state: SharedAppState,
+    state: &SharedAppState,
     shutdown_signal: ShutdownSignal,
 ) -> Result<Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>>, String> {
     let runtime = state.sorafs_moderation_orchestrator.clone();
@@ -18495,12 +18523,9 @@ pub(crate) fn spawn_sorafs_moderation_orchestrator_worker(
                                 () = shutdown_signal.receive() => None,
                                 result = &mut blocking => Some(result),
                             };
-                            match second_wait {
-                                Some(result) => result,
-                                None => {
-                                    shutdown_requested = true;
-                                    blocking.await
-                                }
+                            if let Some(result) = second_wait { result } else {
+                                shutdown_requested = true;
+                                blocking.await
                             }
                         }
                     };
@@ -19117,35 +19142,38 @@ fn appeal_pricing_policy_manifest(
     let class_manifest =
         |class: &iroha_config::parameters::actual::SorafsAppealPricingClassPolicy| {
             json_object(vec![
-                json_entry("base_rate_xor", class.base_rate_xor.to_string()),
-                json_entry("backlog_target", u64::from(class.backlog_target)),
-                json_entry("backlog_cap", class.backlog_cap.to_string()),
-                json_entry("size_divisor_mb", class.size_divisor_mb.to_string()),
-                json_entry("size_cap", class.size_cap.to_string()),
-                json_entry("min_deposit_xor", class.min_deposit_xor.to_string()),
-                json_entry("max_deposit_xor", class.max_deposit_xor.to_string()),
-                json_entry("surge_multiplier", class.surge_multiplier.to_string()),
+                json_entry("base_rate_xor", &(class.base_rate_xor.to_string())),
+                json_entry("backlog_target", &(u64::from(class.backlog_target))),
+                json_entry("backlog_cap", &(class.backlog_cap.to_string())),
+                json_entry("size_divisor_mb", &(class.size_divisor_mb.to_string())),
+                json_entry("size_cap", &(class.size_cap.to_string())),
+                json_entry("min_deposit_xor", &(class.min_deposit_xor.to_string())),
+                json_entry("max_deposit_xor", &(class.max_deposit_xor.to_string())),
+                json_entry("surge_multiplier", &(class.surge_multiplier.to_string())),
             ])
         };
     json_object(vec![
-        json_entry("version", policy.version.clone()),
-        json_entry("quote_ttl_secs", policy.quote_ttl_secs),
-        json_entry("default_panel_size", u64::from(policy.default_panel_size)),
+        json_entry("version", &(policy.version)),
+        json_entry("quote_ttl_secs", &(policy.quote_ttl_secs)),
+        json_entry(
+            "default_panel_size",
+            &(u64::from(policy.default_panel_size)),
+        ),
         json_entry(
             "urgency_multipliers",
-            json_object(vec![
-                json_entry("normal", policy.urgency_multipliers.normal.to_string()),
-                json_entry("high", policy.urgency_multipliers.high.to_string()),
-            ]),
+            &(json_object(vec![
+                json_entry("normal", &(policy.urgency_multipliers.normal.to_string())),
+                json_entry("high", &(policy.urgency_multipliers.high.to_string())),
+            ])),
         ),
         json_entry(
             "classes",
-            json_object(vec![
-                json_entry("content", class_manifest(&policy.classes.content)),
-                json_entry("access", class_manifest(&policy.classes.access)),
-                json_entry("fraud", class_manifest(&policy.classes.fraud)),
-                json_entry("other", class_manifest(&policy.classes.other)),
-            ]),
+            &(json_object(vec![
+                json_entry("content", &(class_manifest(&policy.classes.content))),
+                json_entry("access", &(class_manifest(&policy.classes.access))),
+                json_entry("fraud", &(class_manifest(&policy.classes.fraud))),
+                json_entry("other", &(class_manifest(&policy.classes.other))),
+            ])),
         ),
     ])
 }
@@ -19154,48 +19182,54 @@ fn appeal_settlement_policy_manifest(
 ) -> Value {
     let rule_manifest = |rule: &iroha_config::parameters::actual::SorafsAppealSettlementRule| {
         json_object(vec![
-            json_entry("refund_rate", rule.refund_rate.to_string()),
-            json_entry("treasury_rate", rule.treasury_rate.to_string()),
+            json_entry("refund_rate", &(rule.refund_rate.to_string())),
+            json_entry("treasury_rate", &(rule.treasury_rate.to_string())),
         ])
     };
     json_object(vec![
-        json_entry("version", policy.version.clone()),
-        json_entry("default_panel_size", u64::from(policy.default_panel_size)),
+        json_entry("version", &(policy.version)),
+        json_entry(
+            "default_panel_size",
+            &(u64::from(policy.default_panel_size)),
+        ),
         json_entry(
             "panel_rewards",
-            json_object(vec![
+            &(json_object(vec![
                 json_entry(
                     "stipend_per_juror_xor",
-                    policy.panel_rewards.stipend_per_juror_xor.to_string(),
+                    &(policy.panel_rewards.stipend_per_juror_xor.to_string()),
                 ),
                 json_entry(
                     "case_bonus_xor",
-                    policy.panel_rewards.case_bonus_xor.to_string(),
+                    &(policy.panel_rewards.case_bonus_xor.to_string()),
                 ),
-            ]),
+            ])),
         ),
         json_entry(
             "rules",
-            json_object(vec![
+            &(json_object(vec![
                 json_entry(
                     "decisions",
-                    json_object(vec![
-                        json_entry("uphold", rule_manifest(&policy.rules.decisions.uphold)),
-                        json_entry("overturn", rule_manifest(&policy.rules.decisions.overturn)),
-                        json_entry("modify", rule_manifest(&policy.rules.decisions.modify)),
-                    ]),
+                    &(json_object(vec![
+                        json_entry("uphold", &(rule_manifest(&policy.rules.decisions.uphold))),
+                        json_entry(
+                            "overturn",
+                            &(rule_manifest(&policy.rules.decisions.overturn)),
+                        ),
+                        json_entry("modify", &(rule_manifest(&policy.rules.decisions.modify))),
+                    ])),
                 ),
                 json_entry(
                     "withdrawn_before_panel",
-                    rule_manifest(&policy.rules.withdrawn_before_panel),
+                    &(rule_manifest(&policy.rules.withdrawn_before_panel)),
                 ),
                 json_entry(
                     "withdrawn_after_panel",
-                    rule_manifest(&policy.rules.withdrawn_after_panel),
+                    &(rule_manifest(&policy.rules.withdrawn_after_panel)),
                 ),
-                json_entry("frivolous", rule_manifest(&policy.rules.frivolous)),
-                json_entry("escalated", rule_manifest(&policy.rules.escalated)),
-            ]),
+                json_entry("frivolous", &(rule_manifest(&policy.rules.frivolous))),
+                json_entry("escalated", &(rule_manifest(&policy.rules.escalated))),
+            ])),
         ),
     ])
 }
@@ -19211,7 +19245,7 @@ fn baseline_appeal_pricing_config() -> AppealPricingConfig {
     AppealPricingConfig::baseline_v1()
 }
 fn appeal_quote_input(
-    req: AppealPricingQuoteRequestDto,
+    req: &AppealPricingQuoteRequestDto,
     config: &AppealPricingConfig,
 ) -> Result<AppealQuoteInput, String> {
     let class = req
@@ -19234,7 +19268,7 @@ fn appeal_quote_input(
             .unwrap_or_else(|| config.default_panel_size()),
     })
 }
-fn appeal_decimal_json(value: impl ToString) -> Value {
+fn appeal_decimal_json(value: &(impl ToString + ?Sized)) -> Value {
     Value::from(value.to_string())
 }
 #[derive(Clone, Copy)]
@@ -19294,24 +19328,24 @@ fn appeal_finance_policy_json_entries(policy: &AppealFinanceRuntimePolicy) -> Ve
     vec![
         json_entry(
             "appeal_finance_policy_source",
-            Value::from(APPEAL_FINANCE_CONFIG_SOURCE_V1),
+            &(Value::from(APPEAL_FINANCE_CONFIG_SOURCE_V1)),
         ),
         json_entry(
             "asset_definition_id",
-            Value::from(policy.asset_definition_id.to_string()),
+            &(Value::from(policy.asset_definition_id.to_string())),
         ),
-        json_entry("asset_scale", Value::from(u64::from(policy.asset_scale))),
+        json_entry("asset_scale", &(Value::from(u64::from(policy.asset_scale)))),
         json_entry(
             "appeal_finance_policy_digest_hex",
-            Value::from(policy.policy_digest_hex()),
+            &(Value::from(policy.policy_digest_hex())),
         ),
         json_entry(
             "pricing_policy_digest_hex",
-            Value::from(policy.pricing_policy_digest_hex()),
+            &(Value::from(policy.pricing_policy_digest_hex())),
         ),
         json_entry(
             "settlement_policy_digest_hex",
-            Value::from(policy.settlement_policy_digest_hex()),
+            &(Value::from(policy.settlement_policy_digest_hex())),
         ),
     ]
 }
@@ -19334,88 +19368,87 @@ fn appeal_pricing_status_json(
 ) -> Value {
     let config = policy.pricing();
     let mut entries = vec![
-        json_entry("schema", Value::from("sorafs.appeal_pricing.status.v1")),
-        json_entry("ready", Value::Bool(asset_readiness.ready)),
+        json_entry("schema", &(Value::from("sorafs.appeal_pricing.status.v1"))),
+        json_entry("ready", &(Value::Bool(asset_readiness.ready))),
         json_entry(
             "asset_readiness_status",
-            Value::from(asset_readiness.status),
+            &(Value::from(asset_readiness.status)),
         ),
         json_entry(
             "observed_asset_scale",
-            asset_readiness
+            &(asset_readiness
                 .observed_scale
-                .map(|scale| Value::from(u64::from(scale)))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |scale| Value::from(u64::from(scale)))),
         ),
-        json_entry("pricing_api", Value::from("enabled")),
-        json_entry("config_api", Value::from("enabled")),
-        json_entry("quote_api", Value::from("enabled")),
+        json_entry("pricing_api", &(Value::from("enabled"))),
+        json_entry("config_api", &(Value::from("enabled"))),
+        json_entry("quote_api", &(Value::from("enabled"))),
         json_entry(
             "config_source",
-            Value::from(APPEAL_FINANCE_CONFIG_SOURCE_V1),
+            &(Value::from(APPEAL_FINANCE_CONFIG_SOURCE_V1)),
         ),
         json_entry(
             "pricing_config_version",
-            Value::from(config.version().to_owned()),
+            &(Value::from(config.version().to_owned())),
         ),
-        json_entry("quote_ttl_secs", Value::from(config.quote_ttl_secs())),
+        json_entry("quote_ttl_secs", &(Value::from(config.quote_ttl_secs()))),
         json_entry(
             "default_panel_size",
-            Value::from(u64::from(config.default_panel_size())),
+            &(Value::from(u64::from(config.default_panel_size()))),
         ),
         json_entry(
             "deposit_api",
-            Value::from(
+            &(Value::from(
                 "enabled_canonical_auth_durable_finalized_asset_lock_forwarder_status_confirmation",
-            ),
+            )),
         ),
-        json_entry("settlement_plan_api", Value::from("enabled")),
+        json_entry("settlement_plan_api", &(Value::from("enabled"))),
         json_entry(
             "settlement_execution_api",
-            Value::from("enabled_canonical_auth_plan_only_durable_forwarder_handoff"),
+            &(Value::from("enabled_canonical_auth_plan_only_durable_forwarder_handoff")),
         ),
         json_entry(
             "settlement_reconciliation_api",
-            Value::from("enabled_canonical_auth_runtime_asset_lock_reconciliation_digest"),
+            &(Value::from("enabled_canonical_auth_runtime_asset_lock_reconciliation_digest")),
         ),
         json_entry(
             "settlement_submission_api",
-            Value::from(
+            &(Value::from(
                 "enabled_canonical_auth_runtime_signer_durable_finalized_next_step_forwarder",
-            ),
+            )),
         ),
         json_entry(
             "settlement_receipt_publication",
-            Value::from("enabled_governance_dag_after_finalized_commit"),
+            &(Value::from("enabled_governance_dag_after_finalized_commit")),
         ),
         json_entry(
             "settlement_receipt_dashboard_api",
-            Value::from("enabled_local_publish_index"),
+            &(Value::from("enabled_local_publish_index")),
         ),
-        json_entry("disbursement_plan_api", Value::from("enabled")),
+        json_entry("disbursement_plan_api", &(Value::from("enabled"))),
         json_entry(
             "report_publication",
-            Value::from("enabled_local_governance_dag"),
+            &(Value::from("enabled_local_governance_dag")),
         ),
         json_entry(
             "weekly_rollup_publication",
-            Value::from("enabled_local_governance_dag"),
+            &(Value::from("enabled_local_governance_dag")),
         ),
         json_entry(
             "weekly_rollup_dashboard_api",
-            Value::from("enabled_local_publish_index"),
+            &(Value::from("enabled_local_publish_index")),
         ),
         json_entry(
             "report_api",
-            Value::from("enabled_canonical_auth_local_governance_dag"),
+            &(Value::from("enabled_canonical_auth_local_governance_dag")),
         ),
         json_entry(
             "weekly_rollup_api",
-            Value::from("enabled_canonical_auth_local_governance_dag"),
+            &(Value::from("enabled_canonical_auth_local_governance_dag")),
         ),
         json_entry(
             "settlement_processor",
-            Value::from("enabled_durable_finalized_ledger_reconciliation"),
+            &(Value::from("enabled_durable_finalized_ledger_reconciliation")),
         ),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
@@ -20602,61 +20635,61 @@ fn appeal_pricing_quote_json(
     let config = policy.pricing();
     let breakdown = &quote.breakdown;
     let mut entries = vec![
-        json_entry("schema", Value::from("sorafs.appeal_pricing.quote.v1")),
+        json_entry("schema", &(Value::from("sorafs.appeal_pricing.quote.v1"))),
         json_entry(
             "pricing_config_version",
-            Value::from(config.version().to_owned()),
+            &(Value::from(config.version().to_owned())),
         ),
-        json_entry("quote_ttl_secs", Value::from(config.quote_ttl_secs())),
-        json_entry("class", Value::from(input.class.as_str())),
-        json_entry("backlog", Value::from(u64::from(input.backlog))),
+        json_entry("quote_ttl_secs", &(Value::from(config.quote_ttl_secs()))),
+        json_entry("class", &(Value::from(input.class.as_str()))),
+        json_entry("backlog", &(Value::from(u64::from(input.backlog)))),
         json_entry(
             "evidence_size_mb",
-            Value::from(u64::from(input.evidence_size_mb)),
+            &(Value::from(u64::from(input.evidence_size_mb))),
         ),
-        json_entry("urgency", Value::from(input.urgency.as_str())),
-        json_entry("panel_size", Value::from(u64::from(input.panel_size))),
-        json_entry("deposit_xor", appeal_decimal_json(&quote.deposit_xor)),
+        json_entry("urgency", &(Value::from(input.urgency.as_str()))),
+        json_entry("panel_size", &(Value::from(u64::from(input.panel_size)))),
+        json_entry("deposit_xor", &(appeal_decimal_json(&quote.deposit_xor))),
         json_entry(
             "breakdown",
-            json_object(vec![
+            &(json_object(vec![
                 json_entry(
                     "base_rate_xor",
-                    appeal_decimal_json(&breakdown.base_rate_xor),
+                    &(appeal_decimal_json(&breakdown.base_rate_xor)),
                 ),
                 json_entry(
                     "backlog_factor",
-                    appeal_decimal_json(&breakdown.backlog_factor),
+                    &(appeal_decimal_json(&breakdown.backlog_factor)),
                 ),
                 json_entry(
                     "size_multiplier",
-                    appeal_decimal_json(&breakdown.size_multiplier),
+                    &(appeal_decimal_json(&breakdown.size_multiplier)),
                 ),
                 json_entry(
                     "urgency_multiplier",
-                    appeal_decimal_json(&breakdown.urgency_multiplier),
+                    &(appeal_decimal_json(&breakdown.urgency_multiplier)),
                 ),
                 json_entry(
                     "panel_multiplier",
-                    appeal_decimal_json(&breakdown.panel_multiplier),
+                    &(appeal_decimal_json(&breakdown.panel_multiplier)),
                 ),
                 json_entry(
                     "surge_multiplier",
-                    appeal_decimal_json(&breakdown.surge_multiplier),
+                    &(appeal_decimal_json(&breakdown.surge_multiplier)),
                 ),
                 json_entry(
                     "raw_deposit_xor",
-                    appeal_decimal_json(&breakdown.raw_deposit_xor),
+                    &(appeal_decimal_json(&breakdown.raw_deposit_xor)),
                 ),
                 json_entry(
                     "min_deposit_xor",
-                    appeal_decimal_json(&breakdown.min_deposit_xor),
+                    &(appeal_decimal_json(&breakdown.min_deposit_xor)),
                 ),
                 json_entry(
                     "max_deposit_xor",
-                    appeal_decimal_json(&breakdown.max_deposit_xor),
+                    &(appeal_decimal_json(&breakdown.max_deposit_xor)),
                 ),
-            ]),
+            ])),
         ),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
@@ -20664,31 +20697,37 @@ fn appeal_pricing_quote_json(
 }
 fn appeal_finance_settlement_json(
     policy: &AppealFinanceRuntimePolicy,
-    deposit_xor: impl ToString,
+    deposit_xor: &(impl ToString + ?Sized),
     panel_size: u32,
     verdict: AppealVerdict,
     breakdown: &AppealSettlementBreakdown,
 ) -> Value {
     let config = policy.settlement();
     let mut entries = vec![
-        json_entry("schema", Value::from("sorafs.appeal_finance.settlement.v1")),
+        json_entry(
+            "schema",
+            &(Value::from("sorafs.appeal_finance.settlement.v1")),
+        ),
         json_entry(
             "settlement_config_version",
-            Value::from(config.version().to_owned()),
+            &(Value::from(config.version().to_owned())),
         ),
-        json_entry("outcome", Value::from(verdict.to_string())),
-        json_entry("deposit_xor", appeal_decimal_json(deposit_xor)),
-        json_entry("panel_size", Value::from(u64::from(panel_size))),
-        json_entry("refund_xor", appeal_decimal_json(&breakdown.refund_xor)),
-        json_entry("treasury_xor", appeal_decimal_json(&breakdown.treasury_xor)),
-        json_entry("held_xor", appeal_decimal_json(&breakdown.held_xor)),
+        json_entry("outcome", &(Value::from(verdict.to_string()))),
+        json_entry("deposit_xor", &(appeal_decimal_json(deposit_xor))),
+        json_entry("panel_size", &(Value::from(u64::from(panel_size)))),
+        json_entry("refund_xor", &(appeal_decimal_json(&breakdown.refund_xor))),
+        json_entry(
+            "treasury_xor",
+            &(appeal_decimal_json(&breakdown.treasury_xor)),
+        ),
+        json_entry("held_xor", &(appeal_decimal_json(&breakdown.held_xor))),
         json_entry(
             "panel_reward_per_juror_xor",
-            appeal_decimal_json(&breakdown.panel_reward_per_juror_xor),
+            &(appeal_decimal_json(&breakdown.panel_reward_per_juror_xor)),
         ),
         json_entry(
             "panel_reward_total_xor",
-            appeal_decimal_json(&breakdown.panel_reward_total_xor),
+            &(appeal_decimal_json(&breakdown.panel_reward_total_xor)),
         ),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
@@ -20704,16 +20743,16 @@ fn appeal_finance_disbursement_json(
         .iter()
         .map(|payout| {
             json_object(vec![
-                json_entry("account", Value::from(payout.juror.to_string())),
-                json_entry("stipend_xor", appeal_decimal_json(&payout.stipend_xor)),
-                json_entry("bonus_xor", appeal_decimal_json(&payout.bonus_xor)),
+                json_entry("account", &(Value::from(payout.juror.to_string()))),
+                json_entry("stipend_xor", &(appeal_decimal_json(&payout.stipend_xor))),
+                json_entry("bonus_xor", &(appeal_decimal_json(&payout.bonus_xor))),
                 json_entry(
                     "total_xor",
-                    appeal_decimal_json(
-                        payout
+                    &(appeal_decimal_json(
+                        &(payout
                             .total()
-                            .expect("validated appeal disbursement arithmetic"),
-                    ),
+                            .expect("validated appeal disbursement arithmetic")),
+                    )),
                 ),
             ])
         })
@@ -20726,69 +20765,75 @@ fn appeal_finance_disbursement_json(
     let mut entries = vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.disbursement.v1"),
+            &(Value::from("sorafs.appeal_finance.disbursement.v1")),
         ),
         json_entry(
             "settlement_config_version",
-            Value::from(config.version().to_owned()),
+            &(Value::from(config.version().to_owned())),
         ),
-        json_entry("outcome", Value::from(plan.verdict.to_string())),
-        json_entry("deposit_xor", appeal_decimal_json(&plan.deposit_xor)),
-        json_entry("panel_size", Value::from(u64::from(plan.panel_size))),
+        json_entry("outcome", &(Value::from(plan.verdict.to_string()))),
+        json_entry("deposit_xor", &(appeal_decimal_json(&plan.deposit_xor))),
+        json_entry("panel_size", &(Value::from(u64::from(plan.panel_size)))),
         json_entry(
             "refund",
-            json_object(vec![
-                json_entry("account", Value::from(plan.refund_account.to_string())),
+            &(json_object(vec![
+                json_entry("account", &(Value::from(plan.refund_account.to_string()))),
                 json_entry(
                     "amount_xor",
-                    appeal_decimal_json(&plan.settlement.refund_xor),
+                    &(appeal_decimal_json(&plan.settlement.refund_xor)),
                 ),
-            ]),
+            ])),
         ),
         json_entry(
             "treasury",
-            json_object(vec![
-                json_entry("account", Value::from(plan.treasury_account.to_string())),
+            &(json_object(vec![
+                json_entry("account", &(Value::from(plan.treasury_account.to_string()))),
                 json_entry(
                     "deposit_component_xor",
-                    appeal_decimal_json(&plan.settlement.treasury_xor),
+                    &(appeal_decimal_json(&plan.settlement.treasury_xor)),
                 ),
                 json_entry(
                     "forfeited_rewards_xor",
-                    appeal_decimal_json(&plan.rewards_forfeited_treasury_xor),
+                    &(appeal_decimal_json(&plan.rewards_forfeited_treasury_xor)),
                 ),
-                json_entry("total_xor", appeal_decimal_json(&plan.total_treasury_xor)),
-            ]),
+                json_entry(
+                    "total_xor",
+                    &(appeal_decimal_json(&plan.total_treasury_xor)),
+                ),
+            ])),
         ),
         json_entry(
             "held",
-            json_object(vec![
-                json_entry("account", Value::from(plan.escrow_account.to_string())),
-                json_entry("amount_xor", appeal_decimal_json(&plan.settlement.held_xor)),
-            ]),
+            &(json_object(vec![
+                json_entry("account", &(Value::from(plan.escrow_account.to_string()))),
+                json_entry(
+                    "amount_xor",
+                    &(appeal_decimal_json(&plan.settlement.held_xor)),
+                ),
+            ])),
         ),
         json_entry(
             "rewards",
-            json_object(vec![
+            &(json_object(vec![
                 json_entry(
                     "available_xor",
-                    appeal_decimal_json(&plan.rewards_available_xor),
+                    &(appeal_decimal_json(&plan.rewards_available_xor)),
                 ),
                 json_entry(
                     "paid_xor",
-                    appeal_decimal_json(&plan.rewards_paid_total_xor),
+                    &(appeal_decimal_json(&plan.rewards_paid_total_xor)),
                 ),
                 json_entry(
                     "forfeited_xor",
-                    appeal_decimal_json(&plan.rewards_forfeited_treasury_xor),
+                    &(appeal_decimal_json(&plan.rewards_forfeited_treasury_xor)),
                 ),
                 json_entry(
                     "attending",
-                    Value::from(u64::try_from(plan.attending_count()).unwrap_or(u64::MAX)),
+                    &(Value::from(u64::try_from(plan.attending_count()).unwrap_or(u64::MAX))),
                 ),
-                json_entry("no_shows", Value::Array(no_shows)),
-                json_entry("participants", Value::Array(participants)),
-            ]),
+                json_entry("no_shows", &(Value::Array(no_shows))),
+                json_entry("participants", &(Value::Array(participants))),
+            ])),
         ),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
@@ -20816,68 +20861,76 @@ fn appeal_finance_deposit_settlement_execution_json(
         .enumerate()
         .map(|(index, step)| {
             json_object(vec![
-                json_entry("step", Value::from((index + 1) as u64)),
-                json_entry("action", Value::from(step.action)),
+                json_entry("step", &(Value::from((index + 1) as u64))),
+                json_entry("action", &(Value::from(step.action))),
                 json_entry(
                     "required_authority_account",
-                    Value::from(step.required_authority.to_string()),
+                    &(Value::from(step.required_authority.to_string())),
                 ),
-                json_entry("amount_xor", appeal_decimal_json(&step.amount_xor)),
+                json_entry("amount_xor", &(appeal_decimal_json(&step.amount_xor))),
             ])
         })
         .collect::<Vec<_>>();
     let mut entries = vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.deposit_settlement_execution.v1"),
+            &(Value::from("sorafs.appeal_finance.deposit_settlement_execution.v1")),
         ),
-        json_entry("status", Value::from("plan_only")),
-        json_entry("ledger_mutation", Value::from("none")),
+        json_entry("status", &(Value::from("plan_only"))),
+        json_entry("ledger_mutation", &(Value::from("none"))),
         json_entry(
             "execution_mode",
-            Value::from("submit_via_durable_finalized_ledger_forwarder"),
+            &(Value::from("submit_via_durable_finalized_ledger_forwarder")),
         ),
         json_entry(
             "requires_multiple_authorities",
-            Value::Bool(authority_count > 1),
+            &(Value::Bool(authority_count > 1)),
         ),
         json_entry(
             "settlement_config_version",
-            Value::from(config.version().to_owned()),
+            &(Value::from(config.version().to_owned())),
         ),
-        json_entry("outcome", Value::from(verdict.to_string())),
-        json_entry("panel_size", Value::from(u64::from(panel_size))),
+        json_entry("outcome", &(Value::from(verdict.to_string()))),
+        json_entry("panel_size", &(Value::from(u64::from(panel_size)))),
         json_entry(
             "escrow_id_hex",
-            Value::from(expected.escrow_id.as_hash().to_string()),
+            &(Value::from(expected.escrow_id.as_hash().to_string())),
         ),
         json_entry(
             "payer_account",
-            Value::from(expected.payer_account.to_string()),
+            &(Value::from(expected.payer_account.to_string())),
         ),
         json_entry(
             "destination_account",
-            Value::from(expected.destination_account.to_string()),
+            &(Value::from(expected.destination_account.to_string())),
         ),
         json_entry(
             "release_authority_account",
-            expected
+            &(expected
                 .release_authority_account
                 .as_ref()
-                .map(|account| Value::from(account.to_string()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |account| Value::from(account.to_string()))),
         ),
-        json_entry("deposit_xor", appeal_decimal_json(&expected.deposit_xor)),
-        json_entry("refund_xor", appeal_decimal_json(&breakdown.refund_xor)),
-        json_entry("treasury_xor", appeal_decimal_json(&breakdown.treasury_xor)),
-        json_entry("held_xor", appeal_decimal_json(&breakdown.held_xor)),
-        json_entry("drawdown_xor", appeal_decimal_json(&execution.drawdown_xor)),
+        json_entry("deposit_xor", &(appeal_decimal_json(&expected.deposit_xor))),
+        json_entry("refund_xor", &(appeal_decimal_json(&breakdown.refund_xor))),
+        json_entry(
+            "treasury_xor",
+            &(appeal_decimal_json(&breakdown.treasury_xor)),
+        ),
+        json_entry("held_xor", &(appeal_decimal_json(&breakdown.held_xor))),
+        json_entry(
+            "drawdown_xor",
+            &(appeal_decimal_json(&execution.drawdown_xor)),
+        ),
         json_entry(
             "cancel_refund_xor",
-            appeal_decimal_json(&execution.refund_xor),
+            &(appeal_decimal_json(&execution.refund_xor)),
         ),
-        json_entry("tx_steps", Value::Array(steps)),
-        json_entry("ledger_record", appeal_finance_deposit_status_json(record)),
+        json_entry("tx_steps", &(Value::Array(steps))),
+        json_entry(
+            "ledger_record",
+            &(appeal_finance_deposit_status_json(record)),
+        ),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
     json_object(entries)
@@ -20895,82 +20948,87 @@ fn appeal_finance_deposit_settlement_reconciliation_json(
     let mut entries = vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.deposit_settlement_reconciliation.v1"),
+            &(Value::from("sorafs.appeal_finance.deposit_settlement_reconciliation.v1")),
         ),
-        json_entry("status", Value::from(reconciliation.status)),
-        json_entry("reconciled", Value::Bool(reconciliation.reconciled)),
+        json_entry("status", &(Value::from(reconciliation.status))),
+        json_entry("reconciled", &(Value::Bool(reconciliation.reconciled))),
         json_entry(
             "reconciliation_digest_hex",
-            Value::from(reconciliation.reconciliation_digest_hex.clone()),
+            &(Value::from(reconciliation.reconciliation_digest_hex.clone())),
         ),
         json_entry(
             "settlement_config_version",
-            Value::from(config.version().to_owned()),
+            &(Value::from(config.version().to_owned())),
         ),
-        json_entry("outcome", Value::from(verdict.to_string())),
-        json_entry("panel_size", Value::from(u64::from(panel_size))),
+        json_entry("outcome", &(Value::from(verdict.to_string()))),
+        json_entry("panel_size", &(Value::from(u64::from(panel_size)))),
         json_entry(
             "escrow_id_hex",
-            Value::from(expected.escrow_id.as_hash().to_string()),
+            &(Value::from(expected.escrow_id.as_hash().to_string())),
         ),
         json_entry(
             "payer_account",
-            Value::from(expected.payer_account.to_string()),
+            &(Value::from(expected.payer_account.to_string())),
         ),
         json_entry(
             "destination_account",
-            Value::from(expected.destination_account.to_string()),
+            &(Value::from(expected.destination_account.to_string())),
         ),
         json_entry(
             "release_authority_account",
-            expected
+            &(expected
                 .release_authority_account
                 .as_ref()
-                .map(|account| Value::from(account.to_string()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |account| Value::from(account.to_string()))),
         ),
-        json_entry("deposit_xor", appeal_decimal_json(&expected.deposit_xor)),
-        json_entry("refund_xor", appeal_decimal_json(&breakdown.refund_xor)),
-        json_entry("treasury_xor", appeal_decimal_json(&breakdown.treasury_xor)),
-        json_entry("held_xor", appeal_decimal_json(&breakdown.held_xor)),
+        json_entry("deposit_xor", &(appeal_decimal_json(&expected.deposit_xor))),
+        json_entry("refund_xor", &(appeal_decimal_json(&breakdown.refund_xor))),
+        json_entry(
+            "treasury_xor",
+            &(appeal_decimal_json(&breakdown.treasury_xor)),
+        ),
+        json_entry("held_xor", &(appeal_decimal_json(&breakdown.held_xor))),
         json_entry(
             "expected_drawdown_xor",
-            appeal_decimal_json(&reconciliation.drawdown_xor),
+            &(appeal_decimal_json(&reconciliation.drawdown_xor)),
         ),
         json_entry(
             "expected_cancel_refund_xor",
-            appeal_decimal_json(&reconciliation.refund_xor),
+            &(appeal_decimal_json(&reconciliation.refund_xor)),
         ),
         json_entry(
             "expected_final_lifecycle_status",
-            Value::from(asset_escrow_status_label(
+            &(Value::from(asset_escrow_status_label(
                 reconciliation.expected_final_status,
-            )),
+            ))),
         ),
         json_entry(
             "expected_remaining_amount",
-            appeal_decimal_json(&reconciliation.expected_remaining_xor),
+            &(appeal_decimal_json(&reconciliation.expected_remaining_xor)),
         ),
         json_entry(
             "observed_lifecycle_status",
-            Value::from(asset_escrow_status_label(record.status)),
+            &(Value::from(asset_escrow_status_label(record.status))),
         ),
         json_entry(
             "observed_remaining_amount",
-            appeal_decimal_json(&record.remaining_amount),
+            &(appeal_decimal_json(&record.remaining_amount)),
         ),
         json_entry(
             "mismatches",
-            Value::Array(
+            &(Value::Array(
                 reconciliation
                     .mismatches
                     .iter()
                     .cloned()
                     .map(Value::from)
                     .collect(),
-            ),
+            )),
         ),
-        json_entry("ledger_record", appeal_finance_deposit_status_json(record)),
+        json_entry(
+            "ledger_record",
+            &(appeal_finance_deposit_status_json(record)),
+        ),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
     json_object(entries)
@@ -20995,47 +21053,47 @@ fn appeal_finance_deposit_settlement_submission_json(
     let mut entries = vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.deposit_settlement_submission.v1"),
+            &(Value::from("sorafs.appeal_finance.deposit_settlement_submission.v1")),
         ),
-        json_entry("status", Value::from(status)),
+        json_entry("status", &(Value::from(status))),
         json_entry(
             "ledger_mutation",
-            Value::from("durable_finalized_ledger_forwarder"),
+            &(Value::from("durable_finalized_ledger_forwarder")),
         ),
         json_entry(
             "operation_id_hex",
-            tx_hash_hex.map(Value::from).unwrap_or(Value::Null),
+            &(tx_hash_hex.map_or(Value::Null, Value::from)),
         ),
-        json_entry("tx_hash_hex", Value::Null),
+        json_entry("tx_hash_hex", &(Value::Null)),
         json_entry(
             "configured_signer_count",
-            Value::from(configured_signer_count as u64),
+            &(Value::from(configured_signer_count as u64)),
         ),
         json_entry(
             "submitted_step",
-            step.map(appeal_finance_settlement_submission_step_json)
-                .unwrap_or(Value::Null),
+            &(step.map_or(Value::Null, appeal_finance_settlement_submission_step_json)),
         ),
         json_entry(
             "missing_required_authority",
-            if status == "missing_required_signer" {
-                step.map(|step| Value::from(step.required_authority.to_string()))
-                    .unwrap_or(Value::Null)
+            &(if status == "missing_required_signer" {
+                step.map_or(Value::Null, |step| {
+                    Value::from(step.required_authority.to_string())
+                })
             } else {
                 Value::Null
-            },
+            }),
         ),
         json_entry(
             "settlement_receipt",
-            appeal_finance_settlement_receipt_publication_json(
+            &(appeal_finance_settlement_receipt_publication_json(
                 receipt,
                 receipt_publication_status,
                 receipt_publication_error,
-            ),
+            )),
         ),
         json_entry(
             "reconciliation",
-            appeal_finance_deposit_settlement_reconciliation_json(
+            &(appeal_finance_deposit_settlement_reconciliation_json(
                 policy,
                 expected,
                 record,
@@ -21043,7 +21101,7 @@ fn appeal_finance_deposit_settlement_submission_json(
                 panel_size,
                 breakdown,
                 reconciliation,
-            ),
+            )),
         ),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
@@ -21054,55 +21112,53 @@ fn appeal_finance_settlement_receipt_publication_json(
     publication_status: &'static str,
     publication_error: Option<&str>,
 ) -> Value {
-    let receipt_json = receipt
-        .map(|receipt| {
-            json::to_value(receipt).unwrap_or_else(|err| {
-                json_object(vec![json_entry(
-                    "serialization_error",
-                    Value::from(err.to_string()),
-                )])
-            })
+    let receipt_json = receipt.map_or(Value::Null, |receipt| {
+        json::to_value(receipt).unwrap_or_else(|err| {
+            json_object(vec![json_entry(
+                "serialization_error",
+                &(Value::from(err.to_string())),
+            )])
         })
-        .unwrap_or(Value::Null);
+    });
     json_object(vec![
-        json_entry("publication_status", Value::from(publication_status)),
+        json_entry("publication_status", &(Value::from(publication_status))),
         json_entry(
             "publication_error",
-            publication_error.map(Value::from).unwrap_or(Value::Null),
+            &(publication_error.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "payload_kind",
-            Value::from("appeal_finance_settlement_receipt"),
+            &(Value::from("appeal_finance_settlement_receipt")),
         ),
         json_entry(
             "receipt_id_hex",
-            receipt
-                .map(|receipt| Value::from(hex::encode(receipt.receipt_id)))
-                .unwrap_or(Value::Null),
+            &(receipt.map_or(Value::Null, |receipt| {
+                Value::from(hex::encode(receipt.receipt_id))
+            })),
         ),
         json_entry(
             "tx_hash_hex",
-            receipt
-                .map(|receipt| Value::from(receipt.tx_hash_hex.clone()))
-                .unwrap_or(Value::Null),
+            &(receipt.map_or(Value::Null, |receipt| {
+                Value::from(receipt.tx_hash_hex.clone())
+            })),
         ),
         json_entry(
             "reconciliation_digest_hex",
-            receipt
-                .map(|receipt| Value::from(receipt.reconciliation_digest_hex.clone()))
-                .unwrap_or(Value::Null),
+            &(receipt.map_or(Value::Null, |receipt| {
+                Value::from(receipt.reconciliation_digest_hex.clone())
+            })),
         ),
-        json_entry("receipt", receipt_json),
+        json_entry("receipt", &(receipt_json)),
     ])
 }
 fn appeal_finance_settlement_submission_step_json(step: &AppealFinanceSettlementStep) -> Value {
     json_object(vec![
-        json_entry("action", Value::from(step.action)),
+        json_entry("action", &(Value::from(step.action))),
         json_entry(
             "required_authority",
-            Value::from(step.required_authority.to_string()),
+            &(Value::from(step.required_authority.to_string())),
         ),
-        json_entry("amount_xor", appeal_decimal_json(&step.amount_xor)),
+        json_entry("amount_xor", &(appeal_decimal_json(&step.amount_xor))),
     ])
 }
 fn appeal_finance_deposit_submission_json(
@@ -21121,63 +21177,58 @@ fn appeal_finance_deposit_submission_json(
     let mut entries = vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.deposit_submission.v1"),
+            &(Value::from("sorafs.appeal_finance.deposit_submission.v1")),
         ),
-        json_entry("status", Value::from(status)),
+        json_entry("status", &(Value::from(status))),
         json_entry(
             "ledger_mutation",
-            Value::from("durable_finalized_ledger_forwarder"),
+            &(Value::from("durable_finalized_ledger_forwarder")),
         ),
         json_entry(
             "operation_id_hex",
-            operation_id_hex.map(Value::from).unwrap_or(Value::Null),
+            &(operation_id_hex.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "configured_signer_count",
-            Value::from(configured_signer_count as u64),
+            &(Value::from(configured_signer_count as u64)),
         ),
-        json_entry("case_id", Value::from(expected.case_id.clone())),
+        json_entry("case_id", &(Value::from(expected.case_id.clone()))),
         json_entry(
             "round_id",
-            expected
+            &(expected
                 .round_id
                 .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "payer_account",
-            Value::from(expected.payer_account.to_string()),
+            &(Value::from(expected.payer_account.to_string())),
         ),
         json_entry(
             "destination_account",
-            Value::from(expected.destination_account.to_string()),
+            &(Value::from(expected.destination_account.to_string())),
         ),
         json_entry(
             "release_authority_account",
-            expected
+            &(expected
                 .release_authority_account
                 .as_ref()
-                .map(|account| Value::from(account.to_string()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |account| Value::from(account.to_string()))),
         ),
-        json_entry("deposit_xor", appeal_decimal_json(&expected.deposit_xor)),
+        json_entry("deposit_xor", &(appeal_decimal_json(&expected.deposit_xor))),
         json_entry(
             "expires_at_ms",
-            expected
-                .expires_at_ms
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+            &(expected.expires_at_ms.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "idempotency_key",
-            Value::from(expected.idempotency_key.clone()),
+            &(Value::from(expected.idempotency_key.clone())),
         ),
         json_entry(
             "escrow_id_hex",
-            Value::from(expected.escrow_id.as_hash().to_string()),
+            &(Value::from(expected.escrow_id.as_hash().to_string())),
         ),
-        json_entry("evidence_hashes_hex", Value::Array(evidence_hashes)),
+        json_entry("evidence_hashes_hex", &(Value::Array(evidence_hashes))),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
     json_object(entries)
@@ -21195,55 +21246,50 @@ fn appeal_finance_deposit_instruction_json(
     let mut entries = vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.deposit_request.v1"),
+            &(Value::from("sorafs.appeal_finance.deposit_request.v1")),
         ),
-        json_entry("status", Value::from("ready_for_durable_submission")),
+        json_entry("status", &(Value::from("ready_for_durable_submission"))),
         json_entry(
             "ledger_mutation",
-            Value::from("none_call_authenticated_deposit_endpoint"),
+            &(Value::from("none_call_authenticated_deposit_endpoint")),
         ),
-        json_entry("case_id", Value::from(expected.case_id.clone())),
+        json_entry("case_id", &(Value::from(expected.case_id.clone()))),
         json_entry(
             "round_id",
-            expected
+            &(expected
                 .round_id
                 .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "payer_account",
-            Value::from(expected.payer_account.to_string()),
+            &(Value::from(expected.payer_account.to_string())),
         ),
         json_entry(
             "destination_account",
-            Value::from(expected.destination_account.to_string()),
+            &(Value::from(expected.destination_account.to_string())),
         ),
         json_entry(
             "release_authority_account",
-            expected
+            &(expected
                 .release_authority_account
                 .as_ref()
-                .map(|account| Value::from(account.to_string()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |account| Value::from(account.to_string()))),
         ),
-        json_entry("deposit_xor", appeal_decimal_json(&expected.deposit_xor)),
+        json_entry("deposit_xor", &(appeal_decimal_json(&expected.deposit_xor))),
         json_entry(
             "expires_at_ms",
-            expected
-                .expires_at_ms
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+            &(expected.expires_at_ms.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "idempotency_key",
-            Value::from(expected.idempotency_key.clone()),
+            &(Value::from(expected.idempotency_key.clone())),
         ),
         json_entry(
             "escrow_id_hex",
-            Value::from(expected.escrow_id.as_hash().to_string()),
+            &(Value::from(expected.escrow_id.as_hash().to_string())),
         ),
-        json_entry("evidence_hashes_hex", Value::Array(evidence_hashes)),
+        json_entry("evidence_hashes_hex", &(Value::Array(evidence_hashes))),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
     json_object(entries)
@@ -21256,57 +21302,55 @@ fn appeal_finance_deposit_confirmation_json(
     let mut entries = vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.deposit_confirmation.v1"),
+            &(Value::from("sorafs.appeal_finance.deposit_confirmation.v1")),
         ),
-        json_entry("status", Value::from("confirmed")),
-        json_entry("confirmed", Value::Bool(true)),
+        json_entry("status", &(Value::from("confirmed"))),
+        json_entry("confirmed", &(Value::Bool(true))),
         json_entry(
             "escrow_id_hex",
-            Value::from(expected.escrow_id.as_hash().to_string()),
+            &(Value::from(expected.escrow_id.as_hash().to_string())),
         ),
-        json_entry("case_id", Value::from(expected.case_id.clone())),
+        json_entry("case_id", &(Value::from(expected.case_id.clone()))),
         json_entry(
             "round_id",
-            expected
+            &(expected
                 .round_id
                 .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "payer_account",
-            Value::from(expected.payer_account.to_string()),
+            &(Value::from(expected.payer_account.to_string())),
         ),
         json_entry(
             "destination_account",
-            Value::from(expected.destination_account.to_string()),
+            &(Value::from(expected.destination_account.to_string())),
         ),
         json_entry(
             "release_authority_account",
-            expected
+            &(expected
                 .release_authority_account
                 .as_ref()
-                .map(|account| Value::from(account.to_string()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |account| Value::from(account.to_string()))),
         ),
-        json_entry("deposit_xor", appeal_decimal_json(&expected.deposit_xor)),
+        json_entry("deposit_xor", &(appeal_decimal_json(&expected.deposit_xor))),
         json_entry(
             "remaining_amount",
-            appeal_decimal_json(&record.remaining_amount),
+            &(appeal_decimal_json(&record.remaining_amount)),
         ),
         json_entry(
             "lifecycle_status",
-            Value::from(asset_escrow_status_label(record.status)),
+            &(Value::from(asset_escrow_status_label(record.status))),
         ),
-        json_entry("kind", Value::from(asset_escrow_kind_label(record.kind))),
+        json_entry("kind", &(Value::from(asset_escrow_kind_label(record.kind)))),
         json_entry(
             "expires_at_ms",
-            expected
-                .expires_at_ms
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+            &(expected.expires_at_ms.map_or(Value::Null, Value::from)),
         ),
-        json_entry("ledger_record", appeal_finance_deposit_status_json(record)),
+        json_entry(
+            "ledger_record",
+            &(appeal_finance_deposit_status_json(record)),
+        ),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
     json_object(entries)
@@ -21320,19 +21364,22 @@ fn appeal_finance_deposit_confirmation_mismatch_json(
     let mut entries = vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.deposit_confirmation.v1"),
+            &(Value::from("sorafs.appeal_finance.deposit_confirmation.v1")),
         ),
-        json_entry("status", Value::from("mismatch")),
-        json_entry("confirmed", Value::Bool(false)),
+        json_entry("status", &(Value::from("mismatch"))),
+        json_entry("confirmed", &(Value::Bool(false))),
         json_entry(
             "escrow_id_hex",
-            Value::from(expected.escrow_id.as_hash().to_string()),
+            &(Value::from(expected.escrow_id.as_hash().to_string())),
         ),
         json_entry(
             "mismatches",
-            Value::Array(mismatches.into_iter().map(Value::from).collect()),
+            &(Value::Array(mismatches.into_iter().map(Value::from).collect())),
         ),
-        json_entry("ledger_record", appeal_finance_deposit_status_json(record)),
+        json_entry(
+            "ledger_record",
+            &(appeal_finance_deposit_status_json(record)),
+        ),
     ];
     entries.extend(appeal_finance_policy_json_entries(policy));
     json_object(entries)
@@ -21358,83 +21405,74 @@ fn appeal_finance_deposit_status_json(record: &AssetEscrowRecord) -> Value {
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.deposit_status.v1"),
+            &(Value::from("sorafs.appeal_finance.deposit_status.v1")),
         ),
-        json_entry("status", Value::from("found")),
+        json_entry("status", &(Value::from("found"))),
         json_entry(
             "escrow_id_hex",
-            Value::from(record.id.as_hash().to_string()),
+            &(Value::from(record.id.as_hash().to_string())),
         ),
-        json_entry("seller_account", Value::from(record.seller.to_string())),
+        json_entry("seller_account", &(Value::from(record.seller.to_string()))),
         json_entry(
             "buyer_account",
-            record
+            &(record
                 .buyer
                 .as_ref()
-                .map(|buyer| Value::from(buyer.to_string()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |buyer| Value::from(buyer.to_string()))),
         ),
         json_entry(
             "asset_definition_id",
-            Value::from(record.asset_definition.to_string()),
+            &(Value::from(record.asset_definition.to_string())),
         ),
-        json_entry("amount", appeal_decimal_json(&record.amount)),
+        json_entry("amount", &(appeal_decimal_json(&record.amount))),
         json_entry(
             "remaining_amount",
-            appeal_decimal_json(&record.remaining_amount),
+            &(appeal_decimal_json(&record.remaining_amount)),
         ),
-        json_entry("custody_account", Value::from(record.custody.to_string())),
+        json_entry(
+            "custody_account",
+            &(Value::from(record.custody.to_string())),
+        ),
         json_entry(
             "lifecycle_status",
-            Value::from(asset_escrow_status_label(record.status)),
+            &(Value::from(asset_escrow_status_label(record.status))),
         ),
-        json_entry("kind", Value::from(asset_escrow_kind_label(record.kind))),
+        json_entry("kind", &(Value::from(asset_escrow_kind_label(record.kind)))),
         json_entry(
             "release_authority",
-            record
+            &(record
                 .release_authority
                 .as_ref()
-                .map(|authority| Value::from(authority.to_string()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |authority| Value::from(authority.to_string()))),
         ),
         json_entry(
             "expires_at_ms",
-            record.expires_at_ms.map(Value::from).unwrap_or(Value::Null),
+            &(record.expires_at_ms.map_or(Value::Null, Value::from)),
         ),
-        json_entry("evidence_hashes_hex", Value::Array(evidence_hashes)),
-        json_entry("created_at_ms", Value::from(record.created_at_ms)),
+        json_entry("evidence_hashes_hex", &(Value::Array(evidence_hashes))),
+        json_entry("created_at_ms", &(Value::from(record.created_at_ms))),
         json_entry(
             "accepted_at_ms",
-            record
-                .accepted_at_ms
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+            &(record.accepted_at_ms.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "payment_sent_at_ms",
-            record
-                .payment_sent_at_ms
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+            &(record.payment_sent_at_ms.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "disputed_at_ms",
-            record
-                .disputed_at_ms
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+            &(record.disputed_at_ms.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "closed_at_ms",
-            record.closed_at_ms.map(Value::from).unwrap_or(Value::Null),
+            &(record.closed_at_ms.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "resolution",
-            record
+            &(record
                 .resolution
                 .as_ref()
-                .map(asset_escrow_resolution_json)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, asset_escrow_resolution_json)),
         ),
     ])
 }
@@ -21447,18 +21485,18 @@ fn asset_escrow_resolution_json(resolution: &AssetEscrowResolution) -> Value {
     json_object(vec![
         json_entry(
             "resolver_account",
-            Value::from(resolution.resolver.to_string()),
+            &(Value::from(resolution.resolver.to_string())),
         ),
         json_entry(
             "buyer_amount",
-            appeal_decimal_json(&resolution.buyer_amount),
+            &(appeal_decimal_json(&resolution.buyer_amount)),
         ),
         json_entry(
             "seller_amount",
-            appeal_decimal_json(&resolution.seller_amount),
+            &(appeal_decimal_json(&resolution.seller_amount)),
         ),
-        json_entry("evidence_hashes_hex", Value::Array(evidence_hashes)),
-        json_entry("resolved_at_ms", Value::from(resolution.resolved_at_ms)),
+        json_entry("evidence_hashes_hex", &(Value::Array(evidence_hashes))),
+        json_entry("resolved_at_ms", &(Value::from(resolution.resolved_at_ms))),
     ])
 }
 fn asset_escrow_status_label(status: AssetEscrowStatus) -> &'static str {
@@ -21486,41 +21524,37 @@ fn appeal_finance_report_publish_json(report: &SoraFsAppealFinanceReportV1) -> V
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.report.publish.v1"),
+            &(Value::from("sorafs.appeal_finance.report.publish.v1")),
         ),
-        json_entry("status", Value::from("accepted")),
-        json_entry("payload_kind", Value::from(APPEAL_FINANCE_REPORT_KIND)),
-        json_entry("report_id_hex", Value::from(encode(report.report_id))),
-        json_entry("case_id", Value::from(report.case_id.clone())),
+        json_entry("status", &(Value::from("accepted"))),
+        json_entry("payload_kind", &(Value::from(APPEAL_FINANCE_REPORT_KIND))),
+        json_entry("report_id_hex", &(Value::from(encode(report.report_id)))),
+        json_entry("case_id", &(Value::from(report.case_id.clone()))),
         json_entry(
             "round_id",
-            report
-                .round_id
-                .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+            &(report.round_id.as_deref().map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "generated_at_unix_ms",
-            Value::from(report.generated_at_unix_ms),
+            &(Value::from(report.generated_at_unix_ms)),
         ),
         json_entry(
             "appeal_finance_config_version",
-            Value::from(report.appeal_finance_config_version.clone()),
+            &(Value::from(report.appeal_finance_config_version.clone())),
         ),
-        json_entry("outcome", Value::from(report.outcome.as_str())),
-        json_entry("panel_size", Value::from(u64::from(report.panel_size))),
+        json_entry("outcome", &(Value::from(report.outcome.as_str()))),
+        json_entry("panel_size", &(Value::from(u64::from(report.panel_size)))),
         json_entry(
             "juror_payout_count",
-            Value::from(report.juror_payouts.len() as u64),
+            &(Value::from(report.juror_payouts.len() as u64)),
         ),
         json_entry(
             "no_show_count",
-            Value::from(report.no_show_juror_ids.len() as u64),
+            &(Value::from(report.no_show_juror_ids.len() as u64)),
         ),
         json_entry(
             "publication",
-            Value::from("local_governance_dag_filesystem"),
+            &(Value::from("local_governance_dag_filesystem")),
         ),
     ])
 }
@@ -21533,31 +21567,37 @@ fn appeal_finance_weekly_rollup_publish_json(rollup: &SoraFsAppealFinanceWeeklyR
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.appeal_finance.weekly_rollup.publish.v1"),
+            &(Value::from("sorafs.appeal_finance.weekly_rollup.publish.v1")),
         ),
-        json_entry("status", Value::from("accepted")),
+        json_entry("status", &(Value::from("accepted"))),
         json_entry(
             "payload_kind",
-            Value::from(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND),
+            &(Value::from(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)),
         ),
-        json_entry("cycle", Value::from(rollup.cycle.to_string())),
+        json_entry("cycle", &(Value::from(rollup.cycle.to_string()))),
         json_entry(
             "generated_at_unix_ms",
-            Value::from(rollup.generated_at_unix_ms),
+            &(Value::from(rollup.generated_at_unix_ms)),
         ),
-        json_entry("report_count", Value::from(rollup.report_count)),
-        json_entry("case_count", Value::from(rollup.case_count)),
+        json_entry("report_count", &(Value::from(rollup.report_count))),
+        json_entry("case_count", &(Value::from(rollup.case_count))),
         json_entry(
             "config_version_count",
-            Value::from(rollup.appeal_finance_config_versions.len() as u64),
+            &(Value::from(rollup.appeal_finance_config_versions.len() as u64)),
         ),
-        json_entry("outcome_count", Value::from(rollup.outcomes.len() as u64)),
-        json_entry("juror_payout_count", Value::from(rollup.juror_payout_count)),
-        json_entry("no_show_count", Value::from(rollup.no_show_juror_count)),
-        json_entry("source_report_ids_hex", Value::Array(source_report_ids)),
+        json_entry(
+            "outcome_count",
+            &(Value::from(rollup.outcomes.len() as u64)),
+        ),
+        json_entry(
+            "juror_payout_count",
+            &(Value::from(rollup.juror_payout_count)),
+        ),
+        json_entry("no_show_count", &(Value::from(rollup.no_show_juror_count))),
+        json_entry("source_report_ids_hex", &(Value::Array(source_report_ids))),
         json_entry(
             "publication",
-            Value::from("local_governance_dag_filesystem"),
+            &(Value::from("local_governance_dag_filesystem")),
         ),
     ])
 }
@@ -21585,7 +21625,7 @@ where
         )
     })
 }
-fn moderation_model_registry_error_response(err: ModerationModelRegistryError) -> Response {
+fn moderation_model_registry_error_response(err: &ModerationModelRegistryError) -> Response {
     let status = match err {
         ModerationModelRegistryError::ConflictingReproManifest { .. } => StatusCode::CONFLICT,
         ModerationModelRegistryError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
@@ -21605,20 +21645,20 @@ fn moderation_repro_registry_admission_json(record: &ModerationReproRegistryReco
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.model_registry.repro_manifest_admission.v1"),
+            &(Value::from("sorafs.moderation.model_registry.repro_manifest_admission.v1")),
         ),
-        json_entry("status", Value::from("accepted")),
-        json_entry("record", moderation_repro_registry_record_json(record)),
+        json_entry("status", &(Value::from("accepted"))),
+        json_entry("record", &(moderation_repro_registry_record_json(record))),
     ])
 }
 fn moderation_corpus_registry_admission_json(record: &ModerationCorpusRegistryRecord) -> Value {
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.model_registry.corpus_manifest_admission.v1"),
+            &(Value::from("sorafs.moderation.model_registry.corpus_manifest_admission.v1")),
         ),
-        json_entry("status", Value::from("accepted")),
-        json_entry("record", moderation_corpus_registry_record_json(record)),
+        json_entry("status", &(Value::from("accepted"))),
+        json_entry("record", &(moderation_corpus_registry_record_json(record))),
     ])
 }
 fn moderation_model_registry_snapshot_json(
@@ -21640,70 +21680,81 @@ fn moderation_model_registry_snapshot_json(
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.model_registry.snapshot.v1"),
+            &(Value::from("sorafs.moderation.model_registry.snapshot.v1")),
         ),
-        json_entry("source", Value::from("local")),
-        json_entry("repro_manifest_count", Value::from(repro_count as u64)),
+        json_entry("source", &(Value::from("local"))),
+        json_entry("repro_manifest_count", &(Value::from(repro_count as u64))),
         json_entry(
             "returned_repro_manifest_count",
-            Value::from(repro_manifests.len() as u64),
+            &(Value::from(repro_manifests.len() as u64)),
         ),
         json_entry(
             "truncated_repro_manifests",
-            Value::from(repro_count > limit),
+            &(Value::from(repro_count > limit)),
         ),
-        json_entry("corpus_count", Value::from(corpus_count as u64)),
+        json_entry("corpus_count", &(Value::from(corpus_count as u64))),
         json_entry(
             "returned_corpus_count",
-            Value::from(adversarial_corpora.len() as u64),
+            &(Value::from(adversarial_corpora.len() as u64)),
         ),
-        json_entry("truncated_corpora", Value::from(corpus_count > limit)),
-        json_entry("limit", Value::from(limit as u64)),
-        json_entry("repro_manifests", Value::Array(repro_manifests)),
-        json_entry("adversarial_corpora", Value::Array(adversarial_corpora)),
+        json_entry("truncated_corpora", &(Value::from(corpus_count > limit))),
+        json_entry("limit", &(Value::from(limit as u64))),
+        json_entry("repro_manifests", &(Value::Array(repro_manifests))),
+        json_entry("adversarial_corpora", &(Value::Array(adversarial_corpora))),
     ])
 }
 fn moderation_repro_registry_record_json(record: &ModerationReproRegistryRecord) -> Value {
     json_object(vec![
-        json_entry("manifest_id_hex", Value::from(encode(record.manifest_id))),
+        json_entry(
+            "manifest_id_hex",
+            &(Value::from(encode(record.manifest_id))),
+        ),
         json_entry(
             "manifest_digest_hex",
-            Value::from(encode(record.manifest_digest)),
+            &(Value::from(encode(record.manifest_digest))),
         ),
-        json_entry("runner_hash_hex", Value::from(encode(record.runner_hash))),
+        json_entry(
+            "runner_hash_hex",
+            &(Value::from(encode(record.runner_hash))),
+        ),
         json_entry(
             "runtime_version",
-            Value::from(record.runtime_version.clone()),
+            &(Value::from(record.runtime_version.clone())),
         ),
-        json_entry("issued_at_unix", Value::from(record.issued_at_unix)),
-        json_entry("model_count", Value::from(u64::from(record.model_count))),
-        json_entry("signer_count", Value::from(u64::from(record.signer_count))),
+        json_entry("issued_at_unix", &(Value::from(record.issued_at_unix))),
+        json_entry("model_count", &(Value::from(u64::from(record.model_count)))),
+        json_entry(
+            "signer_count",
+            &(Value::from(u64::from(record.signer_count))),
+        ),
     ])
 }
 fn moderation_corpus_registry_record_json(record: &ModerationCorpusRegistryRecord) -> Value {
     json_object(vec![
         json_entry(
             "corpus_digest_hex",
-            Value::from(encode(record.corpus_digest)),
+            &(Value::from(encode(record.corpus_digest))),
         ),
-        json_entry("issued_at_unix", Value::from(record.issued_at_unix)),
+        json_entry("issued_at_unix", &(Value::from(record.issued_at_unix))),
         json_entry(
             "cohort_label",
-            record
+            &(record
                 .cohort_label
                 .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
-        json_entry("family_count", Value::from(u64::from(record.family_count))),
+        json_entry(
+            "family_count",
+            &(Value::from(u64::from(record.family_count))),
+        ),
         json_entry(
             "variant_count",
-            Value::from(u64::from(record.variant_count)),
+            &(Value::from(u64::from(record.variant_count))),
         ),
     ])
 }
 fn authenticated_moderation_screening_request_from_dto(
-    request: ModerationScreeningResultRequestDto,
+    request: &ModerationScreeningResultRequestDto,
 ) -> Result<ModerationAuthenticatedScreeningRequestV1, Response> {
     let idempotency_key =
         parse_hex_fixed::<32>(&request.idempotency_key_hex, "idempotency_key_hex")
@@ -21898,14 +21949,15 @@ fn moderation_quarantine_object_input_from_request(
         notes: request.notes,
     })
 }
-fn moderation_screening_error_response(err: ModerationScreeningError) -> Response {
+fn moderation_screening_error_response(err: &ModerationScreeningError) -> Response {
     let status = match err {
         ModerationScreeningError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
         ModerationScreeningError::ConflictingRecord { .. }
         | ModerationScreeningError::ConflictingIdempotencyKey { .. }
-        | ModerationScreeningError::ReplayedAuthority { .. } => StatusCode::CONFLICT,
+        | ModerationScreeningError::ReplayedAuthority { .. }
+        | ModerationScreeningError::InvalidTransition { .. } => StatusCode::CONFLICT,
         ModerationScreeningError::UnknownQuarantine { .. } => StatusCode::NOT_FOUND,
-        ModerationScreeningError::InvalidTransition { .. } => StatusCode::CONFLICT,
+
         ModerationScreeningError::InvalidInput { .. }
         | ModerationScreeningError::InvalidSnapshot { .. } => StatusCode::BAD_REQUEST,
         ModerationScreeningError::Checkpoint { .. } => StatusCode::SERVICE_UNAVAILABLE,
@@ -21918,7 +21970,7 @@ fn authenticated_moderation_screening_error_response(
 ) -> Response {
     match err {
         ModerationAuthenticatedScreeningAdmissionError::Runtime(error) => {
-            moderation_screening_error_response(error)
+            moderation_screening_error_response(&(error))
         }
         ModerationAuthenticatedScreeningAdmissionError::Authentication(error) => {
             let status = match error {
@@ -21947,19 +21999,20 @@ fn authenticated_moderation_screening_error_response(
         }
     }
 }
-fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectError) -> Response {
+fn moderation_quarantine_object_error_response(err: &ModerationQuarantineObjectError) -> Response {
     let status = match err {
         ModerationQuarantineObjectError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
-        ModerationQuarantineObjectError::StorageDisabled => StatusCode::SERVICE_UNAVAILABLE,
+        ModerationQuarantineObjectError::StorageDisabled
+        | ModerationQuarantineObjectError::KeyWrapperUnavailable
+        | ModerationQuarantineObjectError::KeyWrapperUnqualified
+        | ModerationQuarantineObjectError::KeyWrapping { .. }
+        | ModerationQuarantineObjectError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
         ModerationQuarantineObjectError::UnknownQuarantine { .. }
         | ModerationQuarantineObjectError::MissingObject { .. } => StatusCode::NOT_FOUND,
         ModerationQuarantineObjectError::DigestMismatch { .. }
         | ModerationQuarantineObjectError::ConflictingObject { .. }
         | ModerationQuarantineObjectError::AuthenticationFailed { .. } => StatusCode::CONFLICT,
-        ModerationQuarantineObjectError::KeyWrapperUnavailable
-        | ModerationQuarantineObjectError::KeyWrapperUnqualified
-        | ModerationQuarantineObjectError::KeyWrapping { .. }
-        | ModerationQuarantineObjectError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
+
         ModerationQuarantineObjectError::InvalidInput { .. }
         | ModerationQuarantineObjectError::InvalidSnapshot { .. }
         | ModerationQuarantineObjectError::InvalidRange { .. }
@@ -21976,19 +22029,23 @@ fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectEr
 fn moderation_resource_exhaustion_errors_map_to_too_many_requests() {
     let limit = 1;
     let responses = [
-        moderation_model_registry_error_response(ModerationModelRegistryError::ResourceExhausted {
-            resource: "reproducibility_manifests",
-            limit,
-        }),
-        moderation_screening_error_response(ModerationScreeningError::ResourceExhausted {
-            resource: "screening_records",
-            limit,
-        }),
+        moderation_model_registry_error_response(
+            &(ModerationModelRegistryError::ResourceExhausted {
+                resource: "reproducibility_manifests",
+                limit,
+            }),
+        ),
+        moderation_screening_error_response(
+            &(ModerationScreeningError::ResourceExhausted {
+                resource: "screening_records",
+                limit,
+            }),
+        ),
         moderation_quarantine_object_error_response(
-            ModerationQuarantineObjectError::ResourceExhausted {
+            &(ModerationQuarantineObjectError::ResourceExhausted {
                 resource: "quarantine_objects",
                 limit,
-            },
+            }),
         ),
     ];
     for response in responses {
@@ -21999,9 +22056,9 @@ fn moderation_resource_exhaustion_errors_map_to_too_many_requests() {
 #[test]
 fn moderation_state_lock_failures_map_to_internal_server_error() {
     let responses = [
-        moderation_screening_error_response(ModerationScreeningError::StateLockPoisoned),
+        moderation_screening_error_response(&(ModerationScreeningError::StateLockPoisoned)),
         moderation_quarantine_object_error_response(
-            ModerationQuarantineObjectError::StateLockPoisoned,
+            &(ModerationQuarantineObjectError::StateLockPoisoned),
         ),
     ];
     for response in responses {
@@ -22022,7 +22079,7 @@ fn moderation_checkpoint_store_failures_map_to_service_unavailable() {
         ModerationOrchestratorError::PanelNotificationArchiveRejected,
         ModerationOrchestratorError::PanelNotificationArchiveInvalid,
     ]
-    .map(moderation_orchestrator_error_response);
+    .map(|value| moderation_orchestrator_error_response(&value));
     for response in responses {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -22032,7 +22089,7 @@ fn moderation_checkpoint_store_failures_map_to_service_unavailable() {
 async fn moderation_quarantine_provider_error_detail_is_redacted_from_http() {
     const SECRET_SENTINEL: &str = "SECRET-KMS-BEARER-DO-NOT-EMIT";
     let unqualified_response = moderation_quarantine_object_error_response(
-        ModerationQuarantineObjectError::KeyWrapperUnqualified,
+        &(ModerationQuarantineObjectError::KeyWrapperUnqualified),
     );
     assert_eq!(
         unqualified_response.status(),
@@ -22046,7 +22103,7 @@ async fn moderation_quarantine_provider_error_detail_is_redacted_from_http() {
     );
     assert!(!error.to_string().contains(SECRET_SENTINEL));
     assert!(!format!("{error:?}").contains(SECRET_SENTINEL));
-    let response = moderation_quarantine_object_error_response(error);
+    let response = moderation_quarantine_object_error_response(&(error));
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -22061,42 +22118,41 @@ fn authenticated_moderation_screening_outcome_json(
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.screening_result.authenticated_ingest.v1"),
+            &(Value::from("sorafs.moderation.screening_result.authenticated_ingest.v1")),
         ),
-        json_entry("status", Value::from("accepted")),
+        json_entry("status", &(Value::from("accepted"))),
         json_entry(
             "admission",
-            json_object(vec![
+            &(json_object(vec![
                 json_entry(
                     "idempotency_key_hex",
-                    Value::from(encode(outcome.admission.idempotency_key)),
+                    &(Value::from(encode(outcome.admission.idempotency_key))),
                 ),
                 json_entry(
                     "authority_digest_hex",
-                    Value::from(encode(outcome.admission.authority_digest)),
+                    &(Value::from(encode(outcome.admission.authority_digest))),
                 ),
                 json_entry(
                     "authority_kind",
-                    Value::from(outcome.admission.authority_kind.clone()),
+                    &(Value::from(outcome.admission.authority_kind.clone())),
                 ),
                 json_entry(
                     "receipt_digest_hex",
-                    Value::from(encode(outcome.admission.receipt_digest)),
+                    &(Value::from(encode(outcome.admission.receipt_digest))),
                 ),
-            ]),
+            ])),
         ),
         json_entry(
             "record",
-            moderation_screening_record_json(&outcome.screening.record),
+            &(moderation_screening_record_json(&outcome.screening.record)),
         ),
         json_entry(
             "quarantine",
-            outcome
+            &(outcome
                 .screening
                 .quarantine
                 .as_ref()
-                .map(moderation_quarantine_record_json)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, moderation_quarantine_record_json)),
         ),
     ])
 }
@@ -22161,67 +22217,68 @@ fn moderation_quarantine_operator_panel_json(
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.quarantine.operator_panel.v1"),
+            &(Value::from("sorafs.moderation.quarantine.operator_panel.v1")),
         ),
         json_entry(
             "source",
-            Value::from("local_quarantine_and_finalized_chain_moderation"),
+            &(Value::from("local_quarantine_and_finalized_chain_moderation")),
         ),
-        json_entry("moderation_source", Value::from("finalized_chain")),
-        json_entry("finalized_height", Value::from(finalized_height)),
+        json_entry("moderation_source", &(Value::from("finalized_chain"))),
+        json_entry("finalized_height", &(Value::from(finalized_height))),
         json_entry(
             "finalized_block_hash_hex",
-            Value::from(hex::encode(finalized_block_hash)),
+            &(Value::from(hex::encode(finalized_block_hash))),
         ),
-        json_entry("status", Value::from("ready")),
-        json_entry("record", moderation_quarantine_record_json(record)),
+        json_entry("status", &(Value::from("ready"))),
+        json_entry("record", &(moderation_quarantine_record_json(record))),
         json_entry(
             "object_status",
-            Value::from(if object.is_some() {
+            &(Value::from(if object.is_some() {
                 "stored"
             } else {
                 "missing"
-            }),
+            })),
         ),
         json_entry(
             "object",
-            object
-                .map(moderation_quarantine_object_record_json)
-                .unwrap_or(Value::Null),
+            &(object.map_or(Value::Null, moderation_quarantine_object_record_json)),
         ),
-        json_entry("appeal_count", Value::from(projections.appeal_count as u64)),
+        json_entry(
+            "appeal_count",
+            &(Value::from(projections.appeal_count as u64)),
+        ),
         json_entry(
             "returned_appeal_count",
-            Value::from(projections.appeals.len() as u64),
+            &(Value::from(projections.appeals.len() as u64)),
         ),
         json_entry(
             "truncated_appeals",
-            Value::Bool(projections.appeal_count > projections.appeals.len()),
+            &(Value::Bool(projections.appeal_count > projections.appeals.len())),
         ),
-        json_entry("case_count", Value::from(projections.case_count as u64)),
+        json_entry("case_count", &(Value::from(projections.case_count as u64))),
         json_entry(
             "returned_case_count",
-            Value::from(projections.cases.len() as u64),
+            &(Value::from(projections.cases.len() as u64)),
         ),
         json_entry(
             "truncated_cases",
-            Value::Bool(projections.case_count > projections.cases.len()),
+            &(Value::Bool(projections.case_count > projections.cases.len())),
         ),
-        json_entry("limit", Value::from(limit as u64)),
-        json_entry("appeals", Value::Array(projections.appeals.clone())),
-        json_entry("cases", Value::Array(projections.cases.clone())),
+        json_entry("limit", &(Value::from(limit as u64))),
+        json_entry("appeals", &(Value::Array(projections.appeals.clone()))),
+        json_entry("cases", &(Value::Array(projections.cases.clone()))),
         json_entry(
             "operator_routes",
-            moderation_quarantine_operator_panel_routes_json(&quarantine_id_hex),
+            &(moderation_quarantine_operator_panel_routes_json(&quarantine_id_hex)),
         ),
         json_entry(
             "next_actions",
-            Value::Array(moderation_quarantine_operator_panel_next_actions_json(
+            &(Value::Array(moderation_quarantine_operator_panel_next_actions_json(
                 record,
                 object,
                 projections,
                 &quarantine_id_hex,
-            )),
+            ))),
         ),
     ])
 }
@@ -22232,24 +22289,33 @@ fn moderation_quarantine_operator_panel_routes_json(quarantine_id_hex: &str) -> 
         ))
     };
     json_object(vec![
-        json_entry("review", route(MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX)),
-        json_entry("release", route(MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX)),
-        json_entry("object", route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX)),
+        json_entry(
+            "review",
+            &(route(MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX)),
+        ),
+        json_entry(
+            "release",
+            &(route(MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX)),
+        ),
+        json_entry(
+            "object",
+            &(route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX)),
+        ),
         json_entry(
             "signed_viewer_audit_receipts",
-            Value::from(EVIDENCE_ROUTE_SIGNED_AUDIT),
+            &(Value::from(EVIDENCE_ROUTE_SIGNED_AUDIT)),
         ),
         json_entry(
             "signed_viewer_audit_status",
-            Value::from(EVIDENCE_ROUTE_SIGNED_STATUS),
+            &(Value::from(EVIDENCE_ROUTE_SIGNED_STATUS)),
         ),
         json_entry(
             "appeal_handoff",
-            route(MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX),
+            &(route(MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX)),
         ),
         json_entry(
             "native_appeal_intake",
-            Value::from(MODERATION_ROUTE_BALLOTS),
+            &(Value::from(MODERATION_ROUTE_BALLOTS)),
         ),
     ])
 }
@@ -22267,69 +22333,75 @@ fn moderation_quarantine_operator_panel_next_actions_json(
     let mut actions = Vec::new();
     if object.is_none() {
         actions.push(json_object(vec![
-            json_entry("action", Value::from("store_object")),
-            json_entry("route", route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX)),
-            json_entry("required", Value::Bool(true)),
+            json_entry("action", &(Value::from("store_object"))),
+            json_entry("route", &(route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX))),
+            json_entry("required", &(Value::Bool(true))),
         ]));
     } else {
         actions.push(json_object(vec![
-            json_entry("action", Value::from("read_object")),
-            json_entry("route", route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX)),
-            json_entry("required", Value::Bool(false)),
+            json_entry("action", &(Value::from("read_object"))),
+            json_entry("route", &(route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX))),
+            json_entry("required", &(Value::Bool(false))),
         ]));
         actions.push(json_object(vec![
-            json_entry("action", Value::from("read_signed_viewer_audit_receipts")),
-            json_entry("route", Value::from(EVIDENCE_ROUTE_SIGNED_AUDIT)),
-            json_entry("required", Value::Bool(false)),
+            json_entry(
+                "action",
+                &(Value::from("read_signed_viewer_audit_receipts")),
+            ),
+            json_entry("route", &(Value::from(EVIDENCE_ROUTE_SIGNED_AUDIT))),
+            json_entry("required", &(Value::Bool(false))),
         ]));
         actions.push(json_object(vec![
-            json_entry("action", Value::from("read_signed_viewer_audit_status")),
-            json_entry("route", Value::from(EVIDENCE_ROUTE_SIGNED_STATUS)),
-            json_entry("required", Value::Bool(false)),
+            json_entry("action", &(Value::from("read_signed_viewer_audit_status"))),
+            json_entry("route", &(Value::from(EVIDENCE_ROUTE_SIGNED_STATUS))),
+            json_entry("required", &(Value::Bool(false))),
         ]));
     }
     match record.state {
         ModerationQuarantineState::PendingReview => {
             actions.push(json_object(vec![
-                json_entry("action", Value::from("review")),
-                json_entry("route", route(MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX)),
-                json_entry("required", Value::Bool(true)),
+                json_entry("action", &(Value::from("review"))),
+                json_entry("route", &(route(MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX))),
+                json_entry("required", &(Value::Bool(true))),
             ]));
         }
         ModerationQuarantineState::Reviewed => {
             actions.push(json_object(vec![
-                json_entry("action", Value::from("appeal_handoff")),
+                json_entry("action", &(Value::from("appeal_handoff"))),
                 json_entry(
                     "route",
-                    route(MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX),
+                    &(route(MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX)),
                 ),
-                json_entry("required", Value::Bool(projections.appeal_count == 0)),
+                json_entry("required", &(Value::Bool(projections.appeal_count == 0))),
             ]));
             if projections.appeal_count == 0 {
                 actions.push(json_object(vec![
-                    json_entry("action", Value::from("submit_native_appeal_intake")),
-                    json_entry("route", Value::from(MODERATION_ROUTE_BALLOTS)),
-                    json_entry("required", Value::Bool(true)),
+                    json_entry("action", &(Value::from("submit_native_appeal_intake"))),
+                    json_entry("route", &(Value::from(MODERATION_ROUTE_BALLOTS))),
+                    json_entry("required", &(Value::Bool(true))),
                 ]));
             } else if projections.case_count == 0 {
                 actions.push(json_object(vec![
-                    json_entry("action", Value::from("await_chain_sortition_activation")),
-                    json_entry("route", Value::from(MODERATION_ROUTE_BALLOTS)),
-                    json_entry("required", Value::Bool(true)),
+                    json_entry("action", &(Value::from("await_chain_sortition_activation"))),
+                    json_entry("route", &(Value::from(MODERATION_ROUTE_BALLOTS))),
+                    json_entry("required", &(Value::Bool(true))),
                 ]));
             } else if projections.has_open_case {
                 actions.push(json_object(vec![
-                    json_entry("action", Value::from("submit_native_case_actions")),
-                    json_entry("route", Value::from(MODERATION_ROUTE_BALLOTS)),
-                    json_entry("required", Value::Bool(true)),
+                    json_entry("action", &(Value::from("submit_native_case_actions"))),
+                    json_entry("route", &(Value::from(MODERATION_ROUTE_BALLOTS))),
+                    json_entry("required", &(Value::Bool(true))),
                 ]));
             }
         }
         ModerationQuarantineState::Released => {
             actions.push(json_object(vec![
-                json_entry("action", Value::from("release_complete")),
-                json_entry("route", route(MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX)),
-                json_entry("required", Value::Bool(false)),
+                json_entry("action", &(Value::from("release_complete"))),
+                json_entry(
+                    "route",
+                    &(route(MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX)),
+                ),
+                json_entry("required", &(Value::Bool(false))),
             ]));
         }
     }
@@ -22339,26 +22411,29 @@ fn moderation_quarantine_object_store_json(record: &ModerationQuarantineObjectRe
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.quarantine.object.store.v1"),
+            &(Value::from("sorafs.moderation.quarantine.object.store.v1")),
         ),
-        json_entry("status", Value::from("stored")),
-        json_entry("record", moderation_quarantine_object_record_json(record)),
+        json_entry("status", &(Value::from("stored"))),
+        json_entry(
+            "record",
+            &(moderation_quarantine_object_record_json(record)),
+        ),
     ])
 }
 fn moderation_quarantine_object_payload_json(payload: &ModerationQuarantineObjectPayload) -> Value {
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.quarantine.object.payload.v1"),
+            &(Value::from("sorafs.moderation.quarantine.object.payload.v1")),
         ),
-        json_entry("status", Value::from("read")),
+        json_entry("status", &(Value::from("read"))),
         json_entry(
             "record",
-            moderation_quarantine_object_record_json(&payload.record),
+            &(moderation_quarantine_object_record_json(&payload.record)),
         ),
         json_entry(
             "payload_b64",
-            Value::from(BASE64_STANDARD.encode(&payload.payload)),
+            &(Value::from(BASE64_STANDARD.encode(&payload.payload))),
         ),
     ])
 }
@@ -22368,9 +22443,9 @@ fn moderation_quarantine_transition_json(
     record: &ModerationQuarantineRecord,
 ) -> Value {
     json_object(vec![
-        json_entry("schema", Value::from(schema)),
-        json_entry("status", Value::from(status)),
-        json_entry("record", moderation_quarantine_record_json(record)),
+        json_entry("schema", &(Value::from(schema))),
+        json_entry("status", &(Value::from(status))),
+        json_entry("record", &(moderation_quarantine_record_json(record))),
     ])
 }
 fn moderation_quarantine_appeal_handoff_json(
@@ -22384,12 +22459,12 @@ fn moderation_quarantine_appeal_handoff_json(
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.quarantine.appeal_handoff.v1"),
+            &(Value::from("sorafs.moderation.quarantine.appeal_handoff.v1")),
         ),
-        json_entry("status", Value::from("ready_for_native_intake_deposit")),
+        json_entry("status", &(Value::from("ready_for_native_intake_deposit"))),
         json_entry(
             "appealed_decision_digest_hex",
-            record
+            &(record
                 .reviewed_at_unix
                 .map_or(Value::Null, |reviewed_at_unix| {
                     Value::from(hex::encode(
@@ -22400,20 +22475,20 @@ fn moderation_quarantine_appeal_handoff_json(
                         )
                         .as_ref(),
                     ))
-                }),
+                })),
         ),
-        json_entry("record", moderation_quarantine_record_json(record)),
+        json_entry("record", &(moderation_quarantine_record_json(record))),
         json_entry(
             "pricing_quote",
-            appeal_pricing_quote_json(policy, quote_input, quote),
+            &(appeal_pricing_quote_json(policy, quote_input, quote)),
         ),
         json_entry(
             "deposit_request",
-            appeal_finance_deposit_request_json(deposit_request),
+            &(appeal_finance_deposit_request_json(deposit_request)),
         ),
         json_entry(
             "deposit_instruction",
-            appeal_finance_deposit_instruction_json(policy, deposit_instruction),
+            &(appeal_finance_deposit_instruction_json(policy, deposit_instruction)),
         ),
     ])
 }
@@ -22427,45 +22502,43 @@ fn appeal_finance_deposit_request_json(request: &AppealFinanceDepositRequestDto)
         .map(Value::from)
         .collect::<Vec<_>>();
     json_object(vec![
-        json_entry("case_id", Value::from(request.case_id.clone())),
+        json_entry("case_id", &(Value::from(request.case_id.clone()))),
         json_entry(
             "round_id",
-            request
-                .round_id
-                .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+            &(request.round_id.as_deref().map_or(Value::Null, Value::from)),
         ),
-        json_entry("payer_account", Value::from(request.payer_account.clone())),
+        json_entry(
+            "payer_account",
+            &(Value::from(request.payer_account.clone())),
+        ),
         json_entry(
             "destination_account",
-            Value::from(request.destination_account.clone()),
+            &(Value::from(request.destination_account.clone())),
         ),
         json_entry(
             "release_authority_account",
-            request
+            &(request
                 .release_authority_account
                 .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "asset_definition_id",
-            Value::from(request.asset_definition_id.clone()),
+            &(Value::from(request.asset_definition_id.clone())),
         ),
-        json_entry("deposit_xor", Value::from(request.deposit_xor.to_string())),
+        json_entry(
+            "deposit_xor",
+            &(Value::from(request.deposit_xor.to_string())),
+        ),
         json_entry(
             "expires_at_ms",
-            request
-                .expires_at_ms
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+            &(request.expires_at_ms.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "idempotency_key",
-            Value::from(request.idempotency_key.clone()),
+            &(Value::from(request.idempotency_key.clone())),
         ),
-        json_entry("evidence_hashes_hex", Value::Array(evidence_hashes)),
+        json_entry("evidence_hashes_hex", &(Value::Array(evidence_hashes))),
     ])
 }
 fn moderation_screening_snapshot_json(
@@ -22488,31 +22561,34 @@ fn moderation_screening_snapshot_json(
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.screening_results.v1"),
+            &(Value::from("sorafs.moderation.screening_results.v1")),
         ),
-        json_entry("source", Value::from("local")),
+        json_entry("source", &(Value::from("local"))),
         json_entry(
             "authenticated_admission_count",
-            Value::from(authenticated_admission_count as u64),
+            &(Value::from(authenticated_admission_count as u64)),
         ),
-        json_entry("screening_count", Value::from(screening_count as u64)),
+        json_entry("screening_count", &(Value::from(screening_count as u64))),
         json_entry(
             "returned_screening_count",
-            Value::from(records.len() as u64),
+            &(Value::from(records.len() as u64)),
         ),
-        json_entry("truncated_screening", Value::from(screening_count > limit)),
-        json_entry("quarantine_count", Value::from(quarantine_count as u64)),
+        json_entry(
+            "truncated_screening",
+            &(Value::from(screening_count > limit)),
+        ),
+        json_entry("quarantine_count", &(Value::from(quarantine_count as u64))),
         json_entry(
             "returned_quarantine_count",
-            Value::from(quarantines.len() as u64),
+            &(Value::from(quarantines.len() as u64)),
         ),
         json_entry(
             "truncated_quarantine",
-            Value::from(quarantine_count > limit),
+            &(Value::from(quarantine_count > limit)),
         ),
-        json_entry("limit", Value::from(limit as u64)),
-        json_entry("records", Value::Array(records)),
-        json_entry("quarantine_records", Value::Array(quarantines)),
+        json_entry("limit", &(Value::from(limit as u64))),
+        json_entry("records", &(Value::Array(records))),
+        json_entry("quarantine_records", &(Value::Array(quarantines))),
     ])
 }
 fn moderation_quarantine_snapshot_json(
@@ -22526,56 +22602,60 @@ fn moderation_quarantine_snapshot_json(
         .map(moderation_quarantine_record_json)
         .collect::<Vec<_>>();
     json_object(vec![
-        json_entry("schema", Value::from("sorafs.moderation.quarantine.v1")),
-        json_entry("source", Value::from("local")),
-        json_entry("quarantine_count", Value::from(quarantine_count as u64)),
+        json_entry("schema", &(Value::from("sorafs.moderation.quarantine.v1"))),
+        json_entry("source", &(Value::from("local"))),
+        json_entry("quarantine_count", &(Value::from(quarantine_count as u64))),
         json_entry(
             "returned_quarantine_count",
-            Value::from(quarantines.len() as u64),
+            &(Value::from(quarantines.len() as u64)),
         ),
         json_entry(
             "truncated_quarantine",
-            Value::from(quarantine_count > limit),
+            &(Value::from(quarantine_count > limit)),
         ),
-        json_entry("limit", Value::from(limit as u64)),
-        json_entry("quarantine_records", Value::Array(quarantines)),
+        json_entry("limit", &(Value::from(limit as u64))),
+        json_entry("quarantine_records", &(Value::Array(quarantines))),
     ])
 }
 fn moderation_screening_record_json(record: &ModerationScreeningRecord) -> Value {
     json_object(vec![
-        json_entry("record_id_hex", Value::from(encode(record.record_id))),
+        json_entry("record_id_hex", &(Value::from(encode(record.record_id)))),
         json_entry(
             "record_digest_hex",
-            Value::from(encode(record.record_digest)),
+            &(Value::from(encode(record.record_digest))),
         ),
-        json_entry("subject", Value::from(record.subject.clone())),
+        json_entry("subject", &(Value::from(record.subject.clone()))),
         json_entry(
             "subject_digest_hex",
-            Value::from(encode(record.subject_digest)),
+            &(Value::from(encode(record.subject_digest))),
         ),
-        json_entry("manifest_id_hex", Value::from(encode(record.manifest_id))),
-        json_entry("runner_hash_hex", Value::from(encode(record.runner_hash))),
+        json_entry(
+            "manifest_id_hex",
+            &(Value::from(encode(record.manifest_id))),
+        ),
+        json_entry(
+            "runner_hash_hex",
+            &(Value::from(encode(record.runner_hash))),
+        ),
         json_entry(
             "combined_score_bps",
-            Value::from(u64::from(record.combined_score_bps)),
+            &(Value::from(u64::from(record.combined_score_bps))),
         ),
-        json_entry("verdict", Value::from(record.verdict.as_str())),
-        json_entry("screened_at_unix", Value::from(record.screened_at_unix)),
+        json_entry("verdict", &(Value::from(record.verdict.as_str()))),
+        json_entry("screened_at_unix", &(Value::from(record.screened_at_unix))),
         json_entry(
             "evidence_digest_hex",
-            record
+            &(record
                 .evidence_digest
                 .map(encode)
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "policy_digest_hex",
-            record
+            &(record
                 .policy_digest
                 .map(encode)
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
     ])
 }
@@ -22583,59 +22663,55 @@ fn moderation_quarantine_record_json(record: &ModerationQuarantineRecord) -> Val
     json_object(vec![
         json_entry(
             "quarantine_id_hex",
-            Value::from(encode(record.quarantine_id)),
+            &(Value::from(encode(record.quarantine_id))),
         ),
         json_entry(
             "screening_record_id_hex",
-            Value::from(encode(record.screening_record_id)),
+            &(Value::from(encode(record.screening_record_id))),
         ),
-        json_entry("subject", Value::from(record.subject.clone())),
+        json_entry("subject", &(Value::from(record.subject.clone()))),
         json_entry(
             "subject_digest_hex",
-            Value::from(encode(record.subject_digest)),
+            &(Value::from(encode(record.subject_digest))),
         ),
-        json_entry("verdict", Value::from(record.verdict.as_str())),
-        json_entry("queued_at_unix", Value::from(record.queued_at_unix)),
-        json_entry("state", Value::from(record.state.as_str())),
+        json_entry("verdict", &(Value::from(record.verdict.as_str()))),
+        json_entry("queued_at_unix", &(Value::from(record.queued_at_unix))),
+        json_entry("state", &(Value::from(record.state.as_str()))),
         json_entry(
             "reviewed_at_unix",
-            record.reviewed_at_unix.map_or(Value::Null, Value::from),
+            &(record.reviewed_at_unix.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "reviewed_by",
-            record
+            &(record
                 .reviewed_by
                 .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "review_notes",
-            record
+            &(record
                 .review_notes
                 .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "released_at_unix",
-            record.released_at_unix.map_or(Value::Null, Value::from),
+            &(record.released_at_unix.map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "release_authority",
-            record
+            &(record
                 .release_authority
                 .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "release_notes",
-            record
+            &(record
                 .release_notes
                 .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
     ])
 }
@@ -22643,38 +22719,43 @@ fn moderation_quarantine_object_record_json(record: &ModerationQuarantineObjectR
     json_object(vec![
         json_entry(
             "quarantine_id_hex",
-            Value::from(encode(record.quarantine_id)),
+            &(Value::from(encode(record.quarantine_id))),
         ),
-        json_entry("object_id_hex", Value::from(encode(record.object_id))),
+        json_entry("object_id_hex", &(Value::from(encode(record.object_id)))),
         json_entry(
             "payload_digest_hex",
-            Value::from(encode(record.payload_digest)),
+            &(Value::from(encode(record.payload_digest))),
         ),
         json_entry(
             "ciphertext_digest_hex",
-            Value::from(encode(record.ciphertext_digest)),
+            &(Value::from(encode(record.ciphertext_digest))),
         ),
-        json_entry("payload_len", Value::from(record.payload_len)),
-        json_entry("captured_at_unix", Value::from(record.captured_at_unix)),
+        json_entry("payload_len", &(Value::from(record.payload_len))),
+        json_entry("captured_at_unix", &(Value::from(record.captured_at_unix))),
         json_entry(
             "content_type",
-            record
+            &(record
                 .content_type
                 .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from)),
         ),
         json_entry(
             "encryption_algorithm",
-            Value::from(record.encryption_algorithm.clone()),
+            &(Value::from(record.encryption_algorithm.clone())),
         ),
-        json_entry("nonce_prefix_hex", Value::from(encode(record.nonce_prefix))),
+        json_entry(
+            "nonce_prefix_hex",
+            &(Value::from(encode(record.nonce_prefix))),
+        ),
         json_entry(
             "chunk_plaintext_bytes",
-            Value::from(record.chunk_plaintext_bytes),
+            &(Value::from(record.chunk_plaintext_bytes)),
         ),
-        json_entry("chunk_count", Value::from(record.chunk_count)),
-        json_entry("envelope_path", Value::from(record.envelope_path.clone())),
+        json_entry("chunk_count", &(Value::from(record.chunk_count))),
+        json_entry(
+            "envelope_path",
+            &(Value::from(record.envelope_path.clone())),
+        ),
     ])
 }
 fn orderbook_finalized_events_etag(page: &OrderbookFinalizedEventPageV1) -> Result<String, String> {
@@ -22702,8 +22783,8 @@ fn orderbook_finalized_event_page_json(
         json_entry("source", "finalized_chain"),
         json_entry(
             "events",
-            json::to_value(page)
-                .map_err(|error| format!("failed to encode orderbook event page: {error}"))?,
+            &(json::to_value(page)
+                .map_err(|error| format!("failed to encode orderbook event page: {error}"))?),
         ),
     ]))
 }
@@ -22842,8 +22923,8 @@ fn repair_finalized_status_json(status: &RepairFinalizedStatusV1) -> Result<Valu
         json_entry("source", "finalized_chain"),
         json_entry(
             "status",
-            json::to_value(status)
-                .map_err(|error| format!("failed to encode finalized repair status: {error}"))?,
+            &(json::to_value(status)
+                .map_err(|error| format!("failed to encode finalized repair status: {error}"))?),
         ),
     ]))
 }
@@ -22852,8 +22933,9 @@ fn repair_finalized_task_page_json(page: &RepairLedgerTaskPageV1) -> Result<Valu
         json_entry("source", "finalized_chain"),
         json_entry(
             "tasks",
-            json::to_value(page)
-                .map_err(|error| format!("failed to encode finalized repair task page: {error}"))?,
+            &(json::to_value(page).map_err(|error| {
+                format!("failed to encode finalized repair task page: {error}")
+            })?),
         ),
     ]))
 }
@@ -22862,8 +22944,8 @@ fn repair_finalized_task_json(task: &RepairFinalizedTaskV1) -> Result<Value, Str
         json_entry("source", "finalized_chain"),
         json_entry(
             "task",
-            json::to_value(task)
-                .map_err(|error| format!("failed to encode finalized repair task: {error}"))?,
+            &(json::to_value(task)
+                .map_err(|error| format!("failed to encode finalized repair task: {error}"))?),
         ),
     ]))
 }
@@ -22872,13 +22954,13 @@ fn repair_finalized_event_page_json(page: &RepairFinalizedEventPageV1) -> Result
         json_entry("source", "finalized_chain"),
         json_entry(
             "events",
-            json::to_value(page).map_err(|error| {
+            &(json::to_value(page).map_err(|error| {
                 format!("failed to encode finalized repair event page: {error}")
-            })?,
+            })?),
         ),
     ]))
 }
-fn repair_finalized_query_error_response(error: QueryExecutionFail) -> Response {
+fn repair_finalized_query_error_response(error: &QueryExecutionFail) -> Response {
     if matches!(error, QueryExecutionFail::Expired) {
         return json_error(
             StatusCode::CONFLICT,
@@ -22886,7 +22968,7 @@ fn repair_finalized_query_error_response(error: QueryExecutionFail) -> Response 
         );
     }
     if matches!(
-        &error,
+        error,
         QueryExecutionFail::Find(FindError::SorafsRepairTask(_))
     ) {
         return json_error(StatusCode::NOT_FOUND, "SoraFS repair task was not found");
@@ -23331,13 +23413,13 @@ fn reputation_committed_event_stream(
                     return Some((ReputationCommittedStreamItem::Event(event), state));
                 }
                 tokio::time::sleep(REPUTATION_COMMITTED_POLL_INTERVAL).await;
-                let retained_events = match state.reader.committed_events_after(state.cursor) {
-                    Ok(events) => events,
-                    Err(_) => {
+                let retained_events =
+                    if let Ok(events) = state.reader.committed_events_after(state.cursor) {
+                        events
+                    } else {
                         state.failed = true;
                         return Some((ReputationCommittedStreamItem::ReaderFailed, state));
-                    }
-                };
+                    };
                 let mut events = retained_events
                     .into_iter()
                     .filter(|event| event.sequence > state.cursor);
@@ -23890,7 +23972,7 @@ pub(crate) fn spawn_sorafs_capacity_reconciler_worker(
         loop {
             tokio::select! {
                 biased;
-                _ = shutdown_signal.receive() => {
+                () = shutdown_signal.receive() => {
                     return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
                 }
                 _ = ticker.tick() => {
@@ -24091,13 +24173,12 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
         let file_count = stored.files().len();
         let offset = query
             .offset
-            .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
-            .unwrap_or(0)
+            .map_or(0, |value| usize::try_from(value).unwrap_or(usize::MAX))
             .min(file_count);
-        let limit = query
-            .limit
-            .map(|limit| normalize_limit(Some(limit)))
-            .unwrap_or_else(|| file_count.saturating_sub(offset));
+        let limit = query.limit.map_or_else(
+            || file_count.saturating_sub(offset),
+            |limit| normalize_limit(Some(limit)),
+        );
         let files = stored
             .files()
             .iter()
@@ -24197,8 +24278,7 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
         let file_count = stored.files().len();
         let offset = query
             .offset
-            .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
-            .unwrap_or(0);
+            .map_or(0, |value| usize::try_from(value).unwrap_or(usize::MAX));
         let file_offset = offset.min(file_count);
         let files = stored
             .files()
@@ -24296,7 +24376,10 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
         expected_finalized_cursor,
         query.status,
         query.after_digest(),
-        query.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32),
+        query.limit.unwrap_or_else(|| {
+            u32::try_from(DEFAULT_LIST_LIMIT)
+                .expect("bounded fixture or protocol constant fits u32")
+        }),
         query
             .max_bytes
             .unwrap_or(PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1),
@@ -24304,7 +24387,7 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
     .execute(&state.state.query_view())
     {
         Ok(page) => page,
-        Err(error) => return pin_manifest_query_error_response(error),
+        Err(error) => return pin_manifest_query_error_response(&(error)),
     };
     let mut response = match format {
         crate::utils::ResponseFormat::Json => (StatusCode::OK, JsonBody(page)).into_response(),
@@ -24360,7 +24443,7 @@ pub(crate) async fn handle_get_sorafs_pin_manifest(
         .execute(&state.state.query_view())
     {
         Ok(finalized) => finalized,
-        Err(error) => return pin_manifest_query_error_response(error),
+        Err(error) => return pin_manifest_query_error_response(&(error)),
     };
     let mut response = (StatusCode::OK, JsonBody(finalized)).into_response();
     response.headers_mut().insert(
@@ -24424,14 +24507,14 @@ pub(crate) async fn handle_get_sorafs_aliases(
         }
     }
     let response = json_object(vec![
-        json_entry("attestation", attestation),
-        json_entry("total_count", total as u64),
-        json_entry("returned_count", alias_values.len() as u64),
-        json_entry("offset", offset as u64),
-        json_entry("limit", limit as u64),
-        json_entry("aliases", Value::Array(alias_values)),
+        json_entry("attestation", &(attestation)),
+        json_entry("total_count", &(total as u64)),
+        json_entry("returned_count", &(alias_values.len() as u64)),
+        json_entry("offset", &(offset as u64)),
+        json_entry("limit", &(limit as u64)),
+        json_entry("aliases", &(Value::Array(alias_values))),
     ]);
-    crate::utils::respond_value_with_format(response, format)
+    crate::utils::respond_value_with_format(&response, format)
 }
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_get_sorafs_replication_orders(
@@ -24507,14 +24590,14 @@ pub(crate) async fn handle_get_sorafs_replication_orders(
         }
     };
     let response = json_object(vec![
-        json_entry("attestation", attestation),
-        json_entry("total_count", total as u64),
-        json_entry("returned_count", order_values.len() as u64),
-        json_entry("offset", offset as u64),
-        json_entry("limit", limit as u64),
-        json_entry("replication_orders", Value::Array(order_values)),
+        json_entry("attestation", &(attestation)),
+        json_entry("total_count", &(total as u64)),
+        json_entry("returned_count", &(order_values.len() as u64)),
+        json_entry("offset", &(offset as u64)),
+        json_entry("limit", &(limit as u64)),
+        json_entry("replication_orders", &(Value::Array(order_values))),
     ]);
-    crate::utils::respond_value_with_format(response, format)
+    crate::utils::respond_value_with_format(&response, format)
 }
 #[cfg(test)]
 fn dm_storage_class_from_manifest(
@@ -24549,7 +24632,7 @@ fn normalized_site_request_host(headers: &HeaderMap) -> Result<String, Response>
     normalize_host_header(host)
         .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid Host header"))
 }
-/// Return whether the canonical request host selects a configured public SoraFS site.
+/// Return whether the canonical request host selects a configured public `SoraFS` site.
 pub(crate) fn request_host_selects_sorafs_site(
     state: &SharedAppState,
     headers: &HeaderMap,
@@ -24665,7 +24748,7 @@ fn resolve_site_host_from_authoritative_app(
         stored,
     }))
 }
-async fn resolve_site_host(
+fn resolve_site_host(
     state: &SharedAppState,
     headers: &HeaderMap,
 ) -> Result<ResolvedSiteHost, Response> {
@@ -24676,7 +24759,7 @@ async fn resolve_site_host(
     if let Some(cid) =
         extract_cid_from_untrusted_host(&host, &state.sorafs_gateway_config.untrusted_hosting)?
     {
-        let stored = resolve_site_manifest_by_cid(state, &cid).await?;
+        let stored = resolve_site_manifest_by_cid(state, &cid)?;
         return Ok(ResolvedSiteHost {
             hostname: host,
             index_document: "index.html".to_owned(),
@@ -24763,7 +24846,7 @@ fn chunk_profile_from_manifest_descriptor(manifest: &ManifestV1) -> Result<Chunk
     }
     Ok(descriptor.profile)
 }
-pub(crate) async fn resolve_site_manifest_by_cid_unchecked(
+pub(crate) fn resolve_site_manifest_by_cid_unchecked(
     state: &SharedAppState,
     cid: &str,
 ) -> Result<StoredManifest, Response> {
@@ -24778,11 +24861,11 @@ pub(crate) async fn resolve_site_manifest_by_cid_unchecked(
         REMOTE_HYDRATION_CAPABILITY_REQUIRED,
     ))
 }
-async fn resolve_site_manifest_by_cid(
+fn resolve_site_manifest_by_cid(
     state: &SharedAppState,
     cid: &str,
 ) -> Result<StoredManifest, Response> {
-    resolve_site_manifest_by_cid_unchecked(state, cid).await
+    resolve_site_manifest_by_cid_unchecked(state, cid)
 }
 async fn validate_local_gateway_manifest(
     state: &SharedAppState,
@@ -25083,12 +25166,12 @@ fn cid_gateway_request_path(uri: &Uri, cid: &str) -> Option<String> {
     path.strip_prefix(&format!("{prefix}/"))
         .map(|suffix| format!("/{suffix}"))
 }
-fn permanent_redirect(location: String) -> Response {
+fn permanent_redirect(location: &str) -> Response {
     let mut response = Response::new(Body::empty());
     *response.status_mut() = StatusCode::PERMANENT_REDIRECT;
     response.headers_mut().insert(
         header::LOCATION,
-        HeaderValue::from_str(&location).unwrap_or_else(|_| HeaderValue::from_static("/")),
+        HeaderValue::from_str(location).unwrap_or_else(|_| HeaderValue::from_static("/")),
     );
     response
 }
@@ -25121,7 +25204,7 @@ fn redirect_cid_gateway_request(
         location.push('?');
         location.push_str(query);
     }
-    Some(permanent_redirect(location))
+    Some(permanent_redirect(&(location)))
 }
 fn is_cid_derived_isolated_origin(
     headers: &HeaderMap,
@@ -25349,7 +25432,7 @@ pub(crate) async fn handle_get_sorafs_site_manifest(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let resolved = match resolve_site_host(&state, &headers).await {
+    let resolved = match resolve_site_host(&state, &headers) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -25377,36 +25460,36 @@ pub(crate) async fn handle_get_sorafs_site_manifest(
             bounded_file_listing_json(&resolved.stored, limit);
         let returned_file_count = files.len();
         let value = json_object(vec![
-            json_entry("hostname", Value::from(resolved.hostname.clone())),
+            json_entry("hostname", &(Value::from(resolved.hostname.clone()))),
             json_entry(
                 "content_cid",
-                Value::from(encode_content_cid(resolved.stored.manifest_cid())),
+                &(Value::from(encode_content_cid(resolved.stored.manifest_cid()))),
             ),
             json_entry(
                 "manifest_digest_hex",
-                Value::from(hex::encode(resolved.stored.manifest_digest())),
+                &(Value::from(hex::encode(resolved.stored.manifest_digest()))),
             ),
             json_entry(
                 "manifest_id_hex",
-                Value::from(resolved.stored.manifest_id().to_owned()),
+                &(Value::from(resolved.stored.manifest_id().to_owned())),
             ),
             json_entry(
                 "manifest_b64",
-                Value::from(BASE64_STANDARD.encode(manifest_bytes)),
+                &(Value::from(BASE64_STANDARD.encode(manifest_bytes))),
             ),
             json_entry(
                 "index_document",
-                Value::from(resolved.index_document.clone()),
+                &(Value::from(resolved.index_document.clone())),
             ),
-            json_entry("spa_fallback", Value::from(resolved.spa_fallback)),
-            json_entry("file_count", Value::from(file_count as u64)),
+            json_entry("spa_fallback", &(Value::from(resolved.spa_fallback))),
+            json_entry("file_count", &(Value::from(file_count as u64))),
             json_entry(
                 "returned_file_count",
-                Value::from(returned_file_count as u64),
+                &(Value::from(returned_file_count as u64)),
             ),
-            json_entry("limit", Value::from(limit as u64)),
-            json_entry("truncated_files", Value::from(truncated_files)),
-            json_entry("files", Value::Array(files)),
+            json_entry("limit", &(Value::from(limit as u64))),
+            json_entry("truncated_files", &(Value::from(truncated_files))),
+            json_entry("files", &(Value::Array(files))),
         ]);
         Ok(JsonBody(value).into_response())
     })
@@ -25433,7 +25516,7 @@ pub(crate) async fn handle_get_sorafs_site_path(
     {
         return response;
     }
-    let resolved = match resolve_site_host(&state, &headers).await {
+    let resolved = match resolve_site_host(&state, &headers) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -25468,7 +25551,7 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let stored = match resolve_site_manifest_by_cid(&state, &cid).await {
+    let stored = match resolve_site_manifest_by_cid(&state, &cid) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -25486,31 +25569,30 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
     let value = json_object(vec![
         json_entry(
             "content_cid",
-            Value::from(encode_content_cid(stored.manifest_cid())),
+            &(Value::from(encode_content_cid(stored.manifest_cid()))),
         ),
         json_entry(
             "manifest_digest_hex",
-            Value::from(hex::encode(stored.manifest_digest())),
+            &(Value::from(hex::encode(stored.manifest_digest()))),
         ),
         json_entry(
             "manifest_id_hex",
-            Value::from(stored.manifest_id().to_owned()),
+            &(Value::from(stored.manifest_id().to_owned())),
         ),
         json_entry(
             "index_document",
-            stored
+            &(stored
                 .file_by_path(&["index.html".to_owned()])
-                .map(|_| Value::from("index.html"))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |_| Value::from("index.html"))),
         ),
-        json_entry("file_count", Value::from(file_count as u64)),
+        json_entry("file_count", &(Value::from(file_count as u64))),
         json_entry(
             "returned_file_count",
-            Value::from(returned_file_count as u64),
+            &(Value::from(returned_file_count as u64)),
         ),
-        json_entry("limit", Value::from(limit as u64)),
-        json_entry("truncated_files", Value::from(truncated_files)),
-        json_entry("files", Value::Array(files)),
+        json_entry("limit", &(Value::from(limit as u64))),
+        json_entry("truncated_files", &(Value::from(truncated_files))),
+        json_entry("files", &(Value::Array(files))),
     ]);
     JsonBody(value).into_response()
 }
@@ -25533,7 +25615,7 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     if decode_canonical_content_cid(&cid).is_none() {
         return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
     }
-    let stored = match resolve_site_manifest_by_cid(&state, &cid).await {
+    let stored = match resolve_site_manifest_by_cid(&state, &cid) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -25612,8 +25694,16 @@ fn round_clamped_u32(value: f64) -> u32 {
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 fn round_clamped_u64(value: f64) -> u64 {
     let rounded = value.round();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the upper clamp uses the nearest f64 representation of u64::MAX"
+    )]
     let bounded = rounded.clamp(0.0, u64::MAX as f64);
-    #[allow(clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the value is rounded and clamped before saturating float-to-integer conversion"
+    )]
     {
         bounded as u64
     }
@@ -25726,7 +25816,7 @@ fn parse_cache_ttl(headers: &HeaderMap) -> Option<u64> {
         Err(()) => return None,
     }
     let mut ttl = None;
-    for value in headers.get_all(CACHE_CONTROL).iter() {
+    for value in &headers.get_all(CACHE_CONTROL) {
         let value = value.to_str().ok()?;
         for directive in value.split(',') {
             let Some((name, _)) = directive.trim().split_once('=') else {
@@ -26028,7 +26118,7 @@ fn enforce_gateway_policy_for_request(
         context = context.with_cache_ttl_secs(ttl);
     }
     context = context.with_provider_id(&provider_id);
-    match state.evaluate_gateway_policy(context) {
+    match state.evaluate_gateway_policy(&(context)) {
         Ok(()) => enforce_governed_gateway_compliance_for_subjects(
             state,
             manifest.manifest_digest(),
@@ -26165,7 +26255,7 @@ fn evaluate_governed_gateway_compliance_subject(
                     true,
                 );
             });
-            gateway_compliance_decision_response(state, decision)
+            gateway_compliance_decision_response(state, &(decision))
         }
         Err(error) => {
             record_gateway_compliance_serving_failure(
@@ -26221,9 +26311,9 @@ fn record_gateway_compliance_serving_failure(state: &SharedAppState, class: &'st
 }
 fn gateway_compliance_decision_response(
     state: &SharedAppState,
-    decision: GatewayComplianceDecision,
+    decision: &GatewayComplianceDecision,
 ) -> Result<(), Response> {
-    let denial = match canonical_gateway_compliance_denial(&decision) {
+    let denial = match canonical_gateway_compliance_denial(decision) {
         Ok(denial) => denial,
         Err(reason) => {
             record_gateway_compliance_serving_failure(state, "internal");
@@ -26274,11 +26364,11 @@ fn canonical_gateway_compliance_denial(
 }
 fn gateway_compliance_denial_http_response(source: &str, catalog_digest: [u8; 32]) -> Response {
     let body = json_object(vec![
-        json_entry("error", Value::from("gateway_compliance_denied")),
-        json_entry("source", Value::from(source)),
+        json_entry("error", &(Value::from("gateway_compliance_denied"))),
+        json_entry("source", &(Value::from(source))),
         json_entry(
             "catalog_digest_hex",
-            Value::from(hex::encode(catalog_digest)),
+            &(Value::from(hex::encode(catalog_digest))),
         ),
     ]);
     let mut response = (StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS, JsonBody(body)).into_response();
@@ -26290,10 +26380,10 @@ fn gateway_compliance_denial_http_response(source: &str, catalog_digest: [u8; 32
 }
 fn gateway_compliance_unavailable_response() -> Response {
     let body = json_object(vec![
-        json_entry("error", Value::from("gateway_compliance_unavailable")),
+        json_entry("error", &(Value::from("gateway_compliance_unavailable"))),
         json_entry(
             "message",
-            Value::from("the governed gateway compliance serving policy is unavailable"),
+            &(Value::from("the governed gateway compliance serving policy is unavailable")),
         ),
     ]);
     let mut response = (StatusCode::SERVICE_UNAVAILABLE, JsonBody(body)).into_response();
@@ -26333,41 +26423,41 @@ fn gateway_policy_violation_response(violation: PolicyViolation) -> Response {
     match violation {
         PolicyViolation::ManifestEnvelopeMissing => {
             let body = json_object(vec![
-                json_entry("error", Value::from("manifest_envelope_required")),
+                json_entry("error", &(Value::from("manifest_envelope_required"))),
                 json_entry(
                     "message",
-                    Value::from("manifest envelope must be attached to the request"),
+                    &(Value::from("manifest envelope must be attached to the request")),
                 ),
             ]);
             (StatusCode::PRECONDITION_REQUIRED, JsonBody(body)).into_response()
         }
         PolicyViolation::MissingProviderId => {
             let body = json_object(vec![
-                json_entry("error", Value::from("provider_id_missing")),
+                json_entry("error", &(Value::from("provider_id_missing"))),
                 json_entry(
                     "message",
-                    Value::from("stream token provider identifier is required"),
+                    &(Value::from("stream token provider identifier is required")),
                 ),
             ]);
             (StatusCode::PRECONDITION_REQUIRED, JsonBody(body)).into_response()
         }
         PolicyViolation::AdmissionUnavailable => {
             let body = json_object(vec![
-                json_entry("error", Value::from("admission_unavailable")),
+                json_entry("error", &(Value::from("admission_unavailable"))),
                 json_entry(
                     "message",
-                    Value::from("gateway admission registry is unavailable"),
+                    &(Value::from("gateway admission registry is unavailable")),
                 ),
             ]);
             (StatusCode::PRECONDITION_FAILED, JsonBody(body)).into_response()
         }
         PolicyViolation::ProviderNotAdmitted { provider_id } => {
             let body = json_object(vec![
-                json_entry("error", Value::from("provider_not_admitted")),
-                json_entry("provider_id_hex", Value::from(hex::encode(provider_id))),
+                json_entry("error", &(Value::from("provider_not_admitted"))),
+                json_entry("provider_id_hex", &(Value::from(hex::encode(provider_id)))),
                 json_entry(
                     "message",
-                    Value::from("provider is not admitted according to governance records"),
+                    &(Value::from("provider is not admitted according to governance records")),
                 ),
             ]);
             (StatusCode::PRECONDITION_FAILED, JsonBody(body)).into_response()
@@ -26395,10 +26485,10 @@ fn gateway_policy_violation_response(violation: PolicyViolation) -> Response {
                 );
             }
             let body = json_object(vec![
-                json_entry("error", Value::from(code)),
+                json_entry("error", &(Value::from(code))),
                 json_entry(
                     "message",
-                    Value::from("gateway rejected the request due to rate limiting"),
+                    &(Value::from("gateway rejected the request due to rate limiting")),
                 ),
             ]);
             (status, headers, JsonBody(body)).into_response()
@@ -26702,6 +26792,16 @@ mod gateway_policy_violation_tests {
     }
     #[test]
     fn manifest_envelope_validation_requires_signed_registry_metadata() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
         let (record, mut envelope, signature) = manifest_envelope_fixture(0x11, 0x21, 0x22, 0x23);
         let encoded = norito::json::to_vec(&Value::Object(envelope.clone())).expect("json");
         assert!(validate_manifest_envelope_bytes(&record, &encoded));
@@ -26721,15 +26821,7 @@ mod gateway_policy_violation_tests {
             !validate_manifest_envelope_bytes(&record, &inert_signature_encoded),
             "all-zero envelope signatures must fail before backend verification"
         );
-        const SMALL_ORDER_R: [u8; 32] = [
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-        ];
-        const NONCANONICAL_R: [u8; 32] = [
-            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
+
         for (label, signer_bytes) in [
             ("all-zero", [0_u8; 32]),
             ("small-order", SMALL_ORDER_R),
@@ -27121,7 +27213,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
             &state,
             StatusCode::NOT_ACCEPTABLE,
             "unsupported_encoding",
-            format!("gzip compression is not allowed for {}", manifest_profile),
+            format!("gzip compression is not allowed for {manifest_profile}"),
             Some(&manifest_profile),
             None,
             TELEMETRY_ENDPOINT_CAR_RANGE,
@@ -27201,8 +27293,8 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         return response;
     }
     if state.sorafs_gateway_config.enforce_capabilities {
-        match provider_id.as_ref() {
-            Some(provider) => match state.provider_supports_chunk_range(provider) {
+        if let Some(provider) = provider_id.as_ref() {
+            match state.provider_supports_chunk_range(provider) {
                 Some(true) => {}
                 Some(false) => {
                     drop(stream_token_guard);
@@ -27222,15 +27314,14 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
                         TELEMETRY_ENDPOINT_CAR_RANGE,
                     );
                 }
-            },
-            None => {
-                drop(stream_token_guard);
-                return chunk_range_capability_provider_missing_response(
-                    &state,
-                    &manifest_profile,
-                    TELEMETRY_ENDPOINT_CAR_RANGE,
-                );
             }
+        } else {
+            drop(stream_token_guard);
+            return chunk_range_capability_provider_missing_response(
+                &state,
+                &manifest_profile,
+                TELEMETRY_ENDPOINT_CAR_RANGE,
+            );
         }
     }
     let worker_state = state.clone();
@@ -27344,13 +27435,15 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
                     | ChunkStoreError::DigestMismatch { .. }
                     | ChunkStoreError::LengthMismatch { .. }),
                 ))) => {
+const DIGEST_MISMATCH_REASON: &str =
+                        "car verification failed due to mismatched chunk digest";
+
                     error!(
                         ?error,
                         manifest_id = worker_manifest_hex,
                         "stored chunk failed CAR range verification"
                     );
-                    const DIGEST_MISMATCH_REASON: &str =
-                        "car verification failed due to mismatched chunk digest";
+
                     return Err(gateway_refusal_response(
                         &worker_state,
                         StatusCode::UNPROCESSABLE_ENTITY,
@@ -27461,7 +27554,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     response_headers.insert(
         header::CONTENT_LENGTH,
         header_value(
-            &car_stats.car_size.to_string(),
+            car_stats.car_size.to_string(),
             header::CONTENT_LENGTH.as_str(),
         ),
     );
@@ -27490,7 +27583,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     if let Some(snapshot) = state.current_tls_snapshot() {
         response_headers.insert(
             HeaderName::from_static(SORA_TLS_STATE_HEADER),
-            header_value(&snapshot.header_value(), "X-Sora-TLS-State"),
+            header_value(snapshot.header_value(), "X-Sora-TLS-State"),
         );
     }
     if let Some(blinded_value) = blinded_b64.as_ref() {
@@ -27525,15 +27618,14 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         });
     }
     if let Some(ref probe) = potr_probe {
-        let provider = match provider_id.as_ref() {
-            Some(value) => value,
-            None => {
-                drop(stream_token_guard);
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    "sora-potr-request requires provider_id",
-                );
-            }
+        let provider = if let Some(value) = provider_id.as_ref() {
+            value
+        } else {
+            drop(stream_token_guard);
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "sora-potr-request requires provider_id",
+            );
         };
         let latency_clamped = round_clamped_u32(latency_ms);
         let (potr_status, note) = if latency_clamped > probe.params.deadline_ms {
@@ -27709,8 +27801,8 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
         return response;
     }
     if state.sorafs_gateway_config.enforce_capabilities {
-        match provider_id.as_ref() {
-            Some(provider) => match state.provider_supports_chunk_range(provider) {
+        if let Some(provider) = provider_id.as_ref() {
+            match state.provider_supports_chunk_range(provider) {
                 Some(true) => {}
                 Some(false) => {
                     drop(stream_token_guard);
@@ -27730,15 +27822,14 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
                         TELEMETRY_ENDPOINT_CHUNK,
                     );
                 }
-            },
-            None => {
-                drop(stream_token_guard);
-                return chunk_range_capability_provider_missing_response(
-                    &state,
-                    &manifest_profile,
-                    TELEMETRY_ENDPOINT_CHUNK,
-                );
             }
+        } else {
+            drop(stream_token_guard);
+            return chunk_range_capability_provider_missing_response(
+                &state,
+                &manifest_profile,
+                TELEMETRY_ENDPOINT_CHUNK,
+            );
         }
     }
     let (stream_token_guard, bytes) = match read_chunk_with_stream_token_lease(
@@ -27764,7 +27855,7 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
     );
     response_headers.insert(
         header::CONTENT_LENGTH,
-        header_value(&bytes.len().to_string(), "Content-Length"),
+        header_value(bytes.len().to_string(), "Content-Length"),
     );
     let chunk_range_value = format!("start={};end={};chunks=1", record.offset, end);
     response_headers.insert(
@@ -27788,7 +27879,7 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
     if let Some(snapshot) = state.current_tls_snapshot() {
         response_headers.insert(
             HeaderName::from_static(SORA_TLS_STATE_HEADER),
-            header_value(&snapshot.header_value(), "X-Sora-TLS-State"),
+            header_value(snapshot.header_value(), "X-Sora-TLS-State"),
         );
     }
     if let Some(blinded_value) = blinded_b64.as_ref() {
@@ -27827,15 +27918,14 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
         });
     }
     if let Some(ref probe) = potr_probe {
-        let provider = match provider_id.as_ref() {
-            Some(value) => value,
-            None => {
-                drop(stream_token_guard);
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    "sora-potr-request requires provider_id",
-                );
-            }
+        let provider = if let Some(value) = provider_id.as_ref() {
+            value
+        } else {
+            drop(stream_token_guard);
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "sora-potr-request requires provider_id",
+            );
         };
         let latency_clamped = round_clamped_u32(latency_ms);
         let (potr_status, note) = if latency_clamped > probe.params.deadline_ms {
@@ -28222,9 +28312,9 @@ fn finalized_proof_stream_item_json(
     Ok(Value::Object(map))
 }
 #[cfg(feature = "app_api")]
-fn proof_outcome_query_error_response(error: QueryExecutionFail, proof_kind: &str) -> Response {
+fn proof_outcome_query_error_response(error: &QueryExecutionFail, proof_kind: &str) -> Response {
     if matches!(
-        &error,
+        error,
         QueryExecutionFail::Find(FindError::SorafsProofOutcome(_))
     ) {
         return json_error(
@@ -28232,7 +28322,7 @@ fn proof_outcome_query_error_response(error: QueryExecutionFail, proof_kind: &st
             format!("finalized {proof_kind} proof outcome was not found"),
         );
     }
-    if matches!(&error, QueryExecutionFail::Expired) {
+    if matches!(error, QueryExecutionFail::Expired) {
         return json_error(
             StatusCode::CONFLICT,
             format!("finalized {proof_kind} proof outcome cursor is stale"),
@@ -28252,9 +28342,9 @@ fn proof_outcome_request_mismatch_response(proof_kind: &str) -> Response {
     )
 }
 #[cfg(feature = "app_api")]
-fn pin_manifest_query_error_response(error: QueryExecutionFail) -> Response {
+fn pin_manifest_query_error_response(error: &QueryExecutionFail) -> Response {
     if matches!(
-        &error,
+        error,
         QueryExecutionFail::Find(FindError::SorafsPinManifest(_))
     ) {
         return json_error(
@@ -28262,7 +28352,7 @@ fn pin_manifest_query_error_response(error: QueryExecutionFail) -> Response {
             "finalized SoraFS pin manifest was not found",
         );
     }
-    if matches!(&error, QueryExecutionFail::Expired) {
+    if matches!(error, QueryExecutionFail::Expired) {
         return json_error(
             StatusCode::CONFLICT,
             "finalized SoraFS pin-manifest cursor is stale",
@@ -28384,20 +28474,19 @@ fn render_finalized_proof_stream_response(
         }
     };
     let verification_started_at = Instant::now();
-    let verified = match ProofStreamItem::from_json(&value, &context) {
-        Ok(verified) => verified,
-        Err(_) => {
-            record_gateway_proof_verification(
-                state,
-                "failure",
-                "item_invalid",
-                verification_started_at,
-            );
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "authoritative finalized SoraFS proof-outcome projection is invalid",
-            );
-        }
+    let verified = if let Ok(verified) = ProofStreamItem::from_json(&value, &context) {
+        verified
+    } else {
+        record_gateway_proof_verification(
+            state,
+            "failure",
+            "item_invalid",
+            verification_started_at,
+        );
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authoritative finalized SoraFS proof-outcome projection is invalid",
+        );
     };
     let mut sequence_verifier = ProofStreamSequenceVerifier::new(&context);
     if sequence_verifier.verify_item(&verified).is_err() {
@@ -28507,9 +28596,12 @@ pub(crate) async fn handle_post_sorafs_pdp_challenge(
             (
                 StatusCode::OK,
                 JsonBody(json_object(vec![
-                    json_entry("result", Value::from(result)),
-                    json_entry("sequence", Value::from(sequence)),
-                    json_entry("challenge_id_hex", Value::from(hex::encode(challenge_id))),
+                    json_entry("result", &(Value::from(result))),
+                    json_entry("sequence", &(Value::from(sequence))),
+                    json_entry(
+                        "challenge_id_hex",
+                        &(Value::from(hex::encode(challenge_id))),
+                    ),
                 ])),
             )
                 .into_response()
@@ -28563,13 +28655,13 @@ pub(crate) async fn handle_post_sorafs_pdp_next(
             (
                 StatusCode::OK,
                 JsonBody(json_object(vec![
-                    json_entry("sequence", Value::from(next.sequence)),
+                    json_entry("sequence", &(Value::from(next.sequence))),
                     json_entry(
                         "challenge_id_hex",
-                        Value::from(hex::encode(next.challenge.challenge_id)),
+                        &(Value::from(hex::encode(next.challenge.challenge_id))),
                     ),
-                    json_entry("challenge_b64", Value::from(challenge_b64)),
-                    json_entry("enqueued_at_unix", Value::from(next.enqueued_at_unix)),
+                    json_entry("challenge_b64", &(Value::from(challenge_b64))),
+                    json_entry("enqueued_at_unix", &(Value::from(next.enqueued_at_unix))),
                 ])),
             )
                 .into_response()
@@ -28720,9 +28812,9 @@ pub(crate) async fn handle_post_sorafs_pdp_export(
                 JsonBody(json_object(vec![
                     json_entry(
                         "items",
-                        Value::Array(statuses.into_iter().map(pdp_status_json).collect()),
+                        &(Value::Array(statuses.into_iter().map(pdp_status_json).collect())),
                     ),
-                    json_entry("next_sequence", Value::from(next_sequence)),
+                    json_entry("next_sequence", &(Value::from(next_sequence))),
                 ])),
             )
                 .into_response()
@@ -28778,7 +28870,7 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
             .execute(&state.state.query_view());
             let finalized_pin = match finalized_pin {
                 Ok(finalized_pin) => finalized_pin,
-                Err(error) => return pin_manifest_query_error_response(error),
+                Err(error) => return pin_manifest_query_error_response(&(error)),
             };
             if !matches!(finalized_pin.manifest.status, PinStatus::Approved(_)) {
                 return json_error(
@@ -28863,6 +28955,10 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
             };
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             let sample_len = samples.len();
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "per-item latency is an approximate telemetry measurement"
+            )]
             let per_item_latency = if sample_len == 0 {
                 elapsed_ms
             } else {
@@ -28913,23 +29009,23 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 if let Some(tier_label) = requested_tier_label {
                     map.insert("tier".into(), Value::from(tier_label));
                 }
-                let verified =
-                    match ProofStreamItem::from_json(&Value::Object(map), &verification_context) {
-                        Ok(verified) => verified,
-                        Err(_) => {
-                            warn!("generated PoR proof failed finalized-root verification");
-                            record_gateway_proof_verification(
-                                &state,
-                                "failure",
-                                "item_invalid",
-                                verification_started_at,
-                            );
-                            return json_error(
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                "generated PoR proof failed finalized-root verification",
-                            );
-                        }
-                    };
+                let verified = if let Ok(verified) =
+                    ProofStreamItem::from_json(&Value::Object(map), &verification_context)
+                {
+                    verified
+                } else {
+                    warn!("generated PoR proof failed finalized-root verification");
+                    record_gateway_proof_verification(
+                        &state,
+                        "failure",
+                        "item_invalid",
+                        verification_started_at,
+                    );
+                    return json_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "generated PoR proof failed finalized-root verification",
+                    );
+                };
                 if sequence_verifier.verify_item(&verified).is_err() {
                     warn!("generated PoR sequence failed request-bound verification");
                     record_gateway_proof_verification(
@@ -29008,7 +29104,7 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 Ok(finalized) => {
                     render_finalized_proof_stream_response(&state, &finalized, &request)
                 }
-                Err(error) => proof_outcome_query_error_response(error, "potr"),
+                Err(error) => proof_outcome_query_error_response(&(error), "potr"),
             }
         }
         ProofStreamKind::Pdp => {
@@ -29035,7 +29131,7 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 Ok(finalized) => {
                     render_finalized_proof_stream_response(&state, &finalized, &request)
                 }
-                Err(error) => proof_outcome_query_error_response(error, "pdp"),
+                Err(error) => proof_outcome_query_error_response(&(error), "pdp"),
             }
         }
     }
@@ -29078,7 +29174,7 @@ fn checked_test_keypair_rejects_all_zero_seed() {
 }
 #[cfg(test)]
 fn alias_proof_header(alias: &str) -> HeaderValue {
-    header_value(&alias_proof_b64(alias), "Sora-Proof")
+    header_value(alias_proof_b64(alias), "Sora-Proof")
 }
 #[cfg(test)]
 fn alias_proof_b64(alias: &str) -> String {
@@ -29255,7 +29351,7 @@ fn ensure_chunk_alignment(manifest: &StoredManifest, range: ByteRange) -> Result
             }
             started = true;
         } else if chunk_start != cursor {
-            return Err(format!("Range crosses chunk boundary at offset {}", cursor));
+            return Err(format!("Range crosses chunk boundary at offset {cursor}"));
         }
         cursor = chunk_end;
         chunk_count += 1;
@@ -29266,10 +29362,10 @@ fn ensure_chunk_alignment(manifest: &StoredManifest, range: ByteRange) -> Result
             return Err("Range ends mid-chunk".to_string());
         }
     }
-    if !started {
-        Err("Range start offset does not match any chunk boundary".to_string())
-    } else {
+    if started {
         Err("Range does not terminate at a chunk boundary".to_string())
+    } else {
+        Err("Range start offset does not match any chunk boundary".to_string())
     }
 }
 fn parse_chunk_digest_hex(hex: &str) -> Result<[u8; 32], String> {
@@ -29283,7 +29379,7 @@ fn parse_chunk_digest_hex(hex: &str) -> Result<[u8; 32], String> {
 }
 fn range_not_satisfiable(total_length: u64, message: String) -> Response {
     let mut response = json_error(StatusCode::RANGE_NOT_SATISFIABLE, message);
-    if let Ok(value) = HeaderValue::from_str(&format!("bytes */{}", total_length)) {
+    if let Ok(value) = HeaderValue::from_str(&format!("bytes */{total_length}")) {
         response.headers_mut().insert(header::CONTENT_RANGE, value);
     }
     response
@@ -29596,8 +29692,7 @@ mod app_api_tests {
             format!("expected_finalized_height=+2&expected_finalized_block_hash_hex={block_hash}"),
             format!("expected_finalized_height=%32&expected_finalized_block_hash_hex={block_hash}"),
             format!(
-                "expected_finalized_height=2&expected_finalized_block_hash_hex={}",
-                uppercase_block_hash
+                "expected_finalized_height=2&expected_finalized_block_hash_hex={uppercase_block_hash}"
             ),
             format!("expected_finalized_height=2&{encoded_hash_query}"),
             format!(
@@ -29672,7 +29767,13 @@ mod app_api_tests {
         let canonical = ModerationFinalizedEventsQuery::parse(Some("since=0&limit=500"))
             .expect("canonical moderation event query");
         assert_eq!(canonical.since, Some(0));
-        assert_eq!(canonical.limit, Some(MAX_LIST_LIMIT as u32));
+        assert_eq!(
+            canonical.limit,
+            Some(
+                u32::try_from(MAX_LIST_LIMIT)
+                    .expect("bounded fixture or protocol constant fits u32")
+            )
+        );
         let maximum_cursor =
             ModerationFinalizedEventsQuery::parse(Some("since=18446744073709551615"))
                 .expect("the full event cursor range remains accepted");
@@ -30042,9 +30143,9 @@ fn advert_ingest_response(
         .map(|warning| Value::String(warning.as_str().to_string()))
         .collect::<Vec<_>>();
     let response = json_object(vec![
-        json_entry("status", status.to_string()),
-        json_entry("fingerprint_hex", fingerprint.encode_hex::<String>()),
-        json_entry("warnings", Value::Array(warnings_json)),
+        json_entry("status", &(status.to_string())),
+        json_entry("fingerprint_hex", &(fingerprint.encode_hex::<String>())),
+        json_entry("warnings", &(Value::Array(warnings_json))),
     ]);
     (StatusCode::OK, JsonBody(response)).into_response()
 }
@@ -30078,29 +30179,29 @@ fn snapshot_to_json(snapshot: CapacitySnapshot, limit: usize) -> Result<Value, j
     let returned_credit_ledger_count = credit_json.len();
     let returned_dispute_count = disputes_json.len();
     Ok(json_object(vec![
-        json_entry("declaration_count", declaration_count as u64),
+        json_entry("declaration_count", &(declaration_count as u64)),
         json_entry(
             "returned_declaration_count",
-            returned_declaration_count as u64,
+            &(returned_declaration_count as u64),
         ),
-        json_entry("declarations", Value::Array(declarations_json)),
-        json_entry("ledger_count", ledger_count as u64),
-        json_entry("returned_ledger_count", returned_ledger_count as u64),
-        json_entry("fee_ledger", Value::Array(ledger_json)),
-        json_entry("credit_ledger_count", credit_count as u64),
+        json_entry("declarations", &(Value::Array(declarations_json))),
+        json_entry("ledger_count", &(ledger_count as u64)),
+        json_entry("returned_ledger_count", &(returned_ledger_count as u64)),
+        json_entry("fee_ledger", &(Value::Array(ledger_json))),
+        json_entry("credit_ledger_count", &(credit_count as u64)),
         json_entry(
             "returned_credit_ledger_count",
-            returned_credit_ledger_count as u64,
+            &(returned_credit_ledger_count as u64),
         ),
-        json_entry("credit_ledger", Value::Array(credit_json)),
-        json_entry("dispute_count", dispute_count as u64),
-        json_entry("returned_dispute_count", returned_dispute_count as u64),
-        json_entry("disputes", Value::Array(disputes_json)),
-        json_entry("limit", limit as u64),
-        json_entry("truncated_declarations", truncated_declarations),
-        json_entry("truncated_fee_ledger", truncated_fee_ledger),
-        json_entry("truncated_credit_ledger", truncated_credit_ledger),
-        json_entry("truncated_disputes", truncated_disputes),
+        json_entry("credit_ledger", &(Value::Array(credit_json))),
+        json_entry("dispute_count", &(dispute_count as u64)),
+        json_entry("returned_dispute_count", &(returned_dispute_count as u64)),
+        json_entry("disputes", &(Value::Array(disputes_json))),
+        json_entry("limit", &(limit as u64)),
+        json_entry("truncated_declarations", &(truncated_declarations)),
+        json_entry("truncated_fee_ledger", &(truncated_fee_ledger)),
+        json_entry("truncated_credit_ledger", &(truncated_credit_ledger)),
+        json_entry("truncated_disputes", &(truncated_disputes)),
     ]))
 }
 fn pin_projection_with_attestation<T>(
@@ -30159,7 +30260,7 @@ fn chunk_fetch_spec_json(spec: &ChunkFetchSpec) -> Value {
     let mut obj = Map::new();
     obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
     obj.insert("offset".into(), Value::from(spec.offset));
-    obj.insert("length".into(), Value::from(spec.length as u64));
+    obj.insert("length".into(), Value::from(u64::from(spec.length)));
     obj.insert(
         "digest_blake3".into(),
         Value::from(hex::encode(spec.digest)),
@@ -30167,10 +30268,14 @@ fn chunk_fetch_spec_json(spec: &ChunkFetchSpec) -> Value {
     Value::Object(obj)
 }
 fn normalize_limit(limit: Option<u32>) -> usize {
-    limit.unwrap_or(DEFAULT_LIST_LIMIT as u32) as usize
+    limit.unwrap_or_else(|| {
+        u32::try_from(DEFAULT_LIST_LIMIT).expect("bounded fixture or protocol constant fits u32")
+    }) as usize
 }
 fn normalize_moderation_read_limit(limit: Option<u32>) -> usize {
-    limit.unwrap_or(DEFAULT_LIST_LIMIT as u32) as usize
+    limit.unwrap_or_else(|| {
+        u32::try_from(DEFAULT_LIST_LIMIT).expect("bounded fixture or protocol constant fits u32")
+    }) as usize
 }
 fn limit_governance_readback_values(mut entries: Vec<Value>, limit: usize) -> (Vec<Value>, bool) {
     let truncated = entries.len() > limit;
@@ -30209,15 +30314,15 @@ fn build_attestation_value(
     map.insert("block_height".into(), json::to_value(&height)?);
     map.insert(
         "block_hash_hex".into(),
-        block_hash
-            .map(|hash| Value::String(hex::encode(hash.as_ref().as_ref())))
-            .unwrap_or(Value::Null),
+        block_hash.map_or(Value::Null, |hash| {
+            Value::String(hex::encode(hash.as_ref().as_ref()))
+        }),
     );
     map.insert("chain_id".into(), Value::String(chain_id.to_string()));
     Ok(Value::Object(map))
 }
 fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
-    let response = json_object(vec![json_entry("error", message.into())]);
+    let response = json_object(vec![json_entry("error", &(message.into()))]);
     (status, JsonBody(response)).into_response()
 }
 fn feature_disabled(message: &str) -> Response {
@@ -30910,7 +31015,7 @@ fn stream_budget_to_json(budget: &StreamBudgetV1) -> Result<Value, json::Error> 
     let mut obj = Map::new();
     obj.insert(
         "max_in_flight".into(),
-        json::to_value(&(budget.max_in_flight as u64))?,
+        json::to_value(&u64::from(budget.max_in_flight))?,
     );
     obj.insert(
         "max_bytes_per_sec".into(),
@@ -30938,7 +31043,10 @@ fn transport_hints_to_json(hints: &[TransportHintV1]) -> Result<Value, json::Err
                 "protocol_id".into(),
                 json::to_value(&(hint.protocol as u8))?,
             );
-            obj.insert("priority".into(), json::to_value(&(hint.priority as u64))?);
+            obj.insert(
+                "priority".into(),
+                json::to_value(&u64::from(hint.priority))?,
+            );
             Ok(Value::Object(obj))
         })
         .collect::<Result<Vec<_>, json::Error>>()?;
@@ -31003,7 +31111,7 @@ fn record_range_capability_metrics(cache: &ProviderAdvertCache, telemetry: &Mayb
             .body
             .transport_hints
             .as_ref()
-            .map_or(false, |hints| !hints.is_empty())
+            .is_some_and(|hints| !hints.is_empty())
         {
             transport_hints += 1;
         }
@@ -31089,7 +31197,10 @@ mod advert_tests {
             },
             token::signer_test_support::{ObserverFault, SignedFixture, TestSignerMode},
         },
-        tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_network_app_headers},
+        tests_runtime_handlers::{
+            mk_app_state_for_tests_with_pre_genesis_world, mk_app_state_for_tests_with_world,
+            signed_network_app_headers,
+        },
         utils::extractors::JsonOnly,
     };
     use axum::{
@@ -31847,11 +31958,12 @@ mod advert_tests {
         });
         (format!("http://{address}"), state, shutdown_tx, task)
     }
+    type ApiTestFencedPublication = ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1);
+
     #[derive(Debug, Default)]
     struct ApiTestFencedPrivacyState {
         head: Option<FencedTransparencyTargetHeadV1>,
-        publications:
-            BTreeMap<([u8; 32], [u8; 16]), ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1)>,
+        publications: BTreeMap<([u8; 32], [u8; 16]), ApiTestFencedPublication>,
         receipts: BTreeMap<
             [u8; 32],
             (
@@ -32177,8 +32289,8 @@ mod advert_tests {
             ]),
         }
     }
-    fn proof_token_issuance_body(request: TransparencyProofTokenIssuanceRequestDto) -> Bytes {
-        Bytes::from(norito::json::to_vec(&request).expect("encode proof-token issuance request"))
+    fn proof_token_issuance_body(request: &TransparencyProofTokenIssuanceRequestDto) -> Bytes {
+        Bytes::from(norito::json::to_vec(request).expect("encode proof-token issuance request"))
     }
     #[tokio::test]
     async fn sorafs_storage_peer_discovery_returns_configured_publish_urls() {
@@ -33307,7 +33419,7 @@ mod advert_tests {
             snapshot.head_bytes(),
         ) {
             Err(response) => response,
-            Ok(_) => panic!("substituted unsigned provenance must fail"),
+            Ok(()) => panic!("substituted unsigned provenance must fail"),
         };
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -33338,7 +33450,7 @@ mod advert_tests {
             snapshot.head_bytes(),
         ) {
             Err(response) => response,
-            Ok(_) => panic!("malformed runtime index must fail"),
+            Ok(()) => panic!("malformed runtime index must fail"),
         };
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -33759,7 +33871,7 @@ mod advert_tests {
     ) -> Bytes {
         moderation_screening_result_body_with_subject_digest(
             subject,
-            hex::encode([subject_digest_byte; 32]),
+            &(hex::encode([subject_digest_byte; 32])),
             0,
             0,
             combined_score_bps,
@@ -33815,7 +33927,7 @@ mod advert_tests {
     }
     fn moderation_screening_result_body_with_subject_digest(
         subject: &str,
-        subject_digest_hex: String,
+        subject_digest_hex: &str,
         _manifest_id_byte: u8,
         _runner_hash_byte: u8,
         combined_score_bps: u16,
@@ -33840,7 +33952,7 @@ mod advert_tests {
             trust_policy_id: policy.body.policy_id,
             trust_policy_digest: policy.body.policy_digest,
             subject: subject.to_owned(),
-            subject_digest: parse_hex_fixed::<32>(&subject_digest_hex, "subject_digest_hex")
+            subject_digest: parse_hex_fixed::<32>(subject_digest_hex, "subject_digest_hex")
                 .expect("fixture subject digest"),
             model_scores: vec![ModerationModelScoreV1 {
                 model_id: manifest.body.models[0].model_id,
@@ -34034,7 +34146,7 @@ mod advert_tests {
             signer,
             moderation_screening_result_body_with_subject_digest(
                 subject,
-                subject_digest_hex,
+                &(subject_digest_hex),
                 0x57,
                 0x67,
                 7_500,
@@ -36593,7 +36705,7 @@ mod advert_tests {
                 admission_envelope_digest: PROOF_OUTCOME_TEST_ADMISSION_DIGEST,
             },
         ));
-        let mut app = mk_app_state_for_tests_with_world(world);
+        let mut app = mk_app_state_for_tests_with_pre_genesis_world(world);
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero fixture block height"),
             None,
@@ -36605,7 +36717,7 @@ mod advert_tests {
         let core_state =
             Arc::get_mut(&mut app_inner.state).expect("unique proof-outcome core state");
         {
-            let mut block = core_state.block(header.clone());
+            let mut block = core_state.block(header);
             let mut transaction = block.transaction();
             SetSorafsProofOutcomeSignerPolicy::new(policy)
                 .execute(&manager_id, &mut transaction)
@@ -37120,8 +37232,8 @@ mod advert_tests {
             )
             .expect("pin registry metrics fixture fee");
         let mut manifest_record = PinManifestRecord::new(
-            manifest_digest.clone(),
-            manifest_root_cid.clone(),
+            manifest_digest,
+            manifest_root_cid,
             chunker_handle.clone(),
             chunk_digest,
             [0xAB; 32],
@@ -37142,19 +37254,14 @@ mod advert_tests {
         manifest_record.approve(7, None);
         tx.world_mut_for_testing()
             .pin_manifests_mut_for_testing()
-            .insert(manifest_digest.clone(), manifest_record);
+            .insert(manifest_digest, manifest_record);
         let alias_binding = ManifestAliasBinding {
             namespace: "sora".into(),
             name: "docs".into(),
             proof: vec![0x01],
         };
-        let alias_record = ManifestAliasRecord::new(
-            alias_binding,
-            manifest_digest.clone(),
-            issuer.clone(),
-            9,
-            40,
-        );
+        let alias_record =
+            ManifestAliasRecord::new(alias_binding, manifest_digest, issuer.clone(), 9, 40);
         let alias_id = alias_record.alias_id();
         tx.world_mut_for_testing()
             .manifest_aliases_mut_for_testing()
@@ -37166,8 +37273,8 @@ mod advert_tests {
                 completed_met_id,
                 ReplicationOrderRecord {
                     order_id: completed_met_id,
-                    manifest_digest: manifest_digest.clone(),
-                    manifest_root_cid: manifest_root_cid.clone(),
+                    manifest_digest,
+                    manifest_root_cid,
                     musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 10,
@@ -37194,8 +37301,8 @@ mod advert_tests {
                 expired_missed_id,
                 ReplicationOrderRecord {
                     order_id: expired_missed_id,
-                    manifest_digest: manifest_digest.clone(),
-                    manifest_root_cid: manifest_root_cid.clone(),
+                    manifest_digest,
+                    manifest_root_cid,
                     musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 20,
@@ -37219,8 +37326,8 @@ mod advert_tests {
                 pending_id,
                 ReplicationOrderRecord {
                     order_id: pending_id,
-                    manifest_digest: manifest_digest.clone(),
-                    manifest_root_cid: manifest_root_cid.clone(),
+                    manifest_digest,
+                    manifest_root_cid,
                     musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 40,
@@ -37244,8 +37351,8 @@ mod advert_tests {
                 expired_id,
                 ReplicationOrderRecord {
                     order_id: expired_id,
-                    manifest_digest: manifest_digest.clone(),
-                    manifest_root_cid: manifest_root_cid.clone(),
+                    manifest_digest,
+                    manifest_root_cid,
                     musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 50,
@@ -37269,8 +37376,8 @@ mod advert_tests {
                 cancelled_id,
                 ReplicationOrderRecord {
                     order_id: cancelled_id,
-                    manifest_digest: manifest_digest.clone(),
-                    manifest_root_cid: manifest_root_cid.clone(),
+                    manifest_digest,
+                    manifest_root_cid,
                     musubi_archive: None,
                     issued_by: issuer,
                     issued_epoch: 70,
@@ -37340,7 +37447,7 @@ mod advert_tests {
                     ReplicationOrderRecord {
                         order_id,
                         manifest_digest,
-                        manifest_root_cid: manifest_root_cid.clone(),
+                        manifest_root_cid,
                         musubi_archive: None,
                         issued_by: issuer.clone(),
                         issued_epoch: 1,
@@ -37483,8 +37590,8 @@ mod advert_tests {
             )
             .expect("gateway registry fixture fee");
         let mut manifest_record = PinManifestRecord::new(
-            manifest_digest.clone(),
-            manifest_root_cid.clone(),
+            manifest_digest,
+            manifest_root_cid,
             default_chunker_handle(),
             manifest.chunk_digest_sha3_256,
             manifest.por_root,
@@ -37505,7 +37612,7 @@ mod advert_tests {
         manifest_record.approve(7, None);
         tx.world_mut_for_testing()
             .pin_manifests_mut_for_testing()
-            .insert(manifest_digest.clone(), manifest_record);
+            .insert(manifest_digest, manifest_record);
         let order_id = ReplicationOrderId::new([0x51; 32]);
         tx.world_mut_for_testing()
             .replication_orders_mut_for_testing()
@@ -37513,7 +37620,7 @@ mod advert_tests {
                 order_id,
                 ReplicationOrderRecord {
                     order_id,
-                    manifest_digest: manifest_digest.clone(),
+                    manifest_digest,
                     manifest_root_cid,
                     musubi_archive: None,
                     issued_by: issuer.clone(),
@@ -38087,7 +38194,7 @@ mod advert_tests {
         insert_api_test_header(&mut headers, HEADER_SORA_CHUNK_DIGEST, chunk_digest_hex);
         headers
     }
-    fn capability_token_context(fixture: &ProviderFixture, payload: Vec<u8>) -> TokenTestContext {
+    fn capability_token_context(fixture: &ProviderFixture, payload: &[u8]) -> TokenTestContext {
         let admission = fixture_admission_registry([&fixture.envelope]);
         let mut cache = ProviderAdvertCache::new(
             vec![
@@ -38104,14 +38211,14 @@ mod advert_tests {
         )
         .expect("cache ingest");
         let (node, storage_dir) = sorafs_node_with_temp_storage();
-        let manifest = manifest_for_payload(0x9B, &payload);
+        let manifest = manifest_for_payload(0x9B, payload);
         let chunker_handle = format!(
             "{}.{}@{}",
             manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
         );
         seed_capacity_declaration(&node, fixture.provider_id(), &chunker_handle);
-        let plan = CarBuildPlan::single_file(&payload).expect("plan");
-        let mut reader = payload.as_slice();
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut reader = payload;
         let manifest_id_hex = node
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest manifest");
@@ -38367,7 +38474,7 @@ mod advert_tests {
             registered_epoch: 1,
             valid_from_epoch: 2,
             valid_until_epoch: 3,
-            declaration_json: json_object(vec![json_entry("version", 1u64)]),
+            declaration_json: json_object(vec![json_entry("version", &(1u64))]),
             metadata_json: Value::Object(Map::new()),
         };
         let ledger = RegistryFeeLedgerEntry {
@@ -38576,7 +38683,7 @@ mod advert_tests {
     }
     #[tokio::test]
     async fn pin_registry_respects_norito_accept_header() {
-        let app = mk_app_state_for_tests();
+        let app = mk_app_state_for_tests_with_pre_genesis_world(World::new());
         let mut inner =
             Arc::try_unwrap(app).unwrap_or_else(|_| panic!("no other references to app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
@@ -38601,7 +38708,7 @@ mod advert_tests {
     }
     #[tokio::test]
     async fn pin_manifest_readback_is_finalized_native_state_without_local_storage() {
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_app_state_for_tests_with_pre_genesis_world(World::new());
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero fixture block height"),
             None,
@@ -38609,7 +38716,7 @@ mod advert_tests {
             0,
             0,
         );
-        let mut block = app.state.block(header.clone());
+        let mut block = app.state.block(header);
         let mut tx = block.transaction();
         let manifest_digest = ManifestDigest::new([0x61; 32]);
         let manifest_root_cid = canonical_fixture_manifest_root_cid();
@@ -38617,7 +38724,7 @@ mod advert_tests {
         let policy = RegistryPinPolicy::default();
         let content_length = 4096;
         let mut manifest_record = PinManifestRecord::new(
-            manifest_digest.clone(),
+            manifest_digest,
             manifest_root_cid,
             default_chunker_handle(),
             [0xA1; 32],
@@ -38652,7 +38759,7 @@ mod advert_tests {
             .insert(status_key, Vec::new());
         world
             .pin_manifests_mut_for_testing()
-            .insert(manifest_digest.clone(), manifest_record);
+            .insert(manifest_digest, manifest_record);
         tx.apply();
         block
             .commit_world_overlay_for_testing()
@@ -40372,8 +40479,7 @@ mod advert_tests {
     async fn car_range_accepts_valid_stream_token() {
         // Serving also requires the provider's governance-admitted capability advert.
         let advert = make_signed_advert();
-        let mut context =
-            capability_token_context(&advert, b"stream token payload fixture".to_vec());
+        let mut context = capability_token_context(&advert, b"stream token payload fixture");
         let mut app =
             Arc::try_unwrap(context.app).unwrap_or_else(|_| panic!("exclusive route app"));
         let admission = ServingAdmissionFixture::new();
@@ -40464,9 +40570,9 @@ mod advert_tests {
     async fn car_range_streams_verified_middle_chunk_window() {
         let payload_len = sorafs_chunker::ChunkProfile::DEFAULT.max_size * 3 + 17;
         let payload = (0..payload_len)
-            .map(|idx| (idx as u8).wrapping_mul(37).wrapping_add(11))
+            .map(|idx| idx.to_le_bytes()[0].wrapping_mul(37).wrapping_add(11))
             .collect::<Vec<_>>();
-        let context = token_test_context_with_payload(payload);
+        let context = token_test_context_with_payload(&payload);
         let manifest = context.manifest();
         assert!(
             manifest.chunk_count() >= 3,
@@ -40741,7 +40847,7 @@ mod advert_tests {
             CapabilityRangeKind::Car => b"capability enforcement car payload".to_vec(),
             CapabilityRangeKind::Chunk => b"capability enforcement chunk payload".to_vec(),
         };
-        let context = capability_token_context(&fixture, payload);
+        let context = capability_token_context(&fixture, &(payload));
         let manifest = context
             .app
             .sorafs_node
@@ -41005,7 +41111,7 @@ mod advert_tests {
             .clone()
             .oneshot(request(
                 build_headers("nonce-fwd-a-0", Some("203.0.113.10"), &trusted_token_base64),
-                trusted_proxy.clone(),
+                trusted_proxy,
             ))
             .await
             .unwrap();
@@ -41014,7 +41120,7 @@ mod advert_tests {
             .clone()
             .oneshot(request(
                 build_headers("nonce-fwd-b-0", Some("203.0.113.11"), &trusted_token_base64),
-                trusted_proxy.clone(),
+                trusted_proxy,
             ))
             .await
             .unwrap();
@@ -41138,14 +41244,18 @@ mod advert_tests {
     #[tokio::test]
     async fn car_range_accepts_multi_chunk_requests_with_small_stream_budget() {
         let payload = vec![0xDD; 2 * 1024 * 1024];
-        let context = token_test_context_with_payload(payload);
+        let context = token_test_context_with_payload(&payload);
         let manifest = context.manifest();
         assert!(
             manifest.chunk_count() > 4,
             "expected multi-chunk manifest for test"
         );
         let full_slice = manifest
-            .chunk_slice(0, manifest.content_length() as usize)
+            .chunk_slice(
+                0,
+                usize::try_from(manifest.content_length())
+                    .expect("bounded fixture or protocol constant fits usize"),
+            )
             .expect("derive full chunk slice");
         assert_eq!(
             full_slice.start_index, 0,
@@ -41195,7 +41305,7 @@ mod advert_tests {
         // Serving also requires the provider's governance-admitted capability advert.
         let advert = make_signed_advert();
         let payload = b"stream token payload fixture";
-        let mut context = capability_token_context(&advert, payload.to_vec());
+        let mut context = capability_token_context(&advert, payload);
         let mut app =
             Arc::try_unwrap(context.app).unwrap_or_else(|_| panic!("exclusive route app"));
         let admission = ServingAdmissionFixture::new();
@@ -41340,7 +41450,7 @@ mod advert_tests {
     #[tokio::test]
     async fn stream_token_enforces_concurrency_budget() {
         let payload = vec![0xEE; 128 * 1024];
-        let context = token_test_context_with_payload(payload);
+        let context = token_test_context_with_payload(&payload);
         let manifest = context.manifest();
         let overrides = TokenOverrides {
             max_streams: Some(1),
@@ -41454,7 +41564,7 @@ mod advert_tests {
     #[tokio::test]
     async fn stream_token_records_range_fetch_throttle_metrics() {
         let payload = vec![0xDD; 64 * 1024];
-        let context = token_test_context_with_payload(payload);
+        let context = token_test_context_with_payload(&payload);
         let manifest = context.manifest();
         let requested_bytes = manifest.content_length();
         let baseline_metrics = context.app.telemetry.metrics();

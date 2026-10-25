@@ -1,4 +1,4 @@
-//! Exact alias sources and reverse buckets on the actual frozen StateBlock.
+//! Exact alias sources and reverse buckets on the actual frozen `StateBlock`.
 //!
 //! Both images use the sole committed alias relation and original State pool.
 //! TODO: join every scoped table/cell/history and original publication owner in
@@ -54,6 +54,10 @@ impl<'frozen> Original<'frozen> {
 /// Incomplete, foreign, released or mixed modes return None. Local work/encoding
 /// refusal preserves the same frozen block and pool for retry; no fresh view,
 /// target refresh, supplied source or caller pool can replace its originals.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,

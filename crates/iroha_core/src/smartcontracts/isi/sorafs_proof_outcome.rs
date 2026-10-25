@@ -114,6 +114,10 @@ struct ProofOutcomePersistedEventV1 {
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_proof_outcome::ProofOutcomeEventJournalHeadV1"
 )]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Canonical journal fields identify the last committed event and retain their serialized names"
+)]
 struct ProofOutcomeEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -825,12 +829,12 @@ fn validate_outcome_against_current_policy(
                     "PDP challenge window is outside the current signer policy",
                 ));
             }
-            if let Some(attestation) = projection.provider_attestation {
-                if attestation.public_key != policy.pdp_public_key {
-                    return Err(invalid_parameter(
-                        "PDP proof signer does not match the current governed provider key",
-                    ));
-                }
+            if let Some(attestation) = projection.provider_attestation
+                && attestation.public_key != policy.pdp_public_key
+            {
+                return Err(invalid_parameter(
+                    "PDP proof signer does not match the current governed provider key",
+                ));
             }
         }
         ProofOutcomeProjectionV1::Potr(projection) => {
@@ -1772,7 +1776,7 @@ mod tests {
         operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
     ) -> Result<(), InstructionExecutionError> {
         let header = block_header_at(height, now_unix);
-        let mut block = state.block(header.clone());
+        let mut block = state.block(header);
         let mut transaction = block.transaction();
         operation(&mut transaction)?;
         transaction.apply();

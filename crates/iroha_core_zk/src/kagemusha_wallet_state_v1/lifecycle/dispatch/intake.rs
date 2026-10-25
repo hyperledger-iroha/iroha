@@ -312,10 +312,12 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                     map_state,
                     request.kind(),
                     request.refresh(),
-                    manifest.issued_requests,
-                    manifest.direct_anchors,
-                    manifest.finality_epochs,
-                    manifest.blacklist.clone(),
+                    crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+                        issued: manifest.issued_requests,
+                        anchors: manifest.direct_anchors,
+                        epochs: manifest.finality_epochs,
+                        blacklist: manifest.blacklist.clone(),
+                    },
                 )?;
                 let (native, prepared) = match speculative {
                     // A review's speculation supplies its own choices for this exact request.
@@ -376,10 +378,12 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                 map_state,
                 request.kind(),
                 request.refresh(),
-                manifest.issued_requests,
-                manifest.direct_anchors,
-                manifest.finality_epochs,
-                manifest.blacklist.clone(),
+                crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+                    issued: manifest.issued_requests,
+                    anchors: manifest.direct_anchors,
+                    epochs: manifest.finality_epochs,
+                    blacklist: manifest.blacklist.clone(),
+                },
             )?;
             let prepared =
                 self.proofs

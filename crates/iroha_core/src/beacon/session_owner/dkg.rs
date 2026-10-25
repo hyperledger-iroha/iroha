@@ -182,10 +182,11 @@ impl RetainedGlobalThresholdBeaconDkgSnapshotV1 {
     }
     pub(in crate::beacon) fn from_rows(
         session: GlobalThresholdBeaconDkgSessionV1,
-        generator_h: [u8; 96],
-        generator_v: [u8; 96],
-        recipient_keys: &DkgRows<GlobalThresholdBeaconDkgRecipientKeyV1>,
-        dealer_commitments: &DkgRows<GlobalThresholdBeaconDkgDealerCommitmentV1>,
+        (generator_h, generator_v): ([u8; 96], [u8; 96]),
+        (recipient_keys, dealer_commitments): (
+            &DkgRows<GlobalThresholdBeaconDkgRecipientKeyV1>,
+            &DkgRows<GlobalThresholdBeaconDkgDealerCommitmentV1>,
+        ),
         encrypted_shares: &DkgRows<GlobalThresholdBeaconDkgEncryptedShareV1>,
         share_acceptances: &DkgRows<GlobalThresholdBeaconDkgShareAcceptanceV1>,
         last_updated_height: u64,

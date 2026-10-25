@@ -175,10 +175,10 @@ impl LaneLifecyclePostPublication {
         );
         #[cfg(not(feature = "telemetry"))]
         let _ = state;
-        if let Some(snapshot) = self.snapshot {
-            if let Err(err) = snapshot.persist() {
-                warn!(?err, "failed to persist DA shard cursor journal");
-            }
+        if let Some(snapshot) = self.snapshot
+            && let Err(err) = snapshot.persist()
+        {
+            warn!(?err, "failed to persist DA shard cursor journal");
         }
         // Preserve existing lifecycle telemetry and log behavior even for replay
         // prevalidation; only cursor/process publication was suppressed before.

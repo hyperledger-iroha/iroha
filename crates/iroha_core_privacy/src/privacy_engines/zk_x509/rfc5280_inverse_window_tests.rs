@@ -116,7 +116,7 @@ fn private_inverse_window_all_widths_descriptors_and_resource_cells_match() {
                 3,
                 first,
                 &mut expected_refs,
-                der_v1(),
+                &der_v1(),
                 &challenges_v1(),
                 &centers,
                 |_| Ok(row_v1()),
@@ -126,7 +126,7 @@ fn private_inverse_window_all_widths_descriptors_and_resource_cells_match() {
                 3,
                 first,
                 &mut actual_refs,
-                der_v1(),
+                &der_v1(),
                 &challenges_v1(),
                 &centers,
                 |_| Ok(row_v1()),
@@ -183,7 +183,7 @@ fn private_inverse_window_active_recurrences_and_numeric_validation_match() {
                             first + offset,
                             &context,
                             last,
-                            der_v1(),
+                            &der_v1(),
                             &challenges_v1(),
                             &centers,
                         ) {
@@ -202,7 +202,7 @@ fn private_inverse_window_active_recurrences_and_numeric_validation_match() {
                         0,
                         &context,
                         last,
-                        der_v1(),
+                        &der_v1(),
                         &challenges_v1(),
                         &centers,
                     );
@@ -274,7 +274,7 @@ fn private_inverse_window_clears_owned_pairs_outputs_and_state_on_failure_unwind
                     4,
                     AUX_PROFILE_LOOKUP_ACCUMULATOR,
                     &mut refs,
-                    der_v1(),
+                    &der_v1(),
                     &challenges_v1(),
                     &centers,
                     |index| {
@@ -375,7 +375,7 @@ fn private_inverse_window_preserves_geometry_and_earliest_original_error() {
                 rows,
                 first,
                 &mut refs,
-                der_v1(),
+                &der_v1(),
                 &challenges_v1(),
                 &centers,
                 |_| panic!("invalid geometry before source")
@@ -399,9 +399,25 @@ fn private_inverse_window_preserves_geometry_and_earliest_original_error() {
             Ok(row)
         };
         let result = if window {
-            fill_with_v1(1, 260, &mut refs, der_v1(), &challenges_v1(), &centers, row)
+            fill_with_v1(
+                1,
+                260,
+                &mut refs,
+                &der_v1(),
+                &challenges_v1(),
+                &centers,
+                row,
+            )
         } else {
-            super::fill_with_v1(1, 260, &mut refs, der_v1(), &challenges_v1(), &centers, row)
+            super::fill_with_v1(
+                1,
+                260,
+                &mut refs,
+                &der_v1(),
+                &challenges_v1(),
+                &centers,
+                row,
+            )
         };
         assert_eq!(result, Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim));
         assert!(columns.iter().flatten().all(|value| *value == F::ZERO));
@@ -422,7 +438,7 @@ fn private_inverse_window_public_noninverse_spans_skip_window_owners() {
                 rows,
                 first,
                 &mut expected_refs,
-                der_v1(),
+                &der_v1(),
                 &challenges_v1(),
                 &centers,
                 |_| Ok(row_v1()),
@@ -434,7 +450,7 @@ fn private_inverse_window_public_noninverse_spans_skip_window_owners() {
                     rows,
                     first,
                     &mut actual_refs,
-                    der_v1(),
+                    &der_v1(),
                     &challenges_v1(),
                     &centers,
                     |_| Ok(row_v1()),

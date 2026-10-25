@@ -2,11 +2,11 @@
 //!
 //! This owner retains original-pool frames and exact no-op/absent undo entries.
 //! Canonical key order is byte order, independent of native map ordering. A retry
-//! borrows the same StateBlock and retains completed fields and row prefixes.
+//! borrows the same `StateBlock` and retains completed fields and row prefixes.
 //! Capture intent is immutable: a change-only owner cannot emit a complete image.
 //! There is no root, proof, finality or publication capability in this module.
 //! TODO: select the keyed engine and consume this exact cut in the existing
-//! StatePublication owner; authenticate the pre-tail cut and deterministic tail
+//! `StatePublication` owner; authenticate the pre-tail cut and deterministic tail
 //! during atomic restore before replacing the current World-only commitment.
 
 use super::{Canonical, Field, Role, STATE_FIELDS, Schema, V1_LAYOUT, find_identity, visit};
@@ -35,6 +35,10 @@ pub(in crate::state) enum CaptureIntent {
 
 /// Local encoding allowances. Refusal does not change transaction validity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "The max prefix distinguishes resource ceilings from observed counts"
+)]
 pub(in crate::state) struct CaptureLimits {
     /// Complete table/cell descriptor capacity.
     pub max_fields: usize,
@@ -53,13 +57,13 @@ pub(in crate::state) struct CaptureLimits {
 /// Exact membership refusal carried beyond State without widening its owner API.
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
-pub(crate) struct MembershipCaptureRefusal(
+pub struct MembershipCaptureRefusal(
     crate::state::storage_transactions::authority::TransactionMembershipAuthorityError,
 );
 
 /// Exact source or local encoding refusal; no partial cut is a successful result.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CaptureError {
+pub enum CaptureError {
     /// The exact original owner has not completed its required frozen phase.
     #[error("original State is not completely frozen")]
     NotFrozen,
@@ -124,7 +128,7 @@ pub(in crate::state) enum SourceIdentity {
     Journal(mv::BlockPublicationIdentity),
     /// Exact prepared membership allocation and predecessor.
     Membership(crate::state::storage_transactions::TransactionsPublicationSurface),
-    /// Immutable policy captured in the original StateBlock's enclosing borrow.
+    /// Immutable policy captured in the original `StateBlock`'s enclosing borrow.
     Policy(usize),
 }
 
@@ -163,7 +167,7 @@ struct PendingField {
 
 /// Internal sink shared only with the concrete original source owners.
 /// It cannot finish without the complete registry and has no public constructor.
-pub(crate) struct Collector {
+pub struct Collector {
     budget: AllocationBudget,
     limits: CaptureLimits,
     intent: CaptureIntent,
@@ -398,17 +402,16 @@ impl Collector {
             let frame = self.frame(key)?;
             self.pending.as_mut().expect("pending original field").key = Some(frame);
         }
-        if let Some(value) = value {
-            if self
+        if let Some(value) = value
+            && self
                 .pending
                 .as_ref()
                 .expect("pending original field")
                 .value
                 .is_none()
-            {
-                let frame = self.frame(value)?;
-                self.pending.as_mut().expect("pending original field").value = Some(frame);
-            }
+        {
+            let frame = self.frame(value)?;
+            self.pending.as_mut().expect("pending original field").value = Some(frame);
         }
         let pending = self.pending.as_mut().expect("pending original field");
         let row = Row {
@@ -711,10 +714,7 @@ impl Collector {
 }
 
 /// Encode the exact V1 bare layout. Never select a decoder or ambient fallback.
-pub(crate) fn bare<T: Encode>(
-    value: &T,
-    writer: &mut dyn Write,
-) -> Result<(), norito::core::Error> {
+pub fn bare<T: Encode>(value: &T, writer: &mut dyn Write) -> Result<(), norito::core::Error> {
     let mut writer = writer;
     norito::codec::encode_adaptive_into(value, &mut writer).map(|_| ())
 }
@@ -835,10 +835,10 @@ impl<'block, 'state> OriginalCut<'block, 'state> {
             return Err(CaptureError::NotFrozen.into());
         }
         self.advance()?;
-        if let Some(base) = &self.collector.membership_delta_base {
-            if !cfg!(all(test, sumeragi_core_mutation = "HC452")) {
-                bind_membership(base).map_err(VisitError::Consumer)?;
-            }
+        if let Some(base) = &self.collector.membership_delta_base
+            && !cfg!(all(test, sumeragi_core_mutation = "HC452"))
+        {
+            bind_membership(base).map_err(VisitError::Consumer)?;
         }
         for field in self.collector.fields.as_slice() {
             if field.replacement {

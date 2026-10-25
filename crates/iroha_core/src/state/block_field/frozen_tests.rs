@@ -384,7 +384,7 @@ fn world_read_trait_borrows_frozen_original_cell_fields_without_execution_deref(
         original.parameters.get()
     ));
     assert!(std::ptr::eq(
-        &**original.parameters(),
+        &raw const **original.parameters(),
         &raw const **original.parameters.get()
     ));
     freeze_cells!(

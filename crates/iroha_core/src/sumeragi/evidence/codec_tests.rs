@@ -2,7 +2,7 @@
 use super::*;
 use norito::core::{DecodeLimits, with_decode_limits_scope};
 
-/// The smallest per-field ceiling admitting the signed NPoS policy read, which every
+/// The smallest per-field ceiling admitting the signed `NPoS` policy read, which every
 /// admission performs before decoding a proof. The proof must still exceed it.
 pub(super) fn policy_field_ceiling(state: &State, proof: &Evidence) -> DecodeLimits {
     let field = |bytes| DecodeLimits::new(usize::MAX, bytes, usize::MAX, usize::MAX, usize::MAX);

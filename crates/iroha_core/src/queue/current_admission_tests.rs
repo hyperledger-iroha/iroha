@@ -56,7 +56,7 @@ fn current_admission_preserves_original_input_across_direct_queue_boundaries() {
         let queue = Arc::new(Queue::test(config_factory(), &time));
         let plan = queue.route_plan_with_state(&transaction, &state).unwrap();
         match boundary {
-            0 => queue.push(transaction.clone(), state.view()).map(|_| ()),
+            0 => queue.push(transaction.clone(), state.view()),
             1 => queue
                 .push_with_lane_with_state(transaction.clone(), &state)
                 .map(|_| ()),
@@ -129,7 +129,7 @@ fn current_admission_rejects_actual_multiroute_before_queue_custody() {
     assert!(!matches!(actual, RoutingPlan::Single(_)));
     for boundary in 0..3 {
         let failure = match boundary {
-            0 => queue.push(tx.clone(), fixture.state.view()).map(|_| ()),
+            0 => queue.push(tx.clone(), fixture.state.view()),
             1 => queue
                 .push_with_lane_with_state_and_routing_plan(
                     tx.clone(),

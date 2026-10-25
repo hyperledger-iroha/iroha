@@ -17,8 +17,8 @@ use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 fn limits() -> PrefixLengthLimits {
     PrefixLengthLimits {
         max_deltas: 128,
-        max_input_frame_bytes: 4_000_000,
-        max_public_statement_frame_bytes: 4_000_000,
+        input_frame_ceiling_bytes: 4_000_000,
+        public_statement_ceiling_bytes: 4_000_000,
     }
 }
 
@@ -245,9 +245,9 @@ fn each_byte_cap_rejects_before_semantic_publication_and_accepts_its_exact_bound
             )
             .unwrap();
         if restrict_input {
-            prefix.lengths.limits.max_input_frame_bytes = expected.input_frame_bytes - 1;
+            prefix.lengths.limits.input_frame_ceiling_bytes = expected.input_frame_bytes - 1;
         } else {
-            prefix.lengths.limits.max_public_statement_frame_bytes =
+            prefix.lengths.limits.public_statement_ceiling_bytes =
                 expected.public_statement_frame_bytes - 1;
         }
         let before = snapshot(&prefix);
@@ -269,8 +269,8 @@ fn each_byte_cap_rejects_before_semantic_publication_and_accepts_its_exact_bound
         assert_eq!(snapshot(&prefix), before);
         // Test-only access adjusts the same sizer's ceiling, so a retry checks
         // the semantic validator that was present during the failed attempt.
-        prefix.lengths.limits.max_input_frame_bytes = expected.input_frame_bytes;
-        prefix.lengths.limits.max_public_statement_frame_bytes =
+        prefix.lengths.limits.input_frame_ceiling_bytes = expected.input_frame_bytes;
+        prefix.lengths.limits.public_statement_ceiling_bytes =
             expected.public_statement_frame_bytes;
         assert_eq!(prefix.append(&second, None).unwrap(), expected);
         assert_eq!(prefix.semantics.count(), 2);

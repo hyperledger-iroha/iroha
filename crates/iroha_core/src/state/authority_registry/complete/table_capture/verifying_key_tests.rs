@@ -18,6 +18,10 @@ fn state() -> State {
         LiveQueryStore::start_test(),
     )
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture(
     state: &State,
     limits: LeafLimits,

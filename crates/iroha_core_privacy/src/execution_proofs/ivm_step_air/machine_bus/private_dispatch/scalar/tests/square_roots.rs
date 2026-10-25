@@ -10,7 +10,7 @@ fn checked(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarF
     assert_eq!(ivm::gas::cost_of(instruction), Some(6));
     assert!(p[SCALAR_RIGHT].iter().all(|cell| *cell == F::ZERO));
     if has_destination(instruction) {
-        assert!(root <= u64::from(u32::MAX));
+        assert!(u32::try_from(root).is_ok());
         assert!(u128::from(root) * u128::from(root) <= u128::from(value));
         assert!(u128::from(root + 1) * u128::from(root + 1) > u128::from(value));
         assert_eq!(p[SCALAR_DESTINATION][AFTER_TAG], p[SCALAR_LEFT][BEFORE_TAG]);

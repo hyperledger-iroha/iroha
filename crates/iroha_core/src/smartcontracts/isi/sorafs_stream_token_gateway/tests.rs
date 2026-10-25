@@ -350,8 +350,8 @@ fn native_gateway_rotation_preserves_original_grants_and_allows_disabled_recover
     assert_eq!(fixture.current().unwrap().head, before);
     fixture.deliver_reputation(&original);
     for action in [
-        Action::Acknowledge(original.clone()),
-        Action::ReleaseLease(original.clone()),
+        Action::Acknowledge(original),
+        Action::ReleaseLease(original),
     ] {
         let instruction = fixture.instruction(action);
         assert!(fixture.commit(2, vec![instruction.into()]));

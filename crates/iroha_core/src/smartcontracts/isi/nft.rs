@@ -71,14 +71,15 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-            let remove_entry = if let Some(permissions) =
-                state_transaction.world.account_permissions.get_mut(&holder)
-            {
-                permissions.retain(|permission| !is_permission_nft_associated(permission, nft_id));
-                permissions.is_empty()
-            } else {
-                false
-            };
+            let remove_entry = state_transaction
+                .world
+                .account_permissions
+                .get_mut(&holder)
+                .is_some_and(|permissions| {
+                    permissions
+                        .retain(|permission| !is_permission_nft_associated(permission, nft_id));
+                    permissions.is_empty()
+                });
             if remove_entry {
                 state_transaction
                     .world
@@ -143,7 +144,9 @@ pub mod isi {
                 .into());
             }
             let _ = state_transaction.world.domain(nft_id.domain())?;
-            state_transaction.world.insert_nft_entry(nft_id, nft_value);
+            state_transaction
+                .world
+                .insert_nft_entry(&(nft_id), nft_value);
             state_transaction
                 .world
                 .emit_events(Some(DomainEvent::Nft(NftEvent::Created(nft))));
@@ -649,7 +652,7 @@ pub mod query {
         Domains(Vec<DomainId>),
         Full,
     }
-    fn nft_from_entry(entry: NftEntry<'_>) -> Nft {
+    fn nft_from_entry(entry: &NftEntry<'_>) -> Nft {
         let details = entry.value().clone().into_inner();
         Nft {
             id: entry.id().clone(),
@@ -696,9 +699,11 @@ pub mod query {
                 iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
             );
             let iter: Box<dyn Iterator<Item = Nft> + '_> = match predicate_view.plan() {
-                NftQueryPlan::Ids(ids) => {
-                    Box::new(world.nft_entries_by_ids_iter(ids).map(nft_from_entry))
-                }
+                NftQueryPlan::Ids(ids) => Box::new(
+                    world
+                        .nft_entries_by_ids_iter(ids)
+                        .map(|value| nft_from_entry(&value)),
+                ),
                 NftQueryPlan::Owners(owners) => {
                     Box::new(owners.into_iter().flat_map(move |owner| {
                         let nft_ids = crate::state::range_bounds::index_members(
@@ -706,7 +711,9 @@ pub mod query {
                             &owner,
                         )
                         .cloned();
-                        world.nft_entries_by_ids_iter(nft_ids).map(nft_from_entry)
+                        world
+                            .nft_entries_by_ids_iter(nft_ids)
+                            .map(|value| nft_from_entry(&value))
                     }))
                 }
                 NftQueryPlan::Domains(domains) => {
@@ -715,17 +722,20 @@ pub mod query {
                             .nfts_in_domain_iter(&domain)
                             .map(|entry| entry.id().clone())
                             .collect::<Vec<_>>();
-                        world.nft_entries_by_ids_iter(nft_ids).map(nft_from_entry)
+                        world
+                            .nft_entries_by_ids_iter(nft_ids)
+                            .map(|value| nft_from_entry(&value))
                     }))
                 }
-                NftQueryPlan::Full => Box::new(world.nfts_iter().map(nft_from_entry)),
+                NftQueryPlan::Full => {
+                    Box::new(world.nfts_iter().map(|value| nft_from_entry(&value)))
+                }
             };
             Ok(iter.filter(move |nft| {
-                if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_nft(predicate, nft)
-                } else {
-                    filter.applies(nft)
-                }
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(nft),
+                    |predicate| predicate_matches_nft(predicate, nft),
+                )
             }))
         }
     }

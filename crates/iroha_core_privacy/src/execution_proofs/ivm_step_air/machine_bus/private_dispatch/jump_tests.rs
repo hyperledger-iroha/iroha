@@ -55,9 +55,7 @@ fn set_depth(fixture: &mut Fixture, before: u64, after: u64) {
         );
     }
     fixture.packets.fields[CALL_DEPTH] = event(
-        Space::Owner,
-        0,
-        CALL_DEPTH_OWNER,
+        (Space::Owner, 0, CALL_DEPTH_OWNER),
         before,
         after,
         false,
@@ -104,9 +102,7 @@ fn from_record(program: &Program, record: &DiagnosticStepRecord) -> Fixture {
         ),
     ] {
         fixture.packets.fields[slot] = event(
-            Space::Owner,
-            0,
-            owner,
+            (Space::Owner, 0, owner),
             before,
             after,
             true,
@@ -120,9 +116,7 @@ fn from_record(program: &Program, record: &DiagnosticStepRecord) -> Fixture {
         );
     }
     fixture.packets.fields[PC_WRITE] = event(
-        Space::Owner,
-        0,
-        PC_OWNER,
+        (Space::Owner, 0, PC_OWNER),
         record.before.pc,
         record.after.pc,
         true,
@@ -144,7 +138,10 @@ fn native_direct_jumps_bind_forward_backward_and_self_targets_without_register_e
                 100,
             );
             let first = recorder.records().first().unwrap();
-            assert_eq!(first.after.pc, first.before.pc + displacement as u64 * 4);
+            assert_eq!(
+                first.after.pc,
+                first.before.pc + i64::from(displacement).cast_unsigned() * 4
+            );
             for record in recorder.records() {
                 if record
                     .instruction
@@ -203,9 +200,7 @@ fn direct_jump_controls_reject_coherent_wrong_pc_gas_cycles_depth_and_halt() {
         ] {
             let mut bad = fixture.clone();
             bad.packets.fields[PC_WRITE] = event(
-                Space::Owner,
-                0,
-                PC_OWNER,
+                (Space::Owner, 0, PC_OWNER),
                 record.before.pc,
                 target,
                 true,
@@ -226,9 +221,7 @@ fn direct_jump_controls_reject_coherent_wrong_pc_gas_cycles_depth_and_halt() {
                 true,
             );
             bad.packets.fields[GAS_DEBIT] = event(
-                Space::Owner,
-                0,
-                GAS_OWNER,
+                (Space::Owner, 0, GAS_OWNER),
                 record.before.gas_remaining,
                 after,
                 true,
@@ -249,9 +242,7 @@ fn direct_jump_controls_reject_coherent_wrong_pc_gas_cycles_depth_and_halt() {
                 false,
             );
             bad.packets.fields[CYCLE_WRITE] = event(
-                Space::Owner,
-                0,
-                CYCLE_OWNER,
+                (Space::Owner, 0, CYCLE_OWNER),
                 record.before.cycles,
                 after,
                 true,
@@ -308,9 +299,7 @@ fn direct_jumps_reject_every_extra_register_frame_and_memory_producer() {
             }
             let mut bad = fixture.clone();
             bad.packets.fields[slot] = event(
-                Space::Register,
-                0,
-                1,
+                (Space::Register, 0, 1),
                 0,
                 7,
                 true,
@@ -401,9 +390,7 @@ fn native_direct_jump_oog_and_cycle_limit_cannot_be_successful_rows() {
         bits(&mut forged.row[WORDS + 2 * 64..WORDS + 3 * 64], u64::MAX);
         carries(&mut forged.row[CARRIES..CARRIES + 4], 1, 2, true);
         forged.packets.fields[GAS_DEBIT] = event(
-            Space::Owner,
-            0,
-            GAS_OWNER,
+            (Space::Owner, 0, GAS_OWNER),
             1,
             u64::MAX,
             true,
@@ -429,9 +416,7 @@ fn native_direct_jump_oog_and_cycle_limit_cannot_be_successful_rows() {
         carries(&mut late.row[CARRIES + 4..CARRIES + 8], 1_000, 1, false);
         carries(&mut late.row[CARRIES + 16..CARRIES + 20], 999, 1_000, true);
         late.packets.fields[CYCLE_WRITE] = event(
-            Space::Owner,
-            0,
-            CYCLE_OWNER,
+            (Space::Owner, 0, CYCLE_OWNER),
             1_000,
             1_001,
             true,
@@ -535,14 +520,34 @@ fn every_original_direct_jump_port_joins_all_private_history_stages() {
             .map(|fields| {
                 (fields[ENABLED] == F::ONE).then(|| Event {
                     space: Space::Owner,
-                    vm: fields[VM].0 as u8,
-                    generation: fields[GENERATION].0 as u16,
-                    index: fields[INDEX].0 as u32,
+                    vm: u8::from_le_bytes(
+                        u64::to_le_bytes(fields[VM].0)[..1]
+                            .try_into()
+                            .expect("low-byte width"),
+                    ),
+                    generation: u16::from_le_bytes(
+                        u64::to_le_bytes(fields[GENERATION].0)[..2]
+                            .try_into()
+                            .expect("low-byte width"),
+                    ),
+                    index: u32::from_le_bytes(
+                        u64::to_le_bytes(fields[INDEX].0)[..4]
+                            .try_into()
+                            .expect("low-byte width"),
+                    ),
                     write: fields[WRITE] == F::ONE,
                     before: bytes(packet::half(fields, BEFORE, 0)),
                     after: bytes(packet::half(fields, AFTER, 0)),
-                    before_private: fields[BEFORE_TAG].0 as u16,
-                    after_private: fields[AFTER_TAG].0 as u16,
+                    before_private: u16::from_le_bytes(
+                        u64::to_le_bytes(fields[BEFORE_TAG].0)[..2]
+                            .try_into()
+                            .expect("low-byte width"),
+                    ),
+                    after_private: u16::from_le_bytes(
+                        u64::to_le_bytes(fields[AFTER_TAG].0)[..2]
+                            .try_into()
+                            .expect("low-byte width"),
+                    ),
                 })
             })
             .collect::<Vec<_>>();
@@ -630,8 +635,7 @@ fn every_original_direct_jump_port_joins_all_private_history_stages() {
             let next = (i + 1) % bus.size();
             private_history::append_residues(
                 &mut residues,
-                &rows[i],
-                &rows[next],
+                (&rows[i], &rows[next]),
                 &aux_rows[i],
                 &aux_rows[next],
                 &fixed[i],

@@ -259,7 +259,7 @@ fn build_faucet_test_context_with_authority(
                 iroha_config::parameters::actual::LaneConfig::default(),
                 0,
             );
-            tx.bind_asset_definition_alias(&asset_definition_id, alias, None, None, 10_000)
+            tx.bind_asset_definition_alias(&asset_definition_id, &(alias), None, None, 10_000)
                 .expect("bind alias");
             tx.apply();
             block.commit();
@@ -509,10 +509,10 @@ fn faucet_mutation_binding(claim: &norito::json::Value) -> norito::json::Value {
     ]);
     json_object(vec![
         json_entry("schema", "iroha.prepared-operation.binding.v1"),
-        json_entry("semantic_hash_hex", hex::encode(semantic.as_ref())),
+        json_entry("semantic_hash_hex", &hex::encode(semantic.as_ref())),
         json_entry("kind", "faucet"),
-        json_entry("request_id", "22".repeat(32)),
-        json_entry("execution_expires_at_unix_ms", u64::MAX),
+        json_entry("request_id", &"22".repeat(32)),
+        json_entry("execution_expires_at_unix_ms", &u64::MAX),
     ])
 }
 async fn prepare_faucet_envelope(app: &axum::Router, claim_body: String) -> Response {
@@ -520,12 +520,12 @@ async fn prepare_faucet_envelope(app: &axum::Router, claim_body: String) -> Resp
         norito::json::from_str(&claim_body).expect("decode faucet claim body");
     let request = json_object(vec![
         json_entry("schema", "iroha.accounts.faucet.prepare.v1"),
-        json_entry("binding", faucet_mutation_binding(&claim)),
+        json_entry("binding", &faucet_mutation_binding(&claim)),
         json_entry(
             "fee_payment",
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            &iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
-        json_entry("claim", claim),
+        json_entry("claim", &claim),
     ]);
     let request = norito::json::to_json(&request).expect("encode faucet prepare request");
     app.clone()
@@ -705,9 +705,9 @@ async fn accounts_faucet_prepared_transfer_fails_closed_without_local_authority(
     let (pow_anchor_height, pow_nonce_hex) =
         solve_faucet_pow(&state, &user_id, pow_difficulty_bits, &scrypt_params);
     let body = json_object(vec![
-        json_entry("account_id", user_id.to_string()),
-        json_entry("pow_anchor_height", pow_anchor_height),
-        json_entry("pow_nonce_hex", pow_nonce_hex),
+        json_entry("account_id", &user_id.to_string()),
+        json_entry("pow_anchor_height", &pow_anchor_height),
+        json_entry("pow_nonce_hex", &pow_nonce_hex),
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let height_before = state.committed_height();
@@ -746,9 +746,9 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
     let (pow_anchor_height, pow_nonce_hex) =
         solve_faucet_pow(&state, &user_id, pow_difficulty_bits, &scrypt_params);
     let body = json_object(vec![
-        json_entry("account_id", user_id.to_string()),
-        json_entry("pow_anchor_height", pow_anchor_height),
-        json_entry("pow_nonce_hex", pow_nonce_hex),
+        json_entry("account_id", &user_id.to_string()),
+        json_entry("pow_anchor_height", &pow_anchor_height),
+        json_entry("pow_nonce_hex", &pow_nonce_hex),
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let prepared = expect_status(prepare_faucet_envelope(&app, body).await, StatusCode::OK).await;
@@ -833,9 +833,9 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
         &scrypt_params,
     );
     let post_onboarding_claim = json_object(vec![
-        json_entry("account_id", user_id.to_string()),
-        json_entry("pow_anchor_height", pow_anchor_height),
-        json_entry("pow_nonce_hex", pow_nonce_hex),
+        json_entry("account_id", &user_id.to_string()),
+        json_entry("pow_anchor_height", &pow_anchor_height),
+        json_entry("pow_nonce_hex", &pow_nonce_hex),
     ]);
     let post_onboarding_claim =
         norito::json::to_json(&post_onboarding_claim).expect("serialize post-onboarding claim");
@@ -893,9 +893,9 @@ async fn accounts_faucet_preserves_prefunded_balance_without_local_authority() {
     let (pow_anchor_height, pow_nonce_hex) =
         solve_faucet_pow(&state, &user_id, pow_difficulty_bits, &scrypt_params);
     let body = json_object(vec![
-        json_entry("account_id", user_id.to_string()),
-        json_entry("pow_anchor_height", pow_anchor_height),
-        json_entry("pow_nonce_hex", pow_nonce_hex),
+        json_entry("account_id", &user_id.to_string()),
+        json_entry("pow_anchor_height", &pow_anchor_height),
+        json_entry("pow_nonce_hex", &pow_nonce_hex),
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let resp = prepare_and_submit_faucet(&app, body).await;
@@ -938,9 +938,9 @@ async fn accounts_faucet_repeated_claims_do_not_spend_without_local_authority() 
         let (pow_anchor_height, pow_nonce_hex) =
             solve_faucet_pow(&state, &user_id, difficulty_bits, &scrypt_params);
         let body = json_object(vec![
-            json_entry("account_id", user_id.to_string()),
-            json_entry("pow_anchor_height", pow_anchor_height),
-            json_entry("pow_nonce_hex", pow_nonce_hex),
+            json_entry("account_id", &user_id.to_string()),
+            json_entry("pow_anchor_height", &pow_anchor_height),
+            json_entry("pow_nonce_hex", &pow_nonce_hex),
         ]);
         let body = norito::json::to_json(&body).expect("serialize faucet request");
         let resp = prepare_and_submit_faucet(&app, body).await;
@@ -979,9 +979,9 @@ async fn accounts_faucet_prepares_alias_selector_config_but_needs_quorum() {
     let (pow_anchor_height, pow_nonce_hex) =
         solve_faucet_pow(&state, &user_id, pow_difficulty_bits, &scrypt_params);
     let body = json_object(vec![
-        json_entry("account_id", user_id.to_string()),
-        json_entry("pow_anchor_height", pow_anchor_height),
-        json_entry("pow_nonce_hex", pow_nonce_hex),
+        json_entry("account_id", &user_id.to_string()),
+        json_entry("pow_anchor_height", &pow_anchor_height),
+        json_entry("pow_nonce_hex", &pow_nonce_hex),
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let resp = prepare_and_submit_faucet(&app, body).await;
@@ -1014,9 +1014,9 @@ async fn faucet_prepared_envelope_aging_reaches_authoritative_routing_gate() {
         &scrypt_params,
     );
     let claim = json_object(vec![
-        json_entry("account_id", context.user_id.to_string()),
-        json_entry("pow_anchor_height", pow_anchor_height),
-        json_entry("pow_nonce_hex", pow_nonce_hex),
+        json_entry("account_id", &context.user_id.to_string()),
+        json_entry("pow_anchor_height", &pow_anchor_height),
+        json_entry("pow_nonce_hex", &pow_nonce_hex),
     ]);
     let claim = norito::json::to_json(&claim).expect("serialize faucet claim");
     let prepared = expect_status(
@@ -1061,9 +1061,9 @@ async fn faucet_submit_rejects_old_tampered_and_uncertified_exact_retries() {
         &scrypt_params,
     );
     let claim = json_object(vec![
-        json_entry("account_id", context.user_id.to_string()),
-        json_entry("pow_anchor_height", pow_anchor_height),
-        json_entry("pow_nonce_hex", pow_nonce_hex),
+        json_entry("account_id", &context.user_id.to_string()),
+        json_entry("pow_anchor_height", &pow_anchor_height),
+        json_entry("pow_nonce_hex", &pow_nonce_hex),
     ]);
     let claim_body = norito::json::to_json(&claim).expect("serialize faucet claim");
     let old = context
@@ -1180,20 +1180,20 @@ async fn accounts_faucet_policy_exposes_exact_public_configuration() {
     assert_eq!(
         payload,
         json_object(vec![
-            json_entry("schema_version", 1_u16),
-            json_entry("network_id", *context.state.network_id_ref()),
+            json_entry("schema_version", &1_u16),
+            json_entry("network_id", context.state.network_id_ref()),
             json_entry(
                 "network_prefix",
-                iroha_data_model::account::address::chain_discriminant(),
+                &iroha_data_model::account::address::chain_discriminant(),
             ),
-            json_entry("authority", context.authority_id.to_string()),
+            json_entry("authority", &context.authority_id.to_string()),
             json_entry(
                 "asset_definition_id",
-                context.asset_definition_id.to_string()
+                &context.asset_definition_id.to_string()
             ),
             json_entry(
                 "amount",
-                iroha_primitives::numeric::Quantity::from(25_000_u32)
+                &iroha_primitives::numeric::Quantity::from(25_000_u32)
             ),
         ]),
         "discovery exposes only the exact public policy fields",
@@ -1391,9 +1391,9 @@ async fn accounts_faucet_rejects_missing_pow_when_required() {
         ..
     } = build_faucet_test_context(false);
     let claim = json_object(vec![
-        json_entry("account_id", user_id.to_string()),
-        json_entry("pow_anchor_height", 1_u64),
-        json_entry("pow_nonce_hex", "00".repeat(32)),
+        json_entry("account_id", &user_id.to_string()),
+        json_entry("pow_anchor_height", &1_u64),
+        json_entry("pow_nonce_hex", &"00".repeat(32)),
     ]);
     let binding = faucet_mutation_binding(&claim);
     for missing in ["pow_anchor_height", "pow_nonce_hex"] {
@@ -1406,12 +1406,12 @@ async fn accounts_faucet_rejects_missing_pow_when_required() {
             .remove(missing);
         let body = json_object(vec![
             json_entry("schema", "iroha.accounts.faucet.prepare.v1"),
-            json_entry("binding", binding.clone()),
+            json_entry("binding", &binding),
             json_entry(
                 "fee_payment",
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                &iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             ),
-            json_entry("claim", incomplete),
+            json_entry("claim", &incomplete),
         ]);
         let mut request = faucet_post_request(
             "/v1/accounts/faucet/prepare",
@@ -1455,9 +1455,9 @@ async fn accounts_faucet_puzzle_ignores_uncertified_claim() {
     let (pow_anchor_height, pow_nonce_hex) =
         solve_faucet_pow(&state, &other_user_id, pow_difficulty_bits, &scrypt_params);
     let initial_claim_body = json_object(vec![
-        json_entry("account_id", other_user_id.to_string()),
-        json_entry("pow_anchor_height", pow_anchor_height),
-        json_entry("pow_nonce_hex", pow_nonce_hex),
+        json_entry("account_id", &other_user_id.to_string()),
+        json_entry("pow_anchor_height", &pow_anchor_height),
+        json_entry("pow_nonce_hex", &pow_nonce_hex),
     ]);
     let initial_claim_body =
         norito::json::to_json(&initial_claim_body).expect("serialize initial faucet request");
@@ -1515,9 +1515,9 @@ async fn authoritative_faucet_submission_executes_the_exact_prepared_transfer() 
         &params,
     );
     let body = norito::json::to_json(&json_object(vec![
-        json_entry("account_id", context.user_id.to_string()),
-        json_entry("pow_anchor_height", anchor),
-        json_entry("pow_nonce_hex", nonce),
+        json_entry("account_id", &context.user_id.to_string()),
+        json_entry("pow_anchor_height", &anchor),
+        json_entry("pow_nonce_hex", &nonce),
     ]))
     .unwrap();
     let response = prepare_and_submit_faucet(&context.app, body).await;

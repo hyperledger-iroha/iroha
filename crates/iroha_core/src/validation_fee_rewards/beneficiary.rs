@@ -157,7 +157,7 @@ pub(super) fn ensure(
 }
 /// Called only by authorized native account-controller replacement before its atomic mutation.
 /// Historical aliases cannot redirect an already recovered beneficiary or capture another identity.
-pub(crate) fn rekey_beneficiary(
+pub fn rekey_beneficiary(
     stx: &mut StateTransaction<'_, '_>,
     old: &AccountId,
     new: &AccountId,

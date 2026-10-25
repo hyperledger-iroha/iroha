@@ -132,18 +132,18 @@ const GOVERNANCE_OVERLAY_MAX_PARAMS_PER_MODULE_V1: usize = 128;
 /// Maximum parameters across the complete governance overlay.
 const GOVERNANCE_OVERLAY_MAX_PARAMS_V1: usize = 4 * 1024;
 const MANIFEST_JSON_LIMITS_V1: ManifestJsonLimits = ManifestJsonLimits {
-    max_string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_V1,
-    max_strings: MANIFEST_SOURCE_MAX_STRINGS_V1,
-    max_total_string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_TOTAL_V1,
-    max_rule_units: MANIFEST_SOURCE_MAX_RULE_UNITS_V1,
+    string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_V1,
+    strings: MANIFEST_SOURCE_MAX_STRINGS_V1,
+    total_string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_TOTAL_V1,
+    rule_units: MANIFEST_SOURCE_MAX_RULE_UNITS_V1,
     max_depth: MANIFEST_SOURCE_MAX_JSON_DEPTH_V1,
 };
 #[derive(Clone, Copy, Debug)]
 struct ManifestJsonLimits {
-    max_string_bytes: usize,
-    max_strings: usize,
-    max_total_string_bytes: usize,
-    max_rule_units: usize,
+    string_bytes: usize,
+    strings: usize,
+    total_string_bytes: usize,
+    rule_units: usize,
     max_depth: usize,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1371,16 +1371,16 @@ impl LaneManifestRegistry {
                                         .to_owned()
                                 })?;
                             Self::charge_manifest_rule_unit(&mut footprint.rule_units, limits)?;
-                            if footprint.strings > limits.max_strings {
+                            if footprint.strings > limits.strings {
                                 return Err(format!(
                                     "lane-manifest JSON string count {} exceeds first-release limit {}",
-                                    footprint.strings, limits.max_strings
+                                    footprint.strings, limits.strings
                                 ));
                             }
-                            if footprint.string_bytes > limits.max_total_string_bytes {
+                            if footprint.string_bytes > limits.total_string_bytes {
                                 return Err(format!(
                                     "lane-manifest JSON string bytes {} exceed first-release limit {}",
-                                    footprint.string_bytes, limits.max_total_string_bytes
+                                    footprint.string_bytes, limits.total_string_bytes
                                 ));
                             }
                             current_string_bytes = 0;
@@ -1393,10 +1393,10 @@ impl LaneManifestRegistry {
                         }
                     }
                 }
-                if current_string_bytes > limits.max_string_bytes {
+                if current_string_bytes > limits.string_bytes {
                     return Err(format!(
                         "lane-manifest JSON string bytes {current_string_bytes} exceed first-release limit {}",
-                        limits.max_string_bytes
+                        limits.string_bytes
                     ));
                 }
                 continue;
@@ -1452,10 +1452,10 @@ impl LaneManifestRegistry {
         *rule_units = rule_units
             .checked_add(1)
             .ok_or_else(|| "lane-manifest JSON rule-unit counter overflowed".to_owned())?;
-        if *rule_units > limits.max_rule_units {
+        if *rule_units > limits.rule_units {
             return Err(format!(
                 "lane-manifest JSON rule units {} exceed first-release limit {}",
-                *rule_units, limits.max_rule_units
+                *rule_units, limits.rule_units
             ));
         }
         Ok(())
@@ -2022,9 +2022,8 @@ impl LaneManifestRegistry {
     fn governance_overlay_path(cache_dir: &Path) -> Option<PathBuf> {
         let path = cache_dir.join("governance_catalog.json");
         match fs::symlink_metadata(&path) {
-            Ok(_) => Some(path),
             Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-            Err(_) => Some(path),
+            Ok(_) | Err(_) => Some(path),
         }
     }
     #[allow(clippy::too_many_lines)]
@@ -2827,10 +2826,10 @@ mod tests {
     #[test]
     fn manifest_json_preflight_enforces_string_rule_and_depth_boundaries() {
         let limits = ManifestJsonLimits {
-            max_string_bytes: 3,
-            max_strings: 2,
-            max_total_string_bytes: 2,
-            max_rule_units: 4,
+            string_bytes: 3,
+            strings: 2,
+            total_string_bytes: 2,
+            rule_units: 4,
             max_depth: 1,
         };
         let footprint = LaneManifestRegistry::preflight_manifest_json(br#"{"a":"b"}"#, limits)

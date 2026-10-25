@@ -63,7 +63,7 @@ fn capacity() -> ExecutionAttemptError<ChainReadError> {
     ExecutionAttemptError::Deferred(ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into())
 }
 
-pub(crate) struct FinalityDecodeWorkspace {
+pub struct FinalityDecodeWorkspace {
     counters: RefCell<PreparedDecodeWorkspace>,
     budget: AllocationBudget,
     limits: DecodeLimits,

@@ -2,7 +2,7 @@
 //!
 //! Route/generation preconditions are installed in the existing pristine State fixture seam
 //! before genesis execution. This qualifies the proof producer, not route establishment:
-//! RegisterRoute remains fail-closed. No State writes occur after native certification.
+//! `RegisterRoute` remains fail-closed. No State writes occur after native certification.
 //! The adversarial branch control changes only durable certificate bytes after that cut.
 
 use super::*;

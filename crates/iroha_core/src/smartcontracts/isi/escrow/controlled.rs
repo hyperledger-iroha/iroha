@@ -16,7 +16,7 @@ use iroha_data_model::{
 };
 
 /// Reserved, native-written control terms; generic contract state cannot alter them.
-pub(crate) const STATE_ROOT: &str = "asset_lock_control_v1/";
+pub const STATE_ROOT: &str = "asset_lock_control_v1/";
 
 fn key(id: &EscrowId) -> StatePath {
     format!("{STATE_ROOT}{}", hex::encode(id.as_hash().as_ref()))
@@ -142,7 +142,7 @@ fn execute_open(
 /// Handle only the four controlled instructions after executor runtime guards.
 /// JSON payloads, ordinary native instructions and a signed controller account
 /// cannot construct the authenticated runtime frame passed through this corridor.
-pub(crate) fn execute_instruction(
+pub fn execute_instruction(
     instruction: &InstructionBox,
     authority: &AccountId,
     tx: &mut StateTransaction<'_, '_>,
@@ -167,7 +167,13 @@ pub(crate) fn execute_instruction(
                 ));
             }
             let frame = authenticate(tx.world(), authority, context, &terms)?;
-            execute_drawdown_asset_lock(draw.drawdown.clone(), authority, tx, true, draw.waterfall.as_ref().map(|pins| (pins, frame)))
+            execute_drawdown_asset_lock(
+                &(draw.drawdown.clone()),
+                authority,
+                tx,
+                true,
+                draw.waterfall.as_ref().map(|pins| (pins, frame)),
+            )
         })());
     }
     if let Some(cancel) = instruction
@@ -183,7 +189,13 @@ pub(crate) fn execute_instruction(
                 ));
             }
             let frame = authenticate(tx.world(), authority, context, &terms)?;
-            execute_cancel_asset_lock(cancel.cancel.clone(), authority, tx, true, cancel.waterfall.as_ref().map(|pins| (pins, frame)))
+            execute_cancel_asset_lock(
+                &(cancel.cancel.clone()),
+                authority,
+                tx,
+                true,
+                cancel.waterfall.as_ref().map(|pins| (pins, frame)),
+            )
         })());
     }
     if let Some(expiry) = instruction
@@ -199,7 +211,13 @@ pub(crate) fn execute_instruction(
                 ));
             }
             let frame = authenticate(tx.world(), authority, context, &terms)?;
-            execute_expire_asset_lock(expiry.expiry.clone(), authority, tx, true, expiry.waterfall.as_ref().map(|pins| (pins, frame)))
+            execute_expire_asset_lock(
+                &(expiry.expiry.clone()),
+                authority,
+                tx,
+                true,
+                expiry.waterfall.as_ref().map(|pins| (pins, frame)),
+            )
         })());
     }
     None
@@ -222,7 +240,7 @@ reject_unframed!(
 );
 
 /// Fail closed on corrupted or orphaned retained control terms.
-pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
+pub fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
     for (path, bytes) in world.smart_contract_state().iter() {
         let text = path.to_string();
         let Some(id) = text.strip_prefix(STATE_ROOT) else {

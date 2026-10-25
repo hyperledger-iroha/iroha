@@ -333,10 +333,12 @@ fn fetch_torii_model_weight_status_rejects_invalid_url() {
 fn fetch_torii_hf_status_rejects_invalid_url() {
     let err = fetch_torii_soracloud_hf_status(
         "not-a-url",
-        "openai/gpt-oss",
-        TEST_HF_COMMIT_OID,
-        StorageClass::Warm,
-        604_800_000,
+        HfLeaseLookup {
+            repo_id: "openai/gpt-oss",
+            revision: TEST_HF_COMMIT_OID,
+            storage_class: StorageClass::Warm,
+            lease_term_ms: 604_800_000,
+        },
         None,
         None,
         5,
@@ -792,13 +794,15 @@ signed_request_signature_case!(
         "web_portal",
         "model-1",
         "job-1",
-        4,
-        100,
-        20,
-        3,
-        500,
-        50_000,
-        4_000,
+        TrainingJobResources {
+            worker_group_size: 4,
+            target_steps: 100,
+            checkpoint_interval_steps: 20,
+            max_retries: 3,
+            step_compute_units: 500,
+            compute_budget_units: 50_000,
+            storage_budget_bytes: 4_000
+        },
         Some(authority),
         key_pair,
     ),
@@ -909,13 +913,15 @@ fn signed_training_and_model_builders_reject_input_rewrites() {
         " web_portal",
         "model-1",
         "job-1",
-        1,
-        1,
-        1,
-        0,
-        1,
-        1,
-        1,
+        TrainingJobResources {
+            worker_group_size: 1,
+            target_steps: 1,
+            checkpoint_interval_steps: 1,
+            max_retries: 0,
+            step_compute_units: 1,
+            compute_budget_units: 1,
+            storage_budget_bytes: 1,
+        },
         Some(&authority),
         &key_pair,
     )
@@ -1473,7 +1479,7 @@ signature_payload_layout_case!(
         payload.rollout_handle.as_str(),
         payload.healthy,
         payload.promote_to_percent,
-        payload.governance_tx_hash.clone(),
+        payload.governance_tx_hash,
     )
 );
 #[test]
@@ -2084,7 +2090,7 @@ fn training_job_checkpoint_signature_payload_layout_is_canonical_tuple() {
         job_id: "job-1".to_owned(),
         completed_step: 20,
         checkpoint_size_bytes: 1_024,
-        metrics_hash: metrics_hash.clone(),
+        metrics_hash,
     };
     let encoded = encode_training_job_checkpoint_signature_payload(&payload)
         .expect("encode signature payload");
@@ -2125,11 +2131,11 @@ fn model_artifact_register_signature_payload_layout_is_canonical_tuple() {
         service_name: "web_portal".to_owned(),
         model_name: "model-1".to_owned(),
         training_job_id: "job-1".to_owned(),
-        weight_artifact_hash: weight_artifact_hash.clone(),
+        weight_artifact_hash,
         dataset_ref: "dataset://synthetic/v2".to_owned(),
-        training_config_hash: training_config_hash.clone(),
-        reproducibility_hash: reproducibility_hash.clone(),
-        provenance_attestation_hash: provenance_attestation_hash.clone(),
+        training_config_hash,
+        reproducibility_hash,
+        provenance_attestation_hash,
     };
     let encoded = encode_model_artifact_register_signature_payload(&payload)
         .expect("encode signature payload");
@@ -2158,11 +2164,11 @@ fn model_weight_register_signature_payload_layout_is_canonical_tuple() {
         weight_version: "1.0.0".to_owned(),
         training_job_id: "job-1".to_owned(),
         parent_version: Some("0.9.0".to_owned()),
-        weight_artifact_hash: weight_artifact_hash.clone(),
+        weight_artifact_hash,
         dataset_ref: "dataset://synthetic/v2".to_owned(),
-        training_config_hash: training_config_hash.clone(),
-        reproducibility_hash: reproducibility_hash.clone(),
-        provenance_attestation_hash: provenance_attestation_hash.clone(),
+        training_config_hash,
+        reproducibility_hash,
+        provenance_attestation_hash,
     };
     let encoded =
         encode_model_weight_register_signature_payload(&payload).expect("encode signature payload");
@@ -2189,7 +2195,7 @@ fn model_weight_promote_signature_payload_layout_is_canonical_tuple() {
         model_name: "model-1".to_owned(),
         weight_version: "1.0.0".to_owned(),
         gate_approved: true,
-        gate_report_hash: gate_report_hash.clone(),
+        gate_report_hash,
     };
     let encoded =
         encode_model_weight_promote_signature_payload(&payload).expect("encode signature payload");
@@ -2228,7 +2234,7 @@ fn signed_uploaded_model_register_request_uses_verifiable_signatures() {
     let authority = AccountId::new(key_pair.public_key().clone());
     let bundle = sample_uploaded_model_bundle();
     let finalize = sample_uploaded_model_finalize_payload();
-    let request = signed_uploaded_model_register_request(bundle, finalize, &authority, &key_pair)
+    let request = signed_uploaded_model_register_request(bundle, &finalize, &authority, &key_pair)
         .expect("signed uploaded-model register request");
     let bundle_payload =
         encode_uploaded_model_bundle_register_provenance_payload(request.payload.bundle.clone())
@@ -2275,7 +2281,7 @@ fn uploaded_model_register_service_name_override_updates_bundle_and_finalize() {
     .expect("apply service-name override");
     assert_eq!(bundle.service_name.as_ref(), "resolved_models");
     assert_eq!(finalize.service_name, "resolved_models");
-    let request = signed_uploaded_model_register_request(bundle, finalize, &authority, &key_pair)
+    let request = signed_uploaded_model_register_request(bundle, &finalize, &authority, &key_pair)
         .expect("override should keep register request signable");
     assert_eq!(
         request.payload.bundle.service_name.as_ref(),
@@ -2287,19 +2293,19 @@ fn signed_uploaded_model_register_request_rejects_mismatched_finalize_fields() {
     let bundle = sample_uploaded_model_bundle();
     let mut finalize = sample_uploaded_model_finalize_payload();
     finalize.service_name = "other_models".to_owned();
-    let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+    let error = uploaded_model_register_validation_error(bundle.clone(), &finalize);
     assert!(error.contains("must match bundle service_name"));
     let mut finalize = sample_uploaded_model_finalize_payload();
     finalize.model_id = "other-upload".to_owned();
-    let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+    let error = uploaded_model_register_validation_error(bundle.clone(), &finalize);
     assert!(error.contains("must match bundle model_id"));
     let mut finalize = sample_uploaded_model_finalize_payload();
     finalize.weight_version = "2.0.0".to_owned();
-    let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+    let error = uploaded_model_register_validation_error(bundle.clone(), &finalize);
     assert!(error.contains("must match bundle weight_version"));
     let mut finalize = sample_uploaded_model_finalize_payload();
     finalize.bundle_root = Hash::new(b"tampered-bundle-root");
-    let error = uploaded_model_register_validation_error(bundle, finalize);
+    let error = uploaded_model_register_validation_error(bundle, &finalize);
     assert!(error.contains("bundle_root must match"));
 }
 #[test]
@@ -2307,15 +2313,15 @@ fn signed_uploaded_model_register_request_rejects_noncanonical_finalize_fields()
     let bundle = sample_uploaded_model_bundle();
     let mut finalize = sample_uploaded_model_finalize_payload();
     finalize.model_name = " \t ".to_owned();
-    let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+    let error = uploaded_model_register_validation_error(bundle.clone(), &finalize);
     assert!(error.contains("register model_name"));
     let mut finalize = sample_uploaded_model_finalize_payload();
     finalize.artifact_id.clear();
-    let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+    let error = uploaded_model_register_validation_error(bundle.clone(), &finalize);
     assert!(error.contains("artifact_id must not be empty"));
     let mut finalize = sample_uploaded_model_finalize_payload();
     finalize.dataset_ref = "\n".to_owned();
-    let error = uploaded_model_register_validation_error(bundle, finalize);
+    let error = uploaded_model_register_validation_error(bundle, &finalize);
     assert!(error.contains("dataset_ref must not contain surrounding whitespace"));
 
     let bundle = sample_uploaded_model_bundle();
@@ -2336,7 +2342,7 @@ fn signed_uploaded_model_register_request_rejects_noncanonical_finalize_fields()
     for mutate in mutations {
         let mut finalize = sample_uploaded_model_finalize_payload();
         mutate(&mut finalize);
-        let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+        let error = uploaded_model_register_validation_error(bundle.clone(), &finalize);
         assert!(
             error.contains("exact canonical")
                 || error.contains("surrounding whitespace")

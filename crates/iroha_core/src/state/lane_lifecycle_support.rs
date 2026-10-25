@@ -114,7 +114,7 @@ pub(crate) fn lane_incarnation_lineage_root(
             )
         })
         .collect::<Vec<_>>();
-    let encoded = (network_id.clone(), entries).encode();
+    let encoded = (*network_id, entries).encode();
     Hash::new_from_chunks(&[LANE_INCARNATION_LINEAGE_ROOT_DOMAIN, encoded.as_slice()])
 }
 #[cfg(test)]
@@ -129,7 +129,7 @@ fn synthetic_lane_lifecycle_header_hash(
     current_block_height: u64,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
 ) -> HashOf<BlockHeader> {
-    let encoded = (network_id.clone(), current_block_height, plan.clone()).encode();
+    let encoded = (*network_id, current_block_height, plan.clone()).encode();
     HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
         SYNTHETIC_LANE_LIFECYCLE_HEADER_DOMAIN,
         encoded.as_slice(),
@@ -273,7 +273,7 @@ fn derive_config_lane_incarnation(
 ) -> Hash {
     let previous_catalog_hash = merge_lane_consensus_catalog_hash(previous_catalog);
     let encoded = (
-        network_id.clone(),
+        *network_id,
         previous_catalog_hash,
         updated_catalog_hash,
         current_block_height,
@@ -345,9 +345,11 @@ fn derive_lifecycle_lane_incarnations(
     committing_header_hash: HashOf<BlockHeader>,
     previous_catalog: &LaneCatalog,
     updated_catalog: &LaneCatalog,
-    previous_incarnations: &BTreeMap<LaneId, Hash>,
-    previous_activation_heights: &BTreeMap<LaneId, u64>,
-    previous_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
+    (previous_incarnations, previous_activation_heights, previous_lineage): (
+        &LaneIncarnations,
+        &LaneActivationHeights,
+        &LaneLineage,
+    ),
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
 ) -> Result<BTreeMap<LaneId, Hash>, LaneLifecycleError> {
     validate_lane_incarnation_lineage(
@@ -379,7 +381,7 @@ fn derive_lifecycle_lane_incarnations(
                 })?
             };
             let encoded = (
-                network_id.clone(),
+                *network_id,
                 previous_catalog_hash,
                 lane.id,
                 merge_lane_config_hash(lane),
@@ -460,13 +462,17 @@ enum PendingAutoscaleTransition {
 }
 impl PendingAutoscaleTransition {
     fn name(&self) -> &'static str {
-        "catalog-addition"
+        match self {
+            Self::Manual => "catalog-addition",
+        }
     }
     fn log(&self, height: u64) {
-        info!(height, "applied authenticated physical catalog addition");
+        match self {
+            Self::Manual => info!(height, "applied authenticated physical catalog addition"),
+        }
     }
     const fn requires_geometry(&self) -> bool {
-        true
+        matches!(self, Self::Manual)
     }
 }
 

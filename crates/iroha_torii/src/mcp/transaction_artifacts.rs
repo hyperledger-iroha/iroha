@@ -149,8 +149,7 @@ impl TransactionStructuralSummary {
             authority: payload.authority().to_string(),
             network_id: payload
                 .network_id()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "genesis".to_owned()),
+                .map_or_else(|| "genesis".to_owned(), ToString::to_string),
             creation_time_ms: payload.creation_time_ms,
             time_to_live_ms: payload.time_to_live_ms.map(Into::into),
             has_nonce: payload.nonce.is_some(),
@@ -339,7 +338,7 @@ pub struct PreparedTransactionArtifact {
 impl PreparedTransactionArtifact {
     fn from_builder(
         expected_network_id: &NetworkId,
-        builder: TransactionBuilder,
+        builder: &TransactionBuilder,
     ) -> Result<Self, TransactionArtifactError> {
         ensure_expected_network(expected_network_id, builder.payload())?;
         let canonical_payload_bytes = builder.encode_payload();
@@ -596,7 +595,7 @@ pub fn prepare_transaction_payload(
     ensure_expected_network(expected_network_id, &payload)?;
     let builder = TransactionBuilder::from_payload(payload)
         .map_err(|error| TransactionArtifactError::InvalidTransactionPayload(error.to_string()))?;
-    PreparedTransactionArtifact::from_builder(expected_network_id, builder)
+    PreparedTransactionArtifact::from_builder(expected_network_id, &(builder))
 }
 
 /// Decode and canonicalize exact bytes previously emitted by
@@ -606,7 +605,7 @@ pub fn prepare_transaction_payload_bytes(
     payload_bytes: &[u8],
 ) -> Result<PreparedTransactionArtifact, TransactionArtifactError> {
     let builder = decode_canonical_payload_builder(payload_bytes)?;
-    PreparedTransactionArtifact::from_builder(expected_network_id, builder)
+    PreparedTransactionArtifact::from_builder(expected_network_id, &(builder))
 }
 
 fn decode_canonical_payload_builder(
@@ -949,6 +948,80 @@ mod tests {
             Value::String("cryptographic_verification_failed".to_owned())
         );
         assert!(verification.get("message").is_none());
+    }
+
+    #[test]
+    fn signature_failures_keep_closed_mcp_codes() {
+        let cases = [
+            (
+                TransactionSignatureError::UnsupportedMultisigAuthority,
+                "unsupported_multisig_authority",
+            ),
+            (
+                TransactionSignatureError::AlgorithmNotPermitted(iroha_crypto::Algorithm::Ed25519),
+                "algorithm_not_permitted",
+            ),
+            (
+                TransactionSignatureError::AuthorityKeyMismatch,
+                "authority_key_mismatch",
+            ),
+            (
+                TransactionSignatureError::CryptoError("private cryptographic diagnostic".into()),
+                "cryptographic_verification_failed",
+            ),
+            (TransactionSignatureError::NoSignatures, "no_signatures"),
+            (
+                TransactionSignatureError::MissingMultisigSignatures,
+                "missing_multisig_signatures",
+            ),
+            (
+                TransactionSignatureError::UnexpectedMultisigSignatures,
+                "unexpected_multisig_signatures",
+            ),
+            (
+                TransactionSignatureError::UnknownMultisigSigner,
+                "unknown_multisig_signer",
+            ),
+            (
+                TransactionSignatureError::NonCanonicalMultisigSignatures,
+                "noncanonical_multisig_signatures",
+            ),
+            (
+                TransactionSignatureError::InvalidFeePaymentIntent("private fee diagnostic".into()),
+                "invalid_fee_payment_intent",
+            ),
+            (
+                TransactionSignatureError::MissingTimeToLive,
+                "missing_time_to_live",
+            ),
+            (
+                TransactionSignatureError::GenesisDomainNotAllowed,
+                "genesis_domain_not_allowed",
+            ),
+            (
+                TransactionSignatureError::GenesisDomainRequired,
+                "genesis_domain_required",
+            ),
+            (
+                TransactionSignatureError::InsufficientMultisigWeight {
+                    collected: 1,
+                    required: 2,
+                },
+                "insufficient_multisig_weight",
+            ),
+        ];
+
+        for (error, expected_code) in cases {
+            let outcome = SignatureVerification::from_verification_result(Err(error));
+            assert!(matches!(outcome, SignatureVerification::Invalid { .. }));
+            let value = outcome.to_mcp_value();
+            assert_eq!(value["status"], Value::String("invalid".into()));
+            assert_eq!(value["valid"], Value::Bool(false));
+            assert_eq!(value["failure_code"], Value::String(expected_code.into()));
+            assert!(value.get("message").is_none());
+            assert!(value.get("algorithm").is_none());
+            assert!(value.get("operation").is_none());
+        }
     }
 
     #[test]

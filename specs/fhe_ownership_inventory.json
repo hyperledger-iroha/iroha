@@ -14885,9 +14885,10 @@
    "component": "scripts",
    "role": "tooling",
    "tasks": ["V.1"],
-   "summary": "Source guards, estimators and feature-hygiene checks that name BFV, FHE, RAM-LFE or MKHE identifiers, the workflow and Makefile entries that run this inventory's checker, and the registry of generated files, which names the two generated RNS-BGV vector files.",
+   "summary": "Source guards, estimators and feature-hygiene checks that name BFV, FHE, RAM-LFE or MKHE identifiers, the scanner image's FHE fixture build guidance, the workflow and Makefile entries that run this inventory's checker, and the registry of generated files, which names the two generated RNS-BGV vector files.",
    "files": [
     {"path": ".github/workflows/pr.yml", "patterns": ["bgv", "fhe"]},
+    {"path": ".oss-scanner/Dockerfile", "patterns": ["fhe"]},
     {"path": "Makefile", "patterns": ["bgv", "fhe", "rns"]},
     {"path": "generated-files.toml", "patterns": ["bgv", "fhe"]},
     {"path": "pytests/scripts/qmask_s_stream_lifetime_test.py", "patterns": ["mkhe"], "test_only": true},

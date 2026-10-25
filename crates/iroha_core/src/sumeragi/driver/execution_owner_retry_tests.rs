@@ -21,7 +21,7 @@ fn execution_pool_refusal_retains_same_job_without_event_then_retries_on_origina
         let mut scheduler = scheduler(&budget);
         let held = budget.try_reserve_bytes(1).unwrap();
         let original = budget.try_reserve_bytes(1).unwrap_err();
-        let body = block(1, Hash32::ZERO, Hash32::ZERO, vec![1]);
+        let body = block(1, Hash32::ZERO, Hash32::ZERO, &[1]);
         let hash = Hash32([7; 32]);
         scheduler.execute(9, hash, body, certified);
         let Some(ExecOp::Execute { block: before, .. }) = scheduler.next(0) else {
@@ -92,7 +92,7 @@ fn execution_scoped_decoder_refusal_has_no_pool_wait_and_cancels_without_verdict
         .into_local_refusal()
         .expect("genuine enclosing owner");
     let observed = original.clone();
-    let body = block(1, Hash32::ZERO, Hash32::ZERO, vec![1]);
+    let body = block(1, Hash32::ZERO, Hash32::ZERO, &[1]);
     scheduler.execute(3, Hash32([4; 32]), body, false);
     let Some(ExecOp::Execute { block: before, .. }) = scheduler.next(0) else {
         panic!("initial execution")
@@ -152,7 +152,7 @@ fn execution_wait_cancellation_releases_original_job_before_any_retry() {
     scheduler.execute(
         5,
         Hash32([2; 32]),
-        block(1, Hash32::ZERO, Hash32::ZERO, vec![1]),
+        block(1, Hash32::ZERO, Hash32::ZERO, &[1]),
         false,
     );
     assert!(matches!(scheduler.next(0), Some(ExecOp::Execute { .. })));
@@ -225,7 +225,7 @@ fn native_budget_and_cancelled_execution_keep_original_cause_without_a_pool_wait
         scheduler.execute(
             17,
             Hash32([9; 32]),
-            block(1, Hash32::ZERO, Hash32::ZERO, vec![1]),
+            block(1, Hash32::ZERO, Hash32::ZERO, &[1]),
             false,
         );
         let Some(ExecOp::Execute { block: before, .. }) = scheduler.next(0) else {
@@ -329,7 +329,7 @@ fn trusted_initializer_recovery_retains_original_and_halts_without_publication_o
         scheduler.execute(
             17,
             Hash32([7; 32]),
-            block(1, Hash32::ZERO, Hash32::ZERO, vec![1]),
+            block(1, Hash32::ZERO, Hash32::ZERO, &[1]),
             false,
         );
         assert!(matches!(scheduler.next(0), Some(ExecOp::Execute { .. })));
@@ -454,7 +454,7 @@ fn recovery_original_survives_mismatched_completion_kind_and_absent_running_job(
             scheduler.execute(
                 73,
                 Hash32([3; 32]),
-                block(1, Hash32::ZERO, Hash32::ZERO, vec![1]),
+                block(1, Hash32::ZERO, Hash32::ZERO, &[1]),
                 false,
             );
             assert!(matches!(scheduler.next(0), Some(ExecOp::Execute { .. })));

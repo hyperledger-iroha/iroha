@@ -61,7 +61,7 @@ pub(super) fn effective<'a>(
 ///
 /// # Errors
 /// Initial genesis must install its explicit root fee policy before using sponsor custody.
-pub(crate) fn sponsor_vault_custody<'a>(
+pub fn sponsor_vault_custody<'a>(
     state_transaction: &'a StateTransaction<'_, '_>,
 ) -> Result<&'a AccountId, InstructionExecutionError> {
     let policy = if is_initial_genesis_context(state_transaction) {
@@ -83,7 +83,7 @@ pub(crate) fn sponsor_vault_custody<'a>(
 
 /// Validate the complete committed policy for executed-genesis schedule admission.
 /// This borrows the existing projection; it never decodes parameters or selects local defaults.
-pub(crate) fn validate_committed(
+pub fn validate_committed(
     world: &impl WorldReadOnly,
 ) -> Result<(), ExecutionAttemptError<NexusFeeAdmissionError>> {
     let policy = world

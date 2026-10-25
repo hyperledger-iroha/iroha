@@ -33,7 +33,6 @@ pub(super) struct MainShaUnionPlanV1 {
 
 impl MainShaUnionPlanV1 {
     /// Conservative simultaneous public plan, alpha and temporary-copy charge.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) const fn public_owner_charge_v1() -> usize {
         3 * core::mem::size_of::<Self>()
             + core::mem::size_of::<Vec<E>>()
@@ -68,10 +67,13 @@ impl MainShaUnionPlanV1 {
                 bridges[index][lane] = column(rfc, bridge_columns[index][lane])?;
                 consumers[index][lane] = column(rfc, consumer_columns[index][lane])?;
             }
-            let sha = layout.registered_segment(SegmentAdapterIdV1::Sha256CallBus, index as u16)?;
-            for stream in 0..4 {
-                for lane in 0..4 {
-                    streams[index][stream][lane] = column(
+            let sha = layout.registered_segment(
+                SegmentAdapterIdV1::Sha256CallBus,
+                u16::try_from(index).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            )?;
+            for (stream, lanes) in streams[index].iter_mut().enumerate() {
+                for (lane, target) in lanes.iter_mut().enumerate() {
+                    *target = column(
                         sha,
                         ZK_X509_SHA_RFC_CONSUMER_PRODUCTS_V1 + stream * 4 + lane,
                     )?;
@@ -106,7 +108,7 @@ impl MainShaUnionPlanV1 {
             .map_err(map_transparent_error_v1)?;
         for (index, point) in self.points.iter().enumerate() {
             let mut record = [0_u8; 10];
-            record[0] = index as u8;
+            record[0] = u8::try_from(index).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
             record[1] = NATIVE_LOG_V1;
             record[2..].copy_from_slice(&point.0.to_be_bytes());
             transcript
@@ -226,7 +228,6 @@ impl MainShaUnionPlanV1 {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainShaUnionPlanV1 {
     const QUOTIENT_LOG_V1: u8 = 22;
     const QUOTIENT_ROWS_V1: usize = 1 << Self::QUOTIENT_LOG_V1;
@@ -489,14 +490,12 @@ impl MainShaUnionPlanV1 {
 
 /// One public N-row table serves all five endpoint denominators on a stripe.
 /// Prefix multiplication and reverse reconstruction require no second vector.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct ShaUnionEndpointDenominatorsV1 {
     inverses: Vec<F>,
     endpoint_rows: [usize; 5],
     endpoint_inverses: [F; 5],
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ShaUnionEndpointDenominatorsV1 {
     pub(super) const fn payload_charge_v1() -> usize {
         core::mem::size_of::<Self>() + NATIVE_ROWS_V1 * core::mem::size_of::<F>()
@@ -512,7 +511,7 @@ impl ShaUnionEndpointDenominatorsV1 {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
         let expected = main_quotient_stripes::MainQuotientStripeV1::new_v1(
             NATIVE_LOG_V1,
-            full_rows.ilog2() as u8,
+            u8::try_from(full_rows.ilog2()).expect("usize logarithm fits u8"),
             stripe.ordinal,
         )?;
         if stripe.rows != NATIVE_ROWS_V1
@@ -548,8 +547,10 @@ impl ShaUnionEndpointDenominatorsV1 {
             || !rows.is_power_of_two()
             || rows > NATIVE_ROWS_V1
             || root
-                != goldilocks_primitive_root_v1(rows.ilog2() as u8)
-                    .map_err(map_transparent_error_v1)?
+                != goldilocks_primitive_root_v1(
+                    u8::try_from(rows.ilog2()).expect("usize logarithm fits u8"),
+                )
+                .map_err(map_transparent_error_v1)?
             || !shift.is_canonical()
             || shift == F::ZERO
             || shift.pow(rows as u128) == F::ONE

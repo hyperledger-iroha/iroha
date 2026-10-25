@@ -1482,6 +1482,16 @@ export function createConnectAppSession(options = {}) {
       pendingSign.reject(error);
       pendingSign = null;
     }
+    // Close the transport after terminal protocol failures so socket observers
+    // also stop treating an approved session as usable. Set closed first because
+    // custom WebSocket implementations may dispatch their close event inline.
+    if (typeof socket.close === "function" && socket.readyState !== 2 && socket.readyState !== 3) {
+      try {
+        socket.close();
+      } catch {
+        // Preserve the original session failure even if transport cleanup fails.
+      }
+    }
   }
 
   function sendFrame(bytes) {
@@ -1578,11 +1588,6 @@ export function createConnectAppSession(options = {}) {
             );
             approvalFailure = error;
             failSession(error);
-            try {
-              socket.close();
-            } catch {
-              // The session is already closed locally; socket close is best-effort.
-            }
             return;
           }
           const nativeIdentity = inspectAccountIdentity === undefined ? undefined

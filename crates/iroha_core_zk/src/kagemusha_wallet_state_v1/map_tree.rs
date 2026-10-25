@@ -10,7 +10,7 @@ use iroha_data_model::kagemusha::*;
 /// Old roots remain usable after an update, and removed physical slots are never reused.
 #[derive(Debug, Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::PersistentMap")]
-pub(crate) struct PersistentMapV1 {
+pub struct PersistentMapV1 {
     version: u16,
     leaves: IndexRoot,
     nodes: IndexRoot,

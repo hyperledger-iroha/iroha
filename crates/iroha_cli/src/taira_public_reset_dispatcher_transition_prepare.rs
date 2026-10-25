@@ -115,7 +115,7 @@ fn candidate(
     hosts: &ResetHostPairV1,
     trusted: &super::super::super::TrustedKeyV1,
     observed: &mut Observed,
-) -> Result<Candidate> {
+) -> Result<PreparedCandidate> {
     let import = &command.import_root;
     let expected = &command.expected_result_sha256;
     let proof = import.join("preparation");
@@ -152,14 +152,15 @@ fn candidate(
     )?;
     let native_cli = observed.pin(&command.native_edge_cli, Some(0o755), MAX_BINARY)?;
     let signed_cli = &native_edge_candidate.claims.iroha_cli;
+    let candidate_path_matches = native_cli.path == signed_cli.local_path;
     need(
-        native_cli.path == signed_cli.local_path
+        candidate_path_matches
             && native_cli.sha256 == signed_cli.sha256
             && native_cli.size == signed_cli.size
             && native_cli.mode == u32::from(signed_cli.mode),
         "retained Darwin artifact copy differs from its independently signed native candidate",
     )?;
-    let candidate = Candidate {
+    let candidate = PreparedCandidate {
         commit: text(&value, "commit")?.into(),
         tree: text(&value, "tree")?.into(),
         revision: source,
@@ -338,11 +339,18 @@ fn validate_rolled_back_inventory(
 }
 impl PrepareDispatcherTransition {
     /// Produce private reviewable input from current typed records; never apply it.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "Linux custody uses the receiver; unsupported platforms preserve the same rejecting interface"
+        )
+    )]
     pub(in super::super::super) fn run<W: Write>(&self, output: &mut W) -> Result<()> {
         #[cfg(not(target_os = "linux"))]
         {
             let _ = output;
-            return Err(eyre!("dispatcher preparation requires Linux"));
+            Err(eyre!("dispatcher preparation requires Linux"))
         }
         #[cfg(target_os = "linux")]
         {

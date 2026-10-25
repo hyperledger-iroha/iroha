@@ -172,27 +172,27 @@ impl NativeRelationV1 {
     }
     /// Pinned domain exponent of this exact relation.
     pub const fn k(self) -> u32 {
-        if matches!(self, Self::KaigiUsage) {
-            12
-        } else {
-            13
+        match self {
+            Self::KaigiAuthorization => KaigiRelation::Authorization.k(),
+            Self::KaigiUsage => KaigiRelation::Usage.k(),
+            Self::ConfidentialTransfer
+            | Self::ConfidentialFullUnshield
+            | Self::ConfidentialChangeUnshield => 13,
         }
     }
     /// Exact single public-column length.
     pub fn instance_rows(self) -> usize {
-        if let Some(kind) = self.kaigi() {
-            kind.instance_rows()
-        } else {
-            self.confidential().expect("closed relation").rows()
-        }
+        self.kaigi().map_or_else(
+            || self.confidential().expect("closed relation").rows(),
+            KaigiRelation::instance_rows,
+        )
     }
     /// Exact circuit identity; no alias normalization is performed.
     pub fn circuit_id(self) -> &'static str {
-        if let Some(kind) = self.kaigi() {
-            kind.circuit_id()
-        } else {
-            self.confidential().expect("closed relation").circuit_id()
-        }
+        self.kaigi().map_or_else(
+            || self.confidential().expect("closed relation").circuit_id(),
+            KaigiRelation::circuit_id,
+        )
     }
     /// Exact proof-body length of this locally compiled descriptor.
     ///
@@ -233,12 +233,13 @@ impl NativeRelationV1 {
 fn compiled_key(
     kind: NativeRelationV1,
 ) -> Result<&'static [u8], VerificationAttemptError<NativeVerificationError>> {
-    if let Some(kind) = kind.kaigi() {
-        kaigi_compiled_key(kind)
-    } else {
-        crate::confidential_v2::native::key_bytes(kind.confidential().expect("closed relation"))
-            .map_err(confidential_initialization)
-    }
+    kind.kaigi().map_or_else(
+        || {
+            crate::confidential_v2::native::key_bytes(kind.confidential().expect("closed relation"))
+                .map_err(confidential_initialization)
+        },
+        kaigi_compiled_key,
+    )
 }
 /// Resolve only an exact generic or relation-specific native backend label.
 #[must_use]

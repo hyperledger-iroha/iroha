@@ -108,7 +108,7 @@ impl<'a> Committee<'a> {
 /// Same global election owner, registration identity and inclusive activation/exclusive exit
 /// predicates as the penalty pipeline, evaluated at the new generation's start height.
 /// Registrations are borrowed from the original State at executing h, including a handoff
-/// to h + 1. Only LaneId::SINGLE owns the global election. More than one qualifying
+/// to h + 1. Only `LaneId::SINGLE` owns the global election. More than one qualifying
 /// registration within that owner is unresolved:
 /// no map iteration order may choose who bears another registration's liability.
 fn member_for_peer<'a>(

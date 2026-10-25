@@ -35,7 +35,6 @@ impl PrivacyOuterDigestV1 {
         self.0
     }
     /// Overwrite a transient digest tile before its allocation is released.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn zeroize_v1(&mut self) {
         self.0.zeroize();
     }
@@ -110,7 +109,6 @@ impl WipingSha3V1 {
         self.core.finalize_fixed_core(&mut self.buffer, &mut output);
         PrivacyOuterDigestV1::from_bytes(output.into())
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn finish_in_place_v1(&mut self) -> PrivacyOuterDigestV1 {
         let mut output = Output::<Sha3_384Core>::default();
         self.core.finalize_fixed_core(&mut self.buffer, &mut output);
@@ -168,7 +166,11 @@ fn write_domain_prefix_v1(state: &mut WipingSha3V1, domain: PrivacyOuterDomainV1
         // Construction validates every conversion before any hashing.
         let scope = if index == 1 { domain.proof_scope } else { None };
         let length = label.len() + scope.map_or(0, |_| PROOF_INSTANCE_PROFILE_SUFFIX_BYTES_V1);
-        state.update(&(length as u16).to_be_bytes());
+        state.update(
+            &u16::try_from(length)
+                .expect("validated domain label length")
+                .to_be_bytes(),
+        );
         state.update(label);
         if let Some(scope) = scope {
             state.update(PROOF_INSTANCE_PROFILE_MARKER_V1);
@@ -179,7 +181,11 @@ fn write_domain_prefix_v1(state: &mut WipingSha3V1, domain: PrivacyOuterDomainV1
     state.update(&domain.level.to_be_bytes());
 }
 fn write_fields_v1(state: &mut WipingSha3V1, fields: &[&[u8]]) {
-    state.update(&(fields.len() as u32).to_be_bytes());
+    state.update(
+        &u32::try_from(fields.len())
+            .expect("validated field count")
+            .to_be_bytes(),
+    );
     for field in fields {
         state.update(&(field.len() as u64).to_be_bytes());
         state.update(field);
@@ -241,7 +247,6 @@ impl PrivacyOuterDomainPrefixV1 {
     }
     /// Start an exact final field while reusing only the checked public prefix.
     /// Coordinates and every field length remain freshly bound after the clone.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn last_field_stream_at_with_counter(
         &self,
         index: u64,
@@ -302,7 +307,6 @@ impl PrivacyOuterDomainPrefixV1 {
 }
 
 /// An exact final-field stream must neither overrun nor finalize prematurely.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivacyOuterLastFieldStreamErrorV1 {
     /// A label, count, length, or total exceeds its exact framing width.
@@ -321,12 +325,10 @@ pub enum PrivacyOuterLastFieldStreamErrorV1 {
     },
 }
 /// Incremental final-field owner with bounded declared input and wiping state.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct PrivacyOuterLastFieldStreamV1 {
     state: WipingSha3V1,
     remaining: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl PrivacyOuterLastFieldStreamV1 {
     /// Scalar byte oracle for the prefix path; no parallel legacy production owner.
     #[cfg(test)]
@@ -1388,7 +1390,9 @@ mod tests {
     #[test]
     fn sha3_wiping_owner_matches_standard_digest_and_wipes_cloned_buffers() {
         for length in [0, 1, 103, 104, 105, 207, 208, 4448] {
-            let payload: Vec<u8> = (0..length).map(|i| (i % 251) as u8).collect();
+            let payload: Vec<u8> = (0..length)
+                .map(|i| u8::try_from(i % 251).expect("fixture byte"))
+                .collect();
             let mut owner = WipingSha3V1::default();
             for chunk in payload.chunks(7) {
                 owner.update(chunk);

@@ -434,9 +434,9 @@ fn sorafs_component_fee_source_requires_a_retained_finite_producer() {
     assert_pin_fee_balances_unchanged(
         &stx,
         &alice(),
-        alice_balance_before,
+        &(alice_balance_before),
         &treasury_account,
-        treasury_balance_before,
+        &(treasury_balance_before),
     );
     drop(stx);
     drop(block);
@@ -587,12 +587,23 @@ fn seed_public_pin_fee_accounts(state: &mut State) {
     let alice_asset = AssetId::new(fee_asset_id.clone(), alice());
     let bob_asset = AssetId::new(fee_asset_id.clone(), bob());
     for asset in [alice_asset, bob_asset] {
-        state.world.asset_definition_holders.insert((fee_asset_id.clone(), asset.account().clone()), ());
-        state.world.asset_definition_nonzero_holders.insert((fee_asset_id.clone(), asset.account().clone()), ());
-        state.world.asset_definition_assets.insert((fee_asset_id.clone(), asset), ());
+        state
+            .world
+            .asset_definition_holders
+            .insert((fee_asset_id.clone(), asset.account().clone()), ());
+        state
+            .world
+            .asset_definition_nonzero_holders
+            .insert((fee_asset_id.clone(), asset.account().clone()), ());
+        state
+            .world
+            .asset_definition_assets
+            .insert((fee_asset_id.clone(), asset), ());
     }
-    state.world.asset_definition_asset_counts.insert(fee_asset_id, 2);
-
+    state
+        .world
+        .asset_definition_asset_counts
+        .insert(fee_asset_id, 2);
 }
 fn seed_pin_fee_balance(state: &mut State, account: &AccountId, amount: u128) {
     let fee_asset_id = state.gov.sorafs_pin_fee_asset_id.clone();
@@ -605,23 +616,22 @@ fn pin_fee_balance(stx: &crate::state::StateTransaction<'_, '_>, account: &Accou
     stx.world
         .assets
         .get(&asset_id)
-        .map(|value| value.as_ref().clone())
-        .unwrap_or_else(Quantity::zero)
+        .map_or_else(Quantity::zero, |value| value.as_ref().clone())
 }
 fn assert_pin_fee_balances_unchanged(
     stx: &crate::state::StateTransaction<'_, '_>,
     account: &AccountId,
-    account_balance_before: Quantity,
+    account_balance_before: &Quantity,
     treasury: &AccountId,
-    treasury_balance_before: Quantity,
+    treasury_balance_before: &Quantity,
 ) {
     assert_eq!(
-        pin_fee_balance(stx, account),
+        &pin_fee_balance(stx, account),
         account_balance_before,
         "rejected pin registration must not charge the submitter"
     );
     assert_eq!(
-        pin_fee_balance(stx, treasury),
+        &pin_fee_balance(stx, treasury),
         treasury_balance_before,
         "rejected pin registration must not credit treasury"
     );
@@ -840,8 +850,6 @@ pub(super) fn default_chunk_digest() -> [u8; 32] {
 }
 pub(super) fn default_content_length() -> u64 {
     BYTES_PER_GIB
-        .try_into()
-        .expect("default GiB byte count fits u64")
 }
 pub(super) fn default_policy() -> PinPolicy {
     PinPolicy {
@@ -852,7 +860,7 @@ pub(super) fn default_policy() -> PinPolicy {
 }
 fn musubi_archive_for_pin(pin: &PinManifestRecord, seed: u8) -> MusubiArchiveRecordV1 {
     let commitment = MusubiArchiveCommitmentV1 {
-        root_cid: pin.root_cid.clone(),
+        root_cid: pin.root_cid,
         chunker: pin.chunker.clone(),
         chunk_plan_digest: MusubiContentDigestV1::new(pin.chunk_digest_sha3_256),
         por_root: MusubiContentDigestV1::new(pin.por_root),
@@ -1129,9 +1137,9 @@ fn public_pin_resource_ceilings_reject_before_fee_or_state_mutation() {
     assert_pin_fee_balances_unchanged(
         &stx,
         &alice(),
-        alice_balance_before,
+        &(alice_balance_before),
         &treasury_account,
-        treasury_balance_before,
+        &(treasury_balance_before),
     );
     assert_eq!(
         read_pin_usage(stx.world(), pin_global_usage_key(), "global usage")
@@ -1205,9 +1213,9 @@ fn retired_pin_history_cannot_recycle_count_ceilings() {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
 }
@@ -1250,9 +1258,9 @@ fn public_pin_global_and_authority_byte_ceilings_reject_before_fee_or_state() {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
 }
@@ -1283,7 +1291,7 @@ fn pin_expiry_uses_consensus_time_and_releases_live_content_atomically() {
     {
         let header = iroha_data_model::block::BlockHeader::new(
             nonzero!(2_u64),
-            previous.clone(),
+            previous,
             None,
             default_policy().retention_epoch * 1_000 - 1,
             0,
@@ -1462,9 +1470,9 @@ fn public_pin_cannot_reserve_alias_without_alias_permission() {
     assert_pin_fee_balances_unchanged(
         &stx,
         &alice(),
-        alice_balance_before,
+        &(alice_balance_before),
         &treasury_account,
-        treasury_balance_before,
+        &(treasury_balance_before),
     );
 }
 #[test]
@@ -1529,9 +1537,9 @@ fn register_pin_manifest_rejects_insufficient_public_fee_without_side_effects() 
     assert_pin_fee_balances_unchanged(
         &stx,
         &alice(),
-        low_balance,
+        &(low_balance),
         &treasury_account,
-        treasury_balance_before,
+        &(treasury_balance_before),
     );
 }
 #[test]
@@ -1667,8 +1675,10 @@ fn seed_automatic_replication_capacity(
         replicas,
         StorageClass::Hot,
         &default_chunker(),
-        consensus_epoch,
-        u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+        (
+            consensus_epoch,
+            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+        ),
         1_024,
     )
     .expect("seed canonical automatic replication providers");

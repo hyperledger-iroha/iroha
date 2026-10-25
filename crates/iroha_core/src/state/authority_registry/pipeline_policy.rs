@@ -219,7 +219,9 @@ mod tests {
         norito::encode_canonical(&PipelineExecutionPolicyV1::from_actual(config)).unwrap()
     }
 
-    fn assert_mutations_change_projection(mutations: &[(&str, fn(&mut Pipeline))]) {
+    type PolicyMutation<'a> = (&'a str, fn(&mut Pipeline));
+
+    fn assert_mutations_change_projection(mutations: &[PolicyMutation<'_>]) {
         let baseline = policy();
         let expected = frame(&baseline);
         for &(name, mutate) in mutations {
@@ -247,7 +249,7 @@ mod tests {
 
     #[test]
     fn every_pipeline_execution_limit_changes_projection() {
-        let mutations: &[(&str, fn(&mut Pipeline))] = &[
+        let mutations: &[PolicyMutation<'_>] = &[
             ("dynamic prepass", |c| {
                 c.dynamic_prepass = !c.dynamic_prepass
             }),
@@ -273,7 +275,7 @@ mod tests {
 
     #[test]
     fn every_pipeline_gas_input_changes_projection() {
-        let mutations: &[(&str, fn(&mut Pipeline))] = &[
+        let mutations: &[PolicyMutation<'_>] = &[
             ("fee account", |c| c.gas.tech_account_id.push('x')),
             ("accepted fee asset", |c| {
                 c.gas.accepted_assets.push("gas-c".to_owned())
@@ -304,7 +306,7 @@ mod tests {
 
     #[test]
     fn every_pipeline_amx_budget_changes_projection() {
-        let mutations: &[(&str, fn(&mut Pipeline))] = &[
+        let mutations: &[PolicyMutation<'_>] = &[
             ("dataspace budget", |c| c.amx_per_dataspace_budget_ms += 1),
             ("group budget", |c| c.amx_group_budget_ms += 1),
             ("instruction estimate", |c| c.amx_per_instruction_ns += 1),

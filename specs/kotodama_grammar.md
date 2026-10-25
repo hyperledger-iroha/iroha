@@ -1634,15 +1634,25 @@ fingerprint. A rejected positional argument reports
 | `ledger::asset::balance` | `account:`, `asset_definition:` |
 | `ledger::asset::burn` | `account:`, `asset_definition:`, `amount:` |
 | `ledger::asset::mint` | `account:`, `asset_definition:`, `amount:` |
-| `ledger::asset::register` | `asset_definition:`, `name:`, `spec:`, `mintable:` |
+| `ledger::asset::register` | `asset_definition:`, `name:`, `spec:`, `mintable:`, `owning_domain:` |
+| `ledger::asset::same_uid` | `asset_definition:`, `source:`, `destination:` |
 | `ledger::asset::set_holding_limit` | `account:`, `asset_definition:`, `limit:` |
 | `ledger::asset::set_transfer_availability` | `account:`, `asset_definition:`, `expected_revision:`, `incoming:`, `outgoing:`, `reason:` |
 | `ledger::asset::set_transfer_daily_limit` | `account:`, `asset_definition:`, `cap:` |
 | `ledger::asset::transfer` | `source:`, `destination:`, `asset_definition:`, `amount:`, `dataspace:` (optional) |
+| `ledger::asset::uid_holding_quote` | `asset_definition:`, `account:`, `incoming:` |
+| `ledger::asset_lock::cancel` | `key:`, `expected_remaining:` |
+| `ledger::asset_lock::cancel_with_waterfall` | `key:`, `expected_remaining:`, `policy_revision:`, `link_revision:` |
+| `ledger::asset_lock::drawdown` | `key:`, `amount:`, `expected_remaining:` |
+| `ledger::asset_lock::drawdown_with_waterfall` | `key:`, `amount:`, `expected_remaining:`, `policy_revision:`, `link_revision:` |
+| `ledger::asset_lock::expire_with_waterfall` | `key:`, `policy_revision:`, `link_revision:` |
+| `ledger::asset_lock::open` | `key:`, `source:`, `destination:`, `asset_definition:`, `amount:`, `release_until_ms:`, `cancel_not_before_ms:`, `expires_at_ms:` |
 | `ledger::domain::transfer` | `source:`, `domain:`, `destination:` |
 | `ledger::escrow::open_dispute` | `offer:`, `evidence:` (optional) |
 | `ledger::escrow::open_offer` | `offer:`, `asset_definition:`, `amount:`, `evidence:` (optional) |
 | `ledger::escrow::resolve_dispute` | `offer:`, `buyer_amount:`, `seller_amount:`, `evidence:` (optional) |
+| `ledger::fi::link_revision` | `asset_definition:`, `account:`, `expected_fi:` |
+| `ledger::fi::transfer_linked` | `asset_definition:`, `account:`, `amount:`, `policy_revision:`, `link_revision:` |
 | `ledger::governance::build_submit_ballot` | `election_id:`, `ciphertext:`, `nullifier:`, `backend:`, `proof:`, `verification_key:` |
 | `ledger::nft::mint` | `nft:`, `owner:` |
 | `ledger::nft::set_metadata` | `nft:`, `key:`, `value:` |
@@ -1666,8 +1676,9 @@ fingerprint. A rejected positional argument reports
 
 ### Assets
 
-`ledger::asset::register(asset_definition:, name:, spec:, mintable:)` registers
-exactly the definition it names. `name` is the human-readable display name;
+`ledger::asset::register(asset_definition:, name:, spec:, mintable:, owning_domain:)`
+registers exactly the definition it names under the explicit `owning_domain`
+(`DomainId`). `name` is the human-readable display name;
 `spec` is the data model's numeric spec, written with its constructors
 `NumericSpec::unconstrained()`, `NumericSpec::integer()`, or
 `NumericSpec::fractional(scale)` with a constant scale in `0..=28`; `mintable`
@@ -1684,12 +1695,13 @@ mints: issue the initial supply with `ledger::asset::mint` afterwards.
 ```kotodama
 seiyaku RoseIssuer {
     permission RegisterAssetDefinition;
-    kotoage fn issue(AssetDefinitionId rose, AccountId treasury) authorize(RegisterAssetDefinition) {
+    kotoage fn issue(AssetDefinitionId rose, AccountId treasury, DomainId owning_domain) authorize(RegisterAssetDefinition) {
         ledger::asset::register(
             asset_definition: rose,
             name: "Rose",
             spec: NumericSpec::fractional(2),
             mintable: Mintable::Once,
+            owning_domain: owning_domain,
         );
         ledger::asset::mint(account: treasury, asset_definition: rose, amount: 1000);
     }

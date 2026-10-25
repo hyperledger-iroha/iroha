@@ -133,10 +133,10 @@ fn right_immediate(instruction: u32) -> Option<u64> {
     match wide::opcode(instruction) {
         // GETGAS has no register sources. Its result is linked directly to the
         // original gas-debit port; unused arithmetic workspaces stay canonical.
-        wide::system::GETGAS => return Some(0),
         // Unary instructions never read the encoded rs2 byte. NEG routes the
         // original rs1 packet into the right arithmetic operand separately.
-        wide::arithmetic::NEG
+        wide::system::GETGAS
+        | wide::arithmetic::NEG
         | wide::arithmetic::ABS
         | wide::arithmetic::POPCNT
         | wide::arithmetic::CLZ
@@ -182,16 +182,15 @@ fn is_alu(instruction: u32) -> bool {
 /// caller predicate or a scalar word reduced modulo the proof field.
 fn comparison_predicate(instruction: u32) -> Option<usize> {
     match wide::opcode(instruction) {
-        wide::control::BEQ => Some(0),
-        wide::control::BNE => Some(1),
-        wide::control::BLT => Some(2),
+        wide::control::BEQ | wide::arithmetic::SEQ => Some(0),
+        wide::control::BNE | wide::arithmetic::SNE => Some(1),
+        wide::control::BLT
+        | wide::arithmetic::SLT
+        | wide::arithmetic::MIN
+        | wide::arithmetic::MAX => Some(2),
         wide::control::BGE => Some(3),
-        wide::control::BLTU => Some(4),
+        wide::control::BLTU | wide::arithmetic::SLTU => Some(4),
         wide::control::BGEU => Some(5),
-        wide::arithmetic::SLT | wide::arithmetic::MIN | wide::arithmetic::MAX => Some(2),
-        wide::arithmetic::SLTU => Some(4),
-        wide::arithmetic::SEQ => Some(0),
-        wide::arithmetic::SNE => Some(1),
         _ => None,
     }
 }
@@ -373,9 +372,7 @@ pub(super) fn append_residues(
             schedule,
             packets,
             slot,
-            Space::Register,
-            index,
-            F::ZERO,
+            (Space::Register, index, F::ZERO),
             enabled,
             write,
         );
@@ -642,9 +639,7 @@ pub(super) fn append_residues(
         product,
         source,
         &gas_digits,
-        square_selected,
-        F::ZERO,
-        F::ZERO,
+        (square_selected, F::ZERO, F::ZERO),
     );
     let square_destination = select(&|w| is_square_root(w) && has_destination(w));
     gcd::append_residues(out, &row[SCALAR..], source, gcd_selected, zero);
@@ -703,7 +698,10 @@ pub(super) fn append_residues(
                         constant_limb(
                             program
                                 .contract
-                                .scalar_literal(wide::literal_index(word) as u16)
+                                .scalar_literal(
+                                    u16::try_from(wide::literal_index(word))
+                                        .expect("bounded circuit index"),
+                                )
                                 .expect("Program retains admitted scalar literal"),
                             limb,
                         )

@@ -55,7 +55,7 @@ impl FastJsonWrite for Base64Bytes<'_> {
 }
 
 /// Produce one bounded selective proof under an already admitted Explorer read.
-pub(crate) async fn admitted(
+pub async fn admitted(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
@@ -63,25 +63,25 @@ pub(crate) async fn admitted(
     admission: crate::QueryAdmissionPermit,
 ) -> Result<AxResponse, Error> {
     run_admitted_blocking(admission, "Explorer proof worker failed", move || {
-        response(state, telemetry, visibility, identifier)
+        response(&state, &telemetry, &visibility, &identifier)
     })
     .await
 }
 
 pub(super) fn response(
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    visibility: DataspaceReadVisibility,
-    identifier: String,
+    state: &Arc<CoreState>,
+    telemetry: &MaybeTelemetry,
+    visibility: &DataspaceReadVisibility,
+    identifier: &str,
 ) -> Result<AxResponse, Error> {
     response_with_limit(state, telemetry, visibility, identifier, MAX_RESPONSE_BYTES)
 }
 
 pub(super) fn response_with_limit(
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    visibility: DataspaceReadVisibility,
-    identifier: String,
+    state: &Arc<CoreState>,
+    telemetry: &MaybeTelemetry,
+    visibility: &DataspaceReadVisibility,
+    identifier: &str,
     maximum_response_bytes: usize,
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
@@ -89,7 +89,7 @@ pub(super) fn response_with_limit(
         let detail = find_transaction_detail(
             state.as_ref(),
             state.committed_height() as u64,
-            &visibility,
+            visibility,
             identifier,
         )?;
         let row = detail.0;
@@ -102,17 +102,17 @@ pub(super) fn response_with_limit(
         }
         let owner = crate::history_producer::HistoryProducerOwner::current()?;
         let proof = projection(state.network_id_ref(), &row, &owner)?;
-        require_history_anchor(&state, height, block.hash())?;
+        require_history_anchor(state, height, block.hash())?;
         let mut response =
             owner.json_with_limit(&proof, maximum_response_bytes.min(MAX_RESPONSE_BYTES))?;
-        require_history_anchor(&state, height, block.hash())?;
+        require_history_anchor(state, height, block.hash())?;
         response.headers_mut().insert(
             axum::http::header::CACHE_CONTROL,
             axum::http::HeaderValue::from_static("private, no-store"),
         );
         Ok(response)
     })();
-    record_explorer_endpoint_result(&telemetry, ENDPOINT, started, &result);
+    record_explorer_endpoint_result(telemetry, ENDPOINT, started, &result);
     result
 }
 

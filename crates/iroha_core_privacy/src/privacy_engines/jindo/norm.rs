@@ -34,7 +34,7 @@ impl U256 {
         let mut carry = 0_u64;
         for (target, addend) in self.0.iter_mut().zip(square) {
             let sum = u128::from(*target) + u128::from(addend) + u128::from(carry);
-            *target = sum as u64;
+            *target = u64::try_from(sum & u128::from(u64::MAX)).expect("low limb fits u64");
             carry = (sum >> 64) as u64;
         }
         carry == 0
@@ -49,7 +49,10 @@ impl U256 {
     }
 }
 fn square_u128(value: u128) -> [u64; 4] {
-    let limbs = [value as u64, (value >> 64) as u64];
+    let limbs = [
+        u64::try_from(value & u128::from(u64::MAX)).expect("low limb fits u64"),
+        (value >> 64) as u64,
+    ];
     let mut product = [0_u64; 4];
     for left_index in 0..2 {
         let mut carry = 0_u64;
@@ -58,7 +61,8 @@ fn square_u128(value: u128) -> [u64; 4] {
             let accumulation = u128::from(limbs[left_index]) * u128::from(limbs[right_index])
                 + u128::from(product[index])
                 + u128::from(carry);
-            product[index] = accumulation as u64;
+            product[index] =
+                u64::try_from(accumulation & u128::from(u64::MAX)).expect("low limb fits u64");
             carry = (accumulation >> 64) as u64;
         }
         let mut index = left_index + 2;
@@ -130,9 +134,9 @@ mod tests {
         coefficients[0] = -3;
         coefficients[1] = 4;
         let polynomial =
-            JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, JINDO_INNER_MODULI_V1);
+            JindoRnsPolynomialV1::from_balanced_coefficients(&coefficients, JINDO_INNER_MODULI_V1);
         assert!(two_norm_squared_is_below_v1(
-            &[polynomial.clone()],
+            std::slice::from_ref(&polynomial),
             JINDO_INNER_MODULI_V1,
             [26, 0, 0, 0]
         ));

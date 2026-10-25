@@ -402,7 +402,7 @@ async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
     let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &initial)
         .expect("create persistent Kura");
-    let state = state_factory_with_kura(Arc::clone(&kura));
+    let state = state_factory_with_kura(&kura);
     let initial_incarnations = state.lane_incarnations_snapshot();
     let extended_incarnations = BTreeMap::from([
         (LaneId::SINGLE, initial_incarnations[&LaneId::SINGLE]),
@@ -413,10 +413,8 @@ async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
     kura.apply_lane_geometry_transition_at_height(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
         0,
     )
@@ -443,7 +441,7 @@ async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
         &key_pair,
         TEST_CHUNK_SIZE,
         iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES,
-        noncanonical,
+        &(noncanonical),
     )
     .expect_err("noncanonical payload must fail before publication");
     assert!(matches!(
@@ -786,7 +784,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         let tmp_root = tempdir().expect("temporary snapshot root");
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
-        let state = state_factory_with_kura(Arc::clone(&kura));
+        let state = state_factory_with_kura(&kura);
         let mut serialized = CapturedStateSnapshot::capture(&state)
             .expect("stable valid fixture snapshot")
             .json;
@@ -1243,11 +1241,11 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(&kura);
     let manifest = sample_space_directory_manifest();
     let _account_id = insert_account_with_uaid(&mut state, manifest.uaid);
     let block = signed_block_with_transaction(accepted_manifest_transaction());
-    store_block_and_mark_state_height(&mut state, &kura, block);
+    store_block_and_mark_state_height(&mut state, &kura, &(block));
     let key_pair = checked_random_snapshot_keypair();
     let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
     write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
@@ -1283,9 +1281,9 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(&kura);
     let block = signed_block_with_transaction(accepted_log_transaction("missing-section"));
-    store_block_and_mark_state_height(&mut state, &kura, block);
+    store_block_and_mark_state_height(&mut state, &kura, &(block));
     let key_pair = checked_random_snapshot_keypair();
     let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
     write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
@@ -1418,7 +1416,7 @@ async fn signed_snapshot_without_the_sccp_envelope_is_rejected() {
     let tmp_root = tempdir().expect("temporary snapshot root");
     let store_dir = tmp_root.path().join("snapshot");
     let kura = Kura::blank_kura_for_testing();
-    let state = state_factory_with_kura(Arc::clone(&kura));
+    let state = state_factory_with_kura(&kura);
     let serialized = CapturedStateSnapshot::capture(&state)
         .expect("stable valid fixture snapshot")
         .json;

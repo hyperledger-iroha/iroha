@@ -193,7 +193,6 @@ async fn handle(
         admission,
         "native authority originals worker failed",
         move || {
-            let _memory = memory;
             let intake = intake;
             let view = state.view();
             let height = u64::try_from(view.height()).map_err(|_| unavailable())?;
@@ -383,7 +382,7 @@ async fn handle(
                     )
                     .map_err(|_| unavailable())?,
             };
-            encoded.memory = Some(_memory);
+            encoded.memory = Some(memory);
             let mut response = AxResponse::new(Body::from(Bytes::from_owner(encoded)));
             response.headers_mut().insert(
                 axum::http::header::CONTENT_TYPE,

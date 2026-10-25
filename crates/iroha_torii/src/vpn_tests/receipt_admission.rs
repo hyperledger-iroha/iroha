@@ -35,7 +35,7 @@ async fn submit_vpn_receipt_allows_expired_session_within_wsv_grace() {
     fixture.relay_receipt.receipt.client_voucher_hash = fixture.voucher.hash();
     resign_test_relay_receipt(&mut fixture.relay_receipt);
     fixture.body = receipt_submit_body(&fixture.relay_receipt, &fixture.voucher);
-    app.state.insert_vpn_lease_for_testing(lease_record);
+    app.state.insert_vpn_lease_for_testing(&(lease_record));
     let method = Method::POST;
     let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
     let headers = signed_app_headers(
@@ -79,7 +79,7 @@ async fn submit_vpn_receipt_rejects_after_wsv_grace() {
     let active_record = session_record_from_lease(&lease_record).expect("expired lease projection");
     let session = response_from_record(&active_record);
     let fixture = receipt_fixture_for_session(&session, &active_record, &user, &metering_keys);
-    app.state.insert_vpn_lease_for_testing(lease_record);
+    app.state.insert_vpn_lease_for_testing(&(lease_record));
     let method = Method::POST;
     let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
     let headers = signed_app_headers(
@@ -218,12 +218,9 @@ async fn submit_vpn_receipt_rejects_explicit_lease_id_for_different_active_lease
         .expect("active session")
         .clone();
     let fixture = receipt_fixture_for_session(&session, &active_record, &user, &metering_keys);
-    app.state
-        .insert_vpn_lease_for_testing(lease_record_from_session_record(
-            &active_record,
-            VpnLeaseStatusV1::Active,
-            None,
-        ));
+    app.state.insert_vpn_lease_for_testing(
+        &(lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None)),
+    );
     let (other_quote, other_metering_keys) =
         create_quote_for_account(app.clone(), &other_user, &other_user_keys, "standard").await;
     let other_session = create_session_for_quote(
@@ -239,12 +236,9 @@ async fn submit_vpn_receipt_rejects_explicit_lease_id_for_different_active_lease
         .get(&other_session.session_id)
         .expect("other active session")
         .clone();
-    app.state
-        .insert_vpn_lease_for_testing(lease_record_from_session_record(
-            &other_record,
-            VpnLeaseStatusV1::Active,
-            None,
-        ));
+    app.state.insert_vpn_lease_for_testing(
+        &(lease_record_from_session_record(&other_record, VpnLeaseStatusV1::Active, None)),
+    );
     app.vpn_sessions.clear();
     let body = receipt_submit_body_with_lease_id(
         &fixture.relay_receipt,
@@ -723,7 +717,7 @@ async fn submit_vpn_receipt_rejects_settled_lease_after_cache_loss() {
         .lease_fee
         .checked_sub(&fixture.earned_fee)
         .expect("fixture earned fee does not exceed lease fee");
-    app.state.insert_vpn_lease_for_testing(lease);
+    app.state.insert_vpn_lease_for_testing(&(lease));
     submit_receipt_expect_error(
         app,
         &operator,
@@ -743,7 +737,7 @@ async fn submit_vpn_receipt_rejects_refunded_lease_after_cache_loss() {
     lease.status = VpnLeaseStatusV1::Refunded;
     lease.refunded_at_ms = Some(lease.refund_available_at_ms());
     lease.refunded_fee = lease.lease_fee.clone();
-    app.state.insert_vpn_lease_for_testing(lease);
+    app.state.insert_vpn_lease_for_testing(&(lease));
     submit_receipt_expect_error(
         app,
         &operator,
@@ -775,12 +769,9 @@ async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
         .get(&session.session_id)
         .expect("active session")
         .clone();
-    app.state
-        .insert_vpn_lease_for_testing(lease_record_from_session_record(
-            &active_record,
-            VpnLeaseStatusV1::Active,
-            None,
-        ));
+    app.state.insert_vpn_lease_for_testing(
+        &(lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None)),
+    );
     let relay_session_id =
         parse_vpn_session_id_hex(&session.session_id).expect("fixture session id");
     let quote_id = decode_hex_32(&session.quote_id, "quote").expect("quote id");

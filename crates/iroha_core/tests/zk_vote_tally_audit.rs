@@ -3,8 +3,7 @@
 #![cfg(feature = "zk-tests")]
 #[path = "common/governance_closed_state.rs"]
 mod closed_state;
-#[path = "zk_testkit.rs"]
-mod zk_testkit;
+use crate::zk_testkit;
 use iroha_core::{smartcontracts::Execute, state::WorldReadOnly};
 use iroha_core_zk as zk;
 use iroha_data_model::{
@@ -20,10 +19,10 @@ use iroha_data_model::{
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-fn assert_closed_registry(error: InstructionExecutionError) {
+fn assert_closed_registry(error: &InstructionExecutionError) {
     assert_eq!(
         error,
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+        &InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             "native PIPA-R circuit_id is not in the compiled circuit registry".into()
         ))
     );
@@ -88,12 +87,12 @@ fn unadmitted_native_key_and_schema_mutation_cannot_register() {
             record.public_inputs_schema_hash[0] ^= 1;
         }
         assert_closed_registry(
-            RegisterVerifyingKey {
+            &(RegisterVerifyingKey {
                 id: bundle.vk_id.clone(),
                 record,
             }
             .execute(&ALICE_ID, &mut transaction)
-            .expect_err("unadmitted key must not register"),
+            .expect_err("unadmitted key must not register")),
         );
         assert!(
             transaction
@@ -139,9 +138,9 @@ fn unadmitted_native_verify_isi_rejects_missing_and_retained_keys() {
                 ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
             attachment.vk_commitment = Some(bundle.vk_record.commitment);
             assert_closed_registry(
-                VerifyProof::new(attachment)
+                &(VerifyProof::new(attachment)
                     .execute(&ALICE_ID, &mut transaction)
-                    .expect_err("unadmitted envelope must stay outside VerifyProof"),
+                    .expect_err("unadmitted envelope must stay outside VerifyProof")),
             );
             assert!(transaction.world.proofs().get(&proof_id).is_none());
             assert!(transaction.world.take_external_events().is_empty());

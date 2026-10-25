@@ -30,7 +30,9 @@ pub(super) fn laterals(track: RaceTrackV1) -> [i64; 12] {
     })
 }
 pub(super) fn centers(track: RaceTrackV1) -> [i64; 12] {
-    std::array::from_fn(|cell| (2 * cell as i64 + 1) * track.length_mm() / 24)
+    std::array::from_fn(|cell| {
+        (2 * i64::try_from(cell).expect("bounded circuit index") + 1) * track.length_mm() / 24
+    })
 }
 pub(super) fn rain_pattern(track: RaceTrackV1) -> [i64; 4] {
     match track {
@@ -54,7 +56,7 @@ pub(super) fn weather(track: RaceTrackV1, tick: u32) -> (i64, i64) {
 }
 pub(super) fn object(track: RaceTrackV1, progress: i64) -> (i64, i64, i64, i64) {
     let wrapped = progress.rem_euclid(track.length_mm());
-    let cell = (wrapped * 12 / track.length_mm()) as usize;
+    let cell = usize::try_from(wrapped * 12 / track.length_mm()).expect("bounded circuit index");
     (
         wrapped,
         centers(track)[cell],
@@ -111,7 +113,10 @@ pub(super) fn impact(
         } else {
             -1_800
         };
-        (pushed.clamp(-9_000, 9_000) as i32, (speed - 600).max(0))
+        (
+            i32::try_from(pushed.clamp(-9_000, 9_000)).expect("clamped lateral fits i32"),
+            (speed - 600).max(0),
+        )
     } else {
         (lateral, (speed - 260).max(0))
     }
@@ -129,7 +134,7 @@ mod tests {
         ] {
             for cell in 0..12 {
                 let center = centers(track)[cell];
-                let x = laterals(track)[cell] as i32;
+                let x = i32::try_from(laterals(track)[cell]).expect("bounded fixture value");
                 let kind = kinds(track)[cell];
                 if kind == OIL {
                     continue;

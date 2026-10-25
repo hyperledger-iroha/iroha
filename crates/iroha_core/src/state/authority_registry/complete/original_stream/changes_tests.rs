@@ -1,5 +1,7 @@
 // Change intent retains original native touches without claiming a complete image.
 
+type CapturedChange = (&'static str, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
+
 #[test]
 fn change_intent_ignores_untouched_native_rows_and_replays_exact_original_changes() {
     let state = state();
@@ -164,7 +166,7 @@ fn change_intent_matches_complete_stream_but_cannot_emit_a_snapshot() {
     let _retirement_pin = crossbeam_epoch::pin();
     let (state, proposal) = crate::state::publication::musubi_materializer_test_support::fixture();
     let membership_before = committed_membership_bytes(&state);
-    let block = validated_original(&state, proposal.header());
+    let block = validated_original(&state, &(proposal.header()));
     let mut complete = OriginalCut::new(&block, limits(), CaptureIntent::Complete).unwrap();
     let mut delta = OriginalCut::new(&block, limits(), CaptureIntent::Changes).unwrap();
     let mut observations = Vec::new();
@@ -191,9 +193,7 @@ fn change_intent_matches_complete_stream_but_cannot_emit_a_snapshot() {
         .unwrap();
         observations.push((replacements, changes));
     }
-    let ordinary = |entry: &&(&'static str, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>)| {
-        !entry.0.starts_with("state.transactions.")
-    };
+    let ordinary = |entry: &&CapturedChange| !entry.0.starts_with("state.transactions.");
     assert_eq!(
         observations[0]
             .1
@@ -338,8 +338,7 @@ fn change_capture_refusal_retains_original_partial_frame_through_retry_and_refun
     // exact same demand must carry the same pool and release observation, too.
     let original_refusal = budget
         .try_reserve_bytes(first_value_size)
-        .err()
-        .expect("the actual original pool remains occupied");
+        .expect_err("the actual original pool remains occupied");
     assert_eq!(refusal, original_refusal);
     let pending = delta.pending.as_ref().unwrap();
     let key = pending.key.as_ref().unwrap().bytes().as_ptr();

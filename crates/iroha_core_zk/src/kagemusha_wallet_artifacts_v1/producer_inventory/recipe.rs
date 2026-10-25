@@ -119,7 +119,7 @@ mod tests {
                 sec1.extend(word.to_be_bytes());
             }
         }
-        let provider_contract = core::array::from_fn(|i| i as u8);
+        let provider_contract = core::array::from_fn(|i| u8::try_from(i).unwrap());
         let scheme = KagemushaWalletSchemeV1 {
             version: 1,
             network_id: [1; 32],

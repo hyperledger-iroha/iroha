@@ -84,7 +84,7 @@ fn atomic_state_in_scope(
         u32::try_from(count)
             .expect("bounded movement count")
             .max(16),
-        Quantity::from(10_u32),
+        &(Quantity::from(10_u32)),
     )
 }
 fn atomic_state_in_scope_with_source_delta_limit(
@@ -92,7 +92,7 @@ fn atomic_state_in_scope_with_source_delta_limit(
     scope: AssetBalanceScope,
     policy: AssetBalancePolicy,
     max_deltas: u32,
-    source_balance: Quantity,
+    source_balance: &Quantity,
 ) -> (State, Vec<AtomicSettlementMovement>, AssetDefinitionId) {
     let domain_id = DomainId::try_new("atomic", "universal").expect("domain");
     let definition =
@@ -189,7 +189,7 @@ fn atomic_instruction(
     movements: Vec<AtomicSettlementMovement>,
 ) -> SettleAtomic {
     SettleAtomic::new(
-        stx.network_id.clone(),
+        stx.network_id,
         SettlementId::new(
             movements[0].source.account().clone(),
             "atomic_business".parse().expect("reference"),
@@ -338,7 +338,7 @@ fn atomic_settlement_single_global_payment_credits_250000_units_once() {
         AssetBalanceScope::Global,
         AssetBalancePolicy::Global,
         16,
-        Quantity::from(500_000_u32),
+        &(Quantity::from(500_000_u32)),
     );
     movements[0].quantity = Quantity::from(250_000_u32);
     let source = movements[0].source.clone();
@@ -473,7 +473,7 @@ fn atomic_settlement_metadata_or_amount_substitution_requires_fresh_whole_intent
             metadata.insert("reference".parse().expect("key"), Json::new("substituted"));
         }
         let changed = SettleAtomic::new(
-            stx.network_id.clone(),
+            stx.network_id,
             original.settlement_id().clone(),
             AtomicSettlementMovements::try_from(changed_movements).expect("canonical"),
             AtomicSettlementEscrows::empty(),
@@ -499,7 +499,7 @@ fn atomic_settlement_wrong_network_or_expired_height_changes_nothing() {
     for expired in [false, true] {
         let mut stx = block.transaction();
         let network = if expired {
-            stx.network_id.clone()
+            stx.network_id
         } else {
             iroha_data_model::NetworkId::from_genesis_hash(
                 HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"other-network")),
@@ -698,7 +698,7 @@ fn atomic_settlement_source_delta_refusal_preserves_every_observable_effect() {
         AssetBalanceScope::Global,
         AssetBalancePolicy::Global,
         254,
-        Quantity::from(10_u32),
+        &(Quantity::from(10_u32)),
     );
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));
@@ -1034,6 +1034,18 @@ fn bond_escrow_fixture() -> BondEscrowFixture {
         ],
         [],
     );
+    // Component escrow custody owns its policy before the first snapshot.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded component parameter fixture");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     BondEscrowFixture {
         state: State::new(
             world,
@@ -1122,7 +1134,7 @@ impl BondEscrowFixture {
         let mut escrows = escrows;
         escrows.sort_by_key(|escrow| escrow.escrow_id);
         SettleAtomic::new(
-            stx.network_id.clone(),
+            stx.network_id,
             SettlementId::new(payer.clone(), "bond_issue_1".parse().expect("reference")),
             AtomicSettlementMovements::try_from(movements).expect("canonical movements"),
             AtomicSettlementEscrows::try_from(escrows).expect("canonical escrows"),
@@ -1418,7 +1430,7 @@ fn atomic_settlement_movement_cannot_credit_same_intent_escrow_custody() {
     ];
     movements.sort_by(|a, b| (&a.source, &a.recipient).cmp(&(&b.source, &b.recipient)));
     let instruction = SettleAtomic::new(
-        stx.network_id.clone(),
+        stx.network_id,
         SettlementId::new(
             fixture.investor.clone(),
             "custody_credit".parse().expect("reference"),
@@ -1601,7 +1613,7 @@ fn atomic_subscription_with_one_fee_movement_and_four_escrow_legs() {
         ];
         legs.sort_by_key(|leg| leg.escrow_id);
         let instruction = SettleAtomic::new(
-            stx.network_id.clone(),
+            stx.network_id,
             SettlementId::new(
                 fixture.investor.clone(),
                 "subscription".parse().expect("reference"),
@@ -1730,7 +1742,7 @@ fn atomic_settlement_with_only_two_escrow_legs_and_no_movement() {
     ];
     legs.sort_by_key(|leg| leg.escrow_id);
     let instruction = SettleAtomic::new(
-        stx.network_id.clone(),
+        stx.network_id,
         SettlementId::new(
             fixture.investor.clone(),
             "escrow_exchange".parse().expect("reference"),

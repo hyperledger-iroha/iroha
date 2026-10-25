@@ -173,7 +173,7 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
         .set_parameter_for_testing(Parameter::Custom(npos.into_custom_parameter()))
         .expect("install valid committed NPoS fixture parameters");
     let profile =
-        iroha_config::profile::Profile::compiled(iroha_config::profile::ProfileId::IrohaDev)
+        iroha_config::profile::Profile::compiled(iroha_config::profile::ProfileId::IrohaDevV1)
             .unwrap();
     let mut staking = profile.genesis_recipe().public_lane_staking.clone();
     staking.stake_asset_id = stake_asset_definition_id();

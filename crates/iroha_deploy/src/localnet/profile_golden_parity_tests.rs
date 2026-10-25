@@ -210,7 +210,15 @@ fn line_diff_reports_only_changed_lines() {
 fn catalog_normalization_copies_exactly_the_catalog_fields() {
     let mut kagami = actual::Nexus::default();
     kagami.routing_policy.default_lane = LaneId::new(3);
-    kagami.staking.max_validators = kagami.staking.max_validators.wrapping_add(1);
+    kagami.staking.max_validators = std::num::NonZeroU32::new(
+        kagami
+            .staking
+            .max_validators
+            .get()
+            .checked_add(1)
+            .expect("fixture validator limit can increase"),
+    )
+    .expect("increased fixture validator limit remains nonzero");
     let mut profile = actual::Nexus::default();
     copy_kagami_catalog(&mut profile, &kagami);
     assert_eq!(profile.routing_policy, kagami.routing_policy);

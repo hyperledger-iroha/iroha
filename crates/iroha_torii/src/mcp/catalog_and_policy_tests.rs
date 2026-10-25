@@ -168,10 +168,7 @@ fn every_catalog_canonical_auth_tool_publishes_a_strict_required_envelope() {
         if descriptor.authentication() == AuthenticationPolicy::CanonicalAccountSignature {
             covered += 1;
             validate_canonical_auth_tool_schema(tool).unwrap_or_else(|error| {
-                panic!(
-                    "{} {} failed schema validation: {error}",
-                    method, path_template
-                )
+                panic!("{method} {path_template} failed schema validation: {error}")
             });
         }
     }
@@ -197,10 +194,7 @@ fn every_catalog_optional_canonical_auth_tool_publishes_a_strict_optional_envelo
         if descriptor.authentication() == AuthenticationPolicy::OptionalCanonicalAccountSignature {
             covered += 1;
             validate_optional_canonical_auth_tool_schema(tool).unwrap_or_else(|error| {
-                panic!(
-                    "{} {} failed optional schema validation: {error}",
-                    method, path_template
-                )
+                panic!("{method} {path_template} failed optional schema validation: {error}")
             });
             let schema = tool.input_schema.as_object().expect("root object schema");
             assert!(
@@ -236,10 +230,7 @@ fn every_catalog_operator_auth_tool_publishes_a_strict_required_tuple() {
         if descriptor.authentication() == AuthenticationPolicy::OperatorSignature {
             covered += 1;
             validate_operator_auth_tool_schema(tool).unwrap_or_else(|error| {
-                panic!(
-                    "{} {} failed operator schema validation: {error}",
-                    method, path_template
-                )
+                panic!("{method} {path_template} failed operator schema validation: {error}")
             });
         }
     }
@@ -725,8 +716,7 @@ fn remote_addr_probe_payload(
         .get(crate::limits::REMOTE_ADDR_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
-        .map(Value::String)
-        .unwrap_or(Value::Null);
+        .map_or(Value::Null, Value::String);
     let mut payload = Map::new();
     payload.insert(
         "allowed_header_only".into(),
@@ -755,8 +745,10 @@ fn install_remote_addr_probe_router(app: &mut SharedAppState) -> McpDispatchRout
                 let remote = req
                     .extensions()
                     .get::<axum::extract::ConnectInfo<SocketAddr>>()
-                    .map(|connect| connect.0)
-                    .unwrap_or_else(|| SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
+                    .map_or_else(
+                        || SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                        |connect| connect.0,
+                    );
                 let payload = remote_addr_probe_payload(&headers, remote, &allow);
                 let body =
                     Body::from(norito::json::to_string(&payload).expect("encode probe payload"));
@@ -1109,7 +1101,7 @@ async fn cancelling_real_long_poll_releases_both_quotas_and_allows_reentry() {
     handle_cancelled_notification(
         &app,
         &cancellation_test_headers("client"),
-        &cancel_notification(Value::String("cancel-long-poll".to_owned())),
+        &cancel_notification(&(Value::String("cancel-long-poll".to_owned()))),
     );
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), first_wait)
@@ -1145,7 +1137,7 @@ async fn cancelling_real_long_poll_releases_both_quotas_and_allows_reentry() {
     handle_cancelled_notification(
         &app,
         &cancellation_test_headers("client"),
-        &cancel_notification(Value::String("replacement-long-poll".to_owned())),
+        &cancel_notification(&(Value::String("replacement-long-poll".to_owned()))),
     );
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), second_wait)
@@ -1337,11 +1329,11 @@ fn cancellation_test_nonce(fill: u8) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([fill; 32])
 }
 
-fn cancellable_health_request(id: Value) -> Value {
+fn cancellable_health_request(id: &Value) -> Value {
     cancellable_health_request_with_nonce(id, cancellation_test_nonce(0x41).as_str())
 }
 
-fn cancellable_health_request_with_nonce(id: Value, cancellation_nonce: &str) -> Value {
+fn cancellable_health_request_with_nonce(id: &Value, cancellation_nonce: &str) -> Value {
     norito::json!({
         "jsonrpc": (JSONRPC_VERSION),
         "id": (id),
@@ -1354,11 +1346,11 @@ fn cancellable_health_request_with_nonce(id: Value, cancellation_nonce: &str) ->
     })
 }
 
-fn cancel_notification(id: Value) -> Value {
+fn cancel_notification(id: &Value) -> Value {
     cancel_notification_with_nonce(id, cancellation_test_nonce(0x41).as_str())
 }
 
-fn cancel_notification_with_nonce(id: Value, cancellation_nonce: &str) -> Value {
+fn cancel_notification_with_nonce(id: &Value, cancellation_nonce: &str) -> Value {
     norito::json!({
         "jsonrpc": (JSONRPC_VERSION),
         "method": "notifications/cancelled",
@@ -1425,7 +1417,7 @@ async fn malformed_authenticated_cancellation_nonce_is_rejected() {
             std::sync::Arc::new(limits::ApiTokenDigestSet::from_tokens(["client"]));
     }
     let request = cancellable_health_request_with_nonce(
-        Value::String("invalid-nonce".to_owned()),
+        &(Value::String("invalid-nonce".to_owned())),
         "not-canonical",
     );
     let outcome =
@@ -1526,7 +1518,7 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
         handle_tool_call_request(
             call_app,
             &call_headers,
-            cancellable_health_request(Value::Number(json::native::Number::U64(u64::MAX))),
+            cancellable_health_request(&(Value::Number(json::native::Number::U64(u64::MAX)))),
         )
         .await
     });
@@ -1617,12 +1609,12 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     let shared_id = Value::String("shared".to_owned());
     let app_a = std::sync::Arc::clone(&app);
     let headers_a = cancellation_test_headers("client-a");
-    let request_a = cancellable_health_request(shared_id.clone());
+    let request_a = cancellable_health_request(&(shared_id));
     let call_a =
         tokio::spawn(async move { handle_tool_call_request(app_a, &headers_a, request_a).await });
     let app_b = std::sync::Arc::clone(&app);
     let headers_b = cancellation_test_headers("client-b");
-    let request_b = cancellable_health_request(shared_id.clone());
+    let request_b = cancellable_health_request(&(shared_id));
     let call_b =
         tokio::spawn(async move { handle_tool_call_request(app_b, &headers_b, request_b).await });
     tokio::time::timeout(Duration::from_secs(2), started_a.notified())
@@ -1635,10 +1627,7 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     let duplicate = handle_tool_call_request(
         std::sync::Arc::clone(&app),
         &cancellation_test_headers("client-a"),
-        cancellable_health_request_with_nonce(
-            shared_id.clone(),
-            cancellation_test_nonce(0x42).as_str(),
-        ),
+        cancellable_health_request_with_nonce(&(shared_id), cancellation_test_nonce(0x42).as_str()),
     )
     .await;
     let JsonRpcRequestOutcome::Response(duplicate) = duplicate else {
@@ -1656,7 +1645,7 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     handle_cancelled_notification(
         &app,
         &cancellation_test_headers("client-a"),
-        &cancel_notification(shared_id.clone()),
+        &cancel_notification(&(shared_id)),
     );
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), call_a)
@@ -1672,7 +1661,7 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     handle_cancelled_notification(
         &app,
         &cancellation_test_headers("client-b"),
-        &cancel_notification(shared_id.clone()),
+        &cancel_notification(&(shared_id)),
     );
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), call_b)
@@ -1687,7 +1676,7 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     let reused_app = std::sync::Arc::clone(&app);
     let reused_headers = cancellation_test_headers("client-a");
     let reused_request =
-        cancellable_health_request_with_nonce(shared_id.clone(), replacement_nonce.as_str());
+        cancellable_health_request_with_nonce(&(shared_id), replacement_nonce.as_str());
     let reused = tokio::spawn(async move {
         handle_tool_call_request(reused_app, &reused_headers, reused_request).await
     });
@@ -1697,7 +1686,7 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     handle_cancelled_notification(
         &app,
         &cancellation_test_headers("client-a"),
-        &cancel_notification(shared_id.clone()),
+        &cancel_notification(&(shared_id)),
     );
     {
         let key = McpInflightKey {
@@ -1723,7 +1712,7 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     handle_cancelled_notification(
         &app,
         &cancellation_test_headers("client-a"),
-        &cancel_notification_with_nonce(shared_id, replacement_nonce.as_str()),
+        &cancel_notification_with_nonce(&(shared_id), replacement_nonce.as_str()),
     );
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), reused)
@@ -1774,7 +1763,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
         handle_tool_call_request(
             first_app,
             &first_headers,
-            cancellable_health_request(Value::String("one".to_owned())),
+            cancellable_health_request(&(Value::String("one".to_owned()))),
         )
         .await
     });
@@ -1784,7 +1773,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
         handle_tool_call_request(
             second_app,
             &second_headers,
-            cancellable_health_request(Value::String("two".to_owned())),
+            cancellable_health_request(&(Value::String("two".to_owned()))),
         )
         .await
     });
@@ -1800,7 +1789,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
     let overflow = handle_tool_call_request(
         std::sync::Arc::clone(&app),
         &cancellation_test_headers("client"),
-        cancellable_health_request(overflow_id.clone()),
+        cancellable_health_request(&(overflow_id)),
     )
     .await;
     let JsonRpcRequestOutcome::Response(overflow) = overflow else {
@@ -1833,7 +1822,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
     handle_cancelled_notification(
         &app,
         &cancellation_test_headers("client"),
-        &cancel_notification(Value::String("one".to_owned())),
+        &cancel_notification(&(Value::String("one".to_owned()))),
     );
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), first)
@@ -1850,7 +1839,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
         handle_tool_call_request(
             replacement_app,
             &replacement_headers,
-            cancellable_health_request(Value::String("replacement".to_owned())),
+            cancellable_health_request(&(Value::String("replacement".to_owned()))),
         )
         .await
     });
@@ -1864,7 +1853,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
         handle_cancelled_notification(
             &app,
             &cancellation_test_headers("client"),
-            &cancel_notification(Value::String(request_id.to_owned())),
+            &cancel_notification(&(Value::String(request_id.to_owned()))),
         );
     }
     assert!(matches!(

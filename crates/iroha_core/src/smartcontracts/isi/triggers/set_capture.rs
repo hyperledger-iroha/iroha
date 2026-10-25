@@ -5,7 +5,7 @@ use mv::{BlockCapture, BlockRetirement, CaptureCleanup};
 
 /// Original release owners held through an enclosing World capture.
 #[must_use = "retain trigger capture cleanup through enclosing physical writers"]
-pub(crate) struct SetCaptureCleanup([Option<CaptureCleanup>; 10]);
+pub struct SetCaptureCleanup([Option<CaptureCleanup>; 10]);
 
 impl Default for SetCaptureCleanup {
     fn default() -> Self {
@@ -79,6 +79,10 @@ capture_fields! {
     contracts: (HashOf<IvmBytecode>, IvmBytecodeEntry),
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Each phase transfers the original admitted set owner without allocating during capture or publication"
+)]
 enum CapturePhase<'set, Admission> {
     Empty,
     Attached(SetBlock<'set>),
@@ -87,7 +91,7 @@ enum CapturePhase<'set, Admission> {
 }
 
 /// Original trigger capture retained by its enclosing field aggregate.
-pub(crate) struct SetBlockCapture<'set, Admission> {
+pub struct SetBlockCapture<'set, Admission> {
     phase: CapturePhase<'set, Admission>,
     started: bool,
     // Last: retained payloads precede the original release notifications.

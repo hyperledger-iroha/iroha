@@ -457,9 +457,11 @@ impl MainTracePolynomialSetV1 {
         if columns.end > masks.masks.len() {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
+        #[cfg(not(test))]
+        let RetainedRfcV1::Original(cache) = &self.retained_rfc;
+        #[cfg(test)]
         let cache = match &self.retained_rfc {
             RetainedRfcV1::Original(cache) => cache,
-            #[cfg(test)]
             RetainedRfcV1::ReplayOracle => {
                 return self.replay_uncached_columns_v1(
                     layout,
@@ -581,8 +583,7 @@ impl MainTracePolynomialSetV1 {
             kind,
             indices,
             assembly_payload,
-            plan,
-            Some(cut),
+            (&plan, Some(cut)),
             |group, columns| {
                 self.replay_columns_coefficients_v1(
                     layout,
@@ -665,8 +666,7 @@ impl MainTracePolynomialSetV1 {
             kind,
             &[],
             assembly_payload,
-            plan,
-            None,
+            (&plan, None),
             |group, columns| {
                 let mut pending = Vec::new().into_iter();
                 let mut next_column = columns.start;
@@ -744,8 +744,10 @@ impl MainTracePolynomialSetV1 {
         kind: MainTraceColumnKindV1,
         indices: &[usize],
         assembly_payload: usize,
-        plan: aggregate::joined_trace::JoinedTraceCommitmentPlanV1,
-        cut: Option<&aggregate::retained_commitment::RetainedMerkleCutV1>,
+        (plan, cut): (
+            &aggregate::joined_trace::JoinedTraceCommitmentPlanV1,
+            Option<&aggregate::retained_commitment::RetainedMerkleCutV1>,
+        ),
         mut batch: impl FnMut(
             usize,
             core::ops::Range<usize>,
@@ -801,7 +803,7 @@ impl MainTracePolynomialSetV1 {
                     pending.next().ok_or(ZkX509StarkErrorV1::InternalInvariant)
                 })();
                 replay
-                    .map(|coefficients| coefficients.into_vec_v1())
+                    .map(super::super::ZeroizingMainTraceColumnV1::into_vec_v1)
                     .map_err(|error| {
                         source_error = Some(error);
                         AggregateStarkErrorV1::InvalidLayout
@@ -1158,10 +1160,7 @@ mod tests {
                     })
                 }))
             });
-            assert!(match result {
-                Ok(result) => result.is_err(),
-                Err(_) => unwind,
-            });
+            assert!(result.map_or(unwind, |result| result.is_err()));
             assert_cleared(observations, 16);
         }
         let (result, observations) = inspection::observe_v1(|| {
@@ -1648,7 +1647,7 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
                     match kind {
                         MainTraceColumnKindV1::Base => source
-                            .replay_base_columns_v1(segment, local, &mut targets)
+                            .replay_base_columns_v1(&log19.sha_fixed, segment, local, &mut targets)
                             .map_err(map_main_sha_source_error_v1)?,
                         MainTraceColumnKindV1::Aux => {
                             source

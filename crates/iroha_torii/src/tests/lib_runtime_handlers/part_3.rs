@@ -465,7 +465,7 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
         );
         let owned = norito::to_bytes(&(
             "torii:proxy:v1",
-            process_session.clone(),
+            process_session,
             ingress_peer.clone(),
             7_u64,
             request.clone(),
@@ -613,10 +613,10 @@ async fn certified_transaction_batch_invalid_later_signature_does_not_admit_pref
         State(app.clone()),
         HeaderMap::new(),
         transaction_batch_body_for_test(
-            [&tx1, &tx2]
+            &([&tx1, &tx2]
                 .into_iter()
                 .map(iroha_version::codec::EncodeVersioned::encode_versioned)
-                .collect(),
+                .collect()),
         ),
     )
     .await
@@ -1209,9 +1209,8 @@ async fn current_native_ingress_revalidates_expiry_and_current_signing_policy() 
     ])
     .expect("explicit committed policy excludes this Ed25519 signer");
     let pool = app.state.view().execution_budget();
-    let mut parameters =
-        iroha_core::state::parameter_cell_block_for_testing(&app.state.world)
-            .expect("fund the original parameter publication");
+    let mut parameters = iroha_core::state::parameter_cell_block_for_testing(&app.state.world)
+        .expect("fund the original parameter publication");
     iroha_core::state::set_parameter_cell_for_testing(
         &mut parameters,
         policy

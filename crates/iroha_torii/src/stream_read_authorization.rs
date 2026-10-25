@@ -34,10 +34,10 @@ use crate::{
 };
 
 /// Result of a read that may need canonical event history.
-pub(crate) type EventHistoryResult<T> = Result<T, ExecutionAttemptError<iroha_core::kura::Error>>;
+pub type EventHistoryResult<T> = Result<T, ExecutionAttemptError<iroha_core::kura::Error>>;
 
 /// Authorization owned by exactly one long-lived stream.
-pub(crate) trait StreamAuthorization: Send + 'static {
+pub trait StreamAuthorization: Send + 'static {
     /// Whether the admitted reader may still receive the next item.
     ///
     /// Implementations may reuse a recent decision; see the module docs for
@@ -50,7 +50,7 @@ pub(crate) trait StreamAuthorization: Send + 'static {
 }
 
 /// Authorization and visibility owned by exactly one event subscription.
-pub(crate) trait EventStreamScope: StreamAuthorization {
+pub trait EventStreamScope: StreamAuthorization {
     /// Restrict one received event to the reader's current visibility.
     ///
     /// # Errors
@@ -88,7 +88,7 @@ impl StreamReadDecision {
 }
 
 /// A stream's reader with its cached authorization and visibility.
-pub(crate) struct ToriiStreamReadAuthorization {
+pub struct ToriiStreamReadAuthorization {
     context: ToriiDataspaceReadContext,
     decision: StreamReadDecision,
     transactions: Option<BlockTransactionScopes>,
@@ -235,7 +235,7 @@ impl ExplorerStreamReadAuthorization {
 }
 
 /// Event subscription whose transaction scopes come from an explicit block store.
-pub(crate) struct ScopedEventStream {
+pub struct ScopedEventStream {
     authorization: ToriiStreamReadAuthorization,
     kura: Arc<Kura>,
 }
@@ -269,7 +269,7 @@ impl EventStreamScope for ScopedEventStream {
 
 /// Admission-free subscription for fixtures: every event is delivered.
 #[cfg(any(test, feature = "test-fixtures"))]
-pub(crate) struct UnscopedEventStream;
+pub struct UnscopedEventStream;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 impl StreamAuthorization for UnscopedEventStream {
@@ -292,7 +292,7 @@ impl EventStreamScope for UnscopedEventStream {
 /// The complete authorization scope of one event, resolved before any
 /// subscriber-controlled filtering or projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ScopedEventScope {
+pub enum ScopedEventScope {
     /// Block lifecycle notices are public and carry no transaction body.
     Public,
     /// Every named dataspace must be visible to the current reader.
@@ -340,7 +340,7 @@ fn pipeline_event_scope(
 /// # Errors
 /// Returns the original Kura refusal; a capacity refusal is never reported as
 /// an absent block or a global-reader-only scope.
-pub(crate) fn transaction_event_scope(
+pub fn transaction_event_scope(
     kura: &Kura,
     transaction: &TransactionEvent,
     budget: &AllocationBudget,
@@ -367,14 +367,16 @@ pub(crate) fn transaction_event_scope(
     Ok(transactions.insert(scopes).scope(transaction.hash()))
 }
 
-/// Dataspace scopes of the signed transactions committed in one block.
-pub(crate) struct BlockTransactionScopes {
+type TransactionDataSpaceScope = (HashOf<SignedTransaction>, Option<BTreeSet<DataSpaceId>>);
+
+/// Data space scopes of the signed transactions committed in one block.
+pub struct BlockTransactionScopes {
     height: NonZeroUsize,
     /// Signed-transaction hashes with their entrypoint's complete committed
     /// route (`None` when the context is missing, stale or malformed), sorted
     /// by hash. `None` when an entrypoint is not a signed transaction: such a
     /// block attributes no transaction event to a dataspace.
-    transactions: Option<Vec<(HashOf<SignedTransaction>, Option<BTreeSet<DataSpaceId>>)>>,
+    transactions: Option<Vec<TransactionDataSpaceScope>>,
 }
 
 impl BlockTransactionScopes {

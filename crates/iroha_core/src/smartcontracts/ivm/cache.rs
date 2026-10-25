@@ -132,10 +132,10 @@ impl PreparedContractCache {
     }
     #[cfg(test)]
     fn check_checkout_for_test(&self) -> Result<(), ivm::VMError> {
-        match self.with_store(|store| store.checkout_refusal) {
-            Some(reason) => Err(ivm::VMError::ExecutionDeferred(reason)),
-            None => Ok(()),
-        }
+        self.with_store(|store| store.checkout_refusal).map_or_else(
+            || Ok(()),
+            |reason| Err(ivm::VMError::ExecutionDeferred(reason)),
+        )
     }
     /// Construct a store with the same entry bound used by the runtime cache.
     #[must_use]
@@ -1229,6 +1229,10 @@ impl IvmCache {
     ///
     /// # Errors
     /// Returns [`ProgramAnalysisError`] when metadata parsing or instruction decoding fails.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Program analysis propagates the original VM error and its allocation retry owner without allocating"
+    )]
     pub fn analyze_program(
         &mut self,
         summary: &ProgramSummary,
@@ -1254,6 +1258,10 @@ impl IvmCache {
     /// # Errors
     /// Returns [`ProgramAnalysisError`] if the stored validated image cannot be
     /// decoded consistently.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Program analysis propagates the original VM error and its allocation retry owner without allocating"
+    )]
     pub fn analyze_generic_program(
         &mut self,
         summary: &GenericProgramSummary,
