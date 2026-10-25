@@ -41,7 +41,8 @@ public struct PetalFrameView: View {
 /// rate well below the camera rate so each frame is captured whole at least
 /// once; the default suits 30 fps phone cameras.
 public struct PetalStreamView: View {
-    /// Default display rate.
+    /// Default display rate: 8 fps until physical qualification supports more
+    /// (12 fps reads fully in simulation, `specs/petal_stream.md` §5.4).
     public static let defaultFramesPerSecond = 8.0
 
     private let encoder: PetalStreamEncoder

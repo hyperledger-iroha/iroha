@@ -4,6 +4,17 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- `@iroha/iroha-js/petal` implements Petal Stream format 2 and removes format 1 (beacons carry version
+  `0x20`; `0x10` is refused). The katakana tile lanes `P` and `K` (with `PETAL_GLYPHS`, `tileCenter`, the
+  glyph templates, `templateSigmas` and `tileMatchError`) give way to a field of 3,376 petals in four
+  sectors, the field lanes `F0`-`F3` (105-byte words with 22 parity bytes), and the rings move to radii 405,
+  440 and 475. Frames carry 21 atoms (20 on beacon frames) and 512 atoms are buffered before the first
+  beacon. `PetalFrameCells` holds `dots` and `petals`, lane data and words are `{ d, fields }`, and decoded
+  frames carry `fields` and a `PetalPose` (`decodePetalFrameAt` takes one) with radial lens distortion,
+  searched while field lanes stay unread; unread sectors are read again from local levels, `fieldEvidence`
+  and `mergeFields` average repeated captures of one shown frame, and `PetalScanSession` counts
+  `fieldLanes` and `mergedLanes`. The player still defaults to 8 fps (12 reads fully in simulation only).
+  The unit suite checks `fixtures/petal/petal_stream_v2.json` and `petal_captures_v2.json` exactly.
 - Added the asset movement feed of `GET /v1/assets/{definition_id}/movements`: `assetMovements(definitionId)`
   on `ToriiClient` and `ToriiBrowserClient` is a history collection of every committed movement of the
   definition, newest first (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`,

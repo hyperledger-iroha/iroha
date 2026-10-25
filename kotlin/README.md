@@ -739,14 +739,15 @@ newly signed Load transaction with that identity is rejected.
 
 Petal Stream (`org.hyperledger.iroha.sdk.offline.petal`) is the animated
 "streaming QR" used to hand an offline payload such as an `IPM1` peer message
-from one screen to a phone camera. Each square frame shows four sakura-blossom
-finders, a `天`-shaped field of 256 tiles (light/dark polarity, lane `P`;
-katakana glyph, lane `K`) and three dotted rings (lane `D`). Every lane is one
-whitened GF(256) Reed–Solomon codeword carrying fountain-coded 16-byte atoms,
-and every fourth frame's lane `D` carries the stream beacon, so any readable
-lane of any frame helps and lost frames only cost time. The Kotlin port is
-pure JVM in `core-jvm` and follows the normative Rust crate
-`crates/iroha_petal`; encoding is bit-identical to it.
+from one screen to a phone camera. Each square frame (format 2) shows four
+sakura-blossom finders, a field of 3,376 petals on 34 concentric bands cut into
+four sectors (field lanes `F0`–`F3`, one bit per petal; petals inside the SORA
+`天` are drawn light over a faint `天`, the others pink) and three dotted rings
+(lane `D`). Every lane is one whitened GF(256) Reed–Solomon codeword carrying
+fountain-coded 16-byte atoms, and every fourth frame's lane `D` carries the
+stream beacon, so any readable lane of any frame helps and lost frames only cost
+time. The Kotlin port is pure JVM in `core-jvm` and follows the normative Rust
+crate `crates/iroha_petal`; encoding is bit-identical to it.
 
 ```kotlin
 // Sender: frame n of the endless stream, drawn natively or in software.
@@ -763,46 +764,46 @@ session.push(luma, SystemClock.elapsedRealtime()).completed?.let { deliver(it.pa
 ```
 
 `PetalDecoder.decode` locates the finders, tries four rotations and mirrored
-front-camera previews ranked by the ring gates plus the `天` silhouette, reads
-lane `D` first and turns low-confidence cells into Reed–Solomon erasures; a lane
-is only reported when its codeword checks out. When a thumb, a glare or the
-frame edge hides one corner blossom, three blossoms forming a corner still
-locate the code: the fourth corner is inferred, moved to where the dotted rings
-line up, and reported as `PetalDecodedFrame.inferredCorner` (canonical index).
-`PetalScanSession` reads the frames after a decoded one by `PetalDecoder.track`,
-which follows the last pose (at most 500 ms old) instead of searching the whole
-image, and counts both in `stats().tracked` and `stats().inferred`.
-When a capture loses a tile lane, the session holds up to four captures of each
-of six shown frames. It averages patches under their decoded canonical poses,
-first using each capture's finder levels, then the normalised mean raw patches
-for any lane still missing. Only captures whose decoded lane headers agree on
-the stream tag and frame counter share evidence; a recovered lane must name that
-same shown frame. `outcome.merged` names newly recovered tile lanes, while
-`stats().merges`, `stats().mergedP` and `stats().mergedK` count averaging and its
-recoveries. A frame only gains missing lanes. Reset and accepted stream metadata
-replacement drop held evidence; learning the first beacon preserves pre-beacon
-captures.
-The tile lanes `P` and `K` are read in two ways: the *level read* judges every
-8×8 tile patch against the light and dark levels measured at the finders, and a
-lane it cannot decode is retried with the *normalised read*, which rescales each
-patch and each template by its own contrast and erases tiles that lost it, so
-over-exposure, veiling light, glare and shadows cancel out (it only runs when a
-tile lane is missing). Scanners should still ask for about 1280×720 analysis
-frames, set exposure compensation to about −1 EV and fall back to 640×480 (lane
-`K` unreadable) only when the device cannot sustain 5 decoded frames per second;
-see `PetalLumaAdapter` and `specs/petal_stream.md` §8.
+front-camera previews ranked by the ring gates, reads lane `D` first and turns
+low-confidence bytes into Reed–Solomon erasures; a lane is only reported when
+its codeword checks out. Each petal is judged by its brightness against a
+two-means threshold of its sector and colour. A sector the finder levels leave
+unread is read again from *local levels* (every petal rescaled by the darkest
+and brightest petals within 32 units), so shadows, glare, banding and veiling
+light cancel, and while a field lane stays unread the pose is searched for
+radial lens distortion (`PetalDecodedFrame.pose.distortion`). When a thumb, a
+glare or the frame edge hides one corner blossom, three blossoms forming a
+corner still locate the code: the fourth corner is inferred, moved to where the
+dotted rings line up, and reported as `PetalDecodedFrame.inferredCorner`
+(canonical index). `PetalScanSession` reads the frames after a decoded one by
+`PetalDecoder.track`, which follows the last pose and its distortion (at most
+500 ms old) instead of searching the whole image, and counts both in
+`stats().tracked` and `stats().inferred`.
+When a capture loses a field lane, the session holds the petal levels of up to
+four captures of each of six shown frames and reads the missing lanes from
+their mean. Only captures whose decoded lane headers agree on the stream tag and
+frame counter share evidence; a recovered lane must name that same shown frame.
+`outcome.merged` names newly recovered field lanes, while `stats().merges` and
+`stats().mergedLanes` count averaging and its recoveries (`stats().laneD` and
+`stats().fieldLanes` count single-capture reads). A frame only gains missing
+lanes. Reset and accepted stream metadata replacement drop held evidence;
+learning the first beacon preserves pre-beacon captures. In simulation format 2
+moves a 12 KB Payment in about 4.5 s at the default 8 fps against 6.4 s for
+animated QR (3 s at 12 fps, which awaits physical qualification); see
+`specs/petal_stream.md` §8.
 `PetalStreamAssembler` and `PetalScanSession` bound pending atoms, payload
 size (64 KiB by default) and stream lifetime (30 s idle, 180 s absolute), and
 deliver a payload only after its CRC-32C matches the beacon. `client-android`
-adds `PetalStreamView`, `PetalCanvasRenderer` and the dependency-free
-`PetalLumaAdapter` (CameraX `ImageAnalysis`, Camera2 `ImageReader` and Camera1
-NV21 previews); they use API 19 or older platform calls.
+adds `PetalStreamView`, `PetalCanvasRenderer` (one path per colour, petal
+shapes cached) and the dependency-free `PetalLumaAdapter` (CameraX
+`ImageAnalysis`, Camera2 `ImageReader` and Camera1 NV21 previews); they use
+API 19 or older platform calls.
 
-The tests check every section of `../fixtures/petal/petal_stream_v1.json`,
-decode the golden camera captures of `../fixtures/petal/petal_captures_v1.json`
-with exactly the lanes and inferred corners the reference reads, and track its
-golden frame pairs, recover the missing lanes of its noisy and banded merge
-sets, and refuse lanes from mixed-frame captures:
+The tests check every section of `../fixtures/petal/petal_stream_v2.json`,
+decode the golden camera captures of `../fixtures/petal/petal_captures_v2.json`
+with exactly the lanes, inferred corners, poses and Reed–Solomon corrections the
+reference reads, track its golden frame pairs, recover the missing lanes of its
+noisy merge set, and refuse lanes from mixed-frame captures:
 
 ```bash
 ./gradlew :core-jvm:test --tests '*Petal*' --console=plain

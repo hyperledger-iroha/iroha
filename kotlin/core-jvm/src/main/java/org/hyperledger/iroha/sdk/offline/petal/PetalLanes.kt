@@ -1,36 +1,49 @@
 package org.hyperledger.iroha.sdk.offline.petal
 
 /**
- * One of the three data lanes of a Petal frame. Each lane is exactly one
- * Reed–Solomon codeword, XOR-whitened with a fixed xorshift32 sequence.
+ * One of the five data lanes of a Petal frame: lane `D` (the dots on the three
+ * rings) or the field lane of one petal sector ([F0]–[F3]). Each lane is exactly
+ * one Reed–Solomon codeword, XOR-whitened with a fixed xorshift32 sequence.
  *
  * | lane | cells | codeword | data | parity |
  * |------|-------|----------|------|--------|
- * | `P` polarity | 256 tiles × 1 bit | 32 B | 19 B | 13 B |
- * | `K` katakana | 256 tiles × 4 bits | 128 B | 83 B | 45 B |
  * | `D` dots | 240 ring slots × 1 bit | 30 B | 19 B | 11 B |
+ * | `F0`–`F3` petals | 840 field cells of one sector × 1 bit | 105 B | 83 B | 22 B |
  */
 enum class PetalLane(
-    /** The lane letter used in diagnostics (`P`, `K` or `D`). */
+    /** The letter that names the lane in reports: `D`, or the sector digit `0`–`3`. */
     val letter: Char,
+    /** Field sector (`0..3`) of a field lane; `-1` for lane `D`. */
+    val sector: Int,
     /** Codeword length in bytes. */
     val wordLength: Int,
     /** Parity bytes. */
     val parityLength: Int,
+    /** Atoms carried (lane `D`: on frames without a beacon). */
+    val atoms: Int,
     whiteningSeed: Int,
 ) {
-    /** Light/dark polarity of the tiles. */
-    P('P', PetalLanes.P_WORD, PetalLanes.P_PARITY, 0x5045_5441), // "PETA"
-
-    /** Katakana glyph of each tile. */
-    K('K', PetalLanes.K_WORD, PetalLanes.K_PARITY, 0x4B41_4E41), // "KANA"
-
     /** Dots on the three rings. */
-    D('D', PetalLanes.D_WORD, PetalLanes.D_PARITY, 0x444F_5453), // "DOTS"
+    D('D', -1, PetalLanes.D_WORD, PetalLanes.D_PARITY, PetalLanes.D_ATOMS, 0x444F_5453), // "DOTS"
+
+    /** The petals of field sector 0 (3 o'clock to 6 o'clock). */
+    F0('0', 0, PetalLanes.FIELD_WORD, PetalLanes.FIELD_PARITY, PetalLanes.FIELD_ATOMS, 0x5045_5430), // "PET0"
+
+    /** The petals of field sector 1 (6 o'clock to 9 o'clock). */
+    F1('1', 1, PetalLanes.FIELD_WORD, PetalLanes.FIELD_PARITY, PetalLanes.FIELD_ATOMS, 0x5045_5431), // "PET1"
+
+    /** The petals of field sector 2 (9 o'clock to 12 o'clock). */
+    F2('2', 2, PetalLanes.FIELD_WORD, PetalLanes.FIELD_PARITY, PetalLanes.FIELD_ATOMS, 0x5045_5432), // "PET2"
+
+    /** The petals of field sector 3 (12 o'clock to 3 o'clock). */
+    F3('3', 3, PetalLanes.FIELD_WORD, PetalLanes.FIELD_PARITY, PetalLanes.FIELD_ATOMS, 0x5045_5433), // "PET3"
     ;
 
     /** Data bytes. */
     val dataLength: Int get() = wordLength - parityLength
+
+    /** Whether this is a field lane ([F0]–[F3]). */
+    val isField: Boolean get() = sector >= 0
 
     internal val whiteningBytes: ByteArray = PetalXorshift32(whiteningSeed).let { rng ->
         ByteArray(wordLength) { rng.nextByte().toByte() }
@@ -42,9 +55,23 @@ enum class PetalLane(
     fun whitening(): ByteArray = whiteningBytes.copyOf()
 
     companion object {
-        /** All lanes in decode order: `P`, `D`, `K`. */
+        /** All lanes in decode order: `D`, then the field lanes in sector order. */
         @JvmField
-        val DECODE_ORDER: List<PetalLane> = java.util.Collections.unmodifiableList(listOf(P, D, K))
+        val ALL: List<PetalLane> = java.util.Collections.unmodifiableList(listOf(D, F0, F1, F2, F3))
+
+        /** The four field lanes in sector order. */
+        @JvmField
+        val FIELDS: List<PetalLane> = java.util.Collections.unmodifiableList(listOf(F0, F1, F2, F3))
+
+        /** The field lane of sector [sector] (`0..3`). */
+        @JvmStatic
+        fun field(sector: Int): PetalLane = when (sector) {
+            0 -> F0
+            1 -> F1
+            2 -> F2
+            3 -> F3
+            else -> throw IllegalArgumentException("field sector must be 0..3")
+        }
     }
 }
 
@@ -56,49 +83,43 @@ object PetalLanes {
     /** Bytes of the per-lane header (`tag`, `frame` high, `frame` low). */
     const val LANE_HEADER_LEN = 3
 
-    /** Atoms carried by lane `P`. */
-    const val P_ATOMS = 1
-
     /** Atoms carried by lane `D` on frames that do not carry a beacon. */
     const val D_ATOMS = 1
 
-    /** Atoms carried by lane `K`. */
-    const val K_ATOMS = 5
+    /** Atoms carried by each field lane. */
+    const val FIELD_ATOMS = 5
 
-    /** Most atoms one frame can carry (lanes `P`, `D` and `K`). */
-    const val ATOMS_PER_FRAME = P_ATOMS + D_ATOMS + K_ATOMS
-
-    /** Codeword length of lane `P` in bytes. */
-    const val P_WORD = PetalLayout.TILE_COUNT / 8
-
-    /** Codeword length of lane `K` in bytes. */
-    const val K_WORD = PetalLayout.TILE_COUNT / 2
+    /** Most atoms one frame can carry (the four field lanes and lane `D`). */
+    const val ATOMS_PER_FRAME = PetalLayout.SECTORS * FIELD_ATOMS + D_ATOMS
 
     /** Codeword length of lane `D` in bytes. */
     const val D_WORD = PetalLayout.D_BITS / 8
 
-    /** Parity bytes of lane `P`. */
-    const val P_PARITY = 13
-
-    /** Parity bytes of lane `K`. */
-    const val K_PARITY = 45
-
     /** Parity bytes of lane `D`. */
     const val D_PARITY = 11
-
-    /** Data bytes of lane `P`. */
-    const val P_DATA = P_WORD - P_PARITY
-
-    /** Data bytes of lane `K`. */
-    const val K_DATA = K_WORD - K_PARITY
 
     /** Data bytes of lane `D`. */
     const val D_DATA = D_WORD - D_PARITY
 
+    /** Codeword length of a field lane in bytes. */
+    const val FIELD_WORD = 105
+
+    /** Parity bytes of a field lane. */
+    const val FIELD_PARITY = 22
+
+    /** Data bytes of a field lane. */
+    const val FIELD_DATA = FIELD_WORD - FIELD_PARITY
+
+    /** Field cells of a sector that carry no bit (they stay dark). */
+    const val SPARE_SECTOR_CELLS = PetalLayout.SECTOR_CELLS - FIELD_WORD * 8
+
+    /** Cells of a sector that carry its codeword's bits. */
+    internal const val FIELD_BITS = FIELD_WORD * 8
+
     init {
-        check(P_DATA == LANE_HEADER_LEN + P_ATOMS * ATOM_LEN)
-        check(K_DATA == LANE_HEADER_LEN + K_ATOMS * ATOM_LEN)
         check(D_DATA == LANE_HEADER_LEN + D_ATOMS * ATOM_LEN)
+        check(FIELD_DATA == LANE_HEADER_LEN + FIELD_ATOMS * ATOM_LEN)
+        check(FIELD_BITS <= PetalLayout.SECTOR_CELLS)
     }
 
     /** Encodes lane [data] (exactly [PetalLane.dataLength] bytes) into the transmitted codeword. */
@@ -175,47 +196,22 @@ object PetalLanes {
  * Immutable: arrays are copied on construction and access.
  */
 class PetalFrameCells internal constructor(
-    private val lightCells: BooleanArray,
-    private val glyphCells: ByteArray,
     private val dotCells: BooleanArray,
+    private val petalCells: BooleanArray,
 ) {
-    /** Whether tile [tile] is light. */
-    fun isLight(tile: Int): Boolean = lightCells[tile]
-
-    /** Glyph symbol (`0..15`) of tile [tile]. */
-    fun glyph(tile: Int): Int = glyphCells[tile].toInt()
-
     /** Whether flat ring slot [slot] is lit (gate dots included). */
     fun isDotLit(slot: Int): Boolean = dotCells[slot]
 
-    /** Polarity of each tile; `true` is a light tile. */
-    fun light(): BooleanArray = lightCells.copyOf()
-
-    /** Glyph symbol (`0..15`) of each tile. */
-    fun glyphs(): IntArray = IntArray(PetalLayout.TILE_COUNT) { glyphCells[it].toInt() }
+    /** Whether field cell [cell] carries a lit petal (spare cells are dark). */
+    fun isPetalLit(cell: Int): Boolean = petalCells[cell]
 
     /** Lit state of every ring slot, gate dots included. */
     fun dots(): BooleanArray = dotCells.copyOf()
 
-    /** Packs the polarity cells into a lane `P` codeword. */
-    fun pWord(): ByteArray {
-        val word = ByteArray(PetalLanes.P_WORD)
-        for (tile in 0 until PetalLayout.TILE_COUNT) {
-            if (lightCells[tile]) word[tile / 8] = (word[tile / 8].toInt() or (1 shl (7 - tile % 8))).toByte()
-        }
-        return word
-    }
+    /** Lit state of every field cell. */
+    fun petals(): BooleanArray = petalCells.copyOf()
 
-    /** Packs the glyph cells into a lane `K` codeword (first tile of a pair in the high nibble). */
-    fun kWord(): ByteArray {
-        val word = ByteArray(PetalLanes.K_WORD)
-        for (tile in 0 until PetalLayout.TILE_COUNT) {
-            val nibble = glyphCells[tile].toInt() and 0x0F
-            val shifted = if (tile % 2 == 0) nibble shl 4 else nibble
-            word[tile / 2] = (word[tile / 2].toInt() or shifted).toByte()
-        }
-        return word
-    }
+    internal val petalView: BooleanArray get() = petalCells
 
     /** Packs the data dots into a lane `D` codeword. */
     fun dWord(): ByteArray {
@@ -228,40 +224,39 @@ class PetalFrameCells internal constructor(
         return word
     }
 
-    override fun equals(other: Any?): Boolean = other is PetalFrameCells &&
-        lightCells.contentEquals(other.lightCells) && glyphCells.contentEquals(other.glyphCells) &&
-        dotCells.contentEquals(other.dotCells)
+    /** Packs the petals of sector [sector] (`0..3`) into its field codeword. */
+    fun fieldWord(sector: Int): ByteArray {
+        require(sector in 0 until PetalLayout.SECTORS) { "sector index out of range" }
+        val word = ByteArray(PetalLanes.FIELD_WORD)
+        val base = sector * PetalLayout.SECTOR_CELLS
+        for (bit in 0 until PetalLanes.FIELD_BITS) {
+            if (petalCells[PetalLayout.SECTOR_ORDER[base + bit]]) {
+                word[bit / 8] = (word[bit / 8].toInt() or (1 shl (7 - bit % 8))).toByte()
+            }
+        }
+        return word
+    }
 
-    override fun hashCode(): Int =
-        31 * (31 * lightCells.contentHashCode() + glyphCells.contentHashCode()) + dotCells.contentHashCode()
+    override fun equals(other: Any?): Boolean = other is PetalFrameCells &&
+        dotCells.contentEquals(other.dotCells) && petalCells.contentEquals(other.petalCells)
+
+    override fun hashCode(): Int = 31 * dotCells.contentHashCode() + petalCells.contentHashCode()
 
     companion object {
-        /**
-         * Builds cells from explicit values: 256 polarities, 256 glyph symbols
-         * (`0..15`) and [PetalLayout.TOTAL_SLOTS] dot states.
-         */
+        /** Builds cells from explicit values: [PetalLayout.TOTAL_SLOTS] dot states and [PetalLayout.FIELD_CELLS] petal states. */
         @JvmStatic
-        fun of(light: BooleanArray, glyph: IntArray, dots: BooleanArray): PetalFrameCells {
-            require(light.size == PetalLayout.TILE_COUNT && glyph.size == PetalLayout.TILE_COUNT) {
-                "frame cells need ${PetalLayout.TILE_COUNT} tiles"
-            }
+        fun of(dots: BooleanArray, petals: BooleanArray): PetalFrameCells {
             require(dots.size == PetalLayout.TOTAL_SLOTS) { "frame cells need ${PetalLayout.TOTAL_SLOTS} dots" }
-            require(glyph.all { it in 0 until PetalGlyphs.GLYPH_COUNT }) { "glyph symbols are 0..15" }
-            return PetalFrameCells(light.copyOf(), ByteArray(glyph.size) { glyph[it].toByte() }, dots.copyOf())
+            require(petals.size == PetalLayout.FIELD_CELLS) { "frame cells need ${PetalLayout.FIELD_CELLS} petals" }
+            return PetalFrameCells(dots.copyOf(), petals.copyOf())
         }
 
-        /** Builds the cells from the three transmitted codewords. */
+        /** Builds the cells from the transmitted codewords of lane `D` and the four field lanes (sector 0 first). */
         @JvmStatic
-        fun fromWords(p: ByteArray, k: ByteArray, d: ByteArray): PetalFrameCells {
-            require(p.size == PetalLanes.P_WORD && k.size == PetalLanes.K_WORD && d.size == PetalLanes.D_WORD) {
-                "lane codeword length mismatch"
-            }
-            val light = BooleanArray(PetalLayout.TILE_COUNT)
-            val glyph = ByteArray(PetalLayout.TILE_COUNT)
-            for (tile in 0 until PetalLayout.TILE_COUNT) {
-                light[tile] = ((p[tile / 8].toInt() ushr (7 - tile % 8)) and 1) == 1
-                val byte = k[tile / 2].toInt() and 0xFF
-                glyph[tile] = (if (tile % 2 == 0) byte ushr 4 else byte and 0x0F).toByte()
+        fun fromWords(d: ByteArray, fields: List<ByteArray>): PetalFrameCells {
+            require(d.size == PetalLanes.D_WORD) { "lane D codeword length mismatch" }
+            require(fields.size == PetalLayout.SECTORS && fields.all { it.size == PetalLanes.FIELD_WORD }) {
+                "field lane codeword length mismatch"
             }
             val dots = BooleanArray(PetalLayout.TOTAL_SLOTS)
             for (slot in 0 until PetalLayout.TOTAL_SLOTS) {
@@ -274,7 +269,15 @@ class PetalFrameCells internal constructor(
                     else -> false
                 }
             }
-            return PetalFrameCells(light, glyph, dots)
+            val petals = BooleanArray(PetalLayout.FIELD_CELLS)
+            for (sector in 0 until PetalLayout.SECTORS) {
+                val word = fields[sector]
+                val base = sector * PetalLayout.SECTOR_CELLS
+                for (bit in 0 until PetalLanes.FIELD_BITS) {
+                    petals[PetalLayout.SECTOR_ORDER[base + bit]] = ((word[bit / 8].toInt() ushr (7 - bit % 8)) and 1) == 1
+                }
+            }
+            return PetalFrameCells(dots, petals)
         }
     }
 }

@@ -52,9 +52,9 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
             XCTAssertEqual(image.width, 768)
             let decoded = try PetalDecoder.decode(try luma(of: image))
             let expected = encoder.laneData(frame: frame)
-            XCTAssertEqual(decoded.p?.data, expected.p, "frame \(frame) lane P")
-            XCTAssertEqual(decoded.k?.data, expected.k, "frame \(frame) lane K")
-            XCTAssertEqual(decoded.d?.data, expected.d, "frame \(frame) lane D")
+            for lane in PetalLane.decodeOrder {
+                XCTAssertEqual(decoded.lane(lane)?.data, expected.lane(lane), "frame \(frame) lane \(lane.letter)")
+            }
             XCTAssertEqual(decoded.rotation, 0)
             XCTAssertFalse(decoded.mirrored)
         }
@@ -138,8 +138,9 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
         let expected = encoder.laneData(frame: 8)
         for (name, image) in images {
             let decoded = try PetalDecoder.decode(try luma(of: image))
-            XCTAssertEqual(decoded.p?.data, expected.p, name)
-            XCTAssertEqual(decoded.d?.data, expected.d, name)
+            for lane in PetalLane.decodeOrder {
+                XCTAssertEqual(decoded.lane(lane)?.data, expected.lane(lane), "\(name) lane \(lane.letter)")
+            }
             XCTAssertEqual(decoded.beacon?.meta, encoder.meta, name)
         }
         _ = PetalStreamView(encoder: encoder, framesPerSecond: 10)

@@ -1,8 +1,8 @@
 // Payload streams: the sender-side encoder and the receiver-side assembler.
 //
-// Every frame carries a handful of fountain atoms, one lane at a time: lane P
-// one atom, lane K five, and lane D one atom, except on every fourth frame
-// (`frame % 4 == 0`), when lane D carries the stream beacon instead, so a
+// Every frame carries a handful of fountain atoms, one lane at a time: each of
+// the four field lanes five atoms, and lane D one atom, except on every fourth
+// frame (`frame % 4 == 0`), when lane D carries the stream beacon instead, so a
 // receiver can join at any frame within a fraction of a second. Atom ids run
 // contiguously over the atoms actually sent (see `firstAtomId`). Any single
 // readable lane is useful on its own.
@@ -11,7 +11,7 @@
 //
 // * every lane starts with `tag:u8, frame:u16`; `tag` is the low byte of the
 //   payload CRC-32C.
-// * lanes P, K and non-beacon D: `atoms...` (16 bytes each).
+// * field lanes and non-beacon D: `atoms...` (16 bytes each).
 // * beacon D: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
 
 import { crc32c } from "./crc.js";
@@ -21,17 +21,18 @@ import {
   ATOMS_PER_FRAME,
   D_ATOMS,
   D_DATA,
-  K_ATOMS,
+  FIELD_ATOMS,
+  FIELD_LANES,
   LANE_HEADER_LEN,
-  P_ATOMS,
   PetalFrameCells,
   encodeLane,
   laneSpec,
 } from "./lanes.js";
+import { SECTORS } from "./layout.js";
 import { PetalError, requireIndex, toBytes } from "./support.js";
 
-/** Version/profile byte of the beacon: format version 1, layout profile 0. */
-export const FORMAT_VERSION = 0x10;
+/** Version/profile byte of the beacon: format version 2, layout profile 0. */
+export const FORMAT_VERSION = 0x20;
 /** Largest payload a beacon can describe (`u24`). */
 export const MAX_PAYLOAD_LEN = 2 ** 24 - 1;
 /** Default receiver payload limit; override with the assembler limits. */
@@ -39,7 +40,7 @@ export const DEFAULT_MAX_PAYLOAD_LEN = 65536;
 /** A beacon replaces the lane-D atom on frames divisible by this interval. */
 export const BEACON_INTERVAL = 4;
 /** Default number of atoms buffered while waiting for the first beacon. */
-export const DEFAULT_MAX_PENDING_ATOMS = 128;
+export const DEFAULT_MAX_PENDING_ATOMS = 512;
 
 const BEACON_BODY_LEN = 9;
 
@@ -57,7 +58,7 @@ export function isBeaconFrame(frame) {
 
 /** Fountain atoms carried by `frame`. */
 export function atomsInFrame(frame) {
-  return isBeaconFrame(frame) ? P_ATOMS + K_ATOMS : P_ATOMS + D_ATOMS + K_ATOMS;
+  return isBeaconFrame(frame) ? ATOMS_PER_FRAME - D_ATOMS : ATOMS_PER_FRAME;
 }
 
 /**
@@ -71,11 +72,14 @@ export function firstAtomId(frame) {
   return f * ATOMS_PER_FRAME - Math.ceil(f / BEACON_INTERVAL);
 }
 
-function laneFirstId(lane, frame) {
+/**
+ * Fountain id of the first atom `lane` carries in `frame`: the field lanes
+ * come first, in sector order, then lane D.
+ */
+export function laneFirstId(lane, frame) {
+  const spec = laneSpec(lane);
   const base = firstAtomId(frame);
-  if (lane === "P") return base;
-  if (lane === "D") return base + P_ATOMS;
-  return base + P_ATOMS + (frame % BEACON_INTERVAL === 0 ? 0 : D_ATOMS);
+  return spec.sector === null ? base + SECTORS * FIELD_ATOMS : base + spec.sector * FIELD_ATOMS;
 }
 
 /**
@@ -105,7 +109,8 @@ function parseAtoms(lane, data, header, count) {
 }
 
 /**
- * Parses the data bytes of lane P or lane K.
+ * Parses the data bytes of a field lane (`"F0"` ... `"F3"`); `null` for lane D
+ * or a wrong length.
  *
  * @returns {{header: {tag: number, frame: number}, firstId: number, atoms: Uint8Array[]} | null}
  */
@@ -118,7 +123,7 @@ export function parseAtomLane(lane, data) {
   if (bytes.length !== spec.dataLen) {
     return null;
   }
-  return parseAtoms(lane, bytes, parseHeader(bytes), spec.atoms);
+  return parseAtoms(lane, bytes, parseHeader(bytes), FIELD_ATOMS);
 }
 
 /**
@@ -194,9 +199,10 @@ export class PetalStreamEncoder {
   }
 
   /**
-   * The data bytes of every lane of `frame` (a counter reduced modulo 65536).
+   * The data bytes of every lane of `frame` (a counter reduced modulo 65536):
+   * lane D and the four field lanes, sector 0 first.
    *
-   * @returns {{p: Uint8Array, k: Uint8Array, d: Uint8Array}}
+   * @returns {{d: Uint8Array, fields: Uint8Array[]}}
    */
   laneData(frame) {
     const f = frameNumber(frame);
@@ -206,10 +212,11 @@ export class PetalStreamEncoder {
       data.set(header);
       return data;
     };
-    const p = build("P");
-    this._atoms(laneFirstId("P", f), P_ATOMS, p, LANE_HEADER_LEN);
-    const k = build("K");
-    this._atoms(laneFirstId("K", f), K_ATOMS, k, LANE_HEADER_LEN);
+    const fields = FIELD_LANES.map((lane) => {
+      const data = build(lane);
+      this._atoms(laneFirstId(lane, f), FIELD_ATOMS, data, LANE_HEADER_LEN);
+      return data;
+    });
     const d = build("D");
     if (f % BEACON_INTERVAL === 0) {
       const { kind, len, crc } = this._meta;
@@ -231,23 +238,23 @@ export class PetalStreamEncoder {
     } else {
       this._atoms(laneFirstId("D", f), D_ATOMS, d, LANE_HEADER_LEN);
     }
-    return { p, k, d };
+    return { d, fields };
   }
 
   /**
    * The transmitted codewords of `frame`.
    *
-   * @returns {{p: Uint8Array, k: Uint8Array, d: Uint8Array}}
+   * @returns {{d: Uint8Array, fields: Uint8Array[]}}
    */
   words(frame) {
-    const { p, k, d } = this.laneData(frame);
-    return { p: encodeLane("P", p), k: encodeLane("K", k), d: encodeLane("D", d) };
+    const { d, fields } = this.laneData(frame);
+    return { d: encodeLane("D", d), fields: fields.map((data, sector) => encodeLane(FIELD_LANES[sector], data)) };
   }
 
   /** Every cell of `frame`, ready to render. */
   cells(frame) {
-    const { p, k, d } = this.words(frame);
-    return PetalFrameCells.fromWords(p, k, d);
+    const { d, fields } = this.words(frame);
+    return PetalFrameCells.fromWords(d, fields);
   }
 }
 
@@ -270,7 +277,7 @@ export class PetalStreamAssembler {
   /**
    * @param {{maxPayloadLen?: number, maxPendingAtoms?: number}} [limits]
    *   largest accepted payload (default 65536) and atoms buffered while
-   *   waiting for the first beacon (default 128; zero buffers nothing)
+   *   waiting for the first beacon (default 512; zero buffers nothing)
    */
   constructor(limits) {
     this._limits = Object.freeze(resolveLimits(limits));

@@ -4,6 +4,15 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- 2026-10-25: Petal Stream format 2 (no format 1 compatibility: beacon version `0x20`,
+  `0x10` is refused). The katakana tile field and lanes `P`/`K` are replaced by 3,376 petals
+  on 34 bands in four sectors (`PetalLane.field(0...3)`, 105-byte codewords) beside lane `D`
+  on rings at radii 405/440/475; a frame carries 21 atoms. The decoder adds the local read, a
+  lens-distortion search (`PetalPose`) and `PetalDecoder.fieldEvidence`/`mergeFields`;
+  `PetalScanStats` counts `laneD`, `fieldLanes` and `mergedLanes`; `PetalDrawList` lists the
+  `天` backdrop and lit petals. `PetalGlyphs` and the tile APIs are removed. Fixtures:
+  `petal_stream_v2.json` and `petal_captures_v2.json`.
+
 - 2026-10-18: Bridge ABI 30 (no ABI 29 compatibility). Removed the Parliament timed-OVN/TLE
   wallet and client APIs: the native casting-proof, registration and ballot wallet functions
   with their seed-handle, trust-anchor and Keychain seed types, the `ToriiClient`

@@ -20,26 +20,26 @@ public struct PetalColor: Equatable, Hashable, Sendable {
 public struct PetalPalette: Equatable, Sendable {
     /// Background.
     public var background: PetalColor
-    /// Light tile fill and finders.
+    /// Finders and the petals inside the `天`.
     public var light: PetalColor
-    /// Sakura pink of dots and of glyphs on dark tiles.
+    /// Sakura pink of the ring dots and of the petals outside the `天`.
     public var pink: PetalColor
-    /// Glyph colour on a light tile.
-    public var ink: PetalColor
+    /// The faint `天` drawn under the petals (a tenth of the light colour).
+    public var backdrop: PetalColor
 
-    public init(background: PetalColor, light: PetalColor, pink: PetalColor, ink: PetalColor) {
+    public init(background: PetalColor, light: PetalColor, pink: PetalColor, backdrop: PetalColor) {
         self.background = background
         self.light = light
         self.pink = pink
-        self.ink = ink
+        self.backdrop = backdrop
     }
 
-    /// The reference palette: black, pale sakura, sakura pink and near-black ink.
+    /// The reference palette: black, pale sakura, sakura pink and a faint `天`.
     public static let standard = PetalPalette(
         background: PetalColor(red: 0, green: 0, blue: 0),
         light: PetalColor(red: 250, green: 235, blue: 244),
         pink: PetalColor(red: 245, green: 175, blue: 208),
-        ink: PetalColor(red: 20, green: 4, blue: 14)
+        backdrop: PetalColor(red: 25, green: 24, blue: 24)
     )
 }
 
@@ -62,30 +62,13 @@ public struct PetalRenderOptions: Equatable, Sendable {
 /// Reference software renderer (port of `crates/iroha_petal/src/render.rs`).
 ///
 /// The picture is black, with four sakura-blossom finders in the canvas
-/// corners and a `天`-shaped field of 256 tiles inside three dotted rings. A
-/// light tile is a pale rounded square with a near-black katakana; a dark tile
-/// is empty except for its sakura-pink katakana. The output is pixel-identical
-/// to the Rust reference. Platform code may instead draw a ``PetalDrawList``
-/// with its own 2D API: geometry and polarity are the same.
+/// corners, three dotted rings, and inside them a field of petals on
+/// concentric bands. A lit petal whose centre lies inside the `天` is drawn in
+/// the light colour, the others in sakura pink, over a faint backdrop of the
+/// `天` itself, so the character shows through the storm of petals. The output
+/// is pixel-identical to the Rust reference. Platform code may instead draw a
+/// ``PetalDrawList`` with its own 2D API: geometry and polarity are the same.
 public enum PetalRenderer {
-    static let bitmapSize = 128
-
-    /// 128×128 ink bitmaps of the sixteen glyphs.
-    static let glyphBitmaps: [Bool] = {
-        let n = bitmapSize
-        var bitmaps = [Bool](repeating: false, count: PetalGlyphs.count * n * n)
-        for glyph in 0..<PetalGlyphs.count {
-            for v in 0..<n {
-                for u in 0..<n {
-                    let x = (Double(u) + 0.5) / Double(n) * PetalGlyphs.grid
-                    let y = (Double(v) + 0.5) / Double(n) * PetalGlyphs.grid
-                    bitmaps[(glyph * n + v) * n + u] = PetalGlyphs.isInked(glyph: glyph, x: x, y: y)
-                }
-            }
-        }
-        return bitmaps
-    }()
-
     /// Renders one frame as interleaved RGB.
     ///
     /// - Throws: ``PetalImageError/invalidRenderOptions`` when `options.size`
@@ -129,37 +112,55 @@ public enum PetalRenderer {
         return PetalRGBImage(width: size, height: size, pixels: data)
     }
 
-    /// Inside test for a rounded square of half-side `half` and corner
-    /// radius `radius`, relative to its centre.
-    @inline(__always)
-    static func inRoundedSquare(_ dx: Double, _ dy: Double, _ half: Double, _ radius: Double) -> Bool {
-        let ax = abs(dx)
-        let ay = abs(dy)
-        if ax > half || ay > half { return false }
-        let cx = ax - (half - radius)
-        let cy = ay - (half - radius)
-        return cx <= 0.0 || cy <= 0.0 || cx * cx + cy * cy <= radius * radius
-    }
-
-    /// Per-sample colour function; layout tables are copied in once so the
-    /// inner loop touches no lazily initialised globals.
+    /// Per-sample colour function, shading in the reference's order: finders,
+    /// ring dots, petals, the backdrop `天`, background. Layout tables are
+    /// copied in once so the inner loop touches no lazily initialised globals.
     private struct Shader {
-        let light: [Bool]
-        let glyph: [UInt8]
         let dots: [Bool]
+        let petals: [Bool]
         let palette: PetalPalette
         let finderCenters = PetalLayout.finderCenters
-        let tileLookup = PetalLayout.tileLookup
-        let bitmaps = PetalRenderer.glyphBitmaps
         let ringRadii = PetalLayout.ringRadii
         let ringSlots = PetalLayout.ringSlots
         let ringOffsets = (0..<PetalLayout.ringCount).map(PetalLayout.ringOffset)
+        let bandSlots = PetalLayout.bandSlots
+        let bandOffsets = PetalLayout.bandOffsets
+        let cellX = PetalLayout.cellCenterX
+        let cellY = PetalLayout.cellCenterY
+        let cellSin = PetalLayout.cellSin
+        let cellCos = PetalLayout.cellCos
+        let lightCells = PetalLayout.lightCells
 
         init(cells: PetalFrameCells, palette: PetalPalette) {
-            light = cells.light
-            glyph = cells.glyph
             dots = cells.dots
+            petals = cells.petals
             self.palette = palette
+        }
+
+        /// The colour of the lit petal at `(x, y)`, if any: the cells of the
+        /// nearest three bands and the nearest three slots of each are tried.
+        func petal(_ x: Double, _ y: Double, _ radius: Double, _ theta: Double) -> PetalColor? {
+            let tau = 2 * Double.pi
+            let reach = PetalLayout.petalHalfLength
+            let nearest = ((radius - PetalLayout.bandInner) / PetalLayout.bandSpacing).rounded()
+            for step in -1...1 {
+                let band = nearest + Double(step)
+                if band < 0.0 || band >= Double(PetalLayout.bandCount) { continue }
+                let index = Int(band)
+                if abs(radius - PetalLayout.bandRadius(index)) > reach { continue }
+                let n = bandSlots[index]
+                let around = PetalNumeric.saturatingInt(
+                    (theta / tau * Double(n) - PetalLayout.bandPhase(index)).rounded()
+                )
+                for slot in (around - 1)...(around + 1) {
+                    let cell = bandOffsets[index] + ((slot % n) + n) % n
+                    if !petals[cell] { continue }
+                    if PetalLayout.petalLit(x - cellX[cell], y - cellY[cell], sin: cellSin[cell], cos: cellCos[cell]) {
+                        return lightCells[cell] ? palette.light : palette.pink
+                    }
+                }
+            }
+            return nil
         }
 
         func shade(_ x: Double, _ y: Double) -> PetalColor {
@@ -171,59 +172,30 @@ public enum PetalRenderer {
                     return PetalLayout.finderLit(dx: dx, dy: dy) ? palette.light : palette.background
                 }
             }
-            // tiles
-            let lattice = PetalLayout.tileOrigin
-            let pitch = PetalLayout.tilePitch
-            if x >= lattice && y >= lattice {
-                let col = Int((x - lattice) / pitch)
-                let row = Int((y - lattice) / pitch)
-                if col < PetalLayout.tileGrid && row < PetalLayout.tileGrid {
-                    let tile = tileLookup[row * PetalLayout.tileGrid + col]
-                    if tile >= 0 {
-                        let cx = lattice + pitch * (Double(col) + 0.5)
-                        let cy = lattice + pitch * (Double(row) + 0.5)
-                        let dx = x - cx
-                        let dy = y - cy
-                        if !inRoundedSquare(dx, dy, PetalLayout.tileSize / 2.0, PetalLayout.tileCornerRadius) {
-                            return palette.background
-                        }
-                        let boxHalf = PetalLayout.glyphBox / 2.0
-                        var inked = false
-                        if abs(dx) < boxHalf && abs(dy) < boxHalf {
-                            let n = PetalRenderer.bitmapSize
-                            let u = Int((dx + boxHalf) / (2.0 * boxHalf) * Double(n))
-                            let v = Int((dy + boxHalf) / (2.0 * boxHalf) * Double(n))
-                            let symbol = Int(glyph[tile] & 0x0F)
-                            inked = bitmaps[(symbol * n + min(v, n - 1)) * n + min(u, n - 1)]
-                        }
-                        switch (light[tile], inked) {
-                        case (true, false): return palette.light
-                        case (true, true): return palette.ink
-                        case (false, true): return palette.pink
-                        case (false, false): return palette.background
-                        }
-                    }
-                }
-            }
-            // ring dots
             let dx = x - PetalLayout.center
             let dy = y - PetalLayout.center
             let radius = (dx * dx + dy * dy).squareRoot()
             let tau = 2 * Double.pi
+            var theta = atan2(dy, dx)
+            if theta < 0.0 { theta += tau }
+            // ring dots
             for ring in 0..<ringRadii.count {
                 let ringRadius = ringRadii[ring]
                 if abs(radius - ringRadius) > PetalLayout.dotRadius { continue }
                 let slots = ringSlots[ring]
-                var theta = atan2(dy, dx)
-                if theta < 0.0 { theta += tau }
-                let slot = Int((theta / tau * Double(slots)).rounded()) % slots
+                let slot = PetalNumeric.saturatingInt((theta / tau * Double(slots)).rounded()) % slots
                 if !dots[ringOffsets[ring] + slot] { continue }
-                let angle = tau * Double(slot) / Double(slots)
-                let px = ringRadius * cos(angle)
-                let py = ringRadius * sin(angle)
+                let (s, c) = PetalNumeric.sinCos(tau * Double(slot) / Double(slots))
+                let px = ringRadius * c
+                let py = ringRadius * s
                 if ((dx - px) * (dx - px) + (dy - py) * (dy - py)).squareRoot() <= PetalLayout.dotRadius {
                     return palette.pink
                 }
+            }
+            // petals, then the faint 天 under them
+            if radius <= PetalLayout.backdropRadius {
+                if let color = petal(x, y, radius, theta) { return color }
+                if PetalLayout.inMask(x: x, y: y) { return palette.backdrop }
             }
             return palette.background
         }
@@ -258,10 +230,14 @@ public struct PetalRect: Equatable, Sendable {
 /// 1. fill the canvas with ``PetalPalette/background``;
 /// 2. for each finder fill the ``Finder/core`` and every petal circle with
 ///    ``PetalPalette/light``, then fill every notch circle with the background;
-/// 3. for each tile fill ``Tile/fill`` (light tiles only) as a rounded rect,
-///    then stroke the ``Tile/strokes`` polylines with ``Tile/ink``, width
-///    ``Tile/strokeWidth``, round caps and joins, clipped to ``Tile/glyphBox``;
-/// 4. fill every lit ``dots`` circle with ``PetalPalette/pink``.
+/// 3. fill the ``backdrop`` cells with ``PetalPalette/backdrop``, clipped to
+///    the disc ``backdropClip``;
+/// 4. fill every lit ``petals`` entry in its ``Petal/color``: an ellipse of
+///    half-length ``petalHalfLength`` along ``Petal/angle`` and half-width
+///    ``petalHalfWidth``, centred on ``Petal/center``. The reference cuts a
+///    cosmetic notch into its tip (a disc of radius ``petalNotchRadius``
+///    centred ``petalNotchDistance`` outward); renderers may omit it;
+/// 5. fill every lit ``dots`` circle with ``PetalPalette/pink``.
 public struct PetalDrawList: Equatable, Sendable {
     /// A circle.
     public struct Circle: Equatable, Sendable {
@@ -282,38 +258,62 @@ public struct PetalDrawList: Equatable, Sendable {
         public let notches: [Circle]
     }
 
-    /// One data tile with its katakana.
-    public struct Tile: Equatable, Sendable {
-        /// Tile index (`0..<256`).
-        public let index: Int
-        /// The tile square; drawn as a rounded rect.
-        public let rect: PetalRect
-        /// Corner radius of the rounded rect.
-        public let cornerRadius: Double
-        /// Polarity: light tiles are filled, dark tiles are not.
+    /// A lit petal of the field.
+    public struct Petal: Equatable, Sendable {
+        /// Field cell index (`0..<3376`).
+        public let cell: Int
+        /// Centre in canvas units.
+        public let center: PetalPoint
+        /// Outward direction (radians, clockwise on screen from 3 o'clock):
+        /// the petal's long axis.
+        public let angle: Double
+        /// Whether the petal lies inside the `天` (drawn in the light colour).
         public let light: Bool
-        /// Glyph symbol (`0..<16`).
-        public let glyph: Int
-        /// The square the glyph is drawn into; strokes are clipped to it.
-        public let glyphBox: PetalRect
-        /// Glyph polylines in canvas units.
-        public let strokes: [[PetalPoint]]
-        /// Stroke width in canvas units (`6.5 / 32` of the glyph box).
-        public let strokeWidth: Double
-        /// Tile fill colour, `nil` for a dark (unfilled) tile.
-        public let fill: PetalColor?
-        /// Glyph colour (ink on light tiles, pink on dark tiles).
-        public let ink: PetalColor
+        /// Fill colour: ``PetalPalette/light`` inside the `天`,
+        /// ``PetalPalette/pink`` outside.
+        public let color: PetalColor
     }
 
     /// Canvas side in design units.
     public static let canvasSize = PetalLayout.canvas
+    /// Half the length of a petal along ``Petal/angle``.
+    public static let petalHalfLength = PetalLayout.petalHalfLength
+    /// Half the width of a petal.
+    public static let petalHalfWidth = PetalLayout.petalHalfWidth
+    /// Radius of the cosmetic notch at a petal's tip.
+    public static let petalNotchRadius = PetalLayout.petalNotchRadius
+    /// Distance from a petal's centre to its notch centre, outward.
+    public static let petalNotchDistance = PetalLayout.petalNotchDistance
+    /// The disc the ``backdrop`` is clipped to.
+    public static let backdropClip = Circle(
+        center: PetalPoint(x: PetalLayout.center, y: PetalLayout.center),
+        radius: PetalLayout.backdropRadius
+    )
+    /// Every `#` cell of the `天` mask lattice, row by row.
+    static let backdropCells: [PetalRect] = {
+        var cells: [PetalRect] = []
+        for row in 0..<PetalLayout.maskGrid {
+            for column in 0..<PetalLayout.maskGrid where PetalLayout.maskCells[row * PetalLayout.maskGrid + column] {
+                cells.append(PetalRect(
+                    x: PetalLayout.maskOrigin + PetalLayout.maskPitch * Double(column),
+                    y: PetalLayout.maskOrigin + PetalLayout.maskPitch * Double(row),
+                    width: PetalLayout.maskPitch,
+                    height: PetalLayout.maskPitch
+                ))
+            }
+        }
+        return cells
+    }()
+
     /// Colours of the frame.
     public let palette: PetalPalette
     /// The four corner finders, clockwise from top-left.
     public let finders: [Finder]
-    /// The 256 tiles in tile order.
-    public let tiles: [Tile]
+    /// The faint `天`: every `#` cell of the mask lattice, row by row,
+    /// unclipped (clip to ``backdropClip``).
+    public let backdrop: [PetalRect]
+    /// The lit petals in cell order.
+    public let petals: [Petal]
     /// The lit ring dots (gates and data dots).
     public let dots: [Circle]
 
@@ -324,18 +324,18 @@ public struct PetalDrawList: Equatable, Sendable {
             var petals: [Circle] = []
             var notches: [Circle] = []
             for petal in 0..<PetalLayout.finderPetals {
-                let angle = PetalLayout.petalAngle(petal)
+                let (s, c) = PetalNumeric.sinCos(PetalLayout.finderPetalAngle(petal))
                 petals.append(Circle(
                     center: PetalPoint(
-                        x: center.x + PetalLayout.finderPetalDistance * cos(angle),
-                        y: center.y + PetalLayout.finderPetalDistance * sin(angle)
+                        x: center.x + PetalLayout.finderPetalDistance * c,
+                        y: center.y + PetalLayout.finderPetalDistance * s
                     ),
                     radius: PetalLayout.finderPetalRadius
                 ))
                 notches.append(Circle(
                     center: PetalPoint(
-                        x: center.x + PetalLayout.finderOuter * cos(angle),
-                        y: center.y + PetalLayout.finderOuter * sin(angle)
+                        x: center.x + PetalLayout.finderOuter * c,
+                        y: center.y + PetalLayout.finderOuter * s
                     ),
                     radius: PetalLayout.finderNotchRadius
                 ))
@@ -346,40 +346,30 @@ public struct PetalDrawList: Equatable, Sendable {
                 notches: notches
             )
         }
-        let half = PetalLayout.tileSize / 2
-        let boxHalf = PetalLayout.glyphBox / 2
-        let scale = PetalLayout.glyphBox / PetalGlyphs.grid
-        tiles = (0..<PetalLayout.tileCount).map { index in
-            let center = PetalLayout.tileCenter(index)
-            let light = cells.light[index]
-            let glyph = Int(cells.glyph[index] & 0x0F)
-            let originX = center.x - boxHalf
-            let originY = center.y - boxHalf
-            return Tile(
-                index: index,
-                rect: PetalRect(x: center.x - half, y: center.y - half, width: PetalLayout.tileSize, height: PetalLayout.tileSize),
-                cornerRadius: PetalLayout.tileCornerRadius,
+        backdrop = Self.backdropCells
+        var petals: [Petal] = []
+        petals.reserveCapacity(PetalLayout.fieldCells / 2 + 64)
+        for cell in 0..<PetalLayout.fieldCells where cells.petals[cell] {
+            let light = PetalLayout.lightCells[cell]
+            petals.append(Petal(
+                cell: cell,
+                center: PetalLayout.cellCenter(cell),
+                angle: PetalLayout.cellAngles[cell],
                 light: light,
-                glyph: glyph,
-                glyphBox: PetalRect(x: originX, y: originY, width: PetalLayout.glyphBox, height: PetalLayout.glyphBox),
-                strokes: PetalGlyphs.strokes[glyph].map { polyline in
-                    polyline.map { PetalPoint(x: originX + $0.x * scale, y: originY + $0.y * scale) }
-                },
-                strokeWidth: PetalGlyphs.strokeWidth * scale,
-                fill: light ? palette.light : nil,
-                ink: light ? palette.ink : palette.pink
-            )
+                color: light ? palette.light : palette.pink
+            ))
         }
+        self.petals = petals
         var dots: [Circle] = []
         let tau = 2 * Double.pi
         for ring in 0..<PetalLayout.ringCount {
             let slots = PetalLayout.ringSlots[ring]
             for slot in 0..<slots where cells.dots[PetalLayout.ringOffset(ring) + slot] {
-                let angle = tau * Double(slot) / Double(slots)
+                let (s, c) = PetalNumeric.sinCos(tau * Double(slot) / Double(slots))
                 dots.append(Circle(
                     center: PetalPoint(
-                        x: PetalLayout.center + PetalLayout.ringRadii[ring] * cos(angle),
-                        y: PetalLayout.center + PetalLayout.ringRadii[ring] * sin(angle)
+                        x: PetalLayout.center + PetalLayout.ringRadii[ring] * c,
+                        y: PetalLayout.center + PetalLayout.ringRadii[ring] * s
                     ),
                     radius: PetalLayout.dotRadius
                 ))

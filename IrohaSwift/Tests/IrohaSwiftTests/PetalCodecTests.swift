@@ -1,8 +1,8 @@
 import XCTest
 @testable import IrohaSwift
 
-/// Ports of the `crc`, `prng`, `rs`, `lanes`, `layout` and `glyphs` unit
-/// tests of `crates/iroha_petal`.
+/// Ports of the `crc`, `prng`, `rs`, `lanes` and `layout` unit tests of
+/// `crates/iroha_petal`.
 final class PetalCodecTests: XCTestCase {
     // MARK: - CRC-32C and xorshift32
 
@@ -108,22 +108,32 @@ final class PetalCodecTests: XCTestCase {
 
     // MARK: - Lanes
 
+    private func fieldData(_ seed: UInt8) -> [UInt8] {
+        (0..<PetalLane.field(0).dataLength).map { (UInt8($0) &* 37) ^ seed }
+    }
+
     func testLaneSizesAreConsistent() {
-        XCTAssertEqual(PetalLane.p.wordLength, 32)
-        XCTAssertEqual(PetalLane.k.wordLength, 128)
         XCTAssertEqual(PetalLane.d.wordLength, 30)
-        XCTAssertEqual(PetalLane.p.dataLength, 19)
-        XCTAssertEqual(PetalLane.k.dataLength, 83)
         XCTAssertEqual(PetalLane.d.dataLength, 19)
+        XCTAssertEqual(PetalLane.d.parityLength, 11)
+        for lane in PetalLane.fields {
+            XCTAssertEqual(lane.wordLength, 105)
+            XCTAssertEqual(lane.dataLength, 83)
+            XCTAssertEqual(lane.parityLength, 22)
+        }
+        XCTAssertEqual(PetalLane.spareSectorCells, 4)
+        XCTAssertEqual(PetalLane.atomsPerFrame, 21)
+        XCTAssertEqual(
+            PetalLane.atomsPerFrame,
+            PetalLane.d.atomCount + PetalLane.fields.reduce(0) { $0 + $1.atomCount }
+        )
         for lane in PetalLane.decodeOrder {
             XCTAssertEqual(lane.dataLength, PetalLane.headerLength + lane.atomCount * PetalLane.atomLength)
         }
-        XCTAssertEqual(PetalLane.decodeOrder, [.p, .d, .k])
-        XCTAssertEqual(
-            PetalLane.atomsPerFrame,
-            PetalLane.p.atomCount + PetalLane.d.atomCount + PetalLane.k.atomCount
-        )
-        XCTAssertEqual(PetalLane.decodeOrder.map(\.letter), ["P", "D", "K"])
+        XCTAssertEqual(PetalLane.decodeOrder, [.d, .field(0), .field(1), .field(2), .field(3)])
+        XCTAssertEqual(PetalLane.decodeOrder.map(\.letter), ["D", "0", "1", "2", "3"])
+        XCTAssertEqual(PetalLane.field(2).sector, 2)
+        XCTAssertNil(PetalLane.d.sector)
     }
 
     func testWhiteningIsDeterministicAndBalanced() {
@@ -136,40 +146,41 @@ final class PetalCodecTests: XCTestCase {
             XCTAssertGreaterThan(ones, bits * 38 / 100, "\(lane)")
             XCTAssertLessThan(ones, bits * 62 / 100, "\(lane)")
         }
+        XCTAssertNotEqual(PetalLane.field(0).whitening, PetalLane.field(1).whitening)
     }
 
     func testLanesRoundtripThroughCells() throws {
-        let pData = (0..<19).map { UInt8($0) }
-        let kData = (0..<83).map { UInt8($0) &* 37 }
         let dData = (0..<19).map { UInt8($0) ^ 0xA5 }
-        let p = try PetalLane.p.encode(pData)
-        let k = try PetalLane.k.encode(kData)
         let d = try PetalLane.d.encode(dData)
-        let cells = try PetalFrameCells(p: p, k: k, d: d)
-        XCTAssertEqual(cells.pWord, p)
-        XCTAssertEqual(cells.kWord, k)
+        let fields = try (0..<PetalLayout.sectors).map { try PetalLane.field($0).encode(fieldData(UInt8($0))) }
+        let cells = try PetalFrameCells(d: d, fields: fields)
         XCTAssertEqual(cells.dWord, d)
-        XCTAssertEqual(try PetalLane.p.decode(cells.pWord), pData)
-        XCTAssertEqual(try PetalLane.k.decode(cells.kWord), kData)
         XCTAssertEqual(try PetalLane.d.decode(cells.dWord), dData)
+        for (sector, field) in fields.enumerated() {
+            XCTAssertEqual(cells.fieldWord(sector: sector), field)
+            XCTAssertEqual(try PetalLane.field(sector).decode(cells.fieldWord(sector: sector)), fieldData(UInt8(sector)))
+        }
+        // the spare cells at the end of every sector stay dark
+        for sector in 0..<PetalLayout.sectors {
+            for cell in PetalLayout.sectorCells(sector)[(105 * 8)...] {
+                XCTAssertFalse(cells.petals[cell])
+            }
+        }
     }
 
-    func testAllZeroDataStillLightsRoughlyHalfTheCells() throws {
+    func testAllZeroDataStillLightsAboutHalfThePetals() throws {
+        let zero = [UInt8](repeating: 0, count: 83)
         let cells = try PetalFrameCells(
-            p: PetalLane.p.encode([UInt8](repeating: 0, count: 19)),
-            k: PetalLane.k.encode([UInt8](repeating: 0, count: 83)),
-            d: PetalLane.d.encode([UInt8](repeating: 0, count: 19))
+            d: PetalLane.d.encode([UInt8](repeating: 0, count: 19)),
+            fields: (0..<PetalLayout.sectors).map { try PetalLane.field($0).encode(zero) }
         )
-        let lit = cells.light.filter { $0 }.count
-        XCTAssertTrue((90...166).contains(lit), "\(lit) light tiles")
+        let lit = cells.petals.filter { $0 }.count
+        XCTAssertTrue((1300...2050).contains(lit), "\(lit) lit petals")
     }
 
     func testGateDotsAreAlwaysLitAndGuardsDark() throws {
-        let cells = try PetalFrameCells(
-            p: [UInt8](repeating: 0xFF, count: 32),
-            k: [UInt8](repeating: 0xFF, count: 128),
-            d: [UInt8](repeating: 0xFF, count: 30)
-        )
+        let field = [UInt8](repeating: 0xFF, count: 105)
+        let cells = try PetalFrameCells(d: [UInt8](repeating: 0xFF, count: 30), fields: [field, field, field, field])
         for (slot, role) in PetalLayout.slotRoles.enumerated() {
             switch role {
             case .gate, .data: XCTAssertTrue(cells.dots[slot])
@@ -179,70 +190,151 @@ final class PetalCodecTests: XCTestCase {
     }
 
     func testCountedDecodingReportsTheRewrittenPositions() throws {
-        let data = (0..<19).map { UInt8($0) }
-        let clean = try PetalLane.p.encode(data)
-        let exact = try PetalLane.p.decodeCounted(clean)
+        let data = fieldData(9)
+        let lane = PetalLane.field(2)
+        let clean = try lane.encode(data)
+        let exact = try lane.decodeCounted(clean)
         XCTAssertEqual(exact.data, data)
         XCTAssertEqual(exact.corrected, 0)
         var damaged = clean
-        for position in [0, 7, 19, 31] { damaged[position] ^= 0xC3 }
-        let repaired = try PetalLane.p.decodeCounted(damaged)
+        for position in [0, 7, 19, 31, 60, 104] { damaged[position] ^= 0xC3 }
+        let repaired = try lane.decodeCounted(damaged)
         XCTAssertEqual(repaired.data, data)
-        XCTAssertEqual(repaired.corrected, 4)
+        XCTAssertEqual(repaired.corrected, 6)
+    }
+
+    func testAWordDecodedUnderAnotherSectorIsRefused() throws {
+        let word = try PetalLane.field(0).encode(fieldData(1))
+        for sector in 1..<PetalLayout.sectors {
+            XCTAssertThrowsError(try PetalLane.field(sector).decode(word), "sector \(sector)")
+        }
+        XCTAssertEqual(try PetalLane.field(0).decode(word), fieldData(1))
     }
 
     func testDecodeSurvivesBurstDamageToALane() throws {
-        let kData = (0..<83).map { UInt8($0) }
-        var word = try PetalLane.k.encode(kData)
-        for index in 0..<(45 / 2) { word[index] ^= 0x5A }
-        XCTAssertEqual(try PetalLane.k.decode(word), kData)
+        let data = fieldData(3)
+        var word = try PetalLane.field(1).encode(data)
+        for index in 0..<(22 / 2) { word[index] ^= 0x5A }
+        XCTAssertEqual(try PetalLane.field(1).decode(word), data)
     }
 
     func testLaneCodecRejectsWrongLengths() {
-        XCTAssertThrowsError(try PetalLane.p.encode([1, 2, 3])) {
+        XCTAssertThrowsError(try PetalLane.field(0).encode([1, 2, 3])) {
             XCTAssertEqual($0 as? PetalCodecError, .invalidShape)
         }
         XCTAssertThrowsError(try PetalLane.d.decode([UInt8](repeating: 0, count: 29))) {
             XCTAssertEqual($0 as? PetalCodecError, .invalidShape)
         }
-        XCTAssertThrowsError(try PetalFrameCells(p: [0], k: [], d: []))
+        XCTAssertThrowsError(try PetalFrameCells(d: [0], fields: []))
+        let field = [UInt8](repeating: 0, count: 105)
+        XCTAssertThrowsError(try PetalFrameCells(d: [UInt8](repeating: 0, count: 30), fields: [field, field, field]))
+        XCTAssertThrowsError(try PetalFrameCells(d: [UInt8](repeating: 0, count: 30), fields: [field, field, field, [0]]))
     }
 
     // MARK: - Layout
 
-    func testMaskHas256SymmetricTiles() {
-        XCTAssertEqual(PetalLayout.tiles.count, 256)
+    func testMaskIsMirrorSymmetricAndShowsWhichWayIsUp() {
+        XCTAssertEqual(PetalLayout.mask.count, PetalLayout.maskGrid)
         for row in PetalLayout.mask {
             let characters = Array(row)
-            XCTAssertEqual(characters.count, PetalLayout.tileGrid)
-            for column in 0..<(PetalLayout.tileGrid / 2) {
-                XCTAssertEqual(characters[column], characters[PetalLayout.tileGrid - 1 - column], "row \(row) not mirrored")
+            XCTAssertEqual(characters.count, PetalLayout.maskGrid)
+            for column in 0..<(PetalLayout.maskGrid / 2) {
+                XCTAssertEqual(characters[column], characters[PetalLayout.maskGrid - 1 - column], "row \(row) not mirrored")
             }
         }
         XCTAssertNotEqual(PetalLayout.mask.first, PetalLayout.mask.last, "mask must show top from bottom")
     }
 
-    func testTilesAreRowMajorAndInsideTheCanvas() {
-        var previous: PetalTilePosition?
-        for (index, position) in PetalLayout.tiles.enumerated() {
-            if let previous {
-                XCTAssertTrue((position.row, position.column) > (previous.row, previous.column))
+    func testBandsHoldEveryCellAndSplitIntoEqualSectors() {
+        XCTAssertEqual(PetalLayout.bandOffsets[PetalLayout.bandCount], PetalLayout.fieldCells)
+        var seen = [Bool](repeating: false, count: PetalLayout.fieldCells)
+        for sector in 0..<PetalLayout.sectors {
+            let cells = PetalLayout.sectorCells(sector)
+            XCTAssertEqual(cells.count, PetalLayout.sectorCellCount)
+            for cell in cells {
+                XCTAssertFalse(seen[cell], "cell \(cell) in two sectors")
+                seen[cell] = true
+                // a cell sits in its own quarter turn (odd bands lean half a slot forward)
+                let (band, slot) = PetalLayout.cellBandSlot(cell)
+                let quarter = PetalLayout.bandSlots[band] / PetalLayout.sectors
+                XCTAssertEqual(slot / quarter, sector)
+                let turn = PetalLayout.cellAngle(cell) / (2 * Double.pi) * Double(PetalLayout.sectors)
+                XCTAssertTrue(turn > Double(sector) - 1e-9 && turn < Double(sector) + 1)
             }
-            previous = position
-            let center = PetalLayout.tileCenter(index)
-            XCTAssertTrue((0..<PetalLayout.canvas).contains(center.x))
-            XCTAssertTrue((0..<PetalLayout.canvas).contains(center.y))
         }
+        XCTAssertTrue(seen.allSatisfy { $0 })
+    }
+
+    func testBandSlotsFollowThePitchRule() {
+        for (band, slots) in PetalLayout.bandSlots.enumerated() {
+            let raw = 2 * Double.pi * PetalLayout.bandRadius(band) / 50
+            XCTAssertEqual(slots, 4 * max(Int(raw.rounded()), 1), "band \(band)")
+        }
+    }
+
+    func testCellCentresFollowTheBands() {
+        for cell in 0..<PetalLayout.fieldCells {
+            let (band, slot) = PetalLayout.cellBandSlot(cell)
+            XCTAssertEqual(PetalLayout.bandOffsets[band] + slot, cell)
+            let angle = 2 * Double.pi * (Double(slot) + PetalLayout.bandPhase(band)) / Double(PetalLayout.bandSlots[band])
+            XCTAssertEqual(PetalLayout.cellAngle(cell), angle)
+            let center = PetalLayout.cellCenter(cell)
+            let radius = PetalLayout.bandRadius(band)
+            XCTAssertEqual(center.x, 512 + radius * cos(angle), accuracy: 1e-9)
+            XCTAssertEqual(center.y, 512 + radius * sin(angle), accuracy: 1e-9)
+        }
+        XCTAssertEqual(PetalLayout.cellBandSlot(PetalLayout.fieldCells - 1).band, PetalLayout.bandCount - 1)
+    }
+
+    func testTheFieldMapsOntoItselfUnderAQuarterTurn() {
+        for cell in 0..<PetalLayout.fieldCells {
+            let (band, slot) = PetalLayout.cellBandSlot(cell)
+            let n = PetalLayout.bandSlots[band]
+            let turned = PetalLayout.bandOffsets[band] + (slot + n / 4) % n
+            let p = PetalLayout.cellCenter(cell)
+            let q = PetalLayout.cellCenter(turned)
+            // a quarter turn clockwise on screen about the centre
+            XCTAssertEqual(q.x, 512 - (p.y - 512), accuracy: 1e-9, "cell \(cell)")
+            XCTAssertEqual(q.y, 512 + (p.x - 512), accuracy: 1e-9, "cell \(cell)")
+        }
+    }
+
+    func testPetalsStayClearOfTheirNeighboursAndTheRings() {
+        let outer = PetalLayout.bandRadius(PetalLayout.bandCount - 1) + PetalLayout.petalHalfLength
+        XCTAssertLessThan(outer + 10, PetalLayout.ringRadii[0] - PetalLayout.dotRadius)
+        XCTAssertLessThan(outer, PetalLayout.backdropRadius)
+        for cell in 0..<PetalLayout.fieldCells {
+            let p = PetalLayout.cellCenter(cell)
+            let band = PetalLayout.cellBandSlot(cell).band
+            let near = PetalLayout.bandOffsets[max(band - 1, 0)]..<PetalLayout.bandOffsets[min(band + 2, PetalLayout.bandCount)]
+            for other in near where other != cell {
+                let q = PetalLayout.cellCenter(other)
+                let distance = ((p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y)).squareRoot()
+                XCTAssertGreaterThan(distance, 2 * PetalLayout.petalRadius, "cells \(cell) and \(other)")
+            }
+        }
+    }
+
+    func testTheLightCellsDrawTheCharacter() {
+        let light = (0..<PetalLayout.fieldCells).filter(PetalLayout.cellLight).count
+        XCTAssertTrue((1200..<2400).contains(light), "\(light) light cells")
+        XCTAssertTrue(PetalLayout.inMask(x: 512, y: 190), "the top bar")
+        XCTAssertFalse(PetalLayout.inMask(x: 512, y: 350), "the gap under the second bar")
+        XCTAssertFalse(PetalLayout.inMask(x: 181.9, y: 400), "left of the lattice")
+        XCTAssertFalse(PetalLayout.inMask(x: 842, y: 400), "right of the lattice")
+        XCTAssertFalse(PetalLayout.inMask(x: .nan, y: .nan))
+        XCTAssertFalse(PetalLayout.inMask(x: .infinity, y: 400))
     }
 
     func testRingSlotsProvideExactlyTheLaneDCapacity() {
         let roles = PetalLayout.slotRoles
+        XCTAssertEqual(roles.count, PetalLayout.totalSlots)
+        XCTAssertEqual(PetalLayout.ringSlots.reduce(0, +), PetalLayout.totalSlots)
         let data = roles.filter { if case .data = $0 { return true } else { return false } }.count
         XCTAssertEqual(data, PetalLayout.dataBits)
         XCTAssertEqual(roles.filter { $0 == .gate }.count, 4 + 5 + 7)
         XCTAssertEqual(PetalLayout.dataSlots.count, PetalLayout.dataBits)
-        // the two spare slots are the last non-reserved slots of the outer ring
-        XCTAssertEqual(roles.filter { $0 == .spare }.count, 2)
+        XCTAssertEqual(roles.filter { $0 == .spare }.count, PetalLayout.totalSlots - PetalLayout.dataBits - 16 - 18)
     }
 
     func testGatesNeverTouchTheTop() {
@@ -261,26 +353,17 @@ final class PetalCodecTests: XCTestCase {
             let dy = center.y - PetalLayout.center
             XCTAssertGreaterThan((dx * dx + dy * dy).squareRoot() - PetalLayout.finderOuter, outermost + 20)
         }
-        var farthest = 0.0
-        for index in 0..<PetalLayout.tileCount {
-            let center = PetalLayout.tileCenter(index)
-            let h = PetalLayout.tileSize / 2
-            for (x, y) in [(center.x - h, center.y - h), (center.x + h, center.y - h),
-                           (center.x - h, center.y + h), (center.x + h, center.y + h)] {
-                let dx = x - PetalLayout.center
-                let dy = y - PetalLayout.center
-                farthest = max(farthest, (dx * dx + dy * dy).squareRoot())
-            }
-        }
-        XCTAssertLessThan(farthest + 10, PetalLayout.ringRadii[0] - PetalLayout.dotRadius)
     }
 
-    /// `f64::from(slot_center(ring, slot))` bit patterns of the Rust reference for slots
-    /// (0, 5), (1, 30) and (2, 77), which `2 * Float.pi` would move by an ulp.
-    private static let referenceSlotCenterBits: [[UInt64]] = [
-        [0x408A_64C5_E000_0000, 0x4084_4E20_E000_0000],
-        [0x4074_35F9_0000_0000, 0x408B_6043_8000_0000],
-        [0x407E_439D_4000_0000, 0x404A_6B6C_0000_0000],
+    /// `slot_center` of the release reference as `f32` bit patterns for slots
+    /// (0, 5), (1, 30), (2, 77) and (2, 98): `f32::consts::TAU` is not
+    /// `2 * Float.pi`, and the reference's fused sine and cosine move the last
+    /// one by an ulp against separate `sinf` and `cosf`.
+    private static let referenceSlotCenterBits: [[UInt32]] = [
+        [0x445E_DDBC, 0x4423_621D],
+        [0x43BC_0429, 0x4468_9DC0],
+        [0x43C9_3A91, 0x4247_36F0],
+        [0x4463_36D6, 0x437A_FBC0],
     ]
 
     func testSlotCentersSitOnTheirRings() {
@@ -292,16 +375,14 @@ final class PetalCodecTests: XCTestCase {
                 XCTAssertEqual((dx * dx + dy * dy).squareRoot(), PetalLayout.ringRadii[ring], accuracy: 1e-3)
             }
         }
-        let first = PetalLayout.slotCenter(ring: 0, slot: 0)
-        XCTAssertEqual(first, PetalPoint(x: 872, y: 512))
-        // single-precision values of the reference (`f32::consts::TAU`, not `2 * Float.pi`)
-        let bits = [(0, 5), (1, 30), (2, 77)].map { ring, slot -> [UInt64] in
+        XCTAssertEqual(PetalLayout.slotCenter(ring: 0, slot: 0), PetalPoint(x: 917, y: 512))
+        let bits = [(0, 5), (1, 30), (2, 77), (2, 98)].map { ring, slot -> [UInt32] in
             let point = PetalLayout.slotCenter(ring: ring, slot: slot)
-            return [point.x.bitPattern, point.y.bitPattern]
+            return [Float(point.x).bitPattern, Float(point.y).bitPattern]
         }
         XCTAssertEqual(bits, Self.referenceSlotCenterBits)
-        XCTAssertEqual(PetalLayout.splitSlot(80).ring, 1)
-        XCTAssertEqual(PetalLayout.splitSlot(275).slot, 103)
+        XCTAssertEqual(PetalLayout.splitSlot(88).ring, 1)
+        XCTAssertEqual(PetalLayout.splitSlot(295).slot, 107)
     }
 
     func testFinderBlossomShape() {
@@ -312,40 +393,16 @@ final class PetalCodecTests: XCTestCase {
         XCTAssertFalse(PetalLayout.finderLit(dx: 70, dy: 0))
     }
 
-    // MARK: - Glyphs
-
-    func testCheckedInTemplatesMatchTheStrokeDefinitions() {
-        XCTAssertEqual(PetalGlyphs.generateTemplates(), PetalGlyphs.templates)
-    }
-
-    func testEveryGlyphHasInkInsideTheDesignGrid() {
-        XCTAssertEqual(PetalGlyphs.characters.count, PetalGlyphs.count)
-        for (glyph, strokes) in PetalGlyphs.strokes.enumerated() {
-            let total = PetalGlyphs.templates[glyph].reduce(0) { $0 + Int($1) }
-            XCTAssertGreaterThan(total, 255 * 6, "glyph \(glyph) has too little ink")
-            for stroke in strokes {
-                for point in stroke {
-                    XCTAssertTrue((2.0...30.0).contains(point.x) && (2.0...30.0).contains(point.y))
-                }
-            }
-        }
-    }
-
-    func testGlyphsArePairwiseDistinctUnderBlur() {
-        // Zero-mean cosine distance of the raw templates must stay well apart.
-        func feature(_ glyph: Int) -> [Double] {
-            let values = PetalGlyphs.templates[glyph].map(Double.init)
-            let mean = values.reduce(0, +) / Double(values.count)
-            let centered = values.map { $0 - mean }
-            let norm = centered.reduce(0) { $0 + $1 * $1 }.squareRoot()
-            return centered.map { $0 / norm }
-        }
-        for a in 0..<PetalGlyphs.count {
-            for b in (a + 1)..<PetalGlyphs.count {
-                let dot = zip(feature(a), feature(b)).reduce(0) { $0 + $1.0 * $1.1 }
-                XCTAssertGreaterThan(1 - dot, 0.2, "glyphs \(a) and \(b) are too similar")
-            }
-        }
+    func testAPetalIsLitAtItsCentreAndNotchedAtItsTip() {
+        XCTAssertTrue(PetalLayout.petalLit(dx: 0, dy: 0, angle: 0.3))
+        let tip = PetalLayout.petalNotchDistance
+        XCTAssertFalse(PetalLayout.petalLit(dx: tip * cos(0.3), dy: tip * sin(0.3), angle: 0.3))
+        XCTAssertFalse(PetalLayout.petalLit(dx: 0, dy: 10, angle: 0))
+        // half-length outward, half-width across
+        XCTAssertTrue(PetalLayout.petalLit(dx: 0, dy: 4.2, angle: 0))
+        XCTAssertFalse(PetalLayout.petalLit(dx: 0, dy: 4.4, angle: 0))
+        XCTAssertTrue(PetalLayout.petalLit(dx: 0, dy: 3.8, angle: Double.pi / 2))
+        XCTAssertFalse(PetalLayout.petalLit(dx: 5.3, dy: 0, angle: 0))
     }
 
     // MARK: - Numeric helpers
@@ -367,5 +424,25 @@ final class PetalCodecTests: XCTestCase {
         XCTAssertEqual(PetalNumeric.saturatingInt(.infinity), Int.max)
         XCTAssertEqual(PetalNumeric.saturatingInt(-.infinity), Int.min)
         XCTAssertEqual(PetalNumeric.saturatingInt(-3.7), -3)
+    }
+
+    func testFusedSineAndCosineFollowTheReference() {
+        // the reference's optimiser computes a sine and a cosine of one angle in one call; at
+        // the angle of field cell 708 that call's sine is an ulp below `sin`
+        let angle = PetalLayout.cellAngle(708)
+        XCTAssertEqual(angle.bitPattern, 0x3FE2_938D_3E48_A6E6)
+        let (s, c) = PetalNumeric.sinCos(angle)
+        XCTAssertEqual(s, sin(angle), accuracy: 2e-16)
+        XCTAssertEqual(c, cos(angle), accuracy: 2e-16)
+        #if canImport(Darwin)
+        XCTAssertEqual(s.bitPattern, 0x3FE1_8CEA_F04E_4436)
+        XCTAssertEqual(PetalLayout.cellCenter(708).y.bitPattern, 0x4083_1A28_86F9_D58E)
+        #endif
+        for k in 0..<64 {
+            let a = Float(k) * 0.1
+            let (sf, cf) = PetalNumeric.sinCos(a)
+            XCTAssertEqual(sf, sin(a), accuracy: 1e-6)
+            XCTAssertEqual(cf, cos(a), accuracy: 1e-6)
+        }
     }
 }

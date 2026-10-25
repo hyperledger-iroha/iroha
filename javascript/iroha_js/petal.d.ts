@@ -2,11 +2,11 @@
  * Petal Stream: the Sakura-storm optical transport (a streaming visual code).
  *
  * A sender shows a sequence of square frames; a camera reads them and a
- * payload is reassembled. Every frame carries three independent lanes, each
- * one Reed-Solomon codeword over GF(256): tile polarity (lane `P`), the
- * katakana glyph of each tile (lane `K`) and the ring dots (lane `D`). Lanes
- * carry fountain-coded 16-byte atoms; lane `D` carries the stream beacon on
- * every fourth frame.
+ * payload is reassembled. Every frame carries five independent lanes, each
+ * one Reed-Solomon codeword over GF(256): the ring dots (lane `D`) and the
+ * four sectors of a field of 3,376 petals, each lit or dark (lanes `F0`-`F3`).
+ * Lanes carry fountain-coded 16-byte atoms; lane `D` carries the stream
+ * beacon on every fourth frame.
  *
  * This subpath is a port of the `iroha_petal` Rust reference: the encoder is
  * bit-exact (shared fixtures) and the decoder follows the reference step by
@@ -16,8 +16,14 @@
  * {@link PetalCameraScanner} when they run.
  */
 
-/** A lane name. */
-export type PetalLane = "P" | "K" | "D";
+/** A field lane name: the petals of sector `0`-`3`. */
+export type PetalFieldLane = "F0" | "F1" | "F2" | "F3";
+
+/** A lane name: the ring dots (`D`) or a field lane. */
+export type PetalLane = "D" | PetalFieldLane;
+
+/** Four values, one per field sector (sector 0 first). */
+export type PetalSectors<T> = readonly [T, T, T, T];
 
 /** Byte input accepted by the codec. */
 export type PetalBytes = Uint8Array | ArrayBuffer | ArrayBufferView | readonly number[];
@@ -50,21 +56,41 @@ export class PetalError extends Error {
 export interface PetalLayout {
   readonly canvas: 1024;
   readonly center: 512;
-  readonly tileGrid: 20;
-  readonly tileOrigin: 222;
-  readonly tilePitch: 29;
-  readonly tileSize: 25;
-  readonly tileCornerRadius: 3;
-  readonly glyphBox: 23;
-  readonly tileCount: 256;
-  /** The `天` silhouette, one 20-character row string per lattice row (`#` is a tile). */
+  /** Concentric petal bands; band `j` has radius `bandInner + bandSpacing * j`. */
+  readonly bandCount: 34;
+  readonly bandInner: 16;
+  readonly bandSpacing: 11;
+  /** Slots (field cells) of every band, inner band first; every count is a multiple of four. */
+  readonly bandSlots: readonly number[];
+  /** Index of the first cell of every band, and the total at the end. */
+  readonly bandOffsets: readonly number[];
+  readonly fieldCells: 3376;
+  /** Angular sectors of the field, one field lane each. */
+  readonly sectors: 4;
+  /** Cells per sector: 840 carry its codeword, the last four stay dark. */
+  readonly sectorCells: 844;
+  /** Radius of the disc a petal stands in for (decoders sample within it). */
+  readonly petalRadius: 4.6;
+  /** Half-length of a drawn petal along its outward direction. */
+  readonly petalHalfLength: 5.2;
+  /** Half-width of a drawn petal. */
+  readonly petalHalfWidth: 4.3;
+  /** Radius of the cosmetic notch cut into each petal tip. */
+  readonly petalNotchRadius: 1.3;
+  /** Distance from a petal centre to its notch centre, outward. */
+  readonly petalNotchDistance: 5.4;
+  readonly maskGrid: 20;
+  /** Canvas coordinate of the `天` lattice's left and top edge. */
+  readonly maskOrigin: 182;
+  readonly maskPitch: 33;
+  /** The `天` backdrop is drawn inside this radius only. */
+  readonly backdropRadius: 390;
+  /** The `天` silhouette, one 20-character row string per lattice row (`#` is inside the character). */
   readonly mask: readonly string[];
-  /** Lattice `[column, row]` of every tile in row-major order. */
-  readonly tiles: readonly (readonly [number, number])[];
   readonly ringRadii: readonly number[];
   readonly ringSlots: readonly number[];
-  readonly dotRadius: 11;
-  readonly totalSlots: 276;
+  readonly dotRadius: 9;
+  readonly totalSlots: 296;
   /** Dots per gate (right, bottom, left) and ring. */
   readonly gateDots: readonly (readonly number[])[];
   readonly dBits: 240;
@@ -81,28 +107,6 @@ export interface PetalLayout {
 /** Normative frame geometry. */
 export const PETAL_LAYOUT: PetalLayout;
 
-/** The sixteen katakana of lane `K`. */
-export interface PetalGlyphTables {
-  readonly count: 16;
-  /** Side of the stroke design grid. */
-  readonly grid: 32;
-  /** Stroke width on the design grid. */
-  readonly strokeWidth: 6.5;
-  /** Side of the matching template grid. */
-  readonly templateN: 8;
-  /** イ ロ ハ ニ ヘ ト ワ カ レ ム ノ ケ ア ヒ ス ン, in symbol order. */
-  readonly chars: readonly string[];
-  /** Stroke polylines `[x0, y0, x1, y1, ...]` per glyph on the design grid. */
-  readonly strokes: readonly (readonly (readonly number[])[])[];
-  /** Row-major 8x8 area-coverage templates (`0..=255`) per glyph. */
-  readonly templates: readonly (readonly number[])[];
-  /** Stroke width in canvas units once scaled into the 23-unit glyph box. */
-  readonly drawStrokeWidth: number;
-}
-
-/** Glyph alphabet, strokes and matching templates. */
-export const PETAL_GLYPHS: PetalGlyphTables;
-
 /** Byte sizes of one lane. */
 export interface PetalLaneSize {
   readonly wordLen: number;
@@ -112,41 +116,42 @@ export interface PetalLaneSize {
   readonly atoms: number;
 }
 
-/** Lane sizes: P 32/13/19, K 128/45/83, D 30/11/19 (word/parity/data bytes). */
-export const PETAL_LANES: { readonly P: PetalLaneSize; readonly K: PetalLaneSize; readonly D: PetalLaneSize };
+/** Lane sizes in decode order: D 30/11/19, F0-F3 105/22/83 (word/parity/data bytes). */
+export const PETAL_LANES: { readonly [lane in PetalLane]: PetalLaneSize };
 
 /** Stream-level wire constants and receiver defaults. */
 export const PETAL_STREAM: {
   readonly atomLen: 16;
   readonly laneHeaderLen: 3;
-  readonly atomsPerFrame: 7;
-  readonly formatVersion: 16;
+  readonly atomsPerFrame: 21;
+  /** Cells at the end of every sector that carry no bit (they stay dark). */
+  readonly spareSectorCells: 4;
+  /** Beacon version byte: format version 2, layout profile 0. */
+  readonly formatVersion: 32;
   readonly beaconInterval: 4;
   readonly maxPayloadLen: 16777215;
   readonly defaultMaxPayloadLen: 65536;
-  readonly defaultMaxPendingAtoms: 128;
+  readonly defaultMaxPendingAtoms: 512;
 };
 
 /** Colours of the picture. */
 export interface PetalPalette {
   readonly background: PetalRgb;
-  /** Light tile fill and finders. */
+  /** Finders and the petals inside the `天`. */
   readonly light: PetalRgb;
-  /** Sakura pink of dots and of glyphs on dark tiles. */
+  /** Sakura pink of the ring dots and of the petals outside the `天`. */
   readonly pink: PetalRgb;
-  /** Glyph colour on a light tile. */
-  readonly ink: PetalRgb;
+  /** The faint `天` drawn under the petals. */
+  readonly backdrop: PetalRgb;
 }
 
-/** Default palette: background (0,0,0), light (250,235,244), pink (245,175,208), ink (20,4,14). */
+/** Default palette: background (0,0,0), light (250,235,244), pink (245,175,208), backdrop (25,24,24). */
 export const PETAL_PALETTE: PetalPalette;
 
 /** Decoder tuning. */
 export interface PetalDecodeOptions {
   /** Also try horizontally mirrored images (front-camera previews). Default `true`. */
   readonly tryMirrored?: boolean;
-  /** Blur widths (in template cells) tried for glyph matching. Default `[0, 0.5, 0.8, 1.1, 1.5]`. */
-  readonly templateSigmas?: readonly number[];
   /** Largest image (in pixels) the decoder accepts. Default 12,000,000. */
   readonly maxPixels?: number;
 }
@@ -158,7 +163,7 @@ export const PETAL_DEFAULT_DECODE_OPTIONS: Required<PetalDecodeOptions>;
 export interface PetalAssemblerLimits {
   /** Largest payload accepted (default 65536). */
   readonly maxPayloadLen?: number;
-  /** Atoms buffered while waiting for the first beacon (default 128; zero buffers nothing). */
+  /** Atoms buffered while waiting for the first beacon (default 512; zero buffers nothing). */
   readonly maxPendingAtoms?: number;
 }
 
@@ -224,16 +229,38 @@ export class PetalReedSolomon {
   decode(word: Uint8Array, erasures?: readonly number[]): number;
 }
 
-// ------------------------------------------------------------------ layout and glyphs
+// ------------------------------------------------------------------ layout
 
 /** Role of a ring slot. */
 export type PetalSlotRole =
   | { readonly kind: "gate" | "guard" | "spare" }
   | { readonly kind: "data"; readonly bit: number };
 
-/** Canvas coordinates of the centre of tile `index` (0..256). */
-export function tileCenter(index: number): [number, number];
-/** Role of every one of the 276 ring slots in flat index order. */
+/** Radius of petal band `band`. */
+export function bandRadius(band: number): number;
+/** Fraction of a slot by which band `band` is turned (odd bands sit half a slot over). */
+export function bandPhase(band: number): number;
+/** Band and slot of field cell `cell` (0..3376). */
+export function cellBandSlot(cell: number): [number, number];
+/** Angle (radians, clockwise on screen from 3 o'clock) of the centre of field cell `cell`. */
+export function cellAngle(cell: number): number;
+/** Canvas coordinates of the centre of field cell `cell`. */
+export function cellCenter(cell: number): [number, number];
+/** Whether field cell `cell` lies inside the `天` (its petal is drawn in the light colour). */
+export function cellLight(cell: number): boolean;
+/**
+ * The cells of sector `sector` in bit order: band by band from the centre out, ascending slot
+ * within a band. The first 840 carry the sector's codeword; the last four are spare.
+ */
+export function sectorCells(sector: number): number[];
+/** Whether the canvas point `(x, y)` lies inside the `天` mask. */
+export function inMask(x: number, y: number): boolean;
+/**
+ * Whether the point `(dx, dy)` relative to the centre of a petal pointing along `angle` is lit:
+ * the ellipse of the petal minus its notch.
+ */
+export function petalLit(dx: number, dy: number, angle: number): boolean;
+/** Role of every one of the 296 ring slots in flat index order. */
 export function slotRoles(): PetalSlotRole[];
 /** Flat slot index of every lane `D` bit, in bit order. */
 export function dataSlots(): number[];
@@ -245,13 +272,13 @@ export function slotCenter(ring: number, slot: number): [number, number];
 export function ringOffset(ring: number): number;
 /** Whether the point `(dx, dy)` relative to a finder centre is lit (five-petal blossom). */
 export function finderLit(dx: number, dy: number): boolean;
-/** Whether design-grid point `(x, y)` is inked in `glyph`. */
-export function isInked(glyph: number, x: number, y: number): boolean;
-/** Derives the 8x8 matching templates from the stroke definitions. */
-export function generateTemplates(): Uint8Array[];
 
 // ------------------------------------------------------------------ lanes
 
+/** The field lane of sector `sector` (0..4). */
+export function fieldLane(sector: number): PetalFieldLane;
+/** The letter that names `lane` in reports: `D`, or the sector digit `0`-`3`. */
+export function laneLetter(lane: PetalLane): "D" | "0" | "1" | "2" | "3";
 /** The fixed whitening sequence of a lane. */
 export function laneWhitening(lane: PetalLane): Uint8Array;
 /** Encodes lane data (exactly the lane's data length) into the transmitted, whitened codeword. */
@@ -277,25 +304,17 @@ export function decodeLaneCounted(
 
 /** Every cell of one frame: what a renderer draws and a decoder samples. */
 export class PetalFrameCells {
-  constructor(
-    light?: ArrayLike<number | boolean>,
-    glyph?: ArrayLike<number>,
-    dots?: ArrayLike<number | boolean>,
-  );
-  /** Polarity of each of the 256 tiles; `1` is a light tile. */
-  readonly light: Uint8Array;
-  /** Glyph symbol (`0..16`) of each tile. */
-  readonly glyph: Uint8Array;
-  /** Lit state (`0`/`1`) of each of the 276 ring slots, gate dots included. */
+  constructor(dots?: ArrayLike<number | boolean>, petals?: ArrayLike<number | boolean>);
+  /** Lit state (`0`/`1`) of each of the 296 ring slots, gate dots included. */
   readonly dots: Uint8Array;
-  /** Builds the cells from the three transmitted codewords. */
-  static fromWords(p: PetalBytes, k: PetalBytes, d: PetalBytes): PetalFrameCells;
-  /** Packs the polarity cells into a lane `P` codeword. */
-  pWord(): Uint8Array;
-  /** Packs the glyph cells into a lane `K` codeword. */
-  kWord(): Uint8Array;
+  /** Lit state (`0`/`1`) of each of the 3,376 field cells (spare cells are dark). */
+  readonly petals: Uint8Array;
+  /** Builds the cells from the transmitted codewords of lane `D` and the four field lanes. */
+  static fromWords(d: PetalBytes, fields: PetalSectors<PetalBytes>): PetalFrameCells;
   /** Packs the data dots into a lane `D` codeword. */
   dWord(): Uint8Array;
+  /** Packs the petals of sector `sector` into its field codeword. */
+  fieldWord(sector: number): Uint8Array;
   /** Whether `other` holds exactly the same cells. */
   equals(other: unknown): boolean;
 }
@@ -370,11 +389,11 @@ export type PetalDLane =
   | { readonly type: "beacon"; readonly beacon: PetalBeacon }
   | { readonly type: "atoms"; readonly packet: PetalAtomPacket };
 
-/** Data bytes or codewords of the three lanes of one frame. */
+/** Data bytes or codewords of the five lanes of one frame. */
 export interface PetalLaneWords {
-  readonly p: Uint8Array;
-  readonly k: Uint8Array;
   readonly d: Uint8Array;
+  /** The field lanes, sector 0 first. */
+  readonly fields: PetalSectors<Uint8Array>;
 }
 
 /** Snapshot of receive progress for a UI. */
@@ -400,11 +419,13 @@ export interface PetalCompleted {
 
 /** Whether `frame` carries the beacon in lane `D` (every fourth frame). */
 export function isBeaconFrame(frame: number): boolean;
-/** Fountain atoms carried by `frame` (6 on beacon frames, otherwise 7). */
+/** Fountain atoms carried by `frame` (20 on beacon frames, otherwise 21). */
 export function atomsInFrame(frame: number): number;
 /** Fountain id of the first atom of `frame`. */
 export function firstAtomId(frame: number): number;
-/** Parses the data bytes of lane `P` or `K`; `null` for lane `D` or a wrong length. */
+/** Fountain id of the first atom `lane` carries in `frame`: field lanes in sector order, then `D`. */
+export function laneFirstId(lane: PetalLane, frame: number): number;
+/** Parses the data bytes of a field lane; `null` for lane `D` or a wrong length. */
 export function parseAtomLane(lane: PetalLane, data: PetalBytes): PetalAtomPacket | null;
 /** Parses the data bytes of lane `D`; `null` for malformed data. */
 export function parseDLane(data: PetalBytes): PetalDLane | null;
@@ -496,6 +517,40 @@ export class PetalHomography {
   compose(other: PetalHomography): PetalHomography;
 }
 
+/**
+ * A camera pose: a homography from the canvas onto undistorted image pixels, followed by radial
+ * lens distortion about the image centre `c`. A pixel an undistorted camera sees at `u` is seen
+ * at `c + (u - c) * (1 + k * |u - c|^2 / s^2)` with `s = 0.8 * max(width, height)`; `k = 0` is a
+ * plain homography and negative `k` is barrel distortion.
+ */
+export class PetalPose {
+  constructor(homography: PetalHomography, distortion?: number, center?: readonly [number, number], scale2?: number);
+  /** A pose without lens distortion. */
+  static plain(homography: PetalHomography): PetalPose;
+  /**
+   * The pose with distortion `distortion` taking the canvas points `src` to the image points `dst`
+   * of a `width x height` image (the image points are undistorted, then the homography is fitted);
+   * `null` when degenerate or fewer than four pairs.
+   */
+  static fit(
+    src: readonly (readonly [number, number])[],
+    dst: readonly (readonly [number, number])[],
+    distortion: number,
+    width: number,
+    height: number,
+  ): PetalPose | null;
+  /** Canvas to undistorted pixels (a copy). */
+  readonly homography: PetalHomography;
+  /** Radial distortion coefficient `k`. */
+  readonly distortion: number;
+  /** Distortion centre in pixels. */
+  readonly center: [number, number];
+  /** Squared distortion scale `s^2` in pixels^2. */
+  readonly scale2: number;
+  /** Maps a canvas point to image pixels. */
+  apply(x: number, y: number): [number, number];
+}
+
 // ------------------------------------------------------------------ finder search
 
 /** A detected finder in pixel-edge coordinates; `size` is the apparent diameter. */
@@ -581,15 +636,15 @@ export interface PetalLaneResult {
 /** Everything read from one camera frame. */
 export class PetalDecodedFrame {
   private constructor();
-  /** Canvas-to-pixel homography that was used. */
-  readonly homography: PetalHomography;
+  /** Canvas-to-pixel pose that was used, lens distortion included. */
+  readonly pose: PetalPose;
   /** Orientation hypothesis: quarter turns of the finder assignment. */
   readonly rotation: number;
   /** Whether the image was mirrored. */
   readonly mirrored: boolean;
-  readonly p: PetalLaneResult | null;
-  readonly k: PetalLaneResult | null;
   readonly d: PetalLaneResult | null;
+  /** The field lanes, sector 0 first. */
+  readonly fields: PetalSectors<PetalLaneResult | null>;
   /**
    * The corner finder that was hidden (by a finger, a glare or the edge of the frame) and
    * inferred from the other three, as its canonical index: 0 top-left, 1 top-right,
@@ -598,26 +653,36 @@ export class PetalDecodedFrame {
   readonly inferredCorner: number | null;
   /** Number of lanes that decoded. */
   lanesOk(): number;
+  /** The result of `lane`, when it decoded. */
+  lane(lane: PetalLane): PetalLaneResult | null;
+  /** The lanes that decoded, as letters: `D` and the sector digits `0`-`3` (for example `"D0123"`). */
+  letters(): string;
   /** What lane `D` carried, when it decoded. */
   dLane(): PetalDLane | null;
   /** The beacon, when lane `D` decoded on a beacon frame. */
   beacon(): PetalBeacon | null;
-  /** Atom packets from every lane that decoded (P, K, then D). */
+  /** Atom packets from every lane that decoded (the field lanes, then `D`). */
   atomPackets(): PetalAtomPacket[];
   /** Offers everything this frame carries to `assembler`. */
   feed(assembler: PetalStreamAssembler): void;
+}
+
+/** What one capture shows of a frame's petal field: the normalised level of every field cell. */
+export class PetalFieldEvidence {
+  /** @param levels the normalised level of each of the 3,376 field cells */
+  constructor(levels: ArrayLike<number>);
+  readonly levels: Float64Array;
 }
 
 /**
  * Decodes one camera frame.
  *
  * Four corner blossoms are looked for, or three that form a corner with the fourth inferred
- * (reported in `inferredCorner`); orientations are ranked by the ring gates plus the `天`.
- * Lanes `P` and `K` are read against the light and dark levels measured at the
- * finders first; a lane that does not decode that way is re-read with a
- * normalised read that rescales every tile by its own contrast (over-exposure,
- * veiling light, glare and shadows cancel). An orientation is accepted when
- * lane `D`, `P` or `K` decodes.
+ * (reported in `inferredCorner`); orientations are ranked by the ring gates. Every petal is
+ * thresholded per codeword and colour class; while field lanes stay unread the pose is searched
+ * for lens distortion, and lanes the finder levels cannot read (shadows, glare, banding,
+ * veiling light) are read again from local levels. An orientation is accepted when lane `D` or
+ * a field lane decodes.
  *
  * @throws {PetalError} `unsupported_image` (a side below 48 pixels, more than
  *   `maxPixels` pixels or inconsistent data), `no_finders` or `no_orientation`
@@ -625,12 +690,12 @@ export class PetalDecodedFrame {
 export function decodePetalFrame(image: PetalLumaLike, options?: PetalDecodeOptions): PetalDecodedFrame;
 
 /**
- * Reads all lanes with a known canvas-to-pixel homography (no finder search);
+ * Reads all lanes with a known canvas-to-pixel pose (no finder search, no distortion search);
  * `null` when the image is unusable or the reference levels are too weak.
  */
 export function decodePetalFrameAt(
   image: PetalLumaLike,
-  homography: PetalHomography | ArrayLike<number>,
+  pose: PetalPose,
   options?: PetalDecodeOptions,
 ): PetalDecodedFrame | null;
 
@@ -638,9 +703,9 @@ export function decodePetalFrameAt(
  * Follows a code from the previous frame that decoded without searching the whole image for
  * finders: each corner is re-found near where the previous pose puts it (a previously hidden
  * blossom counts again once it is back where the others predict it), one lost corner is
- * inferred, and the orientation is kept. `null` for a broken previous pose, when two corners are
- * lost or when no lane decodes (run {@link decodePetalFrame} then). {@link PetalScanSession}
- * does this by itself.
+ * inferred, the orientation is kept and the distortion search starts from the previous
+ * distortion. `null` for a broken previous pose, when two corners are lost or when no lane
+ * decodes (run {@link decodePetalFrame} then). {@link PetalScanSession} does this by itself.
  */
 export function trackPetalFrame(
   image: PetalLumaLike,
@@ -651,16 +716,29 @@ export function trackPetalFrame(
 /** The cells the decoder believes it saw, for diagnostics. */
 export function observedCells(
   image: PetalLumaLike,
-  frame: { readonly homography: PetalHomography; readonly inferredCorner?: number | null },
+  frame: { readonly pose: PetalPose; readonly inferredCorner?: number | null },
   options?: PetalDecodeOptions,
 ): PetalFrameCells | null;
 
-/** Mean squared tile-match error, a quick image-quality indicator. */
-export function tileMatchError(
+/**
+ * The field evidence of `image` under the pose `frame` was decoded with; `null` when the image is
+ * unusable, the frame names a corner that does not exist or the finder levels are too weak.
+ */
+export function fieldEvidence(
   image: PetalLumaLike,
-  frame: { readonly homography: PetalHomography; readonly inferredCorner?: number | null },
+  frame: { readonly pose: PetalPose; readonly inferredCorner?: number | null },
   options?: PetalDecodeOptions,
-): number | null;
+): PetalFieldEvidence | null;
+
+/**
+ * The field lanes read from the cell-by-cell mean of several captures of one shown frame (local
+ * read included); sectors flagged in `skip` are not read. The caller checks that every evidence
+ * comes from the same shown frame: a lane read here names its frame in its own header.
+ */
+export function mergeFields(
+  evidence: readonly PetalFieldEvidence[],
+  skip?: PetalSectors<boolean>,
+): PetalSectors<PetalLaneResult | null>;
 
 // ------------------------------------------------------------------ rendering
 
@@ -699,36 +777,47 @@ export interface PetalDrawFinder {
   readonly notches: readonly PetalDrawCircle[];
 }
 
-/** One data tile and its glyph. */
-export interface PetalDrawTile {
+/** The faint `天`: its lattice squares, filled with the backdrop colour and clipped to the disc. */
+export interface PetalDrawBackdrop extends PetalDrawCircle {
+  readonly cells: readonly { readonly x: number; readonly y: number; readonly size: number }[];
+}
+
+/** The outline every petal is drawn with, in canvas units. */
+export interface PetalDrawPetalShape {
+  /** Half-length along the petal's outward direction. */
+  readonly halfLength: number;
+  /** Half-width across it. */
+  readonly halfWidth: number;
+  /** Radius of the cosmetic notch cut into the tip (renderers may omit it). */
+  readonly notchRadius: number;
+  /** Distance from the petal centre to the notch centre, outward. */
+  readonly notchDistance: number;
+}
+
+/** One lit petal. */
+export interface PetalDrawPetal {
+  /** Field cell index. */
   readonly index: number;
-  /** Top-left corner of the 25-unit rounded square. */
+  /** Centre in canvas units. */
   readonly x: number;
   readonly y: number;
-  readonly size: number;
-  /** Corner radius (3). */
-  readonly radius: number;
+  /** Outward direction (radians, clockwise on screen from 3 o'clock). */
+  readonly angle: number;
+  /** Whether the petal lies inside the `天` (light colour) or outside it (pink). */
   readonly light: boolean;
-  readonly glyph: number;
-  /** Tile fill (`null` for a dark tile). */
-  readonly fill: PetalRgb | null;
-  /** Glyph stroke colour. */
-  readonly ink: PetalRgb;
-  /** The 23-unit glyph box strokes are clipped to. */
-  readonly glyphBox: { readonly x: number; readonly y: number; readonly size: number };
-  /** Glyph polylines `[x0, y0, x1, y1, ...]` in canvas units (round caps and joins). */
-  readonly strokes: readonly (readonly number[])[];
+  readonly fill: PetalRgb;
 }
 
 /** The frame as vector primitives in canvas design units (0..1024). */
 export interface PetalDrawList {
   readonly canvas: number;
   readonly palette: PetalPalette;
-  /** Glyph stroke width in canvas units (6.5/32 of the glyph box). */
-  readonly strokeWidth: number;
   readonly finders: readonly PetalDrawFinder[];
-  readonly tiles: readonly PetalDrawTile[];
-  /** Lit ring dots (radius 11), gate dots included. */
+  /** Drawn first, under the petals. */
+  readonly backdrop: PetalDrawBackdrop;
+  readonly petal: PetalDrawPetalShape;
+  readonly petals: readonly PetalDrawPetal[];
+  /** Lit ring dots (radius 9), gate dots included. */
   readonly dots: readonly PetalDrawCircle[];
 }
 
@@ -748,19 +837,18 @@ export interface PetalScanStats {
   readonly located: number;
   /** Frames in which at least one lane decoded. */
   readonly readable: number;
-  readonly laneP: number;
-  readonly laneK: number;
+  /** Lane `D` successes. */
   readonly laneD: number;
+  /** Field lane successes (up to four per frame). */
+  readonly fieldLanes: number;
   /** Frames read by tracking the previous pose instead of a full search. */
   readonly tracked: number;
   /** Frames read with one corner finder hidden and inferred. */
   readonly inferred: number;
   /** Merges of two or more captures of one shown frame. */
   readonly merges: number;
-  /** Lane P reads recovered by merging captures. */
-  readonly mergedP: number;
-  /** Lane K reads recovered by merging captures. */
-  readonly mergedK: number;
+  /** Field lanes recovered by merging captures. */
+  readonly mergedLanes: number;
 }
 
 /** The result of offering one camera frame. */
@@ -770,9 +858,9 @@ export interface PetalScanOutcome {
    * code was located but no lane could be read (too far, too blurry).
    */
   readonly error: PetalDecodeErrorCode | null;
-  /** Lanes that decoded, as letters from `"PKD"`. */
+  /** Lanes this capture decoded alone, as letters: `D` and the sector digits `0`-`3`. */
   readonly lanes: string;
-  /** Tile lanes newly recovered by merging captures, as letters from "PK". */
+  /** Field lanes newly recovered by merging this capture with earlier ones of its frame, as sector digits. */
   readonly merged: string;
   readonly progress: PetalProgress;
   /** The finished payload, delivered exactly once. */
@@ -820,7 +908,10 @@ export interface PetalStreamPlayerOptions {
   /** Usually a {@link PetalStreamEncoder}. */
   readonly encoder: { cells(frame: number): PetalFrameCells };
   readonly context: PetalCanvasContext;
-  /** Frames per second (default 8; keep it at or below a third of the camera frame rate). */
+  /**
+   * Frames per second (default 8 until physical qualification supports more; 12 reads fully in
+   * simulation only). Keep it at or below half the camera frame rate.
+   */
   readonly fps?: number;
   /** Drawn side in pixels (default: the smaller canvas side). */
   readonly size?: number;
@@ -896,13 +987,13 @@ export interface PetalCameraScannerOptions {
  * frame to frame and reads it with one corner blossom hidden).
  *
  * The scanner does not change the camera's settings; set the stream up like
- * this (evidence: `specs/petal_stream.md` section 8, "Scanner guidance"):
+ * this (evidence: `specs/petal_stream.md` section 8):
  *
  * - Resolution: ask `getUserMedia` for about 1280x720
  *   (`video: {facingMode: "environment", width: {ideal: 1280}, height: {ideal: 720}}`).
  *   The default `maxSide` of 1280 already matches it. Only drop to 640 when
  *   the device cannot sustain about 5 decoded frames per second, because at
- *   480p only lanes `P` and `D` read.
+ *   480p a little defocus already costs the petal field (lane `D` carries on).
  * - Exposure: automatic exposure over-exposes a mostly black screen. Where the
  *   browser supports it, apply an exposure compensation of about -1 EV to the
  *   video track: feature-detect `track.getCapabilities().exposureCompensation`,

@@ -2,18 +2,26 @@
 //
 // After a frame decodes, the next frames are first read by tracking the code
 // from its last pose, which skips the finder search; a full decode runs when
-// tracking fails or the last pose is older than `TRACK_WINDOW_MS`. Repeated
-// captures with agreeing decoded lane headers are averaged to recover missing
-// tile lanes, keeping at most four captures of six shown frames.
+// tracking fails or the last pose is older than `TRACK_WINDOW_MS`.
+//
+// A camera sees each shown frame two to four times, and noise, display banding
+// or hand shake can cost every one of those captures a field lane. When a
+// capture reads some lane but not every field lane, the session keeps its field
+// evidence under the shown frame its decoded lane headers name, for the last
+// `MERGE_WINDOW` shown frames. From the second such capture on, it merges them
+// (`mergeFields`) and offers a recovered lane only when that lane's own header
+// names the same frame.
 
 import {
   DEFAULT_DECODE_OPTIONS,
   decodeFrameResult,
-  mergeTiles,
+  fieldEvidence,
+  mergeFields,
   resolveDecodeOptions,
-  tileEvidence,
   trackFrame,
 } from "./decode.js";
+import { FIELD_LANES, LANE_ORDER, laneLetter } from "./lanes.js";
+import { SECTORS } from "./layout.js";
 import {
   DEFAULT_MAX_PAYLOAD_LEN,
   DEFAULT_MAX_PENDING_ATOMS,
@@ -26,20 +34,29 @@ import { requireIndex } from "./support.js";
 export const TRACK_WINDOW_MS = 500;
 /** Shown frames whose captures are held for merging. */
 export const MERGE_WINDOW = 6;
-/** Captures per shown frame; further captures replace the oldest. */
+/** Captures held per shown frame; a further capture replaces the oldest. */
 export const MERGE_CAPTURES = 4;
 
-/** Every independently decoded lane must name the same shown frame. */
+/**
+ * The shown frame every decoded lane header of `frame` names; `null` when no lane decoded or the
+ * lanes of a torn capture name different frames.
+ */
 function shownFrame(frame) {
   let shown = null;
-  for (const lane of [frame.d, frame.p, frame.k]) {
-    if (lane === null) continue;
-    if (lane.data.length < 3) return null;
-    const header = { tag: lane.data[0], frame: (lane.data[1] << 8) | lane.data[2] };
+  for (const lane of LANE_ORDER) {
+    const result = frame.lane(lane);
+    if (result === null) continue;
+    if (result.data.length < 3) return null;
+    const header = { tag: result.data[0], frame: (result.data[1] << 8) | result.data[2] };
     if (shown !== null && (shown.tag !== header.tag || shown.frame !== header.frame)) return null;
     shown = header;
   }
   return shown;
+}
+
+function sameMeta(a, b) {
+  if (a === null || b === null) return a === b;
+  return a.kind === b.kind && a.len === b.len && a.crc === b.crc;
 }
 
 /** Default limits of a scan session. */
@@ -87,20 +104,21 @@ export class PetalScanSession {
   /**
    * @param {{idleTimeoutMs?: number, absoluteTimeoutMs?: number,
    *   assembler?: {maxPayloadLen?: number, maxPendingAtoms?: number},
-   *   decode?: {tryMirrored?: boolean, templateSigmas?: readonly number[], maxPixels?: number}}} [limits]
+   *   decode?: {tryMirrored?: boolean, maxPixels?: number}}} [limits]
    */
   constructor(limits) {
     this._limits = resolveScanLimits(limits);
     this._assembler = new PetalStreamAssembler(this._limits.assembler);
     this._stats = {
-      frames: 0, located: 0, readable: 0, laneP: 0, laneK: 0, laneD: 0,
-      tracked: 0, inferred: 0, merges: 0, mergedP: 0, mergedK: 0,
+      frames: 0, located: 0, readable: 0, laneD: 0, fieldLanes: 0,
+      tracked: 0, inferred: 0, merges: 0, mergedLanes: 0,
     };
     this._startedMs = null;
     this._progressMs = 0;
     this._lastRank = 0;
     /** The last frame that decoded and when, for tracking: `{frame, atMs}` or `null`. */
     this._lastPose = null;
+    /** Captures held for merging: `{shown, evidence, done}` per shown frame, oldest first. */
     this._held = [];
   }
 
@@ -112,11 +130,12 @@ export class PetalScanSession {
   /**
    * Diagnostic counters: camera frames offered (`frames`), frames in which a
    * code was located, whether or not a lane could be read (`located`), frames
-   * in which at least one lane decoded (`readable`), per-lane successes,
+   * in which at least one lane decoded (`readable`), lane D successes
+   * (`laneD`), field lane successes (`fieldLanes`, up to four per frame),
    * frames read by tracking the previous pose instead of a full search
    * (`tracked`) and frames read with one corner finder hidden and inferred
-   * (`inferred`), and averaging attempts and recovered tile lanes
-   * (`merges`, `mergedP`, `mergedK`).
+   * (`inferred`), and merges of two or more captures of one shown frame and
+   * the field lanes they recovered (`merges`, `mergedLanes`).
    */
   stats() {
     return Object.freeze({ ...this._stats });
@@ -127,7 +146,7 @@ export class PetalScanSession {
     return this._assembler.progress();
   }
 
-  /** Drops all partial state, including the pose used for tracking. */
+  /** Drops all partial state, including the pose used for tracking and held captures. */
   reset() {
     this._assembler.reset();
     this._startedMs = null;
@@ -147,9 +166,11 @@ export class PetalScanSession {
    *   completed: {meta: object, payload: Uint8Array} | null}}
    *   `error` is a `PetalError` code when the frame produced nothing
    *   (`no_orientation` means a code was located but no lane could be read:
-   *   too far or too blurry), `lanes` lists the lanes that decoded (letters
-   *   from "PKD"), `merged` lists newly recovered tile lanes ("PK"), and
-   *   `completed` is the finished payload, delivered exactly once.
+   *   too far or too blurry), `lanes` lists the lanes this capture decoded
+   *   alone (`D` and the sector digits `0`-`3`), `merged` lists the field
+   *   lanes newly recovered by merging it with earlier captures of its shown
+   *   frame (sector digits), and `completed` is the finished payload,
+   *   delivered exactly once.
    */
   push(image, nowMs) {
     if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) {
@@ -202,72 +223,69 @@ export class PetalScanSession {
     return Object.freeze({ error, lanes, merged, progress, completed: this._assembler.takeCompleted() });
   }
 
-  /** Average only captures keyed by an already decoded lane header. */
-  _merge(image, frame) {
-    const shown = shownFrame(frame);
-    if (shown === null) return "";
-    let held = this._held.find((h) => h.shown.tag === shown.tag && h.shown.frame === shown.frame);
-    if (held === undefined) {
-      if (this._held.length === MERGE_WINDOW) this._held.shift();
-      held = { shown, evidence: [], pDone: false, kDone: false };
-      this._held.push(held);
-    }
-    held.pDone ||= frame.p !== null;
-    held.kDone ||= frame.k !== null;
-    if (held.pDone && held.kDone) {
-      held.evidence = [];
-      return "";
-    }
-    const evidence = tileEvidence(image, frame, this._limits.decode);
-    if (evidence === null) return "";
-    if (held.evidence.length === MERGE_CAPTURES) held.evidence.shift();
-    held.evidence.push(evidence);
-    if (held.evidence.length < 2) return "";
-    this._stats.merges += 1;
-    const { p, k } = mergeTiles(held.evidence, this._limits.decode);
-    let merged = "";
-    for (const [letter, result, done, count] of [
-      ["P", p, "pDone", "mergedP"], ["K", k, "kDone", "mergedK"],
-    ]) {
-      const packet = result === null ? null : parseAtomLane(letter, result.data);
-      if (held[done] || packet === null || packet.header.tag !== shown.tag || packet.header.frame !== shown.frame) {
-        continue;
-      }
-      held[done] = true;
-      this._assembler.pushAtoms(packet);
-      this._stats[count] += 1;
-      merged += letter;
-    }
-    if (held.pDone && held.kDone) held.evidence = [];
-    return merged;
-  }
-
   _absorb(frame) {
-    let lanes = "";
-    if (frame.p !== null) {
-      lanes += "P";
-      this._stats.laneP += 1;
-    }
-    if (frame.k !== null) {
-      lanes += "K";
-      this._stats.laneK += 1;
-    }
+    const lanes = frame.letters();
     if (frame.d !== null) {
-      lanes += "D";
       this._stats.laneD += 1;
+    }
+    for (const field of frame.fields) {
+      if (field !== null) this._stats.fieldLanes += 1;
     }
     if (lanes.length > 0) {
       this._stats.readable += 1;
     }
     const previousMeta = this._assembler.progress().meta;
     frame.feed(this._assembler);
-    const currentMeta = this._assembler.progress().meta;
-    // An eight-bit tag may collide across streams; done flags and evidence belong
-    // to the full stream identity. Preserve captures awaiting their first beacon.
-    if (previousMeta !== null && currentMeta !== null &&
-        (previousMeta.kind !== currentMeta.kind || previousMeta.len !== currentMeta.len || previousMeta.crc !== currentMeta.crc)) {
+    // An eight-bit tag may collide across streams; done flags and evidence
+    // belong to the full stream identity. Captures held before the first
+    // beacon are kept.
+    if (previousMeta !== null && !sameMeta(this._assembler.progress().meta, previousMeta)) {
       this._held = [];
     }
     return lanes;
+  }
+
+  /**
+   * Holds this capture's field evidence under its shown frame and, from the second capture on,
+   * merges the held captures of that frame.
+   */
+  _merge(image, frame) {
+    const shown = shownFrame(frame);
+    if (shown === null) return "";
+    let held = this._held.find((h) => h.shown.tag === shown.tag && h.shown.frame === shown.frame);
+    if (held === undefined) {
+      if (this._held.length === MERGE_WINDOW) this._held.shift();
+      held = { shown, evidence: [], done: [false, false, false, false] };
+      this._held.push(held);
+    }
+    for (let sector = 0; sector < SECTORS; sector += 1) {
+      held.done[sector] ||= frame.fields[sector] !== null;
+    }
+    if (held.done.every(Boolean)) {
+      held.evidence = [];
+      return "";
+    }
+    const evidence = fieldEvidence(image, frame, this._limits.decode);
+    if (evidence === null) return "";
+    if (held.evidence.length === MERGE_CAPTURES) held.evidence.shift();
+    held.evidence.push(evidence);
+    if (held.evidence.length < 2) return "";
+    this._stats.merges += 1;
+    const results = mergeFields(held.evidence, held.done);
+    let merged = "";
+    FIELD_LANES.forEach((lane, sector) => {
+      const result = results[sector];
+      const packet = result === null ? null : parseAtomLane(lane, result.data);
+      // a merge offers only atoms of the shown frame it was made for
+      if (packet === null || packet.header.tag !== shown.tag || packet.header.frame !== shown.frame) {
+        return;
+      }
+      held.done[sector] = true;
+      this._assembler.pushAtoms(packet);
+      this._stats.mergedLanes += 1;
+      merged += laneLetter(lane);
+    });
+    if (held.done.every(Boolean)) held.evidence = [];
+    return merged;
   }
 }

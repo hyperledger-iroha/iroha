@@ -12,18 +12,18 @@ import java.nio.ByteBuffer
  * invariant, so pass `rotationDegrees = 0` (the default) unless an upright
  * image is needed for something else; rotating costs a second copy.
  *
- * Camera setup (`specs/petal_stream.md` §8, "Scanner guidance"):
+ * Camera setup (`specs/petal_stream.md` §8):
  * - Resolution: request about 1280×720 analysis frames wherever the device
  *   sustains at least 5 decoded frames per second, and fall back to 640×480
- *   only when it cannot. At 720p (about 15 px per tile) all three lanes read;
- *   at 480p (tiles 6.7–9.1 px) only lane `D` and, in nominal light, lane `P`
- *   do and lane `K` never does, which makes a 7.5 KB payment roughly four
- *   times slower.
+ *   only when it cannot. At 720p (about 7.5 px per petal) every lane reads; a
+ *   sharp 480p preview (about 4.7 px) reads every lane too, but blur and hand
+ *   shake cost it the petal field first and lane `D` last.
  * - Exposure: automatic exposure over-exposes a mostly black screen. Set the
  *   exposure compensation to about −1 EV (about −2 EV on old cameras) where the
  *   camera API offers it, or lock exposure once the code is seen. The decoder
- *   tolerates over-exposure and veiling light (its normalised tile read keeps
- *   lanes `P` and `K` alive), but it should not be asked to.
+ *   tolerates over-exposure and veiling light (it normalises every petal by the
+ *   corner blossoms and re-reads a shadowed sector against its neighbours), but
+ *   it should not be asked to.
  *
  * CameraX `ImageAnalysis` (YUV_420_888, requested at about 1280×720, see the
  * camera setup above):
@@ -51,12 +51,13 @@ import java.nio.ByteBuffer
  * ```
  *
  * Camera2 `ImageReader` images in `YUV_420_888` go through [fromImage].
- * Decode on a background thread. The reference decoder needs about 10 ms for a
- * 1280×720 frame; measure the target device and fall back to 640×480 only when
- * it decodes fewer than 5 frames per second at 720p.
+ * Decode on a background thread. The reference decoder needs about 5 ms for a
+ * full search of a 1280×720 frame and under 1 ms to track it; measure the
+ * target device and fall back to 640×480 only when it decodes fewer than 5
+ * frames per second at 720p.
  *
  * Push every analysed frame into the same [PetalScanSession]: after a frame
- * decodes, the session tracks the code from its pose (about a quarter of the
+ * decodes, the session tracks the code from its pose (about a tenth of the
  * work of a full search) as long as frames keep arriving within
  * [PetalScanSession.TRACK_WINDOW_MILLIS]. A code with one corner blossom
  * covered by a thumb or cut off by the frame edge still reads; when a push

@@ -1,5 +1,5 @@
-// Plane homographies (row-major 3x3, IEEE double precision, same operation
-// order as the reference so fitted poses are bit-identical).
+// Plane homographies and camera poses (row-major 3x3, IEEE double precision,
+// same operation order as the reference so fitted poses are bit-identical).
 
 /** Applies a row-major 3x3 homography `m` to `(x, y)`. */
 export function applyHomography(m, x, y) {
@@ -267,5 +267,154 @@ export class PetalHomography {
       throw new TypeError("compose expects a PetalHomography");
     }
     return new PetalHomography(compose(this._m, other._m));
+  }
+}
+
+function requireDimension(value, name) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new TypeError(`${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function poseOf(m, distortion, centerX, centerY, scale2) {
+  const pose = Object.create(PetalPose.prototype);
+  pose._m = m;
+  pose.distortion = distortion;
+  pose._cx = centerX;
+  pose._cy = centerY;
+  pose.scale2 = scale2;
+  return Object.freeze(pose);
+}
+
+/**
+ * The pose with lens distortion `distortion` that takes the canvas points `(srcX[i], srcY[i])`
+ * to the image points `(dstX[i], dstY[i])` of a `width x height` image: the image points are
+ * undistorted (six fixed-point rounds), then the homography is fitted to them. Points are given
+ * as flat coordinate arrays. Returns `null` for degenerate input.
+ */
+export function fitPose(srcX, srcY, dstX, dstY, distortion, width, height) {
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const scale = 0.8 * Math.max(width, height);
+  const scale2 = scale * scale;
+  const n = dstX.length;
+  const ux = new Float64Array(n);
+  const uy = new Float64Array(n);
+  for (let index = 0; index < n; index += 1) {
+    const dx = dstX[index] - centerX;
+    const dy = dstY[index] - centerY;
+    let x = dx;
+    let y = dy;
+    if (distortion !== 0) {
+      for (let round = 0; round < 6; round += 1) {
+        const factor = 1 + (distortion * (x * x + y * y)) / scale2;
+        x = dx / factor;
+        y = dy / factor;
+      }
+    }
+    ux[index] = centerX + x;
+    uy[index] = centerY + y;
+  }
+  const m = homographyFromPoints(srcX, srcY, ux, uy);
+  return m === null ? null : poseOf(m, distortion, centerX, centerY, scale2);
+}
+
+/**
+ * A camera pose: a homography from the canvas onto undistorted image pixels,
+ * followed by radial lens distortion about the image centre.
+ *
+ * A pixel that an undistorted camera would see at `u` is seen at
+ * `c + (u - c) * (1 + k * |u - c|^2 / s^2)`, with `c` the image centre, `k`
+ * the `distortion` (negative is barrel) and `s = 0.8 * max(width, height)`.
+ * `k = 0` is a plain homography.
+ */
+export class PetalPose {
+  /**
+   * @param {PetalHomography} homography canvas to undistorted pixels
+   * @param {number} [distortion] radial distortion coefficient `k` (default 0)
+   * @param {readonly [number, number]} [center] distortion centre in pixels (default `[0, 0]`)
+   * @param {number} [scale2] squared distortion scale `s^2` in pixels^2 (default 1)
+   */
+  constructor(homography, distortion = 0, center = [0, 0], scale2 = 1) {
+    if (!(homography instanceof PetalHomography)) {
+      throw new TypeError("a pose needs a PetalHomography");
+    }
+    if (
+      typeof distortion !== "number" ||
+      !Array.isArray(center) ||
+      center.length !== 2 ||
+      typeof center[0] !== "number" ||
+      typeof center[1] !== "number" ||
+      typeof scale2 !== "number"
+    ) {
+      throw new TypeError("pose distortion, centre and scale must be numbers");
+    }
+    this._m = Float64Array.from(homography._m);
+    /** Radial distortion coefficient `k` (negative is barrel). */
+    this.distortion = distortion;
+    this._cx = center[0];
+    this._cy = center[1];
+    /** Squared distortion scale `s^2` in pixels^2. */
+    this.scale2 = scale2;
+    Object.freeze(this);
+  }
+
+  /** A pose without lens distortion. */
+  static plain(homography) {
+    return new PetalPose(homography);
+  }
+
+  /**
+   * The pose with distortion `distortion` that takes the canvas points `src`
+   * to the image points `dst` of a `width x height` image: the image points
+   * are undistorted (six fixed-point rounds), then the homography is fitted to
+   * them. Returns `null` for mismatched, too few or degenerate points.
+   *
+   * @param {Array<[number, number]>} src
+   * @param {Array<[number, number]>} dst
+   */
+  static fit(src, dst, distortion, width, height) {
+    if (typeof distortion !== "number") {
+      throw new TypeError("distortion must be a number");
+    }
+    requireDimension(width, "image width");
+    requireDimension(height, "image height");
+    const [srcX, srcY] = readPoints(src, "src");
+    const [dstX, dstY] = readPoints(dst, "dst");
+    if (srcX.length !== dstX.length) {
+      return null;
+    }
+    return fitPose(srcX, srcY, dstX, dstY, distortion, width, height);
+  }
+
+  /** Canvas to undistorted pixels. */
+  get homography() {
+    return new PetalHomography(this._m);
+  }
+
+  /**
+   * Distortion centre in pixels.
+   *
+   * @returns {[number, number]}
+   */
+  get center() {
+    return [this._cx, this._cy];
+  }
+
+  /**
+   * Maps a canvas point to image pixels.
+   *
+   * @returns {[number, number]}
+   */
+  apply(x, y) {
+    const [ux, uy] = applyHomography(this._m, x, y);
+    if (this.distortion === 0) {
+      return [ux, uy];
+    }
+    const dx = ux - this._cx;
+    const dy = uy - this._cy;
+    const factor = 1 + (this.distortion * (dx * dx + dy * dy)) / this.scale2;
+    return [this._cx + dx * factor, this._cy + dy * factor];
   }
 }

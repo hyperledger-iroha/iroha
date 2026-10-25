@@ -16,7 +16,7 @@ Features:
 - Collection queries for every Torii collection: typed filter builder with canonical text and JSON forms, cursor pages and on-demand iteration, typed `{code, message, details}` errors
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
 - KAGEMUSHA wallet V1 wire helpers (`KagemushaWalletWireV1`) and the iPhone platform adapter of the Rust wallet Advance provider (`KagemushaWalletApplePlatformV1`)
-- Petal Stream animated optical transport: stream encoder/assembler, camera-frame decoder, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
+- Petal Stream animated optical transport (format 2): stream encoder/assembler, camera-frame decoder, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -882,20 +882,22 @@ decoding and signature verification.
 
 ### Petal Stream optical transport
 
-Petal Stream is the animated "streaming QR" in the Sakura-storm look: four
-sakura-blossom finders, a `天`-shaped field of 256 katakana tiles and three
-dotted rings. Each frame carries three independent lanes (tile polarity `P`,
-katakana `K`, ring dots `D`), each one whitened Reed–Solomon codeword of
+Petal Stream is the animated "streaming QR" in the Sakura-storm look (format
+2): four sakura-blossom finders, a storm of 3,376 petals on 34 concentric bands
+(light inside a faint `天`, pink outside) and three dotted rings. Each frame
+carries five independent lanes (ring dots `D` and the four quarter-turn sectors
+`0`–`3` of the petal field), each one whitened Reed–Solomon codeword of
 fountain-coded 16-byte atoms; every fourth frame repeats the stream beacon in
 lane `D`, so a receiver can join at any frame and any single readable lane is
 useful. `Sources/IrohaSwift/Petal/` is a function-by-function port of the
 normative Rust crate `crates/iroha_petal` (decoder included) and passes the
-shared fixtures `fixtures/petal/petal_stream_v1.json` and
-`fixtures/petal/petal_captures_v1.json`.
+shared fixtures `fixtures/petal/petal_stream_v2.json` and
+`fixtures/petal/petal_captures_v2.json`.
 
 ```swift
-// Sender: play an IPM1 message at 8 fps. Payloads may be up to 16 MiB - 1;
-// receivers accept 64 KiB by default. `kind` is application-defined.
+// Sender: play an IPM1 message at the default 8 fps (12 fps reads fully in
+// simulation and awaits physical qualification). Payloads may be up to
+// 16 MiB - 1; receivers accept 64 KiB by default. `kind` is application-defined.
 let encoder = try PetalStreamEncoder(payload: message.encoded, kind: 1)
 PetalStreamView(encoder: encoder)                    // IrohaSwiftTransferUI
 
@@ -909,18 +911,20 @@ analyzer.attach(to: videoDataOutput)
 - `PetalStreamEncoder` / `PetalStreamAssembler` are the sender and receiver
   stream codecs; `PetalDecoder.decode(_:)` reads one `PetalLuma` frame (any
   rotation, optionally mirrored) and `PetalScanSession` combines decoding,
-  reassembly and idle/absolute timeouts. The tile lanes `P` and `K` are first
-  read against the light and dark levels of the finders; a lane that stays
-  unreadable is read again with every patch normalised by its own contrast, so
-  over-exposure, veiling light, glare and shadows cancel out.
+  reassembly and idle/absolute timeouts. The field lanes are first read against
+  the light and dark levels of the finders; a lane that stays unreadable is read
+  again with every petal rescaled by its neighbourhood, so over-exposure,
+  veiling light, glare and shadows cancel out, and the pose (`PetalPose`) is
+  searched for lens distortion when the plain pose misses the outer petals.
 - `PetalScanSession` averages up to four captures of each of the last six
-  shown frames to recover tile lanes lost to noise or display banding.
+  shown frames to recover field lanes lost to noise or display banding.
   Independently decoded lane headers identify each group; unkeyed or torn
   captures are excluded, and recovered lanes must name the same shown frame.
   `PetalScanOutcome.merged` reports recovered lanes separately from the lanes
-  read in one capture; `PetalScanStats.merges`, `.mergedP` and `.mergedK` count
-  the attempts and recoveries. `PetalDecoder.tileEvidence(_:frame:)` and
-  `.mergeTiles(_:)` expose the same averaging for custom camera pipelines.
+  read in one capture; `PetalScanStats.merges` and `.mergedLanes` count the
+  attempts and recoveries (`.laneD` and `.fieldLanes` the single-capture reads).
+  `PetalDecoder.fieldEvidence(_:frame:)` and `.mergeFields(_:skip:)` expose the
+  same averaging for custom camera pipelines.
 - When a thumb, a glare or the edge of the frame hides one corner blossom,
   three blossoms that form a corner still locate the code: the fourth corner is
   inferred, refined against the dotted rings and reported as
@@ -930,7 +934,8 @@ analyzer.attach(to: videoDataOutput)
   blossoms from the last pose (at most 500 ms old) instead of searching the
   whole image; `PetalScanStats.tracked` and `.inferred` count both.
 - `PetalRenderer` is the pixel-exact reference software renderer;
-  `PetalDrawList` describes a frame for vector backends and
+  `PetalDrawList` describes a frame for vector backends (finders, the faint
+  `天`, lit petals as rotated ellipses, lit dots) and
   `PetalCoreGraphicsRenderer` / `PetalFrameView` / `PetalStreamView`
   (`IrohaSwiftTransferUI`) draw it with CoreGraphics and SwiftUI.
 - `PetalCameraAnalyzer` (`IrohaSwiftMobileTransports`) is an
@@ -940,11 +945,11 @@ analyzer.attach(to: videoDataOutput)
   Scanner setup: use the 1280×720 session preset
   (`AVCaptureSession.Preset.hd1280x720`) where the device sustains about five
   decoded frames per second and fall back to 640×480 only when it cannot.
-  Lane `K` is harder to read at 480p; averaging repeated captures of a shown
-  frame can recover it. Automatic exposure over-exposes a mostly black screen, so set
+  The field lanes are harder to read at 480p; averaging repeated captures of a
+  shown frame can recover them. Automatic exposure over-exposes a mostly black screen, so set
   the exposure target bias to about −1 EV
   (`AVCaptureDevice.setExposureTargetBias`) or lock the exposure once the code
-  has been seen (`specs/petal_stream.md` section 8, "Scanner guidance").
+  has been seen (`specs/petal_stream.md` section 8).
 
 Run the Petal suites (codec, fixture conformance, golden captures, renderer,
 SwiftUI and camera glue) with:

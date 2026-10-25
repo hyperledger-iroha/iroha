@@ -1,9 +1,9 @@
 import Foundation
 
 // Petal Stream lane codec: xorshift32 whitening, Reed–Solomon over GF(2^8)
-// and the cell layout of the three lanes. This file is a line-by-line port of
+// and the cell layout of the five lanes. This file is a line-by-line port of
 // `crates/iroha_petal/src/{prng,rs,lanes}.rs`; the shared golden vectors in
-// `fixtures/petal/petal_stream_v1.json` pin every byte.
+// `fixtures/petal/petal_stream_v2.json` pin every byte.
 
 /// Failures of the Petal lane codec.
 public enum PetalCodecError: Error, Equatable, LocalizedError, Sendable {
@@ -322,7 +322,7 @@ public struct PetalReedSolomon: Equatable, Sendable {
     }
 }
 
-/// One of the three data lanes of a Petal frame.
+/// One of the five data lanes of a Petal frame.
 ///
 /// Each lane is exactly one Reed–Solomon codeword, XOR-whitened with a fixed
 /// xorshift32 sequence so the picture is statistically balanced whatever the
@@ -330,44 +330,42 @@ public struct PetalReedSolomon: Equatable, Sendable {
 ///
 /// | lane | cells | codeword | data | parity |
 /// |------|-------|----------|------|--------|
-/// | `P` polarity | 256 tiles × 1 bit | 32 B | 19 B | 13 B |
-/// | `K` katakana | 256 tiles × 4 bits | 128 B | 83 B | 45 B |
 /// | `D` dots | 240 ring slots × 1 bit | 30 B | 19 B | 11 B |
+/// | `F0`–`F3` petals | 840 field cells of one sector × 1 bit | 105 B | 83 B | 22 B |
 ///
-/// Bit order is most-significant-bit first; lane `K` packs the first tile of
-/// a pair into the high nibble.
+/// Bit order is most-significant-bit first.
 public enum PetalLane: Hashable, Sendable {
-    /// Light/dark polarity of the tiles.
-    case p
-    /// Katakana glyph of each tile.
-    case k
     /// Dots on the three rings.
     case d
+    /// The petals of field sector `0..<4`.
+    case field(Int)
 
-    /// All lanes in decode order (`P`, `D`, `K`).
-    public static let decodeOrder: [PetalLane] = [.p, .d, .k]
+    /// All lanes in decode order (`D`, then the field sectors `0`–`3`).
+    public static let decodeOrder: [PetalLane] = [.d, .field(0), .field(1), .field(2), .field(3)]
+    /// The four field lanes, sector 0 first.
+    public static let fields: [PetalLane] = [.field(0), .field(1), .field(2), .field(3)]
     /// Length of a fountain atom in bytes.
     public static let atomLength = 16
     /// Bytes of the per-lane header (`tag`, `frame` high, `frame` low).
     public static let headerLength = 3
-    /// Most atoms one frame can carry (lanes `P`, `D` and `K`).
-    public static let atomsPerFrame = 7
+    /// Most atoms one frame can carry (the four field lanes and lane `D`).
+    public static let atomsPerFrame = 21
+    /// Field cells of a sector that carry no bit (they stay dark).
+    public static let spareSectorCells = PetalLayout.sectorCellCount - 105 * 8
 
     /// Codeword length in bytes.
     public var wordLength: Int {
         switch self {
-        case .p: return PetalLayout.tileCount / 8
-        case .k: return PetalLayout.tileCount / 2
         case .d: return PetalLayout.dataBits / 8
+        case .field: return 105
         }
     }
 
     /// Parity bytes.
     public var parityLength: Int {
         switch self {
-        case .p: return 13
-        case .k: return 45
         case .d: return 11
+        case .field: return 22
         }
     }
 
@@ -377,52 +375,53 @@ public enum PetalLane: Hashable, Sendable {
     /// Atoms the lane carries; lane `D` carries one only on non-beacon frames.
     public var atomCount: Int {
         switch self {
-        case .p: return 1
-        case .k: return 5
         case .d: return 1
+        case .field: return 5
         }
     }
 
-    /// The letter used in scan reports (`P`, `K` or `D`).
+    /// The field sector of a field lane, `nil` for lane `D`.
+    public var sector: Int? {
+        if case .field(let sector) = self { return sector }
+        return nil
+    }
+
+    /// The letter that names the lane in scan reports: `D`, or the sector
+    /// digit `0`–`3`.
     public var letter: Character {
         switch self {
-        case .p: return "P"
-        case .k: return "K"
         case .d: return "D"
+        case .field(let sector): return Character(Unicode.Scalar(UInt8(truncatingIfNeeded: 48 + sector)))
         }
     }
 
     /// The fixed whitening sequence of the lane.
     public var whitening: [UInt8] {
         switch self {
-        case .p: return Self.whiteningP
-        case .k: return Self.whiteningK
         case .d: return Self.whiteningD
+        case .field(let sector):
+            return (0..<Self.whiteningFields.count).contains(sector) ? Self.whiteningFields[sector] : makeWhitening()
         }
     }
 
     var code: PetalReedSolomon {
         switch self {
-        case .p: return Self.codeP
-        case .k: return Self.codeK
         case .d: return Self.codeD
+        case .field: return Self.codeField
         }
     }
 
     private var whiteningSeed: UInt32 {
         switch self {
-        case .p: return 0x5045_5441 // "PETA"
-        case .k: return 0x4B41_4E41 // "KANA"
         case .d: return 0x444F_5453 // "DOTS"
+        case .field(let sector): return 0x5045_5430 &+ UInt32(truncatingIfNeeded: sector) // "PET0" … "PET3"
         }
     }
 
-    private static let whiteningP = PetalLane.p.makeWhitening()
-    private static let whiteningK = PetalLane.k.makeWhitening()
     private static let whiteningD = PetalLane.d.makeWhitening()
-    private static let codeP = PetalReedSolomon(validatedParityLength: PetalLane.p.parityLength)
-    private static let codeK = PetalReedSolomon(validatedParityLength: PetalLane.k.parityLength)
+    private static let whiteningFields = fields.map { $0.makeWhitening() }
     private static let codeD = PetalReedSolomon(validatedParityLength: PetalLane.d.parityLength)
+    private static let codeField = PetalReedSolomon(validatedParityLength: PetalLane.field(0).parityLength)
 
     private func makeWhitening() -> [UInt8] {
         var rng = PetalXorshift32(seed: whiteningSeed)
@@ -475,34 +474,26 @@ public enum PetalLane: Hashable, Sendable {
 
 /// Every cell of one frame: what a renderer draws and a decoder samples.
 public struct PetalFrameCells: Equatable, Sendable {
-    /// Polarity of each of the 256 tiles; `true` is a light tile.
-    public let light: [Bool]
-    /// Glyph symbol (`0..<16`) of each of the 256 tiles.
-    public let glyph: [UInt8]
-    /// Lit state of all 276 ring slots, gate dots included.
+    /// Lit state of all 296 ring slots, gate dots included.
     public let dots: [Bool]
+    /// Lit state of all 3,376 field cells (spare cells are dark).
+    public let petals: [Bool]
 
-    /// Builds the cells from the three transmitted codewords.
+    /// Builds the cells from the transmitted codewords of lane `D` and the
+    /// four field lanes (sector 0 first).
     ///
     /// - Throws: ``PetalCodecError/invalidShape`` when a codeword has the
-    ///   wrong length.
-    public init(p: [UInt8], k: [UInt8], d: [UInt8]) throws {
-        guard p.count == PetalLane.p.wordLength,
-              k.count == PetalLane.k.wordLength,
-              d.count == PetalLane.d.wordLength else {
+    ///   wrong length or there are not four field codewords.
+    public init(d: [UInt8], fields: [[UInt8]]) throws {
+        guard d.count == PetalLane.d.wordLength,
+              fields.count == PetalLayout.sectors,
+              fields.allSatisfy({ $0.count == PetalLane.field(0).wordLength }) else {
             throw PetalCodecError.invalidShape
         }
-        self.init(validatedP: p, k: k, d: d)
+        self.init(validatedD: d, fields: fields)
     }
 
-    init(validatedP p: [UInt8], k: [UInt8], d: [UInt8]) {
-        var light = [Bool](repeating: false, count: PetalLayout.tileCount)
-        var glyph = [UInt8](repeating: 0, count: PetalLayout.tileCount)
-        for tile in 0..<PetalLayout.tileCount {
-            light[tile] = (p[tile / 8] >> (7 - tile % 8)) & 1 == 1
-            let byte = k[tile / 2]
-            glyph[tile] = tile % 2 == 0 ? byte >> 4 : byte & 0x0F
-        }
+    init(validatedD d: [UInt8], fields: [[UInt8]]) {
         var dots = [Bool](repeating: false, count: PetalLayout.totalSlots)
         for (slot, role) in PetalLayout.slotRoles.enumerated() {
             switch role {
@@ -515,34 +506,32 @@ public struct PetalFrameCells: Equatable, Sendable {
                 dots[slot] = false
             }
         }
-        self.light = light
-        self.glyph = glyph
+        var petals = [Bool](repeating: false, count: PetalLayout.fieldCells)
+        for (sector, word) in fields.enumerated() {
+            let cells = PetalLayout.sectorTable[sector]
+            for bit in 0..<(word.count * 8) {
+                petals[cells[bit]] = (word[bit / 8] >> (7 - bit % 8)) & 1 == 1
+            }
+        }
         self.dots = dots
-    }
-
-    /// Packs the polarity cells into a lane `P` codeword.
-    public var pWord: [UInt8] {
-        var word = [UInt8](repeating: 0, count: PetalLane.p.wordLength)
-        for (tile, isLight) in light.enumerated() where isLight {
-            word[tile / 8] |= 1 << (7 - tile % 8)
-        }
-        return word
-    }
-
-    /// Packs the glyph cells into a lane `K` codeword.
-    public var kWord: [UInt8] {
-        var word = [UInt8](repeating: 0, count: PetalLane.k.wordLength)
-        for (tile, symbol) in glyph.enumerated() {
-            let nibble = symbol & 0x0F
-            word[tile / 2] |= tile % 2 == 0 ? nibble << 4 : nibble
-        }
-        return word
+        self.petals = petals
     }
 
     /// Packs the data dots into a lane `D` codeword.
     public var dWord: [UInt8] {
         var word = [UInt8](repeating: 0, count: PetalLane.d.wordLength)
         for (bit, slot) in PetalLayout.dataSlots.enumerated() where dots[slot] {
+            word[bit / 8] |= 1 << (7 - bit % 8)
+        }
+        return word
+    }
+
+    /// Packs the petals of sector `sector` (`0..<4`) into its field codeword.
+    public func fieldWord(sector: Int) -> [UInt8] {
+        let length = PetalLane.field(sector).wordLength
+        var word = [UInt8](repeating: 0, count: length)
+        let cells = PetalLayout.sectorTable[sector]
+        for bit in 0..<(length * 8) where petals[cells[bit]] {
             word[bit / 8] |= 1 << (7 - bit % 8)
         }
         return word
@@ -569,6 +558,33 @@ enum PetalNumeric {
         return value
     }
 
+    /// Sine and cosine of one angle, computed as the reference computes such a
+    /// pair: its optimiser fuses a sine and a cosine of one value into a single
+    /// `__sincos_stret` call on Apple platforms, which differs from separate
+    /// `sin` and `cos` calls in the last bit for a few angles (enough to move
+    /// two field cell centres and four ring slot centres by an ulp). Elsewhere
+    /// `sincos` agrees with `sin` and `cos`.
+    @inline(__always)
+    static func sinCos(_ angle: Double) -> (sin: Double, cos: Double) {
+        #if canImport(Darwin)
+        let pair = __sincos_stret(angle)
+        return (pair.__sinval, pair.__cosval)
+        #else
+        return (sin(angle), cos(angle))
+        #endif
+    }
+
+    /// `sinCos` in single precision (`__sincosf_stret`).
+    @inline(__always)
+    static func sinCos(_ angle: Float) -> (sin: Float, cos: Float) {
+        #if canImport(Darwin)
+        let pair = __sincosf_stret(angle)
+        return (pair.__sinval, pair.__cosval)
+        #else
+        return (sin(angle), cos(angle))
+        #endif
+    }
+
     /// Rust `f64 as isize`: saturating, NaN maps to zero.
     @inline(__always)
     static func saturatingInt(_ value: Double) -> Int {
@@ -576,20 +592,5 @@ enum PetalNumeric {
         if value >= 9.223372036854775807e18 { return Int.max }
         if value <= -9.223372036854775808e18 { return Int.min }
         return Int(value)
-    }
-
-    /// Index of the first minimum under `total_cmp` (Rust `Iterator::min_by`).
-    @inline(__always)
-    static func firstMinimumIndex(_ values: UnsafeBufferPointer<Double>) -> Int {
-        var best = 0
-        var bestKey = Int64.max
-        for index in 0..<values.count {
-            let key = totalOrderKey(values[index])
-            if index == 0 || key < bestKey {
-                best = index
-                bestKey = key
-            }
-        }
-        return best
     }
 }

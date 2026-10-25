@@ -315,13 +315,16 @@ native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
 ## Petal Stream optical transport
 
-`@iroha/iroha-js/petal` is Petal Stream, the animated optical transport used to
-hand over a payload (for example a KAGEMUSHA `IPM1` peer message) from one
-screen to a camera. Each square frame shows four sakura-blossom finders, a
-`天`-shaped field of 256 tiles and three dotted rings. Tile polarity (lane `P`),
-the katakana in each tile (lane `K`) and the ring dots (lane `D`) are three
-independent Reed-Solomon codewords carrying fountain-coded 16-byte atoms, so any
-readable lane of any frame helps and lost frames only cost time.
+`@iroha/iroha-js/petal` is Petal Stream (format 2), the animated optical
+transport used to hand over a payload (for example a KAGEMUSHA `IPM1` peer
+message) from one screen to a camera. Each square frame shows four
+sakura-blossom finders, three dotted rings and inside them a storm of 3,376
+petals on 34 concentric bands, white inside the SORA `天` and pink outside it.
+The ring dots (lane `D`) and the lit petals of the field's four sectors (lanes
+`F0`-`F3`) are five independent Reed-Solomon codewords carrying fountain-coded
+16-byte atoms, so any readable lane of any frame helps and lost frames only cost
+time. The player shows 8 frames per second by default; 12 reads fully in
+simulation and waits for physical qualification.
 
 The module is a port of the `iroha_petal` Rust reference: the encoder is
 bit-exact and the decoder follows the reference step by step. It is pure
@@ -370,15 +373,17 @@ inferred from the other three and refined against the rings
 count both cases). Apps with their own camera pipeline can call
 `session.push(luma, nowMs)` directly with a `PetalLuma` built by
 `PetalLuma.fromStrided` (a camera Y plane), `PetalLuma.fromRgba` or
-`PetalLuma.fromImageData`. When a tile lane is missing, the session averages
-repeated captures keyed by the tag and frame counter in independently decoded
-lane headers. It holds at most six shown frames and four captures each, levels
-each capture by its own finders, and accepts a recovered lane only if its header
-matches that frame. `outcome.merged` lists newly recovered tile lanes;
-`stats().merges`, `mergedP` and `mergedK` count attempts and recovery. Reset and
-receive timeouts clear held evidence. The wire format is unchanged.
+`PetalLuma.fromImageData`. When a capture misses field lanes, the session keeps
+the level of every petal under that capture's pose, keyed by the tag and frame
+counter its decoded lane headers name. It holds at most six shown frames and
+four captures each, reads the missing field lanes from the cell-by-cell mean of
+the held captures, and accepts a recovered lane only if its own header names
+that frame. `outcome.merged` lists newly recovered field lanes (sector digits);
+`stats().merges` and `mergedLanes` count attempts and recoveries. Reset and
+receive timeouts clear held evidence.
 Lower-level pieces are exported as well:
-`decodePetalFrame`, `decodePetalFrameAt` and `trackPetalFrame`, the finder
+`decodePetalFrame`, `decodePetalFrameAt` and `trackPetalFrame`, `PetalPose`,
+`fieldEvidence` and `mergeFields`, the finder
 search (`locate`, `locateCandidates`, `selectTriple`, `followFinder`), the
 software `renderPetalFrame` (RGBA output, ready for `ImageData`), the vector
 `petalDrawList` and `drawPetalFrame`, `PetalStreamAssembler`, the lane codecs
@@ -387,18 +392,19 @@ fountain code (`maskWords`, `encodeAtom`, `PetalFountainDecoder`) and `crc32c`.
 A reassembled payload is only delivered after its CRC-32C matches the beacon;
 it carries no authentication of its own.
 
-The decoder reads the tile lanes (`P` and `K`) against the light and dark levels
-measured at the finders first. A lane that does not decode that way is re-read
-with a normalised read that rescales every tile by its own contrast, so
-over-exposure, veiling light and shadows cost little (a deep glare still defeats
-every lane in the frames it covers); lane `K` still needs a camera that resolves
-the glyphs, and lane `D` carries the stream alone when nothing else reads. The
-scanner does not change the camera's settings, so set the stream up for it
-(`specs/petal_stream.md` section 8, "Scanner guidance"):
+Every petal is one bit, thresholded per sector and colour against the light and
+dark levels measured at the finders. While field lanes stay unread the decoder
+searches the pose for the barrel distortion of cheap lenses, and a lane the
+finder levels cannot read is read again from local levels, which rescale every
+petal by its neighbourhood, so over-exposure, veiling light, shadows and banding
+cost little (a deep glare still defeats every lane in the frames it covers);
+lane `D` carries the stream alone when nothing else reads. The scanner does not
+change the camera's settings, so set the stream up for it
+(`specs/petal_stream.md` section 8):
 
 - Ask `getUserMedia` for about 1280×720; the default `maxSide` of 1280 already
   matches it. Only drop to 640 when the device cannot sustain about 5 decoded
-  frames per second, because at 480p only lanes `P` and `D` read.
+  frames per second, because at 480p a little defocus already costs the field.
 - Automatic exposure over-exposes a mostly black screen. Where the browser
   supports it, apply an exposure compensation of about -1 EV to the video track
   once the stream is open (Chrome on Android exposes it; feature-detect with
@@ -412,8 +418,8 @@ if (track.getCapabilities?.().exposureCompensation) {
 ```
 
 `test/petal.test.js` checks the shared fixtures in `fixtures/petal/`
-(`petal_stream_v1.json`, and the golden camera captures and tracking pairs in
-`petal_captures_v1.json`) and ports the reference unit tests; run it on its own
+(`petal_stream_v2.json`, and the golden camera captures and tracking pairs in
+`petal_captures_v2.json`) and ports the reference unit tests; run it on its own
 with `node --test test/petal.test.js`.
 
 ## Atomic private settlement transport

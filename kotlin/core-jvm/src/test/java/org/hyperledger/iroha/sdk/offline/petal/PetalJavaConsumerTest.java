@@ -38,8 +38,9 @@ final class PetalJavaConsumerTest {
       assertTrue(result.isSuccess(), "frame " + frame);
       assertNull(result.getError());
       final PetalDecodedFrame decoded = result.getFrame();
-      assertEquals("PKD", decoded.getLanes());
-      assertArrayEquals(encoder.laneData(frame).p(), decoded.getP().getData());
+      assertEquals("D0123", decoded.getLanes());
+      assertArrayEquals(encoder.laneData(frame).field(0), decoded.field(0).getData());
+      assertArrayEquals(encoder.laneData(frame).d(), decoded.getD().getData());
       if (PetalStream.isBeaconFrame(frame)) {
         assertEquals(encoder.getMeta(), decoded.beacon().getMeta());
       }
@@ -96,7 +97,12 @@ final class PetalJavaConsumerTest {
     assertNull(decoded.getInferredCorner());
     final PetalDecodedFrame followed = PetalDecoder.track(luma, decoded);
     assertNotNull(followed);
-    assertEquals("PKD", followed.getLanes());
+    assertEquals("D0123", followed.getLanes());
+    assertEquals(0.0, followed.getPose().getDistortion());
+    assertNotNull(PetalDecoder.decodeAt(luma, followed.getPose()));
+    // without lens distortion a pose is its homography
+    final PetalPose plain = PetalPose.plain(followed.getPose().getHomography());
+    assertArrayEquals(followed.getPose().apply(100.0, 200.0), plain.apply(100.0, 200.0));
     assertEquals(500L, PetalScanSession.TRACK_WINDOW_MILLIS);
     final PetalScanSession session = new PetalScanSession();
     session.push(luma, 0L);
@@ -107,25 +113,33 @@ final class PetalJavaConsumerTest {
 
   @Test
   void javaReadsTheCodecAndDrawListSurface() {
-    final byte[] data = new byte[PetalLanes.P_DATA];
-    final byte[] word = PetalLanes.encodeLane(PetalLane.P, data);
+    final byte[] data = new byte[PetalLanes.FIELD_DATA];
+    final PetalLane lane = PetalLane.field(2);
+    assertEquals(PetalLane.F2, lane);
+    assertEquals('2', lane.getLetter());
+    final byte[] word = PetalLanes.encodeLane(lane, data);
     word[0] ^= 0x5A;
-    assertArrayEquals(data, PetalLanes.decodeLane(PetalLane.P, word));
+    assertArrayEquals(data, PetalLanes.decodeLane(lane, word));
+    assertEquals(5, PetalLane.ALL.size());
     final PetalReedSolomonException failure =
         assertThrows(PetalReedSolomonException.class, () -> PetalLanes.decodeLane(PetalLane.D, new byte[3]));
     assertEquals(PetalReedSolomonException.Reason.INVALID_SHAPE, failure.getReason());
 
     final PetalStreamEncoder encoder = new PetalStreamEncoder(payload(64), 3);
     final PetalDrawList list = PetalDrawList.of(encoder.cells(5), PetalPalette.DEFAULT);
-    assertEquals(PetalLayout.TILE_COUNT, list.getTiles().size());
     assertEquals(24, list.getFinderDiscs().size());
     assertFalse(list.getDots().isEmpty());
-    final List<double[]> strokes = PetalGlyphs.strokes(list.getTiles().get(0).getGlyph());
-    assertFalse(strokes.isEmpty());
-    assertEquals(PetalLayout.GLYPH_BOX / PetalGlyphs.GLYPH_GRID, PetalDrawList.GLYPH_SCALE);
-    final PetalDLane lane = PetalStream.parseDLane(encoder.laneData(4).d());
-    assertNotNull(lane);
-    assertTrue(lane.isBeacon());
-    assertEquals(PetalStream.firstAtomId(5), PetalStream.parseAtomLane(PetalLane.P, encoder.laneData(5).p()).getFirstId());
+    final List<PetalDrawPetal> petals = list.getPetals();
+    assertFalse(petals.isEmpty());
+    assertEquals(PetalLayout.isLightCell(petals.get(0).getCell()), petals.get(0).getLight());
+    assertFalse(list.getBackdropCells().isEmpty());
+    assertEquals(PetalLayout.BACKDROP_RADIUS, PetalDrawList.BACKDROP_RADIUS);
+    assertEquals(5.2, PetalDrawList.PETAL_HALF_LENGTH);
+    final PetalDLane dLane = PetalStream.parseDLane(encoder.laneData(4).d());
+    assertNotNull(dLane);
+    assertTrue(dLane.isBeacon());
+    assertEquals(
+        PetalStream.firstAtomId(5) + 5,
+        PetalStream.parseAtomLane(PetalLane.F1, encoder.laneData(5).field(1)).getFirstId());
   }
 }

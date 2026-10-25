@@ -6,7 +6,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.double
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.array
@@ -17,27 +16,33 @@ import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.obj
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.text
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.u32
 
-/** Conformance with every section of the shared `fixtures/petal/petal_stream_v1.json`. */
+/** Conformance with every section of the shared `fixtures/petal/petal_stream_v2.json`. */
 class PetalStreamFixtureTest {
-    private val doc: JsonObject = PetalTestSupport.loadFixture("petal_stream_v1.json")
+    private val doc: JsonObject = PetalTestSupport.loadFixture("petal_stream_v2.json")
+
+    /** One flag per field cell, cell 0 in the most significant bit of byte 0. */
+    private fun flags(bitmap: ByteArray): BooleanArray =
+        BooleanArray(PetalLayout.FIELD_CELLS) { cell -> ((bitmap[cell / 8].toInt() ushr (7 - cell % 8)) and 1) == 1 }
+
+    private fun JsonObject.real(key: String): Double = getValue(key).jsonPrimitive.double
+
+    private fun JsonObject.hexList(key: String): List<ByteArray> = array(key).map { PetalTestSupport.hex(it.jsonPrimitive.content) }
 
     @Test
     fun formatAndConstantsMatch() {
-        assertEquals(1L, doc.number("fixture_version"))
-        assertEquals("petal-stream-v1", doc.text("format"))
+        assertEquals(2L, doc.number("fixture_version"))
+        assertEquals("petal-stream-v2", doc.text("format"))
         val constants = doc.obj("constants")
         assertEquals(PetalLayout.CANVAS, constants.number("canvas").toDouble())
-        assertEquals(PetalLayout.TILE_ORIGIN, constants.number("tile_origin").toDouble())
-        assertEquals(PetalLayout.TILE_PITCH, constants.number("tile_pitch").toDouble())
-        assertEquals(PetalLayout.TILE_SIZE, constants.number("tile_size").toDouble())
-        assertEquals(PetalLayout.DOT_RADIUS, constants.number("dot_radius").toDouble())
         assertEquals(PetalLanes.ATOM_LEN.toLong(), constants.number("atom_len"))
-        assertEquals(PetalLanes.P_WORD.toLong(), constants.number("p_word"))
-        assertEquals(PetalLanes.K_WORD.toLong(), constants.number("k_word"))
         assertEquals(PetalLanes.D_WORD.toLong(), constants.number("d_word"))
-        assertEquals(PetalLanes.P_PARITY.toLong(), constants.number("p_parity"))
-        assertEquals(PetalLanes.K_PARITY.toLong(), constants.number("k_parity"))
         assertEquals(PetalLanes.D_PARITY.toLong(), constants.number("d_parity"))
+        assertEquals(PetalLanes.FIELD_WORD.toLong(), constants.number("field_word"))
+        assertEquals(PetalLanes.FIELD_PARITY.toLong(), constants.number("field_parity"))
+        assertEquals(PetalLanes.FIELD_ATOMS.toLong(), constants.number("field_atoms"))
+        assertEquals(PetalLayout.SECTORS.toLong(), constants.number("sectors"))
+        assertEquals(PetalLanes.ATOMS_PER_FRAME.toLong(), constants.number("atoms_per_frame"))
+        assertEquals(PetalLayout.FIELD_CELLS.toLong(), constants.number("field_cells"))
         assertEquals(PetalStream.BEACON_INTERVAL.toLong(), constants.number("beacon_interval"))
         assertEquals(PetalStream.FORMAT_VERSION.toLong(), constants.number("format_version"))
     }
@@ -45,13 +50,41 @@ class PetalStreamFixtureTest {
     @Test
     fun layoutMatches() {
         val layout = doc.obj("layout")
-        assertEquals(PetalLayout.MASK, layout.array("mask").map { it.jsonPrimitive.content })
-        val tiles = layout.array("tiles_col_row").longs()
-        assertEquals(2 * PetalLayout.TILE_COUNT, tiles.size)
-        for (tile in 0 until PetalLayout.TILE_COUNT) {
-            assertEquals(PetalLayout.tileColumn(tile).toLong(), tiles[2 * tile], "tile $tile column")
-            assertEquals(PetalLayout.tileRow(tile).toLong(), tiles[2 * tile + 1], "tile $tile row")
+        assertContentEquals(
+            LongArray(8) {
+                (if (it % 2 == 0) PetalLayout.finderCenterX(it / 2) else PetalLayout.finderCenterY(it / 2)).toLong()
+            },
+            layout.array("finder_centers").longs(),
+        )
+        assertEquals(PetalLayout.BAND_INNER, layout.real("band_inner"))
+        assertEquals(PetalLayout.BAND_SPACING, layout.real("band_spacing"))
+        assertContentEquals(
+            LongArray(PetalLayout.BAND_COUNT) { PetalLayout.bandSlots(it).toLong() },
+            layout.array("band_slots").longs(),
+        )
+        assertEquals(PetalLayout.PETAL_RADIUS, layout.real("petal_radius"))
+        assertEquals(PetalLayout.PETAL_HALF_LENGTH, layout.real("petal_half_length"))
+        assertEquals(PetalLayout.PETAL_HALF_WIDTH, layout.real("petal_half_width"))
+        assertEquals(PetalLayout.PETAL_NOTCH_RADIUS, layout.real("petal_notch_radius"))
+        assertEquals(PetalLayout.PETAL_NOTCH_DISTANCE, layout.real("petal_notch_distance"))
+        val sectors = layout.array("sector_cells")
+        assertEquals(PetalLayout.SECTORS, sectors.size)
+        for (sector in 0 until PetalLayout.SECTORS) {
+            assertContentEquals(
+                sectors[sector].longs(),
+                PetalLayout.sectorCells(sector).map { it.toLong() }.toLongArray(),
+                "sector $sector",
+            )
         }
+        assertEquals(PetalLayout.MASK, layout.array("mask").map { it.jsonPrimitive.content })
+        assertEquals(PetalLayout.MASK_ORIGIN, layout.real("mask_origin"))
+        assertEquals(PetalLayout.MASK_PITCH, layout.real("mask_pitch"))
+        assertEquals(PetalLayout.BACKDROP_RADIUS, layout.real("backdrop_radius"))
+        assertContentEquals(
+            flags(layout.hexBytes("light_cells_hex")),
+            BooleanArray(PetalLayout.FIELD_CELLS) { PetalLayout.isLightCell(it) },
+            "light cells",
+        )
         assertContentEquals(
             LongArray(PetalLayout.RING_COUNT) { PetalLayout.ringRadius(it).toLong() },
             layout.array("ring_radii").longs(),
@@ -60,37 +93,20 @@ class PetalStreamFixtureTest {
             LongArray(PetalLayout.RING_COUNT) { PetalLayout.ringSlots(it).toLong() },
             layout.array("ring_slots").longs(),
         )
-        assertContentEquals(
-            LongArray(8) {
-                (if (it % 2 == 0) PetalLayout.finderCenterX(it / 2) else PetalLayout.finderCenterY(it / 2)).toLong()
-            },
-            layout.array("finder_centers").longs(),
-        )
+        assertEquals(PetalLayout.DOT_RADIUS, layout.real("dot_radius"))
         assertContentEquals(PetalLayout.dataSlots().map { it.toLong() }.toLongArray(), layout.array("data_slots").longs())
         assertContentEquals(PetalLayout.gateSlots().map { it.toLong() }.toLongArray(), layout.array("gate_slots").longs())
         assertContentEquals(PetalLayout.guardSlots().map { it.toLong() }.toLongArray(), layout.array("guard_slots").longs())
     }
 
     @Test
-    fun glyphAlphabetStrokesAndTemplatesMatch() {
-        val glyphs = doc.obj("glyphs")
-        assertEquals(PetalGlyphs.GLYPH_CHARS, glyphs.text("chars"))
-        assertEquals(PetalGlyphs.STROKE_WIDTH, glyphs.getValue("stroke_width").jsonPrimitive.double, 1e-9)
-        val strokes = glyphs.array("strokes")
-        val templates = glyphs.array("templates")
-        assertEquals(PetalGlyphs.GLYPH_COUNT, strokes.size)
-        assertEquals(PetalGlyphs.GLYPH_COUNT, templates.size)
-        for (glyph in 0 until PetalGlyphs.GLYPH_COUNT) {
-            val expected = strokes[glyph].jsonArray.map { stroke -> stroke.longs().map { it.toDouble() }.toDoubleArray() }
-            val actual = PetalGlyphs.strokes(glyph)
-            assertEquals(expected.size, actual.size, "glyph $glyph stroke count")
-            expected.zip(actual).forEach { (want, have) -> assertContentEquals(want, have, "glyph $glyph strokes") }
-            assertContentEquals(
-                templates[glyph].longs().map { it.toInt() }.toIntArray(),
-                PetalGlyphs.template(glyph),
-                "glyph $glyph template",
-            )
-        }
+    fun paletteMatches() {
+        val palette = doc.obj("palette")
+        fun rgb(key: String): Int = palette.array(key).longs().fold(0) { acc, part -> (acc shl 8) or part.toInt() }
+        assertEquals(PetalPalette.DEFAULT.background, rgb("background"))
+        assertEquals(PetalPalette.DEFAULT.light, rgb("light"))
+        assertEquals(PetalPalette.DEFAULT.pink, rgb("pink"))
+        assertEquals(PetalPalette.DEFAULT.backdrop, rgb("backdrop"))
     }
 
     @Test
@@ -107,9 +123,8 @@ class PetalStreamFixtureTest {
             assertEquals(entry.number("out"), u32(PetalFountain.mix32(entry.number("in").toInt())))
         }
         val whitening = doc.obj("whitening")
-        assertContentEquals(whitening.hexBytes("P"), PetalLane.P.whitening())
-        assertContentEquals(whitening.hexBytes("K"), PetalLane.K.whitening())
         assertContentEquals(whitening.hexBytes("D"), PetalLane.D.whitening())
+        for (lane in PetalLane.FIELDS) assertContentEquals(whitening.hexBytes("F${lane.sector}"), lane.whitening(), "$lane")
     }
 
     @Test
@@ -170,23 +185,26 @@ class PetalStreamFixtureTest {
                 val frame = frameElement.jsonObject
                 val frameNumber = frame.number("frame").toInt()
                 val data = encoder.laneData(frameNumber)
-                assertContentEquals(frame.hexBytes("p_data"), data.p(), "$name frame $frameNumber P")
-                assertContentEquals(frame.hexBytes("k_data"), data.k(), "$name frame $frameNumber K")
                 assertContentEquals(frame.hexBytes("d_data"), data.d(), "$name frame $frameNumber D")
-                val pWord = frame.hexBytes("p_word")
-                val kWord = frame.hexBytes("k_word")
+                val fieldData = frame.hexList("field_data")
+                assertEquals(PetalLayout.SECTORS, fieldData.size)
+                for (sector in 0 until PetalLayout.SECTORS) {
+                    assertContentEquals(fieldData[sector], data.field(sector), "$name frame $frameNumber F$sector")
+                }
                 val dWord = frame.hexBytes("d_word")
-                assertContentEquals(pWord, PetalLanes.encodeLane(PetalLane.P, data.p()))
-                assertContentEquals(kWord, PetalLanes.encodeLane(PetalLane.K, data.k()))
+                val fieldWords = frame.hexList("field_words")
                 assertContentEquals(dWord, PetalLanes.encodeLane(PetalLane.D, data.d()))
                 val words = encoder.words(frameNumber)
-                assertContentEquals(pWord, words.p())
-                assertContentEquals(kWord, words.k())
                 assertContentEquals(dWord, words.d())
-                val cells = PetalFrameCells.fromWords(pWord, kWord, dWord)
-                assertEquals(frame.text("glyphs"), cells.glyphs().joinToString("") { Integer.toHexString(it) })
+                for (lane in PetalLane.FIELDS) {
+                    val word = fieldWords[lane.sector]
+                    assertContentEquals(word, PetalLanes.encodeLane(lane, data.lane(lane)), "$name frame $frameNumber $lane")
+                    assertContentEquals(word, words.lane(lane), "$name frame $frameNumber $lane")
+                }
+                val cells = PetalFrameCells.fromWords(dWord, fieldWords)
                 val lit = (0 until PetalLayout.TOTAL_SLOTS).filter { cells.isDotLit(it) }.map { it.toLong() }
                 assertContentEquals(frame.array("lit_dots").longs(), lit.toLongArray(), "$name frame $frameNumber dots")
+                assertContentEquals(flags(frame.hexBytes("lit_petals_hex")), cells.petals(), "$name frame $frameNumber petals")
                 assertEquals(cells, encoder.cells(frameNumber))
             }
             // push every fixture frame through decodeLane + the assembler
@@ -196,8 +214,9 @@ class PetalStreamFixtureTest {
                     val frame = frameElement.jsonObject
                     val d = PetalLanes.decodeLane(PetalLane.D, frame.hexBytes("d_word"))
                     assembler.pushDLane(assertNotNull(PetalStream.parseDLane(d)))
-                    for ((lane, key) in listOf(PetalLane.P to "p_word", PetalLane.K to "k_word")) {
-                        val data = PetalLanes.decodeLane(lane, frame.hexBytes(key))
+                    val fieldWords = frame.hexList("field_words")
+                    for (lane in PetalLane.FIELDS) {
+                        val data = PetalLanes.decodeLane(lane, fieldWords[lane.sector])
                         assembler.pushAtoms(assertNotNull(PetalStream.parseAtomLane(lane, data)))
                     }
                 }

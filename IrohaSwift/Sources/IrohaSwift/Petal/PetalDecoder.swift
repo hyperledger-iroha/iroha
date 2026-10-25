@@ -4,19 +4,12 @@ import Foundation
 public struct PetalDecodeOptions: Equatable, Sendable {
     /// Also try horizontally mirrored images (front-camera previews).
     public var tryMirrored: Bool
-    /// Blur widths (in template cells) tried for glyph matching.
-    public var templateSigmas: [Double]
     /// Largest image (in pixels) the decoder accepts; larger frames should be
     /// downscaled by the caller. Bounds memory and work on hostile input.
     public var maximumPixels: Int
 
-    public init(
-        tryMirrored: Bool = true,
-        templateSigmas: [Double] = [0.0, 0.5, 0.8, 1.1, 1.5],
-        maximumPixels: Int = 12_000_000
-    ) {
+    public init(tryMirrored: Bool = true, maximumPixels: Int = 12_000_000) {
         self.tryMirrored = tryMirrored
-        self.templateSigmas = templateSigmas
         self.maximumPixels = maximumPixels
     }
 }
@@ -32,31 +25,30 @@ public struct PetalLaneResult: Equatable, Sendable {
     public let erasures: Int
 }
 
-/// The tile patches sampled under one decoded pose, in camera levels, and
-/// that capture's finder levels. A capture holds about 128 KB. Use
-/// ``PetalDecoder/tileEvidence(_:frame:options:)`` to sample it and
-/// ``PetalDecoder/mergeTiles(_:options:)`` to average captures of one shown frame.
-public struct PetalTileEvidence: Equatable, Sendable {
-    let patches: [Double]
-    let reference: PetalDecoder.Reference
+/// What one capture shows of a frame's petal field: the level of every field
+/// cell sampled under the capture's decoded pose and normalised by that
+/// capture's finder levels. Use ``PetalDecoder/fieldEvidence(_:frame:options:)``
+/// to sample it and ``PetalDecoder/mergeFields(_:skip:)`` to average captures of
+/// one shown frame. One evidence holds about 27 KB.
+public struct PetalFieldEvidence: Equatable, Sendable {
+    /// The normalised level of every field cell, in cell order.
+    let levels: [Double]
 }
 
 /// Everything read from one camera frame.
 public struct PetalDecodedFrame: Equatable, Sendable {
-    /// Canvas-to-pixel homography that was used.
-    public let homography: PetalHomography
+    /// Canvas-to-pixel pose that was used.
+    public let pose: PetalPose
     /// Orientation: how many quarter turns the code is rotated, i.e. which
     /// image corner (clockwise from the top-left) holds the code's top-left
     /// finder.
     public let rotation: Int
     /// Whether the image was mirrored.
     public let mirrored: Bool
-    /// Lane `P` result.
-    public let p: PetalLaneResult?
-    /// Lane `K` result.
-    public let k: PetalLaneResult?
     /// Lane `D` result.
     public let d: PetalLaneResult?
+    /// Field lane results, sector 0 first (always four entries).
+    public let fields: [PetalLaneResult?]
     /// The corner finder that was hidden (by a finger, a glare or the edge of
     /// the frame) and inferred from the other three, as its canonical index:
     /// 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left of the upright
@@ -65,15 +57,23 @@ public struct PetalDecodedFrame: Equatable, Sendable {
 
     /// Number of lanes that decoded.
     public var lanesOK: Int {
-        (p == nil ? 0 : 1) + (k == nil ? 0 : 1) + (d == nil ? 0 : 1)
+        (d == nil ? 0 : 1) + fields.reduce(0) { $0 + ($1 == nil ? 0 : 1) }
     }
 
-    /// Letters (`"PKD"` order) of the lanes that decoded.
+    /// The result of `lane`, when it decoded.
+    public func lane(_ lane: PetalLane) -> PetalLaneResult? {
+        switch lane {
+        case .d: return d
+        case .field(let sector): return fields.indices.contains(sector) ? fields[sector] : nil
+        }
+    }
+
+    /// The lanes that decoded, as letters: `D` and the sector digits `0`–`3`.
     public var laneLetters: String {
         var letters = ""
-        if p != nil { letters.append(PetalLane.p.letter) }
-        if k != nil { letters.append(PetalLane.k.letter) }
-        if d != nil { letters.append(PetalLane.d.letter) }
+        for lane in PetalLane.decodeOrder where self.lane(lane) != nil {
+            letters.append(lane.letter)
+        }
         return letters
     }
 
@@ -88,11 +88,15 @@ public struct PetalDecodedFrame: Equatable, Sendable {
         return nil
     }
 
-    /// Atom packets from every lane that decoded.
+    /// Atom packets from every lane that decoded: the field lanes in sector
+    /// order, then lane `D`.
     public var atomPackets: [PetalAtomPacket] {
         var packets: [PetalAtomPacket] = []
-        if let p, let packet = PetalStream.parseAtomLane(.p, data: p.data) { packets.append(packet) }
-        if let k, let packet = PetalStream.parseAtomLane(.k, data: k.data) { packets.append(packet) }
+        for lane in PetalLane.fields {
+            if let result = self.lane(lane), let packet = PetalStream.parseAtomLane(lane, data: result.data) {
+                packets.append(packet)
+            }
+        }
         if case .atoms(let packet) = dLane { packets.append(packet) }
         return packets
     }
@@ -100,11 +104,10 @@ public struct PetalDecodedFrame: Equatable, Sendable {
     /// Offers everything this frame carries to `assembler`.
     public func feed(_ assembler: inout PetalStreamAssembler) {
         if let lane = dLane { assembler.push(dLane: lane) }
-        if let p, let packet = PetalStream.parseAtomLane(.p, data: p.data) {
-            assembler.push(atoms: packet)
-        }
-        if let k, let packet = PetalStream.parseAtomLane(.k, data: k.data) {
-            assembler.push(atoms: packet)
+        for lane in PetalLane.fields {
+            if let result = self.lane(lane), let packet = PetalStream.parseAtomLane(lane, data: result.data) {
+                assembler.push(atoms: packet)
+            }
         }
     }
 }
@@ -114,7 +117,7 @@ public enum PetalDecodeError: Error, Equatable, LocalizedError, Sendable {
     /// The image is smaller than 48 pixels on a side or larger than
     /// ``PetalDecodeOptions/maximumPixels``.
     case unsupportedImage
-    /// The four corner finders were not found.
+    /// No set of corner finders (four, or three forming a corner) was found.
     case noFinders
     /// Finders were found but no orientation produced a readable lane.
     case noOrientation
@@ -131,43 +134,64 @@ public enum PetalDecodeError: Error, Equatable, LocalizedError, Sendable {
 /// From a camera luma plane to lane data (port of
 /// `crates/iroha_petal/src/decode.rs`).
 ///
-/// The decoder locates the four finders (or three, inferring the fourth),
-/// derives a homography for each orientation hypothesis (four rotations,
-/// optionally mirrored), ranks the orientations by their ring gates and the
-/// `天` silhouette, picks the one whose lane `D` codeword (or a tile lane)
-/// checks out, then reads the tiles and dots. Every tile is classified
-/// jointly: the 8×8 sample patch is compared against the 32 hypotheses
-/// (polarity × glyph) and the best match wins. Cells the decoder is unsure about become
-/// Reed–Solomon erasures. A lane is only reported when its codeword checks
-/// out; the payload CRC-32C of the stream catches the rare miscorrection.
+/// The decoder locates the corner finders (four, or three with the fourth
+/// inferred), derives a pose for each orientation hypothesis (four rotations,
+/// optionally mirrored), ranks the orientations by how well the ring gates
+/// line up (lane `D` must check out), then reads the dots and the petal field.
+/// Every petal is one bit: its level, normalised by the finder levels, is
+/// compared with a threshold computed for its codeword and colour class (the
+/// petals inside the `天` are lighter than the pink ones). Bytes the decoder is
+/// unsure about become Reed–Solomon erasures. A lane is only reported when its
+/// codeword checks out; the payload CRC-32C of the stream catches the rare
+/// miscorrection.
 ///
-/// The tile *level read* judges every patch against the light and dark levels
-/// measured at the finders. When it leaves lane `P` or `K` unreadable, the
-/// *normalised read* is tried: it rescales each patch (and each template) by
-/// its own contrast, so over-exposure, veiling light, glare, shadows and
-/// gradients cancel out.
+/// A field lane the levels leave unread is read again from *local levels*:
+/// every cell rescaled by the darkest and brightest cells of its
+/// neighbourhood, so shadows, glare, banding and veiling light cancel. When
+/// some field lanes do not decode, the pose is searched for radial lens
+/// distortion: a cheap camera's barrel distortion moves the petals by a third
+/// of their pitch at the edge of a 480p frame, while the finders that fix the
+/// homography sit far outside the field.
+///
+/// A camera sees each shown frame two to four times.
+/// ``fieldEvidence(_:frame:options:)`` keeps what one capture shows of the
+/// petal field, and ``mergeFields(_:skip:)`` reads the field lanes from the
+/// average of several captures of one shown frame, which recovers lanes that
+/// noise, display banding or hand shake cost each capture alone.
 public enum PetalDecoder {
-    /// Relative level of the glyph ink on a light tile (ink / light fill).
-    static let inkOnLight = 0.04
-    /// Relative level of a pink glyph on a dark tile (pink / light fill).
-    static let pinkOnDark = 0.83
-    static let patch = PetalGlyphs.templateSize
-    static let cells = patch * patch
-    static let hypothesisCount = 2 * PetalGlyphs.count
-    /// Cells cut from each end of a sorted patch to find its robust darkest
-    /// and brightest level.
-    static let patchCut = cells / 10
-    /// Tiles whose contrast is below this fraction of the median tile
-    /// contrast become erasures in the normalised read.
-    static let weakTile = 0.25
+    /// Distortion steps tried, relative to the starting pose, when a plain
+    /// pose leaves field lanes unread; the best is then refined by
+    /// ±``distortionRefine``.
+    static let distortionSteps: [Double] = [-0.03, -0.06, -0.09, -0.12, -0.16, 0.03]
+    /// Final refinement step of the distortion search.
+    static let distortionRefine = 0.015
+    /// A colour class with fewer cells in a codeword than this takes the
+    /// codeword's threshold.
+    static let classMinimumCells = 16
+    /// Field cells within this distance of a cell are its neighbourhood for
+    /// the local read.
+    static let neighbourhood = 32.0
+    /// Cells averaged at each end of a sorted neighbourhood for its local dark
+    /// and lit levels.
+    static let neighbourhoodEnds = 5
+    /// Sample spread of a ring dot, in canvas units.
+    static let dotSpread = 0.32 * PetalLayout.dotRadius
+    /// Sample spread of a petal, in canvas units.
+    static let petalSpread = 0.4 * PetalLayout.petalRadius
+    /// Cells of a sector that carry its codeword.
+    static let fieldBits = PetalLane.field(0).wordLength * 8
+    /// No sector skipped.
+    static let readAll = [Bool](repeating: false, count: PetalLayout.sectors)
+    /// No field lane read.
+    static let noFields = [PetalLaneResult?](repeating: nil, count: PetalLayout.sectors)
 
     /// Decodes one camera frame.
     ///
     /// Tries the finder candidates of ``PetalLocator/candidates(_:)`` in order
     /// and returns the first that reads. For each, the orientation hypotheses
-    /// (four quarter turns, optionally mirrored) are ranked by the ring gates
-    /// plus the `天`; lane `D` is tried under the best three whose gate score is
-    /// at least 0.2, then the tile lanes under the best four.
+    /// (four quarter turns, optionally mirrored) are ranked by the ring gates;
+    /// lane `D` is tried under the best three whose gate score is at least
+    /// 0.2, then the field lanes under the best four.
     ///
     /// - Throws: ``PetalDecodeError/unsupportedImage`` for unusable sizes,
     ///   ``PetalDecodeError/noFinders`` when no code is visible and
@@ -208,10 +232,11 @@ public enum PetalDecoder {
     /// within a quarter diameter of that prediction (so a thumb beside it does
     /// not count). When exactly one corner is missing it is placed at the
     /// prediction and refined against the rings like an inferred corner. The
-    /// orientation is kept from the previous frame. Returns `nil` for a broken
-    /// previous pose (non-finite, or finders larger than the image), when two
-    /// corners are lost or when no lane decodes; the caller then runs
-    /// ``decode(_:options:)``.
+    /// orientation and the lens distortion are kept from the previous frame
+    /// (the distortion is searched again when a field lane does not decode).
+    /// Returns `nil` for a broken previous pose (non-finite, or finders larger
+    /// than the image), when two corners are lost or when no lane decodes; the
+    /// caller then runs ``decode(_:options:)``.
     public static func track(
         _ image: PetalLuma,
         previous: PetalDecodedFrame,
@@ -220,15 +245,11 @@ public enum PetalDecoder {
         // a frame built by the caller may name a corner that does not exist
         guard isSupported(image, options: options),
               previous.inferredCorner.map({ (0...3).contains($0) }) ?? true else { return nil }
-        return image.withView { view in track(view, previous: previous, options: options) }
+        return image.withView { view in track(view, previous: previous) }
     }
 
-    static func track(
-        _ image: PetalLumaView,
-        previous: PetalDecodedFrame,
-        options: PetalDecodeOptions
-    ) -> PetalDecodedFrame? {
-        let h0 = previous.homography
+    static func track(_ image: PetalLumaView, previous: PetalDecodedFrame) -> PetalDecodedFrame? {
+        let p0 = previous.pose
         func span(_ a: (Double, Double), _ b: (Double, Double)) -> Double {
             let dx = a.0 - b.0
             let dy = a.1 - b.1
@@ -237,10 +258,10 @@ public enum PetalDecoder {
         let expected = PetalLayout.finderCenters.map { center -> PetalFinder in
             let cx = center.x
             let cy = center.y
-            let (x, y) = h0.apply(cx, cy)
+            let (x, y) = p0.apply(cx, cy)
             let size = Double.maximum(
-                span(h0.apply(cx - 60.0, cy), h0.apply(cx + 60.0, cy)),
-                span(h0.apply(cx, cy - 60.0), h0.apply(cx, cy + 60.0))
+                span(p0.apply(cx - 60.0, cy), p0.apply(cx + 60.0, cy)),
+                span(p0.apply(cx, cy - 60.0), p0.apply(cx, cy + 60.0))
             )
             return PetalFinder(x: x, y: y, size: size)
         }
@@ -291,97 +312,121 @@ public enum PetalDecoder {
         var corners = found.map { $0 ?? expected[0] }
         if let m = inferred { corners = refineInferredCorner(image, corners, inferred: m) }
         let points = corners.map { PetalPoint(x: $0.x, y: $0.y) }
-        guard let h = PetalHomography.fit(from: PetalLayout.finderCenters, to: points),
-              let reference = referenceLevels(image, h, inferred: inferred) else { return nil }
-        let d = readLaneD(image, h, reference)
-        let patches = samplePatches(image, h)
-        let lanes = readTileLanes(patches, reference, options.templateSigmas)
-        if lanes.p == nil && lanes.k == nil && d == nil { return nil }
+        guard let read = readFieldSearching(image, points, start: previous.pose.distortion, inferred: inferred) else {
+            return nil
+        }
+        let d = readLaneD(image, read.pose, read.reference)
+        if d == nil && read.decoded == 0 { return nil }
         return PetalDecodedFrame(
-            homography: h,
+            pose: read.pose,
             rotation: previous.rotation,
             mirrored: previous.mirrored,
-            p: lanes.p,
-            k: lanes.k,
             d: d,
+            fields: read.fields,
             inferredCorner: inferred
         )
     }
 
-    /// Reads all lanes with a known canvas-to-pixel homography (no finder
-    /// search).
+    /// Reads all lanes with a known canvas-to-pixel pose (no finder search, no
+    /// distortion search).
     ///
-    /// Returns `nil` when the image is unusable or the finder reference
-    /// levels are too weak. Used by trackers that already know the pose, by
-    /// refinement passes and by qualification tooling with a ground-truth
-    /// pose.
+    /// Returns `nil` when the image is unusable or the finder reference levels
+    /// are too weak. Used by refinement passes and by qualification tooling with
+    /// a ground-truth pose. The reference levels come from all four corner
+    /// finders, so a frame whose corner blossom is hidden is refused here (the
+    /// hidden corner has no contrast); ``decode(_:options:)`` and
+    /// ``track(_:previous:options:)`` read such frames by inferring that corner.
     public static func decode(
         _ image: PetalLuma,
-        homography: PetalHomography,
+        pose: PetalPose,
         options: PetalDecodeOptions = PetalDecodeOptions()
     ) -> PetalDecodedFrame? {
         guard isSupported(image, options: options) else { return nil }
         return image.withView { view in
-            guard let reference = referenceLevels(view, homography, inferred: nil) else { return nil }
-            return finish(
-                view,
-                options,
+            guard let reference = referenceLevels(view, pose, inferred: nil) else { return nil }
+            let fields = readFields(fieldLevels(view, pose, reference), skip: readAll).results
+            return PetalDecodedFrame(
+                pose: pose,
                 rotation: 0,
                 mirrored: false,
-                homography: homography,
-                reference: reference,
-                d: nil,
+                d: readLaneD(view, pose, reference),
+                fields: fields,
                 inferredCorner: nil
             )
         }
     }
 
-    /// Builds the cells a decoder believes it saw, for diagnostics.
-    ///
-    /// Tiles are taken from the level read (the one that judges against the
-    /// finder levels), even for a frame whose lanes were rescued by the
-    /// normalised read. Returns `nil` for an image ``decode(_:options:)``
-    /// refuses.
+    /// Builds the cells a decoder believes it saw under `frame`'s pose, for
+    /// diagnostics: the dots as lane `D` reads them, and every codeword
+    /// thresholded as the first read of ``decode(_:options:)`` thresholds it
+    /// (no local read). Returns `nil` for an image or frame that
+    /// ``fieldEvidence(_:frame:options:)`` refuses.
     public static func observedCells(
         _ image: PetalLuma,
         frame: PetalDecodedFrame,
         options: PetalDecodeOptions = PetalDecodeOptions()
     ) -> PetalFrameCells? {
-        guard isSupported(image, options: options) else { return nil }
+        guard let evidence = fieldEvidence(image, frame: frame, options: options) else { return nil }
         return image.withView { view in
-            guard let reference = referenceLevels(view, frame.homography, inferred: frame.inferredCorner) else {
+            guard let reference = referenceLevels(view, frame.pose, inferred: frame.inferredCorner) else {
                 return nil
             }
-            let patches = samplePatches(view, frame.homography)
-            let reads = readTiles(patches, reference, options.templateSigmas)
-            let words = tileWords(reads)
-            let (d, _) = readDots(view, frame.homography, reference)
-            return PetalFrameCells(validatedP: words.p, k: words.k, d: d)
+            let (d, _) = readDots(view, frame.pose, reference)
+            var margins = 0.0
+            var scratch = WordScratch()
+            let words = (0..<PetalLayout.sectors).map { sector in
+                readWord(evidence.levels, sector: sector, margins: &margins, scratch: &scratch).bytes
+            }
+            return PetalFrameCells(validatedD: d, fields: words)
         }
     }
 
-    /// Mean squared tile-match error of the level read, a quick image-quality
-    /// indicator.
+    /// The field evidence of `image` under the pose `frame` was decoded with.
     ///
-    /// It can be large for a frame whose lanes were rescued by the normalised
-    /// read, which is the point: the finder levels did not describe that
-    /// picture. Returns `nil` for an image ``decode(_:options:)`` refuses.
-    public static func tileMatchError(
+    /// Returns `nil` for an unusable image, a frame that names a corner that
+    /// does not exist, or finder levels too weak to read. Evidence is in
+    /// canonical code coordinates, so captures may have different positions,
+    /// rotations and reflections.
+    public static func fieldEvidence(
         _ image: PetalLuma,
         frame: PetalDecodedFrame,
         options: PetalDecodeOptions = PetalDecodeOptions()
-    ) -> Double? {
-        guard isSupported(image, options: options) else { return nil }
+    ) -> PetalFieldEvidence? {
+        // a frame built by the caller may name a corner that does not exist
+        guard isSupported(image, options: options),
+              frame.inferredCorner.map({ (0...3).contains($0) }) ?? true else { return nil }
         return image.withView { view in
-            guard let reference = referenceLevels(view, frame.homography, inferred: frame.inferredCorner) else {
+            guard let reference = referenceLevels(view, frame.pose, inferred: frame.inferredCorner) else {
                 return nil
             }
-            let patches = samplePatches(view, frame.homography)
-            let reads = readTiles(patches, reference, options.templateSigmas)
-            var total = -0.0
-            for read in reads { total += read.error }
-            return total / Double(reads.count)
+            return PetalFieldEvidence(levels: fieldLevels(view, frame.pose, reference))
         }
+    }
+
+    /// The field lanes from several captures of one shown frame: the
+    /// cell-by-cell mean of their levels (summed in capture order, then divided
+    /// by the number of captures), read as one capture's levels are, local read
+    /// included. Averaging cancels the sensor noise, banding and shake that
+    /// differ between captures; one evidence reads exactly the field lanes
+    /// ``decode(_:options:)`` read from that capture's pose. Sectors flagged in
+    /// `skip` are not read.
+    ///
+    /// The caller must group evidence by independently decoded lane headers and
+    /// check each recovered lane's header before offering its atoms: a lane
+    /// read here names its frame in its own header.
+    public static func mergeFields(
+        _ evidence: [PetalFieldEvidence],
+        skip: [Bool] = [false, false, false, false]
+    ) -> [PetalLaneResult?] {
+        guard !evidence.isEmpty else { return noFields }
+        var mean = [Double](repeating: 0, count: PetalLayout.fieldCells)
+        for capture in evidence {
+            for index in mean.indices { mean[index] += capture.levels[index] }
+        }
+        let count = Double(evidence.count)
+        for index in mean.indices { mean[index] /= count }
+        let skip = (0..<PetalLayout.sectors).map { $0 < skip.count && skip[$0] }
+        return readFields(mean, skip: skip).results
     }
 
     private static func isSupported(_ image: PetalLuma, options: PetalDecodeOptions) -> Bool {
@@ -393,80 +438,94 @@ public enum PetalDecoder {
 
     // MARK: - Orientation
 
-    /// One hypothesis: gate score, `天` score, orientation, pose and levels.
+    /// One hypothesis: gate score, orientation, finder centres, plain pose and
+    /// levels.
     struct Scored {
         let gate: Double
-        let mask: Double
         let rotation: Int
         let mirrored: Bool
-        let homography: PetalHomography
+        let destination: [PetalPoint]
+        let pose: PetalPose
         let reference: Reference
     }
 
     /// Reads one finder candidate: ranks its orientation hypotheses by gate
-    /// score plus `天` score, tries lane `D` under the best three whose gate
-    /// score is at least 0.2, then the tile lanes under the best four.
+    /// score, tries lane `D` under the best three whose gate score is at least
+    /// 0.2, then the field lanes under the best four.
     static func decodeCandidate(
         _ image: PetalLumaView,
         _ options: PetalDecodeOptions,
         _ set: PetalFinderSet
     ) -> PetalDecodedFrame? {
         let corners = set.inferred.map { refineInferredCorner(image, set.corners, inferred: $0) } ?? set.corners
+        func inferredCorner(_ rotation: Int, _ mirrored: Bool) -> Int? {
+            set.inferred.map { canonicalCorner($0, rotation: rotation, mirrored: mirrored) }
+        }
         var scored: [Scored] = []
         for hypothesis in hypotheses(corners, tryMirrored: options.tryMirrored) {
-            let inferred = set.inferred.map {
-                canonicalCorner($0, rotation: hypothesis.rotation, mirrored: hypothesis.mirrored)
-            }
-            let h = hypothesis.homography
-            guard let reference = referenceLevels(image, h, inferred: inferred) else { continue }
+            let inferred = inferredCorner(hypothesis.rotation, hypothesis.mirrored)
+            guard let pose = fitPose(image, hypothesis.destination, distortion: 0.0),
+                  let reference = referenceLevels(image, pose, inferred: inferred) else { continue }
             scored.append(Scored(
-                gate: gateScore(image, h, reference),
-                mask: maskScore(image, h, reference),
+                gate: gateScore(image, pose, reference),
                 rotation: hypothesis.rotation,
                 mirrored: hypothesis.mirrored,
-                homography: h,
+                destination: hypothesis.destination,
+                pose: pose,
                 reference: reference
             ))
         }
         // Stable descending sort under total order (Rust `sort_by`).
-        let keys = scored.map { PetalNumeric.totalOrderKey($0.gate + $0.mask) }
+        let keys = scored.map { PetalNumeric.totalOrderKey($0.gate) }
         let ranked = scored.indices.sorted { left, right in
             keys[left] != keys[right] ? keys[left] > keys[right] : left < right
         }.map { scored[$0] }
-        func inferredCorner(_ candidate: Scored) -> Int? {
-            set.inferred.map { canonicalCorner($0, rotation: candidate.rotation, mirrored: candidate.mirrored) }
-        }
         // 1. the ring beacon is the cheapest and strongest orientation check
         for candidate in ranked.prefix(3) {
             if candidate.gate < 0.2 { continue }
-            if let d = readLaneD(image, candidate.homography, candidate.reference) {
-                return finish(
-                    image,
-                    options,
+            if let d = readLaneD(image, candidate.pose, candidate.reference) {
+                let inferred = inferredCorner(candidate.rotation, candidate.mirrored)
+                let read = readFieldSearching(image, candidate.destination, start: 0.0, inferred: inferred)
+                return PetalDecodedFrame(
+                    pose: read?.pose ?? candidate.pose,
                     rotation: candidate.rotation,
                     mirrored: candidate.mirrored,
-                    homography: candidate.homography,
-                    reference: candidate.reference,
                     d: d,
-                    inferredCorner: inferredCorner(candidate)
+                    fields: read?.fields ?? noFields,
+                    inferredCorner: inferred
                 )
             }
         }
-        // 2. fall back to the tile lanes under the most promising orientations
-        for candidate in ranked.prefix(4) {
-            let patches = samplePatches(image, candidate.homography)
-            let lanes = readTileLanes(patches, candidate.reference, options.templateSigmas)
-            if lanes.p != nil || lanes.k != nil {
-                return PetalDecodedFrame(
-                    homography: candidate.homography,
-                    rotation: candidate.rotation,
-                    mirrored: candidate.mirrored,
-                    p: lanes.p,
-                    k: lanes.k,
-                    d: readLaneD(image, candidate.homography, candidate.reference),
-                    inferredCorner: inferredCorner(candidate)
-                )
+        // 2. fall back to the field lanes under the most promising orientations: a wrong
+        //    orientation reads permuted petals, which no field codeword accepts. Strong lens
+        //    distortion can hide both lane D and the field from a plain pose, so the distortion
+        //    is searched under the best orientation whose gates line up even when its plain
+        //    pose reads nothing.
+        for (index, candidate) in ranked.prefix(4).enumerated() {
+            let inferred = inferredCorner(candidate.rotation, candidate.mirrored)
+            guard let plain = readFieldAt(image, candidate.destination, distortion: 0.0, inferred: inferred) else {
+                continue
             }
+            let confident = index == 0 && candidate.gate >= 0.2
+            // the local read costs a sort per cell: only the best orientation gets it for free
+            let read: FieldRead
+            if plain.decoded == PetalLayout.sectors {
+                read = plain
+            } else if plain.decoded == 0 && !confident {
+                read = index == 0 ? plain.finish() : plain
+            } else {
+                read = readFieldSearching(image, candidate.destination, start: 0.0, inferred: inferred)
+                    ?? plain.finish()
+            }
+            if read.decoded == 0 { continue }
+            return PetalDecodedFrame(
+                pose: read.pose,
+                rotation: candidate.rotation,
+                mirrored: candidate.mirrored,
+                d: readLaneD(image, read.pose, read.reference),
+                fields: read.fields,
+                inferredCorner: inferred
+            )
         }
         return nil
     }
@@ -477,14 +536,16 @@ public enum PetalDecoder {
         mirrored ? (rotation + 4 - index) % 4 : (index + 4 - rotation) % 4
     }
 
+    /// One orientation hypothesis: quarter turns, mirrored, and the finder
+    /// centres in canonical corner order.
     struct Hypothesis {
         let rotation: Int
         let mirrored: Bool
-        let homography: PetalHomography
+        let destination: [PetalPoint]
     }
 
+    /// The four orientation hypotheses (and four mirrored ones).
     static func hypotheses(_ finders: [PetalFinder], tryMirrored: Bool) -> [Hypothesis] {
-        let canonical = PetalLayout.finderCenters
         var out: [Hypothesis] = []
         for mirrored in [false, true] {
             if mirrored && !tryMirrored { continue }
@@ -493,15 +554,26 @@ public enum PetalDecoder {
                     let q = mirrored ? finders[(rotation + 4 - i) % 4] : finders[(i + rotation) % 4]
                     return PetalPoint(x: q.x, y: q.y)
                 }
-                if let homography = PetalHomography.fit(from: canonical, to: destination) {
-                    out.append(Hypothesis(rotation: rotation, mirrored: mirrored, homography: homography))
-                }
+                out.append(Hypothesis(rotation: rotation, mirrored: mirrored, destination: destination))
             }
         }
         return out
     }
 
-    // MARK: - Reference levels and dots
+    // MARK: - Pose, reference levels and dots
+
+    /// The pose with lens distortion `distortion` through the four finder
+    /// centres `destination` (image pixels, in canonical corner order).
+    @inline(__always)
+    static func fitPose(_ image: PetalLumaView, _ destination: [PetalPoint], distortion: Double) -> PetalPose? {
+        PetalPose.fit(
+            from: PetalLayout.finderCenters,
+            to: destination,
+            distortion: distortion,
+            width: image.width,
+            height: image.height
+        )
+    }
 
     /// Lit and dark levels at the four finders, interpolated over the canvas.
     struct Reference: Equatable, Sendable {
@@ -522,24 +594,26 @@ public enum PetalDecoder {
         }
     }
 
+    /// The mean of five samples: the centre and four at `±spread` canvas units
+    /// on `x`, then `y`.
     @inline(__always)
     static func dotSamples(
         _ image: PetalLumaView,
-        _ h: PetalHomography,
+        _ pose: PetalPose,
         _ x: Double,
         _ y: Double,
         _ spread: Double
     ) -> Double {
         var sum = 0.0
-        var (px, py) = h.apply(x + 0.0, y + 0.0)
+        var (px, py) = pose.apply(x + 0.0, y + 0.0)
         sum += image.sample(px, py)
-        (px, py) = h.apply(x + spread, y + 0.0)
+        (px, py) = pose.apply(x + spread, y + 0.0)
         sum += image.sample(px, py)
-        (px, py) = h.apply(x + -spread, y + 0.0)
+        (px, py) = pose.apply(x + -spread, y + 0.0)
         sum += image.sample(px, py)
-        (px, py) = h.apply(x + 0.0, y + spread)
+        (px, py) = pose.apply(x + 0.0, y + spread)
         sum += image.sample(px, py)
-        (px, py) = h.apply(x + 0.0, y + -spread)
+        (px, py) = pose.apply(x + 0.0, y + -spread)
         sum += image.sample(px, py)
         return sum / 5.0
     }
@@ -548,7 +622,7 @@ public enum PetalDecoder {
     /// the black canvas 100 units inward of it. An `inferred` corner
     /// (canonical index) was not seen, so its levels are extrapolated from the
     /// other three by the parallelogram rule and kept within their range.
-    static func referenceLevels(_ image: PetalLumaView, _ h: PetalHomography, inferred: Int?) -> Reference? {
+    static func referenceLevels(_ image: PetalLumaView, _ pose: PetalPose, inferred: Int?) -> Reference? {
         var lit = [Double](repeating: 0, count: 4)
         var dark = [Double](repeating: 0, count: 4)
         let tau = 2 * Double.pi
@@ -556,18 +630,18 @@ public enum PetalDecoder {
             let cx = center.x
             let cy = center.y
             // the blossom is solid out to radius 24 around its centre
-            var (px, py) = h.apply(cx, cy)
+            var (px, py) = pose.apply(cx, cy)
             var sum = image.sample(px, py)
             for k in 0..<8 {
-                let angle = tau * Double(k) / 8.0
-                (px, py) = h.apply(cx + 20.0 * cos(angle), cy + 20.0 * sin(angle))
+                let (s, c) = PetalNumeric.sinCos(tau * Double(k) / 8.0)
+                (px, py) = pose.apply(cx + 20.0 * c, cy + 20.0 * s)
                 sum += image.sample(px, py)
             }
             lit[i] = sum / 9.0
             let sx = cx < 512.0 ? 1.0 : -1.0
             let sy = cy < 512.0 ? 1.0 : -1.0
-            let a = dotSamples(image, h, cx + sx * 100.0, cy, 5.0)
-            let b = dotSamples(image, h, cx, cy + sy * 100.0, 5.0)
+            let a = dotSamples(image, pose, cx + sx * 100.0, cy, 5.0)
+            let b = dotSamples(image, pose, cx, cy + sy * 100.0, 5.0)
             dark[i] = 0.5 * (a + b)
             // a NaN contrast (from a broken pose) refuses as well
             if !(lit[i] - dark[i]).isFinite || lit[i] - dark[i] < 12.0 { return nil }
@@ -590,53 +664,16 @@ public enum PetalDecoder {
         return Reference(lit: lit, dark: dark)
     }
 
-    /// Centres of the lattice cells outside the `天` mask (no tile is ever
-    /// drawn there), row-major.
-    static let emptyCells: [PetalPoint] = {
-        var cells: [PetalPoint] = []
-        for (row, line) in PetalLayout.mask.enumerated() {
-            for (column, mark) in line.enumerated() where mark != "#" {
-                cells.append(PetalPoint(
-                    x: PetalLayout.tileOrigin + PetalLayout.tilePitch * (Double(column) + 0.5),
-                    y: PetalLayout.tileOrigin + PetalLayout.tilePitch * (Double(row) + 0.5)
-                ))
-            }
-        }
-        return cells
-    }()
-
-    /// How well the `天` lines up: the mean normalised level over the tiles
-    /// (each sampled at five points across the tile, so a glyph stroke at the
-    /// centre does not decide it) minus the mean over the empty lattice cells.
-    /// The mask is symmetric left to right but not top to bottom, so this
-    /// tells the four quarter turns apart even when the ring gates are
-    /// damaged.
-    static func maskScore(_ image: PetalLumaView, _ h: PetalHomography, _ reference: Reference) -> Double {
-        @inline(__always)
-        func level(_ x: Double, _ y: Double) -> Double {
-            let (lit, dark) = reference.at(x, y)
-            return (dotSamples(image, h, x, y, 8.0) - dark) / (lit - dark)
-        }
-        var tiles = -0.0
-        for tile in 0..<PetalLayout.tileCount {
-            let center = PetalLayout.tileCenter(tile)
-            tiles += level(center.x, center.y)
-        }
-        var empty = -0.0
-        for cell in emptyCells { empty += level(cell.x, cell.y) }
-        return tiles / Double(PetalLayout.tileCount) - empty / Double(emptyCells.count)
-    }
-
-    /// The brightness summed over all ring slots under the pose that maps the
-    /// canonical corners onto `corners` (in quad order). The slots form the
+    /// The brightness summed over all ring slots under the plain pose that maps
+    /// the canonical corners onto `corners` (in quad order). The slots form the
     /// same set of points under every quarter turn and mirror of the canvas
-    /// (80, 92 and 104 are multiples of four), so the value does not depend on
+    /// (88, 100 and 108 are multiples of four), so the value does not depend on
     /// the orientation.
     static func ringBrightness(_ image: PetalLumaView, _ corners: [PetalPoint]) -> Double? {
-        guard let h = PetalHomography.fit(from: PetalLayout.finderCenters, to: corners) else { return nil }
+        guard let pose = fitPose(image, corners, distortion: 0.0) else { return nil }
         var sum = -0.0
         for center in PetalLayout.flatSlotCenters {
-            sum += dotSamples(image, h, center.x, center.y, 3.5)
+            sum += dotSamples(image, pose, center.x, center.y, dotSpread)
         }
         return sum
     }
@@ -645,7 +682,7 @@ public enum PetalDecoder {
     /// a 13 × 13 search in steps of 2 % of the mean leg around the
     /// parallelogram estimate, then a 9 × 9 search in steps of 0.5 % around the
     /// best point. The rings fix the geometry only; the orientation is decided
-    /// afterwards by the gates and the `天`.
+    /// afterwards by the gates and the lanes.
     static func refineInferredCorner(
         _ image: PetalLumaView,
         _ corners: [PetalFinder],
@@ -681,19 +718,20 @@ public enum PetalDecoder {
     @inline(__always)
     static func normalisedDot(
         _ image: PetalLumaView,
-        _ h: PetalHomography,
+        _ pose: PetalPose,
         _ reference: Reference,
         _ flat: Int
     ) -> Double {
         let center = PetalLayout.flatSlotCenters[flat]
         let (lit, dark) = reference.at(center.x, center.y)
-        return (dotSamples(image, h, center.x, center.y, 3.5) - dark) / (lit - dark)
+        return (dotSamples(image, pose, center.x, center.y, dotSpread) - dark) / (lit - dark)
     }
 
-    static func gateScore(_ image: PetalLumaView, _ h: PetalHomography, _ reference: Reference) -> Double {
+    /// The mean normalised sample of the gate dots minus that of the guards.
+    static func gateScore(_ image: PetalLumaView, _ pose: PetalPose, _ reference: Reference) -> Double {
         func mean(_ slots: [Int]) -> Double {
             var sum = -0.0
-            for slot in slots { sum += normalisedDot(image, h, reference, slot) }
+            for slot in slots { sum += normalisedDot(image, pose, reference, slot) }
             return sum / Double(slots.count)
         }
         return mean(PetalLayout.gateSlots) - mean(PetalLayout.guardSlots)
@@ -702,7 +740,7 @@ public enum PetalDecoder {
     /// Reads lane `D`: the transmitted bytes and per-byte confidence.
     static func readDots(
         _ image: PetalLumaView,
-        _ h: PetalHomography,
+        _ pose: PetalPose,
         _ reference: Reference
     ) -> ([UInt8], [Double]) {
         // per-ring thresholds from the gates (lit) and guards (dark)
@@ -711,13 +749,13 @@ public enum PetalDecoder {
             var litSum = -0.0
             var litCount = 0
             for slot in PetalLayout.gateSlots where PetalLayout.splitSlot(slot).ring == ring {
-                litSum += normalisedDot(image, h, reference, slot)
+                litSum += normalisedDot(image, pose, reference, slot)
                 litCount += 1
             }
             var darkSum = -0.0
             var darkCount = 0
             for slot in PetalLayout.guardSlots where PetalLayout.splitSlot(slot).ring == ring {
-                darkSum += normalisedDot(image, h, reference, slot)
+                darkSum += normalisedDot(image, pose, reference, slot)
                 darkCount += 1
             }
             if litCount > 0 && darkCount > 0 {
@@ -729,7 +767,7 @@ public enum PetalDecoder {
         var bytes = [UInt8](repeating: 0, count: PetalLane.d.wordLength)
         var confidence = [Double](repeating: .greatestFiniteMagnitude, count: PetalLane.d.wordLength)
         for (bit, slot) in PetalLayout.dataSlots.enumerated() {
-            let value = normalisedDot(image, h, reference, slot)
+            let value = normalisedDot(image, pose, reference, slot)
             let threshold = thresholds[PetalLayout.splitSlot(slot).ring]
             if value > threshold { bytes[bit / 8] |= 1 << (7 - bit % 8) }
             confidence[bit / 8] = Double.minimum(confidence[bit / 8], abs(value - threshold))
@@ -740,24 +778,21 @@ public enum PetalDecoder {
     /// Lane `D` under one pose.
     static func readLaneD(
         _ image: PetalLumaView,
-        _ h: PetalHomography,
+        _ pose: PetalPose,
         _ reference: Reference
     ) -> PetalLaneResult? {
-        let (word, confidence) = readDots(image, h, reference)
+        let (word, confidence) = readDots(image, pose, reference)
         return decodeWithErasures(.d, word, confidence)
     }
 
     /// Tries Reed–Solomon with growing numbers of erasures, least confident
     /// first.
     ///
-    /// The schedule erases 0, ⅛, ¼, ⅓ and ½ of the parity bytes, and for lane
-    /// `K` also ⅔. Lanes `D` and `P` stop at ½: their words have only 11 and
-    /// 13 parity bytes, and a further erasure step leaves so few spare ones
-    /// that it accepts wrong codewords (lane `D` at 7 erasures: about 0.4 % of
-    /// random words, and 5 wrong lanes in 2 900 simulated harsh frames; lane
-    /// `P` at 8: 2 wrong lanes in 600 banded 480p frames). Capping them costs
-    /// 0.65 % of the lane `D` reads and 0.15 % of the lane `P` reads in those
-    /// frames.
+    /// The schedule erases 0, ⅛, ¼, ⅓ and ½ of the parity bytes (integer
+    /// division: lane `D` 0, 1, 2, 3, 5; a field lane 0, 2, 5, 7, 11). Lane `D`
+    /// has only 11 parity bytes, and a further step leaves so few spare ones
+    /// that it accepts wrong codewords (at 7 erasures about 0.4 % of random
+    /// words). Bytes of equal confidence are erased in position order.
     static func decodeWithErasures(_ lane: PetalLane, _ word: [UInt8], _ confidence: [Double]) -> PetalLaneResult? {
         let nsym = lane.parityLength
         let keys = confidence.map(PetalNumeric.totalOrderKey)
@@ -765,11 +800,9 @@ public enum PetalDecoder {
         let order = word.indices.sorted { a, b in
             keys[a] != keys[b] ? keys[a] < keys[b] : a < b
         }
-        var steps = [0, nsym / 8, nsym / 4, nsym / 3, nsym / 2]
-        if lane == .k { steps.append(nsym * 2 / 3) }
         // Rust `Vec::dedup`: drop consecutive repeats.
         var schedule: [Int] = []
-        for erasures in steps where schedule.last != erasures {
+        for erasures in [0, nsym / 8, nsym / 4, nsym / 3, nsym / 2] where schedule.last != erasures {
             schedule.append(erasures)
         }
         for erasures in schedule {
@@ -784,377 +817,326 @@ public enum PetalDecoder {
         return nil
     }
 
-    // MARK: - Tiles
+    // MARK: - The petal field
 
-    /// `patterns[(polarity * 16 + glyph) * 64 + cell]`: the expected
-    /// normalised patch for each of the 32 hypotheses.
-    static func buildPatterns(_ sigma: Double) -> [Double] {
-        var raw = [Double](repeating: 0, count: 5)
-        for i in -2...2 {
-            if sigma < 0.05 {
-                raw[i + 2] = i == 0 ? 1.0 : 0.0
-            } else {
-                let di = Double(i)
-                raw[i + 2] = exp(-(di * di) / (2.0 * sigma * sigma))
+    /// The two-means threshold of a set of values: start at their mean, then
+    /// move to the midpoint of the means of the values above and at or below
+    /// the threshold, at most eight times, stopping when it moves less than
+    /// 10⁻⁴ or one side is empty. Sums run in the order given.
+    static func twoMeans(_ values: [Double]) -> Double {
+        values.withUnsafeBufferPointer { values in
+            var sum = -0.0
+            for value in values { sum += value }
+            var threshold = sum / Double(values.count)
+            for _ in 0..<8 {
+                var low = 0.0
+                var lows = 0
+                var high = 0.0
+                var highs = 0
+                for value in values {
+                    if value > threshold {
+                        high += value
+                        highs += 1
+                    } else {
+                        low += value
+                        lows += 1
+                    }
+                }
+                if lows == 0 || highs == 0 { break }
+                let next = 0.5 * (low / Double(lows) + high / Double(highs))
+                let moved = abs(next - threshold)
+                threshold = next
+                if moved < 1e-4 { break }
             }
+            return threshold
         }
-        var sum = -0.0
-        for value in raw { sum += value }
-        let kernel = raw.map { $0 / sum }
-        var patterns = [Double](repeating: 0, count: hypothesisCount * cells)
-        var hypothesis = 0
-        for polarity in 0..<2 {
-            for template in PetalGlyphs.templates {
-                let coverage = template.map { Double($0) / 255.0 }
-                for v in 0..<patch {
-                    for u in 0..<patch {
-                        var acc = 0.0
-                        for (ky, wy) in kernel.enumerated() {
-                            for (kx, wx) in kernel.enumerated() {
-                                let sx = u + kx - 2
-                                let sy = v + ky - 2
-                                if sx >= 0 && sx < patch && sy >= 0 && sy < patch {
-                                    acc += wx * wy * coverage[sy * patch + sx]
+    }
+
+    /// The 840 codeword cells of every sector, in bit order.
+    static let sectorBits: [[Int]] = (0..<PetalLayout.sectors).map {
+        Array(PetalLayout.sectorTable[$0].prefix(fieldBits))
+    }
+    /// Whether each codeword cell of every sector is light.
+    static let sectorBitLight: [[Bool]] = sectorBits.map { cells in cells.map { PetalLayout.lightCells[$0] } }
+
+    /// The level of every field cell under one pose, normalised by the finder
+    /// levels.
+    static func fieldLevels(_ image: PetalLumaView, _ pose: PetalPose, _ reference: Reference) -> [Double] {
+        let xs = PetalLayout.cellCenterX
+        let ys = PetalLayout.cellCenterY
+        let spread = petalSpread
+        return [Double](unsafeUninitializedCapacity: PetalLayout.fieldCells) { levels, count in
+            for cell in 0..<PetalLayout.fieldCells {
+                let x = xs[cell]
+                let y = ys[cell]
+                let (lit, dark) = reference.at(x, y)
+                levels[cell] = (dotSamples(image, pose, x, y, spread) - dark) / (lit - dark)
+            }
+            count = PetalLayout.fieldCells
+        }
+    }
+
+    /// The neighbourhood of every field cell, flattened: the cells (itself
+    /// included) whose centres lie within ``neighbourhood`` units, in index
+    /// order, are `cells[starts[c]..<starts[c + 1]]`. Bands are 11 units apart,
+    /// so only the three bands on either side can hold neighbours.
+    static let neighbourhoods: (starts: [Int], cells: [UInt16]) = {
+        let xs = PetalLayout.cellCenterX
+        let ys = PetalLayout.cellCenterY
+        let limit = neighbourhood * neighbourhood
+        var starts = [0]
+        starts.reserveCapacity(PetalLayout.fieldCells + 1)
+        var cells: [UInt16] = []
+        for cell in 0..<PetalLayout.fieldCells {
+            let band = Int(PetalLayout.cellBands[cell])
+            let first = PetalLayout.bandOffsets[max(band - 3, 0)]
+            let last = PetalLayout.bandOffsets[min(band + 4, PetalLayout.bandCount)]
+            for other in first..<last {
+                let dx = xs[other] - xs[cell]
+                let dy = ys[other] - ys[cell]
+                if dx * dx + dy * dy <= limit { cells.append(UInt16(other)) }
+            }
+            starts.append(cells.count)
+        }
+        return (starts, cells)
+    }()
+
+    /// Cell levels rescaled by their neighbourhood: the mean of the lowest and
+    /// of the highest ``neighbourhoodEnds`` levels around a cell (IEEE total
+    /// order, summed ascending) become 0 and 1 (a span below 0.05 counts as
+    /// 0.05). About half the petals around any cell are lit, so shadows, glare,
+    /// banding and veiling light, which the finder levels cannot describe,
+    /// cancel.
+    static func localLevels(_ levels: [Double]) -> [Double] {
+        let table = neighbourhoods
+        let ends = neighbourhoodEnds
+        return [Double](unsafeUninitializedCapacity: PetalLayout.fieldCells) { out, count in
+            levels.withUnsafeBufferPointer { levels in
+                table.starts.withUnsafeBufferPointer { starts in
+                    table.cells.withUnsafeBufferPointer { cells in
+                        withUnsafeTemporaryAllocation(of: Double.self, capacity: 2 * ends) { scratch in
+                            let low = UnsafeMutableBufferPointer(rebasing: scratch[0..<ends])
+                            let high = UnsafeMutableBufferPointer(rebasing: scratch[ends..<(2 * ends)])
+                            for cell in 0..<PetalLayout.fieldCells {
+                                let start = starts[cell]
+                                let end = starts[cell + 1]
+                                let take = max(min(ends, (end - start) / 2), 1)
+                                // `low[..<take]`: the smallest levels, `high[..<take]`: the
+                                // largest, both ascending, as the first and last `take`
+                                // entries of the sorted neighbourhood
+                                var lows = 0
+                                var highs = 0
+                                for index in start..<end {
+                                    let value = levels[Int(cells[index])]
+                                    let key = PetalNumeric.totalOrderKey(value)
+                                    if lows < take || key < PetalNumeric.totalOrderKey(low[take - 1]) {
+                                        var slot = lows < take ? lows : take - 1
+                                        while slot > 0 && PetalNumeric.totalOrderKey(low[slot - 1]) > key {
+                                            low[slot] = low[slot - 1]
+                                            slot -= 1
+                                        }
+                                        low[slot] = value
+                                        if lows < take { lows += 1 }
+                                    }
+                                    if highs < take {
+                                        var slot = highs
+                                        while slot > 0 && PetalNumeric.totalOrderKey(high[slot - 1]) > key {
+                                            high[slot] = high[slot - 1]
+                                            slot -= 1
+                                        }
+                                        high[slot] = value
+                                        highs += 1
+                                    } else if key > PetalNumeric.totalOrderKey(high[0]) {
+                                        var slot = 0
+                                        while slot + 1 < take && PetalNumeric.totalOrderKey(high[slot + 1]) < key {
+                                            high[slot] = high[slot + 1]
+                                            slot += 1
+                                        }
+                                        high[slot] = value
+                                    }
                                 }
+                                var lowSum = -0.0
+                                var highSum = -0.0
+                                for index in 0..<take {
+                                    lowSum += low[index]
+                                    highSum += high[index]
+                                }
+                                let dark = lowSum / Double(take)
+                                let lit = highSum / Double(take)
+                                out[cell] = (levels[cell] - dark) / Double.maximum(lit - dark, 0.05)
                             }
                         }
-                        let index = hypothesis * cells + v * patch + u
-                        patterns[index] = polarity == 1
-                            ? 1.0 - (1.0 - inkOnLight) * acc
-                            : pinkOnDark * acc
-                    }
-                }
-                hypothesis += 1
-            }
-        }
-        return patterns
-    }
-
-    struct TileRead {
-        let light: Bool
-        let glyph: UInt8
-        let polarityMargin: Double
-        let glyphMargin: Double
-        let error: Double
-    }
-
-    /// The raw 8×8 luma patch of every tile, as captured: row-major, 64 cells
-    /// per tile, each the mean of four bilinear samples at ±¼ cell, in luma
-    /// levels (no reference levels applied).
-    static func samplePatches(_ image: PetalLumaView, _ h: PetalHomography) -> [Double] {
-        var patches = [Double](repeating: 0, count: PetalLayout.tileCount * cells)
-        let half = PetalLayout.glyphBox / 2.0
-        let cell = PetalLayout.glyphBox / Double(patch)
-        let offsets: [(Double, Double)] = [(-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)]
-        patches.withUnsafeMutableBufferPointer { patches in
-            for tile in 0..<PetalLayout.tileCount {
-                let center = PetalLayout.tileCenter(tile)
-                let cx = center.x
-                let cy = center.y
-                let base = tile * cells
-                for v in 0..<patch {
-                    for u in 0..<patch {
-                        let gx = cx - half + (Double(u) + 0.5) * cell
-                        let gy = cy - half + (Double(v) + 0.5) * cell
-                        var sum = 0.0
-                        for (ox, oy) in offsets {
-                            let (px, py) = h.apply(gx + ox * cell, gy + oy * cell)
-                            sum += image.sample(px, py)
-                        }
-                        patches[base + v * patch + u] = sum / 4.0
                     }
                 }
             }
-        }
-        return patches
-    }
-
-    /// The robust darkest and brightest level of a patch: the values
-    /// `patchCut` cells in from either end of the sorted cells.
-    ///
-    /// `values` holds one patch (64 cells). The sort follows the IEEE total
-    /// order (Rust `sort_by(f64::total_cmp)`), so a damaged cell cannot make
-    /// the result depend on the sorting algorithm.
-    static func patchLevels(_ values: UnsafeBufferPointer<Double>) -> (low: Double, high: Double) {
-        withUnsafeTemporaryAllocation(of: Double.self, capacity: cells) { sorted in
-            // insertion sort: 64 cells, no allocation
-            for index in 0..<cells {
-                let value = values[index]
-                let key = PetalNumeric.totalOrderKey(value)
-                var slot = index
-                while slot > 0 && PetalNumeric.totalOrderKey(sorted[slot - 1]) > key {
-                    sorted[slot] = sorted[slot - 1]
-                    slot -= 1
-                }
-                sorted[slot] = value
-            }
-            return (sorted[patchCut], sorted[cells - 1 - patchCut])
+            count = PetalLayout.fieldCells
         }
     }
 
-    /// Maps a patch's own darkest level to 0 and brightest to 1, in place,
-    /// with `floor` as the smallest span that counts as contrast. Results are
-    /// clamped to [-0.25, 1.25].
-    static func rescale(_ values: UnsafeMutableBufferPointer<Double>, floor: Double) {
-        let (low, high) = patchLevels(UnsafeBufferPointer(values))
-        let range = Double.maximum(high - low, floor)
-        for index in 0..<cells {
-            values[index] = PetalNumeric.clamp((values[index] - low) / range, -0.25, 1.25)
-        }
-    }
-
-    /// Picks for every patch the polarity and glyph whose template matches
-    /// best.
-    ///
-    /// `patches` holds 64 cells per tile. The template blur is chosen per
-    /// frame, by the lowest total error. With `rescaleTemplates` the templates
-    /// are rescaled like the patches; tiles flagged in `erased` get zero
-    /// margins, so they are the first the Reed–Solomon decoder treats as
-    /// erasures.
-    static func classify(
-        _ patches: [Double],
-        _ sigmas: [Double],
-        rescaleTemplates: Bool,
-        erased: [Bool]
-    ) -> [TileRead] {
-        var bestTotal = Double.greatestFiniteMagnitude
-        var bestReads: [TileRead] = []
-        var errors = [Double](repeating: 0, count: hypothesisCount)
-        for sigma in sigmas {
-            var patterns = buildPatterns(sigma)
-            if rescaleTemplates {
-                patterns.withUnsafeMutableBufferPointer { patterns in
-                    for hypothesis in 0..<hypothesisCount {
-                        let base = hypothesis * cells
-                        rescale(UnsafeMutableBufferPointer(rebasing: patterns[base..<base + cells]), floor: 0.001)
-                    }
-                }
-            }
-            var total = 0.0
-            var reads: [TileRead] = []
-            reads.reserveCapacity(PetalLayout.tileCount)
-            patches.withUnsafeBufferPointer { patches in
-                patterns.withUnsafeBufferPointer { patterns in
-                    errors.withUnsafeMutableBufferPointer { errors in
-                        for tile in 0..<PetalLayout.tileCount {
-                            let patchBase = tile * cells
-                            for hypothesis in 0..<hypothesisCount {
-                                let patternBase = hypothesis * cells
-                                var error = -0.0
-                                for index in 0..<cells {
-                                    let difference = patches[patchBase + index] - patterns[patternBase + index]
-                                    error += difference * difference
-                                }
-                                errors[hypothesis] = error
-                            }
-                            let best = PetalNumeric.firstMinimumIndex(UnsafeBufferPointer(errors))
-                            let polarity = best / PetalGlyphs.count
-                            let glyph = best % PetalGlyphs.count
-                            var otherPolarity = Double.greatestFiniteMagnitude
-                            var otherGlyph = Double.greatestFiniteMagnitude
-                            for g in 0..<PetalGlyphs.count {
-                                otherPolarity = Double.minimum(
-                                    otherPolarity,
-                                    errors[(1 - polarity) * PetalGlyphs.count + g]
-                                )
-                                if g != glyph {
-                                    otherGlyph = Double.minimum(otherGlyph, errors[polarity * PetalGlyphs.count + g])
-                                }
-                            }
-                            total += errors[best]
-                            let flagged = erased[tile]
-                            reads.append(TileRead(
-                                light: polarity == 1,
-                                glyph: UInt8(glyph),
-                                polarityMargin: flagged ? 0.0 : otherPolarity - errors[best],
-                                glyphMargin: flagged ? 0.0 : otherGlyph - errors[best],
-                                error: errors[best]
-                            ))
-                        }
-                    }
-                }
-            }
-            if total < bestTotal {
-                bestTotal = total
-                bestReads = reads
+    /// The field lanes read from normalised cell levels, skipping the sectors
+    /// in `skip`, and how far the cells sit from their thresholds on average.
+    /// Sectors the levels leave unread are read again from their
+    /// ``localLevels(_:)``.
+    static func readFields(_ levels: [Double], skip: [Bool]) -> (results: [PetalLaneResult?], separation: Double) {
+        var (results, separation) = readSectors(levels, skip: skip)
+        let unread = (0..<PetalLayout.sectors).map { !skip[$0] && results[$0] == nil }
+        if unread.contains(true) {
+            let retry = readSectors(localLevels(levels), skip: unread.map { !$0 }).results
+            for sector in 0..<PetalLayout.sectors where results[sector] == nil {
+                results[sector] = retry[sector]
             }
         }
-        return bestReads
+        return (results, separation)
     }
 
-    /// The level read: every patch is judged against the light and dark
-    /// levels measured at the finders, interpolated to the tile.
-    static func levelledPatches(_ patches: [Double], _ reference: Reference) -> [Double] {
-        var levelled = patches
-        levelled.withUnsafeMutableBufferPointer { levelled in
-            for tile in 0..<PetalLayout.tileCount {
-                let center = PetalLayout.tileCenter(tile)
-                let (lit, dark) = reference.at(center.x, center.y)
-                let base = tile * cells
-                for index in base..<base + cells {
-                    levelled[index] = (levelled[index] - dark) / (lit - dark)
-                }
+    /// One read of the field lanes from cell levels with per-codeword,
+    /// per-colour thresholds, and the mean distance of the cells read from
+    /// their thresholds (a pose that lands on the petals separates lit from
+    /// dark cells best).
+    static func readSectors(_ levels: [Double], skip: [Bool]) -> (results: [PetalLaneResult?], separation: Double) {
+        var separation = 0.0
+        var counted = 0
+        var results = noFields
+        var scratch = WordScratch()
+        for sector in 0..<PetalLayout.sectors where !skip[sector] {
+            let (bytes, confidence) = readWord(levels, sector: sector, margins: &separation, scratch: &scratch)
+            counted += fieldBits
+            results[sector] = decodeWithErasures(.field(sector), bytes, confidence)
+        }
+        return (results, separation / Double(max(counted, 1)))
+    }
+
+    /// Reusable buffers of ``readWord(_:sector:margins:scratch:)``.
+    struct WordScratch {
+        var values = [Double](repeating: 0, count: fieldBits)
+        var light: [Double] = []
+        var pink: [Double] = []
+
+        init() {
+            light.reserveCapacity(fieldBits)
+            pink.reserveCapacity(fieldBits)
+        }
+    }
+
+    /// The transmitted word of one sector read from cell levels, and each
+    /// byte's confidence (the smallest margin of its bits). Every bit's margin
+    /// from its threshold is added to `margins`.
+    static func readWord(
+        _ levels: [Double],
+        sector: Int,
+        margins: inout Double,
+        scratch: inout WordScratch
+    ) -> (bytes: [UInt8], confidence: [Double]) {
+        let cells = sectorBits[sector]
+        let lightCell = sectorBitLight[sector]
+        scratch.light.removeAll(keepingCapacity: true)
+        scratch.pink.removeAll(keepingCapacity: true)
+        for bit in 0..<fieldBits {
+            let value = levels[cells[bit]]
+            scratch.values[bit] = value
+            if lightCell[bit] { scratch.light.append(value) } else { scratch.pink.append(value) }
+        }
+        let all = twoMeans(scratch.values)
+        // the light (`天`) and pink petals are thresholded apart: their lit levels differ
+        let lightThreshold = scratch.light.count < classMinimumCells ? all : twoMeans(scratch.light)
+        let pinkThreshold = scratch.pink.count < classMinimumCells ? all : twoMeans(scratch.pink)
+        var bytes = [UInt8](repeating: 0, count: PetalLane.field(sector).wordLength)
+        var confidence = [Double](repeating: .greatestFiniteMagnitude, count: bytes.count)
+        for bit in 0..<fieldBits {
+            let value = scratch.values[bit]
+            let threshold = lightCell[bit] ? lightThreshold : pinkThreshold
+            if value > threshold { bytes[bit / 8] |= 1 << (7 - bit % 8) }
+            let margin = abs(value - threshold)
+            margins += margin
+            confidence[bit / 8] = Double.minimum(confidence[bit / 8], margin)
+        }
+        return (bytes, confidence)
+    }
+
+    /// A read of the field under one pose.
+    struct FieldRead {
+        let pose: PetalPose
+        let reference: Reference
+        let levels: [Double]
+        let fields: [PetalLaneResult?]
+        let decoded: Int
+        let separation: Double
+
+        /// More lanes, then a clearer separation.
+        func betterThan(_ other: FieldRead) -> Bool {
+            decoded != other.decoded ? decoded > other.decoded : separation > other.separation
+        }
+
+        /// Reads the sectors this pose left unread again from their
+        /// ``PetalDecoder/localLevels(_:)``.
+        func finish() -> FieldRead {
+            guard decoded < PetalLayout.sectors else { return self }
+            let retry = readSectors(localLevels(levels), skip: fields.map { $0 != nil }).results
+            var fields = self.fields
+            for sector in 0..<PetalLayout.sectors where fields[sector] == nil {
+                fields[sector] = retry[sector]
             }
-        }
-        return levelled
-    }
-
-    static func readTiles(_ patches: [Double], _ reference: Reference, _ sigmas: [Double]) -> [TileRead] {
-        return classify(
-            levelledPatches(patches, reference),
-            sigmas,
-            rescaleTemplates: false,
-            erased: [Bool](repeating: false, count: PetalLayout.tileCount)
-        )
-    }
-
-    /// The normalised read: every patch and every template is rescaled by its
-    /// own contrast before they are compared, so the judgement does not
-    /// depend on absolute levels. Tiles whose contrast is below `weakTile`
-    /// times the median tile contrast are flagged as erasures.
-    static func readTilesNormalised(_ patches: [Double], _ sigmas: [Double]) -> [TileRead] {
-        var spans = [Double](repeating: 0, count: PetalLayout.tileCount)
-        var scaled = patches
-        patches.withUnsafeBufferPointer { patches in
-            scaled.withUnsafeMutableBufferPointer { scaled in
-                for tile in 0..<PetalLayout.tileCount {
-                    let base = tile * cells
-                    let (low, high) = patchLevels(UnsafeBufferPointer(rebasing: patches[base..<base + cells]))
-                    spans[tile] = high - low
-                    rescale(UnsafeMutableBufferPointer(rebasing: scaled[base..<base + cells]), floor: 1.0)
-                }
-            }
-        }
-        // element `tileCount / 2` of the ascending spans, under the IEEE total order
-        let median = spans.sorted {
-            PetalNumeric.totalOrderKey($0) < PetalNumeric.totalOrderKey($1)
-        }[PetalLayout.tileCount / 2]
-        var erased = [Bool](repeating: false, count: PetalLayout.tileCount)
-        for (tile, span) in spans.enumerated() { erased[tile] = span < weakTile * median }
-        return classify(scaled, sigmas, rescaleTemplates: true, erased: erased)
-    }
-
-    /// Lanes `P` and `K` from one set of patches: the level read first, then,
-    /// for any lane still unreadable, the normalised read.
-    static func readTileLanes(
-        _ patches: [Double],
-        _ reference: Reference,
-        _ sigmas: [Double]
-    ) -> (p: PetalLaneResult?, k: PetalLaneResult?) {
-        let words = tileWords(readTiles(patches, reference, sigmas))
-        var p = decodeWithErasures(.p, words.p, words.pConfidence)
-        var k = decodeWithErasures(.k, words.k, words.kConfidence)
-        if p == nil || k == nil {
-            let words = tileWords(readTilesNormalised(patches, sigmas))
-            if p == nil { p = decodeWithErasures(.p, words.p, words.pConfidence) }
-            if k == nil { k = decodeWithErasures(.k, words.k, words.kConfidence) }
-        }
-        return (p, k)
-    }
-
-    /// Samples the tile field of `image` under the pose that decoded `frame`.
-    /// Returns `nil` for an unusable image, an invalid inferred corner, or
-    /// finder levels too weak to read. Evidence is in canonical code coordinates,
-    /// so captures may have different positions, rotations and reflections.
-    public static func tileEvidence(
-        _ image: PetalLuma,
-        frame: PetalDecodedFrame,
-        options: PetalDecodeOptions = PetalDecodeOptions()
-    ) -> PetalTileEvidence? {
-        guard isSupported(image, options: options),
-              frame.inferredCorner.map({ (0...3).contains($0) }) ?? true else { return nil }
-        return image.withView { view in
-            guard let reference = referenceLevels(view, frame.homography, inferred: frame.inferredCorner) else {
-                return nil
-            }
-            return PetalTileEvidence(patches: samplePatches(view, frame.homography), reference: reference)
-        }
-    }
-
-    /// Reads tile lanes from the average of captures of one shown frame.
-    /// The level read averages patches after applying each capture's finder
-    /// levels. Any lane still unreadable is tried with the normalised read of
-    /// the mean raw patches. One capture reads exactly its original tile lanes.
-    /// The caller must group evidence using independently decoded lane headers
-    /// and check each recovered lane's header before offering its atoms.
-    public static func mergeTiles(
-        _ evidence: [PetalTileEvidence],
-        options: PetalDecodeOptions = PetalDecodeOptions()
-    ) -> (p: PetalLaneResult?, k: PetalLaneResult?) {
-        guard !evidence.isEmpty else { return (nil, nil) }
-        // Sum cell by cell in capture order, matching the Rust reference.
-        func mean(_ patches: (PetalTileEvidence) -> [Double]) -> [Double] {
-            var result = [Double](repeating: 0, count: PetalLayout.tileCount * cells)
-            for capture in evidence {
-                let values = patches(capture)
-                for index in result.indices { result[index] += values[index] }
-            }
-            for index in result.indices { result[index] /= Double(evidence.count) }
-            return result
-        }
-        let levelled = mean { levelledPatches($0.patches, $0.reference) }
-        let reads = classify(
-            levelled, options.templateSigmas, rescaleTemplates: false,
-            erased: [Bool](repeating: false, count: PetalLayout.tileCount)
-        )
-        var words = tileWords(reads)
-        var p = decodeWithErasures(.p, words.p, words.pConfidence)
-        var k = decodeWithErasures(.k, words.k, words.kConfidence)
-        if p == nil || k == nil {
-            words = tileWords(readTilesNormalised(mean { $0.patches }, options.templateSigmas))
-            if p == nil { p = decodeWithErasures(.p, words.p, words.pConfidence) }
-            if k == nil { k = decodeWithErasures(.k, words.k, words.kConfidence) }
-        }
-        return (p, k)
-    }
-
-    struct TileWords {
-        var p: [UInt8]
-        var pConfidence: [Double]
-        var k: [UInt8]
-        var kConfidence: [Double]
-    }
-
-    static func tileWords(_ reads: [TileRead]) -> TileWords {
-        var words = TileWords(
-            p: [UInt8](repeating: 0, count: PetalLane.p.wordLength),
-            pConfidence: [Double](repeating: .greatestFiniteMagnitude, count: PetalLane.p.wordLength),
-            k: [UInt8](repeating: 0, count: PetalLane.k.wordLength),
-            kConfidence: [Double](repeating: .greatestFiniteMagnitude, count: PetalLane.k.wordLength)
-        )
-        for (tile, read) in reads.enumerated() {
-            if read.light { words.p[tile / 8] |= 1 << (7 - tile % 8) }
-            words.pConfidence[tile / 8] = Double.minimum(words.pConfidence[tile / 8], read.polarityMargin)
-            words.k[tile / 2] |= tile % 2 == 0 ? read.glyph << 4 : read.glyph
-            words.kConfidence[tile / 2] = Double.minimum(
-                words.kConfidence[tile / 2],
-                Double.minimum(read.glyphMargin, read.polarityMargin)
+            return FieldRead(
+                pose: pose,
+                reference: reference,
+                levels: levels,
+                fields: fields,
+                decoded: fields.reduce(0) { $0 + ($1 == nil ? 0 : 1) },
+                separation: separation
             )
         }
-        return words
     }
 
-    static func finish(
+    /// The field read under the pose with distortion `distortion` through the
+    /// finder centres `destination` (no local read).
+    static func readFieldAt(
         _ image: PetalLumaView,
-        _ options: PetalDecodeOptions,
-        rotation: Int,
-        mirrored: Bool,
-        homography h: PetalHomography,
-        reference: Reference,
-        d: PetalLaneResult?,
-        inferredCorner: Int?
-    ) -> PetalDecodedFrame {
-        let d = d ?? readLaneD(image, h, reference)
-        let patches = samplePatches(image, h)
-        let lanes = readTileLanes(patches, reference, options.templateSigmas)
-        return PetalDecodedFrame(
-            homography: h,
-            rotation: rotation,
-            mirrored: mirrored,
-            p: lanes.p,
-            k: lanes.k,
-            d: d,
-            inferredCorner: inferredCorner
+        _ destination: [PetalPoint],
+        distortion: Double,
+        inferred: Int?
+    ) -> FieldRead? {
+        guard let pose = fitPose(image, destination, distortion: distortion),
+              let reference = referenceLevels(image, pose, inferred: inferred) else { return nil }
+        let levels = fieldLevels(image, pose, reference)
+        let (fields, separation) = readSectors(levels, skip: readAll)
+        return FieldRead(
+            pose: pose,
+            reference: reference,
+            levels: levels,
+            fields: fields,
+            decoded: fields.reduce(0) { $0 + ($1 == nil ? 0 : 1) },
+            separation: separation
         )
+    }
+
+    /// Reads the field through the finder centres `destination`, starting from
+    /// lens distortion `start`, and searches the distortion while some field
+    /// lane stays unread: `start` plus each of ``distortionSteps`` in turn, then
+    /// the best ±``distortionRefine``. The pose that decodes the most lanes wins
+    /// (ties: the clearer separation); the search stops once every lane
+    /// decodes. Lanes the winning pose still leaves unread are read again from
+    /// its ``localLevels(_:)``.
+    static func readFieldSearching(
+        _ image: PetalLumaView,
+        _ destination: [PetalPoint],
+        start: Double,
+        inferred: Int?
+    ) -> FieldRead? {
+        guard var best = readFieldAt(image, destination, distortion: start, inferred: inferred) else { return nil }
+        if best.decoded == PetalLayout.sectors { return best }
+        for step in distortionSteps {
+            if let read = readFieldAt(image, destination, distortion: start + step, inferred: inferred),
+               read.betterThan(best) {
+                best = read
+                if best.decoded == PetalLayout.sectors { return best }
+            }
+        }
+        let centre = best.pose.distortion
+        for k in [centre - distortionRefine, centre + distortionRefine] {
+            if let read = readFieldAt(image, destination, distortion: k, inferred: inferred), read.betterThan(best) {
+                best = read
+            }
+        }
+        return best.finish()
     }
 }

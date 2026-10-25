@@ -8,7 +8,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.Lcg
 
-/** Ports of the reference `crc`, `prng`, `rs`, `lanes`, `layout` and `glyphs` unit tests. */
+/** Ports of the reference `crc`, `prng`, `rs`, `lanes` and `layout` unit tests. */
 class PetalCodecTest {
     @Test
     fun crc32cMatchesThePublishedCheckValue() {
@@ -138,19 +138,33 @@ class PetalCodecTest {
         assertEquals(0, rs.decode(word))
     }
 
+    private fun fieldData(seed: Int): ByteArray = ByteArray(PetalLanes.FIELD_DATA) { ((it * 37) xor seed).toByte() }
+
+    private fun fieldWords(data: (Int) -> ByteArray): List<ByteArray> =
+        List(PetalLayout.SECTORS) { PetalLanes.encodeLane(PetalLane.field(it), data(it)) }
+
     @Test
     fun laneSizesAreConsistent() {
-        assertEquals(32, PetalLanes.P_WORD)
-        assertEquals(128, PetalLanes.K_WORD)
         assertEquals(30, PetalLanes.D_WORD)
-        assertEquals(listOf(19, 83, 19), listOf(PetalLanes.P_DATA, PetalLanes.K_DATA, PetalLanes.D_DATA))
-        assertEquals(listOf(19, 83, 19), PetalLane.values().map { it.dataLength }.let { listOf(it[0], it[1], it[2]) })
-        assertEquals(listOf(PetalLane.P, PetalLane.D, PetalLane.K), PetalLane.DECODE_ORDER)
+        assertEquals(listOf(19, 83), listOf(PetalLanes.D_DATA, PetalLanes.FIELD_DATA))
+        assertEquals(4, PetalLanes.SPARE_SECTOR_CELLS)
+        assertEquals(21, PetalLanes.ATOMS_PER_FRAME)
+        assertEquals(listOf(19, 83, 83, 83, 83), PetalLane.ALL.map { it.dataLength })
+        assertEquals(listOf(PetalLane.D, PetalLane.F0, PetalLane.F1, PetalLane.F2, PetalLane.F3), PetalLane.ALL)
+        assertEquals("D0123", PetalLane.ALL.joinToString("") { it.letter.toString() })
+        assertEquals(PetalLane.ALL.drop(1), PetalLane.FIELDS)
+        PetalLane.FIELDS.forEachIndexed { sector, lane ->
+            assertEquals(sector, lane.sector)
+            assertEquals(lane, PetalLane.field(sector))
+            assertTrue(lane.isField)
+        }
+        assertEquals(-1, PetalLane.D.sector)
+        assertFailsWith<IllegalArgumentException> { PetalLane.field(4) }
     }
 
     @Test
     fun whiteningIsDeterministicAndBalanced() {
-        for (lane in PetalLane.values()) {
+        for (lane in PetalLane.ALL) {
             val a = lane.whitening()
             assertContentEquals(a, lane.whitening())
             val ones = a.sumOf { Integer.bitCount(it.toInt() and 0xFF) }
@@ -159,25 +173,30 @@ class PetalCodecTest {
             a[0] = (a[0].toInt() xor 1).toByte()
             assertNotEquals(a[0], lane.whitening()[0], "whitening must be returned as a copy")
         }
+        assertTrue(!PetalLane.F0.whitening().contentEquals(PetalLane.F1.whitening()))
     }
 
     @Test
     fun lanesRoundtripThroughCells() {
-        val pData = ByteArray(PetalLanes.P_DATA) { it.toByte() }
-        val kData = ByteArray(PetalLanes.K_DATA) { (it * 37).toByte() }
         val dData = ByteArray(PetalLanes.D_DATA) { (it xor 0xA5).toByte() }
-        val p = PetalLanes.encodeLane(PetalLane.P, pData)
-        val k = PetalLanes.encodeLane(PetalLane.K, kData)
         val d = PetalLanes.encodeLane(PetalLane.D, dData)
-        val cells = PetalFrameCells.fromWords(p, k, d)
-        assertContentEquals(p, cells.pWord())
-        assertContentEquals(k, cells.kWord())
+        val fields = fieldWords(::fieldData)
+        val cells = PetalFrameCells.fromWords(d, fields)
         assertContentEquals(d, cells.dWord())
-        assertContentEquals(pData, PetalLanes.decodeLane(PetalLane.P, cells.pWord()))
-        assertContentEquals(kData, PetalLanes.decodeLane(PetalLane.K, cells.kWord()))
         assertContentEquals(dData, PetalLanes.decodeLane(PetalLane.D, cells.dWord()))
-        assertEquals(cells, PetalFrameCells.of(cells.light(), cells.glyphs(), cells.dots()))
-        assertFailsWith<IllegalArgumentException> { PetalLanes.encodeLane(PetalLane.P, ByteArray(18)) }
+        for (sector in 0 until PetalLayout.SECTORS) {
+            assertContentEquals(fields[sector], cells.fieldWord(sector))
+            assertContentEquals(fieldData(sector), PetalLanes.decodeLane(PetalLane.field(sector), cells.fieldWord(sector)))
+        }
+        // the spare cells at the end of every sector stay dark
+        for (sector in 0 until PetalLayout.SECTORS) {
+            val order = PetalLayout.sectorCells(sector)
+            for (index in PetalLanes.FIELD_WORD * 8 until order.size) assertTrue(!cells.isPetalLit(order[index]))
+        }
+        assertEquals(cells, PetalFrameCells.of(cells.dots(), cells.petals()))
+        assertFailsWith<IllegalArgumentException> { PetalLanes.encodeLane(PetalLane.F2, ByteArray(82)) }
+        assertFailsWith<IllegalArgumentException> { PetalFrameCells.fromWords(d, fields.take(3)) }
+        assertFailsWith<IllegalArgumentException> { PetalFrameCells.of(cells.dots(), BooleanArray(10)) }
         assertEquals(
             PetalReedSolomonException.Reason.INVALID_SHAPE,
             assertFailsWith<PetalReedSolomonException> { PetalLanes.decodeLane(PetalLane.D, ByteArray(29)) }.reason,
@@ -185,23 +204,19 @@ class PetalCodecTest {
     }
 
     @Test
-    fun allZeroDataStillLightsRoughlyHalfTheCells() {
+    fun allZeroDataStillLightsAboutHalfThePetals() {
         val cells = PetalFrameCells.fromWords(
-            PetalLanes.encodeLane(PetalLane.P, ByteArray(PetalLanes.P_DATA)),
-            PetalLanes.encodeLane(PetalLane.K, ByteArray(PetalLanes.K_DATA)),
             PetalLanes.encodeLane(PetalLane.D, ByteArray(PetalLanes.D_DATA)),
+            fieldWords { ByteArray(PetalLanes.FIELD_DATA) },
         )
-        val lit = cells.light().count { it }
-        assertTrue(lit in 90..166, "$lit light tiles")
+        val lit = cells.petals().count { it }
+        assertTrue(lit in 1300..2050, "$lit lit petals")
     }
 
     @Test
     fun gateDotsAreAlwaysLitAndGuardsDark() {
-        val cells = PetalFrameCells.fromWords(
-            ByteArray(PetalLanes.P_WORD) { -1 },
-            ByteArray(PetalLanes.K_WORD) { -1 },
-            ByteArray(PetalLanes.D_WORD) { -1 },
-        )
+        val field = ByteArray(PetalLanes.FIELD_WORD) { -1 }
+        val cells = PetalFrameCells.fromWords(ByteArray(PetalLanes.D_WORD) { -1 }, List(PetalLayout.SECTORS) { field })
         PetalLayout.slotRoles().forEachIndexed { slot, role ->
             when (role) {
                 PetalSlotRole.GATE, PetalSlotRole.DATA -> assertTrue(cells.isDotLit(slot))
@@ -212,54 +227,124 @@ class PetalCodecTest {
 
     @Test
     fun countedDecodingReportsTheRewrittenPositions() {
-        val data = ByteArray(PetalLanes.P_DATA) { it.toByte() }
-        val clean = PetalLanes.encodeLane(PetalLane.P, data)
-        val exact = PetalLanes.decodeLaneCounted(PetalLane.P, clean)
+        val data = fieldData(9)
+        val clean = PetalLanes.encodeLane(PetalLane.F2, data)
+        val exact = PetalLanes.decodeLaneCounted(PetalLane.F2, clean)
         assertContentEquals(data, exact.data)
         assertEquals(0, exact.corrected)
         assertEquals(0, exact.erasures)
         val damaged = clean.copyOf()
-        for (position in intArrayOf(0, 7, 19, 31)) damaged[position] = (damaged[position].toInt() xor 0xC3).toByte()
-        val repaired = PetalLanes.decodeLaneCounted(PetalLane.P, damaged)
+        for (position in intArrayOf(0, 7, 19, 31, 60, 104)) damaged[position] = (damaged[position].toInt() xor 0xC3).toByte()
+        val repaired = PetalLanes.decodeLaneCounted(PetalLane.F2, damaged)
         assertContentEquals(data, repaired.data)
-        assertEquals(4, repaired.corrected)
-        // two of the damaged bytes flagged as erasures: still four rewritten positions
-        val flagged = PetalLanes.decodeLaneCounted(PetalLane.P, damaged, intArrayOf(7, 19))
+        assertEquals(6, repaired.corrected)
+        // two of the damaged bytes flagged as erasures: still six rewritten positions
+        val flagged = PetalLanes.decodeLaneCounted(PetalLane.F2, damaged, intArrayOf(7, 19))
         assertContentEquals(data, flagged.data)
-        assertEquals(4, flagged.corrected)
+        assertEquals(6, flagged.corrected)
         assertEquals(2, flagged.erasures)
     }
 
     @Test
+    fun aWordDecodedUnderAnotherSectorIsRefused() {
+        val word = PetalLanes.encodeLane(PetalLane.F0, fieldData(1))
+        for (lane in listOf(PetalLane.F1, PetalLane.F2, PetalLane.F3)) {
+            assertEquals(
+                PetalReedSolomonException.Reason.UNCORRECTABLE,
+                assertFailsWith<PetalReedSolomonException> { PetalLanes.decodeLane(lane, word) }.reason,
+            )
+        }
+    }
+
+    @Test
     fun decodeSurvivesBurstDamageToALane() {
-        val kData = ByteArray(PetalLanes.K_DATA) { it.toByte() }
-        val word = PetalLanes.encodeLane(PetalLane.K, kData)
-        for (index in 0 until PetalLanes.K_PARITY / 2) word[index] = (word[index].toInt() xor 0x5A).toByte()
-        assertContentEquals(kData, PetalLanes.decodeLane(PetalLane.K, word))
+        val data = fieldData(3)
+        val word = PetalLanes.encodeLane(PetalLane.F1, data)
+        for (index in 0 until PetalLanes.FIELD_PARITY / 2) word[index] = (word[index].toInt() xor 0x5A).toByte()
+        assertContentEquals(data, PetalLanes.decodeLane(PetalLane.F1, word))
     }
 
     @Test
-    fun maskHas256SymmetricTiles() {
+    fun maskIsMirrorSymmetricAndShowsWhichWayIsUp() {
         for (row in PetalLayout.MASK) {
-            assertEquals(PetalLayout.TILE_GRID, row.length)
-            for (column in 0 until PetalLayout.TILE_GRID / 2) {
-                assertEquals(row[column], row[PetalLayout.TILE_GRID - 1 - column], "row $row not mirrored")
+            assertEquals(PetalLayout.MASK_GRID, row.length)
+            for (column in 0 until PetalLayout.MASK_GRID / 2) {
+                assertEquals(row[column], row[PetalLayout.MASK_GRID - 1 - column], "row $row not mirrored")
             }
         }
-        assertNotEquals(PetalLayout.MASK[0], PetalLayout.MASK[PetalLayout.TILE_GRID - 1], "mask must show top from bottom")
-        assertEquals(PetalLayout.TILE_COUNT, PetalLayout.MASK.sumOf { line -> line.count { it == '#' } })
+        assertNotEquals(PetalLayout.MASK[0], PetalLayout.MASK[PetalLayout.MASK_GRID - 1], "mask must show top from bottom")
     }
 
     @Test
-    fun tilesAreRowMajorAndInsideTheCanvas() {
-        for (index in 0 until PetalLayout.TILE_COUNT) {
-            if (index > 0) {
-                val previous = PetalLayout.tileRow(index - 1) * 100 + PetalLayout.tileColumn(index - 1)
-                assertTrue(PetalLayout.tileRow(index) * 100 + PetalLayout.tileColumn(index) > previous)
+    fun bandsHoldEveryCellAndSplitIntoEqualSectors() {
+        assertEquals(PetalLayout.FIELD_CELLS, PetalLayout.bandOffset(PetalLayout.BAND_COUNT))
+        val seen = BooleanArray(PetalLayout.FIELD_CELLS)
+        for (sector in 0 until PetalLayout.SECTORS) {
+            val cells = PetalLayout.sectorCells(sector)
+            assertEquals(PetalLayout.SECTOR_CELLS, cells.size)
+            for (cell in cells) {
+                assertTrue(!seen[cell], "cell $cell in two sectors")
+                seen[cell] = true
+                // a cell sits in its own quarter turn (odd bands lean half a slot forward)
+                val band = PetalLayout.cellBand(cell)
+                val quarter = PetalLayout.bandSlots(band) / PetalLayout.SECTORS
+                assertEquals(sector, PetalLayout.cellSlot(cell) / quarter)
+                val turn = PetalLayout.cellAngle(cell) / PetalLayout.TAU * PetalLayout.SECTORS
+                assertTrue(turn > sector - 1e-9 && turn < sector + 1.0)
             }
-            val (x, y) = PetalLayout.tileCenter(index).let { it[0] to it[1] }
-            assertTrue(x in 0.0..PetalLayout.CANVAS && y in 0.0..PetalLayout.CANVAS)
         }
+        assertTrue(seen.all { it })
+        assertFailsWith<IllegalArgumentException> { PetalLayout.sectorCells(4) }
+    }
+
+    @Test
+    fun bandSlotsFollowThePitchRule() {
+        for (band in 0 until PetalLayout.BAND_COUNT) {
+            val raw = PetalLayout.TAU * PetalLayout.bandRadius(band) / 50.0
+            assertEquals(4 * maxOf(Math.round(raw).toInt(), 1), PetalLayout.bandSlots(band), "band $band")
+            assertEquals(16.0 + 11.0 * band, PetalLayout.bandRadius(band))
+            assertEquals(if (band % 2 == 1) 0.5 else 0.0, PetalLayout.bandPhase(band))
+        }
+    }
+
+    @Test
+    fun theFieldMapsOntoItselfUnderAQuarterTurn() {
+        val c = PetalLayout.CENTER
+        for (cell in 0 until PetalLayout.FIELD_CELLS) {
+            val band = PetalLayout.cellBand(cell)
+            val n = PetalLayout.bandSlots(band)
+            val turned = PetalLayout.bandOffset(band) + (PetalLayout.cellSlot(cell) + n / 4) % n
+            val (x, y) = PetalLayout.cellCenter(cell).let { it[0] to it[1] }
+            val (tx, ty) = PetalLayout.cellCenter(turned).let { it[0] to it[1] }
+            // a quarter turn clockwise on screen about the centre
+            assertTrue(Math.abs(tx - (c - (y - c))) < 1e-9 && Math.abs(ty - (c + (x - c))) < 1e-9, "cell $cell")
+        }
+    }
+
+    @Test
+    fun petalsStayClearOfTheirNeighboursAndTheRings() {
+        val outer = PetalLayout.bandRadius(PetalLayout.BAND_COUNT - 1) + PetalLayout.PETAL_HALF_LENGTH
+        assertTrue(outer + 10.0 < PetalLayout.ringRadius(0) - PetalLayout.DOT_RADIUS)
+        for (cell in 0 until PetalLayout.FIELD_CELLS) {
+            val center = PetalLayout.cellCenter(cell)
+            val band = PetalLayout.cellBand(cell)
+            val near = PetalLayout.bandOffset(maxOf(band - 1, 0)) until PetalLayout.bandOffset(minOf(band + 2, PetalLayout.BAND_COUNT))
+            for (other in near) {
+                if (other == cell) continue
+                val neighbour = PetalLayout.cellCenter(other)
+                val distance = Math.hypot(center[0] - neighbour[0], center[1] - neighbour[1])
+                assertTrue(distance > 2.0 * PetalLayout.PETAL_RADIUS, "cells $cell and $other are $distance apart")
+            }
+        }
+    }
+
+    @Test
+    fun theLightCellsDrawTheCharacter() {
+        val light = (0 until PetalLayout.FIELD_CELLS).count { PetalLayout.isLightCell(it) }
+        assertTrue(light in 1200 until 2400, "$light light cells")
+        assertTrue(PetalLayout.inMask(512.0, 190.0), "the top bar")
+        assertTrue(!PetalLayout.inMask(512.0, 350.0), "the gap under the second bar")
+        assertTrue(!PetalLayout.inMask(181.9, 400.0) && !PetalLayout.inMask(900.0, 900.0))
     }
 
     @Test
@@ -269,8 +354,7 @@ class PetalCodecTest {
         assertEquals(PetalLayout.D_BITS, roles.count { it == PetalSlotRole.DATA })
         assertEquals(4 + 5 + 7, roles.count { it == PetalSlotRole.GATE })
         assertEquals(PetalLayout.D_BITS, PetalLayout.dataSlots().size)
-        // the two spare slots are the last non-reserved slots of the outer ring
-        assertEquals(2, roles.count { it == PetalSlotRole.SPARE })
+        assertEquals(PetalLayout.TOTAL_SLOTS - PetalLayout.D_BITS - 16 - 18, roles.count { it == PetalSlotRole.SPARE })
         PetalLayout.dataSlots().forEachIndexed { bit, slot -> assertEquals(bit, PetalLayout.slotDataBit(slot)) }
         assertEquals(-1, PetalLayout.slotDataBit(PetalLayout.gateSlots()[0]))
     }
@@ -292,19 +376,6 @@ class PetalCodecTest {
             val dy = PetalLayout.finderCenterY(finder) - PetalLayout.CENTER
             assertTrue(Math.sqrt(dx * dx + dy * dy) - PetalLayout.FINDER_OUTER > outermost + 20.0)
         }
-        var farthest = 0.0
-        val h = PetalLayout.TILE_SIZE / 2.0
-        for (tile in 0 until PetalLayout.TILE_COUNT) {
-            val center = PetalLayout.tileCenter(tile)
-            for (sx in listOf(-h, h)) {
-                for (sy in listOf(-h, h)) {
-                    val dx = center[0] + sx - PetalLayout.CENTER
-                    val dy = center[1] + sy - PetalLayout.CENTER
-                    farthest = maxOf(farthest, Math.sqrt(dx * dx + dy * dy))
-                }
-            }
-        }
-        assertTrue(farthest + 10.0 < PetalLayout.ringRadius(0) - PetalLayout.DOT_RADIUS)
     }
 
     @Test
@@ -323,39 +394,12 @@ class PetalCodecTest {
     }
 
     @Test
-    fun checkedInTemplatesMatchTheStrokeDefinitions() {
-        val generated = PetalGlyphs.generateTemplates()
-        for (glyph in 0 until PetalGlyphs.GLYPH_COUNT) {
-            assertContentEquals(PetalGlyphs.template(glyph), generated[glyph], "glyph $glyph")
-        }
-    }
-
-    @Test
-    fun everyGlyphHasInkInsideTheDesignGrid() {
-        for (glyph in 0 until PetalGlyphs.GLYPH_COUNT) {
-            assertTrue(PetalGlyphs.template(glyph).sum() > 255 * 6, "glyph $glyph has too little ink")
-            for (stroke in PetalGlyphs.strokes(glyph)) {
-                for (value in stroke) assertTrue(value in 2.0..30.0)
-            }
-        }
-        assertEquals(PetalGlyphs.GLYPH_COUNT, PetalGlyphs.GLYPH_CHARS.length)
-    }
-
-    @Test
-    fun glyphsArePairwiseDistinctUnderBlur() {
-        // Zero-mean cosine distance of the raw templates must stay well apart.
-        val features = Array(PetalGlyphs.GLYPH_COUNT) { glyph ->
-            val values = PetalGlyphs.template(glyph).map { it.toDouble() }
-            val mean = values.sum() / values.size
-            val centered = values.map { it - mean }
-            val norm = Math.sqrt(centered.sumOf { it * it })
-            centered.map { it / norm }
-        }
-        for (a in 0 until PetalGlyphs.GLYPH_COUNT) {
-            for (b in a + 1 until PetalGlyphs.GLYPH_COUNT) {
-                val dot = features[a].zip(features[b]).sumOf { (x, y) -> x * y }
-                assertTrue(1.0 - dot > 0.2, "glyphs $a and $b are too similar: ${1.0 - dot}")
-            }
-        }
+    fun aPetalIsLitAtItsCentreAndNotchedAtItsTip() {
+        assertTrue(PetalLayout.petalLit(0.0, 0.0, 0.3))
+        val tip = PetalLayout.PETAL_NOTCH_DISTANCE
+        assertTrue(!PetalLayout.petalLit(tip * Math.cos(0.3), tip * Math.sin(0.3), 0.3))
+        assertTrue(!PetalLayout.petalLit(0.0, 10.0, 0.0))
+        // longer along its outward direction (half-length 5.2, the notch from 4.1) than across it (4.3)
+        assertTrue(PetalLayout.petalLit(4.0, 0.0, 0.0) && !PetalLayout.petalLit(0.0, 4.5, 0.0))
     }
 }

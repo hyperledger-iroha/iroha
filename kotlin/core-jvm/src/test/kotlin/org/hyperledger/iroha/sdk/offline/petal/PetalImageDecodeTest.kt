@@ -110,6 +110,33 @@ class PetalImageDecodeTest {
         assertNull(PetalHomography.fromPoints(p, p.copyOf(10)))
         assertNull(PetalHomography(DoubleArray(9)).inverse())
         assertFailsWith<IllegalArgumentException> { PetalHomography(DoubleArray(8)) }
+        assertNull(PetalPose.fit(p, p, -0.05, 640, 480))
+        assertNull(PetalPose.fit(p, p.copyOf(7), 0.0, 640, 480))
+    }
+
+    @Test
+    fun aFittedPoseTakesItsSourcePointsOntoDistortedImagePoints() {
+        val src = doubleArrayOf(72.0, 72.0, 952.0, 72.0, 952.0, 952.0, 72.0, 952.0)
+        val dst = doubleArrayOf(380.0, 90.0, 900.0, 110.0, 880.0, 640.0, 360.0, 620.0)
+        for (distortion in doubleArrayOf(0.0, -0.08, 0.03)) {
+            val pose = assertNotNull(PetalPose.fit(src, dst, distortion, 1280, 720))
+            assertEquals(distortion, pose.distortion)
+            assertEquals(640.0, pose.centerX)
+            assertEquals(360.0, pose.centerY)
+            assertEquals(1024.0 * 1024.0, pose.scale2)
+            for (point in 0 until 4) {
+                val mapped = pose.apply(src[2 * point], src[2 * point + 1])
+                assertEquals(dst[2 * point], mapped[0], 1e-3, "$distortion")
+                assertEquals(dst[2 * point + 1], mapped[1], 1e-3, "$distortion")
+            }
+        }
+        // barrel distortion pulls a mid-edge point toward the image centre
+        val plain = assertNotNull(PetalPose.fit(src, dst, 0.0, 1280, 720))
+        val barrel = assertNotNull(PetalPose.fit(src, dst, -0.08, 1280, 720))
+        assertTrue(Math.abs(plain.apply(512.0, 72.0)[0] - barrel.apply(512.0, 72.0)[0]) < 5.0)
+        assertContentEquals(doubleArrayOf(3.0, 4.0), PetalPose.plain(PetalHomography.IDENTITY).apply(3.0, 4.0))
+        assertEquals(plain, PetalPose.fit(src, dst, 0.0, 1280, 720))
+        assertTrue(plain != barrel)
     }
 
     @Test
@@ -253,7 +280,7 @@ class PetalImageDecodeTest {
 
     @Test
     fun anInferredCornerNeedsContrastToo() {
-        val h = PetalHomography.IDENTITY.m
+        val h = PetalPose.plain(PetalHomography.IDENTITY)
         // even light: the hidden corner (3) gets levels between the others'
         val even = levelCard(listOf(230 to 30, 220 to 25, 210 to 20, 0 to 0))
         val reference = assertNotNull(PetalDecoder.referenceLevels(even, h, 3), "levels")
@@ -271,8 +298,8 @@ class PetalImageDecodeTest {
         val luma = locatorFrame().toLuma()
         val found = assertNotNull(PetalLocator.follow(luma, PetalFinder(48.0, 27.0, 60.0)), "followed")
         assertTrue(Math.abs(found.x - 36.0) < 1.5 && Math.abs(found.y - 36.0) < 1.5, "$found")
-        // nothing bright near the centre of the canvas corner gap
-        assertNull(PetalLocator.follow(luma, PetalFinder(140.0, 36.0, 30.0)))
+        // nothing bright in the canvas corner gap between a blossom and the rings
+        assertNull(PetalLocator.follow(luma, PetalFinder(100.0, 15.0, 30.0)))
         // a finder far outside the image is lost, not an error
         assertNull(PetalLocator.follow(luma, PetalFinder(-1e12, 1e15, 60.0)))
         assertNull(PetalLocator.follow(luma, PetalFinder(Double.NaN, 36.0, 60.0)))
@@ -288,11 +315,20 @@ class PetalImageDecodeTest {
         PetalLocator.follow(luma, PetalFinder(36.0, 36.0, 1e300))
     }
 
-    private val streamPayload = ByteArray(300) { i -> ((i.toLong() * 2_654_435_761L) ushr 11).toByte() }
+
+    /** The payload of the reference decoder tests. */
+    private val streamPayload = ByteArray(3000) { i -> ((i.toLong() * 2_654_435_761L) ushr 11).toByte() }
 
     private fun setup(frame: Int): Pair<PetalStreamEncoder, PetalRgb> {
         val encoder = PetalStreamEncoder(streamPayload, 2)
         return encoder to PetalRenderer.render(encoder.cells(frame), PetalRenderOptions(768, 2))
+    }
+
+    private fun assertAllLanes(decoded: PetalDecodedFrame, truth: PetalFrameLanes, name: String) {
+        assertContentEquals(truth.d(), decoded.d?.data, "$name: lane D")
+        for (sector in 0 until PetalLayout.SECTORS) {
+            assertContentEquals(truth.field(sector), decoded.field(sector)?.data, "$name: field lane $sector")
+        }
     }
 
     @Test
@@ -300,34 +336,24 @@ class PetalImageDecodeTest {
         val (encoder, rgb) = setup(5)
         val luma = rgb.toLuma()
         val decoded = assertNotNull(PetalDecoder.decode(luma).frame)
-        val data = encoder.laneData(5)
-        assertContentEquals(data.p(), decoded.p?.data)
-        assertContentEquals(data.k(), decoded.k?.data)
-        assertContentEquals(data.d(), decoded.d?.data)
+        assertAllLanes(decoded, encoder.laneData(5), "clean")
         assertEquals(0, decoded.rotation)
         assertEquals(false, decoded.mirrored)
-        assertEquals(3, decoded.lanesOk)
-        assertEquals("PKD", decoded.lanes)
-        // diagnostics agree with what was drawn (Reed–Solomon may have corrected a few glyphs)
-        val truth = encoder.cells(5)
-        val observed = assertNotNull(PetalDecoder.observedCells(luma, decoded))
-        assertContentEquals(truth.light(), observed.light())
-        assertContentEquals(truth.dots(), observed.dots())
-        assertTrue((0 until PetalLayout.TILE_COUNT).count { truth.glyph(it) != observed.glyph(it) } <= 4)
-        val matchError = assertNotNull(PetalDecoder.tileMatchError(luma, decoded))
-        assertTrue(matchError >= 0.0 && matchError < 1.0, "tile match error $matchError")
-        val again = assertNotNull(PetalDecoder.decodeAt(luma, decoded.homography))
-        assertEquals("PKD", again.lanes)
+        assertEquals("D0123", decoded.lanes)
+        assertEquals(5, decoded.lanesOk)
+        assertEquals(java.lang.Double.doubleToRawLongBits(0.0), java.lang.Double.doubleToRawLongBits(decoded.pose.distortion))
+        val again = assertNotNull(PetalDecoder.decodeAt(luma, decoded.pose))
+        assertEquals("D0123", again.lanes)
         // frame 5 carries atoms on every lane
         assertNull(decoded.beacon())
-        assertEquals(3, decoded.atomPackets().size)
-        assertEquals(7, decoded.atomPackets().sumOf { it.atomCount })
+        assertEquals(5, decoded.atomPackets().size)
+        assertEquals(21, decoded.atomPackets().sumOf { it.atomCount })
     }
 
     @Test
     fun rotatedAndMirroredRendersDecodeWithTheRightOrientation() {
         val (encoder, rgb) = setup(7)
-        val data = encoder.laneData(7)
+        val truth = encoder.laneData(7)
         val n = rgb.width
         val source = rgb.toLuma().data()
         fun transform(map: (Int, Int) -> Pair<Int, Int>): PetalLuma {
@@ -353,8 +379,7 @@ class PetalImageDecodeTest {
             val decoded = assertNotNull(result.frame, "$name: ${result.error}")
             assertEquals(mirrored, decoded.mirrored, name)
             assertEquals(rotation, decoded.rotation, "$name rotation")
-            assertContentEquals(data.d(), decoded.d?.data, "$name lane D")
-            assertContentEquals(data.p(), decoded.p?.data, "$name lane P")
+            assertAllLanes(decoded, truth, name)
         }
         // without mirrored hypotheses a mirrored preview is unreadable
         val strict = PetalDecodeOptions(tryMirrored = false)
@@ -364,204 +389,64 @@ class PetalImageDecodeTest {
     private data class OrientationCase(val name: String, val image: PetalLuma, val rotation: Int, val mirrored: Boolean)
 
     @Test
+    fun theFieldAloneTellsTheOrientationWhenTheRingsAreGone() {
+        // black out the ring band: no gates, no lane D; a wrong quarter turn reads
+        // permuted petals that no field codeword accepts
+        val (encoder, rgb) = setup(9)
+        val n = rgb.width
+        val luma = rgb.toLuma().data()
+        val scale = n / 1024.0
+        for (y in 0 until n) {
+            for (x in 0 until n) {
+                val dx = (x + 0.5) / scale - 512.0
+                val dy = (y + 0.5) / scale - 512.0
+                val r = Math.sqrt(dx * dx + dy * dy)
+                if (r in 392.0..490.0) luma[y * n + x] = 0
+            }
+        }
+        val rotated = ByteArray(n * n)
+        for (y in 0 until n) for (x in 0 until n) rotated[y * n + x] = luma[(n - 1 - x) * n + y]
+        val decoded = assertNotNull(PetalDecoder.decode(assertNotNull(PetalLuma.fromRaw(n, n, rotated))).frame, "decodes")
+        assertNull(decoded.d)
+        assertEquals(1, decoded.rotation)
+        val truth = encoder.laneData(9)
+        for (sector in 0 until PetalLayout.SECTORS) assertContentEquals(truth.field(sector), decoded.field(sector)?.data)
+    }
+
+    private fun flip(bytes: ByteArray, position: Int, mask: Int) {
+        bytes[position] = (bytes[position].toInt() xor mask).toByte()
+    }
+
+    @Test
     fun correctedCountsRewrittenBytesNotJustErasures() {
-        val data = ByteArray(PetalLanes.P_DATA) { it.toByte() }
-        val word = PetalLanes.encodeLane(PetalLane.P, data)
-        for (position in intArrayOf(2, 11, 30)) word[position] = (word[position].toInt() xor 0x5A).toByte()
+        val data = ByteArray(PetalLanes.FIELD_DATA) { it.toByte() }
+        val lane = PetalLane.F1
+        val word = PetalLanes.encodeLane(lane, data)
+        for (position in intArrayOf(2, 11, 30, 77)) flip(word, position, 0x5A)
         val confidence = DoubleArray(word.size) { 1.0 }
-        val result = assertNotNull(PetalDecoder.decodeWithErasures(PetalLane.P, word, confidence), "three errors fit")
+        val result = assertNotNull(PetalDecoder.decodeWithErasures(lane, word, confidence), "four errors fit")
         assertContentEquals(data, result.data)
         assertEquals(0, result.erasures)
-        assertEquals(3, result.corrected)
+        assertEquals(4, result.corrected)
         // with the damaged bytes flagged as least confident, they become erasures
         val flagged = DoubleArray(word.size) { 1.0 }
-        for (position in intArrayOf(2, 11, 30)) flagged[position] = 0.0
-        val erased = assertNotNull(PetalDecoder.decodeWithErasures(PetalLane.P, word, flagged), "decodes")
+        for (position in intArrayOf(2, 11, 30, 77)) flagged[position] = 0.0
+        val erased = assertNotNull(PetalDecoder.decodeWithErasures(lane, word, flagged), "decodes")
         assertContentEquals(data, erased.data)
-        assertTrue(erased.corrected >= 3)
-    }
-
-    /** The exact canvas-to-pixel homography of the 768-pixel test renders. */
-    private fun renderHomography(): PetalHomography {
-        val canonical = DoubleArray(8)
-        for (finder in 0 until 4) {
-            canonical[2 * finder] = PetalLayout.finderCenterX(finder)
-            canonical[2 * finder + 1] = PetalLayout.finderCenterY(finder)
-        }
-        val scale = 768.0 / 1024.0
-        return assertNotNull(PetalHomography.fromPoints(canonical, DoubleArray(8) { canonical[it] * scale }), "homography")
-    }
-
-    /** A clean 768-pixel render with the exact canvas-to-pixel homography; its raw patches are in [workspace]. */
-    private class CleanPatches(
-        val encoder: PetalStreamEncoder,
-        val luma: PetalLuma,
-        val h: PetalHomography,
-        val workspace: PetalWorkspace,
-    )
-
-    private fun cleanPatches(frame: Int): CleanPatches {
-        val (encoder, rgb) = setup(frame)
-        val luma = rgb.toLuma()
-        val h = renderHomography()
-        val workspace = PetalWorkspace()
-        PetalDecoder.samplePatches(luma, h.m, workspace)
-        return CleanPatches(encoder, luma, h, workspace)
-    }
-
-    private fun laneOf(lane: PetalLane, words: PetalDecoder.TileWords): PetalLaneResult? = when (lane) {
-        PetalLane.P -> PetalDecoder.decodeWithErasures(lane, words.p, words.pConfidence)
-        PetalLane.K -> PetalDecoder.decodeWithErasures(lane, words.k, words.kConfidence)
-        PetalLane.D -> throw IllegalArgumentException("lane D is not read from tiles")
-    }
-
-    @Test
-    fun levelAndNormalisedReadsAgreeOnACleanRender() {
-        val clean = cleanPatches(5)
-        val data = clean.encoder.laneData(5)
-        val options = PetalDecodeOptions.DEFAULT
-        val reference = assertNotNull(PetalDecoder.referenceLevels(clean.luma, clean.h.m, PetalDecoder.NO_CORNER), "reference levels")
-        val reads = listOf(
-            "level" to PetalDecoder.readTiles(reference, options, clean.workspace),
-            "normalised" to PetalDecoder.readTilesNormalised(options, clean.workspace),
-        )
-        for ((name, tiles) in reads) {
-            val words = PetalDecoder.tileWords(tiles)
-            val p = assertNotNull(laneOf(PetalLane.P, words), "$name: lane P")
-            val k = assertNotNull(laneOf(PetalLane.K, words), "$name: lane K")
-            assertContentEquals(data.p(), p.data, name)
-            assertEquals(0, p.corrected, name)
-            assertContentEquals(data.k(), k.data, name)
-            assertEquals(0, k.corrected, name)
-        }
-    }
-
-    @Test
-    fun normalisedReadCancelsGainAndOffsetPerTile() {
-        val clean = cleanPatches(5)
-        val data = clean.encoder.laneData(5)
-        val options = PetalDecodeOptions.DEFAULT
-        // every tile gets its own gain and offset, as under glare, shadows and saturation
-        val patches = clean.workspace.patches
-        for (tile in 0 until PetalLayout.TILE_COUNT) {
-            val gain = 0.35 + 0.65 * ((tile * 37 % 101).toDouble() / 100.0)
-            val offset = 5.0 + (tile * 53 % 61).toDouble()
-            for (cell in tile * PetalWorkspace.CELLS until (tile + 1) * PetalWorkspace.CELLS) {
-                patches[cell] = gain * patches[cell] + offset
-            }
-        }
-        val reference = assertNotNull(PetalDecoder.referenceLevels(clean.luma, clean.h.m, PetalDecoder.NO_CORNER), "reference levels")
-        val levelWords = PetalDecoder.tileWords(PetalDecoder.readTiles(reference, options, clean.workspace))
-        assertNull(
-            laneOf(PetalLane.P, levelWords),
-            "the level read must not survive this distortion, or the test proves nothing",
-        )
-        val words = PetalDecoder.tileWords(PetalDecoder.readTilesNormalised(options, clean.workspace))
-        assertContentEquals(data.p(), assertNotNull(laneOf(PetalLane.P, words), "lane P").data)
-        assertContentEquals(data.k(), assertNotNull(laneOf(PetalLane.K, words), "lane K").data)
-    }
-
-    @Test
-    fun normalisedReadErasesTilesThatLostTheirContrast() {
-        val clean = cleanPatches(5)
-        val cells = PetalWorkspace.CELLS
-        clean.workspace.patches.fill(100.0, 5 * cells, 6 * cells)
-        clean.workspace.patches.fill(30.0, 9 * cells, 10 * cells)
-        val reads = PetalDecoder.readTilesNormalised(PetalDecodeOptions.DEFAULT, clean.workspace)
-        for (tile in intArrayOf(5, 9)) {
-            assertTrue(Math.abs(reads.polarityMargin[tile]) < 1e-12, "tile $tile")
-            assertTrue(Math.abs(reads.glyphMargin[tile]) < 1e-12, "tile $tile")
-        }
-        assertTrue(reads.polarityMargin[6] > 0.0 && reads.glyphMargin[6] > 0.0)
-    }
-
-    @Test
-    fun normalisedReadJudgesContrastAgainstTheMedianTile() {
-        val clean = cleanPatches(5)
-        val cells = PetalWorkspace.CELLS
-        val patches = clean.workspace.patches
-        // 100 tiles keep 15 % of their contrast (a deep shadow patch), the other 156 stay healthy
-        for (cell in 0 until 100 * cells) patches[cell] = 0.15 * patches[cell] + 40.0
-        val reads = PetalDecoder.readTilesNormalised(PetalDecodeOptions.DEFAULT, clean.workspace)
-        // the median tile is a healthy one, so every weak tile is below a quarter of it and erased ...
-        for (tile in 0 until 100) {
-            assertTrue(Math.abs(reads.polarityMargin[tile]) < 1e-12, "weak tile $tile")
-            assertTrue(Math.abs(reads.glyphMargin[tile]) < 1e-12, "weak tile $tile")
-        }
-        // ... while the healthy tiles keep their margins
-        for (tile in 100 until PetalLayout.TILE_COUNT) assertTrue(reads.polarityMargin[tile] > 0.0, "healthy tile $tile")
-    }
-
-    @Test
-    fun patchLevelsIgnoreTheExtremeCells() {
-        val values = DoubleArray(PetalWorkspace.CELLS) { 10.0 }
-        for (i in 0 until PetalWorkspace.CELLS / 2) values[i] = 200.0 + (i % 3)
-        values[0] = 255.0 // one hot cell
-        values[PetalWorkspace.CELLS - 1] = 0.0 // one dead cell
-        val (low, high) = PetalDecoder.patchLevels(values)
-        assertEquals(10.0, low, 1e-12)
-        assertTrue(high in 200.0..202.0, "high level $high")
-        val scaled = PetalDecoder.rescale(values, 1.0)
-        assertTrue(scaled.all { it in -0.25..1.25 })
-        // a flat patch stays flat instead of dividing by nothing
-        assertTrue(PetalDecoder.rescale(DoubleArray(PetalWorkspace.CELLS) { 7.0 }, 1.0).all { Math.abs(it) < 1e-12 })
-    }
-
-    @Test
-    fun shadowedPartOfARenderDecodesThroughTheNormalisedRead() {
-        val (encoder, rgb) = setup(5)
-        val data = encoder.laneData(5)
-        val clear = rgb.toLuma()
-        val width = clear.width
-        val pixels = clear.data()
-        for (y in 0 until clear.height) {
-            for (x in width * 7 / 20 until width * 3 / 5) {
-                val dimmed = PetalNumerics.roundHalfAway((pixels[y * width + x].toInt() and 0xFF) * 0.3)
-                pixels[y * width + x] = dimmed.toInt().toByte()
-            }
-        }
-        val luma = assertNotNull(PetalLuma.fromRaw(width, clear.height, pixels))
-        // the finder levels cannot describe a step in the light: the level read loses lane K
-        val h = renderHomography()
-        val options = PetalDecodeOptions.DEFAULT
-        val reference = assertNotNull(PetalDecoder.referenceLevels(luma, h.m, PetalDecoder.NO_CORNER), "reference levels")
-        val workspace = PetalWorkspace()
-        PetalDecoder.samplePatches(luma, h.m, workspace)
-        val levelWords = PetalDecoder.tileWords(PetalDecoder.readTiles(reference, options, workspace))
-        assertNull(laneOf(PetalLane.K, levelWords), "the level read must lose lane K")
-        val decoded = assertNotNull(PetalDecoder.decode(luma).frame, "decodes")
-        assertContentEquals(data.p(), decoded.p?.data)
-        assertContentEquals(data.k(), decoded.k?.data)
-    }
-
-    @Test
-    fun aFrameWhoseOnlyReadableLaneIsKIsAccepted() {
-        // flip more bytes of lanes P and D than their Reed–Solomon codes repair (t = 6 and 5);
-        // the glyph lane is untouched, and flipping a tile's polarity keeps its glyph
-        val encoder = PetalStreamEncoder(streamPayload, 2)
-        val clean = encoder.cells(5)
-        val p = clean.pWord()
-        val d = clean.dWord()
-        for (index in 0 until 8) p[4 * index] = (p[4 * index].toInt() xor 0xFF).toByte()
-        for (index in 0 until 7) d[4 * index] = (d[4 * index].toInt() xor 0xFF).toByte()
-        val luma = PetalRenderer.render(PetalFrameCells.fromWords(p, clean.kWord(), d), PetalRenderOptions(768, 2)).toLuma()
-        val decoded = assertNotNull(PetalDecoder.decode(luma).frame, "lane K alone is enough to accept an orientation")
-        assertEquals("K", decoded.lanes)
-        assertContentEquals(encoder.laneData(5).k(), decoded.k?.data)
+        assertTrue(erased.corrected >= 4)
     }
 
     @Test
     fun randomWordsAreAlmostNeverAccepted() {
         // Reed–Solomon with erasures can accept a word that is not a transmission. Lane D has only
-        // 11 parity bytes, so its schedule stops at five erasures; at seven it let through about
-        // one random word in 250 (150 of these 40 000). Lane P stops at six for the same reason.
-        // The counts are exact so that this port, fed the same xorshift32 words and byte-valued
-        // confidences (many ties, so the ranking must be stable), reproduces the reference decoder
-        // bit for bit.
+        // 11 parity bytes, so its schedule stops at five erasures; a field lane has 22 and stops at
+        // eleven. The counts are exact so that this port, fed the same xorshift32 words and
+        // byte-valued confidences (many ties, so the ranking must be stable), reproduces the
+        // reference decoder bit for bit.
         val rng = PetalXorshift32(0x5EED)
         val trials = 40_000
-        for ((lane, expected) in listOf(PetalLane.D to 3, PetalLane.P to 0)) {
-            val length = lane.dataLength + lane.parityLength
+        for ((lane, expected) in listOf(PetalLane.D to 3, PetalLane.F0 to 0)) {
+            val length = lane.wordLength
             var accepted = 0
             repeat(trials) {
                 val word = ByteArray(length) { rng.nextByte().toByte() }
@@ -572,16 +457,11 @@ class PetalImageDecodeTest {
         }
     }
 
-    private fun flip(bytes: ByteArray, position: Int, mask: Int) {
-        bytes[position] = (bytes[position].toInt() xor mask).toByte()
-    }
-
     @Test
-    fun onlyLaneKUsesTwoThirdsOfItsParityAsErasures() {
-        // damaged bytes: `flagged` of them marked least confident, two more hidden. With the extra
-        // erasure step of the old schedule the decoder would repair them (2·2 + flagged parity
-        // bytes); the capped schedule must refuse instead of risking a wrong codeword.
-        for ((lane, flagged) in listOf(PetalLane.D to 7, PetalLane.P to 8)) {
+    fun erasuresStopAtHalfTheParity() {
+        // damaged bytes: `flagged` of them marked least confident, two more hidden: beyond half
+        // the parity the decoder must refuse instead of risking a wrong codeword
+        for ((lane, flagged) in listOf(PetalLane.D to 7, PetalLane.F2 to 16)) {
             val data = ByteArray(lane.dataLength) { it.toByte() }
             val word = PetalLanes.encodeLane(lane, data)
             val damaged = word.copyOf()
@@ -600,33 +480,18 @@ class PetalImageDecodeTest {
                 flip(repairable, position, 0xA5)
                 halfFlagged[position] = 0.0
             }
-            flip(repairable, 20, 0x3C)
+            flip(repairable, 24, 0x3C)
             val result = assertNotNull(PetalDecoder.decodeWithErasures(lane, repairable, halfFlagged), "lane ${lane.letter}")
             assertContentEquals(data, result.data, "lane ${lane.letter}")
             assertTrue(result.erasures <= lane.parityLength / 2, "lane ${lane.letter}")
         }
-        // lane K keeps the two-thirds step: 30 flagged bytes plus 7 hidden errors need it
-        // (2·7 + 30 = 44 of 45 parity bytes)
-        val data = ByteArray(PetalLanes.K_DATA) { it.toByte() }
-        val damaged = PetalLanes.encodeLane(PetalLane.K, data)
-        val confidence = DoubleArray(damaged.size) { 1.0 }
-        for (position in 0 until 30) {
-            flip(damaged, position, 0xA5)
-            confidence[position] = 0.0
-        }
-        for (position in 60 until 67) flip(damaged, position, 0x3C)
-        val result = assertNotNull(PetalDecoder.decodeWithErasures(PetalLane.K, damaged, confidence), "30 erasures")
-        assertContentEquals(data, result.data)
-        assertEquals(30, result.erasures)
     }
 
     @Test
     fun equalConfidencesAreErasedInPositionOrder() {
-        // Every tile the normalised read erases has confidence exactly 0, so ties are the rule, and
-        // the ranking must be stable or ports disagree about which bytes are erased. Three damaged
-        // bytes at the front plus four hidden ones fit lane D only if exactly the first three
-        // positions are erased (3 erasures + 4 errors = all 11 parity bytes): a step that erased
-        // the last positions instead would see seven errors.
+        // Ties must be broken by position or ports disagree about which bytes are erased.
+        // Three damaged bytes at the front plus four hidden ones fit lane D only if exactly the
+        // first three positions are erased (3 erasures + 4 errors = all 11 parity bytes).
         val data = ByteArray(PetalLanes.D_DATA) { it.toByte() }
         val word = PetalLanes.encodeLane(PetalLane.D, data)
         for (position in listOf(0, 1, 2, 20, 21, 22, 23)) flip(word, position, 0x5A)
@@ -635,6 +500,15 @@ class PetalImageDecodeTest {
         assertContentEquals(data, result.data)
         assertEquals(3, result.erasures)
         assertEquals(7, result.corrected)
+    }
+
+    @Test
+    fun twoMeansSplitsTwoClustersAndSurvivesOne() {
+        val values = DoubleArray(100) { if (it < 40) 0.05 else 0.9 }
+        val t = PetalDecoder.twoMeans(values, values.size)
+        assertTrue(t > 0.3 && t < 0.6, "$t")
+        val flat = DoubleArray(10) { 0.4 }
+        assertTrue(Math.abs(PetalDecoder.twoMeans(flat, flat.size) - 0.4) < 1e-12)
     }
 
     @Test
@@ -651,17 +525,23 @@ class PetalImageDecodeTest {
         assertEquals(PetalDecodeError.UNSUPPORTED_IMAGE, PetalDecoder.decode(PetalLuma(100, 100), smallBudget).error)
         // just over the default 12,000,000-pixel budget
         assertEquals(PetalDecodeError.UNSUPPORTED_IMAGE, PetalDecoder.decode(PetalLuma(4000, 3001)).error)
-        assertNull(PetalDecoder.decodeAt(PetalLuma(8, 8), PetalHomography.IDENTITY))
+        val identity = PetalPose.plain(PetalHomography.IDENTITY)
+        assertNull(PetalDecoder.decodeAt(PetalLuma(8, 8), identity))
         // the diagnostics refuse unusable images as well (a PetalLuma cannot carry a mismatched buffer)
         val luma = setup(5).second.toLuma()
         val decoded = assertNotNull(PetalDecoder.decode(luma).frame, "decodes")
         assertNull(PetalDecoder.observedCells(PetalLuma(47, 400), decoded))
-        assertNull(PetalDecoder.tileMatchError(PetalLuma(47, 400), decoded))
         assertNull(PetalDecoder.observedCells(luma, decoded, smallBudget))
-        assertNull(PetalDecoder.tileMatchError(luma, decoded, smallBudget))
-        assertNull(PetalDecoder.decodeAt(luma, decoded.homography, smallBudget))
-        assertFailsWith<IllegalArgumentException> { PetalDecodeOptions(templateSigmas = doubleArrayOf(0.0, 0.5)) }
+        assertNull(PetalDecoder.decodeAt(luma, decoded.pose, smallBudget))
         assertFailsWith<IllegalArgumentException> { PetalDecodeOptions(maxPixels = 0) }
+    }
+
+    @Test
+    fun observedCellsMatchTheDrawnCellsOfACleanRender() {
+        val (encoder, rgb) = setup(3)
+        val luma = rgb.toLuma()
+        val decoded = assertNotNull(PetalDecoder.decode(luma).frame, "decodes")
+        assertEquals(encoder.cells(3), PetalDecoder.observedCells(luma, decoded))
     }
 
     @Test
@@ -691,7 +571,7 @@ class PetalImageDecodeTest {
     @Test
     fun randomBlobScenesNeverCrashOrYieldLanes() {
         // Scenes with several random bright ellipses (some finder-sized) on noise:
-        // exercises the locator, quad selection and homography on degenerate layouts.
+        // exercises the locator, quad selection and pose fitting on degenerate layouts.
         val rng = PetalXorshift32(2024)
         fun next(bound: Int): Int = (PetalTestSupport.u32(rng.nextInt()) % bound).toInt()
         for (scene in 0 until 60) {
@@ -743,13 +623,10 @@ class PetalImageDecodeTest {
             val (encoder, rgb) = hiddenBlossom(2, corner)
             val result = PetalDecoder.decode(rgb.toLuma())
             val decoded = assertNotNull(result.frame, "corner $corner: ${result.error}")
-            val data = encoder.laneData(2)
             assertEquals(corner, decoded.inferredCorner, "corner $corner")
             assertEquals(0, decoded.rotation, "corner $corner")
             assertEquals(false, decoded.mirrored, "corner $corner")
-            assertContentEquals(data.p(), decoded.p?.data, "corner $corner lane P")
-            assertContentEquals(data.k(), decoded.k?.data, "corner $corner lane K")
-            assertContentEquals(data.d(), decoded.d?.data, "corner $corner lane D")
+            assertAllLanes(decoded, encoder.laneData(2), "corner $corner")
         }
     }
 
@@ -774,16 +651,75 @@ class PetalImageDecodeTest {
 
     @Test
     fun aLargeHiddenRegionNeverReadsWrongData() {
-        // the whole bottom-right quarter is gone: rings and tiles with it
+        // the whole bottom-right quarter is gone: rings and petals with it
         val (encoder, rgb) = setup(2)
         val n = rgb.width
         val data = rgb.data()
         for (y in n * 3 / 4 until n) for (x in n * 3 / 4 until n) for (c in 0 until 3) data[(y * n + x) * 3 + c] = 0
         val truth = encoder.laneData(2)
         val frame = PetalDecoder.decode(assertNotNull(PetalRgb.fromRaw(n, n, data)).toLuma()).frame ?: return
-        frame.p?.let { assertContentEquals(truth.p(), it.data) }
-        frame.k?.let { assertContentEquals(truth.k(), it.data) }
-        frame.d?.let { assertContentEquals(truth.d(), it.data) }
+        for (lane in PetalLane.ALL) frame.lane(lane)?.let { assertContentEquals(truth.lane(lane), it.data, "lane $lane") }
+    }
+
+    /**
+     * The render warped by barrel distortion about the image centre, as a cheap lens does:
+     * pixel `p` shows what an undistorted camera saw at `c + (p − c) / (1 + k r²/s²)`.
+     */
+    private fun barrel(image: PetalLuma, k: Double): PetalLuma {
+        val w = image.width
+        val h = image.height
+        val cx = w / 2.0
+        val cy = h / 2.0
+        val scale = 0.8 * maxOf(w, h)
+        val scale2 = scale * scale
+        val out = ByteArray(w * h)
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val dx = x + 0.5 - cx
+                val dy = y + 0.5 - cy
+                // invert p_d = c + u (1 + k |u|²/s²) for the undistorted offset u
+                var ux = dx
+                var uy = dy
+                repeat(8) {
+                    val f = 1.0 + k * (ux * ux + uy * uy) / scale2
+                    ux = dx / f
+                    uy = dy / f
+                }
+                out[y * w + x] = PetalNumerics.roundHalfAway(image.sample(cx + ux, cy + uy)).toInt().toByte()
+            }
+        }
+        return assertNotNull(PetalLuma.fromRaw(w, h, out))
+    }
+
+    /** The four finder centres of an upright code, in canonical order. */
+    private fun foundCorners(image: PetalLuma): DoubleArray {
+        val quad = assertNotNull(PetalLocator.locate(image), "four finders")
+        return DoubleArray(8) { if (it % 2 == 0) quad[it / 2].x else quad[it / 2].y }
+    }
+
+    @Test
+    fun lensDistortionIsFoundWhenThePlainPoseMissesThePetals() {
+        // a small, strongly distorted picture: 480 px of code with the corner blossoms far out
+        val (encoder, rgb) = setup(6)
+        val luma = rgb.toLuma()
+        val pixels = luma.data()
+        // downscale 768 → 384 by averaging 2×2 blocks, then frame it in 640×480
+        val small = ByteArray(640 * 480)
+        for (y in 0 until 384) {
+            for (x in 0 until 384) {
+                var sum = 0
+                for ((i, j) in listOf(0 to 0, 1 to 0, 0 to 1, 1 to 1)) sum += pixels[(2 * y + j) * 768 + 2 * x + i].toInt() and 0xFF
+                small[(y + 48) * 640 + x + 128] = ((sum + 2) / 4).toByte()
+            }
+        }
+        val distorted = barrel(assertNotNull(PetalLuma.fromRaw(640, 480, small)), -0.12)
+        // the plain pose misses petals at the edge of the field
+        val plainPose = assertNotNull(PetalDecoder.fitPose(distorted, foundCorners(distorted), 0.0), "pose")
+        val plain = assertNotNull(PetalDecoder.decodeAt(distorted, plainPose), "levels")
+        assertTrue(plain.fields.any { it == null }, plain.lanes)
+        val decoded = assertNotNull(PetalDecoder.decode(distorted).frame, "decodes")
+        assertTrue(decoded.pose.distortion < 0.0, "${decoded.pose.distortion}")
+        assertAllLanes(decoded, encoder.laneData(6), "barrel")
     }
 
     /** Shifts a luma image by whole pixels, filling with black. */
@@ -816,11 +752,8 @@ class PetalImageDecodeTest {
         val (encoder, rgb) = setup(6)
         val luma = padded(rgb.toLuma(), 100)
         val first = assertNotNull(PetalDecoder.decode(luma).frame, "decodes")
-        val data = encoder.laneData(6)
         val followed = assertNotNull(PetalDecoder.track(shifted(luma, 9, -6), first), "tracks a 9 px move")
-        assertContentEquals(data.p(), followed.p?.data)
-        assertContentEquals(data.k(), followed.k?.data)
-        assertContentEquals(data.d(), followed.d?.data)
+        assertAllLanes(followed, encoder.laneData(6), "tracked")
         assertNull(followed.inferredCorner)
         assertEquals(first.rotation, followed.rotation)
         // more than a finder diameter: tracking refuses, a full decode is needed
@@ -839,37 +772,43 @@ class PetalImageDecodeTest {
         assertNull(PetalDecoder.track(assertNotNull(PetalLuma.fromRaw(200, 150, ByteArray(200 * 150) { 40 })), first))
     }
 
-    @Test
-    fun trackingSurvivesABlossomThatDisappears() {
-        val (_, rgb) = setup(4)
-        val first = assertNotNull(PetalDecoder.decode(rgb.toLuma()).frame, "decodes")
-        // the same code, slightly moved, now with the bottom-left blossom covered
-        val (encoder, covered) = hiddenBlossom(4, 3)
-        val followed = assertNotNull(PetalDecoder.track(shifted(covered.toLuma(), -5, 4), first), "tracks with three blossoms")
-        assertEquals(3, followed.inferredCorner)
-        assertContentEquals(encoder.laneData(4).d(), followed.d?.data)
-        // the diagnostics use the extrapolated levels of the inferred corner
-        assertNotNull(PetalDecoder.observedCells(shifted(covered.toLuma(), -5, 4), followed))
-    }
+    private fun withPose(frame: PetalDecodedFrame, pose: PetalPose = frame.pose, inferred: Int? = frame.inferredCorner) =
+        PetalDecodedFrame(pose, frame.rotation, frame.mirrored, frame.d, frame.fields, inferred)
 
     @Test
     fun brokenPosesAreRefusedWithoutCrashing() {
         val (_, rgb) = setup(4)
         val luma = rgb.toLuma()
         val previous = assertNotNull(PetalDecoder.decode(luma).frame, "decodes")
+        assertNotNull(PetalDecoder.track(luma, previous))
+        // a good pose that names a corner that does not exist
+        for (corner in listOf(4, 255, -1)) assertNull(PetalDecoder.track(luma, withPose(previous, inferred = corner)), "corner $corner")
         val nonFinite = listOf(
             PetalHomography(DoubleArray(9) { Double.NaN }),
             PetalHomography(doubleArrayOf(Double.POSITIVE_INFINITY, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)),
         )
-        for (broken in nonFinite) assertNull(PetalDecoder.decodeAt(luma, broken))
+        for (broken in nonFinite) assertNull(PetalDecoder.decodeAt(luma, PetalPose.plain(broken)))
         // the last one makes every finder far larger than the image
         val huge = PetalHomography(doubleArrayOf(50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
         for (broken in nonFinite + huge) {
             for (inferred in listOf(null, 2)) {
-                val pose = PetalDecodedFrame(broken, previous.rotation, previous.mirrored, previous.p, previous.k, previous.d, inferred)
-                assertNull(PetalDecoder.track(luma, pose), "$broken inferred $inferred")
+                assertNull(PetalDecoder.track(luma, withPose(previous, PetalPose.plain(broken), inferred)), "$broken inferred $inferred")
             }
         }
+    }
+
+    @Test
+    fun trackingSurvivesABlossomThatDisappears() {
+        val (_, rgb) = setup(4)
+        val first = assertNotNull(PetalDecoder.decode(rgb.toLuma()).frame, "decodes")
+        // the same code, slightly moved, now with the bottom-left blossom covered
+        val (encoder, covered) = hiddenBlossom(4, 3)
+        val moved = shifted(covered.toLuma(), -5, 4)
+        val followed = assertNotNull(PetalDecoder.track(moved, first), "tracks with three blossoms")
+        assertEquals(3, followed.inferredCorner)
+        assertContentEquals(encoder.laneData(4).d(), followed.d?.data)
+        // the diagnostics use the extrapolated levels of the inferred corner
+        assertNotNull(PetalDecoder.observedCells(moved, followed))
     }
 
     @Test
@@ -888,18 +827,58 @@ class PetalImageDecodeTest {
     }
 
     @Test
-    fun theTianMaskTellsTheQuarterTurnsApart() {
-        val (_, rgb) = setup(5)
-        val luma = rgb.toLuma()
-        val quad = assertNotNull(PetalLocator.locate(luma), "four finders").toTypedArray()
-        val byRotation = DoubleArray(4) { -Double.MAX_VALUE }
-        for (hypothesis in PetalDecoder.hypotheses(quad, true)) {
-            val h = hypothesis.homography.m
-            val reference = assertNotNull(PetalDecoder.referenceLevels(luma, h, PetalDecoder.NO_CORNER), "levels")
-            if (!hypothesis.mirrored) byRotation[hypothesis.rotation] = PetalDecoder.maskScore(luma, h, reference)
+    fun mergingOneCaptureReadsTheFieldLanesDecodeRead() {
+        val workspace = PetalWorkspace()
+        for ((name, image) in listOf("clean" to setup(5).second.toLuma(), "hidden corner" to hiddenBlossom(2, 3).second.toLuma())) {
+            val frame = assertNotNull(PetalDecoder.decode(image).frame, name)
+            assertTrue(frame.fields.all { it != null }, name)
+            val evidence = assertNotNull(PetalDecoder.fieldEvidence(image, frame, PetalDecodeOptions.DEFAULT, null), name)
+            assertEquals(frame.fields, PetalDecoder.mergeFields(listOf(evidence), BooleanArray(PetalLayout.SECTORS), workspace).toList(), name)
         }
-        // upright wins clearly over the three other quarter turns
-        for (rotation in 1 until 4) assertTrue(byRotation[0] > byRotation[rotation] + 0.1, byRotation.joinToString())
+    }
+
+    @Test
+    fun averagingCapturesCancelsTheirIndependentNoise() {
+        val (encoder, rgb) = setup(5)
+        val truth = encoder.laneData(5)
+        val clean = rgb.toLuma()
+        val frame = assertNotNull(PetalDecoder.decode(clean).frame)
+        val workspace = PetalWorkspace()
+        val cleanEvidence = assertNotNull(PetalDecoder.fieldEvidence(clean, frame, PetalDecodeOptions.DEFAULT, null))
+        val rng = PetalXorshift32(9)
+        // uniform noise of ±0.6 of the lit level per cell: about one bit in eight flips in one
+        // capture, far more than a field codeword corrects
+        val captures = List(4) {
+            PetalDecoder.FieldEvidence(DoubleArray(PetalLayout.FIELD_CELLS) { cell -> cleanEvidence.levels[cell] + (rng.nextByte() - 127.5) / 213.0 })
+        }
+        for (capture in captures) {
+            assertTrue(
+                PetalDecoder.mergeFields(listOf(capture), BooleanArray(PetalLayout.SECTORS), workspace).all { it == null },
+                "one noisy capture must not read a field lane, or the test proves nothing",
+            )
+        }
+        val merged = PetalDecoder.mergeFields(captures, BooleanArray(PetalLayout.SECTORS), workspace)
+        for (sector in 0 until PetalLayout.SECTORS) assertContentEquals(truth.field(sector), merged[sector]?.data, "sector $sector")
+        // skipped sectors are not read
+        val skipped = PetalDecoder.mergeFields(captures, booleanArrayOf(true, false, true, true), workspace)
+        assertTrue(skipped[0] == null && skipped[1] != null && skipped[2] == null && skipped[3] == null)
+    }
+
+    @Test
+    fun evidenceNeedsAUsableImageAndARealCorner() {
+        val image = setup(5).second.toLuma()
+        val frame = assertNotNull(PetalDecoder.decode(image).frame)
+        val workspace = PetalWorkspace()
+        val options = PetalDecodeOptions.DEFAULT
+        assertNull(PetalDecoder.fieldEvidence(PetalLuma(20, 20), frame, options, null))
+        for (corner in listOf(7, -1)) assertNull(PetalDecoder.fieldEvidence(image, withPose(frame, inferred = corner), options, null))
+        assertTrue(PetalDecoder.mergeFields(emptyList(), BooleanArray(PetalLayout.SECTORS), workspace).all { it == null })
+        // evidence sampled into a buffer the caller hands over equals freshly sampled evidence
+        val fresh = assertNotNull(PetalDecoder.fieldEvidence(image, frame, options, null))
+        val reused = DoubleArray(PetalLayout.FIELD_CELLS) { Double.NaN }
+        val into = assertNotNull(PetalDecoder.fieldEvidence(image, frame, options, reused))
+        assertTrue(into.levels === reused)
+        assertContentEquals(fresh.levels, reused)
     }
 
     @Test
@@ -922,17 +901,19 @@ class PetalImageDecodeTest {
         }
         // and `hypotheses` puts quad corners where that mapping says
         val hypothesis = PetalDecoder.hypotheses(quad, true).first { it.rotation == 3 && it.mirrored }
+        val pose = assertNotNull(PetalDecoder.fitPose(PetalLuma(640, 640), hypothesis.dst, 0.0))
         for (index in 0 until 4) {
             val i = PetalDecoder.canonicalCorner(index, 3, true)
-            val mapped = hypothesis.homography.apply(canonical[2 * i], canonical[2 * i + 1])
+            val mapped = pose.apply(canonical[2 * i], canonical[2 * i + 1])
             assertEquals(quad[index].x, mapped[0], 1e-6)
             assertEquals(quad[index].y, mapped[1], 1e-6)
         }
+        assertEquals(4, PetalDecoder.hypotheses(quad, false).size)
     }
 
     @Test
     fun decodedFramesFeedAnAssembler() {
-        val encoder = PetalStreamEncoder(streamPayload, 2)
+        val encoder = PetalStreamEncoder(streamPayload.copyOf(300), 2)
         val assembler = PetalStreamAssembler()
         var frame = 0
         while (assembler.progress().meta == null || !assembler.progress().complete) {
@@ -943,18 +924,16 @@ class PetalImageDecodeTest {
             frame += 1
             assertTrue(frame <= encoder.systematicFrames, "one systematic pass suffices")
         }
-        assertContentEquals(streamPayload, assertNotNull(assembler.takeCompleted()).payload)
+        assertContentEquals(streamPayload.copyOf(300), assertNotNull(assembler.takeCompleted()).payload)
     }
 
+    /** Frame cells of the reference renderer tests. */
     private fun cells(seed: Int): PetalFrameCells {
-        val p = ByteArray(PetalLanes.P_DATA) { (it * 31 + seed).toByte() }
-        val k = ByteArray(PetalLanes.K_DATA) { ((it * 17) xor seed).toByte() }
         val d = ByteArray(PetalLanes.D_DATA) { ((it * 13) xor seed).toByte() }
-        return PetalFrameCells.fromWords(
-            PetalLanes.encodeLane(PetalLane.P, p),
-            PetalLanes.encodeLane(PetalLane.K, k),
-            PetalLanes.encodeLane(PetalLane.D, d),
-        )
+        val fields = List(PetalLayout.SECTORS) { sector ->
+            PetalLanes.encodeLane(PetalLane.field(sector), ByteArray(PetalLanes.FIELD_DATA) { ((it * 17 + sector) xor seed).toByte() })
+        }
+        return PetalFrameCells.fromWords(PetalLanes.encodeLane(PetalLane.D, d), fields)
     }
 
     @Test
@@ -971,24 +950,22 @@ class PetalImageDecodeTest {
     }
 
     @Test
-    fun lightTilesAreBrightAndDarkTilesAreMostlyBlack() {
+    fun litPetalsAreDrawnInTheirColourAndDarkCellsShowTheBackdrop() {
         val frame = cells(2)
-        val image = PetalRenderer.render(frame, PetalRenderOptions(512, 2))
-        val scale = 512.0 / 1024.0
-        val lightMeans = ArrayList<Double>()
-        val darkMeans = ArrayList<Double>()
-        for (tile in 0 until PetalLayout.TILE_COUNT) {
-            val center = PetalLayout.tileCenter(tile)
-            val x0 = ((center[0] - 10.0) * scale).toInt()
-            val y0 = ((center[1] - 10.0) * scale).toInt()
-            var sum = 0
-            for (j in 0 until 10) for (i in 0 until 10) sum += image.rgbAt(x0 + i, y0 + j) ushr 16
-            (if (frame.isLight(tile)) lightMeans else darkMeans) += sum / 100.0
+        val image = PetalRenderer.render(frame, PetalRenderOptions(1024, 1))
+        val palette = PetalPalette.DEFAULT
+        for (cell in 0 until PetalLayout.FIELD_CELLS) {
+            val center = PetalLayout.cellCenter(cell)
+            val x = center[0]
+            val y = center[1]
+            val expected = when {
+                frame.isPetalLit(cell) && PetalLayout.isLightCell(cell) -> palette.light
+                frame.isPetalLit(cell) -> palette.pink
+                PetalLayout.inMask(Math.floor(x) + 0.5, Math.floor(y) + 0.5) -> palette.backdrop
+                else -> palette.background
+            }
+            assertEquals(expected, image.rgbAt(x.toInt(), y.toInt()), "cell $cell")
         }
-        val light = lightMeans.average()
-        val dark = darkMeans.average()
-        // bold glyphs ink the middle of every tile, so only the ordering is stable
-        assertTrue(light > dark + 25.0, "light tiles average $light, dark tiles $dark")
     }
 
     @Test
@@ -1013,12 +990,12 @@ class PetalImageDecodeTest {
 
     @Test
     fun softwareRendersAreByteIdenticalToTheReference() {
-        // CRC-32C of the Rust reference `render` output for frames of the `one-pass` fixture stream.
+        // CRC-32C of the Rust reference `render` output for frames of a 700-byte stream.
         val encoder = PetalStreamEncoder(PetalTestSupport.payload(700, 2), 2)
         val expected = listOf(
-            Triple(0, PetalRenderOptions(512, 2), 0xE02A_6A8E.toInt()),
-            Triple(1, PetalRenderOptions(300, 3), 0xF7C1_DC01.toInt()),
-            Triple(6, PetalRenderOptions(777, 4), 0x9C08_B851.toInt()),
+            Triple(0, PetalRenderOptions(512, 2), 0x72A6_EC3B),
+            Triple(1, PetalRenderOptions(300, 3), 0x501C_4D37),
+            Triple(6, PetalRenderOptions(777, 4), 0x9175_B0A4.toInt()),
         )
         for ((frame, options, crc) in expected) {
             val rgb = PetalRenderer.render(encoder.cells(frame), options)
@@ -1032,26 +1009,35 @@ class PetalImageDecodeTest {
         val list = PetalRenderer.drawList(frame)
         assertEquals(4 * (1 + PetalLayout.FINDER_PETALS), list.finderDiscs.size)
         assertEquals(4 * PetalLayout.FINDER_PETALS, list.finderNotches.size)
-        assertEquals(PetalLayout.TILE_COUNT, list.tiles.size)
+        assertEquals(PetalLayout.MASK.sumOf { row -> row.count { it == '#' } }, list.backdropCells.size)
+        assertEquals(frame.petals().count { it }, list.petals.size)
         assertEquals(frame.dots().count { it }, list.dots.size)
-        assertEquals(23.0 / 32.0, PetalDrawList.GLYPH_SCALE)
-        assertEquals(6.5 * 23.0 / 32.0, PetalDrawList.GLYPH_STROKE_WIDTH)
         val image = PetalRenderer.render(frame, PetalRenderOptions(1024, 1))
-        val pink = PetalPalette.DEFAULT.pink
-        for (dot in list.dots) assertEquals(pink, image.rgbAt(dot.x.toInt(), dot.y.toInt()), "dot at ${dot.x},${dot.y}")
-        val light = PetalPalette.DEFAULT.light
-        for (disc in list.finderDiscs) assertEquals(light, image.rgbAt(disc.x.toInt(), disc.y.toInt()))
-        for (notch in list.finderNotches) {
-            assertEquals(PetalPalette.DEFAULT.background, image.rgbAt(notch.x.toInt(), notch.y.toInt()))
+        val palette = PetalPalette.DEFAULT
+        for (dot in list.dots) assertEquals(palette.pink, image.rgbAt(dot.x.toInt(), dot.y.toInt()), "dot at ${dot.x},${dot.y}")
+        for (disc in list.finderDiscs) assertEquals(palette.light, image.rgbAt(disc.x.toInt(), disc.y.toInt()))
+        for (notch in list.finderNotches) assertEquals(palette.background, image.rgbAt(notch.x.toInt(), notch.y.toInt()))
+        var previous = -1
+        for (petal in list.petals) {
+            assertTrue(petal.cell > previous, "petals in cell order")
+            previous = petal.cell
+            assertTrue(frame.isPetalLit(petal.cell))
+            assertEquals(PetalLayout.isLightCell(petal.cell), petal.light)
+            assertEquals(PetalLayout.cellAngle(petal.cell), petal.angle)
+            assertContentEquals(PetalLayout.cellCenter(petal.cell), doubleArrayOf(petal.centerX, petal.centerY))
+            assertEquals(if (petal.light) palette.light else palette.pink, list.petalColor(petal))
+            assertEquals(list.petalColor(petal), image.rgbAt(petal.centerX.toInt(), petal.centerY.toInt()), "petal ${petal.cell}")
         }
-        list.tiles.forEach { tile ->
-            assertEquals(frame.isLight(tile.index), tile.light)
-            assertEquals(frame.glyph(tile.index), tile.glyph)
-            assertEquals(if (tile.light) PetalPalette.DEFAULT.ink else pink, list.glyphColor(tile))
-            assertEquals(tile.centerX - 11.5, tile.glyphLeft)
-            // a tile corner just inside the rounded square shows the tile fill (or black for dark tiles)
-            val corner = image.rgbAt((tile.centerX - 11.8).toInt(), (tile.centerY - 9.0).toInt())
-            assertEquals(if (tile.light) light else PetalPalette.DEFAULT.background, corner)
+        // a backdrop cell is a `#` lattice cell; inside the clip and away from any petal it shows the backdrop
+        for (cell in list.backdropCells) {
+            assertEquals(PetalLayout.MASK_PITCH, cell.right - cell.left)
+            assertEquals(PetalLayout.MASK_PITCH, cell.bottom - cell.top)
+            assertTrue(PetalLayout.inMask(cell.left + 1.0, cell.top + 1.0))
         }
+        // the dark petals inside the 天 show the backdrop
+        val darkLight = (0 until PetalLayout.FIELD_CELLS).filter { !frame.isPetalLit(it) && PetalLayout.isLightCell(it) }
+        assertTrue(darkLight.size > 100)
+        assertTrue(darkLight.count { image.rgbAt(PetalLayout.cellCenter(it)[0].toInt(), PetalLayout.cellCenter(it)[1].toInt()) == palette.backdrop } > 100)
+        assertTrue(list.finderDiscs === PetalRenderer.drawList(cells(5)).finderDiscs, "shapes are shared between frames")
     }
 }

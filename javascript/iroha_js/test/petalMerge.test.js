@@ -4,41 +4,43 @@ import test from "node:test";
 import { inflateSync } from "node:zlib";
 
 import {
-  PETAL_DEFAULT_DECODE_OPTIONS,
   PetalDecodedFrame,
   PetalLuma,
   PetalScanSession,
   PetalStreamAssembler,
   PetalStreamEncoder,
+  PetalXorshift32,
   decodePetalFrame,
+  fieldEvidence,
+  mergeFields,
   renderPetalFrame,
 } from "../src/petal.js";
-import { mergeTiles, tileEvidence } from "../src/petal/decode.js";
 import { MERGE_CAPTURES, MERGE_WINDOW } from "../src/petal/session.js";
 
-const fixture = JSON.parse(readFileSync(new URL("../../../fixtures/petal/petal_captures_v1.json", import.meta.url)));
-const options = PETAL_DEFAULT_DECODE_OPTIONS;
+const fixture = JSON.parse(readFileSync(new URL("../../../fixtures/petal/petal_captures_v2.json", import.meta.url)));
 const hex = (bytes) => Buffer.from(bytes).toString("hex");
 const imageOf = (set, capture) => new PetalLuma(set.width, set.height,
   new Uint8Array(inflateSync(Buffer.from(capture.luma_zlib_base64, "base64"))));
-const lanes = (frame) => ["p", "k", "d"].filter((key) => frame[key] !== null).join("").toUpperCase();
+/** The sector digits of the field lanes that read. */
+const letters = (fields) => fields.map((field, sector) => (field === null ? "" : String(sector))).join("");
+const NO_FIELDS = Object.freeze([null, null, null, null]);
 
 for (const set of fixture.merges) {
-  test(`petal averaging: ${set.name} recovers the recorded tile lanes`, () => {
+  test(`petal averaging: ${set.name} recovers the recorded field lanes`, () => {
     const evidence = [];
     for (const capture of set.captures) {
       const image = imageOf(set, capture);
       const frame = decodePetalFrame(image);
-      assert.equal(lanes(frame), capture.reference_decoded);
-      for (const letter of set.must_merge) assert.equal(frame[letter.toLowerCase()], null);
-      evidence.push(tileEvidence(image, frame, options));
+      assert.equal(frame.letters(), capture.reference_decoded);
+      for (const letter of capture.must_decode) assert.ok(frame.letters().includes(letter));
+      for (const letter of set.must_merge) assert.equal(frame.fields[Number(letter)], null, `lane ${letter} alone`);
+      evidence.push(fieldEvidence(image, frame));
     }
-    const recovered = mergeTiles(evidence, options);
-    const letters = ["p", "k"].filter((key) => recovered[key] !== null).join("").toUpperCase();
-    assert.equal(letters, set.reference_merged);
-    for (const key of ["p", "k"]) {
-      if (recovered[key] !== null) assert.equal(hex(recovered[key].data), set[`${key}_data`]);
-    }
+    const recovered = mergeFields(evidence);
+    assert.equal(letters(recovered), set.reference_merged);
+    recovered.forEach((result, sector) => {
+      if (result !== null) assert.equal(hex(result.data), set.field_data[sector], `merged lane ${sector}`);
+    });
   });
 
   test(`petal session: ${set.name} adds only newly recovered lanes once`, () => {
@@ -46,17 +48,22 @@ for (const set of fixture.merges) {
     let recovered = "";
     for (const [i, capture] of set.captures.entries()) {
       const outcome = session.push(imageOf(set, capture), 33 * i);
-      recovered += outcome.merged;
       assert.equal(outcome.error, null);
+      assert.equal(outcome.lanes, capture.reference_decoded);
+      recovered += outcome.merged;
     }
-    for (const letter of set.must_merge) assert.equal(recovered.split(letter).length - 1, 1);
-    assert.equal(session.stats().mergedP, recovered.includes("P") ? 1 : 0);
-    assert.equal(session.stats().mergedK, recovered.includes("K") ? 1 : 0);
-    for (const letter of set.must_merge) assert.equal(session.stats()[`lane${letter}`], 0);
+    for (const letter of set.must_merge) assert.equal(recovered.split(letter).length - 1, 1, `lane ${letter}`);
+    assert.equal(new Set(recovered).size, recovered.length, "every lane is recovered once");
+    const stats = session.stats();
+    assert.equal(stats.mergedLanes, recovered.length);
+    assert.equal(stats.fieldLanes, 0, "no capture reads a field lane alone");
+    assert.ok(stats.merges > 0);
+    // the merged atoms wait for the beacon of their stream
+    assert.equal(session.progress().atomsReceived, 0);
   });
 }
 
-test("petal averaging: mixed-frame tile lanes never enter the assembler", () => {
+test("petal averaging: mixed-frame field lanes never enter the assembler", () => {
   for (const set of fixture.mixed_merges) {
     const session = new PetalScanSession();
     const baseline = new PetalStreamAssembler();
@@ -64,126 +71,167 @@ test("petal averaging: mixed-frame tile lanes never enter the assembler", () => 
     for (const [i, capture] of set.captures.entries()) {
       const image = imageOf(set, capture);
       const frame = decodePetalFrame(image);
-      assert.equal(lanes(frame), capture.reference_decoded);
+      assert.equal(frame.letters(), capture.reference_decoded);
       frame.feed(baseline);
-      evidence.push(tileEvidence(image, frame, options));
+      evidence.push(fieldEvidence(image, frame));
       assert.equal(session.push(image, 33 * i).merged, "");
     }
-    const recovered = mergeTiles(evidence, options);
-    assert.equal(["p", "k"].filter((key) => recovered[key] !== null).join("").toUpperCase(), set.reference_merged);
-    assert.equal((recovered.p.data[1] << 8) | recovered.p.data[2], set.tiles_frame);
+    // the merge reads the petal field, which shows another frame than the rings
+    const recovered = mergeFields(evidence);
+    assert.equal(letters(recovered), set.reference_merged);
+    recovered.forEach((result, sector) => {
+      if (result === null) return;
+      assert.equal((result.data[1] << 8) | result.data[2], set.petals_frame);
+      assert.equal(hex(result.data), set.field_data[sector]);
+    });
+    assert.notEqual(set.petals_frame, set.frame);
     assert.deepEqual(session.progress(), baseline.progress());
-    assert.equal(session.stats().mergedP + session.stats().mergedK, 0);
+    assert.equal(session.stats().mergedLanes, 0);
     assert.ok(session.stats().merges > 0);
   }
 });
 
 test("petal evidence: one capture matches normal decoding and rejects unusable inputs", () => {
-  for (const name of ["clean-512", "shadow-band-540p", "hidden-corner-540p", "selfie-mirrored-540p"]) {
+  for (const name of ["clean-512", "shadow-band-540p", "hidden-corner-540p", "selfie-mirrored-540p", "barrel-480p"]) {
     const capture = fixture.captures.find((c) => c.name === name);
     const image = imageOf(capture, capture);
     const frame = decodePetalFrame(image);
-    const evidence = tileEvidence(image, frame, options);
-    assert.deepEqual(mergeTiles([evidence], options), { p: frame.p, k: frame.k }, name);
-    assert.equal(tileEvidence(new PetalLuma(20, 20), frame, options), null);
-    const invalid = new PetalDecodedFrame(frame.homography, frame.rotation, frame.mirrored,
-      frame.p, frame.k, frame.d, 7);
-    assert.equal(tileEvidence(image, invalid, options), null);
+    const evidence = fieldEvidence(image, frame);
+    assert.deepEqual(mergeFields([evidence]), frame.fields, name);
+    assert.equal(fieldEvidence(new PetalLuma(20, 20), frame), null);
+    const invalid = new PetalDecodedFrame(frame.pose, frame.rotation, frame.mirrored, frame.d, frame.fields, 7);
+    assert.equal(fieldEvidence(image, invalid), null);
   }
-  assert.deepEqual(mergeTiles([], options), { p: null, k: null });
+  assert.deepEqual(mergeFields([]), [null, null, null, null]);
 });
 
-test("petal session: conflicting headers, bounds and reset preserve capture isolation", () => {
-  const encoder = new PetalStreamEncoder(new Uint8Array(700).map((_, i) => i & 255), 2);
-  const rendered = renderPetalFrame(encoder.cells(11), { size: 512, supersample: 2 });
-  const image = PetalLuma.fromRgba(rendered.width, rendered.height, rendered.data);
-  const decoded = decodePetalFrame(image);
-  const rings = (frame) => new PetalDecodedFrame(decoded.homography, decoded.rotation,
-    decoded.mirrored, null, null, { data: encoder.laneData(frame).d, corrected: 0, erasures: 0 }, null);
+/** The `one-pass` stream of the golden captures. */
+function onePass() {
+  const rng = new PetalXorshift32(2);
+  return new PetalStreamEncoder(Uint8Array.from({ length: 3000 }, () => rng.nextByte()), 2);
+}
+
+function render(encoder, frame, supersample = 2) {
+  const rendered = renderPetalFrame(encoder.cells(frame), { size: 512, supersample });
+  return PetalLuma.fromRgba(rendered.width, rendered.height, rendered.data);
+}
+
+const exact = (bytes) => ({ data: bytes, corrected: 0, erasures: 0 });
+
+/**
+ * A clean render of frame `petals` and its decoded frame with the lanes replaced by lane D of
+ * frame `rings`, as if the rings showed another frame than the petal field.
+ */
+function ringsOfAnotherFrame(encoder, petals, rings) {
+  const image = render(encoder, petals);
+  const frame = decodePetalFrame(image);
+  assert.ok(frame.fields.every((field) => field !== null));
+  return {
+    image,
+    frame: new PetalDecodedFrame(frame.pose, frame.rotation, frame.mirrored, exact(encoder.laneData(rings).d), NO_FIELDS, null),
+  };
+}
+
+test("petal session: a merge never offers atoms of another shown frame", () => {
+  const encoder = onePass();
   const session = new PetalScanSession();
-  const torn = new PetalDecodedFrame(decoded.homography, 0, false, decoded.p, null, rings(10).d, null);
+  const { image, frame } = ringsOfAnotherFrame(encoder, 11, 10);
+  for (let capture = 0; capture < 3; capture += 1) assert.equal(session._merge(image, frame), "", `capture ${capture}`);
+  const stats = session.stats();
+  assert.deepEqual([stats.merges, stats.mergedLanes], [2, 0]);
+  assert.equal(session.progress().atomsReceived, 0);
+  // what was refused: the merged field lanes name frame 11, not frame 10
+  const held = session._held[0];
+  assert.equal(held.shown.frame, 10);
+  const merged = mergeFields(held.evidence);
+  const truth = encoder.laneData(11);
+  merged.forEach((result, sector) => assert.deepEqual(result?.data, truth.fields[sector]));
+});
+
+test("petal session: torn captures whose lanes name different frames are not held", () => {
+  const encoder = onePass();
+  const session = new PetalScanSession();
+  const { image, frame } = ringsOfAnotherFrame(encoder, 11, 10);
+  const torn = new PetalDecodedFrame(frame.pose, frame.rotation, frame.mirrored, frame.d,
+    [null, null, exact(encoder.laneData(11).fields[2]), null], null);
   assert.equal(session._merge(image, torn), "");
   assert.equal(session._held.length, 0);
-  const noHeader = new PetalDecodedFrame(decoded.homography, 0, false, null, null, null, null);
-  assert.equal(session._merge(image, noHeader), "");
+  const noLanes = new PetalDecodedFrame(frame.pose, frame.rotation, frame.mirrored, null, NO_FIELDS, null);
+  assert.equal(session._merge(image, noLanes), "");
   assert.equal(session._held.length, 0);
-  for (let i = 0; i < MERGE_CAPTURES + 2; i += 1) assert.equal(session._merge(image, rings(10)), "");
-  assert.equal(session._held[0].evidence.length, MERGE_CAPTURES);
-  assert.equal(session.progress().atomsReceived, 0);
-  for (let i = 12; i < 12 + MERGE_WINDOW; i += 1) session._merge(image, rings(i));
-  assert.equal(session._held.length, MERGE_WINDOW);
-  assert.equal(session._held[0].shown.frame, 12);
-  assert.ok(session._held.every((h) => h.evidence.length <= MERGE_CAPTURES));
-  const other = new PetalScanSession();
-  assert.equal(other._held.length, 0);
-  session.reset();
-  assert.equal(session._held.length, 0);
-  assert.equal(session._merge(image, rings(10)), "");
-  assert.equal(session._held[0].evidence.length, 1);
-  const beacon = renderPetalFrame(encoder.cells(0), { size: 512, supersample: 2 });
-  session.push(PetalLuma.fromRgba(beacon.width, beacon.height, beacon.data), 0);
-  assert.notEqual(session.progress().meta, null);
-  session.push(new PetalLuma(320, 240), 60_000);
-  assert.equal(session._held.length, 0, "timeout forgets the previous stream's evidence");
 });
 
-
-test("petal session: a same-tag stream switch clears old done flags and evidence", () => {
-  const payload = (value) => {
-    const bytes = new Uint8Array(100);
-    new DataView(bytes.buffer).setUint32(0, value);
-    return bytes;
-  };
-  const oldEncoder = new PetalStreamEncoder(payload(49), 2);
-  const newEncoder = new PetalStreamEncoder(payload(128), 2);
-  assert.equal(oldEncoder.meta.tag, newEncoder.meta.tag);
-  assert.notDeepEqual(oldEncoder.meta, newEncoder.meta);
-  const rendered = renderPetalFrame(newEncoder.cells(0), { size: 512, supersample: 1 });
-  const image = PetalLuma.fromRgba(rendered.width, rendered.height, rendered.data);
-  const decoded = decodePetalFrame(image);
-  const frameOf = (encoder, number, onlyD = false) => {
-    const data = encoder.laneData(number);
-    const result = (bytes) => ({ data: bytes, corrected: 0, erasures: 0 });
-    return new PetalDecodedFrame(decoded.homography, decoded.rotation, decoded.mirrored,
-      onlyD ? null : result(data.p), onlyD ? null : result(data.k), result(data.d), null);
-  };
-  const oldFrame = frameOf(oldEncoder, 0);
-  const newOnlyD = frameOf(newEncoder, 0, true);
+test("petal session: the session holds at most four captures of six shown frames", () => {
+  const encoder = onePass();
   const session = new PetalScanSession();
-  session._absorb(oldFrame);
-  session._merge(image, oldFrame);
-  session._absorb(frameOf(oldEncoder, 1));
-  assert.equal(session.progress().complete, true);
-  assert.equal(session._held[0].pDone && session._held[0].kDone, true);
-  session._absorb(newOnlyD);
-  session._merge(image, newOnlyD);
-  assert.equal(session.progress().meta.crc, oldEncoder.meta.crc, "one conflicting beacon cannot switch streams");
-  session._absorb(newOnlyD);
-  session._merge(image, newOnlyD);
-  assert.equal(session.progress().meta.crc, newEncoder.meta.crc);
-  assert.equal(session._held[0].pDone || session._held[0].kDone, false);
+  // refused merges never finish a shown frame, so its captures stay held
+  const { image, frame } = ringsOfAnotherFrame(encoder, 11, 10);
+  for (let capture = 0; capture < MERGE_CAPTURES + 2; capture += 1) session._merge(image, frame);
+  assert.equal(session._held.length, 1);
+  assert.equal(session._held[0].evidence.length, MERGE_CAPTURES);
+  assert.equal(session.stats().merges, MERGE_CAPTURES + 1);
+  for (let rings = 12; rings < 12 + MERGE_WINDOW; rings += 1) {
+    const other = new PetalDecodedFrame(frame.pose, frame.rotation, frame.mirrored, exact(encoder.laneData(rings).d), NO_FIELDS, null);
+    session._merge(image, other);
+  }
+  assert.equal(session._held.length, MERGE_WINDOW);
+  assert.ok(session._held.every((held) => held.shown.frame >= 12 && held.evidence.length <= MERGE_CAPTURES));
+  session.reset();
+  assert.equal(session._held.length, 0);
+});
+
+test("petal session: a stream switch with the same short tag discards old merge state", () => {
+  const encoder = (last) => {
+    const bytes = new Uint8Array(100);
+    bytes[3] = last;
+    return new PetalStreamEncoder(bytes, 2);
+  };
+  const old = encoder(49);
+  const fresh = encoder(128);
+  assert.deepEqual([old.meta.tag, fresh.meta.tag], [61, 61]);
+  assert.notDeepEqual(old.meta, fresh.meta);
+  const oldImage = render(old, 0, 1);
+  const newImage = render(fresh, 0, 1);
+  const oldFull = decodePetalFrame(oldImage);
+  const partial = (frame) => new PetalDecodedFrame(frame.pose, frame.rotation, frame.mirrored, frame.d, NO_FIELDS, null);
+  const newPartial = partial(decodePetalFrame(newImage));
+  for (const wasComplete of [false, true]) {
+    const session = new PetalScanSession();
+    const previous = wasComplete ? oldFull : partial(oldFull);
+    session._absorb(previous);
+    session._merge(oldImage, previous);
+    assert.ok(session._held.length > 0);
+    session._absorb(newPartial);
+    assert.deepEqual(session.progress().meta, old.meta, "one conflicting beacon cannot switch streams");
+    session._absorb(newPartial);
+    assert.deepEqual(session.progress().meta, fresh.meta);
+    assert.equal(session._held.length, 0, "an accepted stream switch discards held evidence");
+    assert.equal(session._merge(newImage, newPartial), "");
+    assert.equal(session._held[0].evidence.length, 1);
+    assert.ok(session._held[0].done.every((done) => !done));
+    assert.equal(session._merge(newImage, newPartial), "0123");
+  }
+});
+
+test("petal session: the first beacon preserves evidence received before it", () => {
+  const encoder = onePass();
+  const image = render(encoder, 1);
+  const decoded = decodePetalFrame(image);
+  const partial = new PetalDecodedFrame(decoded.pose, decoded.rotation, decoded.mirrored, decoded.d, NO_FIELDS, null);
+  const session = new PetalScanSession();
+  session._absorb(partial);
+  session._merge(image, partial);
+  assert.equal(session.progress().meta, null);
   assert.equal(session._held[0].evidence.length, 1);
-  assert.equal(session._merge(image, newOnlyD), "PK");
-  assert.equal(session._merge(image, newOnlyD), "");
-
-  const partial = new PetalScanSession();
-  const oldOnlyD = frameOf(oldEncoder, 0, true);
-  partial._absorb(oldOnlyD);
-  partial._merge(image, oldOnlyD);
-  const oldEvidence = partial._held[0].evidence[0];
-  partial._absorb(newOnlyD);
-  assert.equal(partial._held[0].evidence[0], oldEvidence, "one conflicting beacon preserves the active stream");
-  partial._absorb(newOnlyD);
-  assert.equal(partial._held.length, 0, "an accepted stream switch discards partial evidence");
-  partial._merge(image, newOnlyD);
-  assert.notEqual(partial._held[0].evidence[0], oldEvidence);
-  assert.equal(partial._held[0].evidence.length, 1);
-  assert.equal(partial.stats().merges, 0);
-
-  // Evidence acquired before the first beacon survives initial stream admission.
-  const beforeBeacon = new PetalScanSession();
-  beforeBeacon._merge(image, newOnlyD);
-  const evidence = beforeBeacon._held[0].evidence[0];
-  beforeBeacon._absorb(newOnlyD);
-  assert.equal(beforeBeacon._held[0].evidence[0], evidence);
+  const evidence = session._held[0].evidence[0];
+  const beaconDecoded = decodePetalFrame(render(encoder, 0));
+  const beacon = new PetalDecodedFrame(beaconDecoded.pose, beaconDecoded.rotation, beaconDecoded.mirrored, beaconDecoded.d, NO_FIELDS, null);
+  session._absorb(beacon);
+  assert.deepEqual(session.progress().meta, encoder.meta);
+  assert.equal(session._held[0].evidence[0], evidence);
+  assert.equal(session._merge(image, partial), "0123");
+  // a timeout forgets the stream and its held evidence
+  session.push(new PetalLuma(320, 240), 0);
+  session.push(new PetalLuma(320, 240), 60_000);
+  assert.equal(session._held.length, 0);
 });

@@ -139,18 +139,18 @@ final class PetalScanSessionTests: XCTestCase {
         XCTAssertNotNil(session.push(try cameraFrame(encoder, 0), nowMilliseconds: 0).progress.meta)
         let second = session.push(try cameraFrame(encoder, 1), nowMilliseconds: 900)
         XCTAssertNotNil(second.progress.meta)
-        XCTAssertGreaterThan(second.progress.rank, 6)
+        XCTAssertEqual(second.progress.rank, 20 + 21)
         let third = session.push(try cameraFrame(encoder, 2), nowMilliseconds: 1_800)
         XCTAssertNotNil(third.progress.meta, "steady progress keeps the idle timer alive")
         // 2.5 s after the start the stream is dropped before the frame is read;
         // frame 3 carries no beacon, so its atoms wait for the next one.
         let fourth = session.push(try cameraFrame(encoder, 3), nowMilliseconds: 2_500)
-        XCTAssertEqual(fourth.lanes, "PKD")
+        XCTAssertEqual(fourth.lanes, "D0123")
         XCTAssertNil(fourth.progress.meta)
         XCTAssertEqual(fourth.progress.rank, 0)
         let fifth = session.push(try cameraFrame(encoder, 4), nowMilliseconds: 2_600)
         XCTAssertEqual(fifth.progress.meta, encoder.meta)
-        XCTAssertEqual(fifth.progress.rank, 7 + 6, "buffered atoms of frame 3 join the restarted stream")
+        XCTAssertEqual(fifth.progress.rank, 21 + 20, "buffered atoms of frame 3 join the restarted stream")
     }
 
     func testLocatedCountsCodesThatWereSeenButCouldNotBeRead() throws {

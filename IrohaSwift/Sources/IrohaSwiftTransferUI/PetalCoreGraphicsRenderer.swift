@@ -6,9 +6,12 @@ import IrohaSwift
 /// Draws Petal Stream frames with CoreGraphics.
 ///
 /// The renderer paints a ``PetalDrawList`` in the order the draw list
-/// documents (background, finder blossoms and notches, rounded tiles with
-/// clipped round-capped glyph strokes, lit ring dots), so the result matches
-/// the reference software renderer up to anti-aliasing.
+/// documents (background, finder blossoms and notches, the faint `天` clipped
+/// to its disc, the lit petals as rotated ellipses, lit ring dots), so the
+/// result matches the reference software renderer up to anti-aliasing. Every
+/// element class is one path filled once (one path per petal colour), so a
+/// frame of about 1,700 lit petals costs a handful of fills; the cosmetic petal
+/// notch is omitted (`specs/petal_stream.md` §2.3 allows it).
 public enum PetalCoreGraphicsRenderer {
     /// Draws `drawList` as a square centred in `rect`.
     ///
@@ -32,45 +35,48 @@ public enum PetalCoreGraphicsRenderer {
         context.fill(CGRect(x: 0, y: 0, width: canvas, height: canvas))
 
         // 2. finder blossoms, then the notches cut into the petal tips
-        context.setFillColor(color(palette.light))
+        let blossoms = CGMutablePath()
+        let notches = CGMutablePath()
         for finder in drawList.finders {
-            context.fillEllipse(in: bounds(finder.core))
-            for petal in finder.petals { context.fillEllipse(in: bounds(petal)) }
+            blossoms.addEllipse(in: bounds(finder.core))
+            for petal in finder.petals { blossoms.addEllipse(in: bounds(petal)) }
+            for notch in finder.notches { notches.addEllipse(in: bounds(notch)) }
         }
-        context.setFillColor(color(palette.background))
-        for finder in drawList.finders {
-            for notch in finder.notches { context.fillEllipse(in: bounds(notch)) }
-        }
+        fill(blossoms, color(palette.light), in: context)
+        fill(notches, color(palette.background), in: context)
 
-        // 3. tiles and their katakana
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
-        for tile in drawList.tiles {
-            if let fill = tile.fill {
-                context.setFillColor(color(fill))
-                context.addPath(CGPath(
-                    roundedRect: cgRect(tile.rect),
-                    cornerWidth: CGFloat(tile.cornerRadius),
-                    cornerHeight: CGFloat(tile.cornerRadius),
-                    transform: nil
-                ))
-                context.fillPath()
-            }
-            context.saveGState()
-            context.clip(to: cgRect(tile.glyphBox))
-            context.setStrokeColor(color(tile.ink))
-            context.setLineWidth(CGFloat(tile.strokeWidth))
-            for polyline in tile.strokes where polyline.count >= 2 {
-                context.beginPath()
-                context.addLines(between: polyline.map { CGPoint(x: $0.x, y: $0.y) })
-                context.strokePath()
-            }
-            context.restoreGState()
-        }
+        // 3. the faint 天 under the petals, clipped to its disc (one path, so the
+        //    edges between lattice cells leave no anti-aliasing seams)
+        let backdrop = CGMutablePath()
+        backdrop.addRects(drawList.backdrop.map(cgRect))
+        context.saveGState()
+        context.addEllipse(in: bounds(PetalDrawList.backdropClip))
+        context.clip()
+        fill(backdrop, color(palette.backdrop), in: context)
+        context.restoreGState()
 
-        // 4. lit ring dots
-        context.setFillColor(color(palette.pink))
-        for dot in drawList.dots { context.fillEllipse(in: bounds(dot)) }
+        // 4. lit petals: an ellipse along each petal's outward angle, one path per colour
+        let halfLength = CGFloat(PetalDrawList.petalHalfLength)
+        let halfWidth = CGFloat(PetalDrawList.petalHalfWidth)
+        let ellipse = CGRect(x: -halfLength, y: -halfWidth, width: 2 * halfLength, height: 2 * halfWidth)
+        let light = CGMutablePath()
+        let pink = CGMutablePath()
+        for petal in drawList.petals {
+            let cosine = CGFloat(cos(petal.angle))
+            let sine = CGFloat(sin(petal.angle))
+            let placement = CGAffineTransform(
+                a: cosine, b: sine, c: -sine, d: cosine,
+                tx: CGFloat(petal.center.x), ty: CGFloat(petal.center.y)
+            )
+            (petal.light ? light : pink).addEllipse(in: ellipse, transform: placement)
+        }
+        fill(light, color(palette.light), in: context)
+        fill(pink, color(palette.pink), in: context)
+
+        // 5. lit ring dots
+        let dots = CGMutablePath()
+        for dot in drawList.dots { dots.addEllipse(in: bounds(dot)) }
+        fill(dots, color(palette.pink), in: context)
     }
 
     /// Renders `drawList` into a new opaque sRGB image of `size` × `size`
@@ -93,6 +99,13 @@ public enum PetalCoreGraphicsRenderer {
         context.scaleBy(x: 1, y: -1)
         draw(drawList, in: context, rect: CGRect(x: 0, y: 0, width: size, height: size))
         return context.makeImage()
+    }
+
+    private static func fill(_ path: CGPath, _ fillColor: CGColor, in context: CGContext) {
+        guard !path.isEmpty else { return }
+        context.setFillColor(fillColor)
+        context.addPath(path)
+        context.fillPath()
     }
 
     private static func color(_ color: PetalColor) -> CGColor {

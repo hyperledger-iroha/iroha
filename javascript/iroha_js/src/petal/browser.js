@@ -19,20 +19,69 @@ function addCircle(context, shape) {
   context.arc(shape.x, shape.y, shape.r, 0, TAU);
 }
 
-function addRoundedSquare(context, tile) {
-  const { x, y, size, radius } = tile;
-  context.moveTo(x + radius, y);
-  context.arcTo(x + size, y, x + size, y + size, radius);
-  context.arcTo(x + size, y + size, x, y + size, radius);
-  context.arcTo(x, y + size, x, y, radius);
-  context.arcTo(x, y, x + size, y, radius);
+/**
+ * Where the outline of a petal leaves its ellipse for the notch, in the
+ * petal's own frame (`x` outward): `t` is the ellipse parameter of the
+ * intersection (`x = a cos t`, `y = b sin t`) and `phi` its angle seen from the
+ * notch centre. `null` when the notch does not cut the ellipse's outline.
+ */
+function notchOutline(shape) {
+  const a = shape.halfLength;
+  const b = shape.halfWidth;
+  const r = shape.notchRadius;
+  const d = shape.notchDistance;
+  // (a cos t - d)^2 + (b sin t)^2 = r^2 is a quadratic in cos t
+  const qa = a * a - b * b;
+  const qb = -2 * a * d;
+  const qc = d * d + b * b - r * r;
+  const roots = [];
+  if (Math.abs(qa) < 1e-12) {
+    roots.push(-qc / qb);
+  } else {
+    const discriminant = qb * qb - 4 * qa * qc;
+    if (discriminant >= 0) {
+      const root = Math.sqrt(discriminant);
+      roots.push((-qb - root) / (2 * qa), (-qb + root) / (2 * qa));
+    }
+  }
+  const cos = roots.find((value) => value > -1 && value < 1);
+  if (!(r > 0) || cos === undefined) {
+    return null;
+  }
+  const t = Math.acos(cos);
+  return { t, phi: Math.atan2(b * Math.sin(t), a * cos - d) };
+}
+
+/**
+ * Adds one petal to the current path: the ellipse the long way round from one
+ * edge of the notch to the other, then the notch's inner arc back.
+ */
+function addPetal(context, petal, shape, outline) {
+  const { x, y, angle } = petal;
+  const a = shape.halfLength;
+  const b = shape.halfWidth;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  if (outline === null) {
+    context.moveTo(x + a * cos, y + a * sin);
+    context.ellipse(x, y, a, b, angle, 0, TAU);
+    return;
+  }
+  const { t, phi } = outline;
+  const ux = a * Math.cos(t);
+  const uy = b * Math.sin(t);
+  context.moveTo(x + ux * cos - uy * sin, y + ux * sin + uy * cos);
+  context.ellipse(x, y, a, b, angle, t, TAU - t);
+  const d = shape.notchDistance;
+  context.arc(x + d * cos, y + d * sin, shape.notchRadius, angle - phi, angle + phi, true);
   context.closePath();
 }
 
 /**
  * Draws a `petalDrawList` result onto a Canvas 2D context (or any object
  * with the same path API), scaling the 1024-unit design canvas to `size`
- * pixels with its top-left corner at `(x, y)`.
+ * pixels with its top-left corner at `(x, y)`. Petals are drawn with their
+ * notch.
  *
  * @param {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} context
  * @param {ReturnType<typeof petalDrawList>} drawList
@@ -52,6 +101,33 @@ export function drawPetalFrame(context, drawList, options = {}) {
   context.scale(scale, scale);
   context.fillStyle = css(palette.background);
   context.fillRect(0, 0, drawList.canvas, drawList.canvas);
+  // the faint 天 under the petals, clipped to the backdrop disc
+  const { backdrop } = drawList;
+  context.save();
+  context.beginPath();
+  addCircle(context, backdrop);
+  context.clip();
+  context.fillStyle = css(palette.backdrop);
+  context.beginPath();
+  for (const cell of backdrop.cells) context.rect(cell.x, cell.y, cell.size, cell.size);
+  context.fill();
+  context.restore();
+  // lit petals: the light ones inside the 天, then the pink ones
+  const shape = drawList.petal;
+  const outline = notchOutline(shape);
+  for (const light of [true, false]) {
+    context.fillStyle = css(light ? palette.light : palette.pink);
+    context.beginPath();
+    for (const petal of drawList.petals) {
+      if (petal.light === light) addPetal(context, petal, shape, outline);
+    }
+    context.fill();
+  }
+  // lit ring dots
+  context.fillStyle = css(palette.pink);
+  context.beginPath();
+  for (const dot of drawList.dots) addCircle(context, dot);
+  context.fill();
   // finders: core and petals in the light colour, then the petal notches
   context.fillStyle = css(palette.light);
   context.beginPath();
@@ -65,43 +141,6 @@ export function drawPetalFrame(context, drawList, options = {}) {
   for (const finder of drawList.finders) {
     for (const notch of finder.notches) addCircle(context, notch);
   }
-  context.fill();
-  // light tiles
-  context.fillStyle = css(palette.light);
-  context.beginPath();
-  for (const tile of drawList.tiles) {
-    if (tile.light) addRoundedSquare(context, tile);
-  }
-  context.fill();
-  // glyphs, clipped to their (disjoint) glyph boxes
-  context.save();
-  context.beginPath();
-  for (const tile of drawList.tiles) {
-    context.rect(tile.glyphBox.x, tile.glyphBox.y, tile.glyphBox.size, tile.glyphBox.size);
-  }
-  context.clip();
-  context.lineWidth = drawList.strokeWidth;
-  context.lineCap = "round";
-  context.lineJoin = "round";
-  for (const light of [true, false]) {
-    context.strokeStyle = css(light ? palette.ink : palette.pink);
-    context.beginPath();
-    for (const tile of drawList.tiles) {
-      if (tile.light !== light) continue;
-      for (const stroke of tile.strokes) {
-        context.moveTo(stroke[0], stroke[1]);
-        for (let index = 2; index + 1 < stroke.length; index += 2) {
-          context.lineTo(stroke[index], stroke[index + 1]);
-        }
-      }
-    }
-    context.stroke();
-  }
-  context.restore();
-  // lit ring dots
-  context.fillStyle = css(palette.pink);
-  context.beginPath();
-  for (const dot of drawList.dots) addCircle(context, dot);
   context.fill();
   context.restore();
 }
@@ -174,9 +213,10 @@ function frameScheduler(requestFrame, cancelFrame) {
 
 /**
  * Plays a Petal stream on a Canvas 2D context, advancing frames at `fps`
- * (default 8, the recommended display rate; keep it at or below a third of
- * the camera frame rate) with `requestAnimationFrame`. Glyphs are stroked
- * with round caps and joins.
+ * with `requestAnimationFrame`. The default of 8 frames per second stays
+ * until physical qualification supports more (12 fps reads fully in
+ * simulation only); a frame must stay up for at least two camera frames, so
+ * keep `fps` at or below half the camera frame rate.
  */
 export class PetalStreamPlayer {
   /**
@@ -306,13 +346,13 @@ function defaultCanvas(width, height) {
  * "one corner blossom is hidden" helps the user uncover it).
  *
  * The scanner does not change the camera's settings; set the stream up like
- * this (evidence: `specs/petal_stream.md` section 8, "Scanner guidance"):
+ * this (evidence: `specs/petal_stream.md` section 8):
  *
  * - Resolution: ask `getUserMedia` for about 1280x720
  *   (`video: {facingMode: "environment", width: {ideal: 1280}, height: {ideal: 720}}`).
  *   The default `maxSide` of 1280 already matches it. Only drop to 640 when
  *   the device cannot sustain about 5 decoded frames per second, because at
- *   480p only lanes `P` and `D` read.
+ *   480p a little defocus already costs the petal field (lane `D` carries on).
  * - Exposure: automatic exposure over-exposes a mostly black screen. Where the
  *   browser supports it, apply an exposure compensation of about -1 EV to the
  *   video track: feature-detect `track.getCapabilities().exposureCompensation`,

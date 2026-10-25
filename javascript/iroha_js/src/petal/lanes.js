@@ -1,19 +1,27 @@
 // Lane codecs: bytes <-> transmitted cell states.
 //
-// A frame carries three lanes. Each lane is exactly one Reed-Solomon codeword,
+// A frame carries five lanes. Each lane is exactly one Reed-Solomon codeword,
 // XOR-whitened with a fixed pseudo-random sequence so the picture is
 // statistically balanced whatever the payload is:
 //
-// | lane | cells                  | codeword | data | parity |
-// |------|------------------------|----------|------|--------|
-// | P    | 256 tiles x 1 bit      | 32 B     | 19 B | 13 B   |
-// | K    | 256 tiles x 4 bits     | 128 B    | 83 B | 45 B   |
-// | D    | 240 ring slots x 1 bit | 30 B     | 19 B | 11 B   |
+// | lane      | cells                                 | codeword | data | parity |
+// |-----------|---------------------------------------|----------|------|--------|
+// | D         | 240 ring slots x 1 bit                | 30 B     | 19 B | 11 B   |
+// | F0 ... F3 | 840 field cells of one sector x 1 bit | 105 B    | 83 B | 22 B   |
 //
-// Bit order is most-significant-bit first; lane K packs the first tile of a
-// pair into the high nibble.
+// Bit order is most-significant-bit first.
 
-import { D_BITS, DATA_SLOT, ROLE_GATE, SLOT_ROLE, TILE_COUNT, TOTAL_SLOTS } from "./layout.js";
+import {
+  D_BITS,
+  DATA_SLOT,
+  FIELD_CELLS,
+  ROLE_GATE,
+  SECTORS,
+  SECTOR_CELLS,
+  SECTOR_CELL_LIST,
+  SLOT_ROLE,
+  TOTAL_SLOTS,
+} from "./layout.js";
 import { PetalXorshift32 } from "./prng.js";
 import { PetalReedSolomon, RS_INVALID_SHAPE, RS_UNCORRECTABLE, rsCorrect } from "./rs.js";
 import { PetalError, toBytes } from "./support.js";
@@ -22,71 +30,91 @@ import { PetalError, toBytes } from "./support.js";
 export const ATOM_LEN = 16;
 /** Bytes of the per-lane header (`tag`, `frame` high, `frame` low). */
 export const LANE_HEADER_LEN = 3;
-/** Atoms carried by lane P. */
-export const P_ATOMS = 1;
 /** Atoms carried by lane D on frames that do not carry a beacon. */
 export const D_ATOMS = 1;
-/** Atoms carried by lane K. */
-export const K_ATOMS = 5;
-/** Most atoms one frame can carry (lanes P, D and K). */
-export const ATOMS_PER_FRAME = P_ATOMS + D_ATOMS + K_ATOMS;
+/** Atoms carried by each field lane. */
+export const FIELD_ATOMS = 5;
+/** Most atoms one frame can carry (the four field lanes and lane D). */
+export const ATOMS_PER_FRAME = SECTORS * FIELD_ATOMS + D_ATOMS;
 
-/** Codeword length of lane P in bytes. */
-export const P_WORD = TILE_COUNT / 8;
-/** Codeword length of lane K in bytes. */
-export const K_WORD = TILE_COUNT / 2;
 /** Codeword length of lane D in bytes. */
 export const D_WORD = D_BITS / 8;
-/** Parity bytes of lane P. */
-export const P_PARITY = 13;
-/** Parity bytes of lane K. */
-export const K_PARITY = 45;
 /** Parity bytes of lane D. */
 export const D_PARITY = 11;
-/** Data bytes of lane P. */
-export const P_DATA = P_WORD - P_PARITY;
-/** Data bytes of lane K. */
-export const K_DATA = K_WORD - K_PARITY;
 /** Data bytes of lane D. */
 export const D_DATA = D_WORD - D_PARITY;
+/** Codeword length of a field lane in bytes. */
+export const FIELD_WORD = 105;
+/** Parity bytes of a field lane. */
+export const FIELD_PARITY = 22;
+/** Data bytes of a field lane. */
+export const FIELD_DATA = FIELD_WORD - FIELD_PARITY;
+/** Field cells of a sector that carry no bit (they stay dark). */
+export const SPARE_SECTOR_CELLS = SECTOR_CELLS - FIELD_WORD * 8;
+/** Field cells of a sector that carry the bits of its codeword. */
+export const FIELD_BITS = FIELD_WORD * 8;
 
-/** All lanes in decode order. */
-export const LANE_ORDER = Object.freeze(["P", "D", "K"]);
+/** The four field lanes, sector 0 first. */
+export const FIELD_LANES = Object.freeze(["F0", "F1", "F2", "F3"]);
+/** All lanes in decode order: lane D, then the field lanes. */
+export const LANE_ORDER = Object.freeze(["D", ...FIELD_LANES]);
 
-function makeSpec(name, wordLen, parityLen, atoms, whiteningSeed) {
+function makeSpec(name, sector, wordLen, parityLen, atoms, whiteningSeed) {
   const rs = new PetalReedSolomon(parityLen);
   const rng = new PetalXorshift32(whiteningSeed);
   const whitening = new Uint8Array(wordLen);
   for (let index = 0; index < wordLen; index += 1) {
     whitening[index] = rng.nextByte();
   }
-  return { name, wordLen, parityLen, dataLen: wordLen - parityLen, atoms, whiteningSeed, rs, whitening };
+  // the letter that names the lane in reports: `D`, or the sector digit
+  const letter = sector === null ? "D" : String(sector);
+  return { name, letter, sector, wordLen, parityLen, dataLen: wordLen - parityLen, atoms, whiteningSeed, rs, whitening };
 }
 
-const P_SPEC = makeSpec("P", P_WORD, P_PARITY, P_ATOMS, 0x50455441); // "PETA"
-const K_SPEC = makeSpec("K", K_WORD, K_PARITY, K_ATOMS, 0x4b414e41); // "KANA"
-const D_SPEC = makeSpec("D", D_WORD, D_PARITY, D_ATOMS, 0x444f5453); // "DOTS"
+const D_SPEC = makeSpec("D", null, D_WORD, D_PARITY, D_ATOMS, 0x444f5453); // "DOTS"
+// "PET0" ... "PET3"
+const FIELD_SPECS = FIELD_LANES.map((name, sector) =>
+  makeSpec(name, sector, FIELD_WORD, FIELD_PARITY, FIELD_ATOMS, 0x50455430 + sector),
+);
 
 if (
-  P_SPEC.dataLen !== LANE_HEADER_LEN + P_ATOMS * ATOM_LEN ||
-  K_SPEC.dataLen !== LANE_HEADER_LEN + K_ATOMS * ATOM_LEN ||
-  D_SPEC.dataLen !== LANE_HEADER_LEN + D_ATOMS * ATOM_LEN
+  D_SPEC.dataLen !== LANE_HEADER_LEN + D_ATOMS * ATOM_LEN ||
+  FIELD_DATA !== LANE_HEADER_LEN + FIELD_ATOMS * ATOM_LEN ||
+  FIELD_BITS > SECTOR_CELLS
 ) {
   throw new Error("petal lane sizes are inconsistent");
 }
 
-/** Resolves a lane name (`"P"`, `"K"` or `"D"`) to its internal description. */
+/** Resolves a lane name (`"D"` or `"F0"` ... `"F3"`) to its internal description. */
 export function laneSpec(lane) {
   switch (lane) {
-    case "P":
-      return P_SPEC;
-    case "K":
-      return K_SPEC;
     case "D":
       return D_SPEC;
+    case "F0":
+      return FIELD_SPECS[0];
+    case "F1":
+      return FIELD_SPECS[1];
+    case "F2":
+      return FIELD_SPECS[2];
+    case "F3":
+      return FIELD_SPECS[3];
     default:
-      throw new TypeError('petal lane must be "P", "K" or "D"');
+      throw new TypeError('petal lane must be "D", "F0", "F1", "F2" or "F3"');
   }
+}
+
+/** The name of the field lane of sector `sector` (`"F0"` ... `"F3"`). */
+export function fieldLane(sector) {
+  const lane = FIELD_LANES[sector];
+  if (lane === undefined) {
+    throw new RangeError("sector out of range");
+  }
+  return lane;
+}
+
+/** The letter that names `lane` in reports: `D`, or the sector digit `0`-`3`. */
+export function laneLetter(lane) {
+  return laneSpec(lane).letter;
 }
 
 /** The fixed whitening sequence of a lane. */
@@ -97,7 +125,7 @@ export function laneWhitening(lane) {
 /**
  * Encodes lane data into the transmitted (whitened) codeword.
  *
- * @param {"P" | "K" | "D"} lane
+ * @param {"D" | "F0" | "F1" | "F2" | "F3"} lane
  * @param {Uint8Array | ArrayBuffer | ArrayBufferView | number[]} data exactly the lane's data length
  * @returns {Uint8Array}
  */
@@ -149,7 +177,7 @@ function countedOrThrow(lane, transmitted, erasures) {
 /**
  * Decodes a transmitted codeword, returning the lane data bytes.
  *
- * @param {"P" | "K" | "D"} lane
+ * @param {"D" | "F0" | "F1" | "F2" | "F3"} lane
  * @param {Uint8Array | ArrayBuffer | ArrayBufferView | number[]} transmitted
  * @param {readonly number[]} [erasures] byte positions the caller distrusts
  * @throws {PetalError} `rs_invalid_shape` or `rs_uncorrectable`
@@ -171,7 +199,7 @@ export function decodeLaneCounted(lane, transmitted, erasures = []) {
   return Object.freeze({ data, corrected });
 }
 
-function cellArray(value, length, name, maximum) {
+function cellArray(value, length, name) {
   const out = new Uint8Array(length);
   if (value === undefined) {
     return out;
@@ -183,15 +211,7 @@ function cellArray(value, length, name, maximum) {
     throw new RangeError(`${name} must hold exactly ${length} cells`);
   }
   for (let index = 0; index < length; index += 1) {
-    const cell = value[index];
-    if (maximum === 1) {
-      out[index] = cell ? 1 : 0;
-    } else {
-      if (!Number.isInteger(cell) || cell < 0 || cell > maximum) {
-        throw new RangeError(`${name} cells must be integers in 0..=${maximum}`);
-      }
-      out[index] = cell;
-    }
+    out[index] = value[index] ? 1 : 0;
   }
   return out;
 }
@@ -199,33 +219,30 @@ function cellArray(value, length, name, maximum) {
 /** Every cell of one frame: what a renderer draws and a decoder samples. */
 export class PetalFrameCells {
   /**
-   * @param {ArrayLike<number | boolean>} [light] polarity of each of the 256 tiles; truthy is a light tile
-   * @param {ArrayLike<number>} [glyph] glyph symbol (`0..16`) of each tile
-   * @param {ArrayLike<number | boolean>} [dots] lit state of each of the 276 ring slots, gate dots included
+   * @param {ArrayLike<number | boolean>} [dots] lit state of each of the 296 ring slots, gate dots included
+   * @param {ArrayLike<number | boolean>} [petals] lit state of each of the 3,376 field cells
    */
-  constructor(light, glyph, dots) {
-    /** Polarity of each tile; `1` is a light tile. */
-    this.light = cellArray(light, TILE_COUNT, "light", 1);
-    /** Glyph symbol (`0..16`) of each tile. */
-    this.glyph = cellArray(glyph, TILE_COUNT, "glyph", 15);
+  constructor(dots, petals) {
     /** Lit state (`0`/`1`) of every ring slot, gate dots included. */
-    this.dots = cellArray(dots, TOTAL_SLOTS, "dots", 1);
+    this.dots = cellArray(dots, TOTAL_SLOTS, "dots");
+    /** Lit state (`0`/`1`) of every field cell (spare cells are dark). */
+    this.petals = cellArray(petals, FIELD_CELLS, "petals");
   }
 
-  /** Builds the cells from the three transmitted codewords. */
-  static fromWords(p, k, d) {
-    const pWord = toBytes(p, "lane P word");
-    const kWord = toBytes(k, "lane K word");
+  /**
+   * Builds the cells from the transmitted codewords of lane D and the four
+   * field lanes (sector 0 first).
+   */
+  static fromWords(d, fields) {
     const dWord = toBytes(d, "lane D word");
-    if (pWord.length !== P_WORD || kWord.length !== K_WORD || dWord.length !== D_WORD) {
+    if (!Array.isArray(fields) || fields.length !== SECTORS) {
+      throw new TypeError("fields must hold the four field lane words");
+    }
+    const fieldWords = fields.map((word, sector) => toBytes(word, `lane F${sector} word`));
+    if (dWord.length !== D_WORD || fieldWords.some((word) => word.length !== FIELD_WORD)) {
       throw new RangeError("lane word length mismatch");
     }
     const cells = new PetalFrameCells();
-    for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-      cells.light[tile] = (pWord[tile >> 3] >> (7 - (tile & 7))) & 1;
-      const byte = kWord[tile >> 1];
-      cells.glyph[tile] = (tile & 1) === 0 ? byte >> 4 : byte & 0x0f;
-    }
     for (let slot = 0; slot < TOTAL_SLOTS; slot += 1) {
       const role = SLOT_ROLE[slot];
       if (role === ROLE_GATE) {
@@ -234,28 +251,14 @@ export class PetalFrameCells {
         cells.dots[slot] = (dWord[role >> 3] >> (7 - (role & 7))) & 1;
       }
     }
-    return cells;
-  }
-
-  /** Packs the polarity cells into a lane P codeword. */
-  pWord() {
-    const word = new Uint8Array(P_WORD);
-    for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-      if (this.light[tile]) {
-        word[tile >> 3] |= 1 << (7 - (tile & 7));
+    for (let sector = 0; sector < SECTORS; sector += 1) {
+      const word = fieldWords[sector];
+      const order = SECTOR_CELL_LIST[sector];
+      for (let bit = 0; bit < FIELD_BITS; bit += 1) {
+        cells.petals[order[bit]] = (word[bit >> 3] >> (7 - (bit & 7))) & 1;
       }
     }
-    return word;
-  }
-
-  /** Packs the glyph cells into a lane K codeword. */
-  kWord() {
-    const word = new Uint8Array(K_WORD);
-    for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-      const nibble = this.glyph[tile] & 0x0f;
-      word[tile >> 1] |= (tile & 1) === 0 ? nibble << 4 : nibble;
-    }
-    return word;
+    return cells;
   }
 
   /** Packs the data dots into a lane D codeword. */
@@ -269,16 +272,29 @@ export class PetalFrameCells {
     return word;
   }
 
+  /** Packs the petals of sector `sector` into its field codeword. */
+  fieldWord(sector) {
+    const order = SECTOR_CELL_LIST[sector];
+    if (order === undefined) {
+      throw new RangeError("sector out of range");
+    }
+    const word = new Uint8Array(FIELD_WORD);
+    for (let bit = 0; bit < FIELD_BITS; bit += 1) {
+      if (this.petals[order[bit]]) {
+        word[bit >> 3] |= 1 << (7 - (bit & 7));
+      }
+    }
+    return word;
+  }
+
   /** Whether `other` holds exactly the same cells. */
   equals(other) {
     if (!(other instanceof PetalFrameCells)) return false;
-    for (let index = 0; index < TILE_COUNT; index += 1) {
-      if (this.light[index] !== other.light[index] || this.glyph[index] !== other.glyph[index]) {
-        return false;
-      }
-    }
     for (let index = 0; index < TOTAL_SLOTS; index += 1) {
       if (this.dots[index] !== other.dots[index]) return false;
+    }
+    for (let index = 0; index < FIELD_CELLS; index += 1) {
+      if (this.petals[index] !== other.petals[index]) return false;
     }
     return true;
   }

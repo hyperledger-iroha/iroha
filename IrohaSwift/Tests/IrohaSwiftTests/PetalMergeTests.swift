@@ -2,27 +2,34 @@ import Foundation
 import XCTest
 @testable import IrohaSwift
 
-/// Capture averaging and session isolation, including the Rust reference's
-/// noisy, banded and torn-camera captures in the shared golden fixture.
+/// Capture averaging and session isolation (ports of the merge tests of
+/// `crates/iroha_petal/src/session.rs` and the merge sets of
+/// `tests/captures.rs`), including the reference's noisy and torn-camera
+/// captures in the shared golden fixture.
 final class PetalMergeTests: XCTestCase {
     private typealias Support = PetalTestSupport
 
+    /// The `one-pass` stream of the golden captures.
+    private func onePass() throws -> PetalStreamEncoder {
+        try PetalStreamEncoder(payload: Support.payload(3000, seed: 2), kind: 2)
+    }
+
     private func setup(_ number: UInt16 = 11) throws -> (PetalStreamEncoder, PetalLuma, PetalDecodedFrame) {
-        let encoder = try PetalStreamEncoder(payload: Support.payload(700, seed: 3), kind: 2)
+        let encoder = try onePass()
         let image = try Support.render(encoder, frame: number, size: 512, supersample: 2)
         return (encoder, image, try PetalDecoder.decode(image))
     }
 
+    /// `pose` with its lanes replaced.
     private func frame(
         _ pose: PetalDecodedFrame,
-        p: PetalLaneResult? = nil,
-        k: PetalLaneResult? = nil,
         d: PetalLaneResult? = nil,
+        fields: [PetalLaneResult?] = [nil, nil, nil, nil],
         inferredCorner: Int? = nil
     ) -> PetalDecodedFrame {
         PetalDecodedFrame(
-            homography: pose.homography, rotation: pose.rotation, mirrored: pose.mirrored,
-            p: p, k: k, d: d, inferredCorner: inferredCorner
+            pose: pose.pose, rotation: pose.rotation, mirrored: pose.mirrored,
+            d: d, fields: fields, inferredCorner: inferredCorner
         )
     }
 
@@ -30,11 +37,18 @@ final class PetalMergeTests: XCTestCase {
         PetalLaneResult(data: data, corrected: 0, erasures: 0)
     }
 
-    func testSharedCRCMatchesTheExistingPeerQRGoldenVector() {
-        // The peer QR suite pins this same CRC-32C check value. Keep the
-        // shared helper in this focused source-only Petal test closure too.
-        XCTAssertEqual(IrohaPeerCRC32CV1.checksum(Data("123456789".utf8)), 0xE306_9283)
-        XCTAssertEqual(IrohaPeerCRC32CV1.checksum([UInt8]()), 0)
+    /// A clean capture of frame `petals` whose decoded lanes are replaced by
+    /// lane `D` of frame `rings`, as if the rings showed another frame than the
+    /// petal field.
+    private func ringsOfAnotherFrame(
+        _ encoder: PetalStreamEncoder,
+        petals: UInt16,
+        rings: UInt16
+    ) throws -> (PetalLuma, PetalDecodedFrame) {
+        let image = try Support.render(encoder, frame: petals, size: 512, supersample: 2)
+        let decoded = try PetalDecoder.decode(image)
+        XCTAssertFalse(decoded.fields.contains { $0 == nil })
+        return (image, frame(decoded, d: lane(encoder.laneData(frame: rings).d)))
     }
 
     func testOneEvidenceMatchesTheSingleCaptureAndTransformsStayInCodeCoordinates() throws {
@@ -63,45 +77,30 @@ final class PetalMergeTests: XCTestCase {
             try Support.mirror(clean),
             try Support.transform(clean) { x, y in (y, clean.width - 1 - x) },
         ]
-        var captures: [PetalTileEvidence] = []
+        var captures: [PetalFieldEvidence] = []
         for image in images {
             let decoded = try PetalDecoder.decode(image)
-            let evidence = try XCTUnwrap(PetalDecoder.tileEvidence(image, frame: decoded))
-            let merged = PetalDecoder.mergeTiles([evidence])
-            XCTAssertEqual(merged.p, decoded.p)
-            XCTAssertEqual(merged.k, decoded.k)
+            let evidence = try XCTUnwrap(PetalDecoder.fieldEvidence(image, frame: decoded))
+            XCTAssertEqual(PetalDecoder.mergeFields([evidence]), decoded.fields)
             captures.append(evidence)
         }
-        let merged = PetalDecoder.mergeTiles(captures)
-        XCTAssertEqual(merged.p?.data, encoder.laneData(frame: 11).p)
-        XCTAssertEqual(merged.k?.data, encoder.laneData(frame: 11).k)
-    }
-
-    func testIndependentCellNoiseIsAveragedDown() throws {
-        let (encoder, image, pose) = try setup(5)
-        let clean = try XCTUnwrap(PetalDecoder.tileEvidence(image, frame: pose))
-        var rng = PetalXorshift32(seed: 9)
-        let captures = (0..<4).map { _ in
-            PetalTileEvidence(
-                patches: clean.patches.map { $0 + (Double(rng.nextByte()) - 127.5) * 3.0 },
-                reference: clean.reference
-            )
+        let merged = PetalDecoder.mergeFields(captures)
+        let truth = encoder.laneData(frame: 11)
+        for sector in 0..<PetalLayout.sectors {
+            XCTAssertEqual(merged[sector]?.data, truth.fields[sector], "sector \(sector)")
         }
-        for capture in captures {
-            XCTAssertNil(PetalDecoder.mergeTiles([capture]).k, "each capture must lose K for this test to prove recovery")
-        }
-        let merged = PetalDecoder.mergeTiles(captures)
-        XCTAssertEqual(merged.p?.data, encoder.laneData(frame: 5).p)
-        XCTAssertEqual(merged.k?.data, encoder.laneData(frame: 5).k)
     }
 
     func testEvidenceRequiresUsableImageAndCornerAndEmptyMergeReadsNothing() throws {
         let (_, image, pose) = try setup()
-        XCTAssertNil(PetalDecoder.tileEvidence(try PetalLuma(width: 20, height: 20), frame: pose))
-        XCTAssertNil(PetalDecoder.tileEvidence(image, frame: frame(pose, inferredCorner: 7)))
-        XCTAssertNil(PetalDecoder.tileEvidence(image, frame: pose, options: PetalDecodeOptions(maximumPixels: 100)))
-        XCTAssertNil(PetalDecoder.mergeTiles([]).p)
-        XCTAssertNil(PetalDecoder.mergeTiles([]).k)
+        XCTAssertNil(PetalDecoder.fieldEvidence(try PetalLuma(width: 20, height: 20), frame: pose))
+        XCTAssertNil(PetalDecoder.fieldEvidence(image, frame: frame(pose, inferredCorner: 7)))
+        XCTAssertNil(PetalDecoder.fieldEvidence(image, frame: frame(pose, inferredCorner: -1)))
+        XCTAssertNil(PetalDecoder.fieldEvidence(image, frame: pose, options: PetalDecodeOptions(maximumPixels: 100)))
+        XCTAssertEqual(PetalDecoder.mergeFields([]), [nil, nil, nil, nil])
+        // a short skip list skips nothing beyond it
+        let evidence = try XCTUnwrap(PetalDecoder.fieldEvidence(image, frame: pose))
+        XCTAssertEqual(PetalDecoder.mergeFields([evidence], skip: [true]).map { $0 != nil }, [false, true, true, true])
     }
 
     func testUnkeyedTornAndShortHeadersAreNotHeld() throws {
@@ -109,8 +108,8 @@ final class PetalMergeTests: XCTestCase {
         var session = PetalScanSession()
         for rejected in [
             frame(pose),
-            frame(pose, p: lane([1, 2])),
-            frame(pose, p: lane(encoder.laneData(frame: 11).p), d: lane(encoder.laneData(frame: 10).d)),
+            frame(pose, fields: [lane([1, 2]), nil, nil, nil]),
+            frame(pose, d: lane(encoder.laneData(frame: 10).d), fields: [nil, nil, lane(encoder.laneData(frame: 11).fields[2]), nil]),
         ] {
             XCTAssertNil(PetalScanSession.shownFrame(rejected))
             XCTAssertEqual(session.merge(image, frame: rejected), "")
@@ -119,58 +118,84 @@ final class PetalMergeTests: XCTestCase {
         XCTAssertEqual(session.stats.merges, 0)
     }
 
-    func testRecoveredLanesMustNameTheShownFrameAndOnlyMissingLanesAreOffered() throws {
-        let (encoder, image, pose) = try setup()
-        let wrongRings = frame(pose, d: lane(encoder.laneData(frame: 10).d))
+    func testAMergeNeverOffersAtomsOfAnotherShownFrame() throws {
+        let encoder = try onePass()
         var session = PetalScanSession()
-        for _ in 0..<3 { XCTAssertEqual(session.merge(image, frame: wrongRings), "") }
+        let (image, rings) = try ringsOfAnotherFrame(encoder, petals: 11, rings: 10)
+        for capture in 1...3 {
+            XCTAssertEqual(session.merge(image, frame: rings), "", "capture \(capture)")
+        }
         XCTAssertEqual(session.stats.merges, 2)
-        XCTAssertEqual(session.stats.mergedP, 0)
-        XCTAssertEqual(session.stats.mergedK, 0)
+        XCTAssertEqual(session.stats.mergedLanes, 0)
         XCTAssertEqual(session.progress.atomsReceived, 0)
-        let rejected = PetalDecoder.mergeTiles(try XCTUnwrap(session.held.first).evidence)
-        XCTAssertEqual(rejected.p?.data, encoder.laneData(frame: 11).p)
-        XCTAssertEqual(rejected.k?.data, encoder.laneData(frame: 11).k)
-
-        session.reset()
-        let pRead = frame(pose, p: pose.p, d: pose.d)
-        XCTAssertEqual(session.merge(image, frame: pRead), "")
-        XCTAssertEqual(session.merge(image, frame: pRead), "K")
-        XCTAssertEqual(session.stats.mergedP, 0)
-        XCTAssertEqual(session.stats.mergedK, 1)
-        XCTAssertTrue(try XCTUnwrap(session.held.first).evidence.isEmpty)
-        let merges = session.stats.merges
-        XCTAssertEqual(session.merge(image, frame: pRead), "")
-        XCTAssertEqual(session.stats.merges, merges, "a completed shown frame releases evidence and stops merging")
+        // what was refused: the merged field lanes name frame 11, not frame 10
+        let held = try XCTUnwrap(session.held.first)
+        XCTAssertEqual(held.shown.frame, 10)
+        let merged = PetalDecoder.mergeFields(held.evidence)
+        let truth = encoder.laneData(frame: 11)
+        for sector in 0..<PetalLayout.sectors {
+            XCTAssertEqual(merged[sector]?.data, truth.fields[sector], "sector \(sector)")
+        }
     }
 
-    func testCaptureAndShownFrameFIFOsAreBoundedAndResetAndSessionsStayIsolated() throws {
+    func testRecoveredLanesFillOnlyTheMissingSectors() throws {
         let (encoder, image, pose) = try setup()
-        let rings = frame(pose, d: lane(encoder.laneData(frame: 10).d))
-        var first = PetalScanSession()
-        var second = PetalScanSession()
-        XCTAssertEqual(first.merge(image, frame: rings), "")
-        XCTAssertEqual(second.merge(image, frame: rings), "")
-        XCTAssertEqual(second.stats.merges, 0, "sessions never share captures")
-        for _ in 0..<PetalScanSession.mergeCaptures + 1 { _ = first.merge(image, frame: rings) }
-        XCTAssertEqual(first.held.count, 1)
-        XCTAssertEqual(first.held[0].evidence.count, PetalScanSession.mergeCaptures)
-        XCTAssertEqual(first.stats.merges, UInt32(PetalScanSession.mergeCaptures + 1))
+        var session = PetalScanSession()
+        let partial = frame(pose, d: pose.d, fields: [pose.fields[0], nil, nil, nil])
+        XCTAssertEqual(session.merge(image, frame: partial), "")
+        XCTAssertEqual(session.merge(image, frame: partial), "123")
+        XCTAssertEqual(session.stats.mergedLanes, 3)
+        XCTAssertEqual(session.stats.merges, 1)
+        XCTAssertTrue(try XCTUnwrap(session.held.first).evidence.isEmpty)
+        XCTAssertEqual(session.held[0].done, [true, true, true, true])
+        let merges = session.stats.merges
+        XCTAssertEqual(session.merge(image, frame: partial), "")
+        XCTAssertEqual(session.stats.merges, merges, "a completed shown frame releases evidence and stops merging")
+        // the recovered atoms wait for the beacon of their stream
+        XCTAssertEqual(session.progress.atomsReceived, 0)
+        let beacon = try PetalDecoder.decode(try Support.render(encoder, frame: 12, size: 512, supersample: 2))
+        _ = session.absorb(frame(beacon, d: beacon.d))
+        XCTAssertEqual(session.progress.meta, encoder.meta)
+        XCTAssertEqual(session.progress.atomsReceived, 15, "the three merged lanes, replayed once the beacon arrives")
+    }
+
+    func testTornCapturesWhoseLanesNameDifferentFramesAreNotHeld() throws {
+        let encoder = try onePass()
+        var session = PetalScanSession()
+        let (image, rings) = try ringsOfAnotherFrame(encoder, petals: 11, rings: 10)
+        let torn = frame(rings, d: rings.d, fields: [nil, nil, lane(encoder.laneData(frame: 11).fields[2]), nil])
+        XCTAssertEqual(session.merge(image, frame: torn), "")
+        XCTAssertTrue(session.held.isEmpty)
+    }
+
+    func testTheSessionHoldsAtMostFourCapturesOfSixShownFrames() throws {
+        let encoder = try onePass()
+        var session = PetalScanSession()
+        // refused merges never finish a shown frame, so its captures stay held
+        let (image, rings) = try ringsOfAnotherFrame(encoder, petals: 11, rings: 10)
+        for _ in 0..<(PetalScanSession.mergeCaptures + 2) { _ = session.merge(image, frame: rings) }
+        XCTAssertEqual(session.held.count, 1)
+        XCTAssertEqual(session.held[0].evidence.count, PetalScanSession.mergeCaptures)
+        XCTAssertEqual(session.stats.merges, UInt32(PetalScanSession.mergeCaptures + 1))
         for number in 12..<12 + PetalScanSession.mergeWindow {
-            _ = first.merge(image, frame: frame(pose, d: lane(encoder.laneData(frame: UInt16(number)).d)))
+            _ = session.merge(image, frame: frame(rings, d: lane(encoder.laneData(frame: UInt16(number)).d)))
         }
-        XCTAssertEqual(first.held.count, PetalScanSession.mergeWindow)
-        XCTAssertEqual(first.held.map(\.shown.frame), (12..<18).map(UInt16.init))
-        // A different stream tag gets its own shown-frame slot even with the same counter.
+        XCTAssertEqual(session.held.count, PetalScanSession.mergeWindow)
+        XCTAssertEqual(session.held.map(\.shown.frame), (12..<18).map(UInt16.init))
+        // a different stream tag gets its own shown-frame slot even with the same counter
         var other = encoder.laneData(frame: 17).d
         other[0] ^= 1
-        _ = first.merge(image, frame: frame(pose, d: lane(other)))
-        XCTAssertEqual(first.held.suffix(2).map(\.shown.frame), [17, 17])
-        XCTAssertNotEqual(first.held[first.held.count - 2].shown.tag, first.held.last?.shown.tag)
-        first.reset()
-        XCTAssertTrue(first.held.isEmpty)
-        XCTAssertEqual(first.merge(image, frame: rings), "")
-        XCTAssertEqual(first.held[0].evidence.count, 1)
+        _ = session.merge(image, frame: frame(rings, d: lane(other)))
+        XCTAssertEqual(session.held.suffix(2).map(\.shown.frame), [17, 17])
+        XCTAssertNotEqual(session.held[session.held.count - 2].shown.tag, session.held.last?.shown.tag)
+        // sessions never share captures, and a reset forgets them
+        var second = PetalScanSession()
+        XCTAssertEqual(second.merge(image, frame: rings), "")
+        XCTAssertEqual(second.stats.merges, 0)
+        session.reset()
+        XCTAssertTrue(session.held.isEmpty)
+        XCTAssertEqual(session.merge(image, frame: rings), "")
+        XCTAssertEqual(session.held[0].evidence.count, 1)
         XCTAssertEqual(second.held[0].evidence.count, 1)
     }
 
@@ -192,57 +217,85 @@ final class PetalMergeTests: XCTestCase {
         }
     }
 
-    func testActualMetadataSwitchClearsSameTagFrameEvidenceAndDoneFlags() throws {
-        // Same cross-port collision: full stream identity differs although
-        // the eight-bit tag and frame counter are identical.
-        let old = try PetalStreamEncoder(payload: [0, 0, 0, 49] + [UInt8](repeating: 0, count: 96), kind: 2)
-        let next = try PetalStreamEncoder(payload: [0, 0, 0, 128] + [UInt8](repeating: 0, count: 96), kind: 2)
+    func testSwitchingStreamsWithTheSameShortTagDiscardsOldMergeState() throws {
+        // full stream identities differ although the eight-bit tag and frame counter are identical
+        func encoder(_ last: UInt8) throws -> PetalStreamEncoder {
+            var payload = [UInt8](repeating: 0, count: 100)
+            payload[3] = last
+            return try PetalStreamEncoder(payload: payload, kind: 2)
+        }
+        let old = try encoder(49)
+        let new = try encoder(128)
         XCTAssertEqual(old.meta.tag, 61)
-        XCTAssertEqual(next.meta.tag, old.meta.tag)
-        XCTAssertNotEqual(next.meta, old.meta)
+        XCTAssertEqual(new.meta.tag, 61)
+        XCTAssertNotEqual(old.meta, new.meta)
         let oldImage = try Support.render(old, frame: 0, size: 512, supersample: 2)
-        let nextImage = try Support.render(next, frame: 0, size: 512, supersample: 2)
+        let newImage = try Support.render(new, frame: 0, size: 512, supersample: 2)
         let oldFull = try PetalDecoder.decode(oldImage)
-        let oldD = frame(oldFull, d: oldFull.d)
-        let nextFull = try PetalDecoder.decode(nextImage)
-        let nextD = frame(nextFull, d: nextFull.d)
-        for oldTileLanesDone in [false, true] {
+        let newDecoded = try PetalDecoder.decode(newImage)
+        let newPartial = frame(newDecoded, d: newDecoded.d)
+        for wasComplete in [false, true] {
             var session = PetalScanSession()
-            XCTAssertEqual(session.merge(oldImage, frame: oldD), "")
-            _ = session.absorb(oldTileLanesDone ? oldFull : oldD)
-            XCTAssertEqual(session.progress.meta, old.meta)
-            XCTAssertEqual(session.held.count, 1, "initial nil-to-meta admission preserves keyed evidence")
-            if oldTileLanesDone { _ = session.merge(oldImage, frame: oldFull) }
-            XCTAssertEqual(session.held[0].pDone, oldTileLanesDone)
-            XCTAssertEqual(session.held[0].kDone, oldTileLanesDone)
-            XCTAssertEqual(session.held[0].evidence.isEmpty, oldTileLanesDone)
-
-            _ = session.absorb(nextD)
+            let previous = wasComplete ? oldFull : frame(oldFull, d: oldFull.d)
+            _ = session.absorb(previous)
+            _ = session.merge(oldImage, frame: previous)
+            XCTAssertFalse(session.held.isEmpty)
+            XCTAssertEqual(session.held[0].done, [Bool](repeating: wasComplete, count: 4))
+            XCTAssertEqual(session.held[0].evidence.isEmpty, wasComplete)
+            _ = session.absorb(newPartial)
             XCTAssertEqual(session.progress.meta, old.meta, "one competing beacon does not switch streams")
             XCTAssertEqual(session.held.count, 1)
-            _ = session.absorb(nextD)
-            XCTAssertEqual(session.progress.meta, next.meta)
+            _ = session.absorb(newPartial)
+            XCTAssertEqual(session.progress.meta, new.meta)
             XCTAssertTrue(session.held.isEmpty, "an accepted metadata switch drops both evidence and done flags")
-            XCTAssertEqual(session.merge(nextImage, frame: nextD), "")
+            XCTAssertEqual(session.merge(newImage, frame: newPartial), "")
             XCTAssertEqual(session.held[0].evidence.count, 1)
-            let fresh = PetalDecoder.mergeTiles(session.held[0].evidence)
-            XCTAssertEqual(fresh.p?.data, next.laneData(frame: 0).p)
-            XCTAssertEqual(fresh.k?.data, next.laneData(frame: 0).k)
-            XCTAssertEqual(session.merge(nextImage, frame: nextD), "PK")
-            XCTAssertEqual(session.stats.mergedP, 1)
-            XCTAssertEqual(session.stats.mergedK, 1)
+            XCTAssertTrue(session.held[0].done.allSatisfy { !$0 })
+            XCTAssertEqual(session.merge(newImage, frame: newPartial), "0123")
+            XCTAssertEqual(session.stats.mergedLanes, 4)
         }
     }
 
-    private func fixtures() throws -> [String: Any] {
-        try Support.loadJSON("petal_captures_v1.json")
+    func testTheFirstBeaconPreservesEvidenceReceivedBeforeIt() throws {
+        let encoder = try onePass()
+        let image = try Support.render(encoder, frame: 1, size: 512, supersample: 2)
+        let decoded = try PetalDecoder.decode(image)
+        let partial = frame(decoded, d: decoded.d)
+        var session = PetalScanSession()
+        _ = session.absorb(partial)
+        _ = session.merge(image, frame: partial)
+        XCTAssertNil(session.progress.meta)
+        XCTAssertEqual(session.held[0].evidence.count, 1)
+        let beaconImage = try Support.render(encoder, frame: 0, size: 512, supersample: 2)
+        let beaconDecoded = try PetalDecoder.decode(beaconImage)
+        _ = session.absorb(frame(beaconDecoded, d: beaconDecoded.d))
+        XCTAssertEqual(session.progress.meta, encoder.meta)
+        XCTAssertEqual(session.held[0].evidence.count, 1)
+        XCTAssertEqual(session.merge(image, frame: partial), "0123")
     }
 
+    // MARK: - Golden merge sets (`fixtures/petal/petal_captures_v2.json`)
+
+    private func fixtures() throws -> [String: Any] {
+        try XCTUnwrap(Support.capturesFixture, "fixtures/petal/petal_captures_v2.json is missing")
+    }
+
+    private func truth(_ set: [String: Any]) throws -> PetalLaneData {
+        PetalLaneData(
+            d: try Support.bytes(set, "d_data"),
+            fields: try XCTUnwrap(set["field_data"] as? [String]).map(Support.hex)
+        )
+    }
+
+    /// Decodes every capture of a merge set as recorded and pushes it through a
+    /// fresh session (30 fps); returns the merge of their field evidence, the
+    /// lanes the session merged and its counters.
     private func mergeSet(_ set: [String: Any]) throws -> (
-        p: PetalLaneResult?, k: PetalLaneResult?, merged: String, stats: PetalScanStats
+        results: [PetalLaneResult?], merged: String, stats: PetalScanStats
     ) {
         let name = try Support.string(set, "name")
-        var evidence: [PetalTileEvidence] = []
+        let truth = try truth(set)
+        var evidence: [PetalFieldEvidence] = []
         var session = PetalScanSession()
         var merged = ""
         for (index, capture) in try Support.objects(set, "captures").enumerated() {
@@ -251,44 +304,65 @@ final class PetalMergeTests: XCTestCase {
             entry["height"] = set["height"]
             let image = try Support.luma(of: entry)
             let decoded = try PetalDecoder.decode(image)
-            XCTAssertEqual(decoded.laneLetters, try Support.string(capture, "reference_decoded"), "\(name) capture \(index)")
-            for (lane, key) in [(decoded.p, "p_data"), (decoded.k, "k_data"), (decoded.d, "d_data")] {
-                if let lane { XCTAssertEqual(lane.data, try Support.bytes(set, key), "\(name) capture \(index) \(key)") }
+            for lane in PetalLane.decodeOrder {
+                if let result = decoded.lane(lane) {
+                    XCTAssertEqual(result.data, truth.lane(lane), "\(name) capture \(index) lane \(lane.letter)")
+                }
             }
-            evidence.append(try XCTUnwrap(PetalDecoder.tileEvidence(image, frame: decoded)))
+            let read = decoded.laneLetters
+            let must = try Support.string(capture, "must_decode")
+            XCTAssertTrue(must.allSatisfy { read.contains($0) }, "\(name) capture \(index): read \(read), must read \(must)")
+            XCTAssertEqual(read, try Support.string(capture, "reference_decoded"), "\(name) capture \(index): lanes read alone")
+            evidence.append(try XCTUnwrap(PetalDecoder.fieldEvidence(image, frame: decoded)))
             merged += session.push(image, nowMilliseconds: UInt64(index) * 33).merged
         }
-        let results = PetalDecoder.mergeTiles(evidence)
-        return (results.p, results.k, merged, session.stats)
+        return (PetalDecoder.mergeFields(evidence), merged, session.stats)
     }
 
-    func testRustGoldenNoisyAndBandedCapturesRecoverExactlyTheReferenceLanes() throws {
-        for set in try Support.objects(fixtures(), "merges") {
+    /// Checks merged field lanes against the recorded data and returns their sector digits.
+    private func mergedLetters(_ name: String, _ results: [PetalLaneResult?], _ set: [String: Any]) throws -> String {
+        let truth = try truth(set)
+        var letters = ""
+        for (sector, result) in results.enumerated() {
+            if let result {
+                XCTAssertEqual(result.data, truth.fields[sector], "\(name): merged lane \(sector) data")
+                letters.append(PetalLane.field(sector).letter)
+            }
+        }
+        return letters
+    }
+
+    func testGoldenMergeSetsRecoverLanesNoCaptureReadsAlone() throws {
+        let sets = try Support.objects(fixtures(), "merges")
+        XCTAssertFalse(sets.isEmpty)
+        for set in sets {
+            let name = try Support.string(set, "name")
             let result = try mergeSet(set)
-            var letters = ""
-            if let p = result.p {
-                XCTAssertEqual(p.data, try Support.bytes(set, "p_data"))
-                letters += "P"
+            XCTAssertEqual(try mergedLetters(name, result.results, set), try Support.string(set, "reference_merged"), name)
+            for letter in try Support.string(set, "must_merge") {
+                XCTAssertTrue(result.merged.contains(letter), "\(name): the session did not recover lane \(letter) (merged \(result.merged))")
             }
-            if let k = result.k {
-                XCTAssertEqual(k.data, try Support.bytes(set, "k_data"))
-                letters += "K"
-            }
-            XCTAssertEqual(letters, try Support.string(set, "reference_merged"))
-            XCTAssertEqual(result.merged, try Support.string(set, "must_merge"))
-            XCTAssertGreaterThan(result.stats.merges, 0)
+            XCTAssertGreaterThan(result.stats.merges, 0, name)
+            XCTAssertEqual(Int(result.stats.mergedLanes), result.merged.count, name)
         }
     }
 
-    func testRustGoldenTornCapturesNeverOfferTheOtherFramesLanes() throws {
-        for set in try Support.objects(fixtures(), "mixed_merges") {
+    func testGoldenMixedSetsNeverOfferTheOtherFramesLanes() throws {
+        let sets = try Support.objects(fixtures(), "mixed_merges")
+        XCTAssertFalse(sets.isEmpty)
+        for set in sets {
+            let name = try Support.string(set, "name")
             let result = try mergeSet(set)
-            XCTAssertEqual(result.p?.data, try Support.bytes(set, "p_data"))
-            XCTAssertNil(result.k)
-            XCTAssertTrue(result.merged.isEmpty)
-            XCTAssertGreaterThan(result.stats.merges, 0)
-            XCTAssertEqual(result.stats.mergedP, 0)
-            XCTAssertEqual(result.stats.mergedK, 0)
+            // the merge itself reads the petal field, which shows another frame than the rings
+            let merged = try mergedLetters(name, result.results, set)
+            let ringsFrame = Array(try Support.bytes(set, "d_data")[1..<3])
+            for lane in result.results.compactMap({ $0 }) {
+                XCTAssertNotEqual(Array(lane.data[1..<3]), ringsFrame, "\(name): a merged lane names the rings' frame")
+            }
+            XCTAssertEqual(merged, try Support.string(set, "reference_merged"), name)
+            XCTAssertGreaterThan(result.stats.merges, 0, "\(name): no merge was tried")
+            XCTAssertEqual(result.merged, "", "\(name): the session offered another frame's lanes")
+            XCTAssertEqual(result.stats.mergedLanes, 0, name)
         }
     }
 }

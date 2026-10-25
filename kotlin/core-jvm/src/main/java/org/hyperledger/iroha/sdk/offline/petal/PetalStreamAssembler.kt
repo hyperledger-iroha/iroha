@@ -5,7 +5,7 @@ class PetalAssemblerLimits @JvmOverloads constructor(
     /** Largest payload the receiver accepts. */
     val maxPayloadLength: Int = PetalStream.DEFAULT_MAX_PAYLOAD_LEN,
     /** Atoms buffered while waiting for the first beacon (`0` drops them). */
-    val maxPendingAtoms: Int = 128,
+    val maxPendingAtoms: Int = 512,
 ) {
     init {
         require(maxPayloadLength >= 0 && maxPendingAtoms >= 0) { "assembler limits must not be negative" }
@@ -17,7 +17,7 @@ class PetalAssemblerLimits @JvmOverloads constructor(
     override fun hashCode(): Int = 31 * maxPayloadLength + maxPendingAtoms
 
     companion object {
-        /** 64 KiB payloads, 128 pending atoms. */
+        /** 64 KiB payloads, 512 pending atoms. */
         @JvmField
         val DEFAULT = PetalAssemblerLimits()
     }

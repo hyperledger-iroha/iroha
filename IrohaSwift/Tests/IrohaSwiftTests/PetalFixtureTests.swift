@@ -2,73 +2,82 @@ import XCTest
 @testable import IrohaSwift
 
 /// Conformance against the shared golden vectors in
-/// `fixtures/petal/petal_stream_v1.json` (every section of the file).
+/// `fixtures/petal/petal_stream_v2.json` (every section of the file).
 final class PetalFixtureTests: XCTestCase {
     private typealias Support = PetalTestSupport
 
     private func fixture() throws -> [String: Any] {
-        try XCTUnwrap(Support.streamFixture, "fixtures/petal/petal_stream_v1.json is missing")
+        try XCTUnwrap(Support.streamFixture, "fixtures/petal/petal_stream_v2.json is missing")
+    }
+
+    /// A fixture number that the reference wrote from a single-precision constant.
+    private func single(_ value: [String: Any], _ key: String) throws -> Float {
+        Float(try XCTUnwrap(value[key] as? NSNumber, key).doubleValue)
     }
 
     func testConstantsAndLayoutMatch() throws {
         let doc = try fixture()
-        XCTAssertEqual(try Support.integer(doc, "fixture_version"), 1)
-        XCTAssertEqual(try Support.string(doc, "format"), "petal-stream-v1")
+        XCTAssertEqual(try Support.integer(doc, "fixture_version"), 2)
+        XCTAssertEqual(try Support.string(doc, "format"), "petal-stream-v2")
         let constants = try Support.object(doc, "constants")
         XCTAssertEqual(Double(try Support.integer(constants, "canvas")), PetalLayout.canvas)
-        XCTAssertEqual(Double(try Support.integer(constants, "tile_origin")), PetalLayout.tileOrigin)
-        XCTAssertEqual(Double(try Support.integer(constants, "tile_pitch")), PetalLayout.tilePitch)
-        XCTAssertEqual(Double(try Support.integer(constants, "tile_size")), PetalLayout.tileSize)
-        XCTAssertEqual(Double(try Support.integer(constants, "dot_radius")), PetalLayout.dotRadius)
         XCTAssertEqual(try Support.integer(constants, "atom_len"), PetalLane.atomLength)
-        XCTAssertEqual(try Support.integer(constants, "p_word"), PetalLane.p.wordLength)
-        XCTAssertEqual(try Support.integer(constants, "k_word"), PetalLane.k.wordLength)
         XCTAssertEqual(try Support.integer(constants, "d_word"), PetalLane.d.wordLength)
-        XCTAssertEqual(try Support.integer(constants, "p_parity"), PetalLane.p.parityLength)
-        XCTAssertEqual(try Support.integer(constants, "k_parity"), PetalLane.k.parityLength)
         XCTAssertEqual(try Support.integer(constants, "d_parity"), PetalLane.d.parityLength)
+        XCTAssertEqual(try Support.integer(constants, "field_word"), PetalLane.field(0).wordLength)
+        XCTAssertEqual(try Support.integer(constants, "field_parity"), PetalLane.field(0).parityLength)
+        XCTAssertEqual(try Support.integer(constants, "field_atoms"), PetalLane.field(0).atomCount)
+        XCTAssertEqual(try Support.integer(constants, "sectors"), PetalLayout.sectors)
+        XCTAssertEqual(try Support.integer(constants, "atoms_per_frame"), PetalLane.atomsPerFrame)
+        XCTAssertEqual(try Support.integer(constants, "field_cells"), PetalLayout.fieldCells)
         XCTAssertEqual(try Support.integer(constants, "beacon_interval"), Int(PetalStream.beaconInterval))
         XCTAssertEqual(try Support.integer(constants, "format_version"), Int(PetalStream.formatVersion))
 
         let layout = try Support.object(doc, "layout")
-        XCTAssertEqual(try Support.array(layout, "mask") as? [String], PetalLayout.mask)
         XCTAssertEqual(
-            try Support.integers(layout, "tiles_col_row"),
-            PetalLayout.tiles.flatMap { [$0.column, $0.row] }
+            try Support.integers(layout, "finder_centers").map(Double.init),
+            PetalLayout.finderCenters.flatMap { [$0.x, $0.y] }
+        )
+        XCTAssertEqual(Double(try Support.integer(layout, "band_inner")), PetalLayout.bandInner)
+        XCTAssertEqual(Double(try Support.integer(layout, "band_spacing")), PetalLayout.bandSpacing)
+        XCTAssertEqual(try Support.integers(layout, "band_slots"), PetalLayout.bandSlots)
+        XCTAssertEqual(try single(layout, "petal_radius"), Float(PetalLayout.petalRadius))
+        XCTAssertEqual(try single(layout, "petal_half_length"), Float(PetalLayout.petalHalfLength))
+        XCTAssertEqual(try single(layout, "petal_half_width"), Float(PetalLayout.petalHalfWidth))
+        XCTAssertEqual(try single(layout, "petal_notch_radius"), Float(PetalLayout.petalNotchRadius))
+        XCTAssertEqual(try single(layout, "petal_notch_distance"), Float(PetalLayout.petalNotchDistance))
+        let sectors = try XCTUnwrap(layout["sector_cells"] as? [[NSNumber]])
+        XCTAssertEqual(sectors.count, PetalLayout.sectors)
+        for (sector, cells) in sectors.enumerated() {
+            XCTAssertEqual(cells.map(\.intValue), PetalLayout.sectorCells(sector), "sector \(sector)")
+        }
+        XCTAssertEqual(try Support.array(layout, "mask") as? [String], PetalLayout.mask)
+        XCTAssertEqual(Double(try Support.integer(layout, "mask_origin")), PetalLayout.maskOrigin)
+        XCTAssertEqual(Double(try Support.integer(layout, "mask_pitch")), PetalLayout.maskPitch)
+        XCTAssertEqual(Double(try Support.integer(layout, "backdrop_radius")), PetalLayout.backdropRadius)
+        XCTAssertEqual(
+            Support.flags(try Support.bytes(layout, "light_cells_hex")),
+            (0..<PetalLayout.fieldCells).map(PetalLayout.cellLight)
         )
         XCTAssertEqual(
             try Support.integers(layout, "ring_radii").map(Double.init),
             PetalLayout.ringRadii
         )
         XCTAssertEqual(try Support.integers(layout, "ring_slots"), PetalLayout.ringSlots)
-        XCTAssertEqual(
-            try Support.integers(layout, "finder_centers").map(Double.init),
-            PetalLayout.finderCenters.flatMap { [$0.x, $0.y] }
-        )
+        XCTAssertEqual(Double(try Support.integer(layout, "dot_radius")), PetalLayout.dotRadius)
         XCTAssertEqual(try Support.integers(layout, "data_slots"), PetalLayout.dataSlots)
         XCTAssertEqual(try Support.integers(layout, "gate_slots"), PetalLayout.gateSlots)
         XCTAssertEqual(try Support.integers(layout, "guard_slots"), PetalLayout.guardSlots)
-    }
 
-    func testGlyphAlphabetStrokesAndTemplatesMatch() throws {
-        let glyphs = try Support.object(try fixture(), "glyphs")
-        XCTAssertEqual(try Support.string(glyphs, "chars"), String(PetalGlyphs.characters))
-        let strokeWidth = try XCTUnwrap(glyphs["stroke_width"] as? NSNumber).doubleValue
-        XCTAssertEqual(strokeWidth, PetalGlyphs.strokeWidth, accuracy: 1e-9)
-        let strokes = try XCTUnwrap(glyphs["strokes"] as? [[[NSNumber]]])
-        XCTAssertEqual(strokes.count, PetalGlyphs.count)
-        for (glyph, polylines) in strokes.enumerated() {
-            XCTAssertEqual(
-                polylines.map { $0.map(\.doubleValue) },
-                PetalGlyphs.strokes[glyph].map { $0.flatMap { [$0.x, $0.y] } },
-                "glyph \(glyph)"
-            )
+        let palette = try Support.object(doc, "palette")
+        func color(_ key: String) throws -> PetalColor {
+            let channels = try Support.integers(palette, key).map(UInt8.init)
+            return PetalColor(red: channels[0], green: channels[1], blue: channels[2])
         }
-        let templates = try XCTUnwrap(glyphs["templates"] as? [[NSNumber]])
-        XCTAssertEqual(templates.count, PetalGlyphs.templates.count)
-        for (glyph, row) in templates.enumerated() {
-            XCTAssertEqual(row.map(\.uint8Value), PetalGlyphs.templates[glyph], "glyph \(glyph)")
-        }
+        XCTAssertEqual(try color("background"), PetalPalette.standard.background)
+        XCTAssertEqual(try color("light"), PetalPalette.standard.light)
+        XCTAssertEqual(try color("pink"), PetalPalette.standard.pink)
+        XCTAssertEqual(try color("backdrop"), PetalPalette.standard.backdrop)
     }
 
     func testChecksumsPRNGAndWhiteningMatch() throws {
@@ -87,9 +96,10 @@ final class PetalFixtureTests: XCTestCase {
             XCTAssertEqual(Int(PetalFountain.mix32(input)), try Support.integer(entry, "out"))
         }
         let whitening = try Support.object(doc, "whitening")
-        XCTAssertEqual(try Support.bytes(whitening, "P"), PetalLane.p.whitening)
-        XCTAssertEqual(try Support.bytes(whitening, "K"), PetalLane.k.whitening)
         XCTAssertEqual(try Support.bytes(whitening, "D"), PetalLane.d.whitening)
+        for sector in 0..<PetalLayout.sectors {
+            XCTAssertEqual(try Support.bytes(whitening, "F\(sector)"), PetalLane.field(sector).whitening, "F\(sector)")
+        }
     }
 
     func testReedSolomonVectorsEncodeAndCorrect() throws {
@@ -139,23 +149,28 @@ final class PetalFixtureTests: XCTestCase {
             for frame in try Support.objects(stream, "frames") {
                 let number = UInt16(try Support.integer(frame, "frame"))
                 let data = encoder.laneData(frame: number)
-                XCTAssertEqual(data.p, try Support.bytes(frame, "p_data"), "\(name) frame \(number)")
-                XCTAssertEqual(data.k, try Support.bytes(frame, "k_data"), "\(name) frame \(number)")
                 XCTAssertEqual(data.d, try Support.bytes(frame, "d_data"), "\(name) frame \(number)")
-                let pWord = try Support.bytes(frame, "p_word")
-                let kWord = try Support.bytes(frame, "k_word")
+                let fieldData = try XCTUnwrap(frame["field_data"] as? [String]).map(Support.hex)
+                XCTAssertEqual(data.fields, fieldData, "\(name) frame \(number)")
                 let dWord = try Support.bytes(frame, "d_word")
-                XCTAssertEqual(try PetalLane.p.encode(data.p), pWord)
-                XCTAssertEqual(try PetalLane.k.encode(data.k), kWord)
+                let fieldWords = try XCTUnwrap(frame["field_words"] as? [String]).map(Support.hex)
                 XCTAssertEqual(try PetalLane.d.encode(data.d), dWord)
-                let cells = try PetalFrameCells(p: pWord, k: kWord, d: dWord)
-                XCTAssertEqual(
-                    cells.glyph.map { String($0, radix: 16) }.joined(),
-                    try Support.string(frame, "glyphs")
-                )
+                for (sector, word) in fieldWords.enumerated() {
+                    XCTAssertEqual(
+                        try PetalLane.field(sector).encode(data.fields[sector]),
+                        word,
+                        "\(name) frame \(number) sector \(sector)"
+                    )
+                }
+                let cells = try PetalFrameCells(d: dWord, fields: fieldWords)
                 XCTAssertEqual(
                     cells.dots.indices.filter { cells.dots[$0] },
                     try Support.integers(frame, "lit_dots")
+                )
+                XCTAssertEqual(
+                    cells.petals,
+                    Support.flags(try Support.bytes(frame, "lit_petals_hex")),
+                    "\(name) frame \(number)"
                 )
                 XCTAssertEqual(cells, encoder.cells(frame: number))
             }
@@ -165,8 +180,10 @@ final class PetalFixtureTests: XCTestCase {
                 for frame in try Support.objects(stream, "frames") {
                     let d = try PetalLane.d.decode(try Support.bytes(frame, "d_word"))
                     assembler.push(dLane: try XCTUnwrap(PetalStream.parseDLane(d)))
-                    for (lane, key) in [(PetalLane.p, "p_word"), (PetalLane.k, "k_word")] {
-                        let data = try lane.decode(try Support.bytes(frame, key))
+                    let words = try XCTUnwrap(frame["field_words"] as? [String]).map(Support.hex)
+                    for (sector, word) in words.enumerated() {
+                        let lane = PetalLane.field(sector)
+                        let data = try lane.decode(word)
                         assembler.push(atoms: try XCTUnwrap(PetalStream.parseAtomLane(lane, data: data)))
                     }
                 }

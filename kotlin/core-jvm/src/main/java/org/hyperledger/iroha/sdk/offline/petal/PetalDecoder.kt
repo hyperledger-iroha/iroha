@@ -6,48 +6,26 @@ import java.util.Arrays
  * Decoder tuning. Immutable and thread-safe.
  *
  * @param tryMirrored also try horizontally mirrored images (front-camera previews).
- * @param templateSigmas the five blur widths (in template cells) tried for glyph matching.
  * @param maxPixels largest image (in pixels) the decoder accepts; larger frames
  *   should be downscaled by the caller. Bounds memory and work on hostile input.
  */
 class PetalDecodeOptions @JvmOverloads constructor(
     /** Whether horizontally mirrored images are tried too. */
     val tryMirrored: Boolean = true,
-    templateSigmas: DoubleArray = doubleArrayOf(0.0, 0.5, 0.8, 1.1, 1.5),
     /** Largest accepted image area in pixels. */
     val maxPixels: Int = 12_000_000,
 ) {
-    private val sigmas = templateSigmas.copyOf()
-
     init {
-        require(sigmas.size == TEMPLATE_SIGMA_COUNT) { "exactly $TEMPLATE_SIGMA_COUNT template sigmas are required" }
-        require(sigmas.all { !it.isNaN() && !it.isInfinite() }) { "template sigmas must be finite" }
         require(maxPixels > 0) { "maxPixels must be positive" }
     }
 
-    /** The blur widths tried for glyph matching (a copy). */
-    fun templateSigmas(): DoubleArray = sigmas.copyOf()
+    override fun equals(other: Any?): Boolean =
+        other is PetalDecodeOptions && tryMirrored == other.tryMirrored && maxPixels == other.maxPixels
 
-    /** Expected tile patches per sigma: `32 × 64` values each (polarity-major). */
-    internal val patterns: Array<DoubleArray> by lazy {
-        Array(TEMPLATE_SIGMA_COUNT) { PetalDecoder.buildPatterns(sigmas[it]) }
-    }
-
-    /** [patterns] rescaled by their own contrast, as the normalised tile read compares them. */
-    internal val normalisedPatterns: Array<DoubleArray> by lazy {
-        Array(TEMPLATE_SIGMA_COUNT) { PetalDecoder.rescalePatterns(patterns[it]) }
-    }
-
-    override fun equals(other: Any?): Boolean = other is PetalDecodeOptions && tryMirrored == other.tryMirrored &&
-        maxPixels == other.maxPixels && sigmas.contentEquals(other.sigmas)
-
-    override fun hashCode(): Int = 31 * (31 * tryMirrored.hashCode() + maxPixels) + sigmas.contentHashCode()
+    override fun hashCode(): Int = 31 * tryMirrored.hashCode() + maxPixels
 
     companion object {
-        /** Number of template blur widths. */
-        const val TEMPLATE_SIGMA_COUNT = 5
-
-        /** Mirrored previews tried, sigmas `[0, 0.5, 0.8, 1.1, 1.5]`, at most 12,000,000 pixels. */
+        /** Mirrored previews tried, at most 12,000,000 pixels. */
         @JvmField
         val DEFAULT = PetalDecodeOptions()
     }
@@ -61,7 +39,7 @@ enum class PetalDecodeError(
     /** The image is empty, smaller than 48 pixels on a side, or larger than [PetalDecodeOptions.maxPixels]. */
     UNSUPPORTED_IMAGE("petal image has an unsupported size"),
 
-    /** The four corner finders were not found. */
+    /** No set of corner finders (four, or three forming a corner) was found. */
     NO_FINDERS("petal finders not found"),
 
     /** Finders were found but no orientation produced a readable lane. */
@@ -92,18 +70,15 @@ class PetalLaneResult internal constructor(
 
 /** Everything read from one camera frame. */
 class PetalDecodedFrame internal constructor(
-    /** Canvas-to-pixel homography that was used. */
-    val homography: PetalHomography,
+    /** Canvas-to-pixel pose that was used. */
+    val pose: PetalPose,
     /** Orientation: how many quarter turns the code is rotated (`0..3`). */
     val rotation: Int,
     /** Whether the image was mirrored. */
     val mirrored: Boolean,
-    /** Lane `P` result. */
-    val p: PetalLaneResult?,
-    /** Lane `K` result. */
-    val k: PetalLaneResult?,
     /** Lane `D` result. */
     val d: PetalLaneResult?,
+    fields: List<PetalLaneResult?>,
     /**
      * The corner finder that was hidden (by a finger, a glare or the edge of the
      * frame) and inferred from the other three, as its canonical index: 0 top-left,
@@ -112,23 +87,27 @@ class PetalDecodedFrame internal constructor(
      */
     val inferredCorner: Int?,
 ) {
-    /** Number of lanes that decoded. */
-    val lanesOk: Int get() = (if (p != null) 1 else 0) + (if (k != null) 1 else 0) + (if (d != null) 1 else 0)
+    /** Field lane results, sector 0 first: four entries, `null` where a lane did not decode. */
+    val fields: List<PetalLaneResult?> = java.util.Collections.unmodifiableList(ArrayList(fields))
 
-    /** Decoded lanes as letters from `"PKD"`, in that order. */
+    init {
+        require(this.fields.size == PetalLayout.SECTORS) { "a frame has ${PetalLayout.SECTORS} field lanes" }
+    }
+
+    /** The result of the field lane of sector [sector] (`0..3`), when it decoded. */
+    fun field(sector: Int): PetalLaneResult? = fields[sector]
+
+    /** Number of lanes that decoded. */
+    val lanesOk: Int get() = (if (d != null) 1 else 0) + fields.count { it != null }
+
+    /** Decoded lanes as letters: `D` and the sector digits `0`–`3`, in that order. */
     val lanes: String
-        get() = buildString(3) {
-            if (p != null) append('P')
-            if (k != null) append('K')
-            if (d != null) append('D')
+        get() = buildString(PetalLane.ALL.size) {
+            for (each in PetalLane.ALL) if (lane(each) != null) append(each.letter)
         }
 
     /** The result of [lane], when it decoded. */
-    fun lane(lane: PetalLane): PetalLaneResult? = when (lane) {
-        PetalLane.P -> p
-        PetalLane.K -> k
-        PetalLane.D -> d
-    }
+    fun lane(lane: PetalLane): PetalLaneResult? = if (lane.isField) fields[lane.sector] else d
 
     /** What lane `D` carried, when it decoded. */
     fun dLane(): PetalDLane? = d?.let { PetalStream.parseDLane(it.dataView) }
@@ -136,11 +115,10 @@ class PetalDecodedFrame internal constructor(
     /** The beacon, when lane `D` decoded on a beacon frame. */
     fun beacon(): PetalBeacon? = dLane()?.beacon
 
-    /** Atom packets from every lane that decoded (`P`, `K`, then a non-beacon `D`). */
+    /** Atom packets from every lane that decoded (the field lanes in sector order, then a non-beacon `D`). */
     fun atomPackets(): List<PetalAtomPacket> {
-        val packets = ArrayList<PetalAtomPacket>(3)
-        p?.let { PetalStream.parseAtomLane(PetalLane.P, it.dataView) }?.let { packets += it }
-        k?.let { PetalStream.parseAtomLane(PetalLane.K, it.dataView) }?.let { packets += it }
+        val packets = ArrayList<PetalAtomPacket>(PetalLane.ALL.size)
+        for (lane in PetalLane.FIELDS) fields[lane.sector]?.let { PetalStream.parseAtomLane(lane, it.dataView) }?.let { packets += it }
         dLane()?.atoms?.let { packets += it }
         return packets
     }
@@ -148,8 +126,9 @@ class PetalDecodedFrame internal constructor(
     /** Offers everything this frame carries to [assembler] (lane `D` first). */
     fun feed(assembler: PetalStreamAssembler) {
         dLane()?.let(assembler::pushDLane)
-        p?.let { PetalStream.parseAtomLane(PetalLane.P, it.dataView) }?.let(assembler::pushAtoms)
-        k?.let { PetalStream.parseAtomLane(PetalLane.K, it.dataView) }?.let(assembler::pushAtoms)
+        for (lane in PetalLane.FIELDS) {
+            fields[lane.sector]?.let { PetalStream.parseAtomLane(lane, it.dataView) }?.let(assembler::pushAtoms)
+        }
     }
 }
 
@@ -169,66 +148,59 @@ class PetalDecodeResult internal constructor(
  *
  * The decoder tries the finder candidates of [PetalLocator.candidates] in turn
  * (four seen corners, or three with the fourth inferred and moved to where the
- * dotted rings line up), derives a homography for each orientation hypothesis
- * (four rotations, optionally mirrored), ranks the hypotheses by their ring
- * gates plus the `天` silhouette, then reads the dots and tiles. Every tile is
- * classified *jointly*: the 8×8 sample patch is compared against the 32
- * hypotheses (polarity × glyph) and the best match wins, so the katakana and
- * the light/dark bit help each other. Cells the decoder is unsure about become
+ * dotted rings line up), derives a pose for each orientation hypothesis (four
+ * rotations, optionally mirrored), ranks the hypotheses by how well the ring
+ * gates line up, then reads the dots and the petal field. Every petal is one
+ * bit: its level, normalised by the finder levels, is compared with a threshold
+ * computed for its codeword and colour class (the petals inside the `天` are
+ * lighter than the pink ones). Bytes the decoder is unsure about become
  * Reed–Solomon erasures.
  *
- * After a frame decodes, [track] reads the next ones from its pose without the
- * finder search (what [PetalScanSession] does within 500 ms). The session also averages
- * captures of the same shown frame to recover tile lanes lost to noise or display banding.
+ * When some field lanes do not decode, the pose is searched for radial lens
+ * distortion: a cheap camera's barrel distortion moves the petals by a third of
+ * their pitch at the edge of a 480p frame, while the finders that fix the
+ * homography sit far outside the field. Field lanes the finder levels leave
+ * unread are read again from *local levels*: every petal rescaled by the
+ * darkest and brightest petals around it, so shadows, glare, banding and
+ * veiling light cancel.
  *
- * The tile *level read* judges every patch against the light and dark levels
- * measured at the finders. When it leaves lane `P` or `K` unreadable, the
- * *normalised read* is tried: it rescales each patch (and each template) by
- * its own contrast, so over-exposure, veiling light, glare, shadows and
- * gradients cancel out. Only a lane that the level read could not decode is
- * taken from the normalised read, so a frame the level read handles costs
- * nothing extra.
+ * After a frame decodes, [track] reads the next ones from its pose without the
+ * finder search (what [PetalScanSession] does within 500 ms). The session also
+ * averages the field levels of captures of the same shown frame to recover
+ * field lanes lost to noise or display banding.
  *
  * All functions are thread-safe. [PetalScanSession] reuses scratch buffers
  * between frames; direct calls allocate their own.
  */
 object PetalDecoder {
-    private const val PATCH = PetalGlyphs.TEMPLATE_N
-    private const val CELLS = PATCH * PATCH
-    private const val HYPOTHESES = 2 * PetalGlyphs.GLYPH_COUNT
     private const val MIN_SIDE = 48
 
-    /** Relative level of the glyph ink on a light tile (ink / light fill). */
-    private const val INK_ON_LIGHT = 0.04
-
-    /** Relative level of a pink glyph on a dark tile (pink / light fill). */
-    private const val PINK_ON_DARK = 0.83
-
-    /** Cells cut from each end of a sorted patch to find its robust darkest and brightest level. */
-    private const val PATCH_CUT = CELLS / 10
-
     /**
-     * Tiles whose contrast is below this fraction of the median tile contrast
-     * become erasures in the normalised read.
+     * Distortion steps tried, relative to the starting pose, when a plain pose leaves field lanes
+     * unread; the best is then refined by ±[DISTORTION_REFINE].
      */
-    private const val WEAK_TILE = 0.25
+    private val DISTORTION_STEPS = doubleArrayOf(-0.03, -0.06, -0.09, -0.12, -0.16, 0.03)
 
-    /** Smallest span (in luma levels) of a camera patch that counts as contrast in the normalised read. */
-    private const val PATCH_SPAN_FLOOR = 1.0
+    /** Final refinement step of the distortion search. */
+    private const val DISTORTION_REFINE = 0.015
 
-    /** Smallest span (relative to the light fill) of a template that counts as contrast in the normalised read. */
-    private const val TEMPLATE_SPAN_FLOOR = 0.001
+    /** A colour class with fewer cells in a codeword than this takes the codeword's threshold. */
+    private const val CLASS_MIN_CELLS = 16
 
-    /** Rescaled cells are clamped to this range, a quarter beyond the robust darkest and brightest levels. */
-    private const val RESCALED_MIN = -0.25
-    private const val RESCALED_MAX = 1.25
+    /** Field cells within this distance of a cell are its neighbourhood for the local read. */
+    private const val NEIGHBOURHOOD = 32.0
 
-    private const val HALF_GLYPH_BOX = PetalLayout.GLYPH_BOX / 2.0
-    private const val PATCH_CELL = PetalLayout.GLYPH_BOX / PATCH
+    /** Cells averaged at each end of a sorted neighbourhood for its local dark and lit levels. */
+    private const val NEIGHBOURHOOD_ENDS = 5
 
-    /** Sub-cell sample offsets, in cells. */
-    private val CELL_OFFSET_X = doubleArrayOf(-0.25, 0.25, -0.25, 0.25)
-    private val CELL_OFFSET_Y = doubleArrayOf(-0.25, -0.25, 0.25, 0.25)
+    /** Sample spread of a ring dot, in canvas units. */
+    private const val DOT_SPREAD = 0.32 * PetalLayout.DOT_RADIUS
+
+    /** Sample spread of a petal, in canvas units. */
+    private val PETAL_SPREAD = 0.4 * PetalLayout.PETAL_RADIUS_EXACT
+
+    private const val SECTORS = PetalLayout.SECTORS
+    private const val FIELD_BITS = PetalLanes.FIELD_BITS
 
     /** Directions of the eight finder-body samples (`τ·k/8`). */
     private val BODY_COS = DoubleArray(8)
@@ -237,12 +209,8 @@ object PetalDecoder {
     /** Canonical finder centres `x0, y0, …` (clockwise from the top-left). */
     private val CANONICAL = DoubleArray(8)
 
-    /** Lattice cells outside the `天` mask (no tile is ever drawn there). */
-    private const val EMPTY_CELLS = PetalLayout.TILE_GRID * PetalLayout.TILE_GRID - PetalLayout.TILE_COUNT
-
-    /** Centres of the [EMPTY_CELLS] lattice cells outside the mask, row-major. */
-    private val EMPTY_X = DoubleArray(EMPTY_CELLS)
-    private val EMPTY_Y = DoubleArray(EMPTY_CELLS)
+    /** No field lane read. */
+    private val NO_FIELDS: List<PetalLaneResult?> = java.util.Collections.unmodifiableList(listOf(null, null, null, null))
 
     init {
         for (k in 0 until 8) {
@@ -254,16 +222,6 @@ object PetalDecoder {
             CANONICAL[2 * finder] = PetalLayout.finderCenterX(finder)
             CANONICAL[2 * finder + 1] = PetalLayout.finderCenterY(finder)
         }
-        var empty = 0
-        for (row in 0 until PetalLayout.TILE_GRID) {
-            val line = PetalLayout.MASK[row]
-            for (column in 0 until PetalLayout.TILE_GRID) {
-                if (line[column] == '#') continue
-                EMPTY_X[empty] = PetalLayout.TILE_ORIGIN + PetalLayout.TILE_PITCH * (column + 0.5)
-                EMPTY_Y[empty] = PetalLayout.TILE_ORIGIN + PetalLayout.TILE_PITCH * (row + 0.5)
-                empty += 1
-            }
-        }
     }
 
     /**
@@ -271,8 +229,8 @@ object PetalDecoder {
      *
      * Tries the finder candidates of [PetalLocator.candidates] in order and returns the first
      * that reads. For each, the orientation hypotheses (four quarter turns, optionally mirrored)
-     * are ranked by the ring gates plus the `天`; lane `D` is tried under the best three whose
-     * gate score is at least 0.2, then the tile lanes under the best four.
+     * are ranked by the ring gates; lane `D` is tried under the best three whose gate score is at
+     * least 0.2, then the field lanes under the best four.
      *
      * Returns [PetalDecodeError.UNSUPPORTED_IMAGE] for unusable sizes,
      * [PetalDecodeError.NO_FINDERS] when no code is visible and
@@ -292,7 +250,8 @@ object PetalDecoder {
      * inferred in the previous frame counts as seen again only when its blossom is re-found within
      * a quarter diameter of that prediction (so a thumb beside it does not count). When exactly one
      * corner is missing it is placed at the prediction and refined against the rings like an
-     * inferred corner. The orientation is kept from the previous frame. Returns `null` when the
+     * inferred corner. The orientation and the lens distortion are kept from the previous frame
+     * (the distortion is searched again when a field lane does not decode). Returns `null` when the
      * image is unusable, the previous pose is broken (non-finite, or finders larger than the
      * image), two corners are lost or no lane decodes; the caller then runs [decode].
      */
@@ -305,27 +264,34 @@ object PetalDecoder {
     ): PetalDecodedFrame? = track(image, previous, options, PetalWorkspace())
 
     /**
-     * Reads all lanes with a known canvas-to-pixel [homography] (no finder
-     * search), as trackers, refinement passes and qualification tooling do.
-     * Returns `null` when the image is unusable or the finder reference levels
-     * are too weak.
+     * Reads all lanes with a known canvas-to-pixel [pose] (no finder search, no distortion
+     * search), as refinement passes and qualification tooling do. The reference levels come from
+     * all four corner finders, so a frame whose corner blossom is hidden is refused here; [decode]
+     * and [track] read such frames by inferring that corner. Returns `null` when the image is
+     * unusable or the finder reference levels are too weak.
      */
     @JvmStatic
     @JvmOverloads
     fun decodeAt(
         image: PetalLuma,
-        homography: PetalHomography,
+        pose: PetalPose,
         options: PetalDecodeOptions = PetalDecodeOptions.DEFAULT,
     ): PetalDecodedFrame? {
         if (!supported(image, options)) return null
-        val reference = referenceLevels(image, homography.m, NO_CORNER) ?: return null
-        return finish(image, options, 0, false, homography, reference, null, PetalWorkspace())
+        val reference = referenceLevels(image, pose, NO_CORNER) ?: return null
+        val workspace = PetalWorkspace()
+        val levels = workspace.fieldReads[0].levels
+        fieldLevels(image, pose, reference, levels)
+        val fields = arrayOfNulls<PetalLaneResult>(SECTORS)
+        readFields(levels, 0, fields, workspace)
+        return PetalDecodedFrame(pose, 0, false, readLaneD(image, pose, reference), fields.toList(), null)
     }
 
     /**
-     * Builds the cells the decoder believes it saw in [frame], for diagnostics. Tiles are taken
-     * from the level read (the one that judges against the finder levels), even for a frame whose
-     * lanes were rescued by the normalised read. Returns `null` when the image is unusable.
+     * Builds the cells the decoder believes it saw under [frame]'s pose, for diagnostics: every
+     * codeword thresholded as the first read of [decode] thresholds it (no local read). Returns
+     * `null` when the image is unusable, the frame names a corner that does not exist or the
+     * finder levels under that pose are too weak.
      */
     @JvmStatic
     @JvmOverloads
@@ -334,98 +300,71 @@ object PetalDecoder {
         frame: PetalDecodedFrame,
         options: PetalDecodeOptions = PetalDecodeOptions.DEFAULT,
     ): PetalFrameCells? {
-        if (!supported(image, options)) return null
-        val h = frame.homography.m
-        val reference = referenceLevels(image, h, frame.inferredCorner ?: NO_CORNER) ?: return null
+        val evidence = fieldEvidence(image, frame, options, null) ?: return null
+        val reference = referenceLevels(image, frame.pose, frame.inferredCorner ?: NO_CORNER) ?: return null
+        val d = readDots(image, frame.pose, reference).word
         val workspace = PetalWorkspace()
-        samplePatches(image, h, workspace)
-        val words = tileWords(readTiles(reference, options, workspace))
-        return PetalFrameCells.fromWords(words.p, words.k, readDots(image, h, reference).word)
+        val words = List(SECTORS) { sector ->
+            readWord(evidence.levels, sector, 0.0, workspace)
+            workspace.wordBytes.copyOf()
+        }
+        return PetalFrameCells.fromWords(d, words)
     }
 
     /**
-     * Mean squared tile-match error of the level read of [frame], a quick image-quality indicator.
-     * It can be large for a frame whose lanes were rescued by the normalised read, which is the
-     * point: the finder levels did not describe that picture. Returns `null` when the image is unusable.
+     * What one capture shows of a frame's petal field: the level of every field cell sampled under
+     * the capture's decoded pose and normalised by that capture's finder levels (about 27 KB).
      */
-    @JvmStatic
-    @JvmOverloads
-    fun tileMatchError(
-        image: PetalLuma,
-        frame: PetalDecodedFrame,
-        options: PetalDecodeOptions = PetalDecodeOptions.DEFAULT,
-    ): Double? {
-        if (!supported(image, options)) return null
-        val h = frame.homography.m
-        val reference = referenceLevels(image, h, frame.inferredCorner ?: NO_CORNER) ?: return null
-        val workspace = PetalWorkspace()
-        samplePatches(image, h, workspace)
-        val reads = readTiles(reference, options, workspace)
-        var total = -0.0
-        for (tile in 0 until reads.count) total += reads.error[tile]
-        return total / reads.count.toDouble()
-    }
+    internal class FieldEvidence(val levels: DoubleArray)
 
-    /** One capture's raw tile patches and finder levels, held independently of decoding scratch. */
-    internal class TileEvidence(patches: DoubleArray, reference: Reference) {
-        val patches = patches.copyOf()
-        val reference = Reference(reference.lit.copyOf(), reference.dark.copyOf())
-    }
-
-    /** Samples a usable capture under its canonical decoded pose for later averaging. */
-    internal fun tileEvidence(
+    /**
+     * The field evidence of [image] under the pose [frame] was decoded with, sampled into [into]
+     * when given (a buffer the caller no longer needs) or a new buffer. Returns `null` when the
+     * image is unusable, the frame names a corner that does not exist, or the finder levels under
+     * that pose are too weak; [into] is untouched then.
+     */
+    internal fun fieldEvidence(
         image: PetalLuma,
         frame: PetalDecodedFrame,
         options: PetalDecodeOptions,
-        workspace: PetalWorkspace,
-    ): TileEvidence? {
+        into: DoubleArray?,
+    ): FieldEvidence? {
+        // a frame built by the caller may name a corner that does not exist
         if (!supported(image, options) || frame.inferredCorner?.let { it !in 0..3 } == true) return null
-        val h = frame.homography.m
-        val reference = referenceLevels(image, h, frame.inferredCorner ?: NO_CORNER) ?: return null
-        samplePatches(image, h, workspace)
-        return TileEvidence(workspace.patches, reference)
+        val reference = referenceLevels(image, frame.pose, frame.inferredCorner ?: NO_CORNER) ?: return null
+        val levels = into ?: DoubleArray(PetalLayout.FIELD_CELLS)
+        fieldLevels(image, frame.pose, reference, levels)
+        return FieldEvidence(levels)
     }
 
     /**
-     * Tile lanes from captures of one shown frame. The level read averages patches levelled by
-     * each capture's own finder levels; missing lanes then use the normalised mean raw patches.
-     * Summation follows capture order, exactly as the reference decoder does. The caller must
-     * group captures by their decoded lane headers and check the recovered lane's own header.
+     * The field lanes from several captures of one shown frame: the cell-by-cell mean of their
+     * levels (summed in capture order, then divided by the number of captures), read as one
+     * capture's levels are, local read included. Averaging cancels the sensor noise, banding and
+     * shake that differ between captures; one evidence reads exactly the field lanes [decode] read
+     * from that capture's pose. The caller checks that every evidence comes from captures of the
+     * same shown frame: a lane read here names its frame in its own header. Sectors flagged in
+     * [skip] are not read.
      */
-    internal fun mergeTiles(
-        evidence: Collection<TileEvidence>,
-        options: PetalDecodeOptions,
+    internal fun mergeFields(
+        evidence: Collection<FieldEvidence>,
+        skip: BooleanArray,
         workspace: PetalWorkspace,
-    ): TileLanes {
-        if (evidence.isEmpty()) return TileLanes(null, null)
-        val mean = workspace.scaled
+    ): Array<PetalLaneResult?> {
+        val results = arrayOfNulls<PetalLaneResult>(SECTORS)
+        if (evidence.isEmpty()) return results
+        val mean = workspace.meanLevels
         Arrays.fill(mean, 0.0)
         for (capture in evidence) {
-            for (tile in 0 until PetalLayout.TILE_COUNT) {
-                val lit = capture.reference.litAt(PetalLayout.TILE_CENTER_X[tile], PetalLayout.TILE_CENTER_Y[tile])
-                val dark = capture.reference.darkAt(PetalLayout.TILE_CENTER_X[tile], PetalLayout.TILE_CENTER_Y[tile])
-                val base = tile * CELLS
-                for (cell in base until base + CELLS) mean[cell] += (capture.patches[cell] - dark) / (lit - dark)
-            }
+            val levels = capture.levels
+            for (cell in 0 until PetalLayout.FIELD_CELLS) mean[cell] += levels[cell]
         }
         val count = evidence.size.toDouble()
-        for (cell in mean.indices) mean[cell] /= count
-        Arrays.fill(workspace.erased, false)
-        var words = tileWords(classify(mean, options, false, workspace.erased, workspace))
-        var p = decodeWithErasures(PetalLane.P, words.p, words.pConfidence)
-        var k = decodeWithErasures(PetalLane.K, words.k, words.kConfidence)
-        if (p == null || k == null) {
-            val raw = workspace.patches
-            Arrays.fill(raw, 0.0)
-            for (capture in evidence) {
-                for (cell in raw.indices) raw[cell] += capture.patches[cell]
-            }
-            for (cell in raw.indices) raw[cell] /= count
-            words = tileWords(readTilesNormalised(options, workspace))
-            if (p == null) p = decodeWithErasures(PetalLane.P, words.p, words.pConfidence)
-            if (k == null) k = decodeWithErasures(PetalLane.K, words.k, words.kConfidence)
-        }
-        return TileLanes(p, k)
+        for (cell in 0 until PetalLayout.FIELD_CELLS) mean[cell] /= count
+        var mask = 0
+        for (sector in 0 until SECTORS) if (skip[sector]) mask = mask or (1 shl sector)
+        readFields(mean, mask, results, workspace)
+        return results
     }
 
     internal fun decode(image: PetalLuma, options: PetalDecodeOptions, workspace: PetalWorkspace): PetalDecodeResult {
@@ -445,8 +384,8 @@ object PetalDecoder {
 
     /**
      * Reads one finder candidate: refines an inferred corner against the rings, ranks the
-     * orientation hypotheses by gate score + `天` score, tries lane `D` under the best three whose
-     * gate score is at least 0.2, then the tile lanes under the best four. `null` when none reads.
+     * orientation hypotheses by gate score, tries lane `D` under the best three whose gate score is
+     * at least 0.2, then the field lanes under the best four. `null` when none reads.
      */
     internal fun decodeCandidate(
         image: PetalLuma,
@@ -458,49 +397,60 @@ object PetalDecoder {
         val corners = if (missing == NO_CORNER) set.quad else refineInferredCorner(image, set.quad, missing)
         val scored = ArrayList<Hypothesis>(8)
         for (hypothesis in hypotheses(corners, options.tryMirrored)) {
-            val h = hypothesis.homography.m
+            val pose = fitPose(image, hypothesis.dst, 0.0) ?: continue
             val inferred = if (missing == NO_CORNER) NO_CORNER else canonicalCorner(missing, hypothesis.rotation, hypothesis.mirrored)
-            val reference = referenceLevels(image, h, inferred) ?: continue
+            val reference = referenceLevels(image, pose, inferred) ?: continue
+            hypothesis.pose = pose
             hypothesis.inferred = inferred
             hypothesis.reference = reference
-            hypothesis.gate = gateScore(image, h, reference)
-            hypothesis.mask = maskScore(image, h, reference)
-            hypothesis.rank = hypothesis.gate + hypothesis.mask
-            // Stable descending insertion by rank (`sort_by` with `(b.0 + b.1).total_cmp(&(a.0 + a.1))`).
+            hypothesis.gate = gateScore(image, pose, reference)
+            // Stable descending insertion by gate score (`sort_by` with `b.0.total_cmp(&a.0)`).
             var at = scored.size
-            while (at > 0 && PetalNumerics.totalCompare(hypothesis.rank, scored[at - 1].rank) > 0) at -= 1
+            while (at > 0 && PetalNumerics.totalCompare(hypothesis.gate, scored[at - 1].gate) > 0) at -= 1
             scored.add(at, hypothesis)
         }
-        // 1. the ring beacon is the cheapest and strongest orientation check; the ranking is not by
-        //    gate score alone, so a weak gate skips that hypothesis but not the ones after it
+        // 1. the ring beacon is the cheapest and strongest orientation check
         for (index in 0 until minOf(3, scored.size)) {
             val candidate = scored[index]
             if (candidate.gate < 0.2) continue
-            val reference = candidate.reference!!
-            val d = readLaneD(image, candidate.homography.m, reference) ?: continue
-            return finish(
-                image, options, candidate.rotation, candidate.mirrored, candidate.homography, reference, d, workspace,
+            val d = readLaneD(image, candidate.pose!!, candidate.reference!!) ?: continue
+            val read = readFieldSearching(image, candidate.dst, 0.0, candidate.inferred, workspace)
+            return PetalDecodedFrame(
+                read?.pose ?: candidate.pose!!,
+                candidate.rotation,
+                candidate.mirrored,
+                d,
+                read?.fields?.toList() ?: NO_FIELDS,
                 candidate.inferredCorner(),
             )
         }
-        // 2. fall back to the tile lanes under the most promising orientations
+        // 2. fall back to the field lanes under the most promising orientations: a wrong
+        //    orientation reads permuted petals, which no field codeword accepts. Strong lens
+        //    distortion can hide both lane D and the field from a plain pose, so the distortion
+        //    is searched under the best orientation whose gates line up even when its plain
+        //    pose reads nothing.
         for (index in 0 until minOf(4, scored.size)) {
             val candidate = scored[index]
-            val h = candidate.homography.m
-            val reference = candidate.reference!!
-            samplePatches(image, h, workspace)
-            val lanes = readTileLanes(reference, options, workspace)
-            if (lanes.p != null || lanes.k != null) {
-                return PetalDecodedFrame(
-                    candidate.homography,
-                    candidate.rotation,
-                    candidate.mirrored,
-                    lanes.p,
-                    lanes.k,
-                    readLaneD(image, h, reference),
-                    candidate.inferredCorner(),
-                )
+            val plain = workspace.fieldReads[0]
+            if (!readFieldAt(image, candidate.dst, 0.0, candidate.inferred, plain, workspace)) continue
+            val confident = index == 0 && candidate.gate >= 0.2
+            // the local read costs a sort per cell: only the best orientation gets it for free
+            val read = when {
+                plain.decoded == SECTORS -> plain
+                plain.decoded == 0 && !confident -> if (index == 0) finish(plain, workspace) else plain
+                // the search from distortion 0 starts with exactly this plain read
+                else -> searchDistortion(image, candidate.dst, 0.0, candidate.inferred, workspace, plain)
             }
+            if (read.decoded == 0) continue
+            val pose = read.pose!!
+            return PetalDecodedFrame(
+                pose,
+                candidate.rotation,
+                candidate.mirrored,
+                readLaneD(image, pose, read.reference!!),
+                read.fields.toList(),
+                candidate.inferredCorner(),
+            )
         }
         return null
     }
@@ -511,15 +461,17 @@ object PetalDecoder {
         options: PetalDecodeOptions,
         workspace: PetalWorkspace,
     ): PetalDecodedFrame? {
-        if (!supported(image, options)) return null
-        val h0 = previous.homography.m
+        // a frame built by the caller may name a corner that does not exist
+        if (!supported(image, options) || previous.inferredCorner?.let { it !in 0..3 } == true) return null
+        val p0 = previous.pose
         val expected = Array(4) { corner ->
             val cx = CANONICAL[2 * corner]
             val cy = CANONICAL[2 * corner + 1]
+            val centre = p0.apply(cx, cy)
             // the finder's diameter is 120 units: its widest projection along either axis
-            val across = span(h0, cx - 60.0, cy, cx + 60.0, cy)
-            val down = span(h0, cx, cy - 60.0, cx, cy + 60.0)
-            PetalFinder(applyX(h0, cx, cy), applyY(h0, cx, cy), PetalNumerics.max(across, down))
+            val across = span(p0, cx - 60.0, cy, cx + 60.0, cy)
+            val down = span(p0, cx, cy - 60.0, cx, cy + 60.0)
+            PetalFinder(centre[0], centre[1], PetalNumerics.max(across, down))
         }
         // a broken pose, or one whose finders are larger than the picture, cannot be followed
         val short = minOf(image.width, image.height).toDouble()
@@ -576,34 +528,26 @@ object PetalDecoder {
             points[2 * corner] = corners[corner].x
             points[2 * corner + 1] = corners[corner].y
         }
-        val homography = PetalHomography.fromPoints(CANONICAL, points) ?: return null
-        val h = homography.m
-        val reference = referenceLevels(image, h, missing) ?: return null
-        val d = readLaneD(image, h, reference)
-        samplePatches(image, h, workspace)
-        val lanes = readTileLanes(reference, options, workspace)
-        if (lanes.p == null && lanes.k == null && d == null) return null
+        val read = readFieldSearching(image, points, p0.distortion, missing, workspace) ?: return null
+        val pose = read.pose!!
+        val d = readLaneD(image, pose, read.reference!!)
+        if (d == null && read.decoded == 0) return null
         return PetalDecodedFrame(
-            homography,
+            pose,
             previous.rotation,
             previous.mirrored,
-            lanes.p,
-            lanes.k,
             d,
+            read.fields.toList(),
             if (missing == NO_CORNER) null else missing,
         )
     }
 
-    private fun applyX(h: DoubleArray, x: Double, y: Double): Double =
-        (h[0] * x + h[1] * y + h[2]) / (h[6] * x + h[7] * y + h[8])
-
-    private fun applyY(h: DoubleArray, x: Double, y: Double): Double =
-        (h[3] * x + h[4] * y + h[5]) / (h[6] * x + h[7] * y + h[8])
-
-    /** Pixel distance between the images of canvas points `(ax, ay)` and `(bx, by)` under [h]. */
-    private fun span(h: DoubleArray, ax: Double, ay: Double, bx: Double, by: Double): Double {
-        val dx = applyX(h, ax, ay) - applyX(h, bx, by)
-        val dy = applyY(h, ax, ay) - applyY(h, bx, by)
+    /** Pixel distance between the images of canvas points `(ax, ay)` and `(bx, by)` under [pose]. */
+    private fun span(pose: PetalPose, ax: Double, ay: Double, bx: Double, by: Double): Double {
+        val a = pose.apply(ax, ay)
+        val b = pose.apply(bx, by)
+        val dx = a[0] - b[0]
+        val dy = a[1] - b[1]
         return Math.sqrt(dx * dx + dy * dy)
     }
 
@@ -611,38 +555,13 @@ object PetalDecoder {
         image.width >= MIN_SIDE && image.height >= MIN_SIDE &&
             image.width.toLong() * image.height.toLong() <= options.maxPixels.toLong()
 
-    /**
-     * Reads every lane under one orientation; [d] may carry the lane `D` result already computed.
-     * The frame reports [inferredCorner] (canonical index, or `null`).
-     */
-    private fun finish(
-        image: PetalLuma,
-        options: PetalDecodeOptions,
-        rotation: Int,
-        mirrored: Boolean,
-        homography: PetalHomography,
-        reference: Reference,
-        d: PetalLaneResult?,
-        workspace: PetalWorkspace,
-        inferredCorner: Int? = null,
-    ): PetalDecodedFrame {
-        val h = homography.m
-        val dLane = d ?: readLaneD(image, h, reference)
-        samplePatches(image, h, workspace)
-        val lanes = readTileLanes(reference, options, workspace)
-        return PetalDecodedFrame(homography, rotation, mirrored, lanes.p, lanes.k, dLane, inferredCorner)
-    }
-
-    /** One orientation hypothesis and, once measured, its reference levels and scores. */
-    internal class Hypothesis(val rotation: Int, val mirrored: Boolean, val homography: PetalHomography) {
+    /** One orientation hypothesis: the finder centres in canonical corner order and, once measured, its pose, levels and gate score. */
+    internal class Hypothesis(val rotation: Int, val mirrored: Boolean, val dst: DoubleArray) {
         /** Canonical index of the inferred corner under this hypothesis, or [NO_CORNER]. */
         var inferred = NO_CORNER
+        var pose: PetalPose? = null
         var reference: Reference? = null
         var gate = 0.0
-        var mask = 0.0
-
-        /** Gate score + `天` score, the ranking key. */
-        var rank = 0.0
 
         fun inferredCorner(): Int? = if (inferred == NO_CORNER) null else inferred
     }
@@ -654,17 +573,21 @@ object PetalDecoder {
     internal fun canonicalCorner(index: Int, rotation: Int, mirrored: Boolean): Int =
         if (mirrored) (rotation + 4 - index) % 4 else (index + 4 - rotation) % 4
 
+    /** The pose with lens distortion [distortion] through the four finder centres [dst] (image pixels, canonical order). */
+    internal fun fitPose(image: PetalLuma, dst: DoubleArray, distortion: Double): PetalPose? =
+        PetalPose.fit(CANONICAL, dst, distortion, image.width, image.height)
+
     /**
-     * The brightness summed over all ring slots under the pose that maps the canonical corners
-     * onto [corners] (`x0, y0, …` in quad order), or NaN when they admit no homography. The slots
-     * form the same set of points under every quarter turn and mirror of the canvas (80, 92 and
-     * 104 are multiples of four), so the value does not depend on the orientation.
+     * The brightness summed over all ring slots under the plain pose that maps the canonical
+     * corners onto [corners] (`x0, y0, …` in quad order), or NaN when they admit no pose. The
+     * slots form the same set of points under every quarter turn and mirror of the canvas (88,
+     * 100 and 108 are multiples of four), so the value does not depend on the orientation.
      */
     private fun ringBrightness(image: PetalLuma, corners: DoubleArray): Double {
-        val h = PetalHomography.fromPoints(CANONICAL, corners)?.m ?: return Double.NaN
+        val pose = fitPose(image, corners, 0.0) ?: return Double.NaN
         var sum = -0.0
         for (flat in 0 until PetalLayout.TOTAL_SLOTS) {
-            sum += dotSamples(image, h, PetalLayout.SLOT_CENTER_X[flat], PetalLayout.SLOT_CENTER_Y[flat], 3.5)
+            sum += dotSamples(image, pose, PetalLayout.SLOT_CENTER_X[flat], PetalLayout.SLOT_CENTER_Y[flat], DOT_SPREAD)
         }
         return sum
     }
@@ -673,7 +596,7 @@ object PetalDecoder {
      * Moves the [inferred] corner of [corners] to where the three dotted rings line up best: a
      * 13 × 13 search in steps of 2 % of the mean leg around the parallelogram estimate, then a
      * 9 × 9 search in steps of 0.5 % around the best point. The rings fix the geometry only; the
-     * orientation is decided afterwards by the gates and the `天`.
+     * orientation is decided afterwards by the gates and the lanes.
      */
     internal fun refineInferredCorner(image: PetalLuma, corners: Array<PetalFinder>, inferred: Int): Array<PetalFinder> {
         val points = DoubleArray(8)
@@ -714,18 +637,19 @@ object PetalDecoder {
         return refined
     }
 
+    /** The four orientation hypotheses (and four mirrored ones), in that order. */
     internal fun hypotheses(finders: Array<PetalFinder>, tryMirrored: Boolean): List<Hypothesis> {
         val out = ArrayList<Hypothesis>(8)
-        val dst = DoubleArray(8)
         for (mirrored in booleanArrayOf(false, true)) {
             if (mirrored && !tryMirrored) continue
             for (rotation in 0 until 4) {
+                val dst = DoubleArray(8)
                 for (i in 0 until 4) {
                     val q = if (mirrored) finders[(rotation + 4 - i) % 4] else finders[(i + rotation) % 4]
                     dst[2 * i] = q.x
                     dst[2 * i + 1] = q.y
                 }
-                PetalHomography.fromPoints(CANONICAL, dst)?.let { out += Hypothesis(rotation, mirrored, it) }
+                out += Hypothesis(rotation, mirrored, dst)
             }
         }
         return out
@@ -747,30 +671,39 @@ object PetalDecoder {
         }
     }
 
-    /** Samples [image] at the pixel that canvas point `(x, y)` maps to under [h]. */
-    private fun sampleThrough(image: PetalLuma, h: DoubleArray, x: Double, y: Double): Double {
+    /** Samples [image] at the pixel that canvas point `(x, y)` maps to under [pose] (no allocation). */
+    private fun sampleThrough(image: PetalLuma, pose: PetalPose, x: Double, y: Double): Double {
+        val h = pose.homography.m
         val w = h[6] * x + h[7] * y + h[8]
-        return image.sample((h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w)
+        val ux = (h[0] * x + h[1] * y + h[2]) / w
+        val uy = (h[3] * x + h[4] * y + h[5]) / w
+        val k = pose.distortion
+        if (k == 0.0) return image.sample(ux, uy)
+        val dx = ux - pose.centerX
+        val dy = uy - pose.centerY
+        val factor = 1.0 + k * (dx * dx + dy * dy) / pose.scale2
+        return image.sample(pose.centerX + dx * factor, pose.centerY + dy * factor)
     }
 
-    private fun dotSamples(image: PetalLuma, h: DoubleArray, x: Double, y: Double, spread: Double): Double {
+    /** The mean of five samples: the centre and four points at ±[spread] on `x`, then on `y`. */
+    private fun dotSamples(image: PetalLuma, pose: PetalPose, x: Double, y: Double, spread: Double): Double {
         var sum = 0.0
-        sum += sampleThrough(image, h, x + 0.0, y + 0.0)
-        sum += sampleThrough(image, h, x + spread, y + 0.0)
-        sum += sampleThrough(image, h, x + -spread, y + 0.0)
-        sum += sampleThrough(image, h, x + 0.0, y + spread)
-        sum += sampleThrough(image, h, x + 0.0, y + -spread)
+        sum += sampleThrough(image, pose, x + 0.0, y + 0.0)
+        sum += sampleThrough(image, pose, x + spread, y + 0.0)
+        sum += sampleThrough(image, pose, x + -spread, y + 0.0)
+        sum += sampleThrough(image, pose, x + 0.0, y + spread)
+        sum += sampleThrough(image, pose, x + 0.0, y + -spread)
         return sum / 5.0
     }
 
     /**
      * Light and dark levels at the four corners: the solid blossom core, and the black canvas 100
      * units inward of it; `null` when a seen corner has less than 12 levels of contrast (or a
-     * non-finite one, under a broken pose). An
-     * [inferred] corner (canonical index, or [NO_CORNER]) was not seen, so its levels are
-     * extrapolated from the other three by the parallelogram rule and kept within their range.
+     * non-finite one, under a broken pose). An [inferred] corner (canonical index, or
+     * [NO_CORNER]) was not seen, so its levels are extrapolated from the other three by the
+     * parallelogram rule and kept within their range.
      */
-    internal fun referenceLevels(image: PetalLuma, h: DoubleArray, inferred: Int): Reference? {
+    internal fun referenceLevels(image: PetalLuma, pose: PetalPose, inferred: Int): Reference? {
         val lit = DoubleArray(4)
         val dark = DoubleArray(4)
         for (i in 0 until 4) {
@@ -778,13 +711,13 @@ object PetalDecoder {
             val cx = CANONICAL[2 * i]
             val cy = CANONICAL[2 * i + 1]
             // the blossom is solid out to radius 24 around its centre
-            var sum = sampleThrough(image, h, cx, cy)
-            for (k in 0 until 8) sum += sampleThrough(image, h, cx + 20.0 * BODY_COS[k], cy + 20.0 * BODY_SIN[k])
+            var sum = sampleThrough(image, pose, cx, cy)
+            for (k in 0 until 8) sum += sampleThrough(image, pose, cx + 20.0 * BODY_COS[k], cy + 20.0 * BODY_SIN[k])
             lit[i] = sum / 9.0
             val sx = if (cx < 512.0) 1.0 else -1.0
             val sy = if (cy < 512.0) 1.0 else -1.0
-            val a = dotSamples(image, h, cx + sx * 100.0, cy, 5.0)
-            val b = dotSamples(image, h, cx, cy + sy * 100.0, 5.0)
+            val a = dotSamples(image, pose, cx + sx * 100.0, cy, 5.0)
+            val b = dotSamples(image, pose, cx, cy + sy * 100.0, 5.0)
             dark[i] = 0.5 * (a + b)
             // a NaN contrast (from a broken pose) refuses as well
             val contrast = lit[i] - dark[i]
@@ -811,41 +744,20 @@ object PetalDecoder {
         return if (estimate < low) low else if (estimate > high) high else estimate
     }
 
-    /**
-     * How well the `天` lines up: the mean normalised level over the tiles (each sampled at five
-     * points across the tile, so a glyph stroke at the centre does not decide it) minus the mean
-     * over the empty lattice cells. The mask is symmetric left to right but not top to bottom, so
-     * this tells the four quarter turns apart even when the ring gates are damaged.
-     */
-    internal fun maskScore(image: PetalLuma, h: DoubleArray, reference: Reference): Double {
-        var tiles = -0.0
-        for (tile in 0 until PetalLayout.TILE_COUNT) {
-            tiles += maskLevel(image, h, reference, PetalLayout.TILE_CENTER_X[tile], PetalLayout.TILE_CENTER_Y[tile])
-        }
-        var empty = -0.0
-        for (cell in 0 until EMPTY_CELLS) empty += maskLevel(image, h, reference, EMPTY_X[cell], EMPTY_Y[cell])
-        return tiles / PetalLayout.TILE_COUNT.toDouble() - empty / EMPTY_CELLS.toDouble()
-    }
-
-    private fun maskLevel(image: PetalLuma, h: DoubleArray, reference: Reference, x: Double, y: Double): Double {
-        val lit = reference.litAt(x, y)
-        val dark = reference.darkAt(x, y)
-        return (dotSamples(image, h, x, y, 8.0) - dark) / (lit - dark)
-    }
-
-    private fun normalisedDot(image: PetalLuma, h: DoubleArray, reference: Reference, flat: Int): Double {
+    private fun normalisedDot(image: PetalLuma, pose: PetalPose, reference: Reference, flat: Int): Double {
         val x = PetalLayout.SLOT_CENTER_X[flat]
         val y = PetalLayout.SLOT_CENTER_Y[flat]
         val lit = reference.litAt(x, y)
         val dark = reference.darkAt(x, y)
-        return (dotSamples(image, h, x, y, 3.5) - dark) / (lit - dark)
+        return (dotSamples(image, pose, x, y, DOT_SPREAD) - dark) / (lit - dark)
     }
 
-    internal fun gateScore(image: PetalLuma, h: DoubleArray, reference: Reference): Double {
+    /** The mean normalised sample of the gate dots minus that of the guards. */
+    internal fun gateScore(image: PetalLuma, pose: PetalPose, reference: Reference): Double {
         var gates = -0.0
-        for (slot in PetalLayout.GATE_SLOTS) gates += normalisedDot(image, h, reference, slot)
+        for (slot in PetalLayout.GATE_SLOTS) gates += normalisedDot(image, pose, reference, slot)
         var guards = -0.0
-        for (slot in PetalLayout.GUARD_SLOTS) guards += normalisedDot(image, h, reference, slot)
+        for (slot in PetalLayout.GUARD_SLOTS) guards += normalisedDot(image, pose, reference, slot)
         return gates / PetalLayout.GATE_SLOTS.size.toDouble() - guards / PetalLayout.GUARD_SLOTS.size.toDouble()
     }
 
@@ -853,21 +765,21 @@ object PetalDecoder {
     private class DotWord(val word: ByteArray, val confidence: DoubleArray)
 
     /** Reads lane `D` with per-ring thresholds from the gates (lit) and guards (dark). */
-    private fun readDots(image: PetalLuma, h: DoubleArray, reference: Reference): DotWord {
+    private fun readDots(image: PetalLuma, pose: PetalPose, reference: Reference): DotWord {
         val thresholds = doubleArrayOf(0.5, 0.5, 0.5)
         for (ring in 0 until PetalLayout.RING_COUNT) {
             var litSum = -0.0
             var litCount = 0
             for (slot in PetalLayout.GATE_SLOTS) {
                 if (PetalLayout.SLOT_RING[slot] != ring) continue
-                litSum += normalisedDot(image, h, reference, slot)
+                litSum += normalisedDot(image, pose, reference, slot)
                 litCount += 1
             }
             var darkSum = -0.0
             var darkCount = 0
             for (slot in PetalLayout.GUARD_SLOTS) {
                 if (PetalLayout.SLOT_RING[slot] != ring) continue
-                darkSum += normalisedDot(image, h, reference, slot)
+                darkSum += normalisedDot(image, pose, reference, slot)
                 darkCount += 1
             }
             if (litCount > 0 && darkCount > 0) {
@@ -880,7 +792,7 @@ object PetalDecoder {
         val confidence = DoubleArray(PetalLanes.D_WORD) { Double.MAX_VALUE }
         for (bit in 0 until PetalLayout.D_BITS) {
             val slot = PetalLayout.DATA_SLOTS[bit]
-            val value = normalisedDot(image, h, reference, slot)
+            val value = normalisedDot(image, pose, reference, slot)
             val threshold = thresholds[PetalLayout.SLOT_RING[slot]]
             if (value > threshold) word[bit / 8] = (word[bit / 8].toInt() or (1 shl (7 - bit % 8))).toByte()
             confidence[bit / 8] = PetalNumerics.min(confidence[bit / 8], Math.abs(value - threshold))
@@ -889,18 +801,19 @@ object PetalDecoder {
     }
 
     /** Lane `D` under one pose. */
-    private fun readLaneD(image: PetalLuma, h: DoubleArray, reference: Reference): PetalLaneResult? {
-        val dots = readDots(image, h, reference)
+    private fun readLaneD(image: PetalLuma, pose: PetalPose, reference: Reference): PetalLaneResult? {
+        val dots = readDots(image, pose, reference)
         return decodeWithErasures(PetalLane.D, dots.word, dots.confidence)
     }
 
     /**
-     * Tries Reed–Solomon with growing numbers of erasures, least confident first.
+     * Tries Reed–Solomon with growing numbers of erasures, least confident first (a stable
+     * ranking: equal confidences keep position order).
      *
-     * The schedule erases 0, ⅛, ¼, ⅓ and ½ of the parity bytes (integer division), and for lane `K`
-     * also ⅔. Lanes `D` and `P` stop at ½: their words have only 11 and 13 parity bytes, and a
-     * further erasure step leaves so few spare ones that it accepts wrong codewords (lane `D` at 7
-     * erasures: about 0.4 % of random words; lane `P` at 8: wrong lanes in banded 480p frames).
+     * The schedule erases 0, ⅛, ¼, ⅓ and ½ of the parity bytes (integer division: lane `D`
+     * 0, 1, 2, 3, 5; a field lane 0, 2, 5, 7, 11). Lane `D` has only 11 parity bytes, and a further
+     * step leaves so few spare ones that it accepts wrong codewords (at 7 erasures about 0.4 % of
+     * random words).
      */
     internal fun decodeWithErasures(lane: PetalLane, word: ByteArray, confidence: DoubleArray): PetalLaneResult? {
         val n = word.size
@@ -917,11 +830,7 @@ object PetalDecoder {
             order[j + 1] = position
         }
         val nsym = lane.parityLength
-        val schedule = if (lane == PetalLane.K) {
-            intArrayOf(0, nsym / 8, nsym / 4, nsym / 3, nsym / 2, nsym * 2 / 3)
-        } else {
-            intArrayOf(0, nsym / 8, nsym / 4, nsym / 3, nsym / 2)
-        }
+        val schedule = intArrayOf(0, nsym / 8, nsym / 4, nsym / 3, nsym / 2)
         val trial = ByteArray(n)
         var previous = -1
         for (erasures in schedule) {
@@ -935,287 +844,302 @@ object PetalDecoder {
         return null
     }
 
-    /** Expected normalised patches for one blur width: `pred[(polarity * 16 + glyph) * 64 + cell]`. */
-    internal fun buildPatterns(sigma: Double): DoubleArray {
-        val kernel = DoubleArray(5) { index ->
-            val i = index - 2
-            if (sigma < 0.05) {
-                if (i == 0) 1.0 else 0.0
-            } else {
-                StrictMath.exp(-(i * i).toDouble() / (2.0 * sigma * sigma))
-            }
-        }
-        var sum = -0.0
-        for (value in kernel) sum += value
-        for (index in kernel.indices) kernel[index] = kernel[index] / sum
-        val pred = DoubleArray(HYPOTHESES * CELLS)
-        val coverage = DoubleArray(CELLS)
-        val blurred = DoubleArray(CELLS)
-        for (polarity in 0 until 2) {
-            for (glyph in 0 until PetalGlyphs.GLYPH_COUNT) {
-                for (cell in 0 until CELLS) {
-                    coverage[cell] = PetalGlyphs.TEMPLATES[glyph * CELLS + cell].toDouble() / 255.0
+    /**
+     * The two-means threshold of the first [count] [values]: start at their mean, then move to the
+     * midpoint of the means of the values above and at or below the threshold, at most eight
+     * times, stopping when it moves less than 10⁻⁴ or one side is empty. Sums run in the order given.
+     */
+    internal fun twoMeans(values: DoubleArray, count: Int): Double {
+        var total = -0.0
+        for (index in 0 until count) total += values[index]
+        var threshold = total / count.toDouble()
+        for (round in 0 until 8) {
+            var low = 0.0
+            var lows = 0
+            var high = 0.0
+            var highs = 0
+            for (index in 0 until count) {
+                val value = values[index]
+                if (value > threshold) {
+                    high += value
+                    highs += 1
+                } else {
+                    low += value
+                    lows += 1
                 }
-                for (v in 0 until PATCH) {
-                    for (u in 0 until PATCH) {
-                        var acc = 0.0
-                        for (ky in 0 until 5) {
-                            for (kx in 0 until 5) {
-                                val sx = u + kx - 2
-                                val sy = v + ky - 2
-                                if (sx in 0 until PATCH && sy in 0 until PATCH) {
-                                    acc += kernel[kx] * kernel[ky] * coverage[sy * PATCH + sx]
-                                }
-                            }
-                        }
-                        blurred[v * PATCH + u] = acc
+            }
+            if (lows == 0 || highs == 0) break
+            val next = 0.5 * (low / lows.toDouble() + high / highs.toDouble())
+            val moved = Math.abs(next - threshold)
+            threshold = next
+            if (moved < 1e-4) break
+        }
+        return threshold
+    }
+
+    /** The level of every field cell under one pose, normalised by the finder levels, into [out]. */
+    internal fun fieldLevels(image: PetalLuma, pose: PetalPose, reference: Reference, out: DoubleArray) {
+        for (cell in 0 until PetalLayout.FIELD_CELLS) {
+            val x = PetalLayout.CELL_X[cell]
+            val y = PetalLayout.CELL_Y[cell]
+            val lit = reference.litAt(x, y)
+            val dark = reference.darkAt(x, y)
+            out[cell] = (dotSamples(image, pose, x, y, PETAL_SPREAD) - dark) / (lit - dark)
+        }
+    }
+
+    /**
+     * The neighbourhood of every field cell: the cells (itself included) whose centres lie within
+     * [NEIGHBOURHOOD] units, in index order, as `CELLS[START[c] until START[c + 1]]`. Bands are 11
+     * units apart, so only the three bands on either side can hold neighbours. Built on first use.
+     */
+    private object Neighbourhoods {
+        val START = IntArray(PetalLayout.FIELD_CELLS + 1)
+        val CELLS: ShortArray
+        val LARGEST: Int
+
+        init {
+            var cells = ShortArray(PetalLayout.FIELD_CELLS * 32)
+            var count = 0
+            var largest = 0
+            val limit = NEIGHBOURHOOD * NEIGHBOURHOOD
+            for (cell in 0 until PetalLayout.FIELD_CELLS) {
+                val x = PetalLayout.CELL_X[cell]
+                val y = PetalLayout.CELL_Y[cell]
+                val band = PetalLayout.CELL_BAND[cell]
+                val first = PetalLayout.BAND_OFFSETS[maxOf(band - 3, 0)]
+                val last = PetalLayout.BAND_OFFSETS[minOf(band + 4, PetalLayout.BAND_COUNT)]
+                START[cell] = count
+                for (other in first until last) {
+                    val dx = PetalLayout.CELL_X[other] - x
+                    val dy = PetalLayout.CELL_Y[other] - y
+                    if (dx * dx + dy * dy <= limit) {
+                        if (count == cells.size) cells = cells.copyOf(2 * cells.size)
+                        cells[count] = other.toShort()
+                        count += 1
                     }
                 }
-                val base = (polarity * PetalGlyphs.GLYPH_COUNT + glyph) * CELLS
-                for (cell in 0 until CELLS) {
-                    val ink = blurred[cell]
-                    pred[base + cell] = if (polarity == 1) 1.0 - (1.0 - INK_ON_LIGHT) * ink else PINK_ON_DARK * ink
+                largest = maxOf(largest, count - START[cell])
+            }
+            START[PetalLayout.FIELD_CELLS] = count
+            CELLS = cells.copyOf(count)
+            LARGEST = largest
+        }
+    }
+
+    /**
+     * Cell levels rescaled by their neighbourhood, into [out]: the mean of the lowest and of the
+     * highest [NEIGHBOURHOOD_ENDS] levels around a cell become 0 and 1 (a span below 0.05 counts as
+     * 0.05). About half the petals around any cell are lit, so shadows, glare, banding and veiling
+     * light, which the finder levels cannot describe, cancel.
+     */
+    internal fun localLevels(levels: DoubleArray, out: DoubleArray, workspace: PetalWorkspace) {
+        val start = Neighbourhoods.START
+        val neighbours = Neighbourhoods.CELLS
+        val values = workspace.neighbourValues(Neighbourhoods.LARGEST)
+        for (cell in 0 until PetalLayout.FIELD_CELLS) {
+            val from = start[cell]
+            val n = start[cell + 1] - from
+            // insertion sort by `total_cmp` (equal keys are identical values)
+            for (index in 0 until n) {
+                val value = levels[neighbours[from + index].toInt()]
+                var at = index
+                while (at > 0 && PetalNumerics.totalCompare(values[at - 1], value) > 0) {
+                    values[at] = values[at - 1]
+                    at -= 1
                 }
+                values[at] = value
+            }
+            val ends = maxOf(minOf(NEIGHBOURHOOD_ENDS, n / 2), 1)
+            var low = -0.0
+            for (index in 0 until ends) low += values[index]
+            low /= ends.toDouble()
+            var high = -0.0
+            for (index in n - ends until n) high += values[index]
+            high /= ends.toDouble()
+            out[cell] = (levels[cell] - low) / PetalNumerics.max(high - low, 0.05)
+        }
+    }
+
+    /**
+     * The field lanes read from normalised cell levels into [out] (cleared first), skipping the
+     * sectors whose bit is set in [skip], and how far the cells sit from their thresholds on
+     * average. Sectors the levels leave unread are read again from their local levels.
+     */
+    private fun readFields(levels: DoubleArray, skip: Int, out: Array<PetalLaneResult?>, workspace: PetalWorkspace): Double {
+        Arrays.fill(out, null)
+        val separation = readSectors(levels, skip, out, workspace)
+        var retrySkip = skip
+        var unread = false
+        for (sector in 0 until SECTORS) {
+            if (skip and (1 shl sector) != 0) continue
+            if (out[sector] == null) unread = true else retrySkip = retrySkip or (1 shl sector)
+        }
+        if (unread) {
+            val local = workspace.localLevels
+            localLevels(levels, local, workspace)
+            readSectors(local, retrySkip, out, workspace)
+        }
+        return separation
+    }
+
+    /**
+     * One read of the field lanes from cell levels with per-codeword, per-colour thresholds: the
+     * result of every sector not flagged in [skip] goes to [out]. Returns the mean distance of
+     * the cells read from their thresholds (a pose that lands on the petals separates lit from
+     * dark cells best).
+     */
+    internal fun readSectors(levels: DoubleArray, skip: Int, out: Array<PetalLaneResult?>, workspace: PetalWorkspace): Double {
+        var separation = 0.0
+        var counted = 0
+        for (sector in 0 until SECTORS) {
+            if (skip and (1 shl sector) != 0) continue
+            separation = readWord(levels, sector, separation, workspace)
+            counted += FIELD_BITS
+            out[sector] = decodeWithErasures(PetalLane.field(sector), workspace.wordBytes, workspace.wordConfidence)
+        }
+        return separation / maxOf(counted, 1).toDouble()
+    }
+
+    /**
+     * The transmitted word of one sector read from cell levels into `workspace.wordBytes`, with
+     * each byte's confidence (the smallest margin of its bits) in `workspace.wordConfidence`.
+     * Every bit's margin from its threshold is added to the running sum [margins], which is returned.
+     */
+    private fun readWord(levels: DoubleArray, sector: Int, margins: Double, workspace: PetalWorkspace): Double {
+        val base = sector * PetalLayout.SECTOR_CELLS
+        val values = workspace.sectorValues
+        for (bit in 0 until FIELD_BITS) values[bit] = levels[PetalLayout.SECTOR_ORDER[base + bit]]
+        val all = twoMeans(values, FIELD_BITS)
+        // the light (`天`) and pink petals are thresholded apart: their lit levels differ
+        val lightThreshold = classThreshold(values, base, true, all, workspace)
+        val pinkThreshold = classThreshold(values, base, false, all, workspace)
+        val bytes = workspace.wordBytes
+        val confidence = workspace.wordConfidence
+        Arrays.fill(bytes, 0.toByte())
+        Arrays.fill(confidence, Double.MAX_VALUE)
+        var sum = margins
+        for (bit in 0 until FIELD_BITS) {
+            val threshold = if (PetalLayout.CELL_LIGHT[PetalLayout.SECTOR_ORDER[base + bit]]) lightThreshold else pinkThreshold
+            val value = values[bit]
+            if (value > threshold) bytes[bit / 8] = (bytes[bit / 8].toInt() or (1 shl (7 - bit % 8))).toByte()
+            val margin = Math.abs(value - threshold)
+            sum += margin
+            confidence[bit / 8] = PetalNumerics.min(confidence[bit / 8], margin)
+        }
+        return sum
+    }
+
+    /** The two-means threshold of the bit cells of one colour class, or [all] for a class of fewer than [CLASS_MIN_CELLS]. */
+    private fun classThreshold(values: DoubleArray, base: Int, light: Boolean, all: Double, workspace: PetalWorkspace): Double {
+        val members = workspace.classValues
+        var count = 0
+        for (bit in 0 until FIELD_BITS) {
+            if (PetalLayout.CELL_LIGHT[PetalLayout.SECTOR_ORDER[base + bit]] == light) {
+                members[count] = values[bit]
+                count += 1
             }
         }
-        return pred
+        return if (count < CLASS_MIN_CELLS) all else twoMeans(members, count)
     }
 
-    /**
-     * Rescales every `64`-cell template of [pred] (polarity × glyph) by its own contrast, the way
-     * the normalised read rescales the patches it compares them with.
-     */
-    internal fun rescalePatterns(pred: DoubleArray): DoubleArray {
-        val out = DoubleArray(pred.size)
-        val sorted = DoubleArray(CELLS)
-        val levels = DoubleArray(2)
-        for (hypothesis in 0 until HYPOTHESES) {
-            val base = hypothesis * CELLS
-            patchLevels(pred, base, sorted, levels)
-            rescaleInto(pred, base, levels[0], levels[1], TEMPLATE_SPAN_FLOOR, out)
-        }
-        return out
+    /** A read of the field under one pose; its [levels] buffer belongs to a workspace. */
+    internal class FieldRead(val levels: DoubleArray) {
+        var pose: PetalPose? = null
+        var reference: Reference? = null
+        val fields = arrayOfNulls<PetalLaneResult>(PetalLayout.SECTORS)
+        var decoded = 0
+        var separation = 0.0
+
+        /** More lanes, then a clearer separation. */
+        fun betterThan(other: FieldRead): Boolean =
+            decoded > other.decoded || (decoded == other.decoded && separation > other.separation)
     }
 
-    /**
-     * The robust darkest and brightest level of the [CELLS] values of [values] from [base]: the
-     * values [PATCH_CUT] cells in from either end of the sorted cells. Writes `[low, high]` to
-     * [levels]; [sorted] is scratch space of [CELLS] values.
-     */
-    private fun patchLevels(values: DoubleArray, base: Int, sorted: DoubleArray, levels: DoubleArray) {
-        System.arraycopy(values, base, sorted, 0, CELLS)
-        Arrays.sort(sorted)
-        levels[0] = sorted[PATCH_CUT]
-        levels[1] = sorted[CELLS - 1 - PATCH_CUT]
-    }
-
-    /** The robust darkest and brightest level `[low, high]` of one patch of [CELLS] values. */
-    internal fun patchLevels(values: DoubleArray): DoubleArray {
-        require(values.size == CELLS) { "a patch has $CELLS cells" }
-        val levels = DoubleArray(2)
-        patchLevels(values, 0, DoubleArray(CELLS), levels)
-        return levels
-    }
-
-    /**
-     * Maps the patch of [values] at [base] so that [low] becomes 0 and [high] becomes 1, with
-     * [floor] as the smallest span that counts as contrast, clamped to `[-0.25, 1.25]`; the result
-     * goes to the same cells of [out].
-     */
-    private fun rescaleInto(values: DoubleArray, base: Int, low: Double, high: Double, floor: Double, out: DoubleArray) {
-        val range = PetalNumerics.max(high - low, floor)
-        for (cell in base until base + CELLS) {
-            out[cell] = ((values[cell] - low) / range).coerceIn(RESCALED_MIN, RESCALED_MAX)
-        }
-    }
-
-    /** One patch of [CELLS] values mapped by its own darkest level to 0 and brightest to 1. */
-    internal fun rescale(values: DoubleArray, floor: Double): DoubleArray {
-        val levels = patchLevels(values)
-        val out = DoubleArray(CELLS)
-        rescaleInto(values, 0, levels[0], levels[1], floor, out)
-        return out
-    }
-
-    /**
-     * Samples the raw 8×8 luma patch of every tile as captured into `workspace.patches`: each cell
-     * is the mean of four bilinear samples at ±¼ cell, in camera luma levels (no reference
-     * levels applied).
-     */
-    internal fun samplePatches(image: PetalLuma, h: DoubleArray, workspace: PetalWorkspace) {
-        val patches = workspace.patches
-        for (tile in 0 until PetalLayout.TILE_COUNT) {
-            val cx = PetalLayout.TILE_CENTER_X[tile]
-            val cy = PetalLayout.TILE_CENTER_Y[tile]
-            val base = tile * CELLS
-            for (v in 0 until PATCH) {
-                val gy = cy - HALF_GLYPH_BOX + (v + 0.5) * PATCH_CELL
-                for (u in 0 until PATCH) {
-                    val gx = cx - HALF_GLYPH_BOX + (u + 0.5) * PATCH_CELL
-                    var sum = 0.0
-                    for (offset in 0 until 4) {
-                        sum += sampleThrough(
-                            image,
-                            h,
-                            gx + CELL_OFFSET_X[offset] * PATCH_CELL,
-                            gy + CELL_OFFSET_Y[offset] * PATCH_CELL,
-                        )
-                    }
-                    patches[base + v * PATCH + u] = sum / 4.0
-                }
-            }
-        }
-    }
-
-    /** The joint polarity + glyph reading of every tile under the best blur width. */
-    internal class TileReads(val count: Int) {
-        val light = BooleanArray(count)
-        val glyph = IntArray(count)
-        val polarityMargin = DoubleArray(count)
-        val glyphMargin = DoubleArray(count)
-        val error = DoubleArray(count)
-    }
-
-    /**
-     * Picks for every patch of [patches] (`TILE_COUNT × 64` values) the polarity and glyph whose
-     * template matches best.
-     *
-     * The template blur is chosen per frame, by the lowest total error. With [rescaleTemplates] the
-     * templates are rescaled like the patches; tiles flagged in [erased] get zero margins, so they are
-     * the first the Reed–Solomon decoder treats as erasures.
-     */
-    private fun classify(
-        patches: DoubleArray,
-        options: PetalDecodeOptions,
-        rescaleTemplates: Boolean,
-        erased: BooleanArray,
+    /** Reads the field through the finder centres [dst] under the pose with distortion [distortion] into [into] (no local read). */
+    private fun readFieldAt(
+        image: PetalLuma,
+        dst: DoubleArray,
+        distortion: Double,
+        inferred: Int,
+        into: FieldRead,
         workspace: PetalWorkspace,
-    ): TileReads {
-        val errors = workspace.errors
-        var bestTotal = Double.MAX_VALUE
-        var bestReads = TileReads(0)
-        for (pred in if (rescaleTemplates) options.normalisedPatterns else options.patterns) {
-            var total = 0.0
-            val reads = TileReads(PetalLayout.TILE_COUNT)
-            for (tile in 0 until PetalLayout.TILE_COUNT) {
-                val base = tile * CELLS
-                for (hypothesis in 0 until HYPOTHESES) {
-                    val predBase = hypothesis * CELLS
-                    var error = -0.0
-                    for (cell in 0 until CELLS) {
-                        val difference = patches[base + cell] - pred[predBase + cell]
-                        error += difference * difference
-                    }
-                    errors[hypothesis] = error
-                }
-                var best = 0
-                for (hypothesis in 1 until HYPOTHESES) {
-                    if (PetalNumerics.totalCompare(errors[hypothesis], errors[best]) < 0) best = hypothesis
-                }
-                val polarity = best / PetalGlyphs.GLYPH_COUNT
-                val glyph = best % PetalGlyphs.GLYPH_COUNT
-                var otherPolarity = Double.MAX_VALUE
-                val otherBase = (1 - polarity) * PetalGlyphs.GLYPH_COUNT
-                for (g in 0 until PetalGlyphs.GLYPH_COUNT) otherPolarity = PetalNumerics.min(otherPolarity, errors[otherBase + g])
-                var otherGlyph = Double.MAX_VALUE
-                val sameBase = polarity * PetalGlyphs.GLYPH_COUNT
-                for (g in 0 until PetalGlyphs.GLYPH_COUNT) {
-                    if (g != glyph) otherGlyph = PetalNumerics.min(otherGlyph, errors[sameBase + g])
-                }
-                val bestError = errors[best]
-                total += bestError
-                reads.light[tile] = polarity == 1
-                reads.glyph[tile] = glyph
-                reads.polarityMargin[tile] = if (erased[tile]) 0.0 else otherPolarity - bestError
-                reads.glyphMargin[tile] = if (erased[tile]) 0.0 else otherGlyph - bestError
-                reads.error[tile] = bestError
+    ): Boolean {
+        val pose = fitPose(image, dst, distortion) ?: return false
+        val reference = referenceLevels(image, pose, inferred) ?: return false
+        fieldLevels(image, pose, reference, into.levels)
+        into.pose = pose
+        into.reference = reference
+        Arrays.fill(into.fields, null)
+        into.separation = readSectors(into.levels, 0, into.fields, workspace)
+        into.decoded = into.fields.count { it != null }
+        return true
+    }
+
+    /** Reads the sectors [read]'s pose left unread again from their local levels. */
+    private fun finish(read: FieldRead, workspace: PetalWorkspace): FieldRead {
+        if (read.decoded < SECTORS) {
+            var skip = 0
+            for (sector in 0 until SECTORS) if (read.fields[sector] != null) skip = skip or (1 shl sector)
+            val local = workspace.localLevels
+            localLevels(read.levels, local, workspace)
+            readSectors(local, skip, read.fields, workspace)
+            read.decoded = read.fields.count { it != null }
+        }
+        return read
+    }
+
+    /**
+     * Reads the field through the finder centres [dst], starting from lens distortion [start], and
+     * searches the distortion while some field lane stays unread: [start] plus each of
+     * [DISTORTION_STEPS] in turn, then the best ±[DISTORTION_REFINE]. The pose that decodes the
+     * most lanes wins (ties: the clearer separation); the search stops once every lane decodes.
+     * Lanes the winning pose still leaves unread are read again from its local levels. `null` when
+     * no pose through [dst] has usable finder levels. The result is one of the workspace's two
+     * reads, valid until the next read.
+     */
+    private fun readFieldSearching(
+        image: PetalLuma,
+        dst: DoubleArray,
+        start: Double,
+        inferred: Int,
+        workspace: PetalWorkspace,
+    ): FieldRead? {
+        val first = workspace.fieldReads[0]
+        if (!readFieldAt(image, dst, start, inferred, first, workspace)) return null
+        return searchDistortion(image, dst, start, inferred, workspace, first)
+    }
+
+    /** [readFieldSearching] from [first], the read at distortion [start] (one of the workspace's reads). */
+    private fun searchDistortion(
+        image: PetalLuma,
+        dst: DoubleArray,
+        start: Double,
+        inferred: Int,
+        workspace: PetalWorkspace,
+        first: FieldRead,
+    ): FieldRead {
+        val reads = workspace.fieldReads
+        var best = first
+        if (best.decoded == SECTORS) return best
+        var candidate = if (best === reads[0]) reads[1] else reads[0]
+        for (step in DISTORTION_STEPS) {
+            if (readFieldAt(image, dst, start + step, inferred, candidate, workspace) && candidate.betterThan(best)) {
+                val previous = best
+                best = candidate
+                candidate = previous
+                if (best.decoded == SECTORS) return best
             }
-            if (total < bestTotal) {
-                bestTotal = total
-                bestReads = reads
+        }
+        val centre = best.pose!!.distortion
+        for (side in 0 until 2) {
+            val k = if (side == 0) centre - DISTORTION_REFINE else centre + DISTORTION_REFINE
+            if (readFieldAt(image, dst, k, inferred, candidate, workspace) && candidate.betterThan(best)) {
+                val previous = best
+                best = candidate
+                candidate = previous
             }
         }
-        return bestReads
-    }
-
-    /**
-     * The level read of the patches in `workspace.patches`: every cell becomes
-     * `(v − dark) / (lit − dark)` with the lit and dark levels measured at the finders and
-     * interpolated to the tile, and is compared with the templates as drawn.
-     */
-    internal fun readTiles(reference: Reference, options: PetalDecodeOptions, workspace: PetalWorkspace): TileReads {
-        val patches = workspace.patches
-        val levelled = workspace.scaled
-        for (tile in 0 until PetalLayout.TILE_COUNT) {
-            val lit = reference.litAt(PetalLayout.TILE_CENTER_X[tile], PetalLayout.TILE_CENTER_Y[tile])
-            val dark = reference.darkAt(PetalLayout.TILE_CENTER_X[tile], PetalLayout.TILE_CENTER_Y[tile])
-            val base = tile * CELLS
-            for (cell in base until base + CELLS) levelled[cell] = (patches[cell] - dark) / (lit - dark)
-        }
-        Arrays.fill(workspace.erased, false)
-        return classify(levelled, options, false, workspace.erased, workspace)
-    }
-
-    /**
-     * The normalised read of the patches in `workspace.patches`: every patch and every template is
-     * rescaled by its own contrast before they are compared, so the judgement does not depend on
-     * absolute levels. Tiles whose contrast is below [WEAK_TILE] times the median contrast are erased.
-     */
-    internal fun readTilesNormalised(options: PetalDecodeOptions, workspace: PetalWorkspace): TileReads {
-        val patches = workspace.patches
-        val scaled = workspace.scaled
-        val spans = workspace.spans
-        val levels = workspace.levels
-        for (tile in 0 until PetalLayout.TILE_COUNT) {
-            val base = tile * CELLS
-            patchLevels(patches, base, workspace.sortedCells, levels)
-            spans[tile] = levels[1] - levels[0]
-            rescaleInto(patches, base, levels[0], levels[1], PATCH_SPAN_FLOOR, scaled)
-        }
-        System.arraycopy(spans, 0, workspace.sortedSpans, 0, PetalLayout.TILE_COUNT)
-        Arrays.sort(workspace.sortedSpans)
-        val median = workspace.sortedSpans[PetalLayout.TILE_COUNT / 2]
-        for (tile in 0 until PetalLayout.TILE_COUNT) workspace.erased[tile] = spans[tile] < WEAK_TILE * median
-        return classify(scaled, options, true, workspace.erased, workspace)
-    }
-
-    /** Lanes `P` and `K` read from one set of patches. */
-    internal class TileLanes(val p: PetalLaneResult?, val k: PetalLaneResult?)
-
-    /**
-     * Lanes `P` and `K` from the patches in `workspace.patches`: the level read first, then, for any
-     * lane still unreadable, the normalised read.
-     */
-    internal fun readTileLanes(reference: Reference, options: PetalDecodeOptions, workspace: PetalWorkspace): TileLanes {
-        var words = tileWords(readTiles(reference, options, workspace))
-        var p = decodeWithErasures(PetalLane.P, words.p, words.pConfidence)
-        var k = decodeWithErasures(PetalLane.K, words.k, words.kConfidence)
-        if (p == null || k == null) {
-            words = tileWords(readTilesNormalised(options, workspace))
-            if (p == null) p = decodeWithErasures(PetalLane.P, words.p, words.pConfidence)
-            if (k == null) k = decodeWithErasures(PetalLane.K, words.k, words.kConfidence)
-        }
-        return TileLanes(p, k)
-    }
-
-    /** Lane `P` and `K` words with per-byte confidence. */
-    internal class TileWords(val p: ByteArray, val pConfidence: DoubleArray, val k: ByteArray, val kConfidence: DoubleArray)
-
-    internal fun tileWords(reads: TileReads): TileWords {
-        val p = ByteArray(PetalLanes.P_WORD)
-        val pConfidence = DoubleArray(PetalLanes.P_WORD) { Double.MAX_VALUE }
-        val k = ByteArray(PetalLanes.K_WORD)
-        val kConfidence = DoubleArray(PetalLanes.K_WORD) { Double.MAX_VALUE }
-        for (tile in 0 until reads.count) {
-            if (reads.light[tile]) p[tile / 8] = (p[tile / 8].toInt() or (1 shl (7 - tile % 8))).toByte()
-            pConfidence[tile / 8] = PetalNumerics.min(pConfidence[tile / 8], reads.polarityMargin[tile])
-            val glyph = reads.glyph[tile]
-            k[tile / 2] = (k[tile / 2].toInt() or (if (tile % 2 == 0) glyph shl 4 else glyph)).toByte()
-            kConfidence[tile / 2] = PetalNumerics.min(
-                kConfidence[tile / 2],
-                PetalNumerics.min(reads.glyphMargin[tile], reads.polarityMargin[tile]),
-            )
-        }
-        return TileWords(p, pConfidence, k, kConfidence)
+        return finish(best, workspace)
     }
 }

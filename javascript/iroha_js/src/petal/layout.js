@@ -3,7 +3,8 @@
 // All coordinates are design units on a square canvas of 1024 units with the
 // origin at the top-left and `y` growing downward. A renderer scales the
 // canvas to any pixel size; a decoder maps camera pixels back to design units.
-// Cell order is defined by integer indices only.
+// Cell order is defined by integer indices only, and the slot count of every
+// band is a fixed table.
 
 import { deepFreeze, requireIndex } from "./support.js";
 
@@ -11,25 +12,192 @@ import { deepFreeze, requireIndex } from "./support.js";
 export const CANVAS = 1024;
 /** Canvas centre coordinate on both axes. */
 export const CENTER = 512;
-/** Number of tile lattice columns and rows. */
-export const TILE_GRID = 20;
-/** Canvas coordinate of the lattice's left and top edge. */
-export const TILE_ORIGIN = 222;
-/** Lattice pitch in design units. */
-export const TILE_PITCH = 29;
-/** Side of a drawn tile (pitch minus a 4-unit gutter). */
-export const TILE_SIZE = 25;
-/** Corner radius of a drawn tile. */
-export const TILE_CORNER_RADIUS = 3;
-/** Side of the square glyph box inside a tile. */
-export const GLYPH_BOX = 23;
-/** Number of data tiles in the `天` mask. */
-export const TILE_COUNT = 256;
+
+/** Number of petal bands (concentric rings of field cells). */
+export const BAND_COUNT = 34;
+/** Radius of band 0. */
+export const BAND_INNER = 16;
+/** Radial distance between consecutive bands. */
+export const BAND_SPACING = 11;
+/**
+ * Cells on each band, inner band first: `4 * round(2 pi r / 50)` for the band
+ * radius `r`, about one cell every 12.5 units. Every count is a multiple of
+ * four, so the four sectors split each band evenly and the field maps onto
+ * itself under quarter turns. The table, not the formula, is normative.
+ */
+export const BAND_SLOTS = Object.freeze([
+  8, 12, 20, 24, 32, 36, 40, 48, 52, 56, 64, 68, 76, 80, 84, 92, 96, 104, 108, 112, 120, 124, 128,
+  136, 140, 148, 152, 156, 164, 168, 172, 180, 184, 192,
+]);
+/** Number of field cells. */
+export const FIELD_CELLS = 3376;
+/** Angular sectors of the field; each is one lane codeword. */
+export const SECTORS = 4;
+/** Cells in each sector. */
+export const SECTOR_CELLS = FIELD_CELLS / SECTORS;
+/** Radius of the disc a petal stands in for: decoders sample within it. */
+export const PETAL_RADIUS = 4.6;
+/** Half the length of a drawn petal, along the outward radial direction. */
+export const PETAL_HALF_LENGTH = 5.2;
+/** Half the width of a drawn petal. */
+export const PETAL_HALF_WIDTH = 4.3;
+/** Radius of the cosmetic notch cut into each petal tip. */
+export const PETAL_NOTCH_RADIUS = 1.3;
+/** Distance from a petal centre to its notch centre, outward. */
+export const PETAL_NOTCH_DISTANCE = 5.4;
+
+// The reference keeps the petal constants in single precision and widens them
+// where it computes; these are the widened values its arithmetic sees.
+/** `PETAL_RADIUS` as the reference computes with it (its `f32` value). */
+export const PETAL_RADIUS_F32 = Math.fround(PETAL_RADIUS);
+const HALF_LENGTH_F32 = Math.fround(PETAL_HALF_LENGTH);
+const HALF_WIDTH_F32 = Math.fround(PETAL_HALF_WIDTH);
+const NOTCH_RADIUS_F32 = Math.fround(PETAL_NOTCH_RADIUS);
+const NOTCH_DISTANCE_F32 = Math.fround(PETAL_NOTCH_DISTANCE);
+/** `PETAL_HALF_LENGTH` as the reference renderer computes with it (its `f32` value). */
+export const PETAL_HALF_LENGTH_F32 = HALF_LENGTH_F32;
+
+const TAU = 2 * Math.PI;
+
+/** Index of the first cell of every band (and the total at the end). */
+export const BAND_OFFSETS = (() => {
+  const offsets = new Uint16Array(BAND_COUNT + 1);
+  for (let band = 0; band < BAND_COUNT; band += 1) {
+    if (BAND_SLOTS[band] % 4 !== 0) {
+      throw new Error("band slot counts are multiples of four");
+    }
+    offsets[band + 1] = offsets[band] + BAND_SLOTS[band];
+  }
+  if (offsets[BAND_COUNT] !== FIELD_CELLS) {
+    throw new Error("the band table must hold every cell");
+  }
+  return offsets;
+})();
+
+/** Radius of band `band`. */
+export function bandRadius(band) {
+  return BAND_INNER + BAND_SPACING * band;
+}
+
+/**
+ * Fraction of a slot by which band `band` is turned: odd bands sit half a slot
+ * over, so neighbouring bands interleave.
+ */
+export function bandPhase(band) {
+  return band % 2 === 1 ? 0.5 : 0;
+}
+
+/** Band of every field cell. */
+export const CELL_BAND = new Uint8Array(FIELD_CELLS);
+/** Slot (within its band) of every field cell. */
+export const CELL_SLOT = new Uint8Array(FIELD_CELLS);
+/** Angle (radians, clockwise on screen from 3 o'clock) of every field cell centre. */
+export const CELL_ANGLE = new Float64Array(FIELD_CELLS);
+/** Canvas `x` of every field cell centre. */
+export const CELL_CENTER_X = new Float64Array(FIELD_CELLS);
+/** Canvas `y` of every field cell centre. */
+export const CELL_CENTER_Y = new Float64Array(FIELD_CELLS);
+/** Cosine of every field cell's angle (the outward direction of its petal). */
+export const CELL_COS = new Float64Array(FIELD_CELLS);
+/** Sine of every field cell's angle. */
+export const CELL_SIN = new Float64Array(FIELD_CELLS);
+(() => {
+  for (let band = 0; band < BAND_COUNT; band += 1) {
+    const slots = BAND_SLOTS[band];
+    const radius = bandRadius(band);
+    for (let slot = 0; slot < slots; slot += 1) {
+      const cell = BAND_OFFSETS[band] + slot;
+      const angle = (TAU * (slot + bandPhase(band))) / slots;
+      CELL_BAND[cell] = band;
+      CELL_SLOT[cell] = slot;
+      CELL_ANGLE[cell] = angle;
+      CELL_COS[cell] = Math.cos(angle);
+      CELL_SIN[cell] = Math.sin(angle);
+      CELL_CENTER_X[cell] = CENTER + radius * CELL_COS[cell];
+      CELL_CENTER_Y[cell] = CENTER + radius * CELL_SIN[cell];
+    }
+  }
+})();
+
+function requireCell(cell) {
+  requireIndex(cell, "field cell");
+  if (cell >= FIELD_CELLS) {
+    throw new RangeError("field cell out of range");
+  }
+  return cell;
+}
+
+/**
+ * Band and slot of field cell `cell`.
+ *
+ * @returns {[number, number]}
+ */
+export function cellBandSlot(cell) {
+  requireCell(cell);
+  return [CELL_BAND[cell], CELL_SLOT[cell]];
+}
+
+/** Angle (radians, clockwise on screen from 3 o'clock) of the centre of field cell `cell`. */
+export function cellAngle(cell) {
+  return CELL_ANGLE[requireCell(cell)];
+}
+
+/**
+ * Canvas coordinates of the centre of field cell `cell` (double precision).
+ *
+ * @returns {[number, number]}
+ */
+export function cellCenter(cell) {
+  requireCell(cell);
+  return [CELL_CENTER_X[cell], CELL_CENTER_Y[cell]];
+}
+
+/**
+ * The cells of every sector in bit order: band by band from the centre out,
+ * and within a band in ascending slot order. Sector `s` holds slots
+ * `s*n/4 ... (s+1)*n/4 - 1` of every band of `n` slots. The first 840 cells
+ * carry the sector's codeword; the last four are spare and stay dark.
+ */
+export const SECTOR_CELL_LIST = Object.freeze(
+  Array.from({ length: SECTORS }, (_, sector) => {
+    const cells = new Uint16Array(SECTOR_CELLS);
+    let count = 0;
+    for (let band = 0; band < BAND_COUNT; band += 1) {
+      const quarter = BAND_SLOTS[band] / SECTORS;
+      for (let slot = sector * quarter; slot < (sector + 1) * quarter; slot += 1) {
+        cells[count] = BAND_OFFSETS[band] + slot;
+        count += 1;
+      }
+    }
+    return cells;
+  }),
+);
+
+/** The cells of sector `sector` in bit order (a copy). */
+export function sectorCells(sector) {
+  requireIndex(sector, "sector");
+  if (sector >= SECTORS) {
+    throw new RangeError("sector out of range");
+  }
+  return Array.from(SECTOR_CELL_LIST[sector]);
+}
+
+/** Number of lattice columns and rows of the `天` mask. */
+export const MASK_GRID = 20;
+/** Canvas coordinate of the mask lattice's left and top edge. */
+export const MASK_ORIGIN = 182;
+/** Mask lattice pitch in design units. */
+export const MASK_PITCH = 33;
+/** Radius beyond which the `天` backdrop is not drawn. */
+export const BACKDROP_RADIUS = 390;
 
 /**
  * The `天` silhouette, one string per lattice row from top to bottom. `#`
- * marks a data tile. The mask is mirror-symmetric left to right and not
- * symmetric top to bottom, so it also tells a decoder which way is up.
+ * marks a lattice cell inside the character. Petals whose centre lies in a `#`
+ * cell are drawn in the light colour, the others in pink, and the `#` cells
+ * inside `BACKDROP_RADIUS` are drawn as a faint backdrop, so the character
+ * shows through the petals. The mask is mirror-symmetric left to right and not
+ * top to bottom.
  */
 export const MASK = Object.freeze([
   "....############....",
@@ -54,63 +222,45 @@ export const MASK = Object.freeze([
   ".....##########.....",
 ]);
 
-/** Lattice column of every data tile in row-major order. */
-export const TILE_COLS = new Uint8Array(TILE_COUNT);
-/** Lattice row of every data tile in row-major order. */
-export const TILE_ROWS = new Uint8Array(TILE_COUNT);
-/** Canvas `x` of every tile centre. */
-export const TILE_CENTER_X = new Float64Array(TILE_COUNT);
-/** Canvas `y` of every tile centre. */
-export const TILE_CENTER_Y = new Float64Array(TILE_COUNT);
-/** `TILE_LOOKUP[row * 20 + col]` is the tile index or -1. */
-export const TILE_LOOKUP = new Int16Array(TILE_GRID * TILE_GRID).fill(-1);
+/** `MASK_LIT[row * 20 + col]` is 1 for a `#` lattice cell. */
+const MASK_LIT = new Uint8Array(MASK_GRID * MASK_GRID);
+MASK.forEach((line, row) => {
+  for (let col = 0; col < MASK_GRID; col += 1) {
+    MASK_LIT[row * MASK_GRID + col] = line[col] === "#" ? 1 : 0;
+  }
+});
 
-(() => {
-  let count = 0;
-  for (let row = 0; row < TILE_GRID; row += 1) {
-    for (let col = 0; col < TILE_GRID; col += 1) {
-      if (MASK[row][col] !== "#") continue;
-      if (count >= TILE_COUNT) {
-        throw new Error("mask must contain exactly 256 tiles");
-      }
-      TILE_COLS[count] = col;
-      TILE_ROWS[count] = row;
-      // Exact in f32 and f64 alike: 222 + 29 * (n + 0.5).
-      TILE_CENTER_X[count] = TILE_ORIGIN + TILE_PITCH * (col + 0.5);
-      TILE_CENTER_Y[count] = TILE_ORIGIN + TILE_PITCH * (row + 0.5);
-      TILE_LOOKUP[row * TILE_GRID + col] = count;
-      count += 1;
-    }
+/** Whether the canvas point `(x, y)` lies inside the `天` mask. */
+export function inMask(x, y) {
+  if (x < MASK_ORIGIN || y < MASK_ORIGIN) {
+    return false;
   }
-  if (count !== TILE_COUNT) {
-    throw new Error("mask must contain exactly 256 tiles");
-  }
-})();
+  const col = Math.floor((x - MASK_ORIGIN) / MASK_PITCH);
+  const row = Math.floor((y - MASK_ORIGIN) / MASK_PITCH);
+  return col < MASK_GRID && row < MASK_GRID && MASK_LIT[row * MASK_GRID + col] === 1;
+}
 
-/**
- * Canvas coordinates of the centre of tile `index`.
- *
- * @returns {[number, number]}
- */
-export function tileCenter(index) {
-  requireIndex(index, "tile index");
-  if (index >= TILE_COUNT) {
-    throw new RangeError("tile index out of range");
-  }
-  return [TILE_CENTER_X[index], TILE_CENTER_Y[index]];
+/** `1` for every field cell inside the `天` (drawn in the light colour). */
+export const CELL_LIGHT = Uint8Array.from({ length: FIELD_CELLS }, (_, cell) =>
+  inMask(CELL_CENTER_X[cell], CELL_CENTER_Y[cell]) ? 1 : 0,
+);
+
+/** Whether field cell `cell` lies inside the `天` (drawn in the light colour). */
+export function cellLight(cell) {
+  return CELL_LIGHT[requireCell(cell)] === 1;
 }
 
 /** Number of concentric dot rings. */
 export const RING_COUNT = 3;
 /** Ring radii in design units. */
-export const RING_RADII = Object.freeze([360, 410, 460]);
+export const RING_RADII = Object.freeze([405, 440, 475]);
 /**
  * Dot slots on each ring (all multiples of four so the three cardinal gates
  * sit exactly on a slot).
  */
-export const RING_SLOTS = Object.freeze([80, 92, 104]);
+export const RING_SLOTS = Object.freeze([88, 100, 108]);
 /** Radius of a drawn ring dot. */
-export const DOT_RADIUS = 11;
+export const DOT_RADIUS = 9;
 /** Total dot slots over the three rings. */
 export const TOTAL_SLOTS = RING_SLOTS[0] + RING_SLOTS[1] + RING_SLOTS[2];
 /**
@@ -244,7 +394,7 @@ export function splitSlot(flat) {
 }
 
 const fround = Math.fround;
-const TAU_F32 = fround(2 * Math.PI);
+const TAU_F32 = fround(TAU);
 
 // The reference computes slot centres in single precision; every step is
 // rounded to f32 here so the decoder samples exactly the same positions.
@@ -311,7 +461,7 @@ export const PETAL_COS = new Float64Array(FINDER_PETALS);
 export const PETAL_SIN = new Float64Array(FINDER_PETALS);
 (() => {
   for (let petal = 0; petal < FINDER_PETALS; petal += 1) {
-    const angle = -Math.PI / 2 + (2 * Math.PI * petal) / FINDER_PETALS;
+    const angle = -Math.PI / 2 + (TAU * petal) / FINDER_PETALS;
     PETAL_COS[petal] = Math.cos(angle);
     PETAL_SIN[petal] = Math.sin(angle);
   }
@@ -338,4 +488,27 @@ export function finderLit(dx, dy) {
     }
   }
   return false;
+}
+
+/**
+ * Returns whether the point `(dx, dy)`, relative to the centre of a petal that
+ * points along `angle`, is lit: an ellipse of half-length `PETAL_HALF_LENGTH`
+ * along the outward direction and half-width `PETAL_HALF_WIDTH`, minus the
+ * cosmetic notch at its tip.
+ */
+export function petalLit(dx, dy, angle) {
+  return petalLitAlong(dx, dy, Math.sin(angle), Math.cos(angle));
+}
+
+/** {@link petalLit} with the sine and cosine of the petal's angle given. */
+export function petalLitAlong(dx, dy, sin, cos) {
+  const along = dx * cos + dy * sin;
+  const across = -dx * sin + dy * cos;
+  const u = along / HALF_LENGTH_F32;
+  const v = across / HALF_WIDTH_F32;
+  if (u * u + v * v > 1) {
+    return false;
+  }
+  const tip = along - NOTCH_DISTANCE_F32;
+  return tip * tip + across * across > NOTCH_RADIUS_F32 * NOTCH_RADIUS_F32;
 }

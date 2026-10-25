@@ -1,10 +1,12 @@
 // Petal Stream: the Sakura-storm optical transport.
 //
-// A Petal frame is a square image whose data lives in three independent
-// lanes: the light/dark polarity of 256 tiles shaped like the SORA `天`
-// (lane P), the katakana glyph drawn in each tile (lane K) and the dots on
-// three concentric rings (lane D). Every lane is one Reed-Solomon codeword,
-// so any lane that reads cleanly yields fountain-coded payload atoms.
+// A Petal frame is a square image whose data lives in five independent
+// lanes: the dots on three concentric rings (lane D), and a storm of 3,376
+// petals on concentric bands inside them, cut into four sectors (lanes
+// F0-F3), each petal lit or dark. The petals inside the SORA `天` are drawn
+// white and the others pink, over a faint `天`. Every lane is one
+// Reed-Solomon codeword, so any lane that reads cleanly yields fountain-coded
+// payload atoms.
 //
 // This module is a port of the `iroha_petal` Rust reference: the encoder is
 // bit-exact (shared fixtures) and the decoder follows the reference step by
@@ -13,7 +15,6 @@
 // runs in browsers, Node and React Native-like engines; the browser glue only
 // touches DOM objects when a player or scanner is used.
 
-import { GLYPH_CHARS, GLYPH_COUNT, GLYPH_GRID, STROKES, STROKE_WIDTH, TEMPLATES, TEMPLATE_N } from "./petal/glyphs.js";
 import {
   ATOMS_PER_FRAME,
   ATOM_LEN,
@@ -21,21 +22,25 @@ import {
   D_DATA,
   D_PARITY,
   D_WORD,
-  K_ATOMS,
-  K_DATA,
-  K_PARITY,
-  K_WORD,
+  FIELD_ATOMS,
+  FIELD_DATA,
+  FIELD_PARITY,
+  FIELD_WORD,
   LANE_HEADER_LEN,
-  P_ATOMS,
-  P_DATA,
-  P_PARITY,
-  P_WORD,
+  SPARE_SECTOR_CELLS,
 } from "./petal/lanes.js";
 import {
+  BACKDROP_RADIUS,
+  BAND_COUNT,
+  BAND_INNER,
+  BAND_OFFSETS,
+  BAND_SLOTS,
+  BAND_SPACING,
   CANVAS,
   CENTER,
   DOT_RADIUS,
   D_BITS,
+  FIELD_CELLS,
   FINDER_CENTERS,
   FINDER_CORE,
   FINDER_NOTCH_RADIUS,
@@ -44,22 +49,23 @@ import {
   FINDER_PETAL_DISTANCE,
   FINDER_PETAL_RADIUS,
   GATE_DOTS,
-  GLYPH_BOX,
   MASK,
+  MASK_GRID,
+  MASK_ORIGIN,
+  MASK_PITCH,
+  PETAL_HALF_LENGTH,
+  PETAL_HALF_WIDTH,
+  PETAL_NOTCH_DISTANCE,
+  PETAL_NOTCH_RADIUS,
+  PETAL_RADIUS,
   RING_RADII,
   RING_SLOTS,
-  TILE_COLS,
-  TILE_CORNER_RADIUS,
-  TILE_COUNT,
-  TILE_GRID,
-  TILE_ORIGIN,
-  TILE_PITCH,
-  TILE_ROWS,
-  TILE_SIZE,
+  SECTORS,
+  SECTOR_CELLS,
   TOTAL_SLOTS,
 } from "./petal/layout.js";
 import { DEFAULT_DECODE_OPTIONS } from "./petal/decode.js";
-import { DEFAULT_PALETTE, GLYPH_STROKE_WIDTH } from "./petal/render.js";
+import { DEFAULT_PALETTE } from "./petal/render.js";
 import { DEFAULT_SCAN_LIMITS, TRACK_WINDOW_MS } from "./petal/session.js";
 import {
   BEACON_INTERVAL,
@@ -74,9 +80,32 @@ export { PetalError } from "./petal/support.js";
 export { crc32c } from "./petal/crc.js";
 export { PetalXorshift32 } from "./petal/prng.js";
 export { PetalReedSolomon, gfExp, gfMul } from "./petal/rs.js";
-export { dataSlots, finderLit, ringOffset, slotCenter, slotRoles, splitSlot, tileCenter } from "./petal/layout.js";
-export { generateTemplates, isInked } from "./petal/glyphs.js";
-export { PetalFrameCells, decodeLane, decodeLaneCounted, encodeLane, laneWhitening } from "./petal/lanes.js";
+export {
+  bandPhase,
+  bandRadius,
+  cellAngle,
+  cellBandSlot,
+  cellCenter,
+  cellLight,
+  dataSlots,
+  finderLit,
+  inMask,
+  petalLit,
+  ringOffset,
+  sectorCells,
+  slotCenter,
+  slotRoles,
+  splitSlot,
+} from "./petal/layout.js";
+export {
+  PetalFrameCells,
+  decodeLane,
+  decodeLaneCounted,
+  encodeLane,
+  fieldLane,
+  laneLetter,
+  laneWhitening,
+} from "./petal/lanes.js";
 export { PetalFountainDecoder, encodeAtom, maskLen, maskWords, mix32, splitPayload } from "./petal/fountain.js";
 export {
   PetalStreamAssembler,
@@ -84,11 +113,12 @@ export {
   atomsInFrame,
   firstAtomId,
   isBeaconFrame,
+  laneFirstId,
   parseAtomLane,
   parseDLane,
 } from "./petal/stream.js";
 export { PetalLuma } from "./petal/image.js";
-export { PetalHomography } from "./petal/geometry.js";
+export { PetalHomography, PetalPose } from "./petal/geometry.js";
 export {
   adaptiveBinarize,
   blossoms,
@@ -102,10 +132,12 @@ export {
 } from "./petal/locate.js";
 export {
   PetalDecodedFrame,
+  PetalFieldEvidence,
   decodePetalFrame,
   decodePetalFrameAt,
+  fieldEvidence,
+  mergeFields,
   observedCells,
-  tileMatchError,
   trackPetalFrame,
 } from "./petal/decode.js";
 export { petalDrawList, renderPetalFrame } from "./petal/render.js";
@@ -122,15 +154,24 @@ export {
 export const PETAL_LAYOUT = deepFreeze({
   canvas: CANVAS,
   center: CENTER,
-  tileGrid: TILE_GRID,
-  tileOrigin: TILE_ORIGIN,
-  tilePitch: TILE_PITCH,
-  tileSize: TILE_SIZE,
-  tileCornerRadius: TILE_CORNER_RADIUS,
-  glyphBox: GLYPH_BOX,
-  tileCount: TILE_COUNT,
+  bandCount: BAND_COUNT,
+  bandInner: BAND_INNER,
+  bandSpacing: BAND_SPACING,
+  bandSlots: BAND_SLOTS.slice(),
+  bandOffsets: Array.from(BAND_OFFSETS),
+  fieldCells: FIELD_CELLS,
+  sectors: SECTORS,
+  sectorCells: SECTOR_CELLS,
+  petalRadius: PETAL_RADIUS,
+  petalHalfLength: PETAL_HALF_LENGTH,
+  petalHalfWidth: PETAL_HALF_WIDTH,
+  petalNotchRadius: PETAL_NOTCH_RADIUS,
+  petalNotchDistance: PETAL_NOTCH_DISTANCE,
+  maskGrid: MASK_GRID,
+  maskOrigin: MASK_ORIGIN,
+  maskPitch: MASK_PITCH,
+  backdropRadius: BACKDROP_RADIUS,
   mask: MASK.slice(),
-  tiles: Array.from(TILE_COLS, (col, index) => [col, TILE_ROWS[index]]),
   ringRadii: RING_RADII.slice(),
   ringSlots: RING_SLOTS.slice(),
   dotRadius: DOT_RADIUS,
@@ -146,23 +187,15 @@ export const PETAL_LAYOUT = deepFreeze({
   finderOuter: FINDER_OUTER,
 });
 
-/** The sixteen katakana of lane K: characters, stroke polylines and matching templates. */
-export const PETAL_GLYPHS = deepFreeze({
-  count: GLYPH_COUNT,
-  grid: GLYPH_GRID,
-  strokeWidth: STROKE_WIDTH,
-  templateN: TEMPLATE_N,
-  chars: GLYPH_CHARS.slice(),
-  strokes: STROKES.map((strokes) => strokes.map((stroke) => stroke.slice())),
-  templates: TEMPLATES.map((template) => template.slice()),
-  drawStrokeWidth: GLYPH_STROKE_WIDTH,
-});
+const fieldSize = () => ({ wordLen: FIELD_WORD, parityLen: FIELD_PARITY, dataLen: FIELD_DATA, atoms: FIELD_ATOMS });
 
-/** Codeword, parity and data sizes of the three lanes, in bytes. */
+/** Codeword, parity and data sizes of the five lanes, in bytes, in decode order. */
 export const PETAL_LANES = deepFreeze({
-  P: { wordLen: P_WORD, parityLen: P_PARITY, dataLen: P_DATA, atoms: P_ATOMS },
-  K: { wordLen: K_WORD, parityLen: K_PARITY, dataLen: K_DATA, atoms: K_ATOMS },
   D: { wordLen: D_WORD, parityLen: D_PARITY, dataLen: D_DATA, atoms: D_ATOMS },
+  F0: fieldSize(),
+  F1: fieldSize(),
+  F2: fieldSize(),
+  F3: fieldSize(),
 });
 
 /** Stream-level constants of the wire format and the receiver defaults. */
@@ -170,6 +203,7 @@ export const PETAL_STREAM = deepFreeze({
   atomLen: ATOM_LEN,
   laneHeaderLen: LANE_HEADER_LEN,
   atomsPerFrame: ATOMS_PER_FRAME,
+  spareSectorCells: SPARE_SECTOR_CELLS,
   formatVersion: FORMAT_VERSION,
   beaconInterval: BEACON_INTERVAL,
   maxPayloadLen: MAX_PAYLOAD_LEN,

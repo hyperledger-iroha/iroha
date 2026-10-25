@@ -4,26 +4,26 @@ package org.hyperledger.iroha.sdk.offline.petal
 class PetalPalette(
     /** Background. */
     val background: Int,
-    /** Light tile fill and finders. */
+    /** Finders and the petals inside the `天`. */
     val light: Int,
-    /** Sakura pink of dots and of glyphs on dark tiles. */
+    /** Sakura pink of the ring dots and of the petals outside the `天`. */
     val pink: Int,
-    /** Glyph colour on a light tile. */
-    val ink: Int,
+    /** The faint `天` drawn under the petals (a tenth of the light colour). */
+    val backdrop: Int,
 ) {
     init {
-        require(listOf(background, light, pink, ink).all { it in 0..0xFF_FFFF }) { "palette colours are 0xRRGGBB" }
+        require(listOf(background, light, pink, backdrop).all { it in 0..0xFF_FFFF }) { "palette colours are 0xRRGGBB" }
     }
 
     override fun equals(other: Any?): Boolean = other is PetalPalette && background == other.background &&
-        light == other.light && pink == other.pink && ink == other.ink
+        light == other.light && pink == other.pink && backdrop == other.backdrop
 
-    override fun hashCode(): Int = 31 * (31 * (31 * background + light) + pink) + ink
+    override fun hashCode(): Int = 31 * (31 * (31 * background + light) + pink) + backdrop
 
     companion object {
-        /** Black background, `(250, 235, 244)` light, `(245, 175, 208)` pink, `(20, 4, 14)` ink. */
+        /** Black background, `(250, 235, 244)` light, `(245, 175, 208)` pink, `(25, 24, 24)` backdrop. */
         @JvmField
-        val DEFAULT = PetalPalette(0x000000, 0xFAEBF4, 0xF5AFD0, 0x14040E)
+        val DEFAULT = PetalPalette(0x000000, 0xFAEBF4, 0xF5AFD0, 0x191818)
     }
 }
 
@@ -51,31 +51,14 @@ class PetalRenderOptions @JvmOverloads constructor(
 /**
  * Reference software renderer: equivalent to the Rust `render` module.
  *
- * The picture is black, with four sakura-blossom finders in the canvas
- * corners and a `天`-shaped field of 256 tiles inside three dotted rings. A
- * light tile is a pale rounded square with a near-black katakana; a dark tile
- * is empty except for its sakura-pink katakana. Platform code may draw with its
+ * The picture is black, with four sakura-blossom finders in the canvas corners,
+ * three dotted rings, and inside them a field of petals on concentric bands. A
+ * lit petal whose centre lies inside the `天` is drawn in the light colour, the
+ * others in sakura pink, over a faint backdrop of the `天` itself, so the
+ * character shows through the storm of petals. Platform code may draw with its
  * own 2D API from a [PetalDrawList] as long as geometry and polarity match.
  */
 object PetalRenderer {
-    private const val BITMAP_N = 128
-
-    /** Glyph ink bitmaps, `128 × 128` per glyph, built on first use. */
-    private val bitmaps: BooleanArray by lazy {
-        val out = BooleanArray(PetalGlyphs.GLYPH_COUNT * BITMAP_N * BITMAP_N)
-        for (glyph in 0 until PetalGlyphs.GLYPH_COUNT) {
-            val base = glyph * BITMAP_N * BITMAP_N
-            for (v in 0 until BITMAP_N) {
-                for (u in 0 until BITMAP_N) {
-                    val x = (u.toDouble() + 0.5) / BITMAP_N.toDouble() * PetalGlyphs.GLYPH_GRID
-                    val y = (v.toDouble() + 0.5) / BITMAP_N.toDouble() * PetalGlyphs.GLYPH_GRID
-                    out[base + v * BITMAP_N + u] = PetalGlyphs.isInked(glyph, x, y)
-                }
-            }
-        }
-        out
-    }
-
     /** Renders one frame into an RGB image. */
     @JvmStatic
     @JvmOverloads
@@ -83,7 +66,7 @@ object PetalRenderer {
         val size = options.size
         val s = options.supersample
         val palette = options.palette
-        val glyphs = bitmaps
+        val petals = cells.petalView
         val unit = PetalLayout.CANVAS / size.toDouble()
         val data = ByteArray(size * size * 3)
         val n = s * s
@@ -96,7 +79,7 @@ object PetalRenderer {
                     for (sx in 0 until s) {
                         val x = (px.toDouble() + (sx.toDouble() + 0.5) / s.toDouble()) * unit
                         val y = (py.toDouble() + (sy.toDouble() + 0.5) / s.toDouble()) * unit
-                        val colour = shade(cells, palette, glyphs, x, y)
+                        val colour = shade(cells, petals, palette, x, y)
                         r += colour ushr 16
                         g += (colour ushr 8) and 0xFF
                         b += colour and 0xFF
@@ -117,17 +100,34 @@ object PetalRenderer {
     fun drawList(cells: PetalFrameCells, palette: PetalPalette = PetalPalette.DEFAULT): PetalDrawList =
         PetalDrawList.of(cells, palette)
 
-    /** Inside test for a rounded square of half-side [half] and corner [radius], relative to its centre. */
-    private fun inRoundedSquare(dx: Double, dy: Double, half: Double, radius: Double): Boolean {
-        val ax = Math.abs(dx)
-        val ay = Math.abs(dy)
-        if (ax > half || ay > half) return false
-        val cx = ax - (half - radius)
-        val cy = ay - (half - radius)
-        return cx <= 0.0 || cy <= 0.0 || cx * cx + cy * cy <= radius * radius
+    /** The colour of the lit petal that covers `(x, y)`, or `-1`. */
+    private fun petal(petals: BooleanArray, palette: PetalPalette, x: Double, y: Double, radius: Double, theta: Double): Int {
+        val reach = PetalLayout.PETAL_HALF_LENGTH_EXACT
+        val nearest = PetalNumerics.roundHalfAway((radius - PetalLayout.BAND_INNER) / PetalLayout.BAND_SPACING)
+        for (offset in -1..1) {
+            val candidate = nearest + offset.toDouble()
+            if (candidate < 0.0 || candidate >= PetalLayout.BAND_COUNT.toDouble()) continue
+            val band = candidate.toInt()
+            if (Math.abs(radius - PetalLayout.bandRadius(band)) > reach) continue
+            val count = PetalLayout.bandSlots(band)
+            val slots = count.toDouble()
+            val around = PetalNumerics.roundHalfAway(theta / PetalLayout.TAU * slots - PetalLayout.bandPhase(band)).toInt()
+            for (step in -1..1) {
+                val cell = PetalLayout.BAND_OFFSETS[band] + Math.floorMod(around + step, count)
+                if (!petals[cell]) continue
+                val lit = PetalLayout.petalLit(
+                    x - PetalLayout.CELL_X[cell],
+                    y - PetalLayout.CELL_Y[cell],
+                    PetalLayout.CELL_SIN[cell],
+                    PetalLayout.CELL_COS[cell],
+                )
+                if (lit) return if (PetalLayout.CELL_LIGHT[cell]) palette.light else palette.pink
+            }
+        }
+        return -1
     }
 
-    private fun shade(cells: PetalFrameCells, palette: PetalPalette, glyphs: BooleanArray, x: Double, y: Double): Int {
+    private fun shade(cells: PetalFrameCells, petals: BooleanArray, palette: PetalPalette, x: Double, y: Double): Int {
         // finders
         for (finder in 0 until 4) {
             val dx = x - PetalLayout.finderCenterX(finder)
@@ -136,54 +136,28 @@ object PetalRenderer {
                 return if (PetalLayout.finderLit(dx, dy)) palette.light else palette.background
             }
         }
-        // tiles
-        val lattice = PetalLayout.TILE_ORIGIN
-        val pitch = PetalLayout.TILE_PITCH
-        if (x >= lattice && y >= lattice) {
-            val column = ((x - lattice) / pitch).toInt()
-            val row = ((y - lattice) / pitch).toInt()
-            if (column < PetalLayout.TILE_GRID && row < PetalLayout.TILE_GRID) {
-                val tile = PetalLayout.TILE_AT[row * PetalLayout.TILE_GRID + column]
-                if (tile >= 0) {
-                    val cx = lattice + pitch * (column.toDouble() + 0.5)
-                    val cy = lattice + pitch * (row.toDouble() + 0.5)
-                    val dx = x - cx
-                    val dy = y - cy
-                    if (!inRoundedSquare(dx, dy, PetalLayout.TILE_SIZE / 2.0, PetalLayout.TILE_CORNER_RADIUS)) {
-                        return palette.background
-                    }
-                    val boxHalf = PetalLayout.GLYPH_BOX / 2.0
-                    val inked = Math.abs(dx) < boxHalf && Math.abs(dy) < boxHalf && run {
-                        val u = ((dx + boxHalf) / (2.0 * boxHalf) * BITMAP_N.toDouble()).toInt()
-                        val v = ((dy + boxHalf) / (2.0 * boxHalf) * BITMAP_N.toDouble()).toInt()
-                        glyphs[cells.glyph(tile) * BITMAP_N * BITMAP_N + minOf(v, BITMAP_N - 1) * BITMAP_N + minOf(u, BITMAP_N - 1)]
-                    }
-                    val light = cells.isLight(tile)
-                    return when {
-                        light && !inked -> palette.light
-                        light -> palette.ink
-                        inked -> palette.pink
-                        else -> palette.background
-                    }
-                }
-            }
-        }
-        // ring dots
         val dx = x - PetalLayout.CENTER
         val dy = y - PetalLayout.CENTER
         val radius = Math.sqrt(dx * dx + dy * dy)
+        var theta = StrictMath.atan2(dy, dx)
+        if (theta < 0.0) theta += PetalLayout.TAU
+        // ring dots
         for (ring in 0 until PetalLayout.RING_COUNT) {
             val ringRadius = PetalLayout.ringRadius(ring)
             if (Math.abs(radius - ringRadius) > PetalLayout.DOT_RADIUS) continue
             val slots = PetalLayout.ringSlots(ring)
-            var theta = StrictMath.atan2(dy, dx)
-            if (theta < 0.0) theta += PetalLayout.TAU
             val slot = PetalNumerics.roundHalfAway(theta / PetalLayout.TAU * slots.toDouble()).toInt() % slots
             if (!cells.isDotLit(PetalLayout.ringOffset(ring) + slot)) continue
             val angle = PetalLayout.TAU * slot.toDouble() / slots.toDouble()
             val ex = dx - ringRadius * StrictMath.cos(angle)
             val ey = dy - ringRadius * StrictMath.sin(angle)
             if (Math.sqrt(ex * ex + ey * ey) <= PetalLayout.DOT_RADIUS) return palette.pink
+        }
+        // petals, then the faint 天 under them
+        if (radius <= PetalLayout.BACKDROP_RADIUS) {
+            val colour = petal(petals, palette, x, y, radius, theta)
+            if (colour >= 0) return colour
+            if (PetalLayout.inMask(x, y)) return palette.backdrop
         }
         return palette.background
     }
@@ -199,25 +173,31 @@ class PetalCircle(
     val radius: Double,
 )
 
-/** One tile of a [PetalDrawList], in canvas design units. */
-class PetalDrawTile(
-    /** Tile index (`0..255`). */
-    val index: Int,
+/** An axis-aligned rectangle in canvas design units. */
+class PetalRect(
+    /** Left edge. */
+    val left: Double,
+    /** Top edge. */
+    val top: Double,
+    /** Right edge. */
+    val right: Double,
+    /** Bottom edge. */
+    val bottom: Double,
+)
+
+/** One lit petal of a [PetalDrawList], in canvas design units. */
+class PetalDrawPetal(
+    /** Field cell index (`0..3375`). */
+    val cell: Int,
     /** Centre `x`. */
     val centerX: Double,
     /** Centre `y`. */
     val centerY: Double,
-    /** Whether the tile is filled with the light colour. */
+    /** Outward direction of the petal: radians, clockwise on the screen from 3 o'clock. */
+    val angle: Double,
+    /** Whether the petal lies inside the `天` and is drawn in the light colour (pink otherwise). */
     val light: Boolean,
-    /** Glyph symbol (`0..15`); see [PetalGlyphs.strokes]. */
-    val glyph: Int,
-) {
-    /** Left edge of the glyph box ([PetalLayout.GLYPH_BOX] units square). */
-    val glyphLeft: Double get() = centerX - PetalLayout.GLYPH_BOX / 2.0
-
-    /** Top edge of the glyph box. */
-    val glyphTop: Double get() = centerY - PetalLayout.GLYPH_BOX / 2.0
-}
+)
 
 /**
  * A platform-neutral vector description of one frame for native 2D canvases.
@@ -228,14 +208,17 @@ class PetalDrawTile(
  * 1. fill the canvas with [PetalPalette.background];
  * 2. fill [finderDiscs] (centre disc and five petals per finder) with
  *    [PetalPalette.light], then [finderNotches] with the background colour;
- * 3. for every tile, fill a [PetalLayout.TILE_SIZE] square with corner radius
- *    [PetalLayout.TILE_CORNER_RADIUS] centred on the tile with the light
- *    colour when [PetalDrawTile.light]; then stroke the glyph polylines of
- *    [PetalGlyphs.strokes] (32-unit grid) scaled by [GLYPH_SCALE] from
- *    `(glyphLeft, glyphTop)`, clipped to the glyph box, with round caps and
- *    joins and width [GLYPH_STROKE_WIDTH], in [PetalPalette.ink] on light tiles
- *    and [PetalPalette.pink] on dark tiles;
- * 4. fill [dots] with [PetalPalette.pink].
+ * 3. fill [backdropCells] with [PetalPalette.backdrop], clipped to the disc of
+ *    radius [BACKDROP_RADIUS] around the canvas centre (a circular clip is fine);
+ * 4. fill every one of [petals] in [petalColor]: an ellipse centred on the petal
+ *    with half-length [PETAL_HALF_LENGTH] along [PetalDrawPetal.angle] and
+ *    half-width [PETAL_HALF_WIDTH], minus the cosmetic notch (a disc of radius
+ *    [PETAL_NOTCH_RADIUS] centred [PETAL_NOTCH_DISTANCE] outward from the petal
+ *    centre), which may be omitted;
+ * 5. fill [dots] with [PetalPalette.pink].
+ *
+ * The finder and backdrop lists and the petal and dot shapes are shared between
+ * frames, so a list costs two small arrays per frame.
  */
 class PetalDrawList private constructor(
     /** Colours. */
@@ -244,26 +227,42 @@ class PetalDrawList private constructor(
     val finderDiscs: List<PetalCircle>,
     /** Petal-tip notches, filled with the background colour after [finderDiscs]. */
     val finderNotches: List<PetalCircle>,
-    /** All 256 tiles in tile order. */
-    val tiles: List<PetalDrawTile>,
+    /** The `#` cells of the `天` lattice, filled with the backdrop colour inside [BACKDROP_RADIUS]. */
+    val backdropCells: List<PetalRect>,
+    /** Lit petals in field cell order. */
+    val petals: List<PetalDrawPetal>,
     /** Lit ring dots (gates included), filled with the pink colour. */
     val dots: List<PetalCircle>,
 ) {
-    /** Glyph colour of [tile]: ink on light tiles, pink on dark ones. */
-    fun glyphColor(tile: PetalDrawTile): Int = if (tile.light) palette.ink else palette.pink
+    /** Colour of [petal]: light inside the `天`, pink outside. */
+    fun petalColor(petal: PetalDrawPetal): Int = if (petal.light) palette.light else palette.pink
 
     companion object {
         /** Canvas side in design units. */
         const val CANVAS = PetalLayout.CANVAS
 
-        /** Scale from the 32-unit glyph grid to canvas units (`23 / 32`). */
-        const val GLYPH_SCALE = PetalLayout.GLYPH_BOX / PetalGlyphs.GLYPH_GRID
+        /** Radius of the disc around the canvas centre that clips the backdrop. */
+        const val BACKDROP_RADIUS = PetalLayout.BACKDROP_RADIUS
 
-        /** Glyph stroke width in canvas units (`6.5 / 32` of the glyph box). */
-        const val GLYPH_STROKE_WIDTH = PetalGlyphs.STROKE_WIDTH * GLYPH_SCALE
+        /** Half the length of a petal, along its outward direction. */
+        const val PETAL_HALF_LENGTH = PetalLayout.PETAL_HALF_LENGTH
+
+        /** Half the width of a petal. */
+        const val PETAL_HALF_WIDTH = PetalLayout.PETAL_HALF_WIDTH
+
+        /** Radius of the cosmetic notch at a petal tip. */
+        const val PETAL_NOTCH_RADIUS = PetalLayout.PETAL_NOTCH_RADIUS
+
+        /** Distance from a petal centre to its notch centre, outward. */
+        const val PETAL_NOTCH_DISTANCE = PetalLayout.PETAL_NOTCH_DISTANCE
 
         private val FINDER_DISCS: List<PetalCircle>
         private val FINDER_NOTCHES: List<PetalCircle>
+        private val BACKDROP_CELLS: List<PetalRect>
+
+        /** The petal of every field cell and the dot of every ring slot, shared by all lists. */
+        private val CELL_PETALS: Array<PetalDrawPetal>
+        private val SLOT_DOTS: Array<PetalCircle>
 
         init {
             val discs = ArrayList<PetalCircle>()
@@ -289,41 +288,53 @@ class PetalDrawList private constructor(
             }
             FINDER_DISCS = java.util.Collections.unmodifiableList(discs)
             FINDER_NOTCHES = java.util.Collections.unmodifiableList(notches)
+            val backdrop = ArrayList<PetalRect>()
+            for (row in 0 until PetalLayout.MASK_GRID) {
+                for (column in 0 until PetalLayout.MASK_GRID) {
+                    if (!PetalLayout.MASK_CELLS[row * PetalLayout.MASK_GRID + column]) continue
+                    val left = PetalLayout.MASK_ORIGIN + PetalLayout.MASK_PITCH * column.toDouble()
+                    val top = PetalLayout.MASK_ORIGIN + PetalLayout.MASK_PITCH * row.toDouble()
+                    backdrop += PetalRect(left, top, left + PetalLayout.MASK_PITCH, top + PetalLayout.MASK_PITCH)
+                }
+            }
+            BACKDROP_CELLS = java.util.Collections.unmodifiableList(backdrop)
+            CELL_PETALS = Array(PetalLayout.FIELD_CELLS) { cell ->
+                PetalDrawPetal(
+                    cell,
+                    PetalLayout.CELL_X[cell],
+                    PetalLayout.CELL_Y[cell],
+                    PetalLayout.CELL_ANGLE[cell],
+                    PetalLayout.CELL_LIGHT[cell],
+                )
+            }
+            SLOT_DOTS = Array(PetalLayout.TOTAL_SLOTS) { flat ->
+                val ring = PetalLayout.SLOT_RING[flat]
+                val slots = PetalLayout.ringSlots(ring)
+                val radius = PetalLayout.ringRadius(ring)
+                val angle = PetalLayout.TAU * PetalLayout.SLOT_INDEX[flat].toDouble() / slots.toDouble()
+                PetalCircle(
+                    PetalLayout.CENTER + radius * StrictMath.cos(angle),
+                    PetalLayout.CENTER + radius * StrictMath.sin(angle),
+                    PetalLayout.DOT_RADIUS,
+                )
+            }
         }
 
         /** Builds the draw list of [cells]. */
         @JvmStatic
         @JvmOverloads
         fun of(cells: PetalFrameCells, palette: PetalPalette = PetalPalette.DEFAULT): PetalDrawList {
-            val tiles = ArrayList<PetalDrawTile>(PetalLayout.TILE_COUNT)
-            for (tile in 0 until PetalLayout.TILE_COUNT) {
-                tiles += PetalDrawTile(
-                    tile,
-                    PetalLayout.TILE_CENTER_X[tile],
-                    PetalLayout.TILE_CENTER_Y[tile],
-                    cells.isLight(tile),
-                    cells.glyph(tile),
-                )
-            }
+            val lit = cells.petalView
+            val petals = ArrayList<PetalDrawPetal>(PetalLayout.FIELD_CELLS / 2)
+            for (cell in 0 until PetalLayout.FIELD_CELLS) if (lit[cell]) petals += CELL_PETALS[cell]
             val dots = ArrayList<PetalCircle>()
-            for (ring in 0 until PetalLayout.RING_COUNT) {
-                val slots = PetalLayout.ringSlots(ring)
-                val radius = PetalLayout.ringRadius(ring)
-                for (slot in 0 until slots) {
-                    if (!cells.isDotLit(PetalLayout.ringOffset(ring) + slot)) continue
-                    val angle = PetalLayout.TAU * slot.toDouble() / slots.toDouble()
-                    dots += PetalCircle(
-                        PetalLayout.CENTER + radius * StrictMath.cos(angle),
-                        PetalLayout.CENTER + radius * StrictMath.sin(angle),
-                        PetalLayout.DOT_RADIUS,
-                    )
-                }
-            }
+            for (flat in 0 until PetalLayout.TOTAL_SLOTS) if (cells.isDotLit(flat)) dots += SLOT_DOTS[flat]
             return PetalDrawList(
                 palette,
                 FINDER_DISCS,
                 FINDER_NOTCHES,
-                java.util.Collections.unmodifiableList(tiles),
+                BACKDROP_CELLS,
+                java.util.Collections.unmodifiableList(petals),
                 java.util.Collections.unmodifiableList(dots),
             )
         }

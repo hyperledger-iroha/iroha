@@ -13,7 +13,6 @@ import { findForbiddenBrowserInputs } from "../scripts/bundle-size-check.mjs";
 import {
   PETAL_DEFAULT_DECODE_OPTIONS,
   PETAL_DEFAULT_SCAN_LIMITS,
-  PETAL_GLYPHS,
   PETAL_LANES,
   PETAL_LAYOUT,
   PETAL_PALETTE,
@@ -22,10 +21,12 @@ import {
   PetalCameraScanner,
   PetalDecodedFrame,
   PetalError,
+  PetalFieldEvidence,
   PetalFountainDecoder,
   PetalFrameCells,
   PetalHomography,
   PetalLuma,
+  PetalPose,
   PetalReedSolomon,
   PetalScanSession,
   PetalStreamAssembler,
@@ -33,7 +34,13 @@ import {
   PetalStreamPlayer,
   PetalXorshift32,
   atomsInFrame,
+  bandPhase,
+  bandRadius,
   blossoms,
+  cellAngle,
+  cellBandSlot,
+  cellCenter,
+  cellLight,
   crc32c,
   dataSlots,
   decodeLane,
@@ -43,51 +50,57 @@ import {
   drawPetalFrame,
   encodeAtom,
   encodeLane,
+  fieldEvidence,
+  fieldLane,
   finderLit,
   firstAtomId,
   followFinder,
-  generateTemplates,
+  inMask,
   isBeaconFrame,
   labelComponents,
+  laneFirstId,
+  laneLetter,
   laneWhitening,
   locate,
   locateCandidates,
   maskWords,
+  mergeFields,
   mix32,
   observedCells,
   parseAtomLane,
   parseDLane,
   petalDrawList,
+  petalLit,
   petalPlayerFrame,
   petalScanSize,
   renderPetalFrame,
+  sectorCells,
   selectQuad,
   selectTriple,
   slotCenter,
   slotRoles,
   splitPayload,
   splitSlot,
-  tileCenter,
-  tileMatchError,
   trackPetalFrame,
 } from "../src/petal.js";
 import {
   decodeWithErasures,
-  hypotheses,
-  maskScore,
-  patchLevels,
-  readTileLanes,
-  readTiles,
-  readTilesNormalised,
+  localLevels,
+  neighbourhoods,
+  readFields,
+  readSectors,
   referenceLevels,
-  rescale,
-  samplePatches,
-  tileWords,
+  twoMeans,
 } from "../src/petal/decode.js";
 import { completeTriple, strongFinders } from "../src/petal/locate.js";
 
-const STREAM_FIXTURE = new URL("../../../fixtures/petal/petal_stream_v1.json", import.meta.url);
-const CAPTURE_FIXTURE = new URL("../../../fixtures/petal/petal_captures_v1.json", import.meta.url);
+const STREAM_FIXTURE = new URL("../../../fixtures/petal/petal_stream_v2.json", import.meta.url);
+const CAPTURE_FIXTURE = new URL("../../../fixtures/petal/petal_captures_v2.json", import.meta.url);
+
+/** Lane D, then the four field lanes. */
+const ALL_LANES = Object.freeze(["D", "F0", "F1", "F2", "F3"]);
+const NO_SKIP = Object.freeze([false, false, false, false]);
+const TAU = 2 * Math.PI;
 
 const hex = (bytes) => Buffer.from(bytes).toString("hex");
 const fromHex = (text) => Uint8Array.from(Buffer.from(text, "hex"));
@@ -129,10 +142,15 @@ function renderLuma(cells, size, supersample) {
   return PetalLuma.fromRgba(image.width, image.height, image.data);
 }
 
+/** The bytes of `lane` among lane data or codewords `{d, fields}`. */
+function laneBytes(words, lane) {
+  return lane === "D" ? words.d : words.fields[Number(lane[1])];
+}
+
 function feedFrame(assembler, encoder, frame, lanes) {
   const words = encoder.words(frame);
   for (const lane of lanes) {
-    const data = decodeLane(lane, words[lane.toLowerCase()]);
+    const data = decodeLane(lane, laneBytes(words, lane));
     if (lane === "D") {
       assembler.pushDLane(parseDLane(data));
     } else {
@@ -145,6 +163,16 @@ function reassemble(atoms, len) {
   const out = new Uint8Array(atoms.length * 16);
   atoms.forEach((atom, index) => out.set(atom, index * 16));
   return out.slice(0, len);
+}
+
+/** One flag per field cell, cell 0 in the most significant bit of byte 0. */
+function cellFlags(bytes) {
+  return Array.from({ length: PETAL_LAYOUT.fieldCells }, (_, cell) => (bytes[cell >> 3] >> (7 - (cell & 7))) & 1);
+}
+
+/** Field data of the lane tests: the reference's `field_data(seed)`. */
+function fieldData(seed) {
+  return Uint8Array.from({ length: PETAL_LANES.F0.dataLen }, (_, b) => ((b * 37) & 0xff) ^ seed);
 }
 
 // ---------------------------------------------------------------- CRC / PRNG
@@ -243,10 +271,10 @@ test("Reed-Solomon rejects malformed arguments", () => {
   assert.throws(() => new PetalReedSolomon(10).encode(new Uint8Array(246)), RangeError);
 });
 
-// ---------------------------------------------------------------- layout and glyphs
+// ---------------------------------------------------------------- layout
 
-test("the mask has 256 mirror-symmetric tiles that show top from bottom", () => {
-  assert.equal(PETAL_LAYOUT.tiles.length, 256);
+test("the mask is mirror-symmetric and shows which way is up", () => {
+  assert.equal(PETAL_LAYOUT.mask.length, 20);
   for (const row of PETAL_LAYOUT.mask) {
     assert.equal(row.length, 20);
     for (let col = 0; col < 10; col += 1) assert.equal(row[col], row[19 - col], `row ${row} not mirrored`);
@@ -254,30 +282,87 @@ test("the mask has 256 mirror-symmetric tiles that show top from bottom", () => 
   assert.notEqual(PETAL_LAYOUT.mask[0], PETAL_LAYOUT.mask[19]);
 });
 
-test("tiles are row-major and inside the canvas", () => {
-  let previous = null;
-  PETAL_LAYOUT.tiles.forEach(([col, row], index) => {
-    if (previous !== null) {
-      assert.ok(row > previous[1] || (row === previous[1] && col > previous[0]));
+test("bands hold every cell and split into equal sectors", () => {
+  assert.equal(PETAL_LAYOUT.bandOffsets[PETAL_LAYOUT.bandCount], PETAL_LAYOUT.fieldCells);
+  assert.equal(PETAL_LAYOUT.bandSlots.reduce((a, b) => a + b, 0), 3376);
+  const seen = new Uint8Array(PETAL_LAYOUT.fieldCells);
+  for (let sector = 0; sector < PETAL_LAYOUT.sectors; sector += 1) {
+    const cells = sectorCells(sector);
+    assert.equal(cells.length, PETAL_LAYOUT.sectorCells);
+    for (const cell of cells) {
+      assert.equal(seen[cell], 0, `cell ${cell} in two sectors`);
+      seen[cell] = 1;
+      // a cell sits in its own quarter turn (odd bands lean half a slot forward)
+      const [band, slot] = cellBandSlot(cell);
+      const quarter = PETAL_LAYOUT.bandSlots[band] / 4;
+      assert.equal(Math.floor(slot / quarter), sector);
+      const turn = (cellAngle(cell) / TAU) * 4;
+      assert.ok(turn > sector - 1e-9 && turn < sector + 1, `cell ${cell} turn ${turn}`);
     }
-    previous = [col, row];
-    const [x, y] = tileCenter(index);
-    assert.ok(x >= 0 && x < 1024 && y >= 0 && y < 1024);
+  }
+  assert.ok(seen.every((flag) => flag === 1));
+  assert.throws(() => sectorCells(4), RangeError);
+  assert.throws(() => cellCenter(3376), RangeError);
+});
+
+test("band slots follow the pitch rule", () => {
+  PETAL_LAYOUT.bandSlots.forEach((slots, band) => {
+    const raw = (TAU * bandRadius(band)) / 50;
+    assert.equal(slots, 4 * Math.max(Math.round(raw), 1), `band ${band}`);
+    assert.equal(bandRadius(band), 16 + 11 * band);
+    assert.equal(bandPhase(band), band % 2 === 1 ? 0.5 : 0);
   });
-  assert.throws(() => tileCenter(256), RangeError);
+});
+
+test("the field maps onto itself under a quarter turn", () => {
+  for (let cell = 0; cell < PETAL_LAYOUT.fieldCells; cell += 1) {
+    const [band, slot] = cellBandSlot(cell);
+    const n = PETAL_LAYOUT.bandSlots[band];
+    const turned = PETAL_LAYOUT.bandOffsets[band] + ((slot + n / 4) % n);
+    const [x, y] = cellCenter(cell);
+    const [tx, ty] = cellCenter(turned);
+    // a quarter turn clockwise on screen about the centre
+    assert.ok(Math.abs(tx - (512 - (y - 512))) < 1e-9 && Math.abs(ty - (512 + (x - 512))) < 1e-9, `cell ${cell}`);
+  }
+});
+
+test("petals stay clear of their neighbours and the rings", () => {
+  const outer = bandRadius(PETAL_LAYOUT.bandCount - 1) + PETAL_LAYOUT.petalHalfLength;
+  assert.ok(outer + 10 < PETAL_LAYOUT.ringRadii[0] - PETAL_LAYOUT.dotRadius);
+  const offsets = PETAL_LAYOUT.bandOffsets;
+  for (let cell = 0; cell < PETAL_LAYOUT.fieldCells; cell += 1) {
+    const [x, y] = cellCenter(cell);
+    const [band] = cellBandSlot(cell);
+    const last = offsets[Math.min(band + 2, PETAL_LAYOUT.bandCount)];
+    for (let other = offsets[Math.max(band - 1, 0)]; other < last; other += 1) {
+      if (other === cell) continue;
+      const [ox, oy] = cellCenter(other);
+      const distance = Math.hypot(x - ox, y - oy);
+      assert.ok(distance > 2 * PETAL_LAYOUT.petalRadius, `cells ${cell} and ${other} are ${distance} apart`);
+    }
+  }
+});
+
+test("the light cells draw the character", () => {
+  let light = 0;
+  for (let cell = 0; cell < PETAL_LAYOUT.fieldCells; cell += 1) if (cellLight(cell)) light += 1;
+  assert.ok(light >= 1200 && light < 2400, `${light} light cells`);
+  assert.ok(inMask(512, 190), "the top bar");
+  assert.ok(!inMask(512, 350), "the gap under the second bar");
+  assert.ok(!inMask(181.9, 300) && !inMask(300, 842), "outside the lattice");
 });
 
 test("ring slots provide exactly the lane D capacity", () => {
   const roles = slotRoles();
-  assert.equal(roles.length, 276);
+  assert.equal(roles.length, 296);
   assert.equal(roles.filter((role) => role.kind === "data").length, 240);
   assert.equal(roles.filter((role) => role.kind === "gate").length, 4 + 5 + 7);
+  assert.equal(roles.filter((role) => role.kind === "guard").length, 18);
   assert.equal(dataSlots().length, 240);
-  // the two spare slots are the last non-reserved slots of the outer ring
-  assert.equal(roles.filter((role) => role.kind === "spare").length, 2);
+  assert.equal(roles.filter((role) => role.kind === "spare").length, 296 - 240 - 16 - 18);
   assert.deepEqual(splitSlot(0), [0, 0]);
-  assert.deepEqual(splitSlot(80), [1, 0]);
-  assert.deepEqual(splitSlot(275), [2, 103]);
+  assert.deepEqual(splitSlot(88), [1, 0]);
+  assert.deepEqual(splitSlot(295), [2, 107]);
 });
 
 test("gates and guards never touch the top of a ring", () => {
@@ -290,89 +375,55 @@ test("gates and guards never touch the top of a ring", () => {
   }
 });
 
-test("finders and rings do not overlap and tiles stay inside the inner ring", () => {
+test("finders and rings do not overlap", () => {
   const outermost = PETAL_LAYOUT.ringRadii[2] + PETAL_LAYOUT.dotRadius;
   for (const [x, y] of PETAL_LAYOUT.finderCenters) {
     const distance = Math.hypot(x - 512, y - 512);
     assert.ok(distance - PETAL_LAYOUT.finderOuter > outermost + 20);
   }
-  let farthest = 0;
-  for (let tile = 0; tile < 256; tile += 1) {
-    const [x, y] = tileCenter(tile);
-    const h = PETAL_LAYOUT.tileSize / 2;
-    for (const [cx, cy] of [
-      [x - h, y - h],
-      [x + h, y - h],
-      [x - h, y + h],
-      [x + h, y + h],
-    ]) {
-      farthest = Math.max(farthest, Math.hypot(cx - 512, cy - 512));
-    }
-  }
-  assert.ok(farthest + 10 < PETAL_LAYOUT.ringRadii[0] - PETAL_LAYOUT.dotRadius);
 });
 
 test("slot centres are the single-precision reference values", () => {
-  assert.deepEqual(slotCenter(0, 0), [872, 512]);
-  // f32 bit patterns of slot (0, 1) from the reference: 0x4459B8FA, 0x44070FB3
+  assert.deepEqual(slotCenter(0, 0), [917, 512]);
+  // f32 bit patterns of slot (0, 1) from the reference: 0x4464FDF6, 0x4407391D
   const view = new DataView(new ArrayBuffer(4));
   const [x, y] = slotCenter(0, 1);
   view.setFloat32(0, x);
-  assert.equal(view.getUint32(0), 0x4459b8fa);
+  assert.equal(view.getUint32(0), 0x4464fdf6);
   view.setFloat32(0, y);
-  assert.equal(view.getUint32(0), 0x44070fb3);
+  assert.equal(view.getUint32(0), 0x4407391d);
   assert.ok(finderLit(0, 0) && finderLit(0, -34) && !finderLit(0, -59) && !finderLit(59, 59));
 });
 
-test("checked-in glyph templates match the stroke definitions", () => {
-  const generated = generateTemplates();
-  assert.equal(generated.length, 16);
-  generated.forEach((template, glyph) => assert.deepEqual(Array.from(template), PETAL_GLYPHS.templates[glyph]));
-});
-
-test("every glyph has enough ink inside the design grid", () => {
-  PETAL_GLYPHS.strokes.forEach((strokes, glyph) => {
-    const total = PETAL_GLYPHS.templates[glyph].reduce((sum, value) => sum + value, 0);
-    assert.ok(total > 255 * 6, `glyph ${glyph} has too little ink`);
-    for (const stroke of strokes) {
-      for (const value of stroke) assert.ok(value >= 2 && value <= 30);
-    }
-  });
-});
-
-test("glyphs are pairwise distinct under blur", () => {
-  const feature = (glyph) => {
-    const values = PETAL_GLYPHS.templates[glyph];
-    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-    const centered = values.map((value) => value - mean);
-    const norm = Math.sqrt(centered.reduce((sum, value) => sum + value * value, 0));
-    return centered.map((value) => value / norm);
-  };
-  for (let a = 0; a < 16; a += 1) {
-    for (let b = a + 1; b < 16; b += 1) {
-      const fa = feature(a);
-      const fb = feature(b);
-      const dot = fa.reduce((sum, value, index) => sum + value * fb[index], 0);
-      assert.ok(1 - dot > 0.2, `glyphs ${a} and ${b} are too similar: ${1 - dot}`);
-    }
-  }
+test("a petal is lit at its centre and notched at its tip", () => {
+  assert.ok(petalLit(0, 0, 0.3));
+  const tip = PETAL_LAYOUT.petalNotchDistance;
+  assert.ok(!petalLit(tip * Math.cos(0.3), tip * Math.sin(0.3), 0.3));
+  assert.ok(!petalLit(0, 10, 0));
+  // the ellipse is longer along its outward direction than across it
+  assert.ok(petalLit(-5, 0, 0) && !petalLit(0, -5, 0));
 });
 
 // ---------------------------------------------------------------- lanes
 
 test("lane sizes are consistent", () => {
-  assert.deepEqual(
-    [PETAL_LANES.P.wordLen, PETAL_LANES.K.wordLen, PETAL_LANES.D.wordLen],
-    [32, 128, 30],
-  );
-  assert.deepEqual([PETAL_LANES.P.dataLen, PETAL_LANES.K.dataLen, PETAL_LANES.D.dataLen], [19, 83, 19]);
-  for (const lane of ["P", "K", "D"]) {
+  assert.deepEqual(Object.keys(PETAL_LANES), ALL_LANES);
+  assert.deepEqual([PETAL_LANES.D.wordLen, PETAL_LANES.D.parityLen, PETAL_LANES.D.dataLen], [30, 11, 19]);
+  for (const lane of ALL_LANES) {
+    if (lane !== "D") {
+      assert.deepEqual([PETAL_LANES[lane].wordLen, PETAL_LANES[lane].parityLen, PETAL_LANES[lane].dataLen], [105, 22, 83]);
+    }
     assert.equal(PETAL_LANES[lane].dataLen, PETAL_STREAM.laneHeaderLen + PETAL_LANES[lane].atoms * PETAL_STREAM.atomLen);
   }
+  assert.equal(PETAL_STREAM.spareSectorCells, 4);
+  assert.equal(PETAL_STREAM.atomsPerFrame, 21);
+  assert.deepEqual([0, 1, 2, 3].map(fieldLane), ["F0", "F1", "F2", "F3"]);
+  assert.equal(ALL_LANES.map(laneLetter).join(""), "D0123");
+  assert.throws(() => fieldLane(4), RangeError);
 });
 
 test("whitening is deterministic and balanced", () => {
-  for (const lane of ["P", "D", "K"]) {
+  for (const lane of ALL_LANES) {
     const a = laneWhitening(lane);
     assert.deepEqual(a, laneWhitening(lane));
     let ones = 0;
@@ -380,39 +431,47 @@ test("whitening is deterministic and balanced", () => {
     const bits = a.length * 8;
     assert.ok(ones > Math.floor((bits * 38) / 100) && ones < Math.floor((bits * 62) / 100), `${lane} ones ${ones}/${bits}`);
   }
+  assert.notDeepEqual(laneWhitening("F0"), laneWhitening("F1"));
 });
 
 test("lanes roundtrip through cells", () => {
-  const pData = Uint8Array.from({ length: 19 }, (_, b) => b);
-  const kData = Uint8Array.from({ length: 83 }, (_, b) => (b * 37) & 0xff);
   const dData = Uint8Array.from({ length: 19 }, (_, b) => b ^ 0xa5);
-  const p = encodeLane("P", pData);
-  const k = encodeLane("K", kData);
   const d = encodeLane("D", dData);
-  const cells = PetalFrameCells.fromWords(p, k, d);
-  assert.deepEqual(cells.pWord(), p);
-  assert.deepEqual(cells.kWord(), k);
+  const fields = [0, 1, 2, 3].map((sector) => encodeLane(fieldLane(sector), fieldData(sector)));
+  const cells = PetalFrameCells.fromWords(d, fields);
   assert.deepEqual(cells.dWord(), d);
-  assert.deepEqual(decodeLane("P", cells.pWord()), pData);
-  assert.deepEqual(decodeLane("K", cells.kWord()), kData);
   assert.deepEqual(decodeLane("D", cells.dWord()), dData);
-  assert.throws(() => encodeLane("P", new Uint8Array(18)), RangeError);
-  assert.throws(() => encodeLane("X", pData), TypeError);
-  assertPetalError(() => decodeLane("P", new Uint8Array(31)), "rs_invalid_shape");
+  fields.forEach((field, sector) => {
+    assert.deepEqual(cells.fieldWord(sector), field);
+    assert.deepEqual(decodeLane(fieldLane(sector), cells.fieldWord(sector)), fieldData(sector));
+  });
+  // the spare cells at the end of every sector stay dark
+  for (let sector = 0; sector < 4; sector += 1) {
+    for (const cell of sectorCells(sector).slice(840)) assert.equal(cells.petals[cell], 0);
+  }
+  assert.throws(() => encodeLane("F0", new Uint8Array(82)), RangeError);
+  assert.throws(() => encodeLane("P", dData), TypeError);
+  assertPetalError(() => decodeLane("F0", new Uint8Array(104)), "rs_invalid_shape");
+  assert.throws(() => PetalFrameCells.fromWords(d, fields.slice(0, 3)), TypeError);
+  assert.throws(() => PetalFrameCells.fromWords(d, [...fields.slice(0, 3), new Uint8Array(104)]), RangeError);
+  assert.throws(() => new PetalFrameCells(new Uint8Array(295)), RangeError);
+  assert.ok(cells.equals(PetalFrameCells.fromWords(d, fields)));
+  assert.ok(!cells.equals(new PetalFrameCells()));
 });
 
-test("all-zero data still lights roughly half the tiles", () => {
+test("all-zero data still lights about half the petals", () => {
+  const zero = new Uint8Array(83);
   const cells = PetalFrameCells.fromWords(
-    encodeLane("P", new Uint8Array(19)),
-    encodeLane("K", new Uint8Array(83)),
     encodeLane("D", new Uint8Array(19)),
+    [0, 1, 2, 3].map((sector) => encodeLane(fieldLane(sector), zero)),
   );
-  const lit = cells.light.reduce((sum, value) => sum + value, 0);
-  assert.ok(lit >= 90 && lit <= 166, `${lit} light tiles`);
+  const lit = cells.petals.reduce((sum, value) => sum + value, 0);
+  assert.ok(lit >= 1300 && lit <= 2050, `${lit} lit petals`);
 });
 
 test("gate dots are always lit and guards dark", () => {
-  const cells = PetalFrameCells.fromWords(new Uint8Array(32).fill(0xff), new Uint8Array(128).fill(0xff), new Uint8Array(30).fill(0xff));
+  const field = new Uint8Array(105).fill(0xff);
+  const cells = PetalFrameCells.fromWords(new Uint8Array(30).fill(0xff), [field, field, field, field]);
   slotRoles().forEach((role, slot) => {
     if (role.kind === "gate" || role.kind === "data") assert.equal(cells.dots[slot], 1);
     else assert.equal(cells.dots[slot], 0);
@@ -420,23 +479,28 @@ test("gate dots are always lit and guards dark", () => {
 });
 
 test("counted decoding reports the rewritten positions", () => {
-  const data = Uint8Array.from({ length: 19 }, (_, b) => b);
-  const clean = encodeLane("P", data);
-  const exact = decodeLaneCounted("P", clean);
+  const data = fieldData(9);
+  const clean = encodeLane("F2", data);
+  const exact = decodeLaneCounted("F2", clean);
   assert.deepEqual([Array.from(exact.data), exact.corrected], [Array.from(data), 0]);
   const damaged = clean.slice();
-  for (const position of [0, 7, 19, 31]) damaged[position] ^= 0xc3;
-  const counted = decodeLaneCounted("P", damaged, []);
-  assert.deepEqual([Array.from(counted.data), counted.corrected], [Array.from(data), 4]);
-  assert.deepEqual(decodeLane("P", damaged), data);
-  assertPetalError(() => decodeLaneCounted("P", new Uint8Array(32).fill(0x55), []), "rs_uncorrectable");
+  for (const position of [0, 7, 19, 31, 60, 104]) damaged[position] ^= 0xc3;
+  const counted = decodeLaneCounted("F2", damaged, []);
+  assert.deepEqual([Array.from(counted.data), counted.corrected], [Array.from(data), 6]);
+  assert.deepEqual(decodeLane("F2", damaged), data);
+  assertPetalError(() => decodeLaneCounted("F0", new Uint8Array(105).fill(0x55), []), "rs_uncorrectable");
 });
 
-test("lane decoding survives burst damage", () => {
-  const kData = Uint8Array.from({ length: 83 }, (_, b) => b);
-  const word = encodeLane("K", kData);
-  for (let index = 0; index < 22; index += 1) word[index] ^= 0x5a;
-  assert.deepEqual(decodeLane("K", word), kData);
+test("a word decoded under another sector is refused", () => {
+  const word = encodeLane("F0", fieldData(1));
+  for (const lane of ["F1", "F2", "F3"]) assertPetalError(() => decodeLane(lane, word), "rs_uncorrectable");
+});
+
+test("field lane decoding survives burst damage", () => {
+  const data = fieldData(4);
+  const word = encodeLane("F3", data);
+  for (let index = 40; index < 51; index += 1) word[index] ^= 0x5a;
+  assert.deepEqual(decodeLane("F3", word), data);
 });
 
 // ---------------------------------------------------------------- fountain
@@ -553,12 +617,14 @@ test("atom ids are contiguous across frames", () => {
     assert.equal(firstAtomId(frame), expected, `frame ${frame}`);
     expected += atomsInFrame(frame);
   }
-  assert.equal(atomsInFrame(0), 6);
-  assert.equal(atomsInFrame(1), 7);
+  assert.equal(atomsInFrame(0), 20);
+  assert.equal(atomsInFrame(1), 21);
+  assert.equal(laneFirstId("F0", 4), firstAtomId(4));
+  assert.equal(laneFirstId("F3", 5), firstAtomId(5) + 15);
+  assert.equal(laneFirstId("D", 5), firstAtomId(5) + 20);
   const encoder = new PetalStreamEncoder(payload(300, 1), 1);
-  assert.equal(parseAtomLane("K", encoder.laneData(4).k).firstId, firstAtomId(4) + 1);
-  assert.equal(parseAtomLane("K", encoder.laneData(5).k).firstId, firstAtomId(5) + 2);
-  assert.equal(parseDLane(encoder.laneData(5).d).packet.firstId, firstAtomId(5) + 1);
+  assert.equal(parseAtomLane("F2", encoder.laneData(4).fields[2]).firstId, firstAtomId(4) + 10);
+  assert.equal(parseDLane(encoder.laneData(5).d).packet.firstId, firstAtomId(5) + 20);
   // the frame counter wraps on a beacon frame, so ids repeat cleanly
   assert.ok(isBeaconFrame(0) && 65536 % PETAL_STREAM.beaconInterval === 0);
 });
@@ -567,7 +633,7 @@ test("a clean stream completes after one systematic pass", () => {
   const data = payload(1000, 21);
   const encoder = new PetalStreamEncoder(data, 2);
   const assembler = new PetalStreamAssembler();
-  for (let frame = 0; frame < encoder.systematicFrames(); frame += 1) feedFrame(assembler, encoder, frame, ["D", "P", "K"]);
+  for (let frame = 0; frame < encoder.systematicFrames(); frame += 1) feedFrame(assembler, encoder, frame, ALL_LANES);
   const done = assembler.takeCompleted();
   assert.deepEqual(done.payload, data);
   assert.equal(done.meta.kind, 2);
@@ -577,7 +643,7 @@ test("a clean stream completes after one systematic pass", () => {
 test("any single lane is enough given a beacon", () => {
   const data = payload(400, 22);
   const encoder = new PetalStreamEncoder(data, 1);
-  for (const lane of ["P", "K", "D"]) {
+  for (const lane of ALL_LANES) {
     const assembler = new PetalStreamAssembler();
     feedFrame(assembler, encoder, 0, ["D"]);
     for (let frame = 0; frame < 400; frame += 1) {
@@ -594,9 +660,10 @@ test("atoms seen before the first beacon are not lost", () => {
   const data = payload(300, 23);
   const encoder = new PetalStreamEncoder(data, 1);
   const assembler = new PetalStreamAssembler();
-  for (let frame = 1; frame < 4; frame += 1) feedFrame(assembler, encoder, frame, ["P", "K", "D"]);
+  // frames 1..: no beacon among them until frame 4
+  for (let frame = 1; frame < 4; frame += 1) feedFrame(assembler, encoder, frame, ALL_LANES);
   assert.equal(assembler.progress().meta, null);
-  for (let frame = 4; frame < encoder.systematicFrames() + 4; frame += 1) feedFrame(assembler, encoder, frame, ["P", "K", "D"]);
+  for (let frame = 4; frame < encoder.systematicFrames() + 4; frame += 1) feedFrame(assembler, encoder, frame, ALL_LANES);
   assert.deepEqual(assembler.takeCompleted().payload, data);
 });
 
@@ -605,10 +672,11 @@ test("joining mid-stream and losing frames still completes", () => {
   const encoder = new PetalStreamEncoder(data, 3);
   const assembler = new PetalStreamAssembler();
   const rng = new PetalXorshift32(77);
-  let frame = 15;
+  let frame = 15; // join late
   let shown = 0;
   while (!assembler.progress().complete) {
-    if (rng.nextU32() % 10 < 6) feedFrame(assembler, encoder, frame, ["D", "P", "K"]);
+    // 60 % of the frames are readable
+    if (rng.nextU32() % 10 < 6) feedFrame(assembler, encoder, frame, ALL_LANES);
     frame = (frame + 1) & 0xffff;
     shown += 1;
     assert.ok(shown < 600, "stream failed to complete");
@@ -633,7 +701,7 @@ test("a zero pending limit buffers nothing", () => {
   const encoder = new PetalStreamEncoder(data, 1);
   const assembler = new PetalStreamAssembler({ maxPendingAtoms: 0 });
   // atoms before any beacon are dropped, not buffered
-  for (let frame = 1; frame < 4; frame += 1) feedFrame(assembler, encoder, frame, ["P", "K", "D"]);
+  for (let frame = 1; frame < 4; frame += 1) feedFrame(assembler, encoder, frame, ALL_LANES);
   feedFrame(assembler, encoder, 4, ["D"]);
   assert.equal(assembler.progress().rank, 0);
   assert.equal(assembler.progress().atomsReceived, 0);
@@ -650,33 +718,39 @@ test("the pending-atom buffer is bounded and keeps the newest atoms", () => {
   const data = payload(600, 31);
   const encoder = new PetalStreamEncoder(data, 1);
   const assembler = new PetalStreamAssembler({ maxPendingAtoms: 3 });
-  // frames 1..3 carry 21 atoms before any beacon; only the last three survive
-  for (let frame = 1; frame < 4; frame += 1) feedFrame(assembler, encoder, frame, ["P", "K", "D"]);
+  // frames 1..3 carry 63 atoms before any beacon; only the last three survive
+  for (let frame = 1; frame < 4; frame += 1) feedFrame(assembler, encoder, frame, ALL_LANES);
   feedFrame(assembler, encoder, 0, ["D"]);
   assert.equal(assembler.progress().atomsReceived, 3);
   assert.equal(assembler.progress().rank, 3);
+  assert.equal(new PetalStreamAssembler().limits.maxPendingAtoms, 512);
   // atoms of another stream (different tag) are buffered but never applied
   const other = new PetalStreamEncoder(payload(600, 32), 1);
   assert.notEqual(other.meta.tag, encoder.meta.tag);
   const fresh = new PetalStreamAssembler({ maxPendingAtoms: 128 });
-  feedFrame(fresh, other, 1, ["P", "K"]);
+  feedFrame(fresh, other, 1, ["F0", "F1"]);
   feedFrame(fresh, encoder, 0, ["D"]);
   assert.equal(fresh.progress().atomsReceived, 0);
 });
 
 test("corrupt atoms are caught by the payload CRC", () => {
-  const data = payload(200, 25);
+  const data = payload(2000, 25);
   const encoder = new PetalStreamEncoder(data, 1);
   const assembler = new PetalStreamAssembler();
-  feedFrame(assembler, encoder, 0, ["D", "K"]);
+  feedFrame(assembler, encoder, 0, ["D", "F1"]);
   // atom 0 arrives with a valid header but a wrong body
   assembler.pushAtoms({ header: { tag: encoder.meta.tag, frame: 0 }, firstId: 0, atoms: [new Uint8Array(16).fill(0xee)] });
-  for (let frame = 1; frame < encoder.systematicFrames(); frame += 1) feedFrame(assembler, encoder, frame, ["P", "K", "D"]);
+  let frame = 1;
+  while (assembler.progress().integrityFailures === 0) {
+    feedFrame(assembler, encoder, frame, ALL_LANES);
+    frame += 1;
+    assert.ok(frame < 100, "the corrupt atom was never caught");
+  }
   assert.equal(assembler.takeCompleted(), null);
   assert.equal(assembler.progress().integrityFailures, 1);
   // clean repair frames after the reset recover the payload
-  for (let frame = 100; frame < 600; frame += 1) {
-    feedFrame(assembler, encoder, frame, ["P", "K", "D"]);
+  for (let next = 100; next < 600; next += 1) {
+    feedFrame(assembler, encoder, next, ALL_LANES);
     if (assembler.progress().complete) break;
   }
   assert.deepEqual(assembler.takeCompleted().payload, data);
@@ -695,12 +769,16 @@ test("the beacon roundtrips through lane D", () => {
   assert.equal(lane.type, "beacon");
   assert.deepEqual(lane.beacon.meta, encoder.meta);
   assert.equal(lane.beacon.header.frame, 512);
+  assert.equal(d[3], 0x20);
   assert.equal(parseDLane(d.slice(0, 11)), null);
+  // the retired format 1 (katakana tiles) is refused
   const bad = d.slice();
-  bad[3] = 0x20;
+  bad[3] = 0x10;
   assert.equal(parseDLane(bad), null);
+  // non-beacon frames carry an atom instead
   assert.equal(parseDLane(encoder.laneData(513).d).type, "atoms");
   assert.equal(parseAtomLane("D", encoder.laneData(513).d), null);
+  assert.equal(parseAtomLane("F0", encoder.laneData(513).d), null);
 });
 
 test("random streams always complete and never deliver wrong data", () => {
@@ -714,7 +792,7 @@ test("random streams always complete and never deliver wrong data", () => {
     const encoder = new PetalStreamEncoder(data, kind);
     const lossPercent = rng.nextU32() % 70;
     const choice = rng.nextU32() % 5;
-    const lanes = choice === 0 ? ["P"] : choice === 1 ? ["D", "P"] : choice === 2 ? ["K", "D"] : ["P", "K", "D"];
+    const lanes = choice === 0 ? ["F2"] : choice === 1 ? ["D", "F0"] : choice === 2 ? ["F1", "F3", "D"] : ALL_LANES;
     const assembler = new PetalStreamAssembler();
     let frame = rng.nextU32() & 0xffff;
     let shown = 0;
@@ -742,7 +820,7 @@ test("counter wraparound keeps atom ids consistent", () => {
   // start a few frames before the 16-bit counter wraps and run across it
   let frame = 65530;
   for (let step = 0; step < 200; step += 1) {
-    feedFrame(assembler, encoder, frame, ["P", "K", "D"]);
+    feedFrame(assembler, encoder, frame, ALL_LANES);
     frame = (frame + 1) & 0xffff;
     if (assembler.progress().complete) break;
   }
@@ -832,13 +910,47 @@ test("degenerate homography inputs are rejected", () => {
   assert.equal(new PetalHomography([0, 0, 0, 0, 0, 0, 0, 0, 0]).inverse(), null);
 });
 
+test("a fitted pose takes its source points onto distorted image points", () => {
+  const src = PETAL_LAYOUT.finderCenters;
+  const dst = [
+    [380, 90],
+    [900, 110],
+    [880, 640],
+    [360, 620],
+  ];
+  for (const distortion of [0, -0.08, 0.03]) {
+    const pose = PetalPose.fit(src, dst, distortion, 1280, 720);
+    assert.equal(pose.distortion, distortion);
+    assert.deepEqual(pose.center, [640, 360]);
+    assert.equal(pose.scale2, 1024 * 1024);
+    src.forEach(([x, y], index) => {
+      const [u, v] = pose.apply(x, y);
+      assert.ok(Math.abs(u - dst[index][0]) < 1e-3 && Math.abs(v - dst[index][1]) < 1e-3, `${distortion}`);
+    });
+  }
+  // barrel distortion pulls a mid-edge point toward the image centre
+  const plain = PetalPose.fit(src, dst, 0, 1280, 720);
+  const barrel = PetalPose.fit(src, dst, -0.08, 1280, 720);
+  assert.ok(Math.abs(plain.apply(512, 72)[0] - barrel.apply(512, 72)[0]) < 5);
+  assert.deepEqual(PetalPose.plain(PetalHomography.identity()).apply(3, 4), [3, 4]);
+  assert.equal(PetalPose.fit(src.slice(0, 3), dst.slice(0, 3), 0, 1280, 720), null);
+  assert.throws(() => new PetalPose([1, 0, 0, 0, 1, 0, 0, 0, 1]), TypeError);
+  // without distortion the pose is the plain homography through the points
+  const direct = PetalHomography.fromPoints(src, dst).values;
+  plain.homography.values.forEach((value, index) => assert.ok(Math.abs(value - direct[index]) <= 1e-9 * Math.max(1, Math.abs(value))));
+});
+
 // ---------------------------------------------------------------- renderer
 
 function renderCells(seed) {
-  const p = Uint8Array.from({ length: 19 }, (_, b) => ((b * 31) & 0xff) + seed);
-  const k = Uint8Array.from({ length: 83 }, (_, b) => ((b * 17) & 0xff) ^ seed);
   const d = Uint8Array.from({ length: 19 }, (_, b) => ((b * 13) & 0xff) ^ seed);
-  return PetalFrameCells.fromWords(encodeLane("P", p), encodeLane("K", k), encodeLane("D", d));
+  const fields = [0, 1, 2, 3].map((sector) =>
+    encodeLane(
+      fieldLane(sector),
+      Uint8Array.from({ length: 83 }, (_, b) => ((b * 17 + sector) & 0xff) ^ seed),
+    ),
+  );
+  return PetalFrameCells.fromWords(encodeLane("D", d), fields);
 }
 
 test("finders are solid blossoms and corners are otherwise black", () => {
@@ -851,21 +963,19 @@ test("finders are solid blossoms and corners are otherwise black", () => {
   assert.equal(image.data[3], 255);
 });
 
-test("light tiles are bright and dark tiles are mostly black", () => {
+test("lit petals are drawn in their colour and dark cells show the backdrop", () => {
   const frame = renderCells(2);
-  const image = renderPetalFrame(frame, { size: 512, supersample: 2 });
-  const light = [];
-  const dark = [];
-  for (let tile = 0; tile < 256; tile += 1) {
-    const [cx, cy] = tileCenter(tile);
-    const x0 = Math.floor((cx - 10) * 0.5);
-    const y0 = Math.floor((cy - 10) * 0.5);
-    let sum = 0;
-    for (let j = 0; j < 10; j += 1) for (let i = 0; i < 10; i += 1) sum += image.data[((y0 + j) * 512 + x0 + i) * 4];
-    (frame.light[tile] ? light : dark).push(sum / 100);
+  const image = renderPetalFrame(frame, { size: 1024, supersample: 1 });
+  const palette = PETAL_PALETTE;
+  for (let cell = 0; cell < PETAL_LAYOUT.fieldCells; cell += 1) {
+    const [x, y] = cellCenter(cell);
+    const at = (Math.floor(y) * 1024 + Math.floor(x)) * 4;
+    const pixel = [image.data[at], image.data[at + 1], image.data[at + 2]];
+    let expected;
+    if (frame.petals[cell] === 1) expected = cellLight(cell) ? palette.light : palette.pink;
+    else expected = inMask(Math.floor(x) + 0.5, Math.floor(y) + 0.5) ? palette.backdrop : palette.background;
+    assert.deepEqual(pixel, expected, `cell ${cell}`);
   }
-  const mean = (values) => values.reduce((a, b) => a + b, 0) / values.length;
-  assert.ok(mean(light) > mean(dark) + 25, `light ${mean(light)}, dark ${mean(dark)}`);
 });
 
 test("lit dots are drawn and unlit slots are black", () => {
@@ -876,18 +986,18 @@ test("lit dots are drawn and unlit slots are black", () => {
     for (let slot = 0; slot < PETAL_LAYOUT.ringSlots[ring]; slot += 1) {
       const [x, y] = slotCenter(ring, slot);
       const value = image.data[(Math.floor(y) * 1024 + Math.floor(x)) * 4];
-      const flat = [0, 80, 172][ring] + slot;
+      const flat = [0, 88, 188][ring] + slot;
       if (frame.dots[flat]) assert.ok(value > 150, `ring ${ring} slot ${slot} should be lit`);
       else assert.equal(value, 0, `ring ${ring} slot ${slot} should be dark`);
       checked += 1;
     }
   }
-  assert.equal(checked, 276);
+  assert.equal(checked, 296);
 });
 
 test("the software renderer matches the reference renderer bit for bit", () => {
   // FNV-1a 64 of the RGB bytes produced by `iroha_petal::render::render` for
-  // the decoder-test stream (300 bytes, kind 2).
+  // the decoder-test stream (3,000 bytes, kind 2).
   const fnv = (bytes) => {
     // 64-bit FNV-1a on two 32-bit halves; the prime is 2^40 + 0x1b3.
     let hi = 0xcbf29ce4;
@@ -900,11 +1010,10 @@ test("the software renderer matches the reference renderer bit for bit", () => {
     }
     return hi.toString(16).padStart(8, "0") + lo.toString(16).padStart(8, "0");
   };
-  const data = Uint8Array.from({ length: 300 }, (_, i) => (Math.imul(i, 2654435761) >>> 11) & 0xff);
-  const encoder = new PetalStreamEncoder(data, 2);
+  const encoder = decodeSetupEncoder();
   for (const [frame, size, supersample, expected] of [
-    [0, 256, 2, "08ef9eae80716bd1"],
-    [3, 1024, 1, "2fa730d9d1f440d1"],
+    [0, 256, 2, "b7e07f4a0f55c7e1"],
+    [3, 1024, 1, "8bb66248244edead"],
   ]) {
     const image = renderPetalFrame(encoder.cells(frame), { size, supersample });
     const rgb = new Uint8Array(size * size * 3);
@@ -918,85 +1027,63 @@ test("the draw list reproduces the software renderer's geometry", () => {
   const list = petalDrawList(cells);
   assert.equal(list.canvas, 1024);
   assert.equal(list.finders.length, 4);
-  assert.equal(list.tiles.length, 256);
+  assert.equal(list.petals.length, cells.petals.reduce((a, b) => a + b, 0));
   assert.equal(list.dots.length, cells.dots.reduce((a, b) => a + b, 0));
-  assert.equal(list.strokeWidth, (6.5 * 23) / 32);
+  assert.equal(list.backdrop.cells.length, PETAL_LAYOUT.mask.join("").split("#").length - 1);
+  assert.deepEqual([list.backdrop.x, list.backdrop.y, list.backdrop.r], [512, 512, 390]);
+  assert.deepEqual(list.petal, { halfLength: 5.2, halfWidth: 4.3, notchRadius: 1.3, notchDistance: 5.4 });
   for (const finder of list.finders) {
     assert.equal(finder.core.r, 12);
     assert.equal(finder.petals.length, 5);
     assert.equal(finder.notches.length, 5);
   }
+  for (const petal of list.petals) {
+    assert.deepEqual([petal.x, petal.y], cellCenter(petal.index));
+    assert.equal(petal.angle, cellAngle(petal.index));
+    assert.equal(petal.light, cellLight(petal.index));
+    assert.deepEqual(petal.fill, petal.light ? PETAL_PALETTE.light : PETAL_PALETTE.pink);
+  }
+  // paint the primitives in their documented order onto a grid of sample points
+  const step = 3;
+  const side = Math.ceil(1024 / step);
+  const expected = new Array(side * side).fill(list.palette.background);
+  const paint = (x0, y0, x1, y1, inside, color) => {
+    for (let gy = Math.max(Math.ceil((y0 - 0.5) / step), 0); gy < side && gy * step + 0.5 <= y1; gy += 1) {
+      for (let gx = Math.max(Math.ceil((x0 - 0.5) / step), 0); gx < side && gx * step + 0.5 <= x1; gx += 1) {
+        if (inside(gx * step + 0.5, gy * step + 0.5)) expected[gy * side + gx] = color;
+      }
+    }
+  };
+  const inCircle = (c) => (x, y) => Math.hypot(x - c.x, y - c.y) <= c.r;
+  const box = (c, r = c.r) => [c.x - r, c.y - r, c.x + r, c.y + r];
+  for (const cell of list.backdrop.cells) {
+    paint(cell.x, cell.y, cell.x + cell.size, cell.y + cell.size, (x, y) => x < cell.x + cell.size && y < cell.y + cell.size && inCircle(list.backdrop)(x, y), list.palette.backdrop);
+  }
+  const { halfLength: a, halfWidth: b, notchRadius, notchDistance } = list.petal;
+  for (const petal of list.petals) {
+    const cos = Math.cos(petal.angle);
+    const sin = Math.sin(petal.angle);
+    paint(...box(petal, 6), (x, y) => {
+      const along = (x - petal.x) * cos + (y - petal.y) * sin;
+      const across = -(x - petal.x) * sin + (y - petal.y) * cos;
+      return (along / a) ** 2 + (across / b) ** 2 <= 1 && (along - notchDistance) ** 2 + across ** 2 > notchRadius ** 2;
+    }, petal.fill);
+  }
+  for (const dot of list.dots) paint(...box(dot), inCircle(dot), list.palette.pink);
+  for (const finder of list.finders) {
+    for (const disc of [finder.core, ...finder.petals]) paint(...box(disc), inCircle(disc), list.palette.light);
+    for (const notch of finder.notches) paint(...box(notch), inCircle(notch), list.palette.background);
+  }
   const image = renderPetalFrame(cells, { size: 1024, supersample: 1 });
-  const palette = list.palette;
-  const inCircle = (c, x, y) => Math.hypot(x - c.x, y - c.y) <= c.r;
-  const segment = (px, py, ax, ay, bx, by) => {
-    const dx = bx - ax;
-    const dy = by - ay;
-    const t = Math.min(1, Math.max(0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
-    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
-  };
-  const inRounded = (tile, x, y) => {
-    const ax = Math.abs(x - (tile.x + tile.size / 2));
-    const ay = Math.abs(y - (tile.y + tile.size / 2));
-    const half = tile.size / 2;
-    if (ax > half || ay > half) return false;
-    const cx = ax - (half - tile.radius);
-    const cy = ay - (half - tile.radius);
-    return cx <= 0 || cy <= 0 || cx * cx + cy * cy <= tile.radius * tile.radius;
-  };
-  const byCell = new Map(list.tiles.map((tile) => [PETAL_LAYOUT.tiles[tile.index].join(","), tile]));
-  const tileAt = (x, y) => byCell.get(`${Math.floor((x - 222) / 29)},${Math.floor((y - 222) / 29)}`);
-  const colorAt = (x, y) => {
-    let color = palette.background;
-    for (const finder of list.finders) {
-      if (inCircle(finder.core, x, y) || finder.petals.some((c) => inCircle(c, x, y))) color = palette.light;
-      if (finder.notches.some((c) => inCircle(c, x, y))) color = palette.background;
-    }
-    const tile = tileAt(x, y);
-    if (tile !== undefined) {
-      if (tile.light && inRounded(tile, x, y)) color = tile.fill;
-      const box = tile.glyphBox;
-      if (x > box.x && x < box.x + box.size && y > box.y && y < box.y + box.size) {
-        for (const stroke of tile.strokes) {
-          for (let i = 0; i + 3 < stroke.length; i += 2) {
-            if (segment(x, y, stroke[i], stroke[i + 1], stroke[i + 2], stroke[i + 3]) <= list.strokeWidth / 2) color = tile.ink;
-          }
-        }
-      }
-    }
-    const radius = Math.hypot(x - 512, y - 512);
-    if (radius >= 360 - 12 && radius <= 460 + 12) {
-      for (const dot of list.dots) if (inCircle(dot, x, y)) color = palette.pink;
-    }
-    return color;
-  };
-  const inGlyphBox = (x, y) => {
-    const tile = tileAt(x, y);
-    if (tile === undefined) return false;
-    const box = tile.glyphBox;
-    return x > box.x && x < box.x + box.size && y > box.y && y < box.y + box.size;
-  };
-  let glyphSamples = 0;
-  let glyphMismatches = 0;
-  let otherMismatches = 0;
-  for (let py = 0; py < 1024; py += 3) {
-    for (let px = 0; px < 1024; px += 3) {
-      const expected = colorAt(px + 0.5, py + 0.5);
-      const at = (py * 1024 + px) * 4;
-      const differs = image.data[at] !== expected[0] || image.data[at + 1] !== expected[1] || image.data[at + 2] !== expected[2];
-      if (inGlyphBox(px + 0.5, py + 0.5)) {
-        glyphSamples += 1;
-        if (differs) glyphMismatches += 1;
-      } else if (differs) {
-        otherMismatches += 1;
-      }
+  let mismatches = 0;
+  for (let gy = 0; gy < side; gy += 1) {
+    for (let gx = 0; gx < side; gx += 1) {
+      const at = (gy * step * 1024 + gx * step) * 4;
+      const color = expected[gy * side + gx];
+      if (image.data[at] !== color[0] || image.data[at + 1] !== color[1] || image.data[at + 2] !== color[2]) mismatches += 1;
     }
   }
-  // Finders, tiles and dots match exactly. Glyph outlines may differ by a
-  // hair: the renderer quantises glyph ink to a 128-cell bitmap per glyph
-  // box, the draw list keeps the exact strokes.
-  assert.equal(otherMismatches, 0);
-  assert.ok(glyphMismatches / glyphSamples < 0.02, `${glyphMismatches} of ${glyphSamples} glyph samples differ`);
+  assert.equal(mismatches, 0);
   assert.deepEqual(list.palette, PETAL_PALETTE);
 });
 
@@ -1117,7 +1204,7 @@ function levelCard(levels) {
       for (let x = cx - radius; x <= cx + radius; x += 1) data[y * 1024 + x] = value;
     }
   };
-  [[72, 72], [952, 72], [952, 952], [72, 952]].forEach(([cx, cy], corner) => {
+  PETAL_LAYOUT.finderCenters.forEach(([cx, cy], corner) => {
     const [lit, dark] = levels[corner];
     const sx = cx < 512 ? 1 : -1;
     const sy = cy < 512 ? 1 : -1;
@@ -1129,7 +1216,7 @@ function levelCard(levels) {
 }
 
 test("an inferred corner needs contrast too", () => {
-  const identity = Float64Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1);
+  const identity = PetalPose.plain(PetalHomography.identity());
   // even light: the hidden corner (3) gets levels between the others'
   const even = referenceLevels(levelCard([[230, 30], [220, 25], [210, 20], [0, 0]]), identity, 3);
   assert.ok(even !== null && even.lit[3] - even.dark[3] >= 12);
@@ -1146,8 +1233,8 @@ test("following finds a moved blossom and refuses a lost one", () => {
   const found = followFinder(luma, { x: 48, y: 27, size: 60 });
   assert.ok(Math.abs(found.x - 36) < 1.5 && Math.abs(found.y - 36) < 1.5, JSON.stringify(found));
   assert.equal(found.size, 60);
-  // nothing bright near the centre of the canvas corner gap
-  assert.equal(followFinder(luma, { x: 140, y: 36, size: 30 }), null);
+  // nothing bright in the canvas corner gap between a blossom and the rings
+  assert.equal(followFinder(luma, { x: 100, y: 15, size: 30 }), null);
   // a blossom that moved further than 0.75 diameters is refused (here: found, but too far)
   assert.equal(followFinder(luma, { x: 36 + 70, y: 36, size: 60 }), null);
   // degenerate expectations do not crash
@@ -1167,9 +1254,15 @@ test("following finds a moved blossom and refuses a lost one", () => {
 
 // ---------------------------------------------------------------- frame decoder
 
+/** The decoder tests' stream: 3,000 bytes, kind 2. */
+function decodeSetupEncoder() {
+  const data = Uint8Array.from({ length: 3000 }, (_, i) => (Math.imul(i, 2654435761) >>> 11) & 0xff);
+  return new PetalStreamEncoder(data, 2);
+}
+
+/** A 768-pixel render (2x2 supersampled) of frame `frame` of the decoder tests' stream. */
 function decodeSetup(frame) {
-  const data = Uint8Array.from({ length: 300 }, (_, i) => (Math.imul(i, 2654435761) >>> 11) & 0xff);
-  const encoder = new PetalStreamEncoder(data, 2);
+  const encoder = decodeSetupEncoder();
   return { encoder, luma: renderLuma(encoder.cells(frame), 768, 2) };
 }
 
@@ -1185,84 +1278,93 @@ function transformLuma(luma, map) {
   return new PetalLuma(n, n, out);
 }
 
+/** Asserts that every lane of `decoded` read the recorded data. */
+function assertAllLanes(decoded, truth, name) {
+  assert.deepEqual(decoded.d?.data, truth.d, `${name}: lane D`);
+  for (let sector = 0; sector < 4; sector += 1) {
+    assert.deepEqual(decoded.fields[sector]?.data, truth.fields[sector], `${name}: field lane ${sector}`);
+  }
+}
+
 test("a clean render decodes every lane", () => {
   const { encoder, luma } = decodeSetup(5);
   const decoded = decodePetalFrame(luma);
-  const { p, k, d } = encoder.laneData(5);
-  assert.deepEqual(decoded.p.data, p);
-  assert.deepEqual(decoded.k.data, k);
-  assert.deepEqual(decoded.d.data, d);
-  assert.deepEqual([decoded.rotation, decoded.mirrored, decoded.lanesOk()], [0, false, 3]);
+  assertAllLanes(decoded, encoder.laneData(5), "clean");
+  assert.deepEqual([decoded.rotation, decoded.mirrored, decoded.lanesOk(), decoded.letters()], [0, false, 5, "D0123"]);
+  assert.ok(Object.is(decoded.pose.distortion, 0), "a clean render needs no distortion");
   assert.equal(decoded.beacon(), null);
-  assert.equal(decoded.atomPackets().length, 3);
-  assert.ok(tileMatchError(luma, decoded) < 0.5);
+  assert.equal(decoded.atomPackets().length, 5);
+  assert.deepEqual(decoded.lane("F2"), decoded.fields[2]);
   assert.ok(observedCells(luma, decoded).equals(encoder.cells(5)));
-  const at = decodePetalFrameAt(luma, decoded.homography);
-  assert.deepEqual(at.p.data, p);
+  const at = decodePetalFrameAt(luma, decoded.pose);
+  assertAllLanes(at, encoder.laneData(5), "known pose");
 });
 
 test("rotated and mirrored renders decode with the right orientation", () => {
   const { encoder, luma } = decodeSetup(7);
-  const { p, d } = encoder.laneData(7);
-  const cases = [
-    ["rot90", (x, y, n) => [y, n - 1 - x], false],
-    ["rot180", (x, y, n) => [n - 1 - x, n - 1 - y], false],
-    ["rot270", (x, y, n) => [n - 1 - y, x], false],
-    ["mirror", (x, y, n) => [n - 1 - x, y], true],
-  ];
-  const rotations = [];
-  for (const [name, map, mirrored] of cases) {
+  const truth = encoder.laneData(7);
+  // mirrored hypotheses enumerate corners in the opposite direction, so the unrotated mirror
+  // reports quarter-turn index 1
+  for (const [name, map, rotation, mirrored] of [
+    ["rot90", (x, y, n) => [y, n - 1 - x], 1, false],
+    ["rot180", (x, y, n) => [n - 1 - x, n - 1 - y], 2, false],
+    ["rot270", (x, y, n) => [n - 1 - y, x], 3, false],
+    ["mirror", (x, y, n) => [n - 1 - x, y], 1, true],
+  ]) {
     const decoded = decodePetalFrame(transformLuma(luma, map));
     assert.equal(decoded.mirrored, mirrored, name);
-    assert.deepEqual(decoded.d.data, d, `${name} lane D`);
-    assert.deepEqual(decoded.p.data, p, `${name} lane P`);
-    rotations.push(decoded.rotation);
+    assert.equal(decoded.rotation, rotation, `${name} rotation`);
+    assertAllLanes(decoded, truth, name);
   }
-  // orientations reported by the reference decoder for these images (a
-  // mirrored hypothesis walks the finders counter-clockwise, so a plain
-  // mirror is reported as rotation 1)
-  assert.deepEqual(rotations, [1, 2, 3, 1]);
+});
+
+test("the field alone tells the orientation when the rings are gone", () => {
+  // black out the ring band: no gates, no lane D; a wrong quarter turn reads permuted petals
+  // that no field codeword accepts
+  const { encoder, luma } = decodeSetup(9);
+  const n = luma.width;
+  const scale = n / 1024;
+  for (let y = 0; y < n; y += 1) {
+    for (let x = 0; x < n; x += 1) {
+      const r = Math.hypot((x + 0.5) / scale - 512, (y + 0.5) / scale - 512);
+      if (r >= 392 && r <= 490) luma.data[y * n + x] = 0;
+    }
+  }
+  const rotated = transformLuma(luma, (x, y, size) => [y, size - 1 - x]);
+  const decoded = decodePetalFrame(rotated);
+  assert.equal(decoded.d, null);
+  assert.equal(decoded.rotation, 1);
+  const truth = encoder.laneData(9);
+  for (let sector = 0; sector < 4; sector += 1) assert.deepEqual(decoded.fields[sector]?.data, truth.fields[sector]);
 });
 
 test("corrected counts rewritten bytes, not just erasures", () => {
-  const data = Uint8Array.from({ length: 19 }, (_, b) => b);
-  const word = encodeLane("P", data);
-  for (const position of [2, 11, 30]) word[position] ^= 0x5a;
-  const result = decodeWithErasures("P", word, new Float64Array(word.length).fill(1));
+  const data = Uint8Array.from({ length: 83 }, (_, b) => b);
+  const word = encodeLane("F1", data);
+  for (const position of [2, 11, 30, 77]) word[position] ^= 0x5a;
+  const result = decodeWithErasures("F1", word, new Float64Array(word.length).fill(1));
   assert.deepEqual(result.data, data);
   assert.equal(result.erasures, 0);
-  assert.equal(result.corrected, 3);
+  assert.equal(result.corrected, 4);
   // with the damaged bytes flagged as least confident, they become erasures
   const flagged = new Float64Array(word.length).fill(1);
-  for (const position of [2, 11, 30]) flagged[position] = 0;
-  const again = decodeWithErasures("P", word, flagged);
+  for (const position of [2, 11, 30, 77]) flagged[position] = 0;
+  const again = decodeWithErasures("F1", word, flagged);
   assert.deepEqual(again.data, data);
-  assert.ok(again.corrected >= 3);
-  // 8 bad bytes exceed the 6-error capacity of 13 parity bytes: the schedule
-  // (0, 1, 3, ... erasures) first succeeds with 3 erasures and 5 found errors,
-  // as the reference's counted decoder reports
-  const heavy = encodeLane("P", data);
-  const bad = [1, 4, 9, 12, 17, 22, 26, 29];
-  for (const position of bad) heavy[position] ^= 0xa7;
-  const confidence = new Float64Array(heavy.length).fill(1);
-  for (const position of bad) confidence[position] = 0;
-  const erased = decodeWithErasures("P", heavy, confidence);
-  assert.deepEqual(erased.data, data);
-  assert.equal(erased.erasures, 3);
-  assert.equal(erased.corrected, 8);
+  assert.ok(again.corrected >= 4);
 });
 
 test("random words are almost never accepted", () => {
   // Reed-Solomon with erasures can accept a word that is not a transmission. Lane D has only 11
-  // parity bytes, so its schedule stops at five erasures; at seven it let through about one random
-  // word in 250 (150 of these 40 000). The counts are exact so that every SDK port, fed the same
-  // xorshift32 words and byte-valued confidences (many ties, so the ranking must be stable),
-  // reproduces the decoder bit for bit.
+  // parity bytes, so its schedule stops at five erasures; a field lane has 22 and stops at
+  // eleven. The counts are exact so that every SDK port, fed the same xorshift32 words and
+  // byte-valued confidences (many ties, so the ranking must be stable), reproduces the decoder
+  // bit for bit.
   const rng = new PetalXorshift32(0x5eed);
   const trials = 40000;
   for (const [lane, expected] of [
     ["D", 3],
-    ["P", 0],
+    ["F0", 0],
   ]) {
     const length = PETAL_LANES[lane].wordLen;
     let accepted = 0;
@@ -1277,13 +1379,12 @@ test("random words are almost never accepted", () => {
   }
 });
 
-test("only lane K uses two thirds of its parity as erasures", () => {
-  // Damaged bytes: `flagged` of them marked least confident, two more hidden. With the extra
-  // erasure step of the old schedule the decoder would repair them (2 * 2 + flagged parity
-  // bytes); the capped schedule must refuse instead of risking a wrong codeword.
+test("erasures stop at half the parity", () => {
+  // damaged bytes: `flagged` of them marked least confident, two more hidden: beyond half the
+  // parity the decoder must refuse instead of risking a wrong codeword
   for (const [lane, flagged] of [
     ["D", 7],
-    ["P", 8],
+    ["F2", 16],
   ]) {
     const { dataLen, parityLen, wordLen } = PETAL_LANES[lane];
     const data = Uint8Array.from({ length: dataLen }, (_, index) => index);
@@ -1305,23 +1406,11 @@ test("only lane K uses two thirds of its parity as erasures", () => {
       repairable[position] ^= 0xa5;
       halfFlagged[position] = 0;
     }
-    repairable[20] ^= 0x3c;
+    repairable[24] ^= 0x3c;
     const result = decodeWithErasures(lane, repairable, halfFlagged);
     assert.deepEqual(result.data, data, `lane ${lane}`);
     assert.ok(result.erasures <= half, `lane ${lane}`);
   }
-  // lane K keeps the two-thirds step: 30 flagged bytes plus 7 hidden errors need it
-  // (2 * 7 + 30 = 44 of 45 parity bytes)
-  const data = Uint8Array.from({ length: PETAL_LANES.K.dataLen }, (_, index) => index);
-  const damaged = encodeLane("K", data);
-  const confidence = new Float64Array(damaged.length).fill(1);
-  for (let position = 0; position < 30; position += 1) {
-    damaged[position] ^= 0xa5;
-    confidence[position] = 0;
-  }
-  for (let position = 60; position < 67; position += 1) damaged[position] ^= 0x3c;
-  const result = decodeWithErasures("K", damaged, confidence);
-  assert.deepEqual([result.data, result.erasures], [data, 30]);
 });
 
 test("the erasure schedule has the reference's steps for every lane", () => {
@@ -1332,10 +1421,9 @@ test("the erasure schedule has the reference's steps for every lane", () => {
     // lane, flagged, hidden, erasures used (null: no step of the schedule can repair it)
     ["D", 5, 3, 5], // steps 0, 1, 2, 3, 5: the half step is the last one
     ["D", 7, 2, null], // a seventh erasure would repair it, the capped schedule must not
-    ["P", 7, 2, 6], // steps 0, 1, 3, 4, 6: the half step is the last one for P too
-    ["P", 8, 2, null], // an eighth erasure would repair it
-    ["K", 30, 7, 30], // steps 0, 5, 11, 15, 22, 30: only K has the two-thirds step
-    ["K", 31, 7, null], // nothing beyond the two-thirds step
+    ["F1", 7, 7, 7], // steps 0, 2, 5, 7, 11
+    ["F1", 11, 5, 11], // the half step is the last one for a field lane too
+    ["F1", 12, 5, null], // a twelfth erasure would repair it
   ];
   for (const [lane, flagged, hidden, erasures] of cases) {
     const { dataLen, wordLen } = PETAL_LANES[lane];
@@ -1360,18 +1448,16 @@ test("the erasure schedule has the reference's steps for every lane", () => {
 });
 
 test("equal confidences are erased in position order, so the ranking is stable", () => {
-  // The random-word counts above do not depend on the order of tied confidences (the same counts
-  // come out with the ties reversed), but real reads tie a lot: every tile the normalised read
-  // erases has confidence exactly 0. With all confidences equal the lowest positions are erased
-  // first, so damage at the lowest positions is repaired as soon as the schedule reaches enough
-  // erasures; a ranking that put the ties the other way round would erase good bytes instead.
+  // Ties must be broken by position or ports disagree about which bytes are erased. With all
+  // confidences equal the lowest positions are erased first, so damage at the lowest positions is
+  // repaired as soon as the schedule reaches enough erasures; a ranking that put the ties the
+  // other way round would erase good bytes instead.
   for (const [lane, damagedPositions, mask, erasures] of [
     // The reference's case: three damaged bytes at the front plus four hidden ones fit lane D only
-    // if exactly the first three positions are erased (3 erasures + 4 errors = all 11 parity bytes);
-    // a step that erased the last positions instead would see seven errors.
+    // if exactly the first three positions are erased (3 erasures + 4 errors = all 11 parity bytes).
     ["D", [0, 1, 2, 20, 21, 22, 23], 0x5a, 3],
-    ["P", [0, 1, 2, 3, 4, 5, 6, 7], 0xa5, 3], // 13 parity bytes: 8 errors fail, 3 erasures + 5 errors fit
     ["D", [0, 1, 2, 3, 4, 5], 0xa5, 1], // 11 parity bytes: 6 errors fail, 1 erasure + 5 errors fit
+    ["F0", Array.from({ length: 13 }, (_, index) => index), 0xa5, 5], // 22: 2 + 2 x 11 fail, 5 + 2 x 8 fit
   ]) {
     const { dataLen, wordLen } = PETAL_LANES[lane];
     const data = Uint8Array.from({ length: dataLen }, (_, index) => index);
@@ -1382,6 +1468,17 @@ test("equal confidences are erased in position order, so the ranking is stable",
     assert.ok(result !== null, label);
     assert.deepEqual([result.data, result.erasures, result.corrected], [data, erasures, damagedPositions.length], label);
   }
+});
+
+test("two-means splits two clusters and survives one", () => {
+  const values = [...new Array(40).fill(0.05), ...new Array(60).fill(0.9)];
+  const t = twoMeans(values);
+  assert.ok(t > 0.3 && t < 0.6, `${t}`);
+  assert.ok(Math.abs(twoMeans(new Array(10).fill(0.4)) - 0.4) < 1e-12);
+  // the midpoint of the two cluster means, not the median of the values
+  const skewed = [...new Array(90).fill(0), ...new Array(10).fill(1)];
+  assert.ok(Math.abs(twoMeans(skewed) - 0.5) < 1e-12);
+  assert.equal(twoMeans(Float64Array.of(0, 1, 9, 9), 2), 0.5, "only the first `count` values");
 });
 
 test("blank frames report no finders", () => {
@@ -1397,25 +1494,34 @@ test("unusable sizes are rejected without work", () => {
   // huge frames are refused before any pixel is touched
   assertPetalError(() => decodePetalFrame({ width: 100000, height: 100000, data: new Uint8Array(0) }), "unsupported_image");
   assertPetalError(() => decodePetalFrame({ width: 4001, height: 3000, data: new Uint8Array(0) }), "unsupported_image");
-  assert.equal(decodePetalFrameAt(new PetalLuma(8, 8), PetalHomography.identity()), null);
+  const identity = PetalPose.plain(PetalHomography.identity());
+  assert.equal(decodePetalFrameAt(new PetalLuma(8, 8), identity), null);
   // a buffer that does not match the stated size must not reach the sampler, in any entry point
   const broken = { width: 100, height: 100, data: new Uint8Array(5) };
-  assert.equal(decodePetalFrameAt(broken, PetalHomography.identity()), null);
+  assert.equal(decodePetalFrameAt(broken, identity), null);
   const { luma } = decodeSetup(5);
   const decoded = decodePetalFrame(luma);
   assert.equal(observedCells(broken, decoded), null);
-  assert.equal(tileMatchError(broken, decoded), null);
+  assert.equal(fieldEvidence(broken, decoded), null);
   // ... and so must a frame that is too small or over the pixel budget
   for (const [image, options] of [
     [new PetalLuma(47, 400), undefined],
     [luma, { maxPixels: 1000 }],
   ]) {
     assert.equal(observedCells(image, decoded, options), null);
-    assert.equal(tileMatchError(image, decoded, options), null);
-    assert.equal(decodePetalFrameAt(image, decoded.homography, options), null);
+    assert.equal(fieldEvidence(image, decoded, options), null);
+    assert.equal(decodePetalFrameAt(image, decoded.pose, options), null);
   }
   assert.throws(() => decodePetalFrame({ width: 64, height: 64, data: [] }), TypeError);
-  assert.throws(() => decodePetalFrame(new PetalLuma(64, 64), { templateSigmas: [] }), TypeError);
+  assert.throws(() => decodePetalFrame(new PetalLuma(64, 64), { tryMirrored: "yes" }), TypeError);
+  assert.throws(() => decodePetalFrameAt(luma, PetalHomography.identity()), TypeError);
+  assert.throws(() => fieldEvidence(luma, { pose: null }), TypeError);
+});
+
+test("observed cells match the drawn cells of a clean render", () => {
+  const { encoder, luma } = decodeSetup(3);
+  const decoded = decodePetalFrame(luma);
+  assert.ok(observedCells(luma, decoded).equals(encoder.cells(3)));
 });
 
 test("garbage images never crash or decode", () => {
@@ -1453,13 +1559,13 @@ test("garbage images never crash or decode", () => {
     [0, 0, 0, 0, 0, 0, 0, 0, 0],
     [1e300, 0, 0, 0, 1e300, 0, 0, 0, 1e-300],
     [Number.NaN, 0, 0, 0, 1, 0, 0, 0, 1],
-  ].map((m) => decodePetalFrameAt(noisy, m)?.lanesOk() ?? null);
+  ].map((m) => decodePetalFrameAt(noisy, PetalPose.plain(new PetalHomography(m)))?.lanesOk() ?? null);
   assert.deepEqual(lanes, [null, null, null]);
 });
 
 test("random blob scenes never crash or yield lanes", () => {
   // Scenes with several random bright ellipses (some finder-sized) on noise: exercises the
-  // locator, quad and corner selection, the inferred-corner search and the homography on
+  // locator, quad and corner selection, the inferred-corner search and the pose fit on
   // degenerate layouts.
   const rng = new PetalXorshift32(2024);
   for (let scene = 0; scene < 60; scene += 1) {
@@ -1491,7 +1597,7 @@ test("random blob scenes never crash or yield lanes", () => {
 });
 
 test("a large hidden region never reads wrong data", () => {
-  // the whole bottom-right quarter is gone: rings and tiles with it
+  // the whole bottom-right quarter is gone: rings and petals with it
   const { encoder, luma } = decodeSetup(2);
   const n = luma.width;
   for (let y = (n * 3) / 4; y < n; y += 1) luma.data.fill(0, y * n + (n * 3) / 4, (y + 1) * n);
@@ -1503,8 +1609,9 @@ test("a large hidden region never reads wrong data", () => {
     assert.ok(error instanceof PetalError);
   }
   if (decoded !== null) {
-    for (const lane of ["p", "k", "d"]) {
-      if (decoded[lane] !== null) assert.deepEqual(decoded[lane].data, truth[lane], `lane ${lane}`);
+    for (const lane of ALL_LANES) {
+      const result = decoded.lane(lane);
+      if (result !== null) assert.deepEqual(result.data, laneBytes(truth, lane), `lane ${lane}`);
     }
   }
 });
@@ -1532,21 +1639,15 @@ test("a hidden blossom is inferred and every lane still reads", () => {
   for (let corner = 0; corner < 4; corner += 1) {
     const { encoder, luma } = hiddenBlossom(2, corner);
     const decoded = decodePetalFrame(luma);
-    const { p, k, d } = encoder.laneData(2);
     assert.equal(decoded.inferredCorner, corner, `corner ${corner}`);
     assert.deepEqual([decoded.rotation, decoded.mirrored], [0, false], `corner ${corner}`);
-    assert.deepEqual(decoded.p?.data, p, `corner ${corner} lane P`);
-    assert.deepEqual(decoded.k?.data, k, `corner ${corner} lane K`);
-    assert.deepEqual(decoded.d?.data, d, `corner ${corner} lane D`);
+    assertAllLanes(decoded, encoder.laneData(2), `corner ${corner}`);
     // the diagnostics extrapolate the hidden corner's levels like the decoder; without the
     // inferred corner the missing blossom has no contrast and there are no levels at all
-    assert.ok(tileMatchError(luma, decoded) < 0.5, `corner ${corner}`);
     assert.ok(observedCells(luma, decoded) !== null);
-    assert.equal(tileMatchError(luma, { homography: decoded.homography }), null);
+    assert.equal(observedCells(luma, { pose: decoded.pose }), null);
+    assert.equal(fieldEvidence(luma, { pose: decoded.pose, inferredCorner: 4 }), null);
   }
-  const { luma } = hiddenBlossom(2, 0);
-  const decoded = decodePetalFrame(luma);
-  assert.throws(() => tileMatchError(luma, { homography: decoded.homography, inferredCorner: 4 }), TypeError);
 });
 
 test("the inferred corner is reported in code coordinates when mirrored", () => {
@@ -1559,18 +1660,54 @@ test("the inferred corner is reported in code coordinates when mirrored", () => 
   assert.deepEqual(decoded.d.data, encoder.laneData(3).d);
 });
 
-test("the tian mask tells the quarter turns apart", () => {
-  const { luma } = decodeSetup(5);
-  const quad = locate(luma);
-  const byRotation = [-Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE];
-  for (const { rotation, mirrored, m } of hypotheses(quad, true)) {
-    const score = maskScore(luma, m, referenceLevels(luma, m));
-    if (!mirrored) byRotation[rotation] = score;
+/**
+ * The image warped by barrel distortion about the image centre, as a cheap lens does: pixel `p`
+ * shows what an undistorted camera saw at `c + (p - c) / (1 + k r^2 / s^2)`.
+ */
+function barrel(image, k) {
+  const { width: w, height: h } = image;
+  const cx = w / 2;
+  const cy = h / 2;
+  const scale2 = (0.8 * Math.max(w, h)) ** 2;
+  const out = new PetalLuma(w, h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const dx = x + 0.5 - cx;
+      const dy = y + 0.5 - cy;
+      // invert p_d = c + u (1 + k |u|^2 / s^2) for the undistorted offset u
+      let ux = dx;
+      let uy = dy;
+      for (let round = 0; round < 8; round += 1) {
+        const f = 1 + (k * (ux * ux + uy * uy)) / scale2;
+        ux = dx / f;
+        uy = dy / f;
+      }
+      out.data[y * w + x] = Math.round(image.sample(cx + ux, cy + uy));
+    }
   }
-  // upright wins clearly over the three other quarter turns
-  for (let rotation = 1; rotation < 4; rotation += 1) {
-    assert.ok(byRotation[0] > byRotation[rotation] + 0.1, byRotation.join(", "));
+  return out;
+}
+
+test("lens distortion is found when the plain pose misses the petals", () => {
+  // a small, strongly distorted picture: 384 px of code with the corner blossoms far out
+  const { encoder, luma } = decodeSetup(6);
+  // downscale 768 -> 384 by averaging 2x2 blocks, then frame it in 640x480
+  const small = new PetalLuma(640, 480);
+  for (let y = 0; y < 384; y += 1) {
+    for (let x = 0; x < 384; x += 1) {
+      const at = 2 * y * 768 + 2 * x;
+      const sum = luma.data[at] + luma.data[at + 1] + luma.data[at + 768] + luma.data[at + 769];
+      small.data[(y + 48) * 640 + x + 128] = Math.floor((sum + 2) / 4);
+    }
   }
+  const distorted = barrel(small, -0.12);
+  // the plain pose misses petals at the edge of the field
+  const corners = locate(distorted).map((finder) => [finder.x, finder.y]);
+  const plain = decodePetalFrameAt(distorted, PetalPose.fit(PETAL_LAYOUT.finderCenters, corners, 0, 640, 480));
+  assert.ok(plain.fields.some((field) => field === null), plain.letters());
+  const decoded = decodePetalFrame(distorted);
+  assert.ok(decoded.pose.distortion < 0, `${decoded.pose.distortion}`);
+  assertAllLanes(decoded, encoder.laneData(6), "barrel");
 });
 
 /** Shifts a luma image by whole pixels, filling with black. */
@@ -1601,10 +1738,9 @@ test("tracking follows a small movement and gives up on a jump", () => {
   const { encoder, luma: render } = decodeSetup(6);
   const luma = padded(render, 100);
   const first = decodePetalFrame(luma);
-  const { p, k, d } = encoder.laneData(6);
   const followed = trackPetalFrame(shifted(luma, 9, -6), first);
   assert.ok(followed !== null, "tracks a 9 px move");
-  assert.deepEqual([followed.p?.data, followed.k?.data, followed.d?.data], [p, k, d]);
+  assertAllLanes(followed, encoder.laneData(6), "tracked");
   assert.equal(followed.inferredCorner, null);
   assert.deepEqual([followed.rotation, followed.mirrored], [first.rotation, first.mirrored]);
   // more than a finder diameter: tracking refuses, a full decode is needed
@@ -1614,8 +1750,32 @@ test("tracking follows a small movement and gives up on a jump", () => {
   // unusable images and foreign previous frames
   assert.equal(trackPetalFrame(new PetalLuma(47, 400), first), null);
   assert.equal(trackPetalFrame(luma, first, { maxPixels: 1000 }), null);
-  assert.throws(() => trackPetalFrame(luma, { homography: first.homography }), TypeError);
+  assert.throws(() => trackPetalFrame(luma, { pose: first.pose }), TypeError);
   assert.throws(() => trackPetalFrame({ width: 64, height: 64, data: [] }, first), TypeError);
+});
+
+test("broken poses are refused without crashing", () => {
+  const { luma } = decodeSetup(4);
+  const previous = decodePetalFrame(luma);
+  assert.ok(trackPetalFrame(luma, previous) !== null);
+  const rebuilt = (pose, inferred) =>
+    new PetalDecodedFrame(pose, previous.rotation, previous.mirrored, previous.d, previous.fields, inferred);
+  // a good pose that names a corner that does not exist
+  for (const corner of [4, 255]) {
+    assert.equal(trackPetalFrame(luma, rebuilt(previous.pose, corner)), null);
+  }
+  const nonFinite = [new Array(9).fill(Number.NaN), [Number.POSITIVE_INFINITY, 0, 0, 0, 1, 0, 0, 0, 1]];
+  for (const broken of nonFinite) {
+    assert.equal(decodePetalFrameAt(luma, PetalPose.plain(new PetalHomography(broken))), null);
+  }
+  // the last one makes every finder far larger than the image
+  const huge = [50, 0, 0, 0, 50, 0, 0, 0, 1];
+  for (const broken of [...nonFinite, huge]) {
+    for (const inferred of [null, 2]) {
+      const frame = rebuilt(PetalPose.plain(new PetalHomography(broken)), inferred);
+      assert.equal(trackPetalFrame(luma, frame), null, `${broken.join(",")} inferred ${inferred}`);
+    }
+  }
 });
 
 test("tracking survives a blossom that disappears", () => {
@@ -1645,455 +1805,100 @@ test("a blossom that reappears is seen again", () => {
   assert.equal(still.inferredCorner, 3);
 });
 
-test("broken poses are refused without crashing", () => {
-  const { luma } = decodeSetup(4);
-  const previous = decodePetalFrame(luma);
-  const nonFinite = [
-    new Array(9).fill(Number.NaN),
-    [Number.POSITIVE_INFINITY, 0, 0, 0, 1, 0, 0, 0, 1],
-  ];
-  for (const broken of nonFinite) {
-    assert.equal(decodePetalFrameAt(luma, broken), null);
-  }
-  // the last one makes every finder far larger than the image
-  const huge = [50, 0, 0, 0, 50, 0, 0, 0, 1];
-  for (const broken of [...nonFinite, huge]) {
-    for (const inferred of [null, 2]) {
-      const frame = new PetalDecodedFrame(
-        new PetalHomography(broken),
-        previous.rotation,
-        previous.mirrored,
-        previous.p,
-        previous.k,
-        previous.d,
-        inferred,
-      );
-      assert.equal(trackPetalFrame(luma, frame), null, `${broken.join(",")} inferred ${inferred}`);
-    }
-  }
-});
+// ---------------------------------------------------------------- field evidence and the local read
 
-// ---------------------------------------------------------------- tile reads
-
-const SIGMAS = PETAL_DEFAULT_DECODE_OPTIONS.templateSigmas;
-/** Cells in the patch of one tile. */
-const PATCH_CELLS = PETAL_GLYPHS.templateN * PETAL_GLYPHS.templateN;
-
-/** The exact canvas-to-pixel homography (nine coefficients) of the 768-pixel test renders. */
-function renderHomography() {
-  const canonical = PETAL_LAYOUT.finderCenters;
-  const scale = 768 / PETAL_LAYOUT.canvas;
-  const pixels = canonical.map(([x, y]) => [x * scale, y * scale]);
-  return Float64Array.from(PetalHomography.fromPoints(canonical, pixels).values);
-}
-
-/** A clean 768-pixel render with the exact canvas-to-pixel homography and its raw patches. */
-function cleanPatches(frame) {
-  const { encoder, luma } = decodeSetup(frame);
-  const m = renderHomography();
-  return { encoder, luma, m, patches: samplePatches(luma, m) };
-}
-
-function decodedLane(lane, words) {
-  const key = lane.toLowerCase();
-  return decodeWithErasures(lane, words[key], words[`${key}Confidence`]);
-}
-
-/** Contrast (span between the robust darkest and brightest cell) of every tile's patch. */
-function patchSpans(patches) {
-  return Array.from({ length: PETAL_LAYOUT.tileCount }, (_, tile) => {
-    const [low, high] = patchLevels(patches, tile * PATCH_CELLS);
-    return high - low;
-  });
-}
-
-/** Scales the contrast of one tile's patch about its own darkest level; the span scales by `gain`. */
-function squeezeTile(patches, tile, gain) {
-  const base = tile * PATCH_CELLS;
-  const [low] = patchLevels(patches, base);
-  for (let cell = 0; cell < PATCH_CELLS; cell += 1) {
-    patches[base + cell] = low + gain * (patches[base + cell] - low);
-  }
-}
-
-/** Remaps one tile's patch linearly so that its robust darkest level is 0 and its span exactly `span`. */
-function setTileSpan(patches, tile, span) {
-  const base = tile * PATCH_CELLS;
-  const [low, high] = patchLevels(patches, base);
-  for (let cell = 0; cell < PATCH_CELLS; cell += 1) {
-    patches[base + cell] = ((patches[base + cell] - low) / (high - low)) * span;
-  }
-}
-
-/**
- * Flattens fourteen tiles that sit in fourteen different bytes of lane P (and of lane K): more
- * damage than the 13 parity bytes of lane P repair, which lane K (45 parity bytes) shrugs off.
- * Returns the tile numbers.
- */
-function flattenFourteenTiles(patches) {
-  const tiles = Array.from({ length: 14 }, (_, j) => 8 * j);
-  for (const tile of tiles) patches.fill(100, tile * PATCH_CELLS, (tile + 1) * PATCH_CELLS);
-  return tiles;
-}
-
-const isErased = (reads, tile) => reads.polarityMargin[tile] === 0 && reads.glyphMargin[tile] === 0;
-
-test("level and normalised reads agree on a clean render", () => {
-  const { encoder, luma, m, patches } = cleanPatches(5);
-  const { p: pData, k: kData } = encoder.laneData(5);
-  const reference = referenceLevels(luma, m);
-  assert.ok(reference !== null, "reference levels");
-  for (const [name, reads] of [
-    ["level", readTiles(patches, reference, SIGMAS)],
-    ["normalised", readTilesNormalised(patches, SIGMAS)],
+test("merging one capture reads the field lanes decode read", () => {
+  for (const [name, { luma }] of [
+    ["clean", decodeSetup(5)],
+    ["hidden corner", hiddenBlossom(2, 3)],
   ]) {
-    const words = tileWords(reads);
-    const p = decodedLane("P", words);
-    const k = decodedLane("K", words);
-    assert.deepEqual([p.data, p.corrected], [pData, 0], name);
-    assert.deepEqual([k.data, k.corrected], [kData, 0], name);
+    const frame = decodePetalFrame(luma);
+    assert.ok(frame.fields.every((field) => field !== null), name);
+    const evidence = fieldEvidence(luma, frame);
+    assert.equal(evidence.levels.length, PETAL_LAYOUT.fieldCells);
+    assert.deepEqual(mergeFields([evidence]), frame.fields, name);
   }
 });
 
-test("the normalised read cancels gain and offset per tile", () => {
-  const { encoder, luma, m, patches } = cleanPatches(5);
-  const { p: pData, k: kData } = encoder.laneData(5);
-  // every tile gets its own gain and offset, as under glare, shadows and saturation
-  const distorted = new Float64Array(patches.length);
-  for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
-    const gain = 0.35 + 0.65 * (((tile * 37) % 101) / 100);
-    const offset = 5 + ((tile * 53) % 61);
-    for (let cell = 0; cell < PATCH_CELLS; cell += 1) {
-      distorted[tile * PATCH_CELLS + cell] = gain * patches[tile * PATCH_CELLS + cell] + offset;
-    }
-  }
-  const reference = referenceLevels(luma, m);
-  assert.equal(
-    decodedLane("P", tileWords(readTiles(distorted, reference, SIGMAS))),
-    null,
-    "the level read must not survive this distortion, or the test proves nothing",
+test("averaging captures cancels their independent noise", () => {
+  const { encoder, luma } = decodeSetup(5);
+  const truth = encoder.laneData(5);
+  const frame = decodePetalFrame(luma);
+  const clean = fieldEvidence(luma, frame);
+  const rng = new PetalXorshift32(9);
+  // uniform noise of +-0.6 of the lit level per cell: about one bit in eight flips in one capture,
+  // far more than a field codeword corrects
+  const captures = Array.from(
+    { length: 4 },
+    () => new PetalFieldEvidence(clean.levels.map((value) => value + (rng.nextByte() - 127.5) / 213)),
   );
-  const words = tileWords(readTilesNormalised(distorted, SIGMAS));
-  assert.deepEqual([decodedLane("P", words).data, decodedLane("K", words).data], [pData, kData]);
-});
-
-test("the normalised read erases tiles that lost their contrast", () => {
-  const { patches } = cleanPatches(5);
-  patches.fill(100, 5 * PATCH_CELLS, 6 * PATCH_CELLS);
-  patches.fill(30, 9 * PATCH_CELLS, 10 * PATCH_CELLS);
-  const reads = readTilesNormalised(patches, SIGMAS);
-  for (const tile of [5, 9]) {
-    assert.ok(Math.abs(reads.polarityMargin[tile]) < 1e-12, `tile ${tile}`);
-    assert.ok(Math.abs(reads.glyphMargin[tile]) < 1e-12, `tile ${tile}`);
+  for (const capture of captures) {
+    assert.ok(
+      mergeFields([capture]).every((field) => field === null),
+      "one noisy capture must not read a field lane, or the test proves nothing",
+    );
   }
-  assert.ok(reads.polarityMargin[6] > 0 && reads.glyphMargin[6] > 0);
+  const merged = mergeFields(captures);
+  merged.forEach((result, sector) => assert.deepEqual(result?.data, truth.fields[sector], `sector ${sector}`));
+  // skipped sectors are not read
+  const skipped = mergeFields(captures, [true, false, true, true]);
+  assert.ok(skipped[0] === null && skipped[1] !== null && skipped[2] === null);
 });
 
-test("tiles under a quarter of the median contrast are erased, others are not", () => {
-  const { patches } = cleanPatches(5);
-  const spans = patchSpans(patches);
-  const ascending = spans.map((span, tile) => [span, tile]).sort((a, b) => a[0] - b[0]);
-  const median = ascending[PETAL_LAYOUT.tileCount / 2][0];
-  // Two tiles below the median: squeezing them cannot move the median itself.
-  const [weak, fine] = [ascending[10][1], ascending[20][1]];
-  squeezeTile(patches, weak, (0.24 * median) / spans[weak]);
-  squeezeTile(patches, fine, (0.26 * median) / spans[fine]);
-  // Exactly a quarter of the median is still read (the comparison is strict); a hair under is not.
-  const [exact, hairUnder] = [ascending[30][1], ascending[40][1]];
-  setTileSpan(patches, exact, 0.25 * median);
-  setTileSpan(patches, hairUnder, 0.25 * median * (1 - 2 ** -40));
-  const reads = readTilesNormalised(patches, SIGMAS);
-  assert.ok(isErased(reads, weak), "0.24 x median is erased");
-  assert.ok(reads.polarityMargin[fine] > 0 && reads.glyphMargin[fine] > 0, "0.26 x median is read");
-  assert.ok(reads.polarityMargin[exact] > 0 && reads.glyphMargin[exact] > 0, "exactly 0.25 x median is read");
-  assert.ok(isErased(reads, hairUnder), "just under 0.25 x median is erased");
-  const all = Array.from({ length: PETAL_LAYOUT.tileCount }, (_, tile) => tile);
-  const erased = all.filter((tile) => isErased(reads, tile));
-  assert.deepEqual(erased, [weak, hairUnder].sort((a, b) => a - b), "no other tile is erased");
+test("evidence needs a usable image and a real corner", () => {
+  const { luma } = decodeSetup(5);
+  const frame = decodePetalFrame(luma);
+  assert.equal(fieldEvidence(new PetalLuma(20, 20), frame), null);
+  const invalid = new PetalDecodedFrame(frame.pose, frame.rotation, frame.mirrored, frame.d, frame.fields, 7);
+  assert.equal(fieldEvidence(luma, invalid), null);
+  assert.deepEqual(mergeFields([]), [null, null, null, null]);
+  assert.throws(() => mergeFields([{ levels: new Float64Array(3376) }]), TypeError);
+  assert.throws(() => new PetalFieldEvidence(new Float64Array(10)), TypeError);
 });
 
-test("the median contrast is the upper middle of the sorted tile spans", () => {
-  // Half of the tiles keep a tenth of their contrast. Sorted, the upper middle span (element 128
-  // of the ascending spans) belongs to a strong tile, so the squeezed half falls under a quarter
-  // of it; the lower middle span would not erase them, and neither would the span of tile 128 when
-  // that tile is among the squeezed ones (the spans are not in tile order).
-  const half = PETAL_LAYOUT.tileCount / 2;
-  for (const [name, squeezed] of [
-    ["lower half", (tile) => tile < half],
-    ["upper half", (tile) => tile >= half],
-  ]) {
-    const { patches } = cleanPatches(5);
-    for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
-      if (squeezed(tile)) squeezeTile(patches, tile, 0.1);
+test("neighbourhoods hold every cell within 32 units, itself included", () => {
+  const { start, cells } = neighbourhoods();
+  assert.equal(start.length, PETAL_LAYOUT.fieldCells + 1);
+  for (const cell of [0, 1, 100, 1500, 3375]) {
+    const [x, y] = cellCenter(cell);
+    const around = Array.from(cells.subarray(start[cell], start[cell + 1]));
+    const brute = [];
+    for (let other = 0; other < PETAL_LAYOUT.fieldCells; other += 1) {
+      const [ox, oy] = cellCenter(other);
+      if ((ox - x) ** 2 + (oy - y) ** 2 <= 1024) brute.push(other);
     }
-    const reads = readTilesNormalised(patches, SIGMAS);
-    for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
-      assert.equal(isErased(reads, tile), squeezed(tile), `${name}: tile ${tile}`);
-    }
+    assert.deepEqual(around, brute, `cell ${cell}`);
+    assert.ok(around.includes(cell));
   }
 });
 
-test("patch levels ignore the extreme cells", () => {
-  const values = new Float64Array(PATCH_CELLS).fill(10);
-  for (let i = 0; i < PATCH_CELLS / 2; i += 1) values[i] = 200 + (i % 3);
-  values[0] = 255; // one hot cell
-  values[PATCH_CELLS - 1] = 0; // one dead cell
-  const [low, high] = patchLevels(values);
-  assert.ok(Math.abs(low - 10) < 1e-12);
-  assert.ok(high >= 200 && high <= 202);
-  // the cut is exactly six cells in from either end: indices 6 and 57 of the 64 sorted cells
-  const permuted = Float64Array.from({ length: PATCH_CELLS }, (_, cell) => (cell * 37) % PATCH_CELLS);
-  assert.deepEqual(patchLevels(permuted), [6, 57]);
-  const scaled = new Float64Array(PATCH_CELLS);
-  assert.equal(rescale(values, 0, 1, scaled), high - low, "rescale reports the span it used");
-  assert.ok(scaled.every((value) => value >= -0.25 && value <= 1.25));
-  assert.equal(scaled[0], 1.25, "the hot cell is clamped");
-  assert.ok(Math.abs(scaled[PATCH_CELLS - 1] - (0 - low) / (high - low)) < 1e-12, "the dead cell is not");
-  // patches are addressed by offset and may be rescaled in place
-  const stacked = new Float64Array(2 * PATCH_CELLS);
-  stacked.set(values, PATCH_CELLS);
-  assert.deepEqual(patchLevels(stacked, PATCH_CELLS), [low, high]);
-  rescale(stacked, PATCH_CELLS, 1, stacked);
-  assert.deepEqual(stacked.slice(PATCH_CELLS), scaled);
-  assert.ok(stacked.subarray(0, PATCH_CELLS).every((value) => value === 0), "the neighbouring patch is untouched");
-  // a cell far below the darkest level is clamped from below; the two levels map to 0 and 1
-  const stepped = new Float64Array(PATCH_CELLS).fill(100);
-  stepped.fill(110, 0, 20);
-  stepped[PATCH_CELLS - 1] = 0;
-  const steppedOut = new Float64Array(PATCH_CELLS);
-  assert.equal(rescale(stepped, 0, 1, steppedOut), 10);
-  assert.deepEqual([steppedOut[0], steppedOut[19], steppedOut[20], steppedOut[PATCH_CELLS - 1]], [1, 1, 0, -0.25]);
-  // a flat patch stays flat instead of dividing by nothing
-  const flatOut = new Float64Array(PATCH_CELLS);
-  assert.equal(rescale(new Float64Array(PATCH_CELLS).fill(7), 0, 1, flatOut), 0);
-  assert.ok(flatOut.every((value) => Math.abs(value) < 1e-12));
-});
-
-/**
- * The expected patch of every hypothesis `polarity * 16 + glyph` for the sharp template (sigma 0):
- * levels relative to the light fill, with the ink at 0.04 on a light tile and the pink glyph at
- * 0.83 on a dark tile (spec section 7, step 5).
- */
-function templatePatches() {
-  const hypotheses = [];
-  for (let polarity = 0; polarity < 2; polarity += 1) {
-    for (let glyph = 0; glyph < PETAL_GLYPHS.count; glyph += 1) {
-      hypotheses.push(
-        Float64Array.from(PETAL_GLYPHS.templates[glyph], (byte) => {
-          const coverage = byte / 255;
-          return polarity === 1 ? 1 - (1 - 0.04) * coverage : 0.83 * coverage;
-        }),
-      );
-    }
-  }
-  return hypotheses;
-}
-
-test("both reads recognise every template at any gain and offset", () => {
-  const hypotheses = templatePatches();
-  // Level read: one gain and offset for the whole frame, which the finder levels describe exactly.
-  const [gain, offset] = [200, 20];
-  const levelPatches = new Float64Array(PETAL_LAYOUT.tileCount * PATCH_CELLS);
-  // Normalised read: a different gain and offset for every tile.
-  const normalisedPatches = new Float64Array(PETAL_LAYOUT.tileCount * PATCH_CELLS);
-  for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
-    const pattern = hypotheses[tile % hypotheses.length];
-    const tileGain = 120 + ((tile * 7) % 90);
-    const tileOffset = 3 + ((tile * 11) % 40);
-    for (let cell = 0; cell < PATCH_CELLS; cell += 1) {
-      levelPatches[tile * PATCH_CELLS + cell] = gain * pattern[cell] + offset;
-      normalisedPatches[tile * PATCH_CELLS + cell] = tileGain * pattern[cell] + tileOffset;
-    }
-  }
-  // finder levels that describe that gain and offset exactly
-  const reference = { lit: new Float64Array(4).fill(offset + gain), dark: new Float64Array(4).fill(offset) };
-  // Both reads in turn, twice: each keeps using its own set of templates.
-  const sigmas = [0.5, 0]; // the exactly matching blur wins on total error whatever the order
-  for (const [name, read] of [
-    ["level", () => readTiles(levelPatches, reference, sigmas)],
-    ["normalised", () => readTilesNormalised(normalisedPatches, sigmas)],
-    ["level again", () => readTiles(levelPatches, reference, sigmas)],
-    ["normalised again", () => readTilesNormalised(normalisedPatches, sigmas)],
-  ]) {
-    const reads = read();
-    for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
-      const hypothesis = tile % hypotheses.length;
-      assert.ok(reads.error[tile] < 1e-9, `${name}: tile ${tile} error ${reads.error[tile]}`);
-      const expected = [hypothesis >> 4, hypothesis & 15];
-      assert.deepEqual([reads.light[tile], reads.glyph[tile]], expected, `${name}: tile ${tile}`);
-    }
-  }
-});
-
-test("the level read follows the light across the frame", () => {
-  const hypotheses = templatePatches();
-  const full = 200;
-  // The light falls off to 40% towards the left (or the top) edge, linearly in canvas
-  // coordinates; the finder levels at the four corners describe that exactly, so the
-  // interpolated levels cancel it. Corners run top left, top right, bottom right, bottom left.
-  const fall = (position) => 0.4 + (0.6 * position) / PETAL_LAYOUT.canvas;
-  const cases = [
-    ["left to right", (x) => fall(x), [fall(0), fall(PETAL_LAYOUT.canvas), fall(PETAL_LAYOUT.canvas), fall(0)]],
-    ["top to bottom", (_x, y) => fall(y), [fall(0), fall(0), fall(PETAL_LAYOUT.canvas), fall(PETAL_LAYOUT.canvas)]],
-  ];
-  for (const [name, gainAt, corners] of cases) {
-    const patches = new Float64Array(PETAL_LAYOUT.tileCount * PATCH_CELLS);
-    for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
-      const [cx, cy] = tileCenter(tile);
-      for (let cell = 0; cell < PATCH_CELLS; cell += 1) {
-        patches[tile * PATCH_CELLS + cell] = gainAt(cx, cy) * full * hypotheses[tile % hypotheses.length][cell];
-      }
-    }
-    const reference = { lit: Float64Array.from(corners, (gain) => gain * full), dark: new Float64Array(4) };
-    const reads = readTiles(patches, reference, [0]);
-    for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
-      const hypothesis = tile % hypotheses.length;
-      assert.ok(reads.error[tile] < 1e-9, `${name}: tile ${tile} error ${reads.error[tile]}`);
-      const expected = [hypothesis >> 4, hypothesis & 15];
-      assert.deepEqual([reads.light[tile], reads.glyph[tile]], expected, `${name}: tile ${tile}`);
-    }
-  }
-});
-
-test("a lane the level read decoded is kept when the normalised read decodes it too", () => {
-  const { luma, m, patches } = cleanPatches(5);
-  const flat = new Set(flattenFourteenTiles(patches)); // lane P is beyond repair in both reads
-  for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
-    if (flat.has(tile) || tile % 3 !== 1) continue;
-    for (let cell = 0; cell < PATCH_CELLS; cell += 1) {
-      patches[tile * PATCH_CELLS + cell] = 0.55 * patches[tile * PATCH_CELLS + cell] + 20; // dimmed
-    }
-  }
-  const reference = referenceLevels(luma, m);
-  const levelK = decodedLane("K", tileWords(readTiles(patches, reference, SIGMAS)));
-  const normalisedK = decodedLane("K", tileWords(readTilesNormalised(patches, SIGMAS)));
-  // the dimming costs the level read more repairs than the normalised read, which cancels it
-  assert.ok(levelK !== null && normalisedK !== null);
-  assert.ok(levelK.corrected > normalisedK.corrected, `${levelK.corrected} vs ${normalisedK.corrected}`);
-  const lanes = readTileLanes(patches, reference, SIGMAS);
-  assert.equal(lanes.p, null);
-  assert.deepEqual(lanes.k, levelK, "lane K keeps the level read");
-});
-
-test("sampled patches average four bilinear samples around each cell centre", () => {
-  const side = 300;
-  const rng = new Lcg(11);
-  const noise = new PetalLuma(side, side, Uint8Array.from({ length: side * side }, () => rng.byte()));
-  const canonical = PETAL_LAYOUT.finderCenters;
-  const pose = PetalHomography.fromPoints(canonical, [
-    [40, 30],
-    [260, 50],
-    [250, 270],
-    [30, 250],
-  ]);
-  const patches = samplePatches(noise, Float64Array.from(pose.values));
-  const half = PETAL_LAYOUT.glyphBox / 2;
-  const cell = PETAL_LAYOUT.glyphBox / PETAL_GLYPHS.templateN;
-  for (const tile of [0, 77, 255]) {
-    const [cx, cy] = tileCenter(tile);
-    for (let v = 0; v < PETAL_GLYPHS.templateN; v += 1) {
-      for (let u = 0; u < PETAL_GLYPHS.templateN; u += 1) {
-        let sum = 0;
-        for (const [ox, oy] of [
-          [-0.25, -0.25],
-          [0.25, -0.25],
-          [-0.25, 0.25],
-          [0.25, 0.25],
-        ]) {
-          const canvasX = cx - half + (u + 0.5) * cell + ox * cell;
-          const canvasY = cy - half + (v + 0.5) * cell + oy * cell;
-          const [px, py] = pose.apply(canvasX, canvasY);
-          sum += noise.sample(px, py);
-        }
-        const actual = patches[tile * PATCH_CELLS + v * PETAL_GLYPHS.templateN + u];
-        assert.ok(Math.abs(actual - sum / 4) < 1e-9, `tile ${tile} cell (${u}, ${v}): ${actual} vs ${sum / 4}`);
-      }
-    }
-  }
-});
-
-test("sampled patches are raw luma levels at the tile cells", () => {
-  const side = 256;
-  const scale = side / PETAL_LAYOUT.canvas;
-  const m = [scale, 0, 0, 0, scale, 0, 0, 0, 1];
-  const half = PETAL_LAYOUT.glyphBox / 2;
-  const cell = PETAL_LAYOUT.glyphBox / PETAL_GLYPHS.templateN;
-  // A ramp is reproduced exactly by bilinear sampling (pixel i has its centre at i + 0.5), so
-  // each cell holds the ramp at the cell's centre, whatever the offsets of its four samples.
-  for (const axis of ["x", "y"]) {
-    const ramp = new Uint8Array(side * side);
-    for (let y = 0; y < side; y += 1) for (let x = 0; x < side; x += 1) ramp[y * side + x] = axis === "x" ? x : y;
-    const out = new Float64Array(PETAL_LAYOUT.tileCount * PATCH_CELLS);
-    assert.equal(samplePatches(new PetalLuma(side, side, ramp), m, out), out, "fills and returns the given buffer");
-    for (const tile of [0, 1, 17, 128, 255]) {
-      const [cx, cy] = tileCenter(tile);
-      for (let v = 0; v < PETAL_GLYPHS.templateN; v += 1) {
-        for (let u = 0; u < PETAL_GLYPHS.templateN; u += 1) {
-          const canvasX = cx - half + (u + 0.5) * cell;
-          const canvasY = cy - half + (v + 0.5) * cell;
-          const expected = (axis === "x" ? canvasX : canvasY) * scale - 0.5;
-          const actual = out[tile * PATCH_CELLS + v * PETAL_GLYPHS.templateN + u];
-          const where = `${axis} tile ${tile} cell (${u}, ${v})`;
-          assert.ok(Math.abs(actual - expected) < 1e-9, `${where}: ${actual} vs ${expected}`);
-        }
-      }
-    }
-  }
-  // without a buffer a fresh one is allocated: 256 patches of 64 cells
-  assert.equal(samplePatches(new PetalLuma(side, side), m).length, PETAL_LAYOUT.tileCount * PATCH_CELLS);
-});
-
-test("a shadowed part of a render decodes through the normalised read", () => {
+test("the local read cancels light the finder levels cannot describe", () => {
   const { encoder, luma } = decodeSetup(5);
-  const { p: pData, k: kData } = encoder.laneData(5);
-  const width = luma.width;
-  for (let row = 0; row < luma.height; row += 1) {
-    for (let x = Math.floor((width * 7) / 20); x < Math.floor((width * 3) / 5); x += 1) {
-      luma.data[row * width + x] = Math.round(luma.data[row * width + x] * 0.3);
-    }
-  }
-  // the finder levels cannot describe a step in the light: the level read loses lane K
-  const m = renderHomography();
-  const reference = referenceLevels(luma, m);
-  const levelWords = tileWords(readTiles(samplePatches(luma, m), reference, SIGMAS));
-  assert.equal(decodedLane("K", levelWords), null);
-  const decoded = decodePetalFrame(luma);
-  assert.deepEqual(decoded.p.data, pData);
-  assert.deepEqual(decoded.k.data, kData);
-  // a known pose takes the same road
-  const at = decodePetalFrameAt(luma, m);
-  assert.deepEqual([at.p.data, at.k.data], [pData, kData]);
-});
-
-test("lane K alone is enough to accept an orientation", () => {
-  const { encoder, luma } = decodeSetup(5);
-  const { k: kData } = encoder.laneData(5);
-  const size = luma.width;
-  const scale = size / PETAL_LAYOUT.canvas;
-  const [inner, , outer] = PETAL_LAYOUT.ringRadii;
-  // wipe the dotted rings: neither lane D nor the gates that rank orientations survive
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const radius = Math.hypot((x + 0.5) / scale - PETAL_LAYOUT.center, (y + 0.5) / scale - PETAL_LAYOUT.center);
-      if (radius > inner - 20 && radius < outer + 20) luma.data[y * size + x] = 0;
-    }
-  }
-  assert.equal(decodePetalFrame(luma).d, null);
-  // Flatten fourteen tiles that sit in fourteen different bytes of lane P: that is more than its
-  // 13 parity bytes repair, while lane K (45 parity bytes) shrugs it off.
-  for (let j = 0; j < 14; j += 1) {
-    const [cx, cy] = tileCenter(8 * j);
-    for (let y = Math.floor((cy - 14) * scale); y <= Math.ceil((cy + 14) * scale); y += 1) {
-      for (let x = Math.floor((cx - 14) * scale); x <= Math.ceil((cx + 14) * scale); x += 1) {
-        luma.data[y * size + x] = 128;
-      }
-    }
-  }
-  const decoded = decodePetalFrame(luma);
-  assert.equal(decoded.p, null);
-  assert.equal(decoded.d, null);
-  assert.deepEqual(decoded.k.data, kData);
-  assert.deepEqual([decoded.rotation, decoded.mirrored, decoded.lanesOk()], [0, false, 1]);
+  const truth = encoder.laneData(5);
+  const levels = fieldEvidence(luma, decodePetalFrame(luma)).levels;
+  // a soft shadow band down the right of the code and veiling light that grows towards the
+  // bottom: every cell's level gets the gain and offset of where it sits
+  const lit = levels.map((value, cell) => {
+    const [x, y] = cellCenter(cell);
+    return (1 - 0.65 * Math.exp(-(((x - 700) / 80) ** 2))) * value + 0.3 * (y / 1024);
+  });
+  const level = [null, null, null, null];
+  readSectors(lit, NO_SKIP, level);
+  // the finder levels lose the lanes under the shadow and keep the others
+  assert.deepEqual(level.map((field) => field !== null), [false, true, true, false]);
+  const local = [null, null, null, null];
+  readSectors(localLevels(lit), NO_SKIP, local);
+  local.forEach((result, sector) => assert.deepEqual(result?.data, truth.fields[sector], `local read, sector ${sector}`));
+  // the combined read keeps the level read's lanes and fills in the rest from the local levels
+  const combined = [null, null, null, null];
+  readFields(lit, NO_SKIP, combined);
+  combined.forEach((result, sector) => {
+    assert.deepEqual(result?.data, truth.fields[sector], `combined read, sector ${sector}`);
+    if (level[sector] !== null) assert.deepEqual(result, level[sector], `sector ${sector} keeps the level read`);
+  });
+  // a local level of 0 and 1 sits at the means of a neighbourhood's darkest and brightest cells
+  const flat = localLevels(new Float64Array(PETAL_LAYOUT.fieldCells).fill(0.5));
+  assert.ok(flat.every((value) => value === 0), "a flat field has no contrast: a 0.05 span, centred at 0");
 });
 
 // ---------------------------------------------------------------- scan session
@@ -2135,7 +1940,7 @@ function cameraCapture(source, { width, height, rotationDeg = 0, noise = 3, seed
 }
 
 test("a session receives a payload from simulated captures", () => {
-  const data = payload(500, 3);
+  const data = payload(5000, 3);
   const encoder = new PetalStreamEncoder(data, 2);
   const session = new PetalScanSession();
   let done = null;
@@ -2152,12 +1957,14 @@ test("a session receives a payload from simulated captures", () => {
   assert.deepEqual(done.payload, data);
   assert.equal(done.meta.kind, 2);
   const stats = session.stats();
-  assert.ok(stats.readable > 0 && stats.laneD > 0);
+  assert.ok(stats.readable > 0 && stats.laneD > 0 && stats.fieldLanes > 0);
   assert.ok(stats.frames >= stats.located && stats.located >= stats.readable);
+  // 5,000 bytes need 313 atoms: a clean camera reads them in 15 or 16 frames
+  assert.ok(stats.frames <= 17, JSON.stringify(stats));
 });
 
 test("a steady camera is tracked after the first frame", () => {
-  const encoder = new PetalStreamEncoder(payload(300, 3), 2);
+  const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
   const shoot = (frame) =>
     cameraCapture(renderLuma(encoder.cells(frame), 512, 2), { width: 640, height: 480, rotationDeg: 8, seed: frame + 1 });
   const session = new PetalScanSession();
@@ -2184,18 +1991,19 @@ test("a steady camera is tracked after the first frame", () => {
 test("a session counts frames read with a hidden corner and keeps tracking through one", () => {
   const session = new PetalScanSession();
   const { luma } = decodeSetup(4);
-  assert.equal(session.push(luma, 0).lanes, "PKD");
+  assert.equal(session.push(luma, 0).lanes, "D0123");
   // a thumb arrives over the bottom-left blossom: tracked, with the corner inferred
   const outcome = session.push(hiddenBlossom(4, 3).luma, 100);
-  assert.equal(outcome.lanes, "PKD");
+  assert.equal(outcome.lanes, "D0123");
   assert.deepEqual([session.stats().tracked, session.stats().inferred], [1, 1]);
+  assert.deepEqual([session.stats().laneD, session.stats().fieldLanes], [2, 8]);
   // a frame without a code keeps the pose, and an unreadable frame is not tracked
   assert.equal(session.push(new PetalLuma(768, 768), 200).error, "no_finders");
   assert.deepEqual([session.stats().tracked, session.stats().readable], [1, 2]);
 });
 
 test("idle sessions forget partial streams", () => {
-  const encoder = new PetalStreamEncoder(payload(4000, 3), 1);
+  const encoder = new PetalStreamEncoder(payload(12000, 3), 1);
   const session = new PetalScanSession({ idleTimeoutMs: 1000 });
   const source = renderLuma(encoder.cells(0), 512, 2);
   session.push(cameraCapture(source, { width: 640, height: 480 }), 0);
@@ -2233,11 +2041,13 @@ test("unreadable frames do not disturb progress", () => {
   const outcome = session.push(new PetalLuma(320, 240), 5);
   assert.equal(outcome.completed, null);
   assert.equal(outcome.lanes, "");
+  assert.equal(outcome.merged, "");
   assert.equal(session.stats().frames, 1);
   assert.equal(session.stats().located, 0);
   assert.equal(PETAL_DEFAULT_SCAN_LIMITS.idleTimeoutMs, 30000);
   assert.equal(PETAL_DEFAULT_SCAN_LIMITS.absoluteTimeoutMs, 180000);
-  assert.deepEqual(PETAL_DEFAULT_DECODE_OPTIONS.templateSigmas, [0, 0.5, 0.8, 1.1, 1.5]);
+  assert.equal(PETAL_DEFAULT_SCAN_LIMITS.assembler.maxPendingAtoms, 512);
+  assert.deepEqual(PETAL_DEFAULT_DECODE_OPTIONS, { tryMirrored: true, maxPixels: 12000000 });
 });
 
 // ---------------------------------------------------------------- shared fixtures
@@ -2246,46 +2056,85 @@ const streamFixture = JSON.parse(readFileSync(STREAM_FIXTURE, "utf8"));
 
 test("fixture: constants and layout match", () => {
   const doc = streamFixture;
-  assert.equal(doc.fixture_version, 1);
-  assert.equal(doc.format, "petal-stream-v1");
+  assert.equal(doc.fixture_version, 2);
+  assert.equal(doc.format, "petal-stream-v2");
   const c = doc.constants;
   assert.deepEqual(
-    [c.canvas, c.tile_origin, c.tile_pitch, c.tile_size, c.dot_radius],
-    [PETAL_LAYOUT.canvas, PETAL_LAYOUT.tileOrigin, PETAL_LAYOUT.tilePitch, PETAL_LAYOUT.tileSize, PETAL_LAYOUT.dotRadius],
-  );
-  assert.deepEqual(
-    [c.atom_len, c.p_word, c.k_word, c.d_word, c.p_parity, c.k_parity, c.d_parity, c.beacon_interval, c.format_version],
     [
+      c.canvas,
+      c.atom_len,
+      c.d_word,
+      c.d_parity,
+      c.field_word,
+      c.field_parity,
+      c.field_atoms,
+      c.sectors,
+      c.atoms_per_frame,
+      c.field_cells,
+      c.beacon_interval,
+      c.format_version,
+    ],
+    [
+      PETAL_LAYOUT.canvas,
       PETAL_STREAM.atomLen,
-      PETAL_LANES.P.wordLen,
-      PETAL_LANES.K.wordLen,
       PETAL_LANES.D.wordLen,
-      PETAL_LANES.P.parityLen,
-      PETAL_LANES.K.parityLen,
       PETAL_LANES.D.parityLen,
+      PETAL_LANES.F0.wordLen,
+      PETAL_LANES.F0.parityLen,
+      PETAL_LANES.F0.atoms,
+      PETAL_LAYOUT.sectors,
+      PETAL_STREAM.atomsPerFrame,
+      PETAL_LAYOUT.fieldCells,
       PETAL_STREAM.beaconInterval,
       PETAL_STREAM.formatVersion,
     ],
   );
   const layout = doc.layout;
+  assert.deepEqual(layout.finder_centers, PETAL_LAYOUT.finderCenters.flat());
+  assert.deepEqual(
+    [
+      layout.band_inner,
+      layout.band_spacing,
+      layout.petal_radius,
+      layout.petal_half_length,
+      layout.petal_half_width,
+      layout.petal_notch_radius,
+      layout.petal_notch_distance,
+      layout.mask_origin,
+      layout.mask_pitch,
+      layout.backdrop_radius,
+      layout.dot_radius,
+    ],
+    [
+      PETAL_LAYOUT.bandInner,
+      PETAL_LAYOUT.bandSpacing,
+      PETAL_LAYOUT.petalRadius,
+      PETAL_LAYOUT.petalHalfLength,
+      PETAL_LAYOUT.petalHalfWidth,
+      PETAL_LAYOUT.petalNotchRadius,
+      PETAL_LAYOUT.petalNotchDistance,
+      PETAL_LAYOUT.maskOrigin,
+      PETAL_LAYOUT.maskPitch,
+      PETAL_LAYOUT.backdropRadius,
+      PETAL_LAYOUT.dotRadius,
+    ],
+  );
+  assert.deepEqual(layout.band_slots, PETAL_LAYOUT.bandSlots);
+  assert.equal(layout.sector_cells.length, 4);
+  layout.sector_cells.forEach((cells, sector) => assert.deepEqual(cells, sectorCells(sector), `sector ${sector}`));
   assert.deepEqual(layout.mask, PETAL_LAYOUT.mask);
-  assert.deepEqual(layout.tiles_col_row, PETAL_LAYOUT.tiles.flat());
+  assert.deepEqual(
+    cellFlags(fromHex(layout.light_cells_hex)),
+    Array.from({ length: PETAL_LAYOUT.fieldCells }, (_, cell) => (cellLight(cell) ? 1 : 0)),
+  );
   assert.deepEqual(layout.ring_radii, PETAL_LAYOUT.ringRadii);
   assert.deepEqual(layout.ring_slots, PETAL_LAYOUT.ringSlots);
-  assert.deepEqual(layout.finder_centers, PETAL_LAYOUT.finderCenters.flat());
   assert.deepEqual(layout.data_slots, dataSlots());
   const roles = slotRoles();
   const of = (kind) => roles.map((role, index) => [role.kind, index]).filter(([k]) => k === kind).map(([, index]) => index);
   assert.deepEqual(layout.gate_slots, of("gate"));
   assert.deepEqual(layout.guard_slots, of("guard"));
-});
-
-test("fixture: glyph alphabet, strokes and templates match", () => {
-  const glyphs = streamFixture.glyphs;
-  assert.equal(glyphs.chars, PETAL_GLYPHS.chars.join(""));
-  assert.equal(glyphs.stroke_width, PETAL_GLYPHS.strokeWidth);
-  assert.deepEqual(glyphs.strokes, PETAL_GLYPHS.strokes);
-  assert.deepEqual(glyphs.templates, PETAL_GLYPHS.templates);
+  assert.deepEqual(doc.palette, PETAL_PALETTE);
 });
 
 test("fixture: checksums, PRNG, mixer and whitening match", () => {
@@ -2296,7 +2145,8 @@ test("fixture: checksums, PRNG, mixer and whitening match", () => {
     streamFixture.prng.xorshift32_seed1,
   );
   for (const entry of streamFixture.prng.mix32) assert.equal(mix32(entry.in), entry.out);
-  for (const lane of ["P", "K", "D"]) assert.equal(hex(laneWhitening(lane)), streamFixture.whitening[lane]);
+  assert.deepEqual(Object.keys(streamFixture.whitening), ALL_LANES);
+  for (const lane of ALL_LANES) assert.equal(hex(laneWhitening(lane)), streamFixture.whitening[lane], lane);
 });
 
 test("fixture: Reed-Solomon vectors encode and correct", () => {
@@ -2321,6 +2171,7 @@ test("fixture: fountain masks and atom ids match", () => {
 });
 
 test("fixture: streams encode identically and reassemble", () => {
+  assert.deepEqual(streamFixture.streams.map((stream) => stream.name), ["tiny", "one-pass", "wrap"]);
   for (const stream of streamFixture.streams) {
     const data = fromHex(stream.payload_hex);
     const encoder = new PetalStreamEncoder(data, stream.kind);
@@ -2331,34 +2182,32 @@ test("fixture: streams encode identically and reassemble", () => {
       stream.name,
     );
     for (const frame of stream.frames) {
+      const label = `${stream.name} frame ${frame.frame}`;
       const lanes = encoder.laneData(frame.frame);
-      assert.equal(hex(lanes.p), frame.p_data, `${stream.name} frame ${frame.frame}`);
-      assert.equal(hex(lanes.k), frame.k_data, `${stream.name} frame ${frame.frame}`);
-      assert.equal(hex(lanes.d), frame.d_data, `${stream.name} frame ${frame.frame}`);
-      assert.equal(hex(encodeLane("P", lanes.p)), frame.p_word);
-      assert.equal(hex(encodeLane("K", lanes.k)), frame.k_word);
-      assert.equal(hex(encodeLane("D", lanes.d)), frame.d_word);
+      assert.equal(hex(lanes.d), frame.d_data, label);
+      assert.deepEqual(lanes.fields.map(hex), frame.field_data, label);
+      assert.equal(hex(encodeLane("D", lanes.d)), frame.d_word, label);
+      lanes.fields.forEach((field, sector) => assert.equal(hex(encodeLane(fieldLane(sector), field)), frame.field_words[sector], `${label} sector ${sector}`));
       const words = encoder.words(frame.frame);
-      assert.deepEqual([hex(words.p), hex(words.k), hex(words.d)], [frame.p_word, frame.k_word, frame.d_word]);
-      const cells = PetalFrameCells.fromWords(fromHex(frame.p_word), fromHex(frame.k_word), fromHex(frame.d_word));
-      assert.equal(Array.from(cells.glyph, (g) => g.toString(16)).join(""), frame.glyphs);
+      assert.deepEqual([hex(words.d), words.fields.map(hex)], [frame.d_word, frame.field_words], label);
+      const cells = PetalFrameCells.fromWords(fromHex(frame.d_word), frame.field_words.map(fromHex));
       assert.deepEqual(
         Array.from(cells.dots).flatMap((lit, index) => (lit ? [index] : [])),
         frame.lit_dots,
+        label,
       );
-      assert.ok(cells.equals(encoder.cells(frame.frame)));
+      assert.deepEqual(Array.from(cells.petals), cellFlags(fromHex(frame.lit_petals_hex)), label);
+      assert.ok(cells.equals(encoder.cells(frame.frame)), label);
     }
     // push every fixture frame through decodeLane + assembler
     if (stream.name === "one-pass") {
       const assembler = new PetalStreamAssembler();
       for (const frame of stream.frames) {
         assembler.pushDLane(parseDLane(decodeLane("D", fromHex(frame.d_word))));
-        for (const [lane, key] of [
-          ["P", "p_word"],
-          ["K", "k_word"],
-        ]) {
-          assembler.pushAtoms(parseAtomLane(lane, decodeLane(lane, fromHex(frame[key]))));
-        }
+        frame.field_words.forEach((word, sector) => {
+          const lane = fieldLane(sector);
+          assembler.pushAtoms(parseAtomLane(lane, decodeLane(lane, fromHex(word))));
+        });
       }
       assert.deepEqual(assembler.takeCompleted().payload, data);
     }
@@ -2374,7 +2223,18 @@ function captureLuma(entry, key = "luma_zlib_base64") {
   return new PetalLuma(entry.width, entry.height, data);
 }
 
+/** Checks every decoded lane against the recorded data and returns the lane letters. */
+function readLanes(name, frame, entry) {
+  for (const lane of ALL_LANES) {
+    const result = frame.lane(lane);
+    const expected = lane === "D" ? entry.d_data : entry.field_data[Number(lane[1])];
+    if (result !== null) assert.equal(hex(result.data), expected, `${name}: lane ${laneLetter(lane)} data`);
+  }
+  return frame.letters();
+}
+
 test("golden captures decode as recorded", (t) => {
+  assert.equal(captureFixture.fixture_version, 2);
   const assembler = new PetalStreamAssembler();
   for (const capture of captureFixture.captures) {
     const image = captureLuma(capture);
@@ -2382,28 +2242,21 @@ test("golden captures decode as recorded", (t) => {
     const decoded = decodePetalFrame(image);
     const elapsed = performance.now() - started;
     assert.equal(decoded.mirrored, capture.mirrored, `${capture.name}: mirror flag`);
-    let lanes = "";
-    for (const [letter, lane, expected] of [
-      ["P", decoded.p, capture.p_data],
-      ["K", decoded.k, capture.k_data],
-      ["D", decoded.d, capture.d_data],
-    ]) {
-      if (lane !== null) {
-        assert.equal(hex(lane.data), expected, `${capture.name}: lane ${letter} data`);
-        lanes += letter;
-      } else {
-        assert.ok(!capture.must_decode.includes(letter), `${capture.name}: required lane ${letter} was not decoded`);
-      }
+    const lanes = readLanes(capture.name, decoded, capture);
+    for (const letter of capture.must_decode) {
+      assert.ok(lanes.includes(letter), `${capture.name}: required lane ${letter} was not decoded`);
     }
-    // the decoder follows the reference step by step, so under V8 it reads
-    // exactly the lanes the reference read
+    // the decoder follows the reference step by step, so under V8 it reads exactly the lanes
+    // the reference read
     assert.equal(lanes, capture.reference_decoded, `${capture.name}: lanes differ from the reference`);
     assert.equal(decoded.inferredCorner, capture.inferred_corner, `${capture.name}: inferred corner`);
-    t.diagnostic(`${capture.name} ${capture.width}x${capture.height}: lanes ${lanes} in ${elapsed.toFixed(1)} ms`);
+    t.diagnostic(
+      `${capture.name} ${capture.width}x${capture.height}: lanes ${lanes}, distortion ${decoded.pose.distortion} in ${elapsed.toFixed(1)} ms`,
+    );
     decoded.feed(assembler);
   }
   // captures of different frames of the same stream accumulate in one assembler
-  assert.ok(assembler.progress().atomsReceived > 10);
+  assert.ok(assembler.progress().atomsReceived > 100);
 });
 
 test("golden tracks follow the pose into the next frame", (t) => {
@@ -2415,19 +2268,8 @@ test("golden tracks follow the pose into the next frame", (t) => {
     const followed = trackPetalFrame(next, previous);
     const elapsed = performance.now() - started;
     assert.ok(followed !== null, `${pair.name}: tracking lost the code`);
-    let lanes = "";
-    for (const [letter, lane, expected] of [
-      ["P", followed.p, pair.p_data],
-      ["K", followed.k, pair.k_data],
-      ["D", followed.d, pair.d_data],
-    ]) {
-      if (lane !== null) {
-        assert.equal(hex(lane.data), expected, `${pair.name}: lane ${letter} data`);
-        lanes += letter;
-      } else {
-        assert.ok(!pair.must_track.includes(letter), `${pair.name}: lane ${letter} lost`);
-      }
-    }
+    const lanes = readLanes(pair.name, followed, pair);
+    for (const letter of pair.must_track) assert.ok(lanes.includes(letter), `${pair.name}: lane ${letter} lost`);
     assert.equal(lanes, pair.reference_tracked, `${pair.name}: lanes differ from the reference`);
     assert.equal(followed.inferredCorner, pair.inferred_corner, `${pair.name}: inferred corner`);
     assert.deepEqual([followed.rotation, followed.mirrored], [previous.rotation, previous.mirrored]);
@@ -2454,66 +2296,42 @@ test("the fixture holds the inferred-corner captures", () => {
   for (const capture of captureFixture.captures) assert.ok("inferred_corner" in capture, capture.name);
 });
 
-/** The captures of bad lighting: only the normalised tile read gets their tile lanes. */
-const LIGHTING_CAPTURES = ["overexposed-540p", "veiled-720p", "shadow-band-540p"];
-
 function namedCapture(name) {
   const capture = captureFixture.captures.find((entry) => entry.name === name);
   assert.ok(capture !== undefined, `capture ${name} is part of the fixture`);
   return capture;
 }
 
-/** The pose a capture was read under, as nine coefficients, with its reference levels and raw patches. */
-function capturePatches(capture) {
+test("the barrel capture needs the distortion search", () => {
+  const capture = namedCapture("barrel-480p");
   const image = captureLuma(capture);
-  const m = Float64Array.from(decodePetalFrame(image).homography.values);
-  return { image, m, reference: referenceLevels(image, m), patches: samplePatches(image, m) };
-}
-
-test("the fixture holds the lighting captures", () => {
-  assert.ok(captureFixture.captures.length >= 9, "six camera captures and the three lighting ones");
-  for (const name of LIGHTING_CAPTURES) namedCapture(name);
-  // every capture records the lanes the reference decoder read; they cover the required ones
-  for (const capture of captureFixture.captures) {
-    for (const letter of capture.must_decode) assert.ok(capture.reference_decoded.includes(letter), capture.name);
-  }
+  const decoded = decodePetalFrame(image);
+  assert.ok(decoded.pose.distortion < 0, `${decoded.pose.distortion}`);
+  // the same finders under a plain pose leave field lanes unread
+  const corners = locate(image).map((finder) => [finder.x, finder.y]);
+  const quad = [0, 1, 2, 3].map((index) => corners[(index + decoded.rotation) % 4]);
+  const plain = [null, null, null, null];
+  readSectors(
+    fieldEvidence(image, { pose: PetalPose.fit(PETAL_LAYOUT.finderCenters, quad, 0, image.width, image.height) }).levels,
+    NO_SKIP,
+    plain,
+  );
+  assert.ok(plain.some((field) => field === null), "the plain pose must miss a lane, or the test proves nothing");
 });
 
-test("the lighting captures need the normalised read", () => {
-  for (const name of LIGHTING_CAPTURES) {
-    const capture = namedCapture(name);
-    const { reference, patches } = capturePatches(capture);
-    const words = tileWords(readTiles(patches, reference, SIGMAS));
-    const levelLanes = ["P", "K"].filter((lane) => decodedLane(lane, words) !== null);
-    const required = [...capture.must_decode].filter((lane) => lane !== "D");
-    assert.ok(
-      required.some((lane) => !levelLanes.includes(lane)),
-      `${name}: the level read alone already reads ${levelLanes.join("")}`,
-    );
-    // ... and the combined read delivers every required tile lane with the recorded data
-    const lanes = readTileLanes(patches, reference, SIGMAS);
-    for (const lane of required) {
-      assert.equal(hex(lanes[lane.toLowerCase()].data), capture[`${lane.toLowerCase()}_data`], `${name}: lane ${lane}`);
-    }
-  }
-});
-
-test("the normalised read only fills in the lanes the level read missed", () => {
-  const capture = namedCapture("veiled-720p");
-  const { reference, patches } = capturePatches(capture);
-  const levelWords = tileWords(readTiles(patches, reference, SIGMAS));
-  const normalisedWords = tileWords(readTilesNormalised(patches, SIGMAS));
-  const [levelP, levelK] = ["P", "K"].map((lane) => decodedLane(lane, levelWords));
-  const [normalisedP, normalisedK] = ["P", "K"].map((lane) => decodedLane(lane, normalisedWords));
-  // this capture separates the reads: the level read has lane P (after repairs) but not K, and
-  // the normalised read has both, with a different repair count for P
-  assert.ok(levelP !== null && levelK === null && normalisedP !== null && normalisedK !== null);
-  assert.notDeepEqual(levelP, normalisedP);
-  const lanes = readTileLanes(patches, reference, SIGMAS);
-  assert.deepEqual(lanes.p, levelP, "lane P keeps the level read");
-  assert.deepEqual(lanes.k, normalisedK, "lane K comes from the normalised read");
-  assert.equal(hex(lanes.p.data), capture.p_data);
-  assert.equal(hex(lanes.k.data), capture.k_data);
+test("the shadow band capture needs the local read", () => {
+  const capture = namedCapture("shadow-band-540p");
+  const image = captureLuma(capture);
+  const decoded = decodePetalFrame(image);
+  const levels = fieldEvidence(image, decoded).levels;
+  const level = [null, null, null, null];
+  readSectors(levels, NO_SKIP, level);
+  const required = [...capture.must_decode].filter((letter) => letter !== "D").map(Number);
+  assert.ok(required.some((sector) => level[sector] === null), "the finder levels alone must miss a required lane");
+  const combined = [null, null, null, null];
+  readFields(levels, NO_SKIP, combined);
+  for (const sector of required) assert.equal(hex(combined[sector].data), capture.field_data[sector], `sector ${sector}`);
+  assert.deepEqual(combined, decoded.fields);
 });
 
 test("a scan session reads the recorded lanes of every golden capture", () => {
@@ -2523,8 +2341,8 @@ test("a scan session reads the recorded lanes of every golden capture", () => {
     assert.equal(outcome.error, null, capture.name);
     assert.equal(outcome.lanes, capture.reference_decoded, capture.name);
     const stats = session.stats();
-    const counted = ["P", "K", "D"].map((lane) => (capture.reference_decoded.includes(lane) ? 1 : 0));
-    assert.deepEqual([stats.laneP, stats.laneK, stats.laneD], counted, capture.name);
+    const letters = capture.reference_decoded;
+    assert.deepEqual([stats.laneD, stats.fieldLanes], [letters.includes("D") ? 1 : 0, letters.replace("D", "").length], capture.name);
     assert.deepEqual([stats.tracked, stats.inferred], [0, capture.inferred_corner === null ? 0 : 1], capture.name);
   }
 });
@@ -2538,10 +2356,12 @@ test("negative captures are rejected", () => {
 test("recorded lane data is a valid codeword of its stream", () => {
   const encoder = new PetalStreamEncoder(fromHex(captureFixture.payload_hex), captureFixture.payload_kind);
   for (const capture of captureFixture.captures) {
-    const data = fromHex(capture.p_data);
-    assert.deepEqual(decodeLane("P", encodeLane("P", data)), data);
+    for (const lane of ALL_LANES) {
+      const data = fromHex(lane === "D" ? capture.d_data : capture.field_data[Number(lane[1])]);
+      assert.deepEqual(decodeLane(lane, encodeLane(lane, data)), data, `${capture.name} lane ${lane}`);
+    }
     const expected = encoder.laneData(capture.frame);
-    assert.deepEqual([hex(expected.p), hex(expected.k), hex(expected.d)], [capture.p_data, capture.k_data, capture.d_data]);
+    assert.deepEqual([hex(expected.d), expected.fields.map(hex)], [capture.d_data, capture.field_data], capture.name);
   }
 });
 
@@ -2550,7 +2370,7 @@ test("recorded lane data is a valid codeword of its stream", () => {
 function recordingContext(canvas = { width: 512, height: 512 }) {
   const calls = [];
   const context = { canvas, calls };
-  for (const name of ["save", "restore", "translate", "scale", "fillRect", "beginPath", "moveTo", "lineTo", "arc", "arcTo", "closePath", "rect", "clip", "fill", "stroke"]) {
+  for (const name of ["save", "restore", "translate", "scale", "fillRect", "beginPath", "moveTo", "lineTo", "arc", "ellipse", "closePath", "rect", "clip", "fill", "stroke"]) {
     context[name] = (...args) => calls.push([name, ...args]);
   }
   return context;
@@ -2575,7 +2395,7 @@ test("petalPlayerFrame advances at the frame rate and wraps the counter", () => 
   assert.throws(() => petalPlayerFrame(0, 0, 0), TypeError);
 });
 
-test("drawPetalFrame paints the draw list with round strokes", () => {
+test("drawPetalFrame paints the draw list: backdrop, notched petals, dots, finders", () => {
   const encoder = new PetalStreamEncoder(payload(300, 8), 1);
   const cells = encoder.cells(3);
   const list = petalDrawList(cells);
@@ -2583,18 +2403,33 @@ test("drawPetalFrame paints the draw list with round strokes", () => {
   drawPetalFrame(context, list);
   const count = (name) => context.calls.filter((call) => call[0] === name).length;
   assert.deepEqual(context.calls.find((call) => call[0] === "scale"), ["scale", 0.5, 0.5]);
-  assert.equal(count("arc"), 4 * 11 + list.dots.length);
-  assert.equal(count("arcTo"), 4 * cells.light.reduce((a, b) => a + b, 0));
-  assert.equal(count("rect"), 256);
+  const petals = list.petals.length;
+  // finder cores, petals and notches, the backdrop disc, the dots and one notch arc per petal
+  assert.equal(count("arc"), 4 * 11 + 1 + list.dots.length + petals);
+  assert.equal(count("ellipse"), petals);
+  assert.equal(count("closePath"), petals);
+  assert.equal(count("rect"), list.backdrop.cells.length);
   assert.equal(count("clip"), 1);
-  assert.equal(count("stroke"), 2);
+  assert.equal(count("fill"), 6);
+  assert.equal(count("stroke"), 0);
   assert.equal(count("save"), count("restore"));
-  assert.equal(context.lineCap, "round");
-  assert.equal(context.lineJoin, "round");
-  assert.equal(context.lineWidth, list.strokeWidth);
-  const strokes = list.tiles.reduce((sum, tile) => sum + tile.strokes.length, 0);
-  const lightTiles = cells.light.reduce((a, b) => a + b, 0);
-  assert.equal(count("moveTo"), 4 * 11 + list.dots.length + lightTiles + strokes);
+  assert.equal(count("moveTo"), 4 * 11 + 1 + list.dots.length + petals);
+  // every petal path starts where its ellipse arc starts, so no stray edge joins two petals
+  const first = context.calls.findIndex((call) => call[0] === "ellipse");
+  const [, x, y, a, b, angle, start] = context.calls[first];
+  const [, mx, my] = context.calls[first - 1];
+  const along = a * Math.cos(start);
+  const across = b * Math.sin(start);
+  assert.ok(Math.abs(mx - (x + along * Math.cos(angle) - across * Math.sin(angle))) < 1e-9);
+  assert.ok(Math.abs(my - (y + along * Math.sin(angle) + across * Math.cos(angle))) < 1e-9);
+  // the notch arc meets the ellipse where the arc starts and ends
+  const [, nx, ny, r, from, to, anticlockwise] = context.calls[first + 1];
+  assert.equal(anticlockwise, true);
+  const end = context.calls[first][7];
+  const ex = x + a * Math.cos(end) * Math.cos(angle) - b * Math.sin(end) * Math.sin(angle);
+  const ey = y + a * Math.cos(end) * Math.sin(angle) + b * Math.sin(end) * Math.cos(angle);
+  assert.ok(Math.hypot(nx + r * Math.cos(from) - ex, ny + r * Math.sin(from) - ey) < 1e-9);
+  assert.ok(Math.hypot(nx + r * Math.cos(to) - mx, ny + r * Math.sin(to) - my) < 1e-9);
 });
 
 test("the stream player draws frames on animation ticks", () => {
@@ -2624,6 +2459,14 @@ test("the stream player draws frames on animation ticks", () => {
   player.drawFrame(70000);
   assert.equal(player.frame, 70000 % 65536);
   assert.throws(() => new PetalStreamPlayer({ encoder: {}, context }), TypeError);
+  // the default rate is 8 frames per second until physical qualification supports more
+  const ticks = [];
+  const drawn = [];
+  const defaults = new PetalStreamPlayer({ encoder, context, requestAnimationFrame: (callback) => ticks.push(callback), onFrame: (frame) => drawn.push(frame) });
+  defaults.start();
+  for (const time of [0, 124, 125, 250]) ticks.shift()(time);
+  assert.deepEqual(drawn, [0, 1, 2]);
+  defaults.stop();
 });
 
 test("the camera scanner reads a stream from video frames", async () => {
@@ -2782,10 +2625,12 @@ test("the declarations type-check a strict browser consumer", () => {
       consumer,
       [
         "import {",
-        "  PETAL_LANES, PetalCameraScanner, PetalDecodedFrame, PetalError, PetalLuma, PetalScanSession, PetalStreamEncoder,",
-        "  PetalStreamPlayer, decodePetalFrame, drawPetalFrame, encodeLane, petalDrawList, renderPetalFrame,",
+        "  PETAL_LANES, PETAL_LAYOUT, PetalCameraScanner, PetalDecodedFrame, PetalError, PetalLuma, PetalPose,",
+        "  PetalScanSession, PetalStreamEncoder, PetalStreamPlayer, decodePetalFrame, decodePetalFrameAt, drawPetalFrame,",
+        "  encodeLane, fieldEvidence, mergeFields, petalDrawList, renderPetalFrame,",
         "  PETAL_TRACK_WINDOW_MS, locateCandidates, trackPetalFrame,",
-        "  type PetalCompleted, type PetalDecodeErrorCode, type PetalScanOutcome, type PetalScanStats,",
+        "  type PetalCompleted, type PetalDecodeErrorCode, type PetalFieldEvidence, type PetalLane, type PetalScanOutcome,",
+        "  type PetalScanStats,",
         `} from ${JSON.stringify(declaration)};`,
         "declare const canvas: HTMLCanvasElement;",
         "declare const video: HTMLVideoElement;",
@@ -2793,11 +2638,11 @@ test("the declarations type-check a strict browser consumer", () => {
         "const context = canvas.getContext(\"2d\");",
         "if (context === null) throw new Error(\"no 2d context\");",
         "const encoder = new PetalStreamEncoder(new Uint8Array([1, 2, 3]), 2);",
-        "const player = new PetalStreamPlayer({ encoder, context, fps: 12, cancelAnimationFrame: (id: number) => cancelAnimationFrame(id) });",
+        "const player = new PetalStreamPlayer({ encoder, context, fps: 8, cancelAnimationFrame: (id: number) => cancelAnimationFrame(id) });",
         "player.start();",
         "const scanner = new PetalCameraScanner({",
         "  video, stream, maxSide: 960, createCanvas: (width, height) => new OffscreenCanvas(width, height),",
-        "  onProgress: (outcome: PetalScanOutcome, stats: PetalScanStats) => void (outcome.progress.rank + stats.tracked + stats.inferred),",
+        "  onProgress: (outcome: PetalScanOutcome, stats: PetalScanStats) => void (outcome.progress.rank + stats.tracked + stats.fieldLanes),",
         "  onComplete: (completed: PetalCompleted) => void completed.payload.byteLength,",
         "});",
         "void scanner.start();",
@@ -2807,22 +2652,32 @@ test("the declarations type-check a strict browser consumer", () => {
         "  try {",
         "    const frame = decodePetalFrame(luma, { tryMirrored: false });",
         "    const lanes: number = frame.lanesOk();",
+        "    const letters: string = frame.letters();",
         "    const corner: number | null = frame.inferredCorner;",
+        "    const k: number = frame.pose.distortion;",
+        "    const sector = frame.fields[3];",
+        "    const lane: PetalLane = \"F2\";",
         "    const next = trackPetalFrame(luma, frame);",
+        "    const at = decodePetalFrameAt(luma, PetalPose.plain(frame.pose.homography));",
+        "    const evidence: PetalFieldEvidence | null = fieldEvidence(luma, frame);",
+        "    const merged = evidence === null ? null : mergeFields([evidence], [false, true, false, false])[0];",
         "    const sets = locateCandidates(luma).filter((set) => set.inferred !== null).length;",
-        "    void lanes; void corner; void next?.inferredCorner; void sets; void PETAL_TRACK_WINDOW_MS;",
+        "    void lanes; void letters; void corner; void k; void sector?.corrected; void frame.lane(lane);",
+        "    void next?.inferredCorner; void at?.d; void merged?.erasures; void sets; void PETAL_TRACK_WINDOW_MS;",
         "  } catch (error) {",
         "    if (error instanceof PetalError) { const code: string = error.code; void code; }",
         "  }",
         "}",
-        "drawPetalFrame(context, petalDrawList(encoder.cells(1)), { size: 512 });",
+        "const list = petalDrawList(encoder.cells(1));",
+        "const petals: number = list.petals.length + list.backdrop.cells.length + list.petal.halfLength;",
+        "drawPetalFrame(context, list, { size: 512 });",
         "const session = new PetalScanSession({ idleTimeoutMs: 10_000, decode: { maxPixels: 2_000_000 } });",
         "const outcome = session.push(new PetalLuma(64, 64), performance.now());",
         "const reason: PetalDecodeErrorCode | null = outcome.error;",
-        "const kLen: number = PETAL_LANES.K.wordLen;",
-        "void reason; void kLen; void encodeLane(\"P\", new Uint8Array(19));",
-        "// @ts-expect-error lanes are named P, K or D",
-        "encodeLane(\"X\", new Uint8Array(19));",
+        "const fieldLen: number = PETAL_LANES.F0.wordLen + PETAL_LAYOUT.fieldCells;",
+        "void petals; void reason; void fieldLen; void encodeLane(\"D\", new Uint8Array(19));",
+        "// @ts-expect-error lanes are named D or F0-F3",
+        "encodeLane(\"P\", new Uint8Array(19));",
         "// @ts-expect-error decoded frames come from the decoder only",
         "void new PetalDecodedFrame();",
       ].join("\n"),

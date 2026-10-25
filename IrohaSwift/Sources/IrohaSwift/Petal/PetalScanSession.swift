@@ -28,26 +28,22 @@ public struct PetalScanLimits: Equatable, Sendable {
 public struct PetalScanStats: Equatable, Sendable {
     /// Camera frames offered.
     public internal(set) var frames: UInt32 = 0
-    /// Frames in which the four finders were located, readable or not.
+    /// Frames in which a code was located, whether or not a lane could be read.
     public internal(set) var located: UInt32 = 0
     /// Frames in which at least one lane decoded.
     public internal(set) var readable: UInt32 = 0
-    /// Lane `P` successes.
-    public internal(set) var laneP: UInt32 = 0
-    /// Lane `K` successes.
-    public internal(set) var laneK: UInt32 = 0
     /// Lane `D` successes.
     public internal(set) var laneD: UInt32 = 0
+    /// Field lane successes (up to four per frame).
+    public internal(set) var fieldLanes: UInt32 = 0
     /// Frames read by tracking the previous pose instead of a full search.
     public internal(set) var tracked: UInt32 = 0
     /// Frames read with one corner finder hidden and inferred.
     public internal(set) var inferred: UInt32 = 0
     /// Merges of two or more captures of one shown frame.
     public internal(set) var merges: UInt32 = 0
-    /// Lane `P` reads recovered by merging captures.
-    public internal(set) var mergedP: UInt32 = 0
-    /// Lane `K` reads recovered by merging captures.
-    public internal(set) var mergedK: UInt32 = 0
+    /// Field lanes recovered by merging captures.
+    public internal(set) var mergedLanes: UInt32 = 0
 
     public init() {}
 }
@@ -55,11 +51,14 @@ public struct PetalScanStats: Equatable, Sendable {
 /// The result of offering one camera frame to a ``PetalScanSession``.
 public struct PetalScanOutcome: Equatable, Sendable {
     /// Why the frame produced nothing, when it did not.
+    /// ``PetalDecodeError/noOrientation`` means a code was located but no lane
+    /// could be read (too far, too blurry).
     public let error: PetalDecodeError?
-    /// Lanes that decoded in this capture alone, as letters from `"PKD"`.
+    /// Lanes that decoded in this capture alone, as letters: `D` and the
+    /// sector digits `0`–`3`.
     public let lanes: String
-    /// Lanes recovered by merging captures of this shown frame, as letters
-    /// from `"PK"`.
+    /// Field lanes recovered by merging this capture with earlier captures of
+    /// its shown frame, as sector digits.
     public let merged: String
     /// Receive progress after this frame.
     public let progress: PetalProgress
@@ -78,11 +77,16 @@ public struct PetalScanOutcome: Equatable, Sendable {
 /// ``trackWindowMilliseconds``. A half-received stream is forgotten after
 /// ``PetalScanLimits/idleTimeoutMilliseconds`` without progress or
 /// ``PetalScanLimits/absoluteTimeoutMilliseconds`` after it started.
-/// Repeated captures are held under the frame identity of their decoded lane
-/// headers, up to ``mergeCaptures`` captures of ``mergeWindow`` shown frames.
-/// Averaging recovers missing tile lanes; a recovered lane is offered only
-/// when its header names the same shown frame. Unkeyed and torn captures are
-/// never combined.
+///
+/// A camera sees each shown frame two to four times, and noise, display
+/// banding or hand shake can cost every one of those captures a field lane.
+/// When a capture reads some lane but not every field lane, the session keeps
+/// its ``PetalFieldEvidence`` under the shown frame its decoded lane headers
+/// name, up to ``mergeCaptures`` captures of ``mergeWindow`` shown frames.
+/// From the second such capture on, it merges them
+/// (``PetalDecoder/mergeFields(_:skip:)``) and offers a recovered lane only
+/// when that lane's own header names the same frame. Unkeyed and torn
+/// captures are never combined.
 public struct PetalScanSession: Sendable {
     /// How long a decoded pose stays usable for tracking the next frames.
     public static let trackWindowMilliseconds: UInt64 = 500
@@ -101,11 +105,11 @@ public struct PetalScanSession: Sendable {
     private var lastRank = 0
     /// The last frame that decoded and when it was captured.
     private var lastPose: (frame: PetalDecodedFrame, at: UInt64)?
+    /// The captures of one shown frame held for merging.
     struct Held: Sendable {
         let shown: PetalLaneHeader
-        var evidence: [PetalTileEvidence] = []
-        var pDone = false
-        var kDone = false
+        var evidence: [PetalFieldEvidence] = []
+        var done = [Bool](repeating: false, count: PetalLayout.sectors)
     }
     private(set) var held: [Held] = []
 
@@ -178,10 +182,9 @@ public struct PetalScanSession: Sendable {
     }
 
     mutating func absorb(_ frame: PetalDecodedFrame) -> String {
-        if frame.p != nil { stats.laneP &+= 1 }
-        if frame.k != nil { stats.laneK &+= 1 }
-        if frame.d != nil { stats.laneD &+= 1 }
         let lanes = frame.laneLetters
+        if frame.d != nil { stats.laneD &+= 1 }
+        stats.fieldLanes &+= UInt32(frame.fields.reduce(0) { $0 + ($1 == nil ? 0 : 1) })
         if !lanes.isEmpty { stats.readable &+= 1 }
         let previousMeta = assembler.progress.meta
         frame.feed(&assembler)
@@ -192,14 +195,15 @@ public struct PetalScanSession: Sendable {
         return lanes
     }
 
-    /// Returns the header all independently decoded lanes name, or `nil`
-    /// when none decoded or a torn capture names different shown frames.
+    /// The shown frame every decoded lane header of `frame` names; `nil` when
+    /// no lane decoded or the lanes of a torn capture name different frames.
     static func shownFrame(_ frame: PetalDecodedFrame) -> PetalLaneHeader? {
         var shown: PetalLaneHeader?
-        for lane in [frame.d, frame.p, frame.k].compactMap({ $0 }) {
-            guard lane.data.count >= PetalLane.headerLength else { return nil }
+        for lane in PetalLane.decodeOrder {
+            guard let result = frame.lane(lane) else { continue }
+            guard result.data.count >= PetalLane.headerLength else { return nil }
             let header = PetalLaneHeader(
-                tag: lane.data[0], frame: UInt16(lane.data[1]) << 8 | UInt16(lane.data[2])
+                tag: result.data[0], frame: UInt16(result.data[1]) << 8 | UInt16(result.data[2])
             )
             if let shown, shown != header { return nil }
             shown = header
@@ -207,8 +211,9 @@ public struct PetalScanSession: Sendable {
         return shown
     }
 
-    /// Holds only keyed evidence and fills tile lanes not read earlier for
-    /// this shown frame. Recovered atoms must name exactly that frame.
+    /// Holds this capture's field evidence under its shown frame and, from the
+    /// second capture on, merges the held captures of that frame. Recovered
+    /// atoms must name exactly that frame.
     mutating func merge(_ image: PetalLuma, frame: PetalDecodedFrame) -> String {
         guard let shown = Self.shownFrame(frame) else { return "" }
         let index: Int
@@ -219,35 +224,33 @@ public struct PetalScanSession: Sendable {
             held.append(Held(shown: shown))
             index = held.count - 1
         }
-        held[index].pDone = held[index].pDone || frame.p != nil
-        held[index].kDone = held[index].kDone || frame.k != nil
-        if held[index].pDone && held[index].kDone {
+        for sector in 0..<PetalLayout.sectors where frame.lane(.field(sector)) != nil {
+            held[index].done[sector] = true
+        }
+        if !held[index].done.contains(false) {
             held[index].evidence.removeAll()
             return ""
         }
-        guard let evidence = PetalDecoder.tileEvidence(image, frame: frame, options: limits.decode) else { return "" }
+        guard let evidence = PetalDecoder.fieldEvidence(image, frame: frame, options: limits.decode) else {
+            return ""
+        }
         if held[index].evidence.count == Self.mergeCaptures { held[index].evidence.removeFirst() }
         held[index].evidence.append(evidence)
         if held[index].evidence.count < 2 { return "" }
         stats.merges &+= 1
-        let results = PetalDecoder.mergeTiles(held[index].evidence, options: limits.decode)
+        let results = PetalDecoder.mergeFields(held[index].evidence, skip: held[index].done)
         var merged = ""
-        for (lane, result) in [(PetalLane.p, results.p), (.k, results.k)] {
-            guard let result, let packet = PetalStream.parseAtomLane(lane, data: result.data),
-                  packet.header == shown else { continue }
-            if lane == .p {
-                if held[index].pDone { continue }
-                held[index].pDone = true
-                stats.mergedP &+= 1
-            } else {
-                if held[index].kDone { continue }
-                held[index].kDone = true
-                stats.mergedK &+= 1
-            }
+        for (sector, result) in results.enumerated() {
+            let lane = PetalLane.field(sector)
+            guard let result, let packet = PetalStream.parseAtomLane(lane, data: result.data) else { continue }
+            // a merge offers only atoms of the shown frame it was made for
+            if packet.header != shown { continue }
+            held[index].done[sector] = true
             assembler.push(atoms: packet)
+            stats.mergedLanes &+= 1
             merged.append(lane.letter)
         }
-        if held[index].pDone && held[index].kDone { held[index].evidence.removeAll() }
+        if !held[index].done.contains(false) { held[index].evidence.removeAll() }
         return merged
     }
 }

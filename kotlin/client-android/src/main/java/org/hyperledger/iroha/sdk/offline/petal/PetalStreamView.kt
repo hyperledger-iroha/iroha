@@ -12,8 +12,9 @@ import android.view.View
  * It is framework-agnostic: use it from XML layouts, from code, or from
  * Jetpack Compose through `AndroidView`. Call [setStream], then [start]; the
  * view keeps the screen on while it plays and pauses its timer while it is
- * detached from a window. Frames are encoded on the UI thread, which costs well
- * under a millisecond even for a 10 KB payload. Use from the UI thread only.
+ * detached from a window. Frames are encoded on the UI thread (about 0.1 ms per
+ * frame for a 12 KB payload on a desktop JVM) and drawn by a
+ * [PetalCanvasRenderer], one path per colour. Use from the UI thread only.
  */
 class PetalStreamView @JvmOverloads constructor(
     context: Context,
@@ -32,7 +33,10 @@ class PetalStreamView @JvmOverloads constructor(
             encoder?.let { showFrame(it, frame) }
         }
 
-    /** Display rate in frames per second (`0 < fps <= 60`, default 8). */
+    /**
+     * Display rate in frames per second (`0 < fps <= 60`, default 8). Format 2 is qualified in
+     * simulation at 12 fps; the default stays at 8 until physical devices confirm a faster rate.
+     */
     var framesPerSecond: Double = DEFAULT_FRAMES_PER_SECOND
         set(value) {
             require(value > 0.0 && value <= 60.0) { "frames per second must be in (0, 60]" }

@@ -1,18 +1,31 @@
 // Reference software renderer and the platform-neutral draw list.
 //
 // The picture is black, with four sakura-blossom finders in the canvas
-// corners and a `天`-shaped field of 256 tiles inside three dotted rings. A
-// light tile is a pale rounded square with a near-black katakana; a dark tile
-// is empty except for its sakura-pink katakana. Vector backends draw the
-// `petalDrawList` primitives with their own 2D APIs; geometry and polarity
+// corners, three dotted rings, and inside them a field of petals on concentric
+// bands. A lit petal whose centre lies inside the `天` is drawn in the light
+// colour, the others in sakura pink, over a faint backdrop of the `天` itself,
+// so the character shows through the storm of petals. Vector backends draw
+// the `petalDrawList` primitives with their own 2D APIs; geometry and polarity
 // match the software renderer.
 
-import { GLYPH_COUNT, GLYPH_GRID, STROKES, STROKE_WIDTH, inked } from "./glyphs.js";
 import { PetalFrameCells } from "./lanes.js";
 import {
+  BACKDROP_RADIUS,
+  BAND_COUNT,
+  BAND_INNER,
+  BAND_OFFSETS,
+  BAND_SLOTS,
+  BAND_SPACING,
   CANVAS,
+  CELL_ANGLE,
+  CELL_CENTER_X,
+  CELL_CENTER_Y,
+  CELL_COS,
+  CELL_LIGHT,
+  CELL_SIN,
   CENTER,
   DOT_RADIUS,
+  FIELD_CELLS,
   FINDER_CENTERS,
   FINDER_CORE,
   FINDER_NOTCH_RADIUS,
@@ -20,23 +33,25 @@ import {
   FINDER_PETALS,
   FINDER_PETAL_DISTANCE,
   FINDER_PETAL_RADIUS,
-  GLYPH_BOX,
+  MASK,
+  MASK_ORIGIN,
+  MASK_PITCH,
   PETAL_COS,
+  PETAL_HALF_LENGTH,
+  PETAL_HALF_LENGTH_F32,
+  PETAL_HALF_WIDTH,
+  PETAL_NOTCH_DISTANCE,
+  PETAL_NOTCH_RADIUS,
   PETAL_SIN,
   RING_COUNT,
   RING_RADII,
   RING_SLOTS,
-  TILE_CENTER_X,
-  TILE_CENTER_Y,
-  TILE_CORNER_RADIUS,
-  TILE_COUNT,
-  TILE_GRID,
-  TILE_LOOKUP,
-  TILE_ORIGIN,
-  TILE_PITCH,
-  TILE_SIZE,
   TOTAL_SLOTS,
+  bandPhase,
+  bandRadius,
   finderLit,
+  inMask,
+  petalLitAlong,
   ringOffset,
 } from "./layout.js";
 import { deepFreeze } from "./support.js";
@@ -45,12 +60,12 @@ import { deepFreeze } from "./support.js";
 export const DEFAULT_PALETTE = deepFreeze({
   /** Background. */
   background: [0, 0, 0],
-  /** Light tile fill and finders. */
+  /** Finders and the petals inside the `天`. */
   light: [250, 235, 244],
-  /** Sakura pink of dots and of glyphs on dark tiles. */
+  /** Sakura pink of the ring dots and of the petals outside the `天`. */
   pink: [245, 175, 208],
-  /** Glyph colour on a light tile. */
-  ink: [20, 4, 14],
+  /** The faint `天` drawn under the petals (a tenth of the light colour). */
+  backdrop: [25, 24, 24],
 });
 
 function readColor(value, name) {
@@ -72,7 +87,7 @@ export function resolvePalette(palette) {
     background: readColor(palette.background ?? DEFAULT_PALETTE.background, "background"),
     light: readColor(palette.light ?? DEFAULT_PALETTE.light, "light"),
     pink: readColor(palette.pink ?? DEFAULT_PALETTE.pink, "pink"),
-    ink: readColor(palette.ink ?? DEFAULT_PALETTE.ink, "ink"),
+    backdrop: readColor(palette.backdrop ?? DEFAULT_PALETTE.backdrop, "backdrop"),
   });
 }
 
@@ -83,51 +98,53 @@ function requireCells(cells) {
   return cells;
 }
 
-const BITMAP_N = 128;
-let glyphBitmaps = null;
-
-/** 128x128 ink bitmaps of every glyph, built on first use. */
-function bitmaps() {
-  if (glyphBitmaps === null) {
-    const all = new Uint8Array(GLYPH_COUNT * BITMAP_N * BITMAP_N);
-    for (let glyph = 0; glyph < GLYPH_COUNT; glyph += 1) {
-      const base = glyph * BITMAP_N * BITMAP_N;
-      for (let v = 0; v < BITMAP_N; v += 1) {
-        for (let u = 0; u < BITMAP_N; u += 1) {
-          const x = ((u + 0.5) / BITMAP_N) * GLYPH_GRID;
-          const y = ((v + 0.5) / BITMAP_N) * GLYPH_GRID;
-          all[base + v * BITMAP_N + u] = inked(glyph, x, y) ? 1 : 0;
-        }
-      }
-    }
-    glyphBitmaps = all;
-  }
-  return glyphBitmaps;
-}
-
-/**
- * Inside test for a rounded square of half-side `half` and corner radius
- * `radius`, relative to its centre.
- */
-function inRoundedSquare(dx, dy, half, radius) {
-  const ax = Math.abs(dx);
-  const ay = Math.abs(dy);
-  if (ax > half || ay > half) {
-    return false;
-  }
-  const cx = ax - (half - radius);
-  const cy = ay - (half - radius);
-  return cx <= 0 || cy <= 0 || cx * cx + cy * cy <= radius * radius;
-}
-
 const BACKGROUND = 0;
 const LIGHT = 1;
 const PINK = 2;
-const INK = 3;
+const BACKDROP = 3;
 const TAU = 2 * Math.PI;
 
+/** Rust `f64::round`: halves round away from zero. */
+function roundHalfAway(value) {
+  return value < 0 ? -Math.round(-value) : Math.round(value);
+}
+
+const OUTER_DOT_EDGE = RING_RADII[RING_COUNT - 1] + DOT_RADIUS;
+const INNER_DOT_EDGE = RING_RADII[0] - DOT_RADIUS;
+
+// No point further than this from a petal's centre lies inside it (the half-length is the
+// larger half-axis; the margin keeps the shortcut clear of rounding at the tips).
+const PETAL_REACH2 = (PETAL_HALF_LENGTH_F32 + 0.01) * (PETAL_HALF_LENGTH_F32 + 0.01);
+
+/** Colour index of the lit petal covering canvas point `(x, y)`, or -1. */
+function petalAt(cells, x, y, radius, theta) {
+  const nearest = roundHalfAway((radius - BAND_INNER) / BAND_SPACING);
+  for (let band = nearest - 1; band <= nearest + 1; band += 1) {
+    if (band < 0 || band >= BAND_COUNT) {
+      continue;
+    }
+    if (Math.abs(radius - bandRadius(band)) > PETAL_HALF_LENGTH_F32) {
+      continue;
+    }
+    const slots = BAND_SLOTS[band];
+    const around = roundHalfAway((theta / TAU) * slots - bandPhase(band));
+    for (let slot = around - 1; slot <= around + 1; slot += 1) {
+      const cell = BAND_OFFSETS[band] + (((slot % slots) + slots) % slots);
+      if (cells.petals[cell] !== 1) {
+        continue;
+      }
+      const dx = x - CELL_CENTER_X[cell];
+      const dy = y - CELL_CENTER_Y[cell];
+      if (dx * dx + dy * dy <= PETAL_REACH2 && petalLitAlong(dx, dy, CELL_SIN[cell], CELL_COS[cell])) {
+        return CELL_LIGHT[cell] === 1 ? LIGHT : PINK;
+      }
+    }
+  }
+  return -1;
+}
+
 /** Colour index of canvas point `(x, y)`. */
-function shade(cells, glyphs, x, y) {
+function shade(cells, x, y) {
   // finders
   for (let f = 0; f < 4; f += 1) {
     const dx = x - FINDER_CENTERS[f][0];
@@ -136,49 +153,24 @@ function shade(cells, glyphs, x, y) {
       return finderLit(dx, dy) ? LIGHT : BACKGROUND;
     }
   }
-  // tiles
-  if (x >= TILE_ORIGIN && y >= TILE_ORIGIN) {
-    const col = Math.floor((x - TILE_ORIGIN) / TILE_PITCH);
-    const row = Math.floor((y - TILE_ORIGIN) / TILE_PITCH);
-    if (col < TILE_GRID && row < TILE_GRID) {
-      const tile = TILE_LOOKUP[row * TILE_GRID + col];
-      if (tile >= 0) {
-        const cx = TILE_ORIGIN + TILE_PITCH * (col + 0.5);
-        const cy = TILE_ORIGIN + TILE_PITCH * (row + 0.5);
-        const dx = x - cx;
-        const dy = y - cy;
-        if (!inRoundedSquare(dx, dy, TILE_SIZE / 2, TILE_CORNER_RADIUS)) {
-          return BACKGROUND;
-        }
-        const boxHalf = GLYPH_BOX / 2;
-        let isInk = false;
-        if (Math.abs(dx) < boxHalf && Math.abs(dy) < boxHalf) {
-          const u = Math.floor(((dx + boxHalf) / (2 * boxHalf)) * BITMAP_N);
-          const v = Math.floor(((dy + boxHalf) / (2 * boxHalf)) * BITMAP_N);
-          const base = cells.glyph[tile] * BITMAP_N * BITMAP_N;
-          isInk = glyphs[base + Math.min(v, BITMAP_N - 1) * BITMAP_N + Math.min(u, BITMAP_N - 1)] === 1;
-        }
-        if (cells.light[tile] === 1) {
-          return isInk ? INK : LIGHT;
-        }
-        return isInk ? PINK : BACKGROUND;
-      }
-    }
-  }
-  // ring dots
   const dx = x - CENTER;
   const dy = y - CENTER;
   const radius = Math.sqrt(dx * dx + dy * dy);
+  // beyond the outer ring's dots, and between the backdrop and the inner ring's, nothing is drawn
+  if (radius > OUTER_DOT_EDGE || (radius > BACKDROP_RADIUS && radius < INNER_DOT_EDGE)) {
+    return BACKGROUND;
+  }
+  let theta = Math.atan2(dy, dx);
+  if (theta < 0) {
+    theta += TAU;
+  }
+  // ring dots
   for (let ring = 0; ring < RING_COUNT; ring += 1) {
     const ringRadius = RING_RADII[ring];
     if (Math.abs(radius - ringRadius) > DOT_RADIUS) {
       continue;
     }
     const slots = RING_SLOTS[ring];
-    let theta = Math.atan2(dy, dx);
-    if (theta < 0) {
-      theta += TAU;
-    }
     const slot = Math.round((theta / TAU) * slots) % slots;
     if (cells.dots[ringOffset(ring) + slot] !== 1) {
       continue;
@@ -190,11 +182,21 @@ function shade(cells, glyphs, x, y) {
       return PINK;
     }
   }
+  // petals, then the faint 天 under them
+  if (radius <= BACKDROP_RADIUS) {
+    const petal = petalAt(cells, x, y, radius, theta);
+    if (petal >= 0) {
+      return petal;
+    }
+    if (inMask(x, y)) {
+      return BACKDROP;
+    }
+  }
   return BACKGROUND;
 }
 
 /**
- * Renders one frame in software.
+ * Renders one frame in software, exactly like the reference renderer.
  *
  * @param {PetalFrameCells} cells
  * @param {{size?: number, supersample?: number, palette?: object}} [options]
@@ -213,8 +215,7 @@ export function renderPetalFrame(cells, options = {}) {
     throw new RangeError("supersample must be an integer in 1..=4");
   }
   const palette = resolvePalette(options.palette);
-  const colors = [palette.background, palette.light, palette.pink, palette.ink];
-  const glyphs = bitmaps();
+  const colors = [palette.background, palette.light, palette.pink, palette.backdrop];
   const unit = CANVAS / size;
   const data = new Uint8ClampedArray(size * size * 4);
   const n = supersample * supersample;
@@ -227,7 +228,7 @@ export function renderPetalFrame(cells, options = {}) {
         for (let sx = 0; sx < supersample; sx += 1) {
           const x = (px + (sx + 0.5) / supersample) * unit;
           const y = (py + (sy + 0.5) / supersample) * unit;
-          const color = colors[shade(cells, glyphs, x, y)];
+          const color = colors[shade(cells, x, y)];
           r += color[0];
           g += color[1];
           b += color[2];
@@ -242,9 +243,6 @@ export function renderPetalFrame(cells, options = {}) {
   }
   return { width: size, height: size, data };
 }
-
-/** Stroke width of a glyph in canvas units (6.5/32 of the glyph box). */
-export const GLYPH_STROKE_WIDTH = (STROKE_WIDTH * GLYPH_BOX) / GLYPH_GRID;
 
 function circle(x, y, r) {
   return Object.freeze({ x, y, r });
@@ -270,10 +268,31 @@ const FINDER_SHAPES = Object.freeze(
   }),
 );
 
-// Glyph polylines scaled into the glyph box, relative to the box origin.
-const SCALED_STROKES = STROKES.map((strokes) =>
-  strokes.map((stroke) => stroke.map((value) => (value * GLYPH_BOX) / GLYPH_GRID)),
-);
+/** The `#` cells of the mask lattice as squares, row-major; drawn clipped to the backdrop disc. */
+const BACKDROP_SHAPE = Object.freeze({
+  x: CENTER,
+  y: CENTER,
+  r: BACKDROP_RADIUS,
+  cells: Object.freeze(
+    MASK.flatMap((line, row) =>
+      Array.from(line).flatMap((mark, col) =>
+        mark === "#" ? [Object.freeze({ x: MASK_ORIGIN + MASK_PITCH * col, y: MASK_ORIGIN + MASK_PITCH * row, size: MASK_PITCH })] : [],
+      ),
+    ),
+  ),
+});
+
+/** The petal outline every lit cell is drawn with, in canvas units. */
+const PETAL_SHAPE = Object.freeze({
+  /** Half the length along the outward direction. */
+  halfLength: PETAL_HALF_LENGTH,
+  /** Half the width. */
+  halfWidth: PETAL_HALF_WIDTH,
+  /** Radius of the cosmetic notch cut into the tip (renderers may omit it). */
+  notchRadius: PETAL_NOTCH_RADIUS,
+  /** Distance from the petal centre to the notch centre, outward. */
+  notchDistance: PETAL_NOTCH_DISTANCE,
+});
 
 const DOT_CENTERS = (() => {
   const xs = new Float64Array(TOTAL_SLOTS);
@@ -293,11 +312,14 @@ const DOT_CENTERS = (() => {
  * The frame as vector primitives in canvas design units (0..1024), for
  * backends that draw with their own 2D APIs (Canvas 2D, SVG, Skia...).
  *
- * Paint the background, then each finder (`core` and `petals` filled with
- * `palette.light`, then `notches` filled with `palette.background`), then the
- * light tiles (rounded squares filled with `palette.light`), then each tile's
- * glyph strokes in `tile.ink` (round caps and joins, width `strokeWidth`,
- * clipped to `tile.glyphBox`), then the lit dots in `palette.pink`.
+ * Paint the background, then the `backdrop` cells (squares filled with
+ * `palette.backdrop`, clipped to the backdrop disc), then the lit `petals`
+ * (each an ellipse of `petal.halfLength` along `angle`, the outward direction,
+ * and `petal.halfWidth` across it, centred on the petal and filled with its
+ * `fill`; the notch of `petal.notchRadius` centred `petal.notchDistance`
+ * outward is cut out of the tip and may be omitted), then the lit dots in
+ * `palette.pink`, then each finder (`core` and `petals` filled with
+ * `palette.light`, then `notches` filled with `palette.background`).
  *
  * @param {PetalFrameCells} cells
  * @param {{palette?: object}} [options]
@@ -305,31 +327,20 @@ const DOT_CENTERS = (() => {
 export function petalDrawList(cells, options = {}) {
   requireCells(cells);
   const palette = resolvePalette(options.palette);
-  const tiles = [];
-  for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-    const cx = TILE_CENTER_X[tile];
-    const cy = TILE_CENTER_Y[tile];
-    const light = cells.light[tile] === 1;
-    const glyph = cells.glyph[tile];
-    const boxX = cx - GLYPH_BOX / 2;
-    const boxY = cy - GLYPH_BOX / 2;
-    tiles.push(
+  const petals = [];
+  for (let cell = 0; cell < FIELD_CELLS; cell += 1) {
+    if (cells.petals[cell] !== 1) {
+      continue;
+    }
+    const light = CELL_LIGHT[cell] === 1;
+    petals.push(
       Object.freeze({
-        index: tile,
-        x: cx - TILE_SIZE / 2,
-        y: cy - TILE_SIZE / 2,
-        size: TILE_SIZE,
-        radius: TILE_CORNER_RADIUS,
+        index: cell,
+        x: CELL_CENTER_X[cell],
+        y: CELL_CENTER_Y[cell],
+        angle: CELL_ANGLE[cell],
         light,
-        glyph,
-        fill: light ? palette.light : null,
-        ink: light ? palette.ink : palette.pink,
-        glyphBox: Object.freeze({ x: boxX, y: boxY, size: GLYPH_BOX }),
-        strokes: Object.freeze(
-          SCALED_STROKES[glyph].map((stroke) =>
-            Object.freeze(stroke.map((value, index) => value + (index % 2 === 0 ? boxX : boxY))),
-          ),
-        ),
+        fill: light ? palette.light : palette.pink,
       }),
     );
   }
@@ -342,9 +353,10 @@ export function petalDrawList(cells, options = {}) {
   return Object.freeze({
     canvas: CANVAS,
     palette,
-    strokeWidth: GLYPH_STROKE_WIDTH,
     finders: FINDER_SHAPES,
-    tiles: Object.freeze(tiles),
+    backdrop: BACKDROP_SHAPE,
+    petal: PETAL_SHAPE,
+    petals: Object.freeze(petals),
     dots: Object.freeze(dots),
   });
 }
