@@ -5,14 +5,18 @@
 // frame (`frame % 4 == 0`), when lane D carries the stream beacon instead, so a
 // receiver can join at any frame within a fraction of a second. Atom ids run
 // contiguously over the atoms actually sent (see `firstAtomId`). Any single
-// readable lane is useful on its own.
+// readable lane is useful on its own. On top of every field lane, the turns of
+// its lit petals carry four more atoms from the repair range (see `turns.js`),
+// so a sharp camera reads up to 37 atoms (592 bytes) a frame.
 //
 // Lane data layouts (all big-endian):
 //
-// * every lane starts with `tag:u8, frame:u16`; `tag` is the low byte of the
-//   payload CRC-32C.
+// * every lane but the turn lanes starts with `tag:u8, frame:u16`; `tag` is
+//   the low byte of the payload CRC-32C.
 // * field lanes and non-beacon D: `atoms...` (16 bytes each).
 // * beacon D: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
+// * turn lanes: `atoms... check:u32`, where the check binds the atoms to the
+//   header of the field lane they ride on.
 
 import { crc32c } from "./crc.js";
 import { PetalFountainDecoder, encodeAtom, splitPayload } from "./fountain.js";
@@ -30,9 +34,10 @@ import {
 } from "./lanes.js";
 import { SECTORS } from "./layout.js";
 import { PetalError, requireIndex, toBytes } from "./support.js";
+import { TURN_ATOMS, encodeTurnLane, turnData, turnFirstId } from "./turns.js";
 
-/** Version/profile byte of the beacon: format version 2, layout profile 0. */
-export const FORMAT_VERSION = 0x20;
+/** Version/profile byte of the beacon: format version 3, layout profile 0. */
+export const FORMAT_VERSION = 0x30;
 /** Largest payload a beacon can describe (`u24`). */
 export const MAX_PAYLOAD_LEN = 2 ** 24 - 1;
 /** Default receiver payload limit; override with the assembler limits. */
@@ -200,9 +205,9 @@ export class PetalStreamEncoder {
 
   /**
    * The data bytes of every lane of `frame` (a counter reduced modulo 65536):
-   * lane D and the four field lanes, sector 0 first.
+   * lane D, the four field lanes and the four turn lanes, sector 0 first.
    *
-   * @returns {{d: Uint8Array, fields: Uint8Array[]}}
+   * @returns {{d: Uint8Array, fields: Uint8Array[], turns: Uint8Array[]}}
    */
   laneData(frame) {
     const f = frameNumber(frame);
@@ -238,23 +243,36 @@ export class PetalStreamEncoder {
     } else {
       this._atoms(laneFirstId("D", f), D_ATOMS, d, LANE_HEADER_LEN);
     }
-    return { d, fields };
+    const laneHeader = { tag: this._meta.tag, frame: f };
+    const turns = [];
+    for (let sector = 0; sector < SECTORS; sector += 1) {
+      const atoms = new Uint8Array(TURN_ATOMS * ATOM_LEN);
+      this._atoms(turnFirstId(f, sector), TURN_ATOMS, atoms, 0);
+      turns.push(turnData(laneHeader, sector, atoms));
+    }
+    return { d, fields, turns };
   }
 
   /**
    * The transmitted codewords of `frame`.
    *
-   * @returns {{d: Uint8Array, fields: Uint8Array[]}}
+   * @returns {{d: Uint8Array, fields: Uint8Array[], turns: Uint8Array[]}}
    */
   words(frame) {
-    const { d, fields } = this.laneData(frame);
-    return { d: encodeLane("D", d), fields: fields.map((data, sector) => encodeLane(FIELD_LANES[sector], data)) };
+    const { d, fields, turns } = this.laneData(frame);
+    return {
+      d: encodeLane("D", d),
+      fields: fields.map((data, sector) => encodeLane(FIELD_LANES[sector], data)),
+      turns: turns.map((data, sector) => encodeTurnLane(sector, data)),
+    };
   }
 
-  /** Every cell of `frame`, ready to render. */
+  /** Every cell of `frame`, lit and turned, ready to render. */
   cells(frame) {
-    const { d, fields } = this.words(frame);
-    return PetalFrameCells.fromWords(d, fields);
+    const { d, fields, turns } = this.words(frame);
+    const cells = PetalFrameCells.fromWords(d, fields);
+    cells.setTurns(turns);
+    return cells;
   }
 }
 

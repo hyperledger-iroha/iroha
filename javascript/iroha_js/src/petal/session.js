@@ -11,6 +11,11 @@
 // `MERGE_WINDOW` shown frames. From the second such capture on, it merges them
 // (`mergeFields`) and offers a recovered lane only when that lane's own header
 // names the same frame.
+//
+// Every field lane a capture decodes also lets the session read the turn lane
+// on top of it (`readTurns`). A turn lane is read once per shown frame: the
+// session remembers the last `TURN_MEMORY` it read and does not look at those
+// petals again.
 
 import {
   DEFAULT_DECODE_OPTIONS,
@@ -29,6 +34,7 @@ import {
   parseAtomLane,
 } from "./stream.js";
 import { requireIndex } from "./support.js";
+import { readTurns, turnPacket } from "./turns.js";
 
 /** How long a decoded pose stays usable for tracking the next frames, in milliseconds. */
 export const TRACK_WINDOW_MS = 500;
@@ -36,6 +42,13 @@ export const TRACK_WINDOW_MS = 500;
 export const MERGE_WINDOW = 6;
 /** Captures held per shown frame; a further capture replaces the oldest. */
 export const MERGE_CAPTURES = 4;
+/** Turn lanes remembered as read (the four of each of the last `MERGE_WINDOW` shown frames). */
+export const TURN_MEMORY = MERGE_WINDOW * SECTORS;
+
+/** The header every lane starts with, or `null` for data too short to hold one. */
+function laneHeader(data) {
+  return data.length < 3 ? null : { tag: data[0], frame: (data[1] << 8) | data[2] };
+}
 
 /**
  * The shown frame every decoded lane header of `frame` names; `null` when no lane decoded or the
@@ -46,8 +59,8 @@ function shownFrame(frame) {
   for (const lane of LANE_ORDER) {
     const result = frame.lane(lane);
     if (result === null) continue;
-    if (result.data.length < 3) return null;
-    const header = { tag: result.data[0], frame: (result.data[1] << 8) | result.data[2] };
+    const header = laneHeader(result.data);
+    if (header === null) return null;
     if (shown !== null && (shown.tag !== header.tag || shown.frame !== header.frame)) return null;
     shown = header;
   }
@@ -111,7 +124,7 @@ export class PetalScanSession {
     this._assembler = new PetalStreamAssembler(this._limits.assembler);
     this._stats = {
       frames: 0, located: 0, readable: 0, laneD: 0, fieldLanes: 0,
-      tracked: 0, inferred: 0, merges: 0, mergedLanes: 0,
+      tracked: 0, inferred: 0, merges: 0, mergedLanes: 0, turnLanes: 0,
     };
     this._startedMs = null;
     this._progressMs = 0;
@@ -120,6 +133,8 @@ export class PetalScanSession {
     this._lastPose = null;
     /** Captures held for merging: `{shown, evidence, done}` per shown frame, oldest first. */
     this._held = [];
+    /** The turn lanes read: `{tag, frame, sector}`, oldest first, at most `TURN_MEMORY`. */
+    this._turned = [];
   }
 
   /** The limits in force. */
@@ -134,8 +149,9 @@ export class PetalScanSession {
    * (`laneD`), field lane successes (`fieldLanes`, up to four per frame),
    * frames read by tracking the previous pose instead of a full search
    * (`tracked`) and frames read with one corner finder hidden and inferred
-   * (`inferred`), and merges of two or more captures of one shown frame and
-   * the field lanes they recovered (`merges`, `mergedLanes`).
+   * (`inferred`), merges of two or more captures of one shown frame and the
+   * field lanes they recovered (`merges`, `mergedLanes`), and turn lanes read
+   * (`turnLanes`, each at most once per shown frame).
    */
   stats() {
     return Object.freeze({ ...this._stats });
@@ -146,13 +162,17 @@ export class PetalScanSession {
     return this._assembler.progress();
   }
 
-  /** Drops all partial state, including the pose used for tracking and held captures. */
+  /**
+   * Drops all partial state, including the pose used for tracking, held captures and the turn
+   * lanes read.
+   */
   reset() {
     this._assembler.reset();
     this._startedMs = null;
     this._lastRank = 0;
     this._lastPose = null;
     this._held = [];
+    this._turned = [];
   }
 
   /**
@@ -162,15 +182,16 @@ export class PetalScanSession {
    * code is first followed from its pose (no finder search); a full decode
    * runs when that fails.
    *
-   * @returns {{error: string | null, lanes: string, merged: string, progress: object,
-   *   completed: {meta: object, payload: Uint8Array} | null}}
+   * @returns {{error: string | null, lanes: string, merged: string, turned: string,
+   *   progress: object, completed: {meta: object, payload: Uint8Array} | null}}
    *   `error` is a `PetalError` code when the frame produced nothing
    *   (`no_orientation` means a code was located but no lane could be read:
    *   too far or too blurry), `lanes` lists the lanes this capture decoded
    *   alone (`D` and the sector digits `0`-`3`), `merged` lists the field
    *   lanes newly recovered by merging it with earlier captures of its shown
-   *   frame (sector digits), and `completed` is the finished payload,
-   *   delivered exactly once.
+   *   frame (sector digits), `turned` lists the turn lanes read from it (the
+   *   sector digits of the field lanes they ride on), and `completed` is the
+   *   finished payload, delivered exactly once.
    */
   push(image, nowMs) {
     if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) {
@@ -197,6 +218,7 @@ export class PetalScanSession {
     let error = null;
     let lanes = "";
     let merged = "";
+    let turned = "";
     if (result.error !== undefined) {
       error = result.error;
     } else {
@@ -206,6 +228,7 @@ export class PetalScanSession {
       this._lastPose = { frame: result.frame, atMs: nowMs };
       lanes = this._absorb(result.frame);
       merged = this._merge(image, result.frame);
+      turned = this._turn(image, result.frame);
     }
     // A code that was found but could not be read (`no_orientation`) still
     // counts as located.
@@ -220,7 +243,7 @@ export class PetalScanSession {
       }
     }
     this._lastRank = progress.rank;
-    return Object.freeze({ error, lanes, merged, progress, completed: this._assembler.takeCompleted() });
+    return Object.freeze({ error, lanes, merged, turned, progress, completed: this._assembler.takeCompleted() });
   }
 
   _absorb(frame) {
@@ -236,13 +259,49 @@ export class PetalScanSession {
     }
     const previousMeta = this._assembler.progress().meta;
     frame.feed(this._assembler);
-    // An eight-bit tag may collide across streams; done flags and evidence
-    // belong to the full stream identity. Captures held before the first
-    // beacon are kept.
+    // An eight-bit tag may collide across streams; done flags, evidence and
+    // the turn lanes read belong to the full stream identity. Captures held
+    // before the first beacon are kept.
     if (previousMeta !== null && !sameMeta(this._assembler.progress().meta, previousMeta)) {
       this._held = [];
+      this._turned = [];
     }
     return lanes;
+  }
+
+  /**
+   * Reads the turn lanes on top of the field lanes this capture decoded, except those already
+   * read for their shown frame, and offers their atoms.
+   */
+  _turn(image, frame) {
+    const skip = [true, true, true, true];
+    const headers = [null, null, null, null];
+    for (let sector = 0; sector < SECTORS; sector += 1) {
+      const field = frame.fields[sector];
+      const header = field === null ? null : laneHeader(field.data);
+      if (header === null) continue;
+      headers[sector] = header;
+      skip[sector] = this._turned.some(
+        (read) => read.tag === header.tag && read.frame === header.frame && read.sector === sector,
+      );
+    }
+    if (skip.every(Boolean)) {
+      return "";
+    }
+    let turned = "";
+    readTurns(image, frame, skip).forEach((result, sector) => {
+      const header = headers[sector];
+      const packet = result === null || header === null ? null : turnPacket(header, sector, result.data);
+      if (packet === null) {
+        return;
+      }
+      this._assembler.pushAtoms(packet);
+      if (this._turned.length === TURN_MEMORY) this._turned.shift();
+      this._turned.push({ tag: header.tag, frame: header.frame, sector });
+      this._stats.turnLanes += 1;
+      turned += laneLetter(FIELD_LANES[sector]);
+    });
+    return turned;
   }
 
   /**

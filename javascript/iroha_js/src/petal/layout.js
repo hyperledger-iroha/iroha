@@ -35,16 +35,22 @@ export const FIELD_CELLS = 3376;
 export const SECTORS = 4;
 /** Cells in each sector. */
 export const SECTOR_CELLS = FIELD_CELLS / SECTORS;
-/** Radius of the disc a petal stands in for: decoders sample within it. */
+/**
+ * Radius of the disc a petal stands in for: decoders sample within it, and no other petal,
+ * however it is turned, reaches into it.
+ */
 export const PETAL_RADIUS = 4.6;
-/** Half the length of a drawn petal, along the outward radial direction. */
-export const PETAL_HALF_LENGTH = 5.2;
+/**
+ * Half the length of a drawn petal, along its axis (the outward radial direction, turned by the
+ * petal's turn, see `turns.js`).
+ */
+export const PETAL_HALF_LENGTH = 6.0;
 /** Half the width of a drawn petal. */
-export const PETAL_HALF_WIDTH = 4.3;
-/** Radius of the cosmetic notch cut into each petal tip. */
-export const PETAL_NOTCH_RADIUS = 1.3;
-/** Distance from a petal centre to its notch centre, outward. */
-export const PETAL_NOTCH_DISTANCE = 5.4;
+export const PETAL_HALF_WIDTH = 3.73;
+/** Radius of the notch cut into each petal tip; it tells a petal from one turned by half a turn. */
+export const PETAL_NOTCH_RADIUS = 1.12;
+/** Distance from a petal centre to its notch centre, along its axis. */
+export const PETAL_NOTCH_DISTANCE = 6.24;
 
 // The reference keeps the petal constants in single precision and widens them
 // where it computes; these are the widened values its arithmetic sees.
@@ -493,8 +499,7 @@ export function finderLit(dx, dy) {
 /**
  * Returns whether the point `(dx, dy)`, relative to the centre of a petal that
  * points along `angle`, is lit: an ellipse of half-length `PETAL_HALF_LENGTH`
- * along the outward direction and half-width `PETAL_HALF_WIDTH`, minus the
- * cosmetic notch at its tip.
+ * along `angle` and half-width `PETAL_HALF_WIDTH`, minus the notch at its tip.
  */
 export function petalLit(dx, dy, angle) {
   return petalLitAlong(dx, dy, Math.sin(angle), Math.cos(angle));

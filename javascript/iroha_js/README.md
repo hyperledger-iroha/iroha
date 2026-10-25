@@ -315,15 +315,19 @@ native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
 ## Petal Stream optical transport
 
-`@iroha/iroha-js/petal` is Petal Stream (format 2), the animated optical
+`@iroha/iroha-js/petal` is Petal Stream (format 3), the animated optical
 transport used to hand over a payload (for example a KAGEMUSHA `IPM1` peer
 message) from one screen to a camera. Each square frame shows four
 sakura-blossom finders, three dotted rings and inside them a storm of 3,376
 petals on 34 concentric bands, white inside the SORA `天` and pink outside it.
 The ring dots (lane `D`) and the lit petals of the field's four sectors (lanes
 `F0`-`F3`) are five independent Reed-Solomon codewords carrying fountain-coded
-16-byte atoms, so any readable lane of any frame helps and lost frames only cost
-time. The player shows 12 frames per second by default.
+16-byte atoms. On top of each field lane, the first 360 lit petals of its
+sector are turned by 0°, 45°, 90° or 135° about their centres: a turn lane
+(`T0`-`T3`) of four more atoms, which a camera that resolves the petals' shapes
+reads once the field lane has said which petals are lit. Any readable lane of
+any frame helps and lost frames only cost time. The player shows 12 frames per
+second by default and draws every petal turned, notched and antialiased.
 
 The module is a port of the `iroha_petal` Rust reference: the encoder is
 bit-exact and the decoder follows the reference step by step. It is pure
@@ -377,15 +381,23 @@ counter its decoded lane headers name. It holds at most six shown frames and
 four captures each, reads the missing field lanes from the cell-by-cell mean of
 the held captures, and accepts a recovered lane only if its own header names
 that frame. `outcome.merged` lists newly recovered field lanes (sector digits);
-`stats().merges` and `mergedLanes` count attempts and recoveries. Reset and
-receive timeouts clear held evidence.
+`stats().merges` and `mergedLanes` count attempts and recoveries. Every field
+lane a capture decodes also lets the session read the turn lane on top of it,
+once per shown frame: the session remembers the last 24 turn lanes it read and
+does not look at those petals again. `outcome.turned` lists the turn lanes read
+(the sector digits of their field lanes) and `stats().turnLanes` counts them.
+Reset and receive timeouts clear held evidence and the turn lanes read.
 Lower-level pieces are exported as well:
 `decodePetalFrame`, `decodePetalFrameAt` and `trackPetalFrame`, `PetalPose`,
-`fieldEvidence` and `mergeFields`, the finder
+`fieldEvidence` and `mergeFields`, `readTurns` (with `observedTurns` and
+`turnTemplate` for diagnostics and conformance), the finder
 search (`locate`, `locateCandidates`, `selectTriple`, `followFinder`), the
 software `renderPetalFrame` (RGBA output, ready for `ImageData`), the vector
-`petalDrawList` and `drawPetalFrame`, `PetalStreamAssembler`, the lane codecs
-(`encodeLane`, `decodeLane`, `PetalFrameCells`), `PetalReedSolomon`, the
+`petalDrawList` (each lit petal with its axis: the outward direction plus its
+turn) and `drawPetalFrame`, `PetalStreamAssembler`, the lane codecs
+(`encodeLane`, `decodeLane`, `PetalFrameCells` with its `turns`), the turn lane
+codecs (`PETAL_TURNS`, `carrierOrder`, `carriers`, `turnData`, `turnPacket`,
+`encodeTurnLane`, `decodeTurnLaneCounted`), `PetalReedSolomon`, the
 fountain code (`maskWords`, `encodeAtom`, `PetalFountainDecoder`) and `crc32c`.
 A reassembled payload is only delivered after its CRC-32C matches the beacon;
 it carries no authentication of its own.
@@ -396,7 +408,13 @@ searches the pose for the barrel distortion of cheap lenses, and a lane the
 finder levels cannot read is read again from local levels, which rescale every
 petal by its neighbourhood, so over-exposure, veiling light, shadows and banding
 cost little (a deep glare still defeats every lane in the frames it covers);
-lane `D` carries the stream alone when nothing else reads. The scanner does not
+lane `D` carries the stream alone when nothing else reads. The turn reader
+samples every carrier petal in its own outward frame, after correcting the pose
+by a cubic fitted to the carriers' centroids, fits the camera's blur, and
+decides each turn with the lit neighbours subtracted; a turn lane passes only
+when its check matches the header of the field lane it rides on. From a fitted
+blur of 3.2 canvas units on (a soft or distant camera) it reads no turn lanes and
+the field lanes and lane `D` carry the stream as before. The scanner does not
 change the camera's settings, so set the stream up for it
 (`specs/petal_stream.md` section 8):
 
@@ -416,9 +434,11 @@ if (track.getCapabilities?.().exposureCompensation) {
 ```
 
 `test/petal.test.js` checks the shared fixtures in `fixtures/petal/`
-(`petal_stream_v2.json`, and the golden camera captures and tracking pairs in
-`petal_captures_v2.json`) and ports the reference unit tests; run it on its own
-with `node --test test/petal.test.js`.
+(`petal_stream_v3.json`, turn lanes and the turn reader's template probes
+included, and the golden camera captures and tracking pairs in
+`petal_captures_v3.json`, whose turn lanes it reads exactly as the reference)
+and ports the reference unit tests; run it on its own with
+`node --test test/petal.test.js`.
 
 ## Atomic private settlement transport
 

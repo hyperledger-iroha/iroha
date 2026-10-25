@@ -1239,7 +1239,8 @@ export function mergeFields(evidence, skip = NO_SKIP) {
  * Builds the cells a decoder believes it saw under `frame`'s pose, for diagnostics; `null` when
  * the image is unusable, the frame names a corner that does not exist or the finder reference
  * levels are too weak. The levels of the frame's inferred corner, if any, are extrapolated as in
- * the decoder, and every sector is thresholded per colour class as the decoder reads it.
+ * the decoder, and every sector is thresholded per colour class as the decoder reads it. The
+ * petals are left unturned (`observedTurns` reports the turns).
  *
  * @param {{width: number, height: number, data: Uint8Array | Uint8ClampedArray}} image luma plane
  * @param {{pose: PetalPose, inferredCorner?: number | null}} frame usually a {@link PetalDecodedFrame}

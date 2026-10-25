@@ -17,7 +17,7 @@ import {
 } from "../src/petal.js";
 import { MERGE_CAPTURES, MERGE_WINDOW } from "../src/petal/session.js";
 
-const fixture = JSON.parse(readFileSync(new URL("../../../fixtures/petal/petal_captures_v2.json", import.meta.url)));
+const fixture = JSON.parse(readFileSync(new URL("../../../fixtures/petal/petal_captures_v3.json", import.meta.url)));
 const hex = (bytes) => Buffer.from(bytes).toString("hex");
 const imageOf = (set, capture) => new PetalLuma(set.width, set.height,
   new Uint8Array(inflateSync(Buffer.from(capture.luma_zlib_base64, "base64"))));
@@ -201,11 +201,14 @@ test("petal session: a stream switch with the same short tag discards old merge 
     session._absorb(previous);
     session._merge(oldImage, previous);
     assert.ok(session._held.length > 0);
+    session._turned.push({ tag: old.meta.tag, frame: 0, sector: 1 });
     session._absorb(newPartial);
     assert.deepEqual(session.progress().meta, old.meta, "one conflicting beacon cannot switch streams");
+    assert.equal(session._turned.length, 1);
     session._absorb(newPartial);
     assert.deepEqual(session.progress().meta, fresh.meta);
     assert.equal(session._held.length, 0, "an accepted stream switch discards held evidence");
+    assert.equal(session._turned.length, 0, "and forgets the turn lanes read, which share the short tag");
     assert.equal(session._merge(newImage, newPartial), "");
     assert.equal(session._held[0].evidence.length, 1);
     assert.ok(session._held[0].done.every((done) => !done));

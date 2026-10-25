@@ -2,11 +2,13 @@
  * Petal Stream: the Sakura-storm optical transport (a streaming visual code).
  *
  * A sender shows a sequence of square frames; a camera reads them and a
- * payload is reassembled. Every frame carries five independent lanes, each
- * one Reed-Solomon codeword over GF(256): the ring dots (lane `D`) and the
- * four sectors of a field of 3,376 petals, each lit or dark (lanes `F0`-`F3`).
- * Lanes carry fountain-coded 16-byte atoms; lane `D` carries the stream
- * beacon on every fourth frame.
+ * payload is reassembled. Every frame carries independent lanes, each one
+ * Reed-Solomon codeword over GF(256): the ring dots (lane `D`), the four
+ * sectors of a field of 3,376 petals, each lit or dark (lanes `F0`-`F3`), and
+ * on top of each field lane the turns of its first 360 lit petals, 0, 45, 90
+ * or 135 degrees about their centres (turn lanes `T0`-`T3`, named by the
+ * digit of their field lane). Lanes carry fountain-coded 16-byte atoms; lane
+ * `D` carries the stream beacon on every fourth frame.
  *
  * This subpath is a port of the `iroha_petal` Rust reference: the encoder is
  * bit-exact (shared fixtures) and the decoder follows the reference step by
@@ -69,16 +71,19 @@ export interface PetalLayout {
   readonly sectors: 4;
   /** Cells per sector: 840 carry its codeword, the last four stay dark. */
   readonly sectorCells: 844;
-  /** Radius of the disc a petal stands in for (decoders sample within it). */
+  /**
+   * Radius of the disc a petal stands in for: decoders sample within it, and no other petal,
+   * however it is turned, reaches into it.
+   */
   readonly petalRadius: 4.6;
-  /** Half-length of a drawn petal along its outward direction. */
-  readonly petalHalfLength: 5.2;
+  /** Half-length of a drawn petal along its axis (the outward direction plus its turn). */
+  readonly petalHalfLength: 6;
   /** Half-width of a drawn petal. */
-  readonly petalHalfWidth: 4.3;
-  /** Radius of the cosmetic notch cut into each petal tip. */
-  readonly petalNotchRadius: 1.3;
-  /** Distance from a petal centre to its notch centre, outward. */
-  readonly petalNotchDistance: 5.4;
+  readonly petalHalfWidth: 3.73;
+  /** Radius of the notch cut into each petal tip; it tells a petal from one turned by half a turn. */
+  readonly petalNotchRadius: 1.12;
+  /** Distance from a petal centre to its notch centre, along its axis. */
+  readonly petalNotchDistance: 6.24;
   readonly maskGrid: 20;
   /** Canvas coordinate of the `天` lattice's left and top edge. */
   readonly maskOrigin: 182;
@@ -116,7 +121,7 @@ export interface PetalLaneSize {
   readonly atoms: number;
 }
 
-/** Lane sizes in decode order: D 30/11/19, F0-F3 105/22/83 (word/parity/data bytes). */
+/** Lane sizes in decode order: D 30/11/19, F0-F3 105/22/83 (word/parity/data bytes; turn lanes: {@link PETAL_TURNS}). */
 export const PETAL_LANES: { readonly [lane in PetalLane]: PetalLaneSize };
 
 /** Stream-level wire constants and receiver defaults. */
@@ -126,12 +131,34 @@ export const PETAL_STREAM: {
   readonly atomsPerFrame: 21;
   /** Cells at the end of every sector that carry no bit (they stay dark). */
   readonly spareSectorCells: 4;
-  /** Beacon version byte: format version 2, layout profile 0. */
-  readonly formatVersion: 32;
+  /** Beacon version byte: format version 3, layout profile 0. */
+  readonly formatVersion: 48;
   readonly beaconInterval: 4;
   readonly maxPayloadLen: 16777215;
   readonly defaultMaxPayloadLen: 65536;
   readonly defaultMaxPendingAtoms: 512;
+};
+
+/**
+ * The turn lanes `T0`-`T3`. The first `carriers` lit petals of a sector (in its carrier order)
+ * each show `bits` bits as one of `positions` turns; the lane is one codeword of `wordLen` bytes
+ * (`parityLen` parity), whose `dataLen` data bytes are `atoms` atoms and a `checkLen`-byte check.
+ */
+export const PETAL_TURNS: {
+  readonly positions: 4;
+  readonly bits: 2;
+  readonly carriers: 360;
+  readonly wordLen: 90;
+  readonly parityLen: 22;
+  readonly dataLen: 68;
+  readonly atoms: 4;
+  readonly checkLen: 4;
+  /** Fountain id of the first turn atom of frame 0 (`2^31`). */
+  readonly idBase: 2147483648;
+  /** Gaussian blurs (sigma in canvas units) the turn reader fits: 1.0, 1.4, 1.9, 2.5, 3.2, 4.0. */
+  readonly blurs: readonly number[];
+  /** Turn lanes a scan session remembers as read (the four of each of the last six shown frames). */
+  readonly memory: 24;
 };
 
 /** Colours of the picture. */
@@ -257,7 +284,7 @@ export function sectorCells(sector: number): number[];
 export function inMask(x: number, y: number): boolean;
 /**
  * Whether the point `(dx, dy)` relative to the centre of a petal pointing along `angle` is lit:
- * the ellipse of the petal minus its notch.
+ * the ellipse of the petal (half-length 6 along `angle`, half-width 3.73) minus its notch.
  */
 export function petalLit(dx: number, dy: number, angle: number): boolean;
 /** Role of every one of the 296 ring slots in flat index order. */
@@ -304,18 +331,37 @@ export function decodeLaneCounted(
 
 /** Every cell of one frame: what a renderer draws and a decoder samples. */
 export class PetalFrameCells {
-  constructor(dots?: ArrayLike<number | boolean>, petals?: ArrayLike<number | boolean>);
+  constructor(
+    dots?: ArrayLike<number | boolean>,
+    petals?: ArrayLike<number | boolean>,
+    turns?: ArrayLike<number>,
+  );
   /** Lit state (`0`/`1`) of each of the 296 ring slots, gate dots included. */
   readonly dots: Uint8Array;
   /** Lit state (`0`/`1`) of each of the 3,376 field cells (spare cells are dark). */
   readonly petals: Uint8Array;
-  /** Builds the cells from the transmitted codewords of lane `D` and the four field lanes. */
+  /**
+   * Turn position (0-3, see {@link turnAngle}) of each of the 3,376 field cells: zero for dark
+   * petals and for lit petals that carry no turn bits.
+   */
+  readonly turns: Uint8Array;
+  /**
+   * Builds the cells from the transmitted codewords of lane `D` and the four field lanes, with
+   * every petal unturned (see {@link PetalFrameCells.setTurns}).
+   */
   static fromWords(d: PetalBytes, fields: PetalSectors<PetalBytes>): PetalFrameCells;
+  /**
+   * Turns the carriers of every sector to show its transmitted turn codeword (sector 0 first); a
+   * sector with too few lit petals stays unturned.
+   */
+  setTurns(words: PetalSectors<PetalBytes>): void;
+  /** Packs the turns of the carriers of sector `sector` into its turn codeword; `null` without carriers. */
+  turnWord(sector: number): Uint8Array | null;
   /** Packs the data dots into a lane `D` codeword. */
   dWord(): Uint8Array;
   /** Packs the petals of sector `sector` into its field codeword. */
   fieldWord(sector: number): Uint8Array;
-  /** Whether `other` holds exactly the same cells. */
+  /** Whether `other` holds exactly the same cells, turns included. */
   equals(other: unknown): boolean;
 }
 
@@ -389,11 +435,13 @@ export type PetalDLane =
   | { readonly type: "beacon"; readonly beacon: PetalBeacon }
   | { readonly type: "atoms"; readonly packet: PetalAtomPacket };
 
-/** Data bytes or codewords of the five lanes of one frame. */
+/** Data bytes or codewords of the lanes of one frame. */
 export interface PetalLaneWords {
   readonly d: Uint8Array;
   /** The field lanes, sector 0 first. */
   readonly fields: PetalSectors<Uint8Array>;
+  /** The turn lanes, sector 0 first: atoms and check (68 bytes), or the 90-byte codewords. */
+  readonly turns: PetalSectors<Uint8Array>;
 }
 
 /** Snapshot of receive progress for a UI. */
@@ -438,13 +486,13 @@ export class PetalStreamEncoder {
    */
   constructor(payload: PetalBytes, kind: number);
   readonly meta: PetalStreamMeta;
-  /** Frames needed to send every source atom once. */
+  /** Frames needed to send every source atom once in the field lanes and lane `D`. */
   systematicFrames(): number;
-  /** Data bytes of every lane of `frame` (reduced modulo 65536). */
+  /** Data bytes of every lane of `frame` (reduced modulo 65536), turn lanes included. */
   laneData(frame: number): PetalLaneWords;
   /** Transmitted codewords of `frame`. */
   words(frame: number): PetalLaneWords;
-  /** Every cell of `frame`, ready to render. */
+  /** Every cell of `frame`, lit and turned, ready to render. */
   cells(frame: number): PetalFrameCells;
 }
 
@@ -462,6 +510,112 @@ export class PetalStreamAssembler {
   pushAtoms(packet: PetalAtomPacket): void;
   pushDLane(lane: PetalDLane): void;
 }
+
+// ------------------------------------------------------------------ turn lanes
+
+/**
+ * The angle (radians, clockwise on screen) by which a petal at turn position `position` (0-3) is
+ * turned from its outward direction: `pi * position / 4`.
+ */
+export function turnAngle(position: number): number;
+/**
+ * The two bits a turn position shows: its Gray code `position ^ (position >> 1)`, so that
+ * neighbouring turns (135 and 0 degrees included) differ in one bit.
+ */
+export function turnLabel(position: number): number;
+/** The turn position that shows the two bits `label` (the inverse of {@link turnLabel}). */
+export function turnPosition(label: number): number;
+/**
+ * The order in which the lit petals of sector `sector` become carriers: its 840 codeword cells
+ * shuffled by Fisher-Yates with an xorshift32 seeded `0x4F524430 + sector`.
+ */
+export function carrierOrder(sector: number): number[];
+/**
+ * The carriers of sector `sector` under the lit map `petals` (one flag per field cell): the first
+ * 360 lit cells in {@link carrierOrder}, or `null` when fewer are lit.
+ */
+export function carriers(petals: ArrayLike<number | boolean>, sector: number): number[] | null;
+/**
+ * Fountain id of the first of the four atoms the turn lane of `sector` carries in `frame`
+ * (reduced modulo 65536): `2^31 + 16 * frame + 4 * sector`.
+ */
+export function turnFirstId(frame: number, sector: number): number;
+/**
+ * The check of a turn lane: CRC-32C over the stream tag, the frame (big-endian), the sector and
+ * the atoms of the field lane header `header` the turn lane rides on.
+ */
+export function turnCheck(header: PetalLaneHeader, sector: number, atoms: PetalBytes): number;
+/** The data of a turn lane: the four atoms (64 bytes) followed by their check (big-endian). */
+export function turnData(header: PetalLaneHeader, sector: number, atoms: PetalBytes): Uint8Array;
+/**
+ * The atoms of turn lane data whose check matches `header` and `sector`; `null` for data of the
+ * wrong length, a sector out of range or a check that does not match.
+ */
+export function turnPacket(header: PetalLaneHeader, sector: number, data: PetalBytes): PetalAtomPacket | null;
+/** The whitening sequence of the turn lane of `sector` (xorshift32 seeded `0x54524E30 + sector`). */
+export function turnWhitening(sector: number): Uint8Array;
+/** Encodes turn lane data (68 bytes) into the transmitted, whitened 90-byte codeword. */
+export function encodeTurnLane(sector: number, data: PetalBytes): Uint8Array;
+/**
+ * Decodes a transmitted turn codeword, returning its data and how many byte positions the
+ * Reed-Solomon decoder rewrote; the check is not verified (see {@link turnPacket}).
+ *
+ * @throws {PetalError} `rs_invalid_shape` or `rs_uncorrectable`
+ */
+export function decodeTurnLaneCounted(
+  sector: number,
+  transmitted: PetalBytes,
+  erasures?: readonly number[],
+): { readonly data: Uint8Array; readonly corrected: number };
+/** The turn position carrier `index` of a transmitted turn codeword shows. */
+export function carrierPosition(word: PetalBytes, index: number): number;
+
+/** A decoded frame as the turn reader needs it: its pose and its field lanes. */
+export interface PetalTurnFrame {
+  readonly pose: PetalPose;
+  readonly fields: PetalSectors<PetalLaneResult | null>;
+}
+
+/**
+ * Reads the turn lanes of the sectors `frame` decoded from `image` (the luma plane it was decoded
+ * from), except those flagged in `skip`. Every carrier is sampled in its petal's own frame,
+ * following a smooth correction of the pose fitted to the carriers' centroids; the blur is fitted
+ * to the carriers and their lit neighbours (none is read from a fitted blur of 3.2 units on), and
+ * each carrier takes the turn whose template matches best once its lit neighbours are
+ * subtracted. A lane passes when its codeword decodes with 0, 2, 5, 7 or 11 of its least
+ * confident bytes erased into data whose check matches its sector's field lane header. Returns
+ * the lane data (atoms and check) per sector.
+ */
+export function readTurns(
+  image: PetalLumaLike,
+  frame: PetalTurnFrame,
+  skip?: PetalSectors<boolean>,
+): PetalSectors<PetalLaneResult | null>;
+
+/** What the turn reader decided for one capture. */
+export interface PetalObservedTurns {
+  /** The blur (Gaussian sigma in canvas units) that fits the carriers best. */
+  readonly blur: number;
+  /**
+   * Every carrier of the decoded sectors, sector by sector in carrier order: its cell, the turn
+   * position decided for it, and how far that position's score led the runner-up's.
+   */
+  readonly carriers: readonly { readonly cell: number; readonly position: number; readonly lead: number }[];
+}
+
+/**
+ * What {@link readTurns} decides for every carrier of the sectors `frame` decoded, before any
+ * Reed-Solomon correction and whatever the blur, for diagnostics; `null` when no decoded sector
+ * has carriers or the image cannot be sampled.
+ */
+export function observedTurns(image: PetalLumaLike, frame: PetalTurnFrame): PetalObservedTurns | null;
+
+/**
+ * The turn reader's blurred petal template for blur `blur` (an index into `PETAL_TURNS.blurs`) at
+ * a point of the unturned petal's own frame (`along` its axis, `across` it); conformance tests
+ * compare it with the fixture's probes.
+ */
+export function turnTemplate(blur: number, along: number, across: number): number;
 
 // ------------------------------------------------------------------ images
 
@@ -782,15 +936,18 @@ export interface PetalDrawBackdrop extends PetalDrawCircle {
   readonly cells: readonly { readonly x: number; readonly y: number; readonly size: number }[];
 }
 
-/** The outline every petal is drawn with, in canvas units. */
+/**
+ * The outline every petal is drawn with, in canvas units: an ellipse minus a notch at its tip.
+ * Draw the notch (it tells a petal from one turned by half a turn) and draw antialiased.
+ */
 export interface PetalDrawPetalShape {
-  /** Half-length along the petal's outward direction. */
+  /** Half-length along the petal's axis (6). */
   readonly halfLength: number;
-  /** Half-width across it. */
+  /** Half-width across it (3.73). */
   readonly halfWidth: number;
-  /** Radius of the cosmetic notch cut into the tip (renderers may omit it). */
+  /** Radius of the notch cut into the tip (1.12). */
   readonly notchRadius: number;
-  /** Distance from the petal centre to the notch centre, outward. */
+  /** Distance from the petal centre to the notch centre, along the axis (6.24). */
   readonly notchDistance: number;
 }
 
@@ -801,7 +958,7 @@ export interface PetalDrawPetal {
   /** Centre in canvas units. */
   readonly x: number;
   readonly y: number;
-  /** Outward direction (radians, clockwise on screen from 3 o'clock). */
+  /** Axis: the outward direction plus the petal's turn (radians, clockwise on screen from 3 o'clock). */
   readonly angle: number;
   /** Whether the petal lies inside the `天` (light colour) or outside it (pink). */
   readonly light: boolean;
@@ -849,6 +1006,8 @@ export interface PetalScanStats {
   readonly merges: number;
   /** Field lanes recovered by merging captures. */
   readonly mergedLanes: number;
+  /** Turn lanes read (each at most once per shown frame). */
+  readonly turnLanes: number;
 }
 
 /** The result of offering one camera frame. */
@@ -862,6 +1021,8 @@ export interface PetalScanOutcome {
   readonly lanes: string;
   /** Field lanes newly recovered by merging this capture with earlier ones of its frame, as sector digits. */
   readonly merged: string;
+  /** Turn lanes read from this capture, as the sector digits of the field lanes they ride on. */
+  readonly turned: string;
   readonly progress: PetalProgress;
   /** The finished payload, delivered exactly once. */
   readonly completed: PetalCompleted | null;
@@ -873,11 +1034,12 @@ export class PetalScanSession {
   readonly limits: PetalResolvedScanLimits;
   stats(): PetalScanStats;
   progress(): PetalProgress;
-  /** Drops all partial state, including the pose used for tracking. */
+  /** Drops all partial state, including the pose used for tracking and the turn lanes read. */
   reset(): void;
   /**
    * Offers one camera luma plane captured at monotonic time `nowMs`. While the last decoded pose
-   * is at most {@link PETAL_TRACK_WINDOW_MS} old, the code is first tracked from it.
+   * is at most {@link PETAL_TRACK_WINDOW_MS} old, the code is first tracked from it. The turn lanes
+   * on top of the field lanes it decodes are read, each once per shown frame.
    */
   push(image: PetalLumaLike, nowMs: number): PetalScanOutcome;
 }
@@ -890,6 +1052,7 @@ export type PetalCanvasContext = CanvasRenderingContext2D | OffscreenCanvasRende
 /**
  * Draws a draw list onto a Canvas 2D context, scaling the 1024-unit design
  * canvas to `size` pixels (default: the smaller canvas side) at `(x, y)`.
+ * Petals are drawn turned, notched and antialiased (Canvas 2D path fills).
  */
 export function drawPetalFrame(
   context: PetalCanvasContext,

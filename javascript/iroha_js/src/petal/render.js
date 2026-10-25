@@ -2,11 +2,12 @@
 //
 // The picture is black, with four sakura-blossom finders in the canvas
 // corners, three dotted rings, and inside them a field of petals on concentric
-// bands. A lit petal whose centre lies inside the `天` is drawn in the light
-// colour, the others in sakura pink, over a faint backdrop of the `天` itself,
-// so the character shows through the storm of petals. Vector backends draw
-// the `petalDrawList` primitives with their own 2D APIs; geometry and polarity
-// match the software renderer.
+// bands, each lit petal turned about its centre by its turn. A lit petal whose
+// centre lies inside the `天` is drawn in the light colour, the others in
+// sakura pink, over a faint backdrop of the `天` itself, so the character
+// shows through the storm of petals. Vector backends draw the `petalDrawList`
+// primitives with their own 2D APIs; geometry, turns and polarity match the
+// software renderer.
 
 import { PetalFrameCells } from "./lanes.js";
 import {
@@ -20,9 +21,7 @@ import {
   CELL_ANGLE,
   CELL_CENTER_X,
   CELL_CENTER_Y,
-  CELL_COS,
   CELL_LIGHT,
-  CELL_SIN,
   CENTER,
   DOT_RADIUS,
   FIELD_CELLS,
@@ -55,6 +54,7 @@ import {
   ringOffset,
 } from "./layout.js";
 import { deepFreeze } from "./support.js";
+import { TURN_POSITIONS, turnAngle } from "./turns.js";
 
 /** Colours of the picture as `[r, g, b]` triples. */
 export const DEFAULT_PALETTE = deepFreeze({
@@ -112,12 +112,34 @@ function roundHalfAway(value) {
 const OUTER_DOT_EDGE = RING_RADII[RING_COUNT - 1] + DOT_RADIUS;
 const INNER_DOT_EDGE = RING_RADII[0] - DOT_RADIUS;
 
-// No point further than this from a petal's centre lies inside it (the half-length is the
-// larger half-axis; the margin keeps the shortcut clear of rounding at the tips).
+// No point further than this from a petal's centre lies inside it, however it is turned (the
+// half-length is the larger half-axis; the margin keeps the shortcut clear of rounding at the tips).
 const PETAL_REACH2 = (PETAL_HALF_LENGTH_F32 + 0.01) * (PETAL_HALF_LENGTH_F32 + 0.01);
 
+let petalAxes = null;
+
+/**
+ * The sine and cosine of the axis of every field cell's petal at every turn position (the outward
+ * direction plus the turn), `[cell * 4 + turn]`; built on first use.
+ */
+function axes() {
+  if (petalAxes === null) {
+    const sin = new Float64Array(FIELD_CELLS * TURN_POSITIONS);
+    const cos = new Float64Array(FIELD_CELLS * TURN_POSITIONS);
+    for (let cell = 0; cell < FIELD_CELLS; cell += 1) {
+      for (let turn = 0; turn < TURN_POSITIONS; turn += 1) {
+        const angle = CELL_ANGLE[cell] + turnAngle(turn);
+        sin[cell * TURN_POSITIONS + turn] = Math.sin(angle);
+        cos[cell * TURN_POSITIONS + turn] = Math.cos(angle);
+      }
+    }
+    petalAxes = { sin, cos };
+  }
+  return petalAxes;
+}
+
 /** Colour index of the lit petal covering canvas point `(x, y)`, or -1. */
-function petalAt(cells, x, y, radius, theta) {
+function petalAt(cells, x, y, radius, theta, axis) {
   const nearest = roundHalfAway((radius - BAND_INNER) / BAND_SPACING);
   for (let band = nearest - 1; band <= nearest + 1; band += 1) {
     if (band < 0 || band >= BAND_COUNT) {
@@ -135,7 +157,8 @@ function petalAt(cells, x, y, radius, theta) {
       }
       const dx = x - CELL_CENTER_X[cell];
       const dy = y - CELL_CENTER_Y[cell];
-      if (dx * dx + dy * dy <= PETAL_REACH2 && petalLitAlong(dx, dy, CELL_SIN[cell], CELL_COS[cell])) {
+      const at = cell * TURN_POSITIONS + cells.turns[cell];
+      if (dx * dx + dy * dy <= PETAL_REACH2 && petalLitAlong(dx, dy, axis.sin[at], axis.cos[at])) {
         return CELL_LIGHT[cell] === 1 ? LIGHT : PINK;
       }
     }
@@ -144,7 +167,7 @@ function petalAt(cells, x, y, radius, theta) {
 }
 
 /** Colour index of canvas point `(x, y)`. */
-function shade(cells, x, y) {
+function shade(cells, x, y, axis) {
   // finders
   for (let f = 0; f < 4; f += 1) {
     const dx = x - FINDER_CENTERS[f][0];
@@ -184,7 +207,7 @@ function shade(cells, x, y) {
   }
   // petals, then the faint 天 under them
   if (radius <= BACKDROP_RADIUS) {
-    const petal = petalAt(cells, x, y, radius, theta);
+    const petal = petalAt(cells, x, y, radius, theta, axis);
     if (petal >= 0) {
       return petal;
     }
@@ -216,6 +239,7 @@ export function renderPetalFrame(cells, options = {}) {
   }
   const palette = resolvePalette(options.palette);
   const colors = [palette.background, palette.light, palette.pink, palette.backdrop];
+  const axis = axes();
   const unit = CANVAS / size;
   const data = new Uint8ClampedArray(size * size * 4);
   const n = supersample * supersample;
@@ -228,7 +252,7 @@ export function renderPetalFrame(cells, options = {}) {
         for (let sx = 0; sx < supersample; sx += 1) {
           const x = (px + (sx + 0.5) / supersample) * unit;
           const y = (py + (sy + 0.5) / supersample) * unit;
-          const color = colors[shade(cells, x, y)];
+          const color = colors[shade(cells, x, y, axis)];
           r += color[0];
           g += color[1];
           b += color[2];
@@ -284,13 +308,13 @@ const BACKDROP_SHAPE = Object.freeze({
 
 /** The petal outline every lit cell is drawn with, in canvas units. */
 const PETAL_SHAPE = Object.freeze({
-  /** Half the length along the outward direction. */
+  /** Half the length along the petal's axis. */
   halfLength: PETAL_HALF_LENGTH,
   /** Half the width. */
   halfWidth: PETAL_HALF_WIDTH,
-  /** Radius of the cosmetic notch cut into the tip (renderers may omit it). */
+  /** Radius of the notch cut into the tip (always drawn: the turn reader's templates include it). */
   notchRadius: PETAL_NOTCH_RADIUS,
-  /** Distance from the petal centre to the notch centre, outward. */
+  /** Distance from the petal centre to the notch centre, along the axis. */
   notchDistance: PETAL_NOTCH_DISTANCE,
 });
 
@@ -314,12 +338,14 @@ const DOT_CENTERS = (() => {
  *
  * Paint the background, then the `backdrop` cells (squares filled with
  * `palette.backdrop`, clipped to the backdrop disc), then the lit `petals`
- * (each an ellipse of `petal.halfLength` along `angle`, the outward direction,
- * and `petal.halfWidth` across it, centred on the petal and filled with its
- * `fill`; the notch of `petal.notchRadius` centred `petal.notchDistance`
- * outward is cut out of the tip and may be omitted), then the lit dots in
- * `palette.pink`, then each finder (`core` and `petals` filled with
- * `palette.light`, then `notches` filled with `palette.background`).
+ * (each an ellipse of `petal.halfLength` along `angle`, the outward direction
+ * plus the petal's turn, and `petal.halfWidth` across it, centred on the petal
+ * and filled with its `fill`, minus the notch of `petal.notchRadius` centred
+ * `petal.notchDistance` along `angle`, which must be drawn: it tells a petal
+ * from one turned by half a turn), then the lit dots in `palette.pink`, then
+ * each finder (`core` and `petals` filled with `palette.light`, then `notches`
+ * filled with `palette.background`). Petals are small (12 x 7.5 units): draw
+ * them antialiased, at 768 pixels or more.
  *
  * @param {PetalFrameCells} cells
  * @param {{palette?: object}} [options]
@@ -338,7 +364,7 @@ export function petalDrawList(cells, options = {}) {
         index: cell,
         x: CELL_CENTER_X[cell],
         y: CELL_CENTER_Y[cell],
-        angle: CELL_ANGLE[cell],
+        angle: CELL_ANGLE[cell] + turnAngle(cells.turns[cell]),
         light,
         fill: light ? palette.light : palette.pink,
       }),

@@ -18,6 +18,7 @@ import {
   PETAL_PALETTE,
   PETAL_STREAM,
   PETAL_TRACK_WINDOW_MS,
+  PETAL_TURNS,
   PetalCameraScanner,
   PetalDecodedFrame,
   PetalError,
@@ -37,6 +38,9 @@ import {
   bandPhase,
   bandRadius,
   blossoms,
+  carrierOrder,
+  carrierPosition,
+  carriers,
   cellAngle,
   cellBandSlot,
   cellCenter,
@@ -47,9 +51,11 @@ import {
   decodeLaneCounted,
   decodePetalFrame,
   decodePetalFrameAt,
+  decodeTurnLaneCounted,
   drawPetalFrame,
   encodeAtom,
   encodeLane,
+  encodeTurnLane,
   fieldEvidence,
   fieldLane,
   finderLit,
@@ -67,12 +73,14 @@ import {
   mergeFields,
   mix32,
   observedCells,
+  observedTurns,
   parseAtomLane,
   parseDLane,
   petalDrawList,
   petalLit,
   petalPlayerFrame,
   petalScanSize,
+  readTurns,
   renderPetalFrame,
   sectorCells,
   selectQuad,
@@ -82,6 +90,15 @@ import {
   splitPayload,
   splitSlot,
   trackPetalFrame,
+  turnAngle,
+  turnCheck,
+  turnData,
+  turnFirstId,
+  turnLabel,
+  turnPacket,
+  turnPosition,
+  turnTemplate,
+  turnWhitening,
 } from "../src/petal.js";
 import {
   decodeWithErasures,
@@ -93,9 +110,11 @@ import {
   twoMeans,
 } from "../src/petal/decode.js";
 import { completeTriple, strongFinders } from "../src/petal/locate.js";
+import { TURN_MEMORY } from "../src/petal/session.js";
+import { decideWindow, neighbours, turnKernels } from "../src/petal/turns.js";
 
-const STREAM_FIXTURE = new URL("../../../fixtures/petal/petal_stream_v2.json", import.meta.url);
-const CAPTURE_FIXTURE = new URL("../../../fixtures/petal/petal_captures_v2.json", import.meta.url);
+const STREAM_FIXTURE = new URL("../../../fixtures/petal/petal_stream_v3.json", import.meta.url);
+const CAPTURE_FIXTURE = new URL("../../../fixtures/petal/petal_captures_v3.json", import.meta.url);
 
 /** Lane D, then the four field lanes. */
 const ALL_LANES = Object.freeze(["D", "F0", "F1", "F2", "F3"]);
@@ -173,6 +192,23 @@ function cellFlags(bytes) {
 /** Field data of the lane tests: the reference's `field_data(seed)`. */
 function fieldData(seed) {
   return Uint8Array.from({ length: PETAL_LANES.F0.dataLen }, (_, b) => ((b * 37) & 0xff) ^ seed);
+}
+
+/** The four atoms of the turn lane tests: the reference's `atoms(seed)`. */
+function turnAtoms(seed) {
+  return Uint8Array.from({ length: PETAL_TURNS.atoms * PETAL_STREAM.atomLen }, (_, b) => ((b * 29) & 0xff) ^ seed);
+}
+
+/** The transmitted turn codewords of the turn lane tests, sector 0 first. */
+function turnWords(header = { tag: 1, frame: 2 }) {
+  return [0, 1, 2, 3].map((sector) => encodeTurnLane(sector, turnData(header, sector, turnAtoms(sector))));
+}
+
+/** Lit-petal flags of a set of cells. */
+function litOf(cells) {
+  const lit = new Uint8Array(PETAL_LAYOUT.fieldCells);
+  for (const cell of cells) lit[cell] = 1;
+  return lit;
 }
 
 // ---------------------------------------------------------------- CRC / PRNG
@@ -338,7 +374,11 @@ test("petals stay clear of their neighbours and the rings", () => {
       if (other === cell) continue;
       const [ox, oy] = cellCenter(other);
       const distance = Math.hypot(x - ox, y - oy);
-      assert.ok(distance > 2 * PETAL_LAYOUT.petalRadius, `cells ${cell} and ${other} are ${distance} apart`);
+      // a petal reaches at most its half-length from its centre, whichever way it is turned
+      assert.ok(
+        distance > PETAL_LAYOUT.petalHalfLength + PETAL_LAYOUT.petalRadius,
+        `cells ${cell} and ${other} are ${distance} apart`,
+      );
     }
   }
 });
@@ -399,9 +439,14 @@ test("a petal is lit at its centre and notched at its tip", () => {
   assert.ok(petalLit(0, 0, 0.3));
   const tip = PETAL_LAYOUT.petalNotchDistance;
   assert.ok(!petalLit(tip * Math.cos(0.3), tip * Math.sin(0.3), 0.3));
+  // the notch cuts into the ellipse: a point 5.5 along the axis is inside the ellipse but in the
+  // notch, while the same point at the other end is lit
+  assert.ok(!petalLit(5.5 * Math.cos(0.3), 5.5 * Math.sin(0.3), 0.3));
+  assert.ok(petalLit(-5.5 * Math.cos(0.3), -5.5 * Math.sin(0.3), 0.3));
   assert.ok(!petalLit(0, 10, 0));
-  // the ellipse is longer along its outward direction than across it
+  // the ellipse is longer along its axis than across it
   assert.ok(petalLit(-5, 0, 0) && !petalLit(0, -5, 0));
+  assert.ok(petalLit(0, -5, Math.PI / 2) && !petalLit(-5, 0, Math.PI / 2));
 });
 
 // ---------------------------------------------------------------- lanes
@@ -417,6 +462,14 @@ test("lane sizes are consistent", () => {
   }
   assert.equal(PETAL_STREAM.spareSectorCells, 4);
   assert.equal(PETAL_STREAM.atomsPerFrame, 21);
+  const turns = PETAL_TURNS;
+  assert.deepEqual([turns.wordLen, turns.parityLen, turns.dataLen], [90, 22, 68]);
+  assert.equal(turns.dataLen, turns.atoms * PETAL_STREAM.atomLen + turns.checkLen);
+  assert.equal(turns.carriers * turns.bits, turns.wordLen * 8);
+  assert.ok(turns.carriers <= PETAL_LANES.F0.wordLen * 8);
+  assert.equal(2 ** turns.bits, turns.positions);
+  assert.deepEqual([turns.idBase, turns.memory], [2 ** 31, 24]);
+  assert.equal(TURN_MEMORY, turns.memory);
   assert.deepEqual([0, 1, 2, 3].map(fieldLane), ["F0", "F1", "F2", "F3"]);
   assert.equal(ALL_LANES.map(laneLetter).join(""), "D0123");
   assert.throws(() => fieldLane(4), RangeError);
@@ -432,6 +485,15 @@ test("whitening is deterministic and balanced", () => {
     assert.ok(ones > Math.floor((bits * 38) / 100) && ones < Math.floor((bits * 62) / 100), `${lane} ones ${ones}/${bits}`);
   }
   assert.notDeepEqual(laneWhitening("F0"), laneWhitening("F1"));
+  for (let sector = 0; sector < 4; sector += 1) {
+    const a = turnWhitening(sector);
+    assert.equal(a.length, PETAL_TURNS.wordLen);
+    let ones = 0;
+    for (const byte of a) for (let bit = 0; bit < 8; bit += 1) ones += (byte >> bit) & 1;
+    assert.ok(ones > 0.38 * 720 && ones < 0.62 * 720, `T${sector} ones ${ones}/720`);
+  }
+  assert.notDeepEqual(turnWhitening(0), turnWhitening(1));
+  assert.throws(() => turnWhitening(4), RangeError);
 });
 
 test("lanes roundtrip through cells", () => {
@@ -769,12 +831,15 @@ test("the beacon roundtrips through lane D", () => {
   assert.equal(lane.type, "beacon");
   assert.deepEqual(lane.beacon.meta, encoder.meta);
   assert.equal(lane.beacon.header.frame, 512);
-  assert.equal(d[3], 0x20);
+  assert.equal(d[3], 0x30);
+  assert.equal(PETAL_STREAM.formatVersion, 0x30);
   assert.equal(parseDLane(d.slice(0, 11)), null);
-  // the retired format 1 (katakana tiles) is refused
-  const bad = d.slice();
-  bad[3] = 0x10;
-  assert.equal(parseDLane(bad), null);
+  // the retired formats 1 (katakana tiles) and 2 (unturned petals) are refused
+  for (const retired of [0x10, 0x20]) {
+    const bad = d.slice();
+    bad[3] = retired;
+    assert.equal(parseDLane(bad), null);
+  }
   // non-beacon frames carry an atom instead
   assert.equal(parseDLane(encoder.laneData(513).d).type, "atoms");
   assert.equal(parseAtomLane("D", encoder.laneData(513).d), null);
@@ -825,6 +890,192 @@ test("counter wraparound keeps atom ids consistent", () => {
     if (assembler.progress().complete) break;
   }
   assert.deepEqual(assembler.takeCompleted().payload, data);
+});
+
+// ---------------------------------------------------------------- turn lanes
+
+test("turn lane sizes and ids are consistent", () => {
+  assert.deepEqual([PETAL_TURNS.wordLen, PETAL_TURNS.dataLen], [90, 68]);
+  assert.equal(turnFirstId(0, 0), 2 ** 31);
+  assert.equal(turnFirstId(1, 3), 2 ** 31 + 16 + 12);
+  assert.equal(turnFirstId(65535, 3) + 3, 2 ** 31 + 16 * 65535 + 15);
+  // the frame counter wraps like the base schedule's
+  assert.equal(turnFirstId(65536 + 7, 1), turnFirstId(7, 1));
+  // the base schedule stays far below the turn ids however long a stream runs
+  assert.ok(firstAtomId(65535) + 21 < PETAL_TURNS.idBase);
+  assert.throws(() => turnFirstId(0, 4), RangeError);
+  assert.throws(() => turnFirstId(0.5, 0), TypeError);
+});
+
+test("Gray labels differ in one bit between neighbouring turns", () => {
+  for (let position = 0; position < 4; position += 1) {
+    assert.equal(turnPosition(turnLabel(position)), position);
+    const next = (position + 1) % 4;
+    const differ = turnLabel(position) ^ turnLabel(next);
+    assert.ok(differ === 1 || differ === 2, `positions ${position} and ${next}`);
+  }
+  assert.ok(Math.abs(turnAngle(2) - Math.PI / 2) < 1e-12);
+  assert.deepEqual([0, 1, 2, 3].map(turnAngle), [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4]);
+  assert.throws(() => turnAngle(4), RangeError);
+  assert.throws(() => turnLabel(-1), RangeError);
+  assert.throws(() => turnPosition(1.5), RangeError);
+});
+
+test("carrier orders shuffle each sector's codeword cells", () => {
+  const ascending = (cells) => [...cells].sort((a, b) => a - b);
+  for (let sector = 0; sector < 4; sector += 1) {
+    const order = carrierOrder(sector);
+    const cells = sectorCells(sector).slice(0, 840);
+    assert.notDeepEqual(order, cells);
+    assert.deepEqual(ascending(order), ascending(cells));
+  }
+  // the four shuffles differ
+  const places = (sector) => carrierOrder(sector).map((cell) => sectorCells(sector).indexOf(cell));
+  assert.notDeepEqual(places(0), places(1));
+  // a copy every time
+  carrierOrder(0)[0] = -1;
+  assert.notEqual(carrierOrder(0)[0], -1);
+  assert.throws(() => carrierOrder(4), RangeError);
+});
+
+test("a sector with too few lit petals carries nothing", () => {
+  const order = carrierOrder(2);
+  const petals = litOf(order.slice(0, PETAL_TURNS.carriers - 1));
+  assert.equal(carriers(petals, 2), null);
+  petals[order[PETAL_TURNS.carriers + 7]] = 1;
+  const chosen = carriers(petals, 2);
+  assert.equal(chosen.length, PETAL_TURNS.carriers);
+  assert.equal(chosen[PETAL_TURNS.carriers - 1], order[PETAL_TURNS.carriers + 7]);
+  // flags may be booleans too
+  assert.deepEqual(carriers(Array.from(petals, Boolean), 2), chosen);
+  assert.throws(() => carriers(petals, 4), RangeError);
+  assert.throws(() => carriers(new Uint8Array(10), 0), TypeError);
+});
+
+test("turn lanes roundtrip and bind their header", () => {
+  const header = { tag: 7, frame: 300 };
+  const data = turnData(header, 1, turnAtoms(3));
+  const word = encodeTurnLane(1, data);
+  assert.equal(word.length, PETAL_TURNS.wordLen);
+  const decoded = decodeTurnLaneCounted(1, word, []);
+  assert.deepEqual([decoded.data, decoded.corrected], [data, 0]);
+  const packet = turnPacket(header, 1, decoded.data);
+  assert.equal(packet.firstId, turnFirstId(300, 1));
+  assert.equal(packet.atoms.length, PETAL_TURNS.atoms);
+  assert.deepEqual(packet.atoms[2], turnAtoms(3).slice(32, 48));
+  assert.deepEqual(packet.header, header);
+  // the check closes the data, big-endian
+  const check = ((data[64] << 24) | (data[65] << 16) | (data[66] << 8) | data[67]) >>> 0;
+  assert.equal(check, turnCheck(header, 1, turnAtoms(3)));
+  // another frame, tag or sector does not match the check
+  assert.equal(turnPacket({ tag: 7, frame: 301 }, 1, decoded.data), null);
+  assert.equal(turnPacket({ tag: 8, frame: 300 }, 1, decoded.data), null);
+  assert.equal(turnPacket(header, 2, decoded.data), null);
+  assert.equal(turnPacket(header, 4, decoded.data), null);
+  assert.equal(turnPacket(header, 1, decoded.data.subarray(0, 67)), null);
+  // a codeword whitened for another sector does not decode
+  assert.throws(() => decodeTurnLaneCounted(0, word, []), PetalError);
+  // eleven wrong bytes are corrected and counted
+  const damaged = word.slice();
+  for (const position of [0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 89]) damaged[position] ^= 0x5a;
+  const repaired = decodeTurnLaneCounted(1, damaged);
+  assert.deepEqual([repaired.data, repaired.corrected], [data, 11]);
+  assertPetalError(() => decodeTurnLaneCounted(1, word.subarray(0, 89)), "rs_invalid_shape");
+  assert.throws(() => turnData(header, 1, new Uint8Array(63)), RangeError);
+  assert.throws(() => encodeTurnLane(1, new Uint8Array(67)), RangeError);
+  assert.throws(() => turnData({ tag: 256, frame: 0 }, 1, turnAtoms(3)), TypeError);
+  assert.throws(() => turnPacket({ tag: 7 }, 1, decoded.data), TypeError);
+});
+
+test("carriers show the codeword two bits at a time", () => {
+  const fields = [0, 1, 2, 3].map((sector) =>
+    encodeLane(fieldLane(sector), Uint8Array.from({ length: PETAL_LANES.F0.dataLen }, (_, b) => ((b * 13) & 0xff) ^ sector)),
+  );
+  const cells = PetalFrameCells.fromWords(new Uint8Array(PETAL_LANES.D.wordLen), fields);
+  assert.ok(cells.turns.every((turn) => turn === 0));
+  const words = turnWords();
+  cells.setTurns(words);
+  let carried = 0;
+  words.forEach((word, sector) => {
+    assert.deepEqual(cells.turnWord(sector), word);
+    const chosen = carriers(cells.petals, sector);
+    chosen.forEach((cell, j) => assert.equal(cells.turns[cell], carrierPosition(word, j), `sector ${sector} carrier ${j}`));
+    carried += chosen.filter((cell) => cells.turns[cell] !== 0).length;
+  });
+  // dark petals and lit petals beyond the carriers stay unturned
+  const turned = cells.turns.reduce((count, turn) => count + (turn !== 0 ? 1 : 0), 0);
+  assert.equal(turned, carried);
+  assert.ok(turned > (4 * PETAL_TURNS.carriers * 6) / 10, `${turned} turned`);
+  // the turns are part of the cells
+  const copy = new PetalFrameCells(cells.dots, cells.petals, cells.turns);
+  assert.ok(copy.equals(cells) && !copy.equals(PetalFrameCells.fromWords(new Uint8Array(30), fields)));
+  // turning again replaces every turn of the carriers
+  const again = turnWords({ tag: 9, frame: 4 });
+  cells.setTurns(again);
+  again.forEach((word, sector) => assert.deepEqual(cells.turnWord(sector), word));
+  // a sector with too few lit petals has no turn word and stays unturned
+  const dark = new PetalFrameCells();
+  dark.setTurns(words);
+  assert.ok(dark.turns.every((turn) => turn === 0));
+  assert.equal(dark.turnWord(0), null);
+  assert.throws(() => cells.setTurns(words.slice(0, 3)), TypeError);
+  assert.throws(() => cells.setTurns([...words.slice(0, 3), new Uint8Array(89)]), RangeError);
+  assert.throws(() => cells.turnWord(4), RangeError);
+  assert.throws(() => new PetalFrameCells(undefined, undefined, new Uint8Array(PETAL_LAYOUT.fieldCells).fill(4)), RangeError);
+  assert.throws(() => carrierPosition(words[0], 360), RangeError);
+});
+
+test("a turned petal stays out of its neighbours' sampling discs", () => {
+  // the nearest petal centres are one band (11 units) apart; a petal reaches its half-length from
+  // its centre whichever way it is turned
+  const { along, across } = neighbours();
+  let nearest = Infinity;
+  for (let entry = 0; entry < along.length; entry += 1) nearest = Math.min(nearest, Math.hypot(along[entry], across[entry]));
+  assert.ok(nearest > PETAL_LAYOUT.petalHalfLength + PETAL_LAYOUT.petalRadius, `${nearest}`);
+  assert.ok(Math.abs(nearest - PETAL_LAYOUT.bandSpacing) < 1e-9, `${nearest}`);
+});
+
+test("neighbours hold every cell within 19 units in index order, in the cell's outward frame", () => {
+  const { start, cells, along, across, angle } = neighbours();
+  assert.equal(start.length, PETAL_LAYOUT.fieldCells + 1);
+  for (const cell of [0, 1, 100, 1500, 3375]) {
+    const [x, y] = cellCenter(cell);
+    const brute = [];
+    for (let other = 0; other < PETAL_LAYOUT.fieldCells; other += 1) {
+      const [ox, oy] = cellCenter(other);
+      if (other !== cell && (ox - x) ** 2 + (oy - y) ** 2 <= 361) brute.push(other);
+    }
+    assert.deepEqual(Array.from(cells.subarray(start[cell], start[cell + 1])), brute, `cell ${cell}`);
+    for (let entry = start[cell]; entry < start[cell + 1]; entry += 1) {
+      const [ox, oy] = cellCenter(cells[entry]);
+      const theta = cellAngle(cell);
+      assert.ok(Math.abs(x + along[entry] * Math.cos(theta) - across[entry] * Math.sin(theta) - ox) < 1e-9);
+      assert.ok(Math.abs(y + along[entry] * Math.sin(theta) + across[entry] * Math.cos(theta) - oy) < 1e-9);
+      assert.equal(angle[entry], cellAngle(cells[entry]) - theta);
+    }
+  }
+});
+
+test("templates hold a unit petal and kernels tell the turns apart", () => {
+  assert.ok(turnTemplate(0, 0, 0) > 0.99);
+  assert.ok(turnTemplate(0, 0, 6) < 0.05 && turnTemplate(0, 8.5, 0) < 0.01);
+  assert.ok(turnTemplate(0, 4.5, 0) > turnTemplate(0, 0, 3.4));
+  // the notch: the tip is darker than the same point at the other end of the petal
+  assert.ok(turnTemplate(0, 5.5, 0) < turnTemplate(0, -5.5, 0));
+  // zero outside the table
+  assert.equal(turnTemplate(0, 9, 0), 0);
+  assert.equal(turnTemplate(5, 0, -9.01), 0);
+  for (let blur = 0; blur < PETAL_TURNS.blurs.length; blur += 1) {
+    const kernels = turnKernels(blur);
+    kernels.forEach((kernel, k) => {
+      // a window showing exactly the petal at turn k picks turn k
+      const [position, lead] = decideWindow(kernel, kernels);
+      assert.equal(position, k, `blur ${blur} turn ${k}`);
+      assert.ok(lead > 0, `blur ${blur} turn ${k}`);
+    });
+  }
+  assert.throws(() => turnTemplate(6, 0, 0), RangeError);
+  assert.throws(() => turnTemplate(0, "0", 0), TypeError);
 });
 
 // ---------------------------------------------------------------- image and geometry
@@ -1012,8 +1263,8 @@ test("the software renderer matches the reference renderer bit for bit", () => {
   };
   const encoder = decodeSetupEncoder();
   for (const [frame, size, supersample, expected] of [
-    [0, 256, 2, "b7e07f4a0f55c7e1"],
-    [3, 1024, 1, "8bb66248244edead"],
+    [0, 256, 2, "0b93de25d5cb490a"],
+    [3, 1024, 1, "71686d3619ad7d3e"],
   ]) {
     const image = renderPetalFrame(encoder.cells(frame), { size, supersample });
     const rgb = new Uint8Array(size * size * 3);
@@ -1024,6 +1275,8 @@ test("the software renderer matches the reference renderer bit for bit", () => {
 
 test("the draw list reproduces the software renderer's geometry", () => {
   const cells = renderCells(4);
+  cells.setTurns(turnWords());
+  assert.ok(cells.turns.some((turn) => turn !== 0), "the draw list is checked with turned petals");
   const list = petalDrawList(cells);
   assert.equal(list.canvas, 1024);
   assert.equal(list.finders.length, 4);
@@ -1031,7 +1284,7 @@ test("the draw list reproduces the software renderer's geometry", () => {
   assert.equal(list.dots.length, cells.dots.reduce((a, b) => a + b, 0));
   assert.equal(list.backdrop.cells.length, PETAL_LAYOUT.mask.join("").split("#").length - 1);
   assert.deepEqual([list.backdrop.x, list.backdrop.y, list.backdrop.r], [512, 512, 390]);
-  assert.deepEqual(list.petal, { halfLength: 5.2, halfWidth: 4.3, notchRadius: 1.3, notchDistance: 5.4 });
+  assert.deepEqual(list.petal, { halfLength: 6, halfWidth: 3.73, notchRadius: 1.12, notchDistance: 6.24 });
   for (const finder of list.finders) {
     assert.equal(finder.core.r, 12);
     assert.equal(finder.petals.length, 5);
@@ -1039,7 +1292,8 @@ test("the draw list reproduces the software renderer's geometry", () => {
   }
   for (const petal of list.petals) {
     assert.deepEqual([petal.x, petal.y], cellCenter(petal.index));
-    assert.equal(petal.angle, cellAngle(petal.index));
+    // the axis: the outward direction plus the turn
+    assert.equal(petal.angle, cellAngle(petal.index) + turnAngle(cells.turns[petal.index]));
     assert.equal(petal.light, cellLight(petal.index));
     assert.deepEqual(petal.fill, petal.light ? PETAL_PALETTE.light : PETAL_PALETTE.pink);
   }
@@ -1295,7 +1549,11 @@ test("a clean render decodes every lane", () => {
   assert.equal(decoded.beacon(), null);
   assert.equal(decoded.atomPackets().length, 5);
   assert.deepEqual(decoded.lane("F2"), decoded.fields[2]);
-  assert.ok(observedCells(luma, decoded).equals(encoder.cells(5)));
+  // the observed cells leave every petal unturned
+  const observed = observedCells(luma, decoded);
+  const drawn = encoder.cells(5);
+  assert.deepEqual([observed.dots, observed.petals], [drawn.dots, drawn.petals]);
+  assert.ok(observed.turns.every((turn) => turn === 0) && !observed.equals(drawn));
   const at = decodePetalFrameAt(luma, decoded.pose);
   assertAllLanes(at, encoder.laneData(5), "known pose");
 });
@@ -1521,7 +1779,9 @@ test("unusable sizes are rejected without work", () => {
 test("observed cells match the drawn cells of a clean render", () => {
   const { encoder, luma } = decodeSetup(3);
   const decoded = decodePetalFrame(luma);
-  assert.ok(observedCells(luma, decoded).equals(encoder.cells(3)));
+  const observed = observedCells(luma, decoded);
+  const drawn = encoder.cells(3);
+  assert.deepEqual([observed.dots, observed.petals], [drawn.dots, drawn.petals]);
 });
 
 test("garbage images never crash or decode", () => {
@@ -1901,6 +2161,79 @@ test("the local read cancels light the finder levels cannot describe", () => {
   assert.ok(flat.every((value) => value === 0), "a flat field has no contrast: a 0.05 span, centred at 0");
 });
 
+// ---------------------------------------------------------------- turn reader
+
+/** The turn reader tests' stream: 6,000 bytes from xorshift32 seed 5, kind 2. */
+function turnStream() {
+  return new PetalStreamEncoder(payload(6000, 5), 2);
+}
+
+test("a clean render reads every turn lane and skips what it is told", () => {
+  const encoder = turnStream();
+  const truth = encoder.laneData(6);
+  const image = renderLuma(encoder.cells(6), 768, 2);
+  const decoded = decodePetalFrame(image);
+  assert.equal(decoded.letters(), "D0123");
+  readTurns(image, decoded).forEach((result, sector) => {
+    assert.ok(result !== null, `turn lane ${sector}`);
+    assert.deepEqual([result.data, result.corrected, result.erasures], [truth.turns[sector], 0, 0], `turn lane ${sector}`);
+  });
+  assert.deepEqual(
+    readTurns(image, decoded, [true, false, true, true]).map((result) => result !== null),
+    [false, true, false, false],
+  );
+  assert.deepEqual(readTurns(image, decoded, [true, true, true, true]), [null, null, null, null]);
+  // a sector whose field lane did not decode has no turn lane
+  const fields = decoded.fields.slice();
+  fields[2] = null;
+  const partial = new PetalDecodedFrame(decoded.pose, decoded.rotation, decoded.mirrored, decoded.d, fields, null);
+  const turns = readTurns(image, partial);
+  assert.ok(turns[2] === null && turns[3] !== null);
+  // the diagnostics see every carrier of the four sectors, each at its drawn turn
+  const observed = observedTurns(image, decoded);
+  assert.equal(observed.carriers.length, 4 * PETAL_TURNS.carriers);
+  assert.ok(PETAL_TURNS.blurs.includes(observed.blur));
+  const drawn = encoder.cells(6);
+  assert.ok(observed.carriers.every(({ cell, position, lead }) => drawn.turns[cell] === position && lead > 0));
+  const none = new PetalDecodedFrame(decoded.pose, decoded.rotation, decoded.mirrored, decoded.d, [null, null, null, null], null);
+  assert.equal(observedTurns(image, none), null);
+  assert.deepEqual(readTurns(image, none), [null, null, null, null]);
+  // malformed arguments
+  assert.throws(() => readTurns(image, { pose: decoded.pose }), TypeError);
+  assert.throws(() => readTurns(image, decoded, [false]), TypeError);
+  assert.throws(() => readTurns({ width: 10, height: 10, data: [] }, decoded), TypeError);
+  assert.deepEqual(readTurns({ width: 10, height: 10, data: new Uint8Array(5) }, decoded), [null, null, null, null]);
+  assert.equal(observedTurns(new PetalLuma(0, 0), decoded), null);
+});
+
+test("a camera reads the turn lanes", () => {
+  const encoder = turnStream();
+  const truth = encoder.laneData(9);
+  const source = renderLuma(encoder.cells(9), 768, 2);
+  for (const [seed, rotationDeg] of [
+    [1, 17],
+    [2, 205],
+  ]) {
+    const image = cameraCapture(source, { width: 1280, height: 720, rotationDeg, seed });
+    const decoded = decodePetalFrame(image);
+    const turns = readTurns(image, decoded);
+    decoded.fields.forEach((field, sector) => {
+      if (field !== null) assert.deepEqual(turns[sector]?.data, truth.turns[sector], `seed ${seed} sector ${sector}`);
+    });
+    assert.ok(turns.some((turn) => turn !== null), `seed ${seed}`);
+  }
+});
+
+test("unturned petals never pass for a turn lane", () => {
+  const encoder = turnStream();
+  const cells = encoder.cells(3);
+  cells.turns.fill(0);
+  const image = renderLuma(cells, 768, 2);
+  const decoded = decodePetalFrame(image);
+  assert.equal(decoded.letters(), "D0123", "the field lanes read without turns");
+  assert.ok(readTurns(image, decoded).every((result) => result === null));
+});
+
 // ---------------------------------------------------------------- scan session
 
 /**
@@ -1959,8 +2292,34 @@ test("a session receives a payload from simulated captures", () => {
   const stats = session.stats();
   assert.ok(stats.readable > 0 && stats.laneD > 0 && stats.fieldLanes > 0);
   assert.ok(stats.frames >= stats.located && stats.located >= stats.readable);
-  // 5,000 bytes need 313 atoms: a clean camera reads them in 15 or 16 frames
-  assert.ok(stats.frames <= 17, JSON.stringify(stats));
+  assert.ok(stats.turnLanes > 0, JSON.stringify(stats));
+  // 5,000 bytes need 313 atoms: the field lanes and lane D alone carry them in 15 or 16 frames,
+  // the turn lanes on top in 9 or 10
+  assert.ok(stats.frames <= 11, JSON.stringify(stats));
+});
+
+test("a turn lane is read once per shown frame", () => {
+  const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
+  const session = new PetalScanSession();
+  const camera = (source, seed) => cameraCapture(source, { width: 640, height: 480, rotationDeg: 12, seed });
+  const shown = renderLuma(encoder.cells(5), 512, 2);
+  const first = session.push(camera(shown, 1), 0);
+  assert.deepEqual([first.lanes, first.turned], ["D0123", "0123"]);
+  const again = session.push(camera(shown, 2), 33);
+  assert.deepEqual([again.lanes, again.turned], ["D0123", ""]);
+  assert.equal(session.stats().turnLanes, 4);
+  // the next shown frame's turn lanes are new
+  const next = session.push(camera(renderLuma(encoder.cells(6), 512, 2), 3), 83);
+  assert.equal(next.turned, "0123");
+  assert.equal(session.stats().turnLanes, 8);
+  session.reset();
+  assert.equal(session._turned.length, 0);
+  // the session remembers the last TURN_MEMORY turn lanes it read
+  session._turned = Array.from({ length: TURN_MEMORY }, (_, frame) => ({ tag: 0, frame, sector: 0 }));
+  assert.equal(session.push(camera(shown, 4), 200).turned, "0123");
+  assert.equal(session._turned.length, TURN_MEMORY);
+  assert.deepEqual(session._turned[0], { tag: 0, frame: 4, sector: 0 });
+  assert.deepEqual(session._turned.at(-1), { tag: encoder.meta.tag, frame: 5, sector: 3 });
 });
 
 test("a steady camera is tracked after the first frame", () => {
@@ -2042,6 +2401,7 @@ test("unreadable frames do not disturb progress", () => {
   assert.equal(outcome.completed, null);
   assert.equal(outcome.lanes, "");
   assert.equal(outcome.merged, "");
+  assert.equal(outcome.turned, "");
   assert.equal(session.stats().frames, 1);
   assert.equal(session.stats().located, 0);
   assert.equal(PETAL_DEFAULT_SCAN_LIMITS.idleTimeoutMs, 30000);
@@ -2056,8 +2416,8 @@ const streamFixture = JSON.parse(readFileSync(STREAM_FIXTURE, "utf8"));
 
 test("fixture: constants and layout match", () => {
   const doc = streamFixture;
-  assert.equal(doc.fixture_version, 2);
-  assert.equal(doc.format, "petal-stream-v2");
+  assert.equal(doc.fixture_version, 3);
+  assert.equal(doc.format, "petal-stream-v3");
   const c = doc.constants;
   assert.deepEqual(
     [
@@ -2088,6 +2448,10 @@ test("fixture: constants and layout match", () => {
       PETAL_STREAM.beaconInterval,
       PETAL_STREAM.formatVersion,
     ],
+  );
+  assert.deepEqual(
+    [c.turn_positions, c.turn_carriers, c.turn_word, c.turn_parity, c.turn_atoms, c.turn_id_base],
+    [PETAL_TURNS.positions, PETAL_TURNS.carriers, PETAL_TURNS.wordLen, PETAL_TURNS.parityLen, PETAL_TURNS.atoms, PETAL_TURNS.idBase],
   );
   const layout = doc.layout;
   assert.deepEqual(layout.finder_centers, PETAL_LAYOUT.finderCenters.flat());
@@ -2122,6 +2486,8 @@ test("fixture: constants and layout match", () => {
   assert.deepEqual(layout.band_slots, PETAL_LAYOUT.bandSlots);
   assert.equal(layout.sector_cells.length, 4);
   layout.sector_cells.forEach((cells, sector) => assert.deepEqual(cells, sectorCells(sector), `sector ${sector}`));
+  assert.equal(layout.carrier_orders.length, 4);
+  layout.carrier_orders.forEach((order, sector) => assert.deepEqual(order, carrierOrder(sector), `sector ${sector}`));
   assert.deepEqual(layout.mask, PETAL_LAYOUT.mask);
   assert.deepEqual(
     cellFlags(fromHex(layout.light_cells_hex)),
@@ -2145,8 +2511,25 @@ test("fixture: checksums, PRNG, mixer and whitening match", () => {
     streamFixture.prng.xorshift32_seed1,
   );
   for (const entry of streamFixture.prng.mix32) assert.equal(mix32(entry.in), entry.out);
-  assert.deepEqual(Object.keys(streamFixture.whitening), ALL_LANES);
+  assert.deepEqual(Object.keys(streamFixture.whitening), [...ALL_LANES, "T0", "T1", "T2", "T3"]);
   for (const lane of ALL_LANES) assert.equal(hex(laneWhitening(lane)), streamFixture.whitening[lane], lane);
+  for (let sector = 0; sector < 4; sector += 1) {
+    assert.equal(hex(turnWhitening(sector)), streamFixture.whitening[`T${sector}`], `T${sector}`);
+  }
+});
+
+test("fixture: turn ids and reader templates match", () => {
+  const ids = streamFixture.turn_first_ids;
+  ids.frames.forEach((frame, index) => assert.equal(turnFirstId(frame, ids.sectors[index]), ids.ids[index], `id ${index}`));
+  const reader = streamFixture.turn_reader;
+  assert.deepEqual(reader.blurs, PETAL_TURNS.blurs);
+  assert.equal(reader.template_probes.length, 6 * PETAL_TURNS.blurs.length);
+  for (const probe of reader.template_probes) {
+    const blur = PETAL_TURNS.blurs.findIndex((value) => Math.abs(value - probe.blur) < 1e-12);
+    assert.ok(blur >= 0, `known blur ${probe.blur}`);
+    const got = turnTemplate(blur, probe.along, probe.across);
+    assert.ok(Math.abs(got - probe.value) < 1e-12, `blur ${probe.blur} at (${probe.along}, ${probe.across}): ${got}`);
+  }
 });
 
 test("fixture: Reed-Solomon vectors encode and correct", () => {
@@ -2186,11 +2569,25 @@ test("fixture: streams encode identically and reassemble", () => {
       const lanes = encoder.laneData(frame.frame);
       assert.equal(hex(lanes.d), frame.d_data, label);
       assert.deepEqual(lanes.fields.map(hex), frame.field_data, label);
+      assert.deepEqual(lanes.turns.map(hex), frame.turn_data, label);
       assert.equal(hex(encodeLane("D", lanes.d)), frame.d_word, label);
       lanes.fields.forEach((field, sector) => assert.equal(hex(encodeLane(fieldLane(sector), field)), frame.field_words[sector], `${label} sector ${sector}`));
+      const header = { tag: meta.tag, frame: frame.frame };
+      frame.turn_data.forEach((turn, sector) => {
+        assert.equal(hex(encodeTurnLane(sector, fromHex(turn))), frame.turn_words[sector], `${label} turn sector ${sector}`);
+        const packet = turnPacket(header, sector, fromHex(turn));
+        assert.ok(packet !== null, `${label} turn check ${sector}`);
+        assert.equal(packet.firstId, turnFirstId(frame.frame, sector));
+      });
       const words = encoder.words(frame.frame);
-      assert.deepEqual([hex(words.d), words.fields.map(hex)], [frame.d_word, frame.field_words], label);
+      assert.deepEqual(
+        [hex(words.d), words.fields.map(hex), words.turns.map(hex)],
+        [frame.d_word, frame.field_words, frame.turn_words],
+        label,
+      );
       const cells = PetalFrameCells.fromWords(fromHex(frame.d_word), frame.field_words.map(fromHex));
+      cells.setTurns(frame.turn_words.map(fromHex));
+      assert.equal(cells.turns.join(""), frame.turns, label);
       assert.deepEqual(
         Array.from(cells.dots).flatMap((lit, index) => (lit ? [index] : [])),
         frame.lit_dots,
@@ -2199,17 +2596,32 @@ test("fixture: streams encode identically and reassemble", () => {
       assert.deepEqual(Array.from(cells.petals), cellFlags(fromHex(frame.lit_petals_hex)), label);
       assert.ok(cells.equals(encoder.cells(frame.frame)), label);
     }
-    // push every fixture frame through decodeLane + assembler
+    // push every fixture frame through decodeLane + assembler, with and without the turn lanes:
+    // the turn lanes finish the one-pass stream in fewer frames
     if (stream.name === "one-pass") {
-      const assembler = new PetalStreamAssembler();
-      for (const frame of stream.frames) {
-        assembler.pushDLane(parseDLane(decodeLane("D", fromHex(frame.d_word))));
-        frame.field_words.forEach((word, sector) => {
-          const lane = fieldLane(sector);
-          assembler.pushAtoms(parseAtomLane(lane, decodeLane(lane, fromHex(word))));
-        });
-      }
-      assert.deepEqual(assembler.takeCompleted().payload, data);
+      const needed = [false, true].map((withTurns) => {
+        const assembler = new PetalStreamAssembler();
+        let frames = 0;
+        for (const frame of stream.frames) {
+          frames += 1;
+          assembler.pushDLane(parseDLane(decodeLane("D", fromHex(frame.d_word))));
+          frame.field_words.forEach((word, sector) => {
+            const lane = fieldLane(sector);
+            assembler.pushAtoms(parseAtomLane(lane, decodeLane(lane, fromHex(word))));
+          });
+          if (withTurns) {
+            const header = { tag: meta.tag, frame: frame.frame };
+            frame.turn_words.forEach((word, sector) => {
+              const { data: turn } = decodeTurnLaneCounted(sector, fromHex(word));
+              assembler.pushAtoms(turnPacket(header, sector, turn));
+            });
+          }
+          if (assembler.progress().complete) break;
+        }
+        assert.deepEqual(assembler.takeCompleted().payload, data);
+        return frames;
+      });
+      assert.ok(needed[1] < needed[0], JSON.stringify(needed));
     }
   }
 });
@@ -2233,8 +2645,33 @@ function readLanes(name, frame, entry) {
   return frame.letters();
 }
 
+/**
+ * Reads the turn lanes of a decoded capture (no sector passed over), checks them against the
+ * recorded data and the requirements, offers their atoms to `assembler` when given and returns
+ * their sector digits.
+ */
+function readTurnLanes(name, image, frame, entry, assembler = null) {
+  let letters = "";
+  readTurns(image, frame).forEach((result, sector) => {
+    if (result === null) return;
+    assert.equal(hex(result.data), entry.turn_data[sector], `${name}: turn lane ${sector} data`);
+    const field = frame.fields[sector];
+    assert.ok(field !== null, `${name}: a turn lane rides on its field lane`);
+    const header = { tag: field.data[0], frame: (field.data[1] << 8) | field.data[2] };
+    const packet = turnPacket(header, sector, result.data);
+    assert.ok(packet !== null, `${name}: turn check ${sector}`);
+    if (assembler !== null) assembler.pushAtoms(packet);
+    letters += String(sector);
+  });
+  for (const letter of entry.must_turn) {
+    assert.ok(letters.includes(letter), `${name}: turned ${letters}, must turn ${entry.must_turn}`);
+  }
+  assert.equal(letters, entry.reference_turned, `${name}: turn lanes read`);
+  return letters;
+}
+
 test("golden captures decode as recorded", (t) => {
-  assert.equal(captureFixture.fixture_version, 2);
+  assert.equal(captureFixture.fixture_version, 3);
   const assembler = new PetalStreamAssembler();
   for (const capture of captureFixture.captures) {
     const image = captureLuma(capture);
@@ -2250,10 +2687,13 @@ test("golden captures decode as recorded", (t) => {
     // the reference read
     assert.equal(lanes, capture.reference_decoded, `${capture.name}: lanes differ from the reference`);
     assert.equal(decoded.inferredCorner, capture.inferred_corner, `${capture.name}: inferred corner`);
-    t.diagnostic(
-      `${capture.name} ${capture.width}x${capture.height}: lanes ${lanes}, distortion ${decoded.pose.distortion} in ${elapsed.toFixed(1)} ms`,
-    );
     decoded.feed(assembler);
+    const turning = performance.now();
+    const turned = readTurnLanes(capture.name, image, decoded, capture, assembler);
+    const turnElapsed = performance.now() - turning;
+    t.diagnostic(
+      `${capture.name} ${capture.width}x${capture.height}: lanes ${lanes}, distortion ${decoded.pose.distortion} in ${elapsed.toFixed(1)} ms; turn lanes ${turned || "-"} in ${turnElapsed.toFixed(1)} ms`,
+    );
   }
   // captures of different frames of the same stream accumulate in one assembler
   assert.ok(assembler.progress().atomsReceived > 100);
@@ -2273,12 +2713,16 @@ test("golden tracks follow the pose into the next frame", (t) => {
     assert.equal(lanes, pair.reference_tracked, `${pair.name}: lanes differ from the reference`);
     assert.equal(followed.inferredCorner, pair.inferred_corner, `${pair.name}: inferred corner`);
     assert.deepEqual([followed.rotation, followed.mirrored], [previous.rotation, previous.mirrored]);
-    t.diagnostic(`${pair.name}: tracked lanes ${lanes} in ${elapsed.toFixed(1)} ms`);
-    // a scan session that saw the first frame reads the second by tracking
+    const turned = readTurnLanes(pair.name, next, followed, pair);
+    t.diagnostic(`${pair.name}: tracked lanes ${lanes} in ${elapsed.toFixed(1)} ms, turn lanes ${turned || "-"}`);
+    // a scan session that saw the first frame reads the second by tracking, turn lanes included
+    // (the two frames show different shown frames)
+    assert.notEqual(pair.from_frame, pair.to_frame);
     const session = new PetalScanSession();
     session.push(captureLuma(pair, "from_luma_zlib_base64"), 0);
     const outcome = session.push(next, 125);
     assert.equal(outcome.lanes, pair.reference_tracked, pair.name);
+    assert.equal(outcome.turned, pair.reference_turned, pair.name);
     assert.equal(session.stats().tracked, 1, pair.name);
     assert.equal(session.stats().inferred, pair.inferred_corner === null ? 0 : 1, pair.name);
   }
@@ -2337,14 +2781,41 @@ test("the shadow band capture needs the local read", () => {
 test("a scan session reads the recorded lanes of every golden capture", () => {
   for (const capture of captureFixture.captures) {
     const session = new PetalScanSession();
-    const outcome = session.push(captureLuma(capture), 0);
+    const image = captureLuma(capture);
+    const outcome = session.push(image, 0);
     assert.equal(outcome.error, null, capture.name);
     assert.equal(outcome.lanes, capture.reference_decoded, capture.name);
+    assert.equal(outcome.turned, capture.reference_turned, capture.name);
     const stats = session.stats();
     const letters = capture.reference_decoded;
     assert.deepEqual([stats.laneD, stats.fieldLanes], [letters.includes("D") ? 1 : 0, letters.replace("D", "").length], capture.name);
     assert.deepEqual([stats.tracked, stats.inferred], [0, capture.inferred_corner === null ? 0 : 1], capture.name);
+    assert.equal(stats.turnLanes, capture.reference_turned.length, capture.name);
+    if (capture.reference_turned === "0123") {
+      // the same shown frame again: its turn lanes were read and are not looked at again
+      assert.equal(session.push(image, 33).turned, "", capture.name);
+      assert.equal(session.stats().turnLanes, 4, capture.name);
+    }
   }
+});
+
+test("the golden turn lanes cover the cameras the spec names", () => {
+  const turned = Object.fromEntries(captureFixture.captures.map((capture) => [capture.name, capture.reference_turned]));
+  // the sharp cameras, the mirrored, covered and cut-off captures read every turn lane; the
+  // over-exposed capture reads two; the soft, blurred, veiled and distorted captures read none
+  for (const name of ["clean-512", "modern-720p-rotated", "selfie-mirrored-540p", "hidden-corner-540p", "cut-corner-720p", "shadow-band-540p"]) {
+    assert.equal(turned[name], "0123", name);
+  }
+  assert.equal(turned["overexposed-540p"], "12");
+  for (const name of ["legacy-540p-tilted", "soft-480p-blur1.9", "small-480p", "veiled-720p", "barrel-480p"]) {
+    assert.equal(turned[name], "", name);
+  }
+  for (const pair of captureFixture.tracks) assert.equal(pair.reference_turned, "0123", pair.name);
+  // the shadow band reads its turn lanes with 3 to 9 corrections
+  const capture = namedCapture("shadow-band-540p");
+  const image = captureLuma(capture);
+  const corrected = readTurns(image, decodePetalFrame(image)).map((result) => result.corrected);
+  assert.ok(corrected.every((count) => count >= 3 && count <= 9), JSON.stringify(corrected));
 });
 
 test("negative captures are rejected", () => {
@@ -2361,7 +2832,19 @@ test("recorded lane data is a valid codeword of its stream", () => {
       assert.deepEqual(decodeLane(lane, encodeLane(lane, data)), data, `${capture.name} lane ${lane}`);
     }
     const expected = encoder.laneData(capture.frame);
-    assert.deepEqual([hex(expected.d), expected.fields.map(hex)], [capture.d_data, capture.field_data], capture.name);
+    assert.deepEqual(
+      [hex(expected.d), expected.fields.map(hex), expected.turns.map(hex)],
+      [capture.d_data, capture.field_data, capture.turn_data],
+      capture.name,
+    );
+  }
+  for (const pair of captureFixture.tracks) {
+    const expected = encoder.laneData(pair.to_frame);
+    assert.deepEqual(
+      [hex(expected.d), expected.fields.map(hex), expected.turns.map(hex)],
+      [pair.d_data, pair.field_data, pair.turn_data],
+      pair.name,
+    );
   }
 });
 
@@ -2629,8 +3112,10 @@ test("the declarations type-check a strict browser consumer", () => {
         "  PetalScanSession, PetalStreamEncoder, PetalStreamPlayer, decodePetalFrame, decodePetalFrameAt, drawPetalFrame,",
         "  encodeLane, fieldEvidence, mergeFields, petalDrawList, renderPetalFrame,",
         "  PETAL_TRACK_WINDOW_MS, locateCandidates, trackPetalFrame,",
+        "  PETAL_TURNS, PetalFrameCells, carrierOrder, carriers, decodeTurnLaneCounted, encodeTurnLane, observedTurns,",
+        "  readTurns, turnAngle, turnData, turnFirstId, turnPacket, turnTemplate, turnWhitening,",
         "  type PetalCompleted, type PetalDecodeErrorCode, type PetalFieldEvidence, type PetalLane, type PetalScanOutcome,",
-        "  type PetalScanStats,",
+        "  type PetalScanStats, type PetalObservedTurns, type PetalLaneResult, type PetalLaneHeader,",
         `} from ${JSON.stringify(declaration)};`,
         "declare const canvas: HTMLCanvasElement;",
         "declare const video: HTMLVideoElement;",
@@ -2642,7 +3127,8 @@ test("the declarations type-check a strict browser consumer", () => {
         "player.start();",
         "const scanner = new PetalCameraScanner({",
         "  video, stream, maxSide: 960, createCanvas: (width, height) => new OffscreenCanvas(width, height),",
-        "  onProgress: (outcome: PetalScanOutcome, stats: PetalScanStats) => void (outcome.progress.rank + stats.tracked + stats.fieldLanes),",
+        "  onProgress: (outcome: PetalScanOutcome, stats: PetalScanStats) =>",
+        "    void (outcome.progress.rank + stats.tracked + stats.fieldLanes + stats.turnLanes + outcome.turned.length),",
         "  onComplete: (completed: PetalCompleted) => void completed.payload.byteLength,",
         "});",
         "void scanner.start();",
@@ -2664,10 +3150,28 @@ test("the declarations type-check a strict browser consumer", () => {
         "    const sets = locateCandidates(luma).filter((set) => set.inferred !== null).length;",
         "    void lanes; void letters; void corner; void k; void sector?.corrected; void frame.lane(lane);",
         "    void next?.inferredCorner; void at?.d; void merged?.erasures; void sets; void PETAL_TRACK_WINDOW_MS;",
+        "    const turns: readonly (PetalLaneResult | null)[] = readTurns(luma, frame, [false, true, false, false]);",
+        "    const header: PetalLaneHeader = { tag: encoder.meta.tag, frame: 0 };",
+        "    const packet = turns[0] ? turnPacket(header, 0, turns[0].data) : null;",
+        "    const observed: PetalObservedTurns | null = observedTurns(luma, frame);",
+        "    const carrier = observed?.carriers[0];",
+        "    void packet?.firstId; void observed?.blur; void carrier?.cell; void carrier?.position; void carrier?.lead;",
         "  } catch (error) {",
         "    if (error instanceof PetalError) { const code: string = error.code; void code; }",
         "  }",
         "}",
+        "const cells: PetalFrameCells = encoder.cells(1);",
+        "const turnWord: Uint8Array | null = cells.turnWord(2);",
+        "const turned: number = cells.turns[5] ?? 0;",
+        "const lanes = encoder.words(1);",
+        "cells.setTurns(lanes.turns);",
+        "const decodedTurn = decodeTurnLaneCounted(0, lanes.turns[0], [3]);",
+        "const turnLen: number = PETAL_TURNS.wordLen + PETAL_TURNS.carriers + PETAL_TURNS.blurs.length + turnFirstId(3, 1);",
+        "const order: number[] = carrierOrder(0);",
+        "const chosen: number[] | null = carriers(cells.petals, 0);",
+        "const word: Uint8Array = encodeTurnLane(1, turnData({ tag: 1, frame: 2 }, 1, new Uint8Array(64)));",
+        "void turnWord; void turned; void decodedTurn.corrected; void turnLen; void order; void chosen; void word;",
+        "void turnAngle(3); void turnTemplate(0, 1.5, -2); void turnWhitening(3);",
         "const list = petalDrawList(encoder.cells(1));",
         "const petals: number = list.petals.length + list.backdrop.cells.length + list.petal.halfLength;",
         "drawPetalFrame(context, list, { size: 512 });",

@@ -1,10 +1,11 @@
 // Petal Stream: the Sakura-storm optical transport.
 //
-// A Petal frame is a square image whose data lives in five independent
-// lanes: the dots on three concentric rings (lane D), and a storm of 3,376
-// petals on concentric bands inside them, cut into four sectors (lanes
-// F0-F3), each petal lit or dark. The petals inside the SORA `天` are drawn
-// white and the others pink, over a faint `天`. Every lane is one
+// A Petal frame is a square image whose data lives in independent lanes: the
+// dots on three concentric rings (lane D), and a storm of 3,376 petals on
+// concentric bands inside them, cut into four sectors (lanes F0-F3), each
+// petal lit or dark. On top of each field lane, the way its lit petals are
+// turned carries a turn lane (T0-T3). The petals inside the SORA `天` are
+// drawn white and the others pink, over a faint `天`. Every lane is one
 // Reed-Solomon codeword, so any lane that reads cleanly yields fountain-coded
 // payload atoms.
 //
@@ -66,7 +67,7 @@ import {
 } from "./petal/layout.js";
 import { DEFAULT_DECODE_OPTIONS } from "./petal/decode.js";
 import { DEFAULT_PALETTE } from "./petal/render.js";
-import { DEFAULT_SCAN_LIMITS, TRACK_WINDOW_MS } from "./petal/session.js";
+import { DEFAULT_SCAN_LIMITS, TRACK_WINDOW_MS, TURN_MEMORY } from "./petal/session.js";
 import {
   BEACON_INTERVAL,
   DEFAULT_MAX_PAYLOAD_LEN,
@@ -75,6 +76,18 @@ import {
   MAX_PAYLOAD_LEN,
 } from "./petal/stream.js";
 import { deepFreeze } from "./petal/support.js";
+import {
+  TURN_ATOMS,
+  TURN_BITS,
+  TURN_BLURS,
+  TURN_CARRIERS,
+  TURN_CHECK_LEN,
+  TURN_DATA,
+  TURN_ID_BASE,
+  TURN_PARITY,
+  TURN_POSITIONS,
+  TURN_WORD,
+} from "./petal/turns.js";
 
 export { PetalError } from "./petal/support.js";
 export { crc32c } from "./petal/crc.js";
@@ -140,6 +153,24 @@ export {
   observedCells,
   trackPetalFrame,
 } from "./petal/decode.js";
+export {
+  carrierOrder,
+  carrierPosition,
+  carriers,
+  decodeTurnLaneCounted,
+  encodeTurnLane,
+  observedTurns,
+  readTurns,
+  turnAngle,
+  turnCheck,
+  turnData,
+  turnFirstId,
+  turnLabel,
+  turnPacket,
+  turnPosition,
+  turnTemplate,
+  turnWhitening,
+} from "./petal/turns.js";
 export { petalDrawList, renderPetalFrame } from "./petal/render.js";
 export { PetalScanSession } from "./petal/session.js";
 export {
@@ -189,13 +220,36 @@ export const PETAL_LAYOUT = deepFreeze({
 
 const fieldSize = () => ({ wordLen: FIELD_WORD, parityLen: FIELD_PARITY, dataLen: FIELD_DATA, atoms: FIELD_ATOMS });
 
-/** Codeword, parity and data sizes of the five lanes, in bytes, in decode order. */
+/**
+ * Codeword, parity and data sizes of lane D and the four field lanes, in bytes, in decode order
+ * (the turn lanes are described by `PETAL_TURNS`).
+ */
 export const PETAL_LANES = deepFreeze({
   D: { wordLen: D_WORD, parityLen: D_PARITY, dataLen: D_DATA, atoms: D_ATOMS },
   F0: fieldSize(),
   F1: fieldSize(),
   F2: fieldSize(),
   F3: fieldSize(),
+});
+
+/**
+ * The turn lanes `T0`-`T3`: positions and bits per carrier, carriers per sector, codeword,
+ * parity and data sizes in bytes, atoms and check bytes per lane, the fountain id of the first
+ * turn atom, the blurs the turn reader fits, and how many turn lanes a scan session remembers as
+ * read.
+ */
+export const PETAL_TURNS = deepFreeze({
+  positions: TURN_POSITIONS,
+  bits: TURN_BITS,
+  carriers: TURN_CARRIERS,
+  wordLen: TURN_WORD,
+  parityLen: TURN_PARITY,
+  dataLen: TURN_DATA,
+  atoms: TURN_ATOMS,
+  checkLen: TURN_CHECK_LEN,
+  idBase: TURN_ID_BASE,
+  blurs: TURN_BLURS.slice(),
+  memory: TURN_MEMORY,
 });
 
 /** Stream-level constants of the wire format and the receiver defaults. */

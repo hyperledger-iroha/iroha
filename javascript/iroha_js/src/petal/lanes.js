@@ -1,13 +1,15 @@
 // Lane codecs: bytes <-> transmitted cell states.
 //
-// A frame carries five lanes. Each lane is exactly one Reed-Solomon codeword,
+// A frame carries five lanes, and four turn lanes on top of the field lanes
+// (see `turns.js`). Each lane is exactly one Reed-Solomon codeword,
 // XOR-whitened with a fixed pseudo-random sequence so the picture is
 // statistically balanced whatever the payload is:
 //
-// | lane      | cells                                 | codeword | data | parity |
-// |-----------|---------------------------------------|----------|------|--------|
-// | D         | 240 ring slots x 1 bit                | 30 B     | 19 B | 11 B   |
-// | F0 ... F3 | 840 field cells of one sector x 1 bit | 105 B    | 83 B | 22 B   |
+// | lane      | cells                                  | codeword | data | parity |
+// |-----------|----------------------------------------|----------|------|--------|
+// | D         | 240 ring slots x 1 bit                 | 30 B     | 19 B | 11 B   |
+// | F0 ... F3 | 840 field cells of one sector x 1 bit  | 105 B    | 83 B | 22 B   |
+// | T0 ... T3 | 360 lit petals of one sector x 2 bits  | 90 B     | 68 B | 22 B   |
 //
 // Bit order is most-significant-bit first.
 
@@ -25,6 +27,15 @@ import {
 import { PetalXorshift32 } from "./prng.js";
 import { PetalReedSolomon, RS_INVALID_SHAPE, RS_UNCORRECTABLE, rsCorrect } from "./rs.js";
 import { PetalError, toBytes } from "./support.js";
+import {
+  TURN_CARRIERS,
+  TURN_LABELS,
+  TURN_POSITIONS,
+  TURN_WORD,
+  carrierOrderTable,
+  carrierPositionOf,
+  carriersInto,
+} from "./turns.js";
 
 /** Length of an atom in bytes. */
 export const ATOM_LEN = 16;
@@ -216,22 +227,50 @@ function cellArray(value, length, name) {
   return out;
 }
 
+function turnArray(value) {
+  const out = new Uint8Array(FIELD_CELLS);
+  if (value === undefined) {
+    return out;
+  }
+  if (value === null || typeof value !== "object" || typeof value.length !== "number") {
+    throw new TypeError(`turns must be an array of ${FIELD_CELLS} turn positions`);
+  }
+  if (value.length !== FIELD_CELLS) {
+    throw new RangeError(`turns must hold exactly ${FIELD_CELLS} turn positions`);
+  }
+  for (let index = 0; index < FIELD_CELLS; index += 1) {
+    const turn = value[index];
+    if (!Number.isInteger(turn) || turn < 0 || turn >= TURN_POSITIONS) {
+      throw new RangeError("a turn position is an integer in 0..=3");
+    }
+    out[index] = turn;
+  }
+  return out;
+}
+
 /** Every cell of one frame: what a renderer draws and a decoder samples. */
 export class PetalFrameCells {
   /**
    * @param {ArrayLike<number | boolean>} [dots] lit state of each of the 296 ring slots, gate dots included
    * @param {ArrayLike<number | boolean>} [petals] lit state of each of the 3,376 field cells
+   * @param {ArrayLike<number>} [turns] turn position (0-3) of each of the 3,376 field cells
    */
-  constructor(dots, petals) {
+  constructor(dots, petals, turns) {
     /** Lit state (`0`/`1`) of every ring slot, gate dots included. */
     this.dots = cellArray(dots, TOTAL_SLOTS, "dots");
     /** Lit state (`0`/`1`) of every field cell (spare cells are dark). */
     this.petals = cellArray(petals, FIELD_CELLS, "petals");
+    /**
+     * Turn position (0-3, see `turnAngle`) of every field cell: zero for dark petals and for lit
+     * petals that carry no turn bits.
+     */
+    this.turns = turnArray(turns);
   }
 
   /**
    * Builds the cells from the transmitted codewords of lane D and the four
-   * field lanes (sector 0 first).
+   * field lanes (sector 0 first), with every petal unturned (see
+   * {@link PetalFrameCells#setTurns}).
    */
   static fromWords(d, fields) {
     const dWord = toBytes(d, "lane D word");
@@ -261,6 +300,55 @@ export class PetalFrameCells {
     return cells;
   }
 
+  /**
+   * Turns the carriers of every sector to show its transmitted turn codeword
+   * (see `turns.js`; sector 0 first); a sector with too few lit petals stays
+   * unturned.
+   */
+  setTurns(words) {
+    if (!Array.isArray(words) || words.length !== SECTORS) {
+      throw new TypeError("words must hold the four turn lane words");
+    }
+    const turnWords = words.map((word, sector) => toBytes(word, `turn lane T${sector} word`));
+    if (turnWords.some((word) => word.length !== TURN_WORD)) {
+      throw new RangeError("turn lane word length mismatch");
+    }
+    const chosen = new Uint16Array(TURN_CARRIERS);
+    for (let sector = 0; sector < SECTORS; sector += 1) {
+      for (const cell of carrierOrderTable()[sector]) {
+        this.turns[cell] = 0;
+      }
+      if (!carriersInto(this.petals, sector, chosen, 0)) {
+        continue;
+      }
+      const word = turnWords[sector];
+      for (let index = 0; index < chosen.length; index += 1) {
+        this.turns[chosen[index]] = carrierPositionOf(word, index);
+      }
+    }
+  }
+
+  /**
+   * Packs the turns of the carriers of sector `sector` into its turn codeword,
+   * or `null` when the sector has too few lit petals to carry one.
+   *
+   * @returns {Uint8Array | null}
+   */
+  turnWord(sector) {
+    if (SECTOR_CELL_LIST[sector] === undefined) {
+      throw new RangeError("sector out of range");
+    }
+    const chosen = new Uint16Array(TURN_CARRIERS);
+    if (!carriersInto(this.petals, sector, chosen, 0)) {
+      return null;
+    }
+    const word = new Uint8Array(TURN_WORD);
+    for (let index = 0; index < chosen.length; index += 1) {
+      word[index >> 2] |= TURN_LABELS[this.turns[chosen[index]]] << (6 - 2 * (index & 3));
+    }
+    return word;
+  }
+
   /** Packs the data dots into a lane D codeword. */
   dWord() {
     const word = new Uint8Array(D_WORD);
@@ -287,14 +375,14 @@ export class PetalFrameCells {
     return word;
   }
 
-  /** Whether `other` holds exactly the same cells. */
+  /** Whether `other` holds exactly the same cells, turns included. */
   equals(other) {
     if (!(other instanceof PetalFrameCells)) return false;
     for (let index = 0; index < TOTAL_SLOTS; index += 1) {
       if (this.dots[index] !== other.dots[index]) return false;
     }
     for (let index = 0; index < FIELD_CELLS; index += 1) {
-      if (this.petals[index] !== other.petals[index]) return false;
+      if (this.petals[index] !== other.petals[index] || this.turns[index] !== other.turns[index]) return false;
     }
     return true;
   }

@@ -21,7 +21,7 @@ function addCircle(context, shape) {
 
 /**
  * Where the outline of a petal leaves its ellipse for the notch, in the
- * petal's own frame (`x` outward): `t` is the ellipse parameter of the
+ * petal's own frame (`x` along its axis): `t` is the ellipse parameter of the
  * intersection (`x = a cos t`, `y = b sin t`) and `phi` its angle seen from the
  * notch centre. `null` when the notch does not cut the ellipse's outline.
  */
@@ -53,7 +53,8 @@ function notchOutline(shape) {
 }
 
 /**
- * Adds one petal to the current path: the ellipse the long way round from one
+ * Adds one petal to the current path, along its axis `petal.angle` (the
+ * outward direction plus its turn): the ellipse the long way round from one
  * edge of the notch to the other, then the notch's inner arc back.
  */
 function addPetal(context, petal, shape, outline) {
@@ -80,8 +81,11 @@ function addPetal(context, petal, shape, outline) {
 /**
  * Draws a `petalDrawList` result onto a Canvas 2D context (or any object
  * with the same path API), scaling the 1024-unit design canvas to `size`
- * pixels with its top-left corner at `(x, y)`. Petals are drawn with their
- * notch.
+ * pixels with its top-left corner at `(x, y)`. Petals are drawn turned
+ * (half-length 6 and half-width 3.73 along their axis), with the notch of
+ * radius 1.12 at 6.24 along the axis that tells a petal from one turned by
+ * half a turn, and antialiased (Canvas 2D fills paths antialiased; keep the
+ * code at 768 pixels or more so the turns show).
  *
  * @param {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} context
  * @param {ReturnType<typeof petalDrawList>} drawList

@@ -4,17 +4,27 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
-- `@iroha/iroha-js/petal` implements Petal Stream format 2 and removes format 1 (beacons carry version
-  `0x20`; `0x10` is refused). The katakana tile lanes `P` and `K` (with `PETAL_GLYPHS`, `tileCenter`, the
-  glyph templates, `templateSigmas` and `tileMatchError`) give way to a field of 3,376 petals in four
-  sectors, the field lanes `F0`-`F3` (105-byte words with 22 parity bytes), and the rings move to radii 405,
-  440 and 475. Frames carry 21 atoms (20 on beacon frames) and 512 atoms are buffered before the first
-  beacon. `PetalFrameCells` holds `dots` and `petals`, lane data and words are `{ d, fields }`, and decoded
-  frames carry `fields` and a `PetalPose` (`decodePetalFrameAt` takes one) with radial lens distortion,
-  searched while field lanes stay unread; unread sectors are read again from local levels, `fieldEvidence`
-  and `mergeFields` average repeated captures of one shown frame, and `PetalScanSession` counts
-  `fieldLanes` and `mergedLanes`. The player defaults to 12 fps.
-  The unit suite checks `fixtures/petal/petal_stream_v2.json` and `petal_captures_v2.json` exactly.
+- `@iroha/iroha-js/petal` implements Petal Stream format 3 and removes formats 1 and 2 (beacons carry
+  version `0x30`; `0x20` and `0x10` are refused). The katakana tile lanes `P` and `K` (with `PETAL_GLYPHS`,
+  `tileCenter`, the glyph templates, `templateSigmas` and `tileMatchError`) give way to a field of 3,376
+  petals in four sectors, the field lanes `F0`-`F3` (105-byte words with 22 parity bytes), and the rings
+  move to radii 405, 440 and 475. On top of each field lane, the first 360 lit petals of its sector (in the
+  fixed shuffled `carrierOrder`) are turned by 0°, 45°, 90° or 135° and carry a turn lane `T0`-`T3`
+  (90-byte words with 22 parity bytes): four repair atoms with ids from 2³¹ (`turnFirstId`) and a CRC-32C
+  check that binds them to the header of the field lane they ride on (`turnData`, `turnPacket`,
+  `encodeTurnLane`, `decodeTurnLaneCounted`, `PETAL_TURNS`). Petals are narrower (half-length 6,
+  half-width 3.73) and their notch (radius 1.12 at 6.24) is always drawn. Frames carry 21 atoms (20 on
+  beacon frames) plus up to 16 turn atoms, and 512 atoms are buffered before the first beacon.
+  `PetalFrameCells` holds `dots`, `petals` and `turns` (`setTurns`, `turnWord`), lane data and words are
+  `{ d, fields, turns }`, and decoded frames carry `fields` and a `PetalPose` (`decodePetalFrameAt` takes
+  one) with radial lens distortion, searched while field lanes stay unread; unread sectors are read again
+  from local levels, `fieldEvidence` and `mergeFields` average repeated captures of one shown frame,
+  `readTurns` reads the turn lanes of a decoded capture (`observedTurns` and `turnTemplate` for
+  diagnostics and conformance), and `PetalScanSession` reads each turn lane once per shown frame and
+  counts `fieldLanes`, `mergedLanes` and `turnLanes` (`outcome.turned`). Draw-list petals carry their axis
+  (the outward direction plus the turn). The player defaults to 12 fps and draws petals turned, notched
+  and antialiased. The unit suite checks `fixtures/petal/petal_stream_v3.json` and
+  `petal_captures_v3.json` exactly.
 - Added the asset movement feed of `GET /v1/assets/{definition_id}/movements`: `assetMovements(definitionId)`
   on `ToriiClient` and `ToriiBrowserClient` is a history collection of every committed movement of the
   definition, newest first (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`,
