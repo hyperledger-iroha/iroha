@@ -77,6 +77,14 @@ fn fixture(first: u32, second: u32) -> (Fixture, State) {
     );
     {
         let mut parameters = world.parameters.block();
+        // Component custody registration owns its policy before the first snapshot.
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
         parameters
             .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,

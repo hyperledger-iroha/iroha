@@ -270,6 +270,16 @@ mod tests {
             )],
             [],
         );
+        // Component registrations use an explicit policy authored before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install fixture crypto policy");
+        parameters.commit();
         State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),

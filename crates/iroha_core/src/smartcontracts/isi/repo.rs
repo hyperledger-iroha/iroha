@@ -726,21 +726,19 @@ pub mod query {
         index: RepoAgreementAccountIndex,
         accounts: impl IntoIterator<Item = AccountId>,
     ) -> BTreeSet<RepoAgreementId> {
+        use crate::state::range_bounds::index_members;
         let mut ids = BTreeSet::new();
         for account_id in accounts {
-            let agreements = match index {
-                RepoAgreementAccountIndex::Initiator => {
-                    world.repo_agreements_by_initiator().get(&account_id)
-                }
-                RepoAgreementAccountIndex::Counterparty => {
-                    world.repo_agreements_by_counterparty().get(&account_id)
-                }
-                RepoAgreementAccountIndex::Custodian => {
-                    world.repo_agreements_by_custodian().get(&account_id)
-                }
-            };
-            if let Some(agreements) = agreements {
-                ids.extend(agreements.iter().cloned());
+            match index {
+                RepoAgreementAccountIndex::Initiator => ids.extend(
+                    index_members(world.repo_agreements_by_initiator(), &account_id).cloned(),
+                ),
+                RepoAgreementAccountIndex::Counterparty => ids.extend(
+                    index_members(world.repo_agreements_by_counterparty(), &account_id).cloned(),
+                ),
+                RepoAgreementAccountIndex::Custodian => ids.extend(
+                    index_members(world.repo_agreements_by_custodian(), &account_id).cloned(),
+                ),
             }
         }
         ids
@@ -831,8 +829,14 @@ pub mod query {
 mod tests {
     use super::*;
     use crate::{
-        kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::ValidQuery,
-        state::State,
+        kura::Kura,
+        prelude::World,
+        query::store::LiveQueryStore,
+        smartcontracts::ValidQuery,
+        state::{
+            State,
+            range_bounds::{index_contains, index_members},
+        },
     };
     use hex::encode_upper;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -1552,24 +1556,21 @@ mod tests {
             .commit_world_overlay_for_testing()
             .expect("commit succeeds");
         let view = state.view();
-        assert!(
-            view.world
-                .repo_agreements_by_initiator()
-                .get(&ALICE_ID)
-                .is_some_and(|agreements| agreements.contains(&agreement_id))
-        );
-        assert!(
-            view.world
-                .repo_agreements_by_counterparty()
-                .get(&BOB_ID)
-                .is_some_and(|agreements| agreements.contains(&agreement_id))
-        );
-        assert!(
-            view.world
-                .repo_agreements_by_custodian()
-                .get(&custodian_id)
-                .is_some_and(|agreements| agreements.contains(&agreement_id))
-        );
+        assert!(index_contains(
+            view.world.repo_agreements_by_initiator(),
+            &ALICE_ID,
+            &agreement_id
+        ));
+        assert!(index_contains(
+            view.world.repo_agreements_by_counterparty(),
+            &BOB_ID,
+            &agreement_id
+        ));
+        assert!(index_contains(
+            view.world.repo_agreements_by_custodian(),
+            &custodian_id,
+            &agreement_id
+        ));
         for (field, account_id) in [
             ("initiator", ALICE_ID.clone()),
             ("counterparty", BOB_ID.clone()),
@@ -1606,9 +1607,8 @@ mod tests {
             .expect("commit succeeds");
         let view = state.view();
         assert!(
-            view.world
-                .repo_agreements_by_initiator()
-                .get(&ALICE_ID)
+            index_members(view.world.repo_agreements_by_initiator(), &ALICE_ID)
+                .next()
                 .is_none()
         );
         let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {

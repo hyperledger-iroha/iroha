@@ -5517,11 +5517,18 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         use nonzero_ext::nonzero;
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(
-            crate::pipeline::overlay::test_support::with_global_root(World::default()),
-            kura,
-            query,
-        );
+        let world = crate::pipeline::overlay::test_support::with_global_root(World::default());
+        // Component account writes require an authored policy before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install fixture crypto policy");
+        parameters.commit();
+        let state = State::new(world, kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -5604,11 +5611,18 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         use nonzero_ext::nonzero;
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(
-            crate::pipeline::overlay::test_support::with_global_root(World::default()),
-            kura,
-            query,
-        );
+        let world = crate::pipeline::overlay::test_support::with_global_root(World::default());
+        // Component account writes require an authored policy before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install fixture crypto policy");
+        parameters.commit();
+        let state = State::new(world, kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -5672,11 +5686,18 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         access_set_cache_clear();
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(
-            crate::pipeline::overlay::test_support::with_global_root(World::default()),
-            kura,
-            query,
-        );
+        let world = crate::pipeline::overlay::test_support::with_global_root(World::default());
+        // Component account writes require an authored policy before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install fixture crypto policy");
+        parameters.commit();
+        let state = State::new(world, kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -5815,11 +5836,18 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         access_set_cache_clear();
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(
-            crate::pipeline::overlay::test_support::with_global_root(World::default()),
-            kura,
-            query,
-        );
+        let world = crate::pipeline::overlay::test_support::with_global_root(World::default());
+        // Component account writes require an authored policy before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install fixture crypto policy");
+        parameters.commit();
+        let state = State::new(world, kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);

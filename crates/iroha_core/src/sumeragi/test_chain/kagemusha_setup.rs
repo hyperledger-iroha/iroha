@@ -97,10 +97,13 @@ fn prepare() -> PreparedTestChainConfig {
     fees.per_byte_fee = Quantity::zero();
     fees.per_instruction_fee = Quantity::zero();
     fees.per_gas_unit_fee = Quantity::zero();
-    let parameters = vec![Parameter::Custom(
-        fees.into_custom_parameter()
-            .expect("fixture authors the complete root fee policy"),
-    )];
+    let parameters = vec![
+        authored_staking_fixture_parameter(),
+        Parameter::Custom(
+            fees.into_custom_parameter()
+                .expect("fixture authors the complete root fee policy"),
+        ),
+    ];
     let (genesis, manifest) = build_genesis(
         &chain_id,
         &genesis_key,

@@ -1865,7 +1865,8 @@ mod tests {
     async fn node_capabilities_reports_projection_checkpoint_snapshot_when_present() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let world = iroha_core::state::World::default();
+        let mut world = iroha_core::state::World::default();
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
         let state = State::new_for_testing(world, kura, query_handle);
         let expected_hash =
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(

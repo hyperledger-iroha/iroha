@@ -22230,7 +22230,7 @@ pub mod isi {
                 },
                 params::SccpParametersV1,
             };
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             let block = new_dummy_block_at_height(
                 NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height"),
             );
@@ -22341,7 +22341,7 @@ pub mod isi {
         #[test]
         fn parliament_due_certificate_grants_and_revokes_exact_global_trigger_permission() {
             fn run(action: GlobalDataTriggerPermissionGovernanceActionV1, initially_granted: bool) {
-                let state = blank_test_state();
+                let state = component_state_with_crypto_policy(blank_test_state());
                 let block = new_dummy_block_at_height(
                     NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT)
                         .expect("due height is nonzero"),
@@ -22410,7 +22410,7 @@ AccountEvent::PermissionRemoved(change))
 
         #[test]
         fn parliament_due_certificate_completes_contract_ownership_transfer_to_account() {
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             let block = new_dummy_block_at_height(
                 NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
             );
@@ -22583,7 +22583,7 @@ AccountEvent::PermissionRemoved(change))
 
         #[test]
         fn parliament_due_certificate_completes_contract_ownership_transfer_from_account() {
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             let block = new_dummy_block_at_height(
                 NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
             );
@@ -22696,7 +22696,7 @@ AccountEvent::PermissionRemoved(change))
 
         #[test]
         fn revoking_contract_parliament_delegation_supersedes_certified_lifecycle_effect() {
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             let block = new_dummy_block_at_height(
                 NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
             );
@@ -22847,7 +22847,7 @@ AccountEvent::PermissionRemoved(change))
 
         #[test]
         fn parliament_due_certificate_applies_bounded_contract_emergency_hold() {
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             let block = new_dummy_block_at_height(
                 NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
             );
@@ -23019,7 +23019,7 @@ AccountEvent::PermissionRemoved(change))
 
         #[test]
         fn certified_retrospective_clears_exact_hold_and_allows_independent_successor_hold() {
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             let block = new_dummy_block_at_height(
                 NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
             );
@@ -23307,6 +23307,21 @@ AccountEvent::PermissionRemoved(change))
             )
         }
 
+        /// Author ordinary account admission for component tests before their first block snapshot.
+        /// This parameter grants no authenticated genesis or governed execution capability.
+        fn component_state_with_crypto_policy(state: State) -> State {
+            let mut parameters = state.world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical component crypto policy"),
+                )
+                .expect("install explicit component crypto policy");
+            parameters.commit();
+            state
+        }
+
         // Ordinary executor cases own a signed original root before H2 dispatch.
         // Pristine component/genesis-refusal macros below deliberately remain unchanged.
         fn original_world_config(component: State) -> crate::sumeragi::test_chain::TestChainConfig {
@@ -23410,7 +23425,7 @@ AccountEvent::PermissionRemoved(change))
             let mut stx = block.transaction_for_callback_testing();
             assert!(crate::executor::root_scope::execution_root_scope(&mut stx).is_ok());
             drop(stx);
-            let component = blank_test_state();
+            let component = component_state_with_crypto_policy(blank_test_state());
             let mut block = component.block(first_test_block_header());
             let mut stx = block.transaction_for_callback_testing();
             bootstrap_alice_account(&mut stx);
@@ -23631,6 +23646,29 @@ AccountEvent::PermissionRemoved(change))
                 let header = first_test_block_header_with_checked_height();
                 let mut $block = $state.block(header);
                 let mut $stx = $block.transaction();
+            };
+        }
+        macro_rules! component_test_state_transaction {
+            ($state:ident, $block:ident, $stx:ident) => {
+                let $state = component_state_with_crypto_policy(blank_test_state());
+                let header = first_test_block_header();
+                let mut $block = $state.block(header);
+                let mut $stx = $block.transaction();
+            };
+        }
+        macro_rules! component_state_transaction {
+            ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
+                let $state = component_state_with_crypto_policy(blank_state());
+                let $block = new_dummy_block();
+                let mut $state_block = $state.block($block.as_ref().header());
+                #[allow(unused_mut)]
+                let mut $stx = $state_block.transaction();
+            };
+        }
+        macro_rules! component_alice_state_transaction {
+            ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
+                component_state_transaction!($state, $block, $state_block, $stx);
+                bootstrap_alice_account(&mut $stx);
             };
         }
         macro_rules! alice_state_transaction {
@@ -25824,7 +25862,7 @@ AccountEvent::PermissionRemoved(change))
             }
         });
         world_test!(zero_minimum_governance_bond_still_escrows_positive_exact_deltas {
-            let mut state = blank_test_state();
+            let mut state = component_state_with_crypto_policy(blank_test_state());
             state.gov.min_bond_amount = Quantity::zero();
             state.gov.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
             state.gov.slash_receiver_account =
@@ -26484,7 +26522,7 @@ AccountEvent::PermissionRemoved(change))
             assert_contains!(format!("{corrupted:?}"), "commitments exist without a bound unshield verifier");
         });
         world_test!(register_zk_asset_requires_owner_or_exact_scoped_grant {
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             state_transaction!(state, block, state_block, stx);
             let domain_id =
                 DomainId::try_new("confidential", "universal").expect("valid test domain");
@@ -26595,7 +26633,7 @@ AccountEvent::PermissionRemoved(change))
             assert_eq!(updated_policy.pending_transition(), &Some(transition));
         });
         world_test!(confidential_policy_transition_requires_owner_or_exact_scoped_grant {
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             state_transaction!(state, block, state_block, stx);
             let domain_id = DomainId::try_new("policy", "universal").expect("valid test domain");
             let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -26720,7 +26758,7 @@ AccountEvent::PermissionRemoved(change))
             );
         });
         world_test!(confidential_policy_transition_cap_rejects_before_mutation {
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             state_transaction!(state, block, state_block, stx);
             stx.zk.policy_transition_max_per_height =
                 NonZeroU32::new(1).expect("nonzero transition cap");
@@ -27034,7 +27072,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let (artifact, manifest) = governance_lifecycle_artifact();
             let code_hash = manifest.code_hash.expect("verified code hash");
             let abi_hash = manifest.abi_hash.expect("verified ABI hash");
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
                 None,
@@ -27093,7 +27131,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let (artifact, manifest) = governance_lifecycle_artifact();
             let code_hash = manifest.code_hash.expect("verified code hash");
             let abi_hash = manifest.abi_hash.expect("verified ABI hash");
-            let state = blank_test_state();
+            let state = component_state_with_crypto_policy(blank_test_state());
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
                 None,
@@ -28887,7 +28925,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             };
             use iroha_model_base::topology::DataSpaceId;
 
-            blank_state_transaction!(state, block, state_block, stx);
+            component_state_transaction!(state, block, state_block, stx);
             let alias_domain =
                 DomainId::try_new("identity", "universal").expect("alias domain");
             let call_domain = DomainId::try_new("calls", "universal").expect("call domain");
@@ -28965,7 +29003,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             assert_eq!(ended.status, KaigiStatus::Ended);
         });
         world_test!(unregister_domain_preserves_global_account_records_and_owned_foreign_nfts {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let other_domain_id: DomainId =
@@ -29064,7 +29102,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_keeps_aliases_in_same_named_foreign_dataspace {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let global_domain_id: DomainId =
                 DomainId::try_new("billing", "universal").expect("domain id parses");
             let retail_domain_id: DomainId =
@@ -29162,7 +29200,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_removes_assets_with_definitions_in_other_domains {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let domain_id: DomainId = DomainId::try_new("defs", "universal").expect("domain id parses");
             let holder_domain: DomainId =
                 DomainId::try_new("holder", "universal").expect("domain id parses");
@@ -29211,7 +29249,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_rejects_retained_native_transfer_controls_atomically {
-            alice_state_transaction!(state, block, state_block, stx);
+            component_alice_state_transaction!(state, block, state_block, stx);
             let domain_id =
                 DomainId::try_new("transfer-controls", "universal").expect("domain id parses");
             Register::domain(Domain::new(domain_id.clone()))
@@ -29280,7 +29318,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_preserves_surviving_account_foreign_ownerships {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let foreign_domain: DomainId =
@@ -29340,7 +29378,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         #[test]
         fn unregister_domain_allows_surviving_accounts_used_by_global_config_and_invalid_literals()
         {
-            let mut state = blank_state();
+            let mut state = component_state_with_crypto_policy(blank_state());
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let account_id = AccountId::new(checked_keypair().public_key().clone());
@@ -29386,7 +29424,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         }
         world_test!(unregister_domain_preserves_configured_canonical_account {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let remove_domain: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let retained_domain: DomainId =
@@ -29441,7 +29479,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_has_foreign_repo_agreement_state()
         {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let foreign_domain: DomainId =
@@ -29533,7 +29571,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         }
         world_test!(unregister_domain_rejects_when_domain_asset_definition_has_settlement_receipt {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let domain_id =
                 DomainId::try_new("cleanup", "universal").expect("cleanup domain id parses");
             let foreign_domain =
@@ -29653,7 +29691,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         });
 
         world_test!(unregister_domain_retained_asset_refusal_preserves_permissions_and_endorsements_in_same_transaction {
-            let mut state = blank_state();
+            let mut state = component_state_with_crypto_policy(blank_state());
             let domain_id = DomainId::try_new("retained", "universal")
                 .expect("retained asset domain");
             let definition_id = AssetDefinitionId::derive_from_components(
@@ -30007,7 +30045,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_preserves_accounts_with_active_settlement_and_oracle_state {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let external_domain: DomainId =
@@ -30177,7 +30215,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_preserves_accounts_with_active_governance_and_storage_audit_state {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let network_id = *state.network_id_ref();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
@@ -30351,7 +30389,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_removes_associated_permissions_from_accounts_and_roles {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let domain_id: DomainId =
                 DomainId::try_new("kingdom", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
@@ -30433,7 +30471,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         #[test]
         fn unregister_domain_preserves_account_target_permissions_for_surviving_accounts_and_roles()
         {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
@@ -30512,7 +30550,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         }
         world_test!(unregister_domain_preserves_other_domain_permissions_for_same_subject {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let retained_domain_id: DomainId =
@@ -30580,7 +30618,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_preserves_foreign_nft_permissions_for_surviving_accounts_and_roles {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
             let foreign_domain_id: DomainId =
@@ -30733,7 +30771,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(register_role_auto_grants_owner {
-            blank_state_transaction!(state, block, state_block, stx);
+            component_state_transaction!(state, block, state_block, stx);
             // Bootstrap a domain and the Alice account
             bootstrap_alice_account(&mut stx);
             // Register a role with Alice as the initial owner
@@ -33351,7 +33389,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             assert_eq!(next.public_key, record_b.public_key);
         });
         world_test!(validator_tenure_rejects_consensus_key_disable_and_rotation {
-            let state = blank_state();
+            let state = component_state_with_crypto_policy(blank_state());
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = consensus_test_parameters!(state_block);
@@ -33598,7 +33636,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         world_test!(set_parameter_alias_dataspace_bootstrap_grant_is_immutable_and_requires_existing_owner {
             use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
 
-            alice_state_transaction!(state, block, state_block, stx);
+            component_alice_state_transaction!(state, block, state_block, stx);
             let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", ALICE_ID.clone())
                 .expect("canonical bootstrap grant");
             let parameter_id = grant.parameter_id().expect("canonical grant key");
@@ -33633,7 +33671,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         world_test!(set_parameter_alias_dataspace_bootstrap_grant_rejects_conflicting_static_catalog {
             use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
 
-            alice_state_transaction!(state, block, state_block, stx);
+            component_alice_state_transaction!(state, block, state_block, stx);
             let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", ALICE_ID.clone())
                 .expect("canonical bootstrap grant");
             let parameter_id = grant.parameter_id().expect("canonical grant key");
@@ -33656,7 +33694,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         world_test!(set_parameter_alias_dataspace_bootstrap_grant_must_precede_first_sns_record {
             use iroha_data_model::alias_setup::{AliasDataspaceBootstrapGrantV1, AliasTargetV1};
 
-            alice_state_transaction!(state, block, state_block, stx);
+            component_alice_state_transaction!(state, block, state_block, stx);
             let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", ALICE_ID.clone())
                 .expect("canonical bootstrap grant");
             let parameter_id = grant.parameter_id().expect("canonical grant key");
@@ -33807,7 +33845,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1,
             };
 
-            alice_state_transaction!(state, block, state_block, stx);
+            component_alice_state_transaction!(state, block, state_block, stx);
             let lane_id = LaneId::SINGLE;
             let lane_incarnation = stx
                 .lane_incarnation_at_height(lane_id, stx.block_height())
@@ -34318,7 +34356,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             assert_contains!(msg, "not permitted: CanManageVerifyingKeys", "unexpected msg: {msg}");
         });
         world_test!(operational_governance_guards_require_exact_typed_tokens {
-            alice_state_transaction!(state, block, state_block, stx);
+            component_alice_state_transaction!(state, block, state_block, stx);
             let role_id: RoleId = "OPERATIONAL_GOVERNANCE".parse().expect("role id");
             Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register governance role");
@@ -35333,7 +35371,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         }
         include!("world_public_artifact_tests.rs");
         world_test!(native_upload_finalization_enforces_live_cycle_ceiling_and_retains_staging {
-            blank_test_state_transaction!(state, block, stx);
+            component_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "seed upload authority");
             grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
@@ -35388,7 +35426,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         });
         world_test!(commit_contract_deployment_enforces_cas_derivation_and_protected_rotation {
             let signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
-            blank_test_state_transaction!(state, block, stx);
+            component_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "seed deployment authority");
             grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
@@ -35627,7 +35665,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             assert!(stx.world.contract_instances.get(&address_at_nonce_1).is_none());
         });
         world_test!(commit_contract_deployment_rejects_malformed_protected_namespace_policy {
-            blank_test_state_transaction!(state, block, stx);
+            component_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "seed authority");
             grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
@@ -35674,7 +35712,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             assert!(stx.world.contract_instances.get(&contract_address).is_none());
         });
         world_test!(activate_contract_instance_requires_governance_for_protected_namespace {
-            blank_test_state_transaction!(state, block, stx);
+            component_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "seed authority");
             let protected = iroha_data_model::parameter::custom::CustomParameter::new(
@@ -35742,7 +35780,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             assert_contains!(msg, "current account owner", "unexpected protected-namespace error: {msg}");
         });
         world_test!(contract_lifecycle_ownership_is_two_step_revocable_and_revision_guarded {
-            blank_test_state_transaction!(state, block, stx);
+            component_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "seed owner");
             Register::account(Account::new(BOB_ID.clone()))

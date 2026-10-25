@@ -152,51 +152,52 @@ fn stage(block: &mut StateBlock<'_>) {
         .world
         .repo_agreements
         .remove(named("repo_agreement_absent"));
-    let open = BTreeSet::from([
-        named("repo_agreement_noop"),
-        named("repo_agreement_untouched"),
-    ]);
-    let alice = BTreeSet::from([
-        named("repo_agreement_noop"),
-        named("repo_agreement_untouched"),
-        named("repo_agreement_insert"),
-    ]);
-    block
-        .world
-        .repo_agreements_by_initiator
-        .insert(ALICE_ID.clone(), alice);
-    block
-        .world
-        .repo_agreements_by_initiator
-        .insert(BOB_ID.clone(), BTreeSet::from([fixture::id()]));
-    block
-        .world
-        .repo_agreements_by_initiator
-        .remove(absent_account());
-    block
-        .world
-        .repo_agreements_by_counterparty
-        .insert(BOB_ID.clone(), open.clone());
-    block.world.repo_agreements_by_counterparty.insert(
-        ALICE_ID.clone(),
-        BTreeSet::from([fixture::id(), named("repo_agreement_insert")]),
+    macro_rules! reset_members {
+        ($field:ident, $rows:expr) => {{
+            let old: Vec<_> = block
+                .world
+                .$field
+                .iter()
+                .map(|(key, ())| key.clone())
+                .collect();
+            for key in old {
+                block.world.$field.remove(key);
+            }
+            for key in $rows {
+                block.world.$field.insert(key, ());
+            }
+            block
+                .world
+                .$field
+                .remove((absent_account(), named("repo_agreement_absent")));
+        }};
+    }
+    reset_members!(
+        repo_agreements_by_initiator,
+        [
+            (ALICE_ID.clone(), named("repo_agreement_noop")),
+            (ALICE_ID.clone(), named("repo_agreement_untouched")),
+            (ALICE_ID.clone(), named("repo_agreement_insert")),
+            (BOB_ID.clone(), fixture::id()),
+        ]
     );
-    block
-        .world
-        .repo_agreements_by_counterparty
-        .remove(absent_account());
-    block
-        .world
-        .repo_agreements_by_custodian
-        .insert(BOB_ID.clone(), open);
-    block.world.repo_agreements_by_custodian.insert(
-        ALICE_ID.clone(),
-        BTreeSet::from([named("repo_agreement_insert")]),
+    reset_members!(
+        repo_agreements_by_counterparty,
+        [
+            (BOB_ID.clone(), named("repo_agreement_noop")),
+            (BOB_ID.clone(), named("repo_agreement_untouched")),
+            (ALICE_ID.clone(), fixture::id()),
+            (ALICE_ID.clone(), named("repo_agreement_insert")),
+        ]
     );
-    block
-        .world
-        .repo_agreements_by_custodian
-        .remove(absent_account());
+    reset_members!(
+        repo_agreements_by_custodian,
+        [
+            (BOB_ID.clone(), named("repo_agreement_noop")),
+            (BOB_ID.clone(), named("repo_agreement_untouched")),
+            (ALICE_ID.clone(), named("repo_agreement_insert")),
+        ]
+    );
 }
 #[test]
 fn ordinary_custodian_migrations_insert_delete_noop_absence_and_untouched_members_retain_originals()
@@ -232,24 +233,26 @@ fn ordinary_custodian_migrations_insert_delete_noop_absence_and_untouched_member
             .undo_entries()
             .any(|(id, prior)| id == &named("repo_agreement_absent") && prior.is_none())
     );
-    assert!(
+    assert_eq!(
         original
             .counterparties
             .undo_entries()
-            .any(|(id, prior)| id == &*BOB_ID
-                && prior.as_ref().is_some_and(|members| members.len() == 4))
+            .filter(|((owner, _), prior)| owner == &*BOB_ID && prior.is_some())
+            .count(),
+        4,
     );
+    let absent = (absent_account(), named("repo_agreement_absent"));
     assert!(
         original
             .initiators
             .undo_entries()
-            .any(|(id, prior)| id == &absent_account() && prior.is_none())
+            .any(|(row, prior)| row == &absent && prior.is_none())
     );
     assert!(
         original
             .custodians
             .undo_entries()
-            .any(|(id, prior)| id == &absent_account() && prior.is_none())
+            .any(|(row, prior)| row == &absent && prior.is_none())
     );
     let work = exact(&original);
     assert_eq!(
@@ -303,18 +306,10 @@ fn replacement_keeps_exact_rewound_four_repo_images_modes_and_canonical_bytes() 
         .world
         .repo_agreements
         .remove(named("repo_agreement_absent"));
-    block
-        .world
-        .repo_agreements_by_initiator
-        .remove(absent_account());
-    block
-        .world
-        .repo_agreements_by_counterparty
-        .remove(absent_account());
-    block
-        .world
-        .repo_agreements_by_custodian
-        .remove(absent_account());
+    let absent = || (absent_account(), named("repo_agreement_absent"));
+    block.world.repo_agreements_by_initiator.remove(absent());
+    block.world.repo_agreements_by_counterparty.remove(absent());
+    block.world.repo_agreements_by_custodian.remove(absent());
     freeze(&mut block);
     let original = Original::retain(&block).unwrap();
     for mode in [
@@ -391,25 +386,18 @@ macro_rules! defect {
         let restore = $restore;
         macro_rules! group {
             ($field:ident,$valid:expr,$foreign:expr) => {{
-                let key = if case % 3 == 0 { $valid } else { $foreign };
-                let value = if restore {
-                    if case % 3 == 0 {
-                        Some(BTreeSet::from([fixture::id()]))
-                    } else {
-                        None
-                    }
+                let owner = if case % 3 == 0 { $valid } else { $foreign };
+                let member = if case % 3 == 1 {
+                    named("repo_agreement_absent")
                 } else {
-                    if case % 3 == 0 {
-                        None
-                    } else {
-                        Some(if case % 3 == 1 {
-                            BTreeSet::new()
-                        } else {
-                            BTreeSet::from([fixture::id()])
-                        })
-                    }
+                    fixture::id()
                 };
-                alter!($world, $kind, $field, key, value);
+                let value = if restore {
+                    (case % 3 == 0).then_some(())
+                } else {
+                    (case % 3 != 0).then_some(())
+                };
+                alter!($world, $kind, $field, (owner, member), value);
             }};
         }
         match case / 3 {
@@ -468,7 +456,6 @@ fn every_repo_index_mismatch_rejects_either_original_image_before_allocation() {
                         },
                         mismatch: match case % 3 {
                             0 => GroupMismatch::MissingMember,
-                            1 => GroupMismatch::EmptyGroup,
                             _ => GroupMismatch::ForeignMember,
                         },
                     }
@@ -485,7 +472,7 @@ fn custodianless_frozen_rows_cannot_have_any_inverse_custodian_membership() {
     block
         .world
         .repo_agreements_by_custodian
-        .insert(BOB_ID.clone(), BTreeSet::from([fixture::id()]));
+        .insert((BOB_ID.clone(), fixture::id()), ());
     freeze(&mut block);
     assert_eq!(
         capture(&block, limits(), fixture::TEST_WORK_ALLOWANCE).err(),
@@ -643,18 +630,18 @@ fn later_equal_or_changed_publications_cannot_refresh_any_repo_original() {
                 ),
                 1 => publish!(
                     repo_agreements_by_initiator,
-                    absent_account(),
-                    BTreeSet::from([fixture::id()])
+                    (absent_account(), fixture::id()),
+                    ()
                 ),
                 2 => publish!(
                     repo_agreements_by_counterparty,
-                    absent_account(),
-                    BTreeSet::from([fixture::id()])
+                    (absent_account(), fixture::id()),
+                    ()
                 ),
                 3 => publish!(
                     repo_agreements_by_custodian,
-                    absent_account(),
-                    BTreeSet::from([fixture::id()])
+                    (absent_account(), fixture::id()),
+                    ()
                 ),
                 _ => unreachable!(),
             }

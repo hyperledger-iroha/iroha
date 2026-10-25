@@ -10,7 +10,7 @@ use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    block::SignedBlock,
+    block::{SignedBlock, consensus::PublicLaneStakingPolicy},
     isi::InstructionBox,
     parameter::{
         Parameter,
@@ -107,7 +107,8 @@ pub fn staged_genesis_policies(
 /// `configured` returns a fresh, fully configured State with no committed block for the given
 /// network. The provisional State and its network identity are discarded; the returned State
 /// belongs to the returned genesis, which [`startup::apply_genesis`] accepts unchanged. The
-/// consensus mode is `NPoS` exactly when `npos` is supplied.
+/// consensus mode is `NPoS` exactly when the supplied policies include `NPoS` parameters.
+/// The staking policy is explicit author input and is included in the original signed parameters.
 ///
 /// # Errors
 /// The genesis cannot be built or signed, or original native execution rejects it.
@@ -117,9 +118,10 @@ pub fn signed_genesis_fixture_for_state(
     validators: &[(PeerId, Vec<u8>)],
     instructions: Vec<InstructionBox>,
     genesis_time_ms: u64,
-    npos: Option<SumeragiNposParameters>,
+    policies: (Option<SumeragiNposParameters>, PublicLaneStakingPolicy),
     mut configured: impl FnMut(NetworkId) -> State,
 ) -> Result<(SignedBlock, State), String> {
+    let (npos, staking) = policies;
     let mode = if npos.is_some() {
         ConsensusMode::Npos
     } else {
@@ -130,7 +132,12 @@ pub fn signed_genesis_fixture_for_state(
         genesis_key,
         validators,
         instructions,
-        npos_genesis_parameters(npos),
+        npos_genesis_parameters(npos)
+            .into_iter()
+            .chain([Parameter::Custom(staking.into_custom_parameter().map_err(
+                |error| format!("authored fixture staking policy: {error}"),
+            )?)])
+            .collect(),
         (
             mode.into(),
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
@@ -255,7 +262,14 @@ mod tests {
             &validators,
             Vec::new(),
             1_000,
-            None,
+            (
+                None,
+                super::super::staking_fixture_policy(
+                    iroha_config::parameters::defaults::nexus::staking::stake_asset_id()
+                        .parse()
+                        .unwrap(),
+                ),
+            ),
             configured,
         )
         .unwrap();

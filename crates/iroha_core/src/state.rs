@@ -4012,9 +4012,9 @@ pub struct WorldData {
     pub(crate) state_accumulator: Cell<world_projection::WorldStateAccumulator>,
     /// Registered domains.
     pub(crate) domains: Storage<DomainId, Domain>,
-    /// Read-side index from domain owner account to owned domain ids.
+    /// Read-side `(owner, domain)` membership rows for owned domain ids.
     #[norito(skip)]
-    pub(crate) domains_by_owner: Storage<AccountId, BTreeSet<DomainId>>,
+    pub(crate) domains_by_owner: Storage<(AccountId, DomainId), ()>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     #[norito(skip)]
     pub(crate) kaigi_relay_registry: Storage<AccountId, DomainId>,
@@ -4625,15 +4625,15 @@ pub struct WorldData {
     pub(crate) soradns_history_len: Cell<u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: Storage<RepoAgreementId, RepoAgreement>,
-    /// Repo agreement ids keyed by initiating account.
+    /// Repo agreement membership rows keyed by initiating account.
     #[norito(skip)]
-    pub(crate) repo_agreements_by_initiator: Storage<AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by counterparty account.
+    pub(crate) repo_agreements_by_initiator: Storage<(AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by counterparty account.
     #[norito(skip)]
-    pub(crate) repo_agreements_by_counterparty: Storage<AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by custodian account.
+    pub(crate) repo_agreements_by_counterparty: Storage<(AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by custodian account.
     #[norito(skip)]
-    pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
+    pub(crate) repo_agreements_by_custodian: Storage<(AccountId, RepoAgreementId), ()>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: Storage<SettlementId, SettlementReceipt>,
     /// Native bond records keyed by the bond asset definition.
@@ -5003,9 +5003,9 @@ pub struct WorldBlockFields<'world> {
         StorageField<'world, DomainId, Vec<HashOf<DomainEndorsement>>>,
     /// Registered domains.
     pub(crate) domains: StorageField<'world, DomainId, Domain>,
-    /// Read-side index from domain owner account to owned domain ids.
+    /// Read-side `(owner, domain)` membership rows for owned domain ids.
     #[norito(skip)]
-    pub(crate) domains_by_owner: StorageField<'world, AccountId, BTreeSet<DomainId>>,
+    pub(crate) domains_by_owner: StorageField<'world, (AccountId, DomainId), ()>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     #[norito(skip)]
     pub(crate) kaigi_relay_registry: StorageField<'world, AccountId, DomainId>,
@@ -5656,18 +5656,16 @@ pub struct WorldBlockFields<'world> {
     pub(crate) soradns_history_len: CellField<'world, u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: StorageField<'world, RepoAgreementId, RepoAgreement>,
-    /// Repo agreement ids keyed by initiating account.
+    /// Repo agreement membership rows keyed by initiating account.
     #[norito(skip)]
-    pub(crate) repo_agreements_by_initiator:
-        StorageField<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by counterparty account.
+    pub(crate) repo_agreements_by_initiator: StorageField<'world, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by counterparty account.
     #[norito(skip)]
     pub(crate) repo_agreements_by_counterparty:
-        StorageField<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by custodian account.
+        StorageField<'world, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by custodian account.
     #[norito(skip)]
-    pub(crate) repo_agreements_by_custodian:
-        StorageField<'world, AccountId, BTreeSet<RepoAgreementId>>,
+    pub(crate) repo_agreements_by_custodian: StorageField<'world, (AccountId, RepoAgreementId), ()>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageField<'world, SettlementId, SettlementReceipt>,
     /// Native bond records keyed by the bond asset definition.
@@ -6747,8 +6745,8 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, DomainId, Vec<HashOf<DomainEndorsement>>>,
     /// Registered domains.
     pub(crate) domains: StorageTransaction<'block, DomainId, Domain>,
-    /// Read-side index from domain owner account to owned domain ids.
-    pub(crate) domains_by_owner: StorageTransaction<'block, AccountId, BTreeSet<DomainId>>,
+    /// Read-side `(owner, domain)` membership rows for owned domain ids.
+    pub(crate) domains_by_owner: StorageTransaction<'block, (AccountId, DomainId), ()>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     pub(crate) kaigi_relay_registry: StorageTransaction<'block, AccountId, DomainId>,
     /// Derived reverse index from raw Kaigi account references to typed metadata locations.
@@ -7391,15 +7389,15 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) soradns_history_len: CellTransaction<'block, 'world, u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: StorageTransaction<'block, RepoAgreementId, RepoAgreement>,
-    /// Repo agreement ids keyed by initiating account.
+    /// Repo agreement membership rows keyed by initiating account.
     pub(crate) repo_agreements_by_initiator:
-        StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by counterparty account.
+        StorageTransaction<'block, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by counterparty account.
     pub(crate) repo_agreements_by_counterparty:
-        StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by custodian account.
+        StorageTransaction<'block, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by custodian account.
     pub(crate) repo_agreements_by_custodian:
-        StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
+        StorageTransaction<'block, (AccountId, RepoAgreementId), ()>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageTransaction<'block, SettlementId, SettlementReceipt>,
     /// Native bond records keyed by the bond asset definition.
@@ -8385,22 +8383,11 @@ impl<'block> WorldTransaction<'block, '_> {
     }
     /// Record domain ownership in the read-side owner index.
     pub(crate) fn track_domain_owner(&mut self, domain_id: &DomainId, owner: &AccountId) {
-        if let Some(domains) = self.domains_by_owner.get_mut(owner) {
-            domains.insert(domain_id.clone());
-        } else {
-            self.domains_by_owner
-                .insert(owner.clone(), BTreeSet::from([domain_id.clone()]));
-        }
+        insert_index_member(&mut self.domains_by_owner, owner, domain_id);
     }
     /// Drop domain ownership from the read-side owner index.
     pub(crate) fn untrack_domain_owner(&mut self, domain_id: &DomainId, owner: &AccountId) {
-        let remove_owner_entry = self.domains_by_owner.get_mut(owner).is_some_and(|domains| {
-            domains.remove(domain_id);
-            domains.is_empty()
-        });
-        if remove_owner_entry {
-            self.domains_by_owner.remove(owner.clone());
-        }
+        remove_index_member(&mut self.domains_by_owner, owner, domain_id);
     }
     /// Insert a domain and keep the owner index consistent.
     pub(crate) fn insert_domain_entry(
@@ -8741,28 +8728,18 @@ impl<'block> WorldTransaction<'block, '_> {
         Ok(previous)
     }
     fn track_repo_agreement_index(
-        storage: &mut StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
+        storage: &mut StorageTransaction<'block, (AccountId, RepoAgreementId), ()>,
         account_id: &AccountId,
         agreement_id: &RepoAgreementId,
     ) {
-        if let Some(agreements) = storage.get_mut(account_id) {
-            agreements.insert(agreement_id.clone());
-        } else {
-            storage.insert(account_id.clone(), BTreeSet::from([agreement_id.clone()]));
-        }
+        insert_index_member(storage, account_id, agreement_id);
     }
     fn untrack_repo_agreement_index(
-        storage: &mut StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
+        storage: &mut StorageTransaction<'block, (AccountId, RepoAgreementId), ()>,
         account_id: &AccountId,
         agreement_id: &RepoAgreementId,
     ) {
-        let remove_entry = storage.get_mut(account_id).is_some_and(|agreements| {
-            agreements.remove(agreement_id);
-            agreements.is_empty()
-        });
-        if remove_entry {
-            storage.remove(account_id.clone());
-        }
+        remove_index_member(storage, account_id, agreement_id);
     }
     /// Record a repo agreement in all read-side indexes.
     pub(crate) fn track_repo_agreement_indexes(&mut self, agreement: &RepoAgreement) {
@@ -9013,8 +8990,8 @@ pub struct WorldView<'world> {
     pub(crate) state_accumulator: CellView<'world, world_projection::WorldStateAccumulator>,
     /// Registered domains.
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
-    /// Read-side index from domain owner account to owned domain ids.
-    pub(crate) domains_by_owner: StorageView<'world, AccountId, BTreeSet<DomainId>>,
+    /// Read-side `(owner, domain)` membership rows for owned domain ids.
+    pub(crate) domains_by_owner: StorageView<'world, (AccountId, DomainId), ()>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     pub(crate) kaigi_relay_registry: StorageView<'world, AccountId, DomainId>,
     /// Derived reverse index from raw Kaigi account references to typed metadata locations.
@@ -9753,15 +9730,13 @@ pub struct WorldView<'world> {
     pub(crate) soradns_history_len: CellView<'world, u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: StorageView<'world, RepoAgreementId, RepoAgreement>,
-    /// Repo agreement ids keyed by initiating account.
-    pub(crate) repo_agreements_by_initiator:
-        StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by counterparty account.
+    /// Repo agreement membership rows keyed by initiating account.
+    pub(crate) repo_agreements_by_initiator: StorageView<'world, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by counterparty account.
     pub(crate) repo_agreements_by_counterparty:
-        StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Repo agreement ids keyed by custodian account.
-    pub(crate) repo_agreements_by_custodian:
-        StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
+        StorageView<'world, (AccountId, RepoAgreementId), ()>,
+    /// Repo agreement membership rows keyed by custodian account.
+    pub(crate) repo_agreements_by_custodian: StorageView<'world, (AccountId, RepoAgreementId), ()>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageView<'world, SettlementId, SettlementReceipt>,
     /// Native bond records keyed by the bond asset definition.
@@ -12887,6 +12862,8 @@ pub struct StateBlockFields<'state> {
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
+    /// Validated confidential-root projection for this immutable view or untouched block.
+    ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache,
     /// Pipeline execution preferences for this block.
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Nexus configuration snapshot for this block.
@@ -14481,6 +14458,8 @@ pub struct StateTransaction<'block, 'state> {
     accounts_snapshot_cache: OnceCell<Arc<Vec<AccountId>>>,
     /// Parent projection, reusable only while election storage has no block edits.
     ivm_elections_cache: &'block ivm_elections::SnapshotCache,
+    /// Parent projection, reusable only while confidential trees have no block edits.
+    ivm_zk_roots_cache: &'block ivm_zk_roots::SnapshotCache,
 }
 
 impl std::ops::Deref for StateTransaction<'_, '_> {
@@ -14718,6 +14697,8 @@ pub struct StateView<'state> {
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
+    /// Validated confidential-root projection for this immutable view or untouched block.
+    ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache,
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
@@ -14788,6 +14769,8 @@ pub struct StateQueryView<'state> {
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
+    /// Validated confidential-root projection for this immutable view or untouched block.
+    ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache,
     /// State telemetry.
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
@@ -17217,6 +17200,8 @@ pub type IvmElectionsSnapshot = BTreeMap<String, (u32, bool, Vec<u128>)>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("invalid IVM election snapshot")]
 pub struct InvalidIvmElectionSnapshot;
+pub(crate) mod ivm_zk_roots;
+pub use ivm_zk_roots::{InvalidIvmZkRootsSnapshot, IvmZkRootsSnapshot, IvmZkTreeRoots};
 #[cfg(test)]
 mod sumeragi_timing_tests {
     use super::*;
@@ -20075,7 +20060,7 @@ impl World {
     }
     fn rebuild_domain_owner_index(&mut self) {
         self.domains_by_owner =
-            ownership_index_restore::grouped(&self.domains.history(), |_, domain| {
+            ownership_index_restore::members(&self.domains.history(), |_, domain| {
                 Some(domain.owned_by().clone())
             });
     }
@@ -20343,13 +20328,13 @@ impl World {
         let (by_initiator, by_counterparty, by_custodian) = {
             let history = self.repo_agreements.history();
             (
-                ownership_index_restore::grouped(&history, |_, agreement| {
+                ownership_index_restore::members(&history, |_, agreement| {
                     Some(agreement.initiator().clone())
                 }),
-                ownership_index_restore::grouped(&history, |_, agreement| {
+                ownership_index_restore::members(&history, |_, agreement| {
                     Some(agreement.counterparty().clone())
                 }),
-                ownership_index_restore::grouped(&history, |_, agreement| {
+                ownership_index_restore::members(&history, |_, agreement| {
                     agreement.custodian().clone()
                 }),
             )
@@ -20936,8 +20921,8 @@ macro_rules! world_ro_accessors {
             cell_ref peers: Peers;
             /// Domain storage (read-only).
             storage domains: DomainId => Domain;
-            /// Domain owner index (read-only).
-            storage domains_by_owner: AccountId => BTreeSet<DomainId>;
+            /// Domain owner membership rows (read-only).
+            storage domains_by_owner: (AccountId, DomainId) => ();
             /// Kaigi relay account to authoritative metadata domain index (read-only).
             storage kaigi_relay_registry: AccountId => DomainId;
             /// Raw Kaigi account reference to typed metadata locations index (read-only).
@@ -21375,12 +21360,12 @@ macro_rules! world_ro_accessors {
         world_ro_accessors!(@items $mode;
             /// Repo agreement registry (read-only).
             storage repo_agreements: RepoAgreementId => RepoAgreement;
-            /// Repo agreement ids keyed by initiating account (read-only).
-            storage repo_agreements_by_initiator: AccountId => BTreeSet<RepoAgreementId>;
-            /// Repo agreement ids keyed by counterparty account (read-only).
-            storage repo_agreements_by_counterparty: AccountId => BTreeSet<RepoAgreementId>;
-            /// Repo agreement ids keyed by custodian account (read-only).
-            storage repo_agreements_by_custodian: AccountId => BTreeSet<RepoAgreementId>;
+            /// Repo agreement membership rows keyed by initiating account (read-only).
+            storage repo_agreements_by_initiator: (AccountId, RepoAgreementId) => ();
+            /// Repo agreement membership rows keyed by counterparty account (read-only).
+            storage repo_agreements_by_counterparty: (AccountId, RepoAgreementId) => ();
+            /// Repo agreement membership rows keyed by custodian account (read-only).
+            storage repo_agreements_by_custodian: (AccountId, RepoAgreementId) => ();
             /// Successful settlement receipts (read-only).
             storage settlement_receipts: SettlementId => SettlementReceipt;
             /// Native bond records (read-only).
@@ -21921,10 +21906,7 @@ pub trait WorldReadOnly {
         &'a self,
         owner: &AccountId,
     ) -> impl Iterator<Item = &'a Domain> + use<'a, Self> {
-        self.domains_by_owner()
-            .get(owner)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
+        index_members(self.domains_by_owner(), owner)
             .filter_map(|domain_id| self.domains().get(domain_id))
     }
     /// Collect the account's dataspace -> domain hierarchy from primary label
@@ -30423,6 +30405,7 @@ impl State {
             query_ledger_time_ms,
             accounts_snapshot_cache: SyncOnceCell::new(),
             ivm_elections_cache: ivm_elections::SnapshotCache::new(),
+            ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
             pipeline: crate::pipeline_validity_policy::effective_pipeline(
@@ -31694,6 +31677,7 @@ impl State {
                 query_ledger_time_ms,
                 accounts_snapshot_cache: SyncOnceCell::new(),
                 ivm_elections_cache: ivm_elections::SnapshotCache::new(),
+                ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),
                 #[cfg(feature = "telemetry")]
                 telemetry: &self.telemetry,
                 pipeline,
@@ -36175,6 +36159,13 @@ pub trait StateReadOnly: WorldStateSnapshot {
     ) -> Result<Arc<IvmElectionsSnapshot>, InvalidIvmElectionSnapshot> {
         ivm_elections::project(self.world().elections())
     }
+    /// Validated confidential-root projection for IVM state reads.
+    ///
+    /// # Errors
+    /// Rejects confidential tree metadata that contradicts its commitment count or profile.
+    fn ivm_zk_roots_snapshot(&self) -> Result<Arc<IvmZkRootsSnapshot>, InvalidIvmZkRootsSnapshot> {
+        ivm_zk_roots::project(self.world().zk_assets().iter())
+    }
     /// Resolve the exact canonical `3f+1` committee for a lane/dataspace route
     /// at an explicit consensus height.
     ///
@@ -36444,6 +36435,9 @@ macro_rules! impl_state_ro {
             }
             fn ivm_elections_snapshot(&self) -> Result<Arc<IvmElectionsSnapshot>, InvalidIvmElectionSnapshot> {
                 ivm_elections::cached_snapshot(&self.ivm_elections_cache, &self.world)
+            }
+            fn ivm_zk_roots_snapshot(&self) -> Result<Arc<IvmZkRootsSnapshot>, InvalidIvmZkRootsSnapshot> {
+                ivm_zk_roots::cached_snapshot(&self.ivm_zk_roots_cache, &self.world)
             }
             fn accounts_snapshot(&self) -> Arc<Vec<AccountId>> {
                 Arc::clone(self.accounts_snapshot_cache.get_or_init(|| {
@@ -39162,6 +39156,7 @@ impl<'state> StateBlock<'state> {
             last_mintable: None,
             accounts_snapshot_cache: OnceCell::new(),
             ivm_elections_cache: &fields.ivm_elections_cache,
+            ivm_zk_roots_cache: &fields.ivm_zk_roots_cache,
         })
     }
     #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
@@ -45040,13 +45035,13 @@ pub mod range_bounds {
     use iroha_model_base::domain::DomainId;
     include!("state/range_bounds.rs");
 }
-#[cfg(test)]
-mod derived_index_write_cost_tests;
 mod account_identity_restore;
 mod account_rekey_restore;
 mod account_scope_restore;
 mod alias_index_restore;
 mod alias_lease;
+#[cfg(test)]
+mod derived_index_write_cost_tests;
 use alias_lease::validate_alias_lease_window;
 mod asset_index_restore;
 pub(crate) mod contract_subject_restore;

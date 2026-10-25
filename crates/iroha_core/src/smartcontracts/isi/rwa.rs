@@ -934,7 +934,18 @@ pub mod isi {
         fn test_state() -> State {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            State::new(World::default(), kura, query_handle)
+            let world = World::default();
+            // Component registrations use an explicit policy authored before the block snapshot.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install fixture crypto policy");
+            parameters.commit();
+            State::new(world, kura, query_handle)
         }
         fn seed_domain_name_lease(
             world: &mut crate::state::WorldTransaction<'_, '_>,
@@ -1800,7 +1811,18 @@ pub mod query {
         fn find_rwas_applies_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let world = World::default();
+            // Component account writes require an authored policy before the block snapshot.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -1848,7 +1870,18 @@ pub mod query {
         fn find_rwas_filters_owner_with_owner_index() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let world = World::default();
+            // Component account writes require an authored policy before the block snapshot.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -1927,7 +1960,18 @@ pub mod query {
         fn find_rwas_intersects_status_and_frozen_wsv_indexes() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let world = World::default();
+            // Component account writes require an authored policy before the block snapshot.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();

@@ -374,7 +374,7 @@ mod tests {
         app_auth::CanonicalRequestAuthConfig,
         tests_runtime_handlers::{
             app_auth_test_guard, checked_torii_test_ed25519_keypair,
-            mk_app_state_for_tests_with_world, signed_network_app_headers,
+            mk_app_state_for_tests_with_pre_genesis_world, signed_network_app_headers,
         },
     };
     use axum::{body::Bytes, http::StatusCode, response::IntoResponse as _};
@@ -427,7 +427,7 @@ mod tests {
         other: Option<&AccountId>,
         nonce: NonceFixture,
     ) -> SharedAppState {
-        mk_app_state_for_tests_with_world(fixture_world(authority, other, nonce))
+        mk_app_state_for_tests_with_pre_genesis_world(fixture_world(authority, other, nonce))
     }
     type AliasAnchorBinding = (
         ContractAddress,
@@ -530,7 +530,7 @@ mod tests {
             iroha_core::sns::record_storage_key(&selector),
             record.encode(),
         );
-        let mut app = mk_app_state_for_tests_with_world(world);
+        let mut app = mk_app_state_for_tests_with_pre_genesis_world(world);
         anchor_state(&mut app, 1_000, None);
         let response = read_contract_deployment_state(
             &app,

@@ -12,12 +12,11 @@ use iroha_data_model::{
     repo::{RepoAgreement, RepoAgreementId},
 };
 use mv::storage::FrozenStorageImages;
-use std::collections::BTreeSet;
 struct Original<'frozen> {
     rows: FrozenStorageImages<'frozen, RepoAgreementId, RepoAgreement>,
-    initiators: FrozenStorageImages<'frozen, AccountId, BTreeSet<RepoAgreementId>>,
-    counterparties: FrozenStorageImages<'frozen, AccountId, BTreeSet<RepoAgreementId>>,
-    custodians: FrozenStorageImages<'frozen, AccountId, BTreeSet<RepoAgreementId>>,
+    initiators: FrozenStorageImages<'frozen, (AccountId, RepoAgreementId), ()>,
+    counterparties: FrozenStorageImages<'frozen, (AccountId, RepoAgreementId), ()>,
+    custodians: FrozenStorageImages<'frozen, (AccountId, RepoAgreementId), ()>,
     budget: &'frozen AllocationBudget,
 }
 impl<'frozen> Original<'frozen> {

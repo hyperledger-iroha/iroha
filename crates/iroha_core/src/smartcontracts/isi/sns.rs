@@ -2569,6 +2569,16 @@ mod tests {
             [payment_definition],
         );
         seed_default_namespace_policies(&mut world);
+        // Component account registration owns its policy before the first snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -3130,6 +3140,16 @@ mod tests {
         world
             .account_permissions
             .insert(authority.clone(), permissions);
+        // Component account registration owns its policy before the first snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -3242,6 +3262,16 @@ mod tests {
         world
             .account_permissions
             .insert(authority.clone(), permissions);
+        // Component account registration owns its policy before the first snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
         let mut state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),

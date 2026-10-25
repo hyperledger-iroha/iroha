@@ -2,6 +2,7 @@
 
 use super::test_support::*;
 use super::*;
+use crate::state::range_bounds::index_members;
 use crate::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -83,15 +84,20 @@ fn restored_groups_keep_untouched_members_across_insert_remove_and_rollback() {
     }
     world.rebuild_repo_agreement_indexes();
     assert_eq!(check(&world, TEST_WORK_ALLOWANCE), Ok(()));
+    let initiated = |world: &World| {
+        index_members(&world.repo_agreements_by_initiator.view(), &ALICE_ID)
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    };
     assert_eq!(
-        world.repo_agreements_by_initiator.view().get(&ALICE_ID),
-        Some(&BTreeSet::from([untouched.id.clone(), inserted.id]))
+        initiated(&world),
+        BTreeSet::from([untouched.id.clone(), inserted.id])
     );
     world.block_and_revert().commit();
     assert_eq!(check(&world, TEST_WORK_ALLOWANCE), Ok(()));
     assert_eq!(
-        world.repo_agreements_by_initiator.view().get(&ALICE_ID),
-        Some(&BTreeSet::from([untouched.id, original.id]))
+        initiated(&world),
+        BTreeSet::from([untouched.id, original.id])
     );
 }
 
@@ -105,7 +111,7 @@ fn every_group_rejects_missing_members_in_both_native_images() {
                     world.$field = Storage::default();
                     if previous {
                         let mut block = world.$field.block();
-                        block.insert($key, BTreeSet::from([id()]));
+                        block.insert(($key, id()), ());
                         block.commit();
                     }
                 }};
@@ -134,21 +140,21 @@ fn every_group_rejects_missing_members_in_both_native_images() {
 }
 
 #[test]
-fn absent_custodians_cannot_have_empty_foreign_or_deleted_source_membership() {
+fn absent_custodians_cannot_have_foreign_or_deleted_source_membership() {
     for previous in [false, true] {
-        for case in 0..3 {
+        for case in 0..2 {
             let mut world = fixture(false);
-            let members = match case {
-                0 => BTreeSet::new(),
-                1 => BTreeSet::from([id()]),
-                _ => BTreeSet::from(["absentrepo".parse().unwrap()]),
+            let member: RepoAgreementId = if case == 0 {
+                id()
+            } else {
+                "absentrepo".parse().unwrap()
             };
             world
                 .repo_agreements_by_custodian
-                .insert(BOB_ID.clone(), members);
+                .insert((BOB_ID.clone(), member.clone()), ());
             if previous {
                 let mut block = world.repo_agreements_by_custodian.block();
-                block.remove(BOB_ID.clone());
+                block.remove((BOB_ID.clone(), member));
                 block.commit();
             }
             assert_eq!(
@@ -156,11 +162,7 @@ fn absent_custodians_cannot_have_empty_foreign_or_deleted_source_membership() {
                 Err(corrupt(
                     "world.repo_agreements_by_custodian",
                     previous,
-                    if case == 0 {
-                        GroupMismatch::EmptyGroup
-                    } else {
-                        GroupMismatch::ForeignMember
-                    },
+                    GroupMismatch::ForeignMember,
                 ))
             );
         }
@@ -169,7 +171,7 @@ fn absent_custodians_cannot_have_empty_foreign_or_deleted_source_membership() {
 
 #[test]
 fn local_work_counts_custodianless_sources_and_absent_undo_rows() {
-    for (custodian, exact, absent_work) in [(false, 816, 140), (true, 1222, 168)] {
+    for (custodian, exact, absent_work) in [(false, 804, 140), (true, 1204, 168)] {
         let world = fixture(custodian);
         assert_eq!(check(&world, exact), Ok(()));
         assert_eq!(
@@ -210,10 +212,10 @@ fn state_capture_checks_undo_indexes_before_encoding_and_preserves_pool_refusal(
     let mut world = fixture(false);
     world
         .repo_agreements_by_custodian
-        .insert(BOB_ID.clone(), BTreeSet::from([id()]));
+        .insert((BOB_ID.clone(), id()), ());
     {
         let mut block = world.repo_agreements_by_custodian.block();
-        block.remove(BOB_ID.clone());
+        block.remove((BOB_ID.clone(), id()));
         block.commit();
     }
     let mut state = State::new_for_testing(

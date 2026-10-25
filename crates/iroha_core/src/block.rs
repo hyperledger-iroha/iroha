@@ -11634,7 +11634,10 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         .expect("canonical network XOR identity");
         let world = World::with(
             [Domain::new(domain).build(&authority)],
-            [Account::new(authority.clone()).build(&authority)],
+            [
+                Account::new(authority.clone()).build(&authority),
+                Account::new(fee_sink.clone()).build(&authority),
+            ],
             [],
         );
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
@@ -11648,9 +11651,6 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         {
             let mut genesis = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let mut transaction = genesis.transaction();
-            Register::account(Account::new(fee_sink.clone()))
-                .execute(&authority, &mut transaction)
-                .unwrap();
             Register::asset_definition(AssetDefinition::numeric(
                 fee_asset.clone(),
                 "sealed fee",

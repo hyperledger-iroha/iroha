@@ -4,6 +4,27 @@ use super::prelude::*;
 use iroha_data_model::{prelude::*, query::error::FindError};
 use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
+
+/// Author the ordinary signing policy required by account component fixtures.
+/// This input grants no authenticated genesis or block-publication capability.
+#[cfg(test)]
+fn account_fixture_state(
+    world: crate::state::World,
+    kura: std::sync::Arc<crate::kura::Kura>,
+    query_handle: crate::query::store::LiveQueryStoreHandle,
+) -> crate::state::State {
+    let mut parameters = world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical account fixture crypto policy"),
+        )
+        .expect("install the account fixture's original crypto policy");
+    parameters.commit();
+    crate::state::State::new(world, kura, query_handle)
+}
+
 /// All instructions related to accounts:
 /// - minting/burning public key into account signatories
 /// - minting/burning signature condition check
@@ -1033,13 +1054,14 @@ pub mod isi {
     }
     #[cfg(test)]
     mod test {
+        use super::super::account_fixture_state;
         use crate::smartcontracts::isi::Registrable as _;
         use crate::{
             block::ValidBlock,
             kura::Kura,
             query::store::LiveQueryStore,
             smartcontracts::Execute,
-            state::{State, World, WorldReadOnly},
+            state::{World, WorldReadOnly},
         };
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
@@ -1093,7 +1115,7 @@ pub mod isi {
         fn duplicate_alias_permission_grant_is_idempotent() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -1130,7 +1152,7 @@ pub mod isi {
         fn duplicate_non_alias_permission_grant_still_rejects() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -2124,7 +2146,9 @@ pub mod query {
     }
     #[cfg(test)]
     mod tests {
-        use super::super::isi::ensure_recovery_request_targets_current_lineage;
+        use super::super::{
+            account_fixture_state, isi::ensure_recovery_request_targets_current_lineage,
+        };
         use super::*;
         use crate::{
             block::ValidBlock,
@@ -2143,6 +2167,27 @@ pub mod query {
         }
         fn checked_account_id() -> AccountId {
             AccountId::new(checked_keypair().public_key().clone())
+        }
+        #[test]
+        fn account_fixture_owns_crypto_policy_without_committed_genesis() {
+            let world = World::default();
+            assert!(world.parameters.view().require_crypto_policy().is_err());
+            let state = account_fixture_state(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            assert_eq!(state.committed_height(), 0);
+            assert_eq!(state.kura().blocks_count(), 0);
+            assert_eq!(
+                state
+                    .view()
+                    .world()
+                    .parameters()
+                    .require_crypto_policy()
+                    .expect("explicit account component policy"),
+                &crate::sumeragi::test_chain::crypto_fixture_policy(),
+            );
         }
         #[test]
         fn checked_keypair_preserves_default_algorithm() {
@@ -2176,7 +2221,7 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
-            State::new(world, kura, query_handle)
+            account_fixture_state(world, kura, query_handle)
         }
         fn new_state_with_authority_and_domain_lease(domain_id: &DomainId) -> State {
             let kura = Kura::blank_kura_for_testing();
@@ -2184,7 +2229,7 @@ pub mod query {
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
             seed_domain_name_lease(&mut world, &ALICE_ID, domain_id);
-            State::new(world, kura, query_handle)
+            account_fixture_state(world, kura, query_handle)
         }
         fn root_alias(label: &str) -> AccountAlias {
             AccountAlias::domainless(
@@ -2288,7 +2333,7 @@ pub mod query {
         fn find_accounts_with_asset_ignores_zero_holdings() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3041,7 +3086,7 @@ pub mod query {
         fn find_accounts_returns_registered_accounts_for_pass_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3074,7 +3119,7 @@ pub mod query {
         fn find_accounts_applies_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3113,7 +3158,7 @@ pub mod query {
         fn find_accounts_applies_id_literal_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3145,7 +3190,7 @@ pub mod query {
         fn find_accounts_applies_id_in_literal_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3185,7 +3230,7 @@ pub mod query {
         fn find_accounts_filters_by_domain_with_scope_index() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3244,7 +3289,7 @@ pub mod query {
         fn find_accounts_applies_mixed_domain_and_metadata_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3305,7 +3350,7 @@ pub mod query {
         fn find_accounts_applies_mixed_id_and_metadata_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3346,7 +3391,7 @@ pub mod query {
         fn find_account_ids_uses_direct_id_lookup_for_id_predicates() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3378,7 +3423,7 @@ pub mod query {
         fn find_account_ids_uses_candidate_lookup_for_id_predicates_with_exists() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3417,7 +3462,7 @@ pub mod query {
         fn find_accounts_with_asset_applies_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3478,7 +3523,7 @@ pub mod query {
         fn find_accounts_with_asset_uses_nonzero_definition_asset_index() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3535,7 +3580,7 @@ pub mod query {
         fn find_accounts_with_asset_filters_by_domain_with_scope_index() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3600,7 +3645,7 @@ pub mod query {
         fn find_accounts_with_asset_applies_id_literal_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3654,7 +3699,7 @@ pub mod query {
         fn find_accounts_with_asset_applies_id_in_literal_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3713,7 +3758,7 @@ pub mod query {
         fn find_accounts_with_asset_applies_mixed_id_and_metadata_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3780,7 +3825,7 @@ pub mod query {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
-            let mut state = State::new(world, kura, query_handle);
+            let mut state = account_fixture_state(world, kura, query_handle);
             state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
@@ -3848,7 +3893,7 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
-            let state = State::new(world, kura, query_handle);
+            let state = account_fixture_state(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3878,7 +3923,7 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
-            let state = State::new(world, kura, query_handle);
+            let state = account_fixture_state(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3940,7 +3985,7 @@ pub mod query {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
-            let mut state = State::new(world, kura, query_handle);
+            let mut state = account_fixture_state(world, kura, query_handle);
             state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
@@ -4006,7 +4051,7 @@ pub mod query {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
-            let mut state = State::new(world, kura, query_handle);
+            let mut state = account_fixture_state(world, kura, query_handle);
             state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
@@ -4065,7 +4110,7 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
-            let mut state = State::new(world, kura, query_handle);
+            let mut state = account_fixture_state(world, kura, query_handle);
             state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
@@ -4113,7 +4158,7 @@ pub mod query {
         fn transfer_asset_definition_rejects_unauthorized_authority() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -4179,7 +4224,7 @@ pub mod query {
         fn transfer_asset_definition_allows_source_owner() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();

@@ -452,6 +452,147 @@ fn a_release_without_a_fee_registers_and_credits_the_recipient() {
 }
 
 #[test]
+fn maximal_codec3_multisig_recipient_releases_without_decoder_deferral() {
+    use iroha_data_model::{
+        account::controller::{MultisigMember, MultisigPolicy},
+        sccp::events::SccpInboundProvenV1,
+    };
+    use iroha_sccp::v1::constants::MAX_TAIRA_ACCOUNT_BYTES;
+
+    let members = (1_u8..=27)
+        .map(|seed| {
+            let algorithm = if seed <= 9 {
+                Algorithm::Ed25519
+            } else {
+                Algorithm::Secp256k1
+            };
+            let key = KeyPair::try_from_seed(vec![seed; 32], algorithm).expect("valid member key");
+            MultisigMember::new(key.public_key().clone(), 1).expect("positive member weight")
+        })
+        .collect();
+    // The constructor checks unique keys and orders the weighted members canonically.
+    let multisig = MultisigPolicy::new(1, members).expect("canonical multisig policy");
+    assert_eq!(multisig.version(), 1);
+    assert_eq!(multisig.threshold(), 1);
+    assert_eq!(multisig.members().len(), 27);
+    assert!(multisig.members().iter().all(|member| member.weight() == 1));
+    for (algorithm, expected) in [(Algorithm::Ed25519, 9), (Algorithm::Secp256k1, 18)] {
+        assert_eq!(
+            multisig
+                .members()
+                .iter()
+                .filter(|member| member.public_key().algorithm() == algorithm)
+                .count(),
+            expected
+        );
+    }
+    let recipient = AccountId::new_multisig(multisig);
+    let recipient_bytes = address_bytes(&recipient);
+    // Seven fixed bytes plus five framing bytes and the key bytes per member.
+    assert_eq!(recipient_bytes.len(), 7 + 9 * (5 + 32) + 18 * (5 + 33));
+    assert_eq!(recipient_bytes.len(), MAX_TAIRA_ACCOUNT_BYTES);
+
+    let state = state();
+    let mut block = state.block(header(5));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"maximal-codec3-recipient"));
+    let original_policy = stx
+        .crypto_admission_policy()
+        .expect("fixture policy retained from the block preimage")
+        .clone();
+    assert!(original_policy.allows(Algorithm::Ed25519));
+    assert!(original_policy.allows(Algorithm::Secp256k1));
+    install(&mut stx);
+    fund(&mut stx, ETH, 1, 10 * ONE_XOR);
+    let escrow = escrow_of(&stx, ETH);
+    let holder_after_lock = xor_balance(&*stx.world, &holder());
+    assert_eq!(xor_balance(&*stx.world, &escrow), 10 * ONE_XOR);
+    assert!(stx.world.account(&recipient).is_err());
+    assert!(!stx.is_execution_deferred());
+    assert!(stx.borrow_execution_deferral().is_none());
+    let events_before = sccp_events(&stx).len();
+
+    // Pass only canonical bytes to record_proven -> settle_inbound -> classify_recipient.
+    let id = prove(&mut stx, 0, 3 * ONE_XOR, recipient_bytes.clone(), 0);
+    assert_eq!(
+        inbound_status(&stx, &id),
+        SccpInboundStatusV1::Released(SccpInboundSettledV1 {
+            height: 5,
+            payout: 3 * ONE_XOR,
+        })
+    );
+    assert!(
+        stx.world.account(&recipient).is_ok(),
+        "registered exact identity"
+    );
+    assert_eq!(xor_balance(&*stx.world, &recipient), 3 * ONE_XOR);
+    assert_eq!(xor_balance(&*stx.world, &escrow), 7 * ONE_XOR);
+    assert_eq!(xor_balance(&*stx.world, &holder()), holder_after_lock);
+    assert_eq!(liability(&stx, ETH, 1), 7 * ONE_XOR);
+    assert_eq!(stranded(&stx, ETH), 0);
+    assert_eq!(store::pending_count(&*stx.world, &(ETH, 1)), (0, 0));
+    assert_eq!(store::outbound_messages::iter(&*stx.world).count(), 0);
+    assert!(!stx.is_execution_deferred());
+    assert!(stx.borrow_execution_deferral().is_none());
+    assert_eq!(stx.crypto_admission_policy().unwrap(), &original_policy);
+    let record = store::inbound_messages::get(&*stx.world, &id).expect("proven record");
+    assert_eq!(
+        SccpTransferPayloadV1::decode(&record.payload)
+            .expect("stored canonical payload")
+            .recipient
+            .bytes,
+        recipient_bytes
+    );
+    let events = sccp_events(&stx);
+    assert_eq!(
+        &events[events_before..],
+        &[
+            SccpEvent::InboundProven(SccpInboundProvenV1 {
+                message_id: id,
+                network: ETH,
+                revision: 1,
+                amount: 3 * ONE_XOR,
+                source_locator: SccpSourceLocatorV1 {
+                    source_height: 100,
+                    block_hash: [7; 32],
+                    index_in_block: 0,
+                },
+                fee_due: 0,
+            }),
+            SccpEvent::RecipientRegistered(SccpRecipientRegisteredV1 {
+                account: recipient.clone(),
+                network: ETH,
+                message_id: Some(id),
+            }),
+            SccpEvent::InboundReleased(SccpInboundReleasedV1 {
+                message_id: id,
+                network: ETH,
+                revision: 1,
+                recipient: recipient.clone(),
+                amount: 3 * ONE_XOR,
+                fee: 0,
+            }),
+        ]
+    );
+    assert_escrow_invariant(&*stx.world, "maximal recipient release");
+    assert_pending_counts(&stx, "maximal recipient release");
+
+    execute_settle(SettleSccpV1::inbound(id), &holder(), &mut stx).expect_err("not pending");
+    assert_eq!(xor_balance(&*stx.world, &recipient), 3 * ONE_XOR);
+    assert_eq!(xor_balance(&*stx.world, &escrow), 7 * ONE_XOR);
+    assert_eq!(liability(&stx, ETH, 1), 7 * ONE_XOR);
+    assert_eq!(
+        sccp_events(&stx),
+        events,
+        "retry cannot publish another release"
+    );
+    assert!(!stx.is_execution_deferred());
+    assert!(stx.borrow_execution_deferral().is_none());
+    assert_eq!(stx.crypto_admission_policy().unwrap(), &original_policy);
+    assert_escrow_invariant(&*stx.world, "maximal recipient retry");
+    assert_pending_counts(&stx, "maximal recipient retry");
+}
+
+#[test]
 fn a_release_with_a_self_claim_fee_pays_the_fee_sink() {
     let state = state();
     let mut block = state.block(header(5));

@@ -515,12 +515,12 @@ pub fn native_retail_multisig_transfer_fixture() -> NativeRetailMultisigTransfer
     // Reward custody authenticates the currency from committed NPoS policy.
     // Author it in signed genesis, with the exact matching consensus mode.
     config.consensus_mode = SumeragiConsensusMode::Npos;
-    config.genesis_parameters = vec![
+    config.genesis_parameters.extend([
         Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
             npos.epoch_length_blocks,
         )),
         Parameter::Custom(npos.into_custom_parameter()),
-    ];
+    ]);
     let genesis_key = config.genesis_key.clone();
     config.genesis_instructions = vec![
         Register::domain(Domain::new(domain.clone())).into(),

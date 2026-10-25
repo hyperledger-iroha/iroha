@@ -31197,7 +31197,10 @@ mod advert_tests {
             },
             token::signer_test_support::{ObserverFault, SignedFixture, TestSignerMode},
         },
-        tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_network_app_headers},
+        tests_runtime_handlers::{
+            mk_app_state_for_tests_with_pre_genesis_world, mk_app_state_for_tests_with_world,
+            signed_network_app_headers,
+        },
         utils::extractors::JsonOnly,
     };
     use axum::{
@@ -36702,7 +36705,7 @@ mod advert_tests {
                 admission_envelope_digest: PROOF_OUTCOME_TEST_ADMISSION_DIGEST,
             },
         ));
-        let mut app = mk_app_state_for_tests_with_world(world);
+        let mut app = mk_app_state_for_tests_with_pre_genesis_world(world);
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero fixture block height"),
             None,
@@ -38680,7 +38683,7 @@ mod advert_tests {
     }
     #[tokio::test]
     async fn pin_registry_respects_norito_accept_header() {
-        let app = mk_app_state_for_tests();
+        let app = mk_app_state_for_tests_with_pre_genesis_world(World::new());
         let mut inner =
             Arc::try_unwrap(app).unwrap_or_else(|_| panic!("no other references to app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
@@ -38705,7 +38708,7 @@ mod advert_tests {
     }
     #[tokio::test]
     async fn pin_manifest_readback_is_finalized_native_state_without_local_storage() {
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_app_state_for_tests_with_pre_genesis_world(World::new());
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero fixture block height"),
             None,

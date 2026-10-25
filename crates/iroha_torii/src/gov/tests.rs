@@ -323,7 +323,7 @@ fn scalar_governance_handlers_cannot_reintroduce_history_scans() {
         .expect("citizen count handler");
     let citizen_tail = &source[citizen_start..];
     let citizen_end = citizen_tail
-        .find("/// GET /v1/gov/citizens/{account_id}")
+        .find("pub async fn handle_gov_citizen_status(")
         .expect("citizen count handler terminator");
     let citizen_handler = &citizen_tail[..citizen_end];
     assert!(citizen_handler.contains("world.citizens().len()"));

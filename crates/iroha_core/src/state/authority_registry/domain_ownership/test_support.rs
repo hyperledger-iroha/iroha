@@ -6,12 +6,12 @@ use iroha_config::parameters::actual::LaneConfig;
 use iroha_data_model::{IntoKeyValue, account::Account, prelude::Registrable};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::{Storage, StorageReadOnly};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Borrowed fixture owner buckets before explicit test corruption.
-pub(in crate::state) type OwnerRows = BTreeMap<AccountId, BTreeSet<DomainId>>;
-/// Original owner preimages retained by the fixture.
-pub(in crate::state) type OwnerUndo = BTreeMap<AccountId, Option<BTreeSet<DomainId>>>;
+/// Borrowed fixture owner membership rows before explicit test corruption.
+pub(in crate::state) type OwnerRows = BTreeSet<(AccountId, DomainId)>;
+/// Original owner membership preimages retained by the fixture.
+pub(in crate::state) type OwnerUndo = BTreeMap<(AccountId, DomainId), Option<()>>;
 
 /// Construct a domain in the fixture dataspace.
 pub(in crate::state) fn id(name: &str) -> DomainId {
@@ -95,19 +95,20 @@ pub(in crate::state) fn edit_index(
     edit: impl FnOnce(&mut OwnerRows, &mut OwnerUndo),
 ) {
     let snapshot = world.domains_by_owner.snapshot();
-    let mut current = snapshot
+    let mut current: OwnerRows = snapshot
         .current()
         .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
+        .map(|(row, ())| row.clone())
         .collect();
     let mut undo = snapshot
         .revert_map()
         .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
+        .map(|(row, prior)| (row.clone(), *prior))
         .collect();
     drop(snapshot);
     edit(&mut current, &mut undo);
-    world.domains_by_owner = Storage::from_snapshot_parts(current, undo);
+    world.domains_by_owner =
+        Storage::from_snapshot_parts(current.into_iter().map(|row| (row, ())).collect(), undo);
 }
 
 /// Inspect one original committed relation without allocating.
@@ -120,7 +121,7 @@ pub(in crate::state) fn error(world: &World, limit: u64) -> DomainOwnershipError
 /// Exact required work for the bounded valid original relation, without allocating.
 pub(in crate::state) fn exact_work(
     domains: &impl RawStorageImages<DomainId, Domain>,
-    owners: &impl RawStorageImages<AccountId, BTreeSet<DomainId>>,
+    owners: &impl RawStorageImages<(AccountId, DomainId), ()>,
 ) -> u64 {
     let mut low = 0;
     let mut high = 1_000_000;

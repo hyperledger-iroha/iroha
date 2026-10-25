@@ -623,12 +623,6 @@ struct PreparedVerifyingKey {
     backend_label: Arc<str>,
     material: Option<crate::zk::PreparedVerifyingKeyMaterialV1>,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ZkRootsSnapshot {
-    tree_profile: crate::state::ConfidentialTreeProfile,
-    root_history: Vec<[u8; 32]>,
-    commitment_count: usize,
-}
 /// One finalized epoch-boundary pulse that passed every State check of the
 /// `VRF_EPOCH_SEED` projection; only its final threshold signature is unchecked.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -937,7 +931,7 @@ pub struct CoreHostImpl<QS> {
     zk_verified_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
     // Snapshots for state-read syscalls
-    zk_roots: BTreeMap<AssetDefinitionId, ZkRootsSnapshot>,
+    zk_roots: Arc<crate::state::IvmZkRootsSnapshot>,
     zk_elections: Arc<crate::state::IvmElectionsSnapshot>,
     // `VRF_EPOCH_SEED` projection; signatures and deferred scans resolve on first use.
     vrf_epoch_seeds: VrfEpochSeedSource,
@@ -3616,7 +3610,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             negotiated_caps_snapshot: None,
             zk_verified_ballot: Arc::new(VecDeque::new()),
             zk_verified_tally: Arc::new(VecDeque::new()),
-            zk_roots: BTreeMap::new(),
+            zk_roots: Arc::default(),
             zk_elections: Arc::default(),
             vrf_epoch_seeds: VrfEpochSeedSource::default(),
             prepared_verifying_keys: BTreeMap::new(),
@@ -3744,7 +3738,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             negotiated_caps_snapshot: None,
             zk_verified_ballot: Arc::new(VecDeque::new()),
             zk_verified_tally: Arc::new(VecDeque::new()),
-            zk_roots: BTreeMap::new(),
+            zk_roots: Arc::default(),
             zk_elections: Arc::default(),
             vrf_epoch_seeds: VrfEpochSeedSource::default(),
             prepared_verifying_keys: BTreeMap::new(),
@@ -3826,7 +3820,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             negotiated_caps_snapshot: None,
             zk_verified_ballot: Arc::new(VecDeque::new()),
             zk_verified_tally: Arc::new(VecDeque::new()),
-            zk_roots: BTreeMap::new(),
+            zk_roots: Arc::default(),
             zk_elections: Arc::default(),
             vrf_epoch_seeds: VrfEpochSeedSource::default(),
             prepared_verifying_keys: BTreeMap::new(),
@@ -4852,32 +4846,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &mut self,
         map: &BTreeMap<AssetDefinitionId, crate::state::ZkAssetState>,
     ) -> Result<(), ivm::VMError> {
-        self.zk_roots = Self::validated_zk_roots_snapshot(map)?;
+        self.zk_roots =
+            crate::state::ivm_zk_roots::project(map).map_err(|_| ivm::VMError::NoritoInvalid)?;
         Ok(())
-    }
-    /// Validate confidential trees in place and copy only what `ZK_ROOTS_GET` reads.
-    ///
-    /// The commitment leaves and nullifier sets stay in the World: a root read
-    /// observes the tree profile, the bounded retained root history and the
-    /// commitment count, never an individual leaf.
-    fn validated_zk_roots_snapshot<'a>(
-        entries: impl IntoIterator<Item = (&'a AssetDefinitionId, &'a crate::state::ZkAssetState)>,
-    ) -> Result<BTreeMap<AssetDefinitionId, ZkRootsSnapshot>, ivm::VMError> {
-        let mut roots = BTreeMap::new();
-        for (asset_id, state) in entries {
-            state
-                .validate_tree_metadata()
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
-            roots.insert(
-                asset_id.clone(),
-                ZkRootsSnapshot {
-                    tree_profile: state.tree_profile,
-                    root_history: state.root_history.clone(),
-                    commitment_count: state.commitments.len(),
-                },
-            );
-        }
-        Ok(roots)
     }
     /// Hydrate the ABI-V1 `VRF_EPOCH_SEED` projection from finalized global pulses.
     ///
@@ -4927,12 +4898,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .seed(epoch),
         }
     }
-    /// Hydrate ZK state reads, reusing elections only while their source is unchanged.
+    /// Hydrate ZK state reads, reusing projections only while their source is unchanged.
     ///
-    /// The State owns an immutable election projection for each read view and
-    /// untouched block. Election edits bypass that cache, including edits in a
-    /// child transaction; rollback restores access to the original projection.
-    /// Confidential trees and verifying-key entries retain their validation order.
+    /// The State owns immutable election and confidential-root projections for
+    /// each read view and untouched block. Election or tree edits bypass the
+    /// matching cache, including edits in a child transaction; rollback restores
+    /// access to the original projection. Elections, confidential trees and
+    /// verifying-key entries retain their validation order.
     ///
     /// # Errors
     /// Rejects malformed election, tree or verifying-key state before replacing
@@ -4944,7 +4916,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let elections = state
             .ivm_elections_snapshot()
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        self.install_zk_snapshots(state.world(), state.zk(), elections)
+        let roots = state
+            .ivm_zk_roots_snapshot()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        self.install_zk_snapshots(state.world(), state.zk(), roots, elections)
     }
     /// Hydrate a standalone World fixture without an enclosing State cache.
     #[cfg(test)]
@@ -4955,15 +4930,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     ) -> Result<(), ivm::VMError> {
         let elections = crate::state::ivm_elections::project(world.elections())
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        self.install_zk_snapshots(world, zk_cfg, elections)
+        let roots = crate::state::ivm_zk_roots::project(world.zk_assets().iter())
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        self.install_zk_snapshots(world, zk_cfg, roots, elections)
     }
+    /// Validate the verifying-key registry, then install the validated projections.
     fn install_zk_snapshots(
         &mut self,
         world: &impl WorldReadOnly,
         zk_cfg: &iroha_config::parameters::actual::Zk,
+        roots: Arc<crate::state::IvmZkRootsSnapshot>,
         elections: Arc<crate::state::IvmElectionsSnapshot>,
     ) -> Result<(), ivm::VMError> {
-        let roots = Self::validated_zk_roots_snapshot(world.zk_assets().iter())?;
         let prepared_verifying_keys =
             Self::prepared_verifying_key_index(world.verifying_keys().iter())?;
         self.prepared_verifying_keys = prepared_verifying_keys;
@@ -5420,6 +5398,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.zk_elections = Arc::new(map);
         Ok(())
     }
+    /// Production hydration validates elections in [`crate::state::ivm_elections::project`].
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn validate_zk_elections_snapshot(
         map: &BTreeMap<String, (u32, bool, Vec<u128>)>,
     ) -> Result<(), ivm::VMError> {
@@ -26244,9 +26224,9 @@ seiyaku DurableOwner {
         );
         let mut host = CoreHost::new(authority);
         host.zk_tree_roots_history_len = NonZeroUsize::new(256).expect("non-zero root history");
-        host.zk_roots.insert(
+        Arc::make_mut(&mut host.zk_roots).insert(
             asset.clone(),
-            ZkRootsSnapshot {
+            crate::state::IvmZkTreeRoots {
                 tree_profile: crate::state::ConfidentialTreeProfile::PoseidonPastaV1,
                 root_history: (0..384_u16)
                     .map(|index| {

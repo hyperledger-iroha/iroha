@@ -16,6 +16,7 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
         &treasury,
         TEST_TRADE_LOCK_MICRO,
     );
+    seed_component_crypto_policy(&state);
     let mut block = state.block(block_header());
     block.admit_fastpq_source_for_testing(Hash::prehashed([0xA7; Hash::LENGTH]));
     let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA6; Hash::LENGTH]));
@@ -242,6 +243,7 @@ fn receipt_overdraw_rejects_without_asset_or_audit_mutation() {
         &treasury,
         TEST_TRADE_LOCK_MICRO,
     );
+    seed_component_crypto_policy(&state);
     let mut block = state.block(block_header());
     let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA4; Hash::LENGTH]));
     let policy_digest = activate_policy(&mut stx, &authority);
@@ -316,6 +318,7 @@ fn receipt_destination_overflow_rejects_without_partial_fee_or_custody_mutation(
         &treasury,
         TEST_TRADE_LOCK_MICRO,
     );
+    seed_component_crypto_policy(&state);
     let mut block = state.block(block_header());
     let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA5; Hash::LENGTH]));
     let policy_digest = activate_policy(&mut stx, &authority);

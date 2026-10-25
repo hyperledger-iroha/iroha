@@ -2620,6 +2620,16 @@ mod tests {
             )],
             [],
         );
+        // Exercise custody refusal after ordinary account admission is configured.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),

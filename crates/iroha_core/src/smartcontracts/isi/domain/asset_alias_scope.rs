@@ -1578,11 +1578,11 @@ impl Execute for Unregister<Account> {
         if let Some(primary_label) = state_transaction.world.account(&account_id)?.label() {
             ensure_alias_can_change_recovery_binding(state_transaction, primary_label)?;
         }
-        if let Some(owned_domain_id) = state_transaction
-            .world
-            .domains_by_owner
-            .get(&account_id)
-            .and_then(|domains| domains.iter().next())
+        if let Some(owned_domain_id) = crate::state::range_bounds::index_members(
+            &state_transaction.world.domains_by_owner,
+            &account_id,
+        )
+        .next()
         {
             return Err(InstructionExecutionError::InvariantViolation(
                     format!(

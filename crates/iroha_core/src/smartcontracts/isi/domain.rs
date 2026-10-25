@@ -185,13 +185,8 @@ pub mod query {
                 ),
                 DomainQueryPlan::Owners(owners) => {
                     Box::new(owners.into_iter().flat_map(move |owner| {
-                        world
-                            .domains_by_owner()
-                            .get(&owner)
-                            .cloned()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(move |domain_id| world.domain(&domain_id).ok().cloned())
+                        crate::state::range_bounds::index_members(world.domains_by_owner(), &owner)
+                            .filter_map(move |domain_id| world.domain(domain_id).ok().cloned())
                     }))
                 }
                 DomainQueryPlan::Full => Box::new(world.domains_iter().cloned()),
@@ -846,15 +841,10 @@ mod tests {
             owned_by: owner.clone(),
         };
         state.world.domains.insert(domain_id.clone(), domain);
-        let mut domains = state
+        state
             .world
             .domains_by_owner
-            .view()
-            .get(owner)
-            .cloned()
-            .unwrap_or_default();
-        domains.insert(domain_id.clone());
-        state.world.domains_by_owner.insert(owner.clone(), domains);
+            .insert((owner.clone(), domain_id.clone()), ());
     }
     fn seed_account(state: &mut State, account_id: &AccountId, domain_id: &DomainId) {
         let account = Account {

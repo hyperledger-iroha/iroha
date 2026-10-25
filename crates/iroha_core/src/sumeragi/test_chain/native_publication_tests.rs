@@ -157,7 +157,7 @@ fn missing_genesis_authority_is_created_by_its_original_signed_registration() {
         &key,
         &validators,
         Vec::new(),
-        Vec::new(),
+        vec![authored_staking_fixture_parameter()],
         (
             SumeragiConsensusMode::Permissioned,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,

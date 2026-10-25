@@ -19,7 +19,7 @@
     "table_catalog_readers": 212,
     "commitments": 36,
     "application_accumulators": 6,
-    "classified_domain_literals": 1108,
+    "classified_domain_literals": 1107,
     "construction_users": 54,
     "state_hash_functions": 215,
     "protocol_carriers": 11,

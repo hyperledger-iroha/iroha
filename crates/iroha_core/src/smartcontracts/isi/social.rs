@@ -625,7 +625,18 @@ mod tests {
     fn select_account_for_uaid_uses_index() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query);
+        let world = World::default();
+        // Component account registration owns its policy before the first snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
+        let state = State::new_for_testing(world, kura, query);
         let domain_id: DomainId = DomainId::try_new("uaid", "reward").expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::reward"));
         let keypair = checked_keypair();

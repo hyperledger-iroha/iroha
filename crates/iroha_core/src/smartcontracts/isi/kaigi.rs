@@ -4632,7 +4632,18 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
+        let world = World::default();
+        // Component registrations use an explicit policy authored before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install fixture crypto policy");
+        parameters.commit();
+        let state = State::new(world, kura, query);
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
@@ -4657,15 +4668,22 @@ mod tests {
             .iter()
             .cloned()
             .map(|account| Account::new(account).build(&ALICE_ID));
-        let state = State::new(
-            World::with(
-                [seeded_domain],
-                seeded_accounts,
-                std::iter::empty::<AssetDefinition>(),
-            ),
-            kura,
-            query,
+        let world = World::with(
+            [seeded_domain],
+            seeded_accounts,
+            std::iter::empty::<AssetDefinition>(),
         );
+        // Component account writes require an authored policy before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install fixture crypto policy");
+        parameters.commit();
+        let state = State::new(world, kura, query);
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,

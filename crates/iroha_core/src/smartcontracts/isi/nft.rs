@@ -373,7 +373,18 @@ pub mod isi {
         fn unregister_nft_removes_associated_permissions_from_accounts_and_roles() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let world = World::default();
+            // Component account registration requires an explicit original policy.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install original fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -441,7 +452,18 @@ pub mod isi {
         fn transfer_nft_rejects_authority_without_ownership() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let world = World::default();
+            // Component account registration requires an explicit original policy.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install original fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, query_handle);
             let users_domain: DomainId =
                 DomainId::try_new("users", "universal").expect("domain id");
             let user1 = checked_account_id();
@@ -483,7 +505,18 @@ pub mod isi {
         fn transfer_nft_allows_nft_domain_owner() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let world = World::default();
+            // Component account registration requires an explicit original policy.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install original fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, query_handle);
             let users_domain: DomainId =
                 DomainId::try_new("users", "universal").expect("domain id");
             let user1 = checked_account_id();
@@ -1021,7 +1054,18 @@ pub mod query {
         fn nft_owner_index_tracks_register_transfer_and_unregister() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let world = World::default();
+            // Component account registration requires an explicit original policy.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install original fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();

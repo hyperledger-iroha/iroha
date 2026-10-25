@@ -1028,6 +1028,16 @@ fn bond_escrow_fixture() -> BondEscrowFixture {
         ],
         [],
     );
+    // Component escrow custody owns its policy before the first snapshot.
+    let mut parameters = world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     BondEscrowFixture {
         state: State::new(
             world,

@@ -4333,6 +4333,19 @@ mod tests {
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
         Ok(())
     }
+    /// Author admission policy only for component fixtures before their first block.
+    /// Shared constructors stay pristine for the authenticated-genesis query fixture.
+    fn seed_component_crypto_policy(state: &State) {
+        let mut parameters = state.world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
+    }
     pub(super) fn state_with_accounts(keypairs: &[&KeyPair]) -> State {
         let authority = account(keypairs[0]);
         let asset_definition = settlement_asset_definition();
@@ -4860,6 +4873,7 @@ mod tests {
         let buyer = keypair(0xE1);
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer]);
+        seed_component_crypto_policy(&state);
         let candidate = order(&buyer, 1);
         let initial_balance;
         {
@@ -4936,6 +4950,7 @@ mod tests {
         let buyer = keypair(0x21);
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer]);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -5175,6 +5190,7 @@ mod tests {
         let provider_id = ProviderId::new([0x72; 32]);
         let mut state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let mut orderbook_policy_digest = [0; 32];
         let mut reserve_policy_digest = [0; 32];
         transact(&mut state, 1, NOW, |transaction| {
@@ -5257,6 +5273,7 @@ mod tests {
         let buyer = keypair(0x27);
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer]);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -5297,6 +5314,7 @@ mod tests {
         let buyer = keypair(0x28);
         let authority = account(&buyer);
         let mut state = state_with_accounts(&[&buyer]);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -5493,6 +5511,7 @@ mod tests {
             Err(QueryExecutionFail::Conversion(_))
         ));
         let mut missing_middle = state_with_accounts(&[&operator]);
+        seed_component_crypto_policy(&missing_middle);
         let mut policy_digest = [0; 32];
         transact(&mut missing_middle, 1, NOW, |transaction| {
             policy_digest = activate_policy(transaction, &authority);
@@ -5522,6 +5541,7 @@ mod tests {
         let attacker = keypair(0x33);
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer, &attacker]);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -5659,6 +5679,7 @@ mod tests {
         let provider_id = account(&provider);
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x2B; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &settlement_id);
@@ -5706,6 +5727,7 @@ mod tests {
         let provider_id = account(&provider);
         let capped_state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&capped_state);
         let mut capped_block = capped_state.block(block_header());
         let mut capped =
             capped_block.transaction_for_fastpq_testing(Hash::prehashed([0x30; Hash::LENGTH]));
@@ -5728,6 +5750,7 @@ mod tests {
         assert_eq!(capped_status.trades, 1);
         let exhausted_state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&exhausted_state);
         let mut exhausted_block = exhausted_state.block(block_header());
         let mut exhausted =
             exhausted_block.transaction_for_fastpq_testing(Hash::prehashed([0x31; Hash::LENGTH]));
@@ -5779,6 +5802,7 @@ mod tests {
         let attacker_id = account(&attacker);
         let mut state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let (attacker_key, attacker_value) = Account::new(attacker_id.clone())
             .build(&attacker_id)
             .into_key_value();
@@ -6050,6 +6074,7 @@ mod tests {
         let provider_id = ProviderId::new([0x72; 32]);
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB6; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &settlement_id);
@@ -6208,6 +6233,7 @@ mod tests {
         let provider_id = account(&provider);
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xAC; Hash::LENGTH]));
         let fixture = seed_two_fill_match(
@@ -6258,6 +6284,7 @@ mod tests {
         let provider_id = account(&provider);
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB1; Hash::LENGTH]));
         let fixture = seed_two_fill_match(
@@ -6292,6 +6319,7 @@ mod tests {
         let buyer_id = account(&buyer);
         let attacker_id = account(&attacker);
         let state = state_with_accounts(&[&operator, &buyer, &attacker]);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &operator_id);
@@ -6407,6 +6435,7 @@ mod tests {
             &treasury,
             TEST_TRADE_LOCK_MICRO,
         );
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA1; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -6653,6 +6682,7 @@ mod tests {
             &treasury,
             TEST_TRADE_LOCK_MICRO,
         );
+        seed_component_crypto_policy(&state);
         let attacker_id = account(&attacker);
         let (attacker_key, attacker_value) = Account::new(attacker_id.clone())
             .build(&attacker_id)

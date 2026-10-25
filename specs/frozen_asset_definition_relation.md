@@ -13,11 +13,12 @@ owner definition groups, pending-transition entries and per-height counts.
 Each phase checks Current then exact Predecessor, in this order: definition/domain
 references and context inverses; owner groups; domain groups; pending policy shape,
 transition inverses and exact per-height counts. Sources precede their inverse
-indexes. The original Source reasons and MissingMember, EmptyGroup and
-ForeignMember classifications remain unchanged. Restricted definitions require an
+indexes. The original Source reasons remain unchanged. Owner and domain indexes
+store one `(group, definition) -> ()` row per membership, so MissingMember and
+ForeignMember are their mismatches; EmptyGroup classifies only a zero height count. Restricted definitions require an
 owning domain; every explicit owning domain must exist. Context rows agree with the
-stored optional domain. Owner/domain groups contain precisely their source members
-and have no empty, missing or foreign groups. The unchanged model policy predicate
+stored optional domain. Owner/domain membership rows contain precisely their
+source members, with no missing or foreign rows. The unchanged model policy predicate
 checks pending transition shape. Each pending row has its (height, stored ID) entry
 and nonzero height count; every transition has its source and height, and each
 nonzero count equals all pending definitions at that height. Overflow preserves the
@@ -34,8 +35,8 @@ A physical current/undo/member advance costs one before access. Each predecessor
 current row visits every original undo candidate, including candidates after a mask
 match, funding both keys before Eq; each final undo visit also funds its Option tag.
 Lookups and membership scans fund every original candidate and continue through the
-complete tail after a match. Empty-group, optional-domain and policy tags are funded
-before inspection. Every comparison funds the complete two operands even if an
+complete tail after a match. Optional-domain and policy tags are funded before
+inspection. Every comparison funds the complete two operands even if an
 initial field differs. The asset ID callback admits its existing sixteen UUID bytes;
 domain keys admit both complete label byte lengths. Account comparisons reuse the
 unchanged borrowed controller helper, including all actual nested member advances,
@@ -48,8 +49,8 @@ Checked conversion/subtraction is local WorkLimit, distinct from ledger validity
 The named committed allowance uses one Single Ed25519 owner (34), one existing
 maximum 63+63-byte domain (126), one definition and all one-row inverses, and one
 valid pending-window policy (53), with no undo: both images cost
-`2 * (831 context/reference + 207 owner + 578 domain + 318 policy) = 3868`.
-The original no-pending fixture costs 434 without context and 1218 with its actual
+`2 * (831 context/reference + 204 owner + 575 domain + 318 policy) = 3856`.
+The original no-pending fixture costs 428 without context and 1206 with its actual
 25-byte domain. One absent definition undo increases those fixtures by 175 and 245.
 The original standalone policy fixture costs 1710; a source no-op plus absent
 preimage adds 808, an absent transition preimage adds 300 and an absent count

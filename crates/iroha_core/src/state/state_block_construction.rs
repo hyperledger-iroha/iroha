@@ -205,6 +205,7 @@ impl State {
                 query_ledger_time_ms: query_ledger_time_ms.take().expect("prepared State input"),
                 soracloud_runtime: soracloud_runtime.take().expect("prepared State input"),
                 ivm_elections_cache: ivm_elections::SnapshotCache::new(),
+                ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),
                 accounts_snapshot_cache: accounts_snapshot_cache
                     .take()
                     .expect("prepared State input"),

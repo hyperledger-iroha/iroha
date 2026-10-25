@@ -234,7 +234,7 @@ mod tests {
     use super::*;
     use crate::tests_runtime_handlers::{
         bind_account_alias_for_test, checked_torii_test_ed25519_keypair,
-        mk_app_state_for_tests_with_world,
+        mk_app_state_for_tests_with_pre_genesis_world,
     };
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -251,7 +251,11 @@ mod tests {
             .map(|account_id| Account::new(account_id.clone()).build(account_id))
             .into_iter()
             .collect::<Vec<_>>();
-        mk_app_state_for_tests_with_world(iroha_core::state::World::with([], accounts, []))
+        mk_app_state_for_tests_with_pre_genesis_world(iroha_core::state::World::with(
+            [],
+            accounts,
+            [],
+        ))
     }
 
     fn anchor_state(app: &mut SharedAppState, creation_time_ms: u64) -> HashOf<BlockHeader> {

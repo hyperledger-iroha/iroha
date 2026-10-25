@@ -227,6 +227,16 @@ impl Harness {
             assets,
             [],
         );
+        // Component vault registration owns its policy before the first snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
         let state = State::new(
             world,
             Kura::blank_kura_for_testing(),

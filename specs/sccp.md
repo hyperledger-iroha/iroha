@@ -1891,12 +1891,21 @@ follow it:
    certificate exists, `ReportSccpLightClientEquivocationV1` where equivocation
    evidence exists, and otherwise a Parliament-enacted `FreezeLightClient`.
 2. Decode `recipient` (codec 3) as `AccountAddress` and derive the `AccountId`.
-   If decoding fails, bounce (§4.12.5) with `UndecodableRecipient`.
+   If a completed decode finds the canonical bytes malformed, bounce (§4.12.5)
+   with `UndecodableRecipient`. A local decoder resource refusal of the current
+   attempt, or an unavailable cryptographic implementation, is not a property
+   of the bytes: the executing attempt answers `Failed` (retry, never
+   `Invalid`; `specs/sumeragi.md` §4.2), and it authorizes neither a bounce nor
+   a pending-credit reason. A resource error without current-attempt
+   provenance (a stale or sibling report, or a protocol bound) and a missing
+   crypto admission policy are invariant violations and grant no local retry.
 3. Bounce if the recipient can never be credited. These are permanent identity
    refusals:
    - it is an SCCP escrow account (`EscrowRecipient`);
-   - its controller uses a signing algorithm or curve that account admission
-     does not allow (`InadmissibleController`); or
+   - its controller uses a signing algorithm, or a curve derived from it, that
+     the `CryptoAdmissionPolicyV1` in force at the start of the executing block
+     does not allow (`InadmissibleController`); while genesis executes this is
+     the signed genesis policy (`specs/crypto_admission_policy.md`); or
    - it does not exist and `Register<Account>(Account::new(recipient))` refuses
      its identity (`UnregistrableRecipient`), for example a retired rekey
      identity or a reserved protocol escrow identity. Core decides this with

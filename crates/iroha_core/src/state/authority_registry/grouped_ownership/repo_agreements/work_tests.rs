@@ -35,9 +35,13 @@ fn multisig() -> AccountId {
 }
 #[test]
 fn independent_repo_singletons_variable_names_and_original_fixture_work_are_exact() {
-    // Required group: 2*(1+69+31+1+1+1+31+68)=406; Some custodian adds four tags.
-    assert_eq!(REPO_AGREEMENT_WORK_PER_ROW, 406 + 406 + 410);
-    for (custodian, exact) in [(false, 816), (true, 1222)] {
+    // Required group per image: source (1+1+68+30) and membership (1+1+30+68) rows.
+    // Some custodian adds one option tag to each of its four visits.
+    assert_eq!(
+        REPO_AGREEMENT_WORK_PER_ROW,
+        2 * (100 + 100 + 100 + 100 + 101 + 101)
+    );
+    for (custodian, exact) in [(false, 804), (true, 1204)] {
         let world = fixture(custodian);
         assert_eq!(world_work(&world), exact);
         assert_eq!(
@@ -46,7 +50,7 @@ fn independent_repo_singletons_variable_names_and_original_fixture_work_are_exac
         );
         assert_eq!(check(&world, exact), Ok(()));
     }
-    for (label, bytes, exact) in [("é".to_owned(), 2, 910), ("x".repeat(255), 255, 6982)] {
+    for (label, bytes, exact) in [("é".to_owned(), 2, 892), ("x".repeat(255), 255, 6964)] {
         let mut world = fixture(true);
         let mut record = world.repo_agreements.view().get(&id()).unwrap().clone();
         let name: RepoAgreementId = label.parse().unwrap();
@@ -61,7 +65,7 @@ fn independent_repo_singletons_variable_names_and_original_fixture_work_are_exac
         );
         assert_eq!(check(&world, exact), Ok(()));
     }
-    for (custodian, exact) in [(false, 1616), (true, 2422)] {
+    for (custodian, exact) in [(false, 1604), (true, 2404)] {
         let mut world = fixture(custodian);
         let mut record = world.repo_agreements.view().get(&id()).unwrap().clone();
         record.initiator = multisig();
@@ -76,7 +80,7 @@ fn independent_repo_singletons_variable_names_and_original_fixture_work_are_exac
         );
         assert_eq!(check(&world, exact), Ok(()));
     }
-    for (initial_custodian, exact) in [(false, 1824), (true, 1787)] {
+    for (initial_custodian, exact) in [(false, 2079), (true, 2012)] {
         let mut world = fixture(initial_custodian);
         let mut record = world.repo_agreements.view().get(&id()).unwrap().clone();
         record.initiator = BOB_ID.clone();
@@ -90,7 +94,7 @@ fn independent_repo_singletons_variable_names_and_original_fixture_work_are_exac
             tx.apply();
             block.commit();
         }
-        // Mandatory groups 756 each; optional appearing/disappearing group 312/275.
+        // Mandatory groups 870 each; optional appearing/disappearing group 339/272.
         assert_eq!(world_work(&world), exact);
         assert_eq!(
             check(&world, exact - 1),
@@ -137,22 +141,25 @@ fn independent_repo_singletons_variable_names_and_original_fixture_work_are_exac
         .collect();
     assert_eq!(current, vec![8, 9]);
     assert_eq!(undo, vec![(15, true), (8, false)]);
-    for rows in [
-        &world.repo_agreements_by_initiator,
-        &world.repo_agreements_by_counterparty,
-        &world.repo_agreements_by_custodian,
+    // Required groups move one membership; the custodian group only loses one.
+    for (rows, current, undo) in [
+        (&world.repo_agreements_by_initiator, 2, vec![true, false]),
+        (&world.repo_agreements_by_counterparty, 2, vec![true, false]),
+        (&world.repo_agreements_by_custodian, 1, vec![true]),
     ] {
         let view = rows.try_committed_view_nonblocking().unwrap();
+        assert_eq!(view.current_entries().len(), current);
         assert_eq!(
-            (view.current_entries().len(), view.undo_entries().len()),
-            (1, 1)
+            view.undo_entries()
+                .map(|(_, prior)| prior.is_some())
+                .collect::<Vec<_>>(),
+            undo
         );
-        assert!(view.undo_entries().all(|(_, v)| v.is_some()));
     }
-    // Required groups 424+957 each; optional group 201+961.
-    assert_eq!(world_work(&world), 3924);
-    assert_eq!(check(&world, 3923), Err(GroupedOwnershipError::WorkLimit));
-    assert_eq!(check(&world, 3924), Ok(()));
+    // Required groups 556+1956 each; optional group 198+1162.
+    assert_eq!(world_work(&world), 6384);
+    assert_eq!(check(&world, 6383), Err(GroupedOwnershipError::WorkLimit));
+    assert_eq!(check(&world, 6384), Ok(()));
 }
 #[test]
 fn repo_physical_mask_lookup_and_member_tails_are_fully_prepaid() {
@@ -216,14 +223,31 @@ fn repo_physical_mask_lookup_and_member_tails_are_fully_prepaid() {
             Ok(view.current().get(key))
         );
     }
-    let members = BTreeSet::from([first.clone(), second.clone()]);
-    for (key, exact) in [(&first, 56), (&second, 44)] {
+    let member_rows: Storage<_, _> = [first.clone(), second.clone()]
+        .into_iter()
+        .map(|member| ((ALICE_ID.clone(), member), ()))
+        .collect();
+    let member_view = member_rows.try_committed_view_nonblocking().unwrap();
+    // Two physical rows, two 68-unit group equalities, then both member equalities.
+    for (key, exact) in [(&first, 192), (&second, 180)] {
         assert_eq!(
-            contains(&members, key, &mut RepoWork::bounded(exact - 1)),
+            contains(
+                &member_view,
+                GroupImage::Current,
+                &*ALICE_ID,
+                key,
+                &mut RepoWork::bounded(exact - 1)
+            ),
             Err(GroupedOwnershipError::WorkLimit)
         );
         assert_eq!(
-            contains(&members, key, &mut RepoWork::bounded(exact)),
+            contains(
+                &member_view,
+                GroupImage::Current,
+                &*ALICE_ID,
+                key,
+                &mut RepoWork::bounded(exact)
+            ),
             Ok(true)
         );
     }
@@ -332,8 +356,8 @@ fn full_repo_name_and_controller_geometry_precedes_equal_or_unequal_keys() {
     }
 }
 #[test]
-fn absent_repo_source_and_account_bucket_rows_have_independent_exact_work() {
-    for (custodian, base, delta) in [(false, 816, 140), (true, 1222, 168)] {
+fn absent_repo_source_and_membership_rows_have_independent_exact_work() {
+    for (custodian, base, delta) in [(false, 804, 140), (true, 1204, 168)] {
         let world = fixture(custodian);
         {
             let mut block = world.repo_agreements.block();
@@ -347,27 +371,28 @@ fn absent_repo_source_and_account_bucket_rows_have_independent_exact_work() {
         );
         assert_eq!(check(&world, base + delta), Ok(()));
     }
+    // One absent membership undo row adds (1+49+44)+2 to both predecessor visits.
     for (custodian, source, base, delta) in [
-        (true, 0, 1222, 142),
-        (true, 1, 1222, 142),
-        (true, 2, 1222, 142),
-        (false, 2, 816, 2),
+        (true, 0, 1204, 192),
+        (true, 1, 1204, 192),
+        (true, 2, 1204, 192),
+        (false, 2, 804, 2),
     ] {
         let world = fixture(custodian);
         match source {
             0 => {
                 let mut b = world.repo_agreements_by_initiator.block();
-                b.remove(absent_account());
+                b.remove((absent_account(), absent_id()));
                 b.commit();
             }
             1 => {
                 let mut b = world.repo_agreements_by_counterparty.block();
-                b.remove(absent_account());
+                b.remove((absent_account(), absent_id()));
                 b.commit();
             }
             2 => {
                 let mut b = world.repo_agreements_by_custodian.block();
-                b.remove(absent_account());
+                b.remove((absent_account(), absent_id()));
                 b.commit();
             }
             _ => unreachable!(),
@@ -383,13 +408,19 @@ fn absent_repo_source_and_account_bucket_rows_have_independent_exact_work() {
 #[test]
 fn repo_phase_precedence_preserves_each_original_group_and_image() {
     let mut world = fixture(true);
-    let saved = omit_initial(&mut world.repo_agreements_by_initiator, &ALICE_ID);
+    omit_initial(
+        &mut world.repo_agreements_by_initiator,
+        &(ALICE_ID.clone(), id()),
+    );
     {
         let mut b = world.repo_agreements_by_initiator.block();
-        b.insert(ALICE_ID.clone(), saved);
+        b.insert((ALICE_ID.clone(), id()), ());
         b.commit();
     }
-    omit_initial(&mut world.repo_agreements_by_counterparty, &BOB_ID);
+    omit_initial(
+        &mut world.repo_agreements_by_counterparty,
+        &(BOB_ID.clone(), id()),
+    );
     assert_eq!(
         check(&world, TEST_WORK_ALLOWANCE),
         Err(corrupt(
@@ -399,13 +430,19 @@ fn repo_phase_precedence_preserves_each_original_group_and_image() {
         ))
     );
     let mut world = fixture(true);
-    let saved = omit_initial(&mut world.repo_agreements_by_counterparty, &BOB_ID);
+    omit_initial(
+        &mut world.repo_agreements_by_counterparty,
+        &(BOB_ID.clone(), id()),
+    );
     {
         let mut b = world.repo_agreements_by_counterparty.block();
-        b.insert(BOB_ID.clone(), saved);
+        b.insert((BOB_ID.clone(), id()), ());
         b.commit();
     }
-    omit_initial(&mut world.repo_agreements_by_custodian, &BOB_ID);
+    omit_initial(
+        &mut world.repo_agreements_by_custodian,
+        &(BOB_ID.clone(), id()),
+    );
     assert_eq!(
         check(&world, TEST_WORK_ALLOWANCE),
         Err(corrupt(

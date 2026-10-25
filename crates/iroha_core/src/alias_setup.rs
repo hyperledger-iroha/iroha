@@ -909,8 +909,8 @@ fn classify_domain_state(
     world: &impl WorldReadOnly,
     intent: &iroha_data_model::alias_setup::AliasDomainIntentV1,
 ) -> Result<bool, AliasSetupError> {
-    for (indexed_owner, domains) in world.domains_by_owner().iter() {
-        if domains.contains(&intent.domain.canonical_name) && indexed_owner != &intent.owner {
+    for ((indexed_owner, domain_id), ()) in world.domains_by_owner().iter() {
+        if domain_id == &intent.domain.canonical_name && indexed_owner != &intent.owner {
             return Err(AliasSetupError::new(
                 "alias.owner.conflict",
                 format!(
@@ -920,10 +920,11 @@ fn classify_domain_state(
             ));
         }
     }
-    let owner_index_missing = !world
-        .domains_by_owner()
-        .get(&intent.owner)
-        .is_some_and(|domains| domains.contains(&intent.domain.canonical_name));
+    let owner_index_missing = !crate::state::range_bounds::index_contains(
+        world.domains_by_owner(),
+        &intent.owner,
+        &intent.domain.canonical_name,
+    );
     let Some(domain) = world.domains().get(&intent.domain.canonical_name) else {
         return Ok(true);
     };

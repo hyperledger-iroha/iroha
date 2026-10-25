@@ -36,15 +36,18 @@ fn proof_test_helpers_seed_records() {
 #[allow(clippy::too_many_lines)]
 async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
     // World with domain/account/asset
-    let state = blank_state();
+    // Initial accounts precede signed genesis; its policy remains uninitialized.
+    let state = State::new(
+        World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    assert!(state.world.parameters.view().crypto_policy().is_none());
     let_row! { block = new_dummy_block_with_payload( |h| { h.set_height(NonZeroU64::new(1).unwrap()); h.creation_time_ms = 1; }) };
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     Register::domain(Domain::new(domain_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-    Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     let_row! { asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").unwrap(), "rose".parse().unwrap(), ) };

@@ -9384,7 +9384,11 @@ mod tests {
             source.attachments().unwrap().occurrences()[0].bytes,
             original_bytes
         );
-        let mut retry = block.transaction();
+        // The refused child retains its storage cause on the original block owner.
+        // Retry the unchanged source only after retiring that unpublished attempt.
+        drop(block);
+        let mut retry_block = state.block(activation_execution_header(&state));
+        let mut retry = retry_block.transaction();
         grant_governance(&mut retry);
         let mut custody = AttachmentCustody::new(&source).unwrap();
         Executor::Initial

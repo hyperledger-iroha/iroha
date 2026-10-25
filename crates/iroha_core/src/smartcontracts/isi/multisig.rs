@@ -3214,13 +3214,50 @@ mod tests {
         assert_eq!(header.prev_block_hash(), Some(original));
         assert_eq!(header.creation_time_ms, 1_000);
     }
+    /// Author component admission input without granting authenticated genesis authority.
+    fn component_world_with_crypto_policy(world: World) -> World {
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical multisig fixture crypto policy"),
+            )
+            .expect("install original multisig component crypto policy");
+        parameters.commit();
+        world
+    }
+
+    #[test]
+    fn multisig_component_fixture_owns_policy_without_genesis_authority() {
+        let raw = World::new();
+        assert!(raw.parameters.view().crypto_policy().is_none());
+        let state = State::new_with_chain(
+            component_world_with_crypto_policy(raw),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("multisig-component-policy"),
+        );
+        assert_eq!(state.committed_height(), 0);
+        assert_eq!(state.kura().blocks_count(), 0);
+        assert_eq!(
+            state
+                .world
+                .parameters
+                .view()
+                .require_crypto_policy()
+                .unwrap(),
+            &crate::sumeragi::test_chain::crypto_fixture_policy(),
+        );
+    }
+
     macro_rules! tx {
         ($state:ident, $block:ident, $transaction:ident, $world:expr, $chain_id:expr) => {
             tx!($state, $block, $transaction, $world, $chain_id, 1_u64, 0);
         };
         ($state:ident, $block:ident, $transaction:ident, $world:expr, $chain_id:expr, $height:expr, $creation_time_ms:expr) => {
             let $state = State::new_with_chain(
-                $world,
+                component_world_with_crypto_policy($world),
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
                 ChainId::from($chain_id),
@@ -4622,7 +4659,7 @@ mod tests {
     #[test]
     fn rekey_account_id_migrates_acquired_unbound_and_binding_cleared_leases() {
         let state = State::new_with_chain(
-            World::new(),
+            component_world_with_crypto_policy(World::new()),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ChainId::from("multisig-rekey-unbound-alias-leases"),
@@ -4972,7 +5009,7 @@ mod tests {
             for old_account in accounts {
                 let new_account = new_account_id(&checked_keypair());
                 let state = State::new_with_chain(
-                    World::new(),
+                    component_world_with_crypto_policy(World::new()),
                     Kura::blank_kura_for_testing(),
                     LiveQueryStore::start_test(),
                     ChainId::from("immutable-settlement-rekey"),
@@ -6191,7 +6228,7 @@ mod tests {
             norito::codec::Encode::encode(&lease),
         );
         let state = State::new_with_chain(
-            world,
+            component_world_with_crypto_policy(world),
             kura,
             query_handle,
             ChainId::from("multisig-repair-from-controller"),
@@ -7864,7 +7901,7 @@ seiyaku TriggerDispatch { permission Admin;
         let mut world = World::new();
         seed_domain_name_lease(&mut world, &owner_id, &domain_id);
         let state = State::new_with_chain(
-            world,
+            component_world_with_crypto_policy(world),
             kura,
             query_handle,
             ChainId::from("replace-single-to-multisig"),
@@ -7930,7 +7967,7 @@ seiyaku TriggerDispatch { permission Admin;
         let mut world = World::new();
         seed_domain_name_lease(&mut world, &signer1_id, &domain_id);
         let state = State::new_with_chain(
-            world,
+            component_world_with_crypto_policy(world),
             kura,
             query_handle,
             ChainId::from("replace-multisig-to-single"),
@@ -7995,7 +8032,7 @@ seiyaku TriggerDispatch { permission Admin;
         let mut world = World::new();
         seed_domain_name_lease(&mut world, &signer1_id, &domain_id);
         let state = State::new_with_chain(
-            world,
+            component_world_with_crypto_policy(world),
             kura,
             query_handle,
             ChainId::from("replace-multisig-to-multisig"),

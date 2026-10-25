@@ -14465,6 +14465,7 @@ mod asset_transfer_request_tests {
             balances,
             [],
         );
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
         crate::test_utils::bind_fixture_root(
             &mut world,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
@@ -20941,6 +20942,7 @@ mod multisig_selector_tests {
         )
     }
     fn build_paynet_routing_state(mut world: World) -> Arc<State> {
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
         crate::test_utils::bind_fixture_root(
             &mut world,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
@@ -30591,7 +30593,9 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
         let manifest = default_manifest();
-        let (queue, state, telemetry) = handler_context(|_| {});
+        let (queue, state, telemetry) = handler_context(|state| {
+            crate::test_utils::author_ready_fixture_crypto_policy(&mut state.world);
+        });
         let transaction = transaction_from_manifest(*state.network_id_ref(), &manifest);
         let expected_tx_hash = hex::encode(transaction.hash().as_ref());
         let resp = handle_post_sorafs_register_manifest(queue, state, telemetry, transaction)
@@ -30838,7 +30842,9 @@ mod sorafs_pin_tests {
         );
     }
     routing_test! { async register_manifest_accepts_alias_binding
-        let (queue, state, telemetry) = handler_context(|_| {});
+        let (queue, state, telemetry) = handler_context(|state| {
+            crate::test_utils::author_ready_fixture_crypto_policy(&mut state.world);
+        });
         let manifest = default_manifest();
         let proof_bytes = b"alias-proof";
         let transaction = transaction_from_instructions(
@@ -31236,7 +31242,12 @@ mod sorafs_capacity_tests {
         (sorafs_node::NodeHandle::new(cfg), temp_dir)
     }
     routing_test! { async transaction_signature_limit_rejects_and_records_metrics
-        let (state, queue, telemetry) = test_state_components([]);
+        let (mut state, queue, telemetry) = test_state_components([]);
+        crate::test_utils::author_ready_fixture_crypto_policy(
+            &mut Arc::get_mut(&mut state)
+                .expect("unshared capacity admission fixture")
+                .world,
+        );
         #[cfg(feature = "telemetry")]
         let before = telemetry.metrics().torii_signature_limit_total.get();
         // Build a multisig transaction with more signatures than the default cap (16).
@@ -31292,8 +31303,13 @@ mod sorafs_capacity_tests {
     #[cfg(feature = "app_api")]
     async fn capacity_declaration_handler_queues_caller_signed_transaction() {
         let kp = checked_capacity_keypair(0x91, "derive capacity declaration fixture key");
-        let (state, queue, telemetry) =
+        let (mut state, queue, telemetry) =
             test_state_components([dm::AccountId::new(kp.public_key().clone())]);
+        crate::test_utils::author_ready_fixture_crypto_policy(
+            &mut Arc::get_mut(&mut state)
+                .expect("unshared capacity admission fixture")
+                .world,
+        );
         let transaction = signed_capacity_declaration_transaction(
             *state.network_id_ref(),
             &kp,
@@ -31502,8 +31518,13 @@ mod sorafs_capacity_tests {
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
         let provider_hex = hex::encode([0x11; 32]);
         let kp = checked_capacity_keypair(0x95, "derive capacity telemetry fixture key");
-        let (state, queue, telemetry) =
+        let (mut state, queue, telemetry) =
             test_state_components([dm::AccountId::new(kp.public_key().clone())]);
+        crate::test_utils::author_ready_fixture_crypto_policy(
+            &mut Arc::get_mut(&mut state)
+                .expect("unshared capacity admission fixture")
+                .world,
+        );
         let transaction = signed_capacity_telemetry_transaction(
             *state.network_id_ref(),
             &kp,
@@ -31538,7 +31559,12 @@ mod sorafs_capacity_tests {
     }
     routing_test! { async capacity_mutation_replay_is_rejected_by_the_transaction_queue
         let key_pair = checked_capacity_keypair(0x97, "derive capacity replay fixture key");
-        let (state, queue, telemetry) = test_state_components([dm::AccountId::new(key_pair.public_key().clone())]);
+        let (mut state, queue, telemetry) = test_state_components([dm::AccountId::new(key_pair.public_key().clone())]);
+        crate::test_utils::author_ready_fixture_crypto_policy(
+            &mut Arc::get_mut(&mut state)
+                .expect("unshared capacity admission fixture")
+                .world,
+        );
         let transaction = signed_capacity_telemetry_transaction(
             *state.network_id_ref(),
             &key_pair,
@@ -43235,6 +43261,7 @@ mod lane_admission_metrics_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut world = crate::tests_runtime_handlers::world_with_account(&account_id);
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
         crate::test_utils::bind_fixture_root(
             &mut world,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
@@ -43908,21 +43935,19 @@ fn repo_agreement_ids_for_accounts(
     index: RepoAgreementAccountIndex,
     accounts: impl IntoIterator<Item = AccountId>,
 ) -> BTreeSet<RepoAgreementId> {
+    use iroha_core::state::range_bounds::index_members;
     let mut ids = BTreeSet::new();
     for account_id in accounts {
-        let agreements = match index {
-            RepoAgreementAccountIndex::Initiator => {
-                world.repo_agreements_by_initiator().get(&account_id)
-            }
-            RepoAgreementAccountIndex::Counterparty => {
-                world.repo_agreements_by_counterparty().get(&account_id)
-            }
-            RepoAgreementAccountIndex::Custodian => {
-                world.repo_agreements_by_custodian().get(&account_id)
-            }
-        };
-        if let Some(agreements) = agreements {
-            ids.extend(agreements.iter().cloned());
+        match index {
+            RepoAgreementAccountIndex::Initiator => ids.extend(
+                index_members(world.repo_agreements_by_initiator(), &account_id).cloned(),
+            ),
+            RepoAgreementAccountIndex::Counterparty => ids.extend(
+                index_members(world.repo_agreements_by_counterparty(), &account_id).cloned(),
+            ),
+            RepoAgreementAccountIndex::Custodian => ids.extend(
+                index_members(world.repo_agreements_by_custodian(), &account_id).cloned(),
+            ),
         }
     }
     ids
@@ -55618,11 +55643,9 @@ mod explorer_asset_definition_snapshot_tests {
     routing_test! { async explorer_asset_definition_snapshot_computes_distribution_metrics
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(
-            World::default(),
-            kura.clone(),
-            query,
-        ));
+        let mut world = World::default();
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
+        let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
         // Setup world state (domain/accounts/asset definition + balances) without relying
         // on transaction permissions/executor behavior.
         let leader0 = checked_snapshot_keypair(
@@ -55658,18 +55681,18 @@ mod explorer_asset_definition_snapshot_tests {
         let bob_id = dm::AccountId::new(kp_bob.public_key().clone());
         let def_id: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
-        dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
         dm::Register::account(dm::Account::new(exec_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
-            .ok();
+            .expect("register snapshot executor");
         dm::Register::account(dm::Account::new(alice_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
-            .ok();
+            .expect("register snapshot Alice");
         dm::Register::account(dm::Account::new(bob_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
-            .ok();
+            .expect("register snapshot Bob");
+        dm::Register::domain(dm::Domain::new(domain_id.clone()))
+            .execute(exec_id.account(), &mut stx0)
+            .expect("register snapshot domain");
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(
@@ -55680,19 +55703,19 @@ mod explorer_asset_definition_snapshot_tests {
             )
         })
         .execute(exec_id.account(), &mut stx0)
-        .ok();
+        .expect("register snapshot definition");
         dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), alice_id.clone()),
         )
         .execute(exec_id.account(), &mut stx0)
-        .ok();
+        .expect("fund snapshot Alice");
         dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), bob_id.clone()),
         )
         .execute(exec_id.account(), &mut stx0)
-        .ok();
+        .expect("fund snapshot Bob");
         stx0.apply();
         st_block0.commit_world_overlay_for_testing().expect("seed fixture state");
         let resp = handle_v1_explorer_asset_definition_snapshot(
@@ -55792,11 +55815,9 @@ mod explorer_asset_definition_snapshot_tests {
     routing_test! { async explorer_asset_definition_snapshot_quantiles_use_nearest_rank
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(
-            World::default(),
-            kura.clone(),
-            query,
-        ));
+        let mut world = World::default();
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
+        let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
         let leader0 = checked_snapshot_keypair(
             0xE4,
             Algorithm::BlsNormal,
@@ -55830,18 +55851,18 @@ mod explorer_asset_definition_snapshot_tests {
         let bob_id = dm::AccountId::new(kp_bob.public_key().clone());
         let def_id: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
-        dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
         dm::Register::account(dm::Account::new(exec_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
-            .ok();
+            .expect("register snapshot executor");
         dm::Register::account(dm::Account::new(alice_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
-            .ok();
+            .expect("register snapshot Alice");
         dm::Register::account(dm::Account::new(bob_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
-            .ok();
+            .expect("register snapshot Bob");
+        dm::Register::domain(dm::Domain::new(domain_id.clone()))
+            .execute(exec_id.account(), &mut stx0)
+            .expect("register snapshot domain");
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(
@@ -55852,19 +55873,19 @@ mod explorer_asset_definition_snapshot_tests {
             )
         })
         .execute(exec_id.account(), &mut stx0)
-        .ok();
+        .expect("register snapshot definition");
         dm::Mint::asset_quantity(
             1_u32,
             dm::AssetId::new(def_id.clone(), alice_id.clone()),
         )
         .execute(exec_id.account(), &mut stx0)
-        .ok();
+        .expect("fund snapshot Alice");
         dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), bob_id.clone()),
         )
         .execute(exec_id.account(), &mut stx0)
-        .ok();
+        .expect("fund snapshot Bob");
         // Another definition's balances never enter this definition's snapshot.
         let other_def_id: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400de");

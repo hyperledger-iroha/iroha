@@ -1209,7 +1209,7 @@ mod tests {
     fn parameters(policy: SumeragiLanePolicy) -> Parameters {
         let mut parameters = Parameters::default();
         let custom = policy.into_custom_parameter();
-        parameters.custom.insert(custom.id.clone(), custom);
+        parameters.custom.insert(custom);
         parameters
     }
 

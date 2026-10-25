@@ -1644,6 +1644,42 @@ mod tests {
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger fixture key generation should succeed")
     }
+    /// Author admission input for isolated component fixtures without genesis authority.
+    fn component_trigger_world() -> World {
+        let world = World::default();
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical trigger fixture crypto policy"),
+            )
+            .expect("install original trigger component crypto policy");
+        parameters.commit();
+        world
+    }
+
+    #[test]
+    fn component_trigger_fixture_owns_policy_without_genesis_authority() {
+        assert!(World::default().parameters.view().crypto_policy().is_none());
+        let state = State::new(
+            component_trigger_world(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        assert_eq!(state.committed_height(), 0);
+        assert_eq!(state.kura().blocks_count(), 0);
+        assert_eq!(
+            state
+                .world
+                .parameters
+                .view()
+                .require_crypto_policy()
+                .unwrap(),
+            &crate::sumeragi::test_chain::crypto_fixture_policy(),
+        );
+    }
+
     /// Apply the original signed genesis before exercising a trigger's executor.
     fn authenticated_trigger_state() -> State {
         use crate::sumeragi::{
@@ -1745,7 +1781,7 @@ mod tests {
     #[test]
     fn ordinary_data_triggers_require_an_exact_owned_subject() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -1791,7 +1827,7 @@ mod tests {
     #[test]
     fn global_data_trigger_permission_is_bound_to_the_trigger_authority() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -1826,7 +1862,7 @@ mod tests {
         drop(stx);
         drop(state_block);
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -1856,7 +1892,7 @@ mod tests {
     #[test]
     fn genesis_global_data_trigger_requires_prior_exact_capability_and_remains_revocable() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -1906,7 +1942,7 @@ mod tests {
     #[test]
     fn data_trigger_scope_recheck_blocks_reused_trigger_id() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -1959,7 +1995,7 @@ mod tests {
     #[test]
     fn data_trigger_scope_recheck_follows_domain_ownership() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -2010,7 +2046,7 @@ mod tests {
     #[test]
     fn global_data_trigger_stops_immediately_when_exact_capability_is_revoked() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -2233,7 +2269,7 @@ mod tests {
             trigger::action::{Action, Repeats},
         };
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -2307,7 +2343,7 @@ mod tests {
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         // Prepare a block and state transaction
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
@@ -2378,7 +2414,7 @@ mod tests {
         use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).expect("nonzero"),
             None,
@@ -2622,7 +2658,7 @@ mod tests {
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -2776,7 +2812,7 @@ mod tests {
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -2816,7 +2852,7 @@ mod tests {
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         // Bootstrap world with a domain and Alice account
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
@@ -2880,7 +2916,7 @@ mod tests {
     fn active_trigger_ids_excludes_disabled_trigger() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -2930,7 +2966,7 @@ mod tests {
     fn active_trigger_ids_excludes_malformed_enabled_metadata() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -2980,7 +3016,7 @@ mod tests {
     fn active_trigger_ids_recover_after_malformed_enabled_is_set_true() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3046,7 +3082,7 @@ mod tests {
     fn active_trigger_ids_recover_after_disabled_enabled_flag_is_removed() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3112,7 +3148,7 @@ mod tests {
     fn active_trigger_ids_exclude_trigger_after_enabled_is_set_false() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3175,7 +3211,7 @@ mod tests {
     fn active_trigger_ids_follow_numeric_enabled_flag_transitions() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3263,7 +3299,7 @@ mod tests {
         };
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3351,7 +3387,7 @@ mod tests {
     fn find_triggers_returns_registered_triggers_for_pass_predicate() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3456,7 +3492,7 @@ mod tests {
     fn time_trigger_with_zero_period_is_rejected() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -3498,7 +3534,7 @@ mod tests {
     fn time_trigger_period_shorter_than_block_cadence_is_rejected() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -3581,7 +3617,7 @@ mod tests {
     fn trigger_registration_enforces_metadata_limit() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();

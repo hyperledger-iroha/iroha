@@ -147,18 +147,14 @@ mod signed_attachment_refusal {
                 .get_sample_count();
             let error = context
                 .with(|| match mode {
-                    0 => routing::accept_transaction_for_ingress(
-                        app.state.clone(),
-                        input,
-                        &app.telemetry,
-                    ),
+                    0 => routing::accept_transaction_for_ingress(&app.state, input, &app.telemetry),
                     1 => routing::accept_decoded_signed_transaction_for_ingress(
-                        app.state.clone(),
+                        &app.state,
                         decoded,
                         &app.telemetry,
                     ),
                     _ => routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
-                        app.state.clone(),
+                        &app.state,
                         decoded,
                         &app.telemetry,
                         precheck.single_ed25519_prechecked,
@@ -217,7 +213,7 @@ mod signed_attachment_refusal {
             assert_eq!(decoded.signed().encode_versioned(), wire);
             assert_eq!(decoded.signed().signature(), &signature);
             let error = routing::accept_decoded_signed_transaction_for_ingress(
-                app.state.clone(),
+                &app.state,
                 decoded,
                 &app.telemetry,
             )
@@ -252,7 +248,7 @@ mod signed_attachment_refusal {
             run_transaction_ingress_compute_job(permit, "fixture_worker_failed", move || {
                 norito::with_decode_limits_scope(narrow(), || {
                     routing::accept_decoded_signed_transaction_for_ingress(
-                        state, decoded, &telemetry,
+                        &state, decoded, &telemetry,
                     )
                 })
             })
@@ -278,7 +274,7 @@ mod signed_attachment_refusal {
         assert_eq!(decoded.signed().encode_versioned(), wire);
         assert_eq!(decoded.signed().signature(), &signature);
         let error = routing::accept_decoded_signed_transaction_for_ingress(
-            app.state.clone(),
+            &app.state,
             decoded,
             &app.telemetry,
         )
@@ -366,9 +362,8 @@ mod signed_attachment_refusal {
         .with_instructions([Log::new(Level::INFO, "malformed intent".into())])
         .with_signed_attachments(SignedAttachmentPlanV1::new().declare())
         .sign(key.private_key());
-        let error =
-            routing::accept_transaction_for_ingress(app.state.clone(), malformed, &app.telemetry)
-                .expect_err("completed schema violation stays rejected");
+        let error = routing::accept_transaction_for_ingress(&app.state, malformed, &app.telemetry)
+            .expect_err("completed schema violation stays rejected");
         assert!(matches!(
             &error,
             Error::AcceptTransaction(AcceptTransactionFail::SignedAttachments(

@@ -13,6 +13,7 @@ use crate::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
+    Registrable,
     account::{Account, AccountId},
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
@@ -46,11 +47,20 @@ fn fixture_with_bob_balance(
     definition: AssetDefinitionId,
     bob_balance: Option<Quantity>,
 ) -> (State, AssetId, AssetId) {
+    // Initial accounts precede signed genesis; its policy remains uninitialized.
     let state = State::new_for_testing(
-        World::default(),
+        World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&ALICE_ID),
+            ],
+            [],
+        ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    assert!(state.world.parameters.view().crypto_policy().is_none());
     let mut fees = state.nexus_snapshot().fees;
     fees.base_fee = Quantity::zero();
     fees.per_byte_fee = Quantity::zero();
@@ -74,12 +84,6 @@ fn fixture_with_bob_balance(
     {
         let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
         let mut transaction = setup.transaction_for_callback_testing();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
         Register::domain(Domain::new(domain))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
@@ -346,6 +350,15 @@ fn genuine_capture_fixture_retains_signed_root_and_complete_empty_and_transfer_s
             |state, mut block, _recording, mut source, hash| {
                 assert_eq!(state.committed_height(), 1);
                 assert_eq!(
+                    state
+                        .world
+                        .parameters
+                        .view()
+                        .require_crypto_policy()
+                        .unwrap(),
+                    &crate::sumeragi::test_chain::crypto_fixture_policy(),
+                );
+                assert_eq!(
                     source.header().prev_block_hash(),
                     state.latest_block_hash_fast()
                 );
@@ -580,7 +593,7 @@ pub fn with_native_capture_dataspace_source<T>(
         test_chain::{CertifiedTestChain, TestChainConfig},
     };
     use iroha_data_model::{
-        NetworkId, Registrable,
+        NetworkId,
         asset::{Asset, AssetBalanceScope},
         block::consensus::{RootFeePolicy, SumeragiRootScope},
         nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},

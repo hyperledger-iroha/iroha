@@ -121,6 +121,19 @@ is replaced directly, without an alternate decoder or a replay exception. The
 four-validator exporter and pinned replay check the new frames, complete World
 root and execution tip through the existing production paths.
 
+The ordinary signing-policy cutover declares `fresh_genesis` for `genesis` and
+`execution_semantics`. Genesis must contain exactly one signed
+`crypto_admission_policy_v1` parameter; the initial policy is selected only from
+that authenticated source before ordinary account or transaction admission.
+The preceding pinned genesis omits the parameter and is refused. Regenerate
+this fixture through its four-validator exporter with the explicit Ed25519,
+Secp256k1 and BLS-normal policy authored by the node fixture, and record the
+actual frame digest in the inventory. The native replay still checks every
+certificate, block hash, complete World root and execution tip, and still
+rejects an altered stored frame. No policy is injected during replay, no
+missing-policy default is introduced, and this local artifact replacement
+authorizes no live reset.
+
 ## Deliberately incompatible change
 
 A change is incompatible when it alters the bytes, validity or certified result

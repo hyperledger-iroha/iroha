@@ -694,6 +694,16 @@ fn state(accounts: &[&KeyPair], manager: &AccountId) -> State {
     state
 }
 fn component_moderation_state(world: World) -> State {
+    // Component account registration owns its policy; authenticated fixtures use signed genesis.
+    let mut parameters = world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -1275,8 +1285,9 @@ fn pre_activation_appeal_retains_accounts_and_immutable_policy_asset() {
                     multisig_spec,
                 )),
             )
-            .map_err(|error| {
-                InstructionExecutionError::InvariantViolation(error.to_string().into())
+            .map_err(|error| match error {
+                iroha_data_model::ValidationFail::InstructionFailed(error) => error,
+                other => InstructionExecutionError::InvariantViolation(format!("{other:?}").into()),
             })
         })
         .expect("register native multisig appellant");

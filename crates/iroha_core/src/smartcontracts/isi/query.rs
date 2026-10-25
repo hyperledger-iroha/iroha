@@ -6920,6 +6920,16 @@ mod tests {
             );
         let asset_id = AssetId::new(ad_id.clone(), ALICE_ID.clone());
         let world = World::default();
+        // Component account registration requires an explicit original policy.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
         // Build state and register domain/account/asset def; then mint
         let kura = Kura::blank_kura_for_testing();
         let store = std::sync::Arc::new(LiveQueryStore::from_config(
@@ -7027,7 +7037,18 @@ mod tests {
             ShutdownSignal::new(),
         ));
         let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(World::default(), kura, handle.clone());
+        let world = World::default();
+        // Component account registration requires an explicit original policy.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
+        let state = State::new(world, kura, handle.clone());
         let header = ValidBlock::new_dummy(ALICE_KEYPAIR.private_key())
             .as_ref()
             .header();
@@ -7130,7 +7151,18 @@ mod tests {
                 ShutdownSignal::new(),
             ));
             let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-            let state = State::new(World::default(), kura, handle.clone());
+            let world = World::default();
+            // Component account registration requires an explicit original policy.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install original fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, handle.clone());
             let header = ValidBlock::new_dummy(ALICE_KEYPAIR.private_key())
                 .as_ref()
                 .header();

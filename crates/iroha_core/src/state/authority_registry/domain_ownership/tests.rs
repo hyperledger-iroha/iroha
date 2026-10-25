@@ -51,30 +51,27 @@ fn native_transfers_deletions_reinsertions_and_replacement_preserve_both_cuts() 
 }
 
 #[test]
-fn rejects_missing_extra_duplicate_wrong_owner_and_empty_current_buckets() {
-    for mutation in 0..5 {
+fn rejects_missing_extra_duplicate_and_wrong_owner_current_rows() {
+    for mutation in 0..4 {
         let mut world = fixture();
         edit_index(&mut world, |current, _| match mutation {
             0 => {
-                current.get_mut(&*ALICE_ID).unwrap().remove(&id("moving"));
+                current.remove(&(ALICE_ID.clone(), id("moving")));
             }
             1 => {
-                current.get_mut(&*ALICE_ID).unwrap().insert(id("ghost"));
+                current.insert((ALICE_ID.clone(), id("ghost")));
             }
             2 => {
-                current.get_mut(&*BOB_ID).unwrap().insert(id("moving"));
+                current.insert((BOB_ID.clone(), id("moving")));
             }
             3 => {
-                current.get_mut(&*ALICE_ID).unwrap().remove(&id("moving"));
-                current.get_mut(&*BOB_ID).unwrap().insert(id("moving"));
-            }
-            4 => {
-                current.insert(BOB_ID.clone(), BTreeSet::new());
+                current.remove(&(ALICE_ID.clone(), id("moving")));
+                current.insert((BOB_ID.clone(), id("moving")));
             }
             _ => unreachable!(),
         });
         let original = encoded(&world);
-        let mismatch = if matches!(mutation, 0 | 3 | 4) {
+        let mismatch = if matches!(mutation, 0 | 3) {
             OwnershipMismatch::MissingDomain
         } else {
             OwnershipMismatch::ForeignDomain
@@ -88,16 +85,16 @@ fn rejects_missing_extra_duplicate_wrong_owner_and_empty_current_buckets() {
         );
         assert_eq!(encoded(&world), original);
     }
-    // An otherwise unused owner cannot have an empty bucket either.
+    // An otherwise unused owner cannot keep an orphan membership row either.
     let mut world = empty();
     world
         .domains_by_owner
-        .insert(ALICE_ID.clone(), BTreeSet::new());
+        .insert((ALICE_ID.clone(), id("ghost")), ());
     assert_eq!(
         error(&world, 1),
         DomainOwnershipError::Corrupt {
             image: OwnershipImage::Current,
-            mismatch: OwnershipMismatch::EmptyBucket
+            mismatch: OwnershipMismatch::ForeignDomain
         }
     );
 }
@@ -109,28 +106,16 @@ fn correct_current_rows_do_not_hide_corrupt_predecessor_membership() {
         change(&world, false);
         edit_index(&mut world, |_, undo| match mutation {
             0 => {
-                undo.insert(ALICE_ID.clone(), None);
+                undo.insert((ALICE_ID.clone(), id("moving")), None);
             }
             1 => {
-                undo.get_mut(&*ALICE_ID)
-                    .unwrap()
-                    .as_mut()
-                    .unwrap()
-                    .insert(id("ghost"));
+                undo.insert((ALICE_ID.clone(), id("ghost")), Some(()));
             }
             2 => {
-                undo.get_mut(&*BOB_ID)
-                    .unwrap()
-                    .as_mut()
-                    .unwrap()
-                    .insert(id("moving"));
+                undo.insert((BOB_ID.clone(), id("moving")), Some(()));
             }
             3 => {
-                undo.get_mut(&*ALICE_ID)
-                    .unwrap()
-                    .as_mut()
-                    .unwrap()
-                    .remove(&id("removed"));
+                undo.insert((ALICE_ID.clone(), id("removed")), None);
             }
             _ => unreachable!(),
         });
@@ -159,11 +144,11 @@ fn exact_work_bound_charges_absent_preimages_and_never_reports_them_as_corruptio
         BTreeMap::from([(id("absent"), None)]),
     );
     world.domains_by_owner = Storage::from_snapshot_parts(
-        BTreeMap::from([(ALICE_ID.clone(), BTreeSet::from([id("live")]))]),
+        [((ALICE_ID.clone(), id("live")), ())].into_iter().collect(),
         // A transient owner during the block may leave a redundant absent
         // preimage. Only current/predecessor contents are derived, not the
-        // intermediate sequence of touched buckets.
-        BTreeMap::from([(BOB_ID.clone(), None)]),
+        // intermediate sequence of touched memberships.
+        OwnerUndo::from([((BOB_ID.clone(), id("live")), None)]),
     );
     let original = encoded(&world);
     let rows = world.domains.try_committed_view_nonblocking().unwrap();
@@ -194,8 +179,9 @@ fn checked_owner_retains_original_rows_and_detects_equal_value_publication() {
             block.commit();
         } else {
             let mut block = world.domains_by_owner.block();
-            let value = block.get(&*ALICE_ID).unwrap().clone();
-            block.insert(ALICE_ID.clone(), value);
+            let row = (ALICE_ID.clone(), id("moving"));
+            assert!(block.get(&row).is_some());
+            block.insert(row, ());
             block.commit();
         }
         assert!(!without_allocations(|| checked.matches_current()).unwrap());
@@ -224,7 +210,7 @@ fn limits() -> LeafLimits {
 fn scoped_native_capture_consumes_checked_source_and_preserves_operational_refusal() {
     let mut world = fixture();
     edit_index(&mut world, |current, _| {
-        current.get_mut(&*ALICE_ID).unwrap().insert(id("ghost"));
+        current.insert((ALICE_ID.clone(), id("ghost")));
     });
     let mut state = State::new_for_testing(
         world,
@@ -274,7 +260,7 @@ fn one_domain(owner: AccountId, id: DomainId) -> World {
     world
         .domains
         .insert(id.clone(), Domain::new(id.clone()).build(&owner));
-    world.domains_by_owner.insert(owner, BTreeSet::from([id]));
+    world.domains_by_owner.insert((owner, id), ());
     world
 }
 
@@ -283,9 +269,9 @@ fn named_descriptor_and_full_controller_geometry_are_exact_local_work() {
     use iroha_data_model::account::{MultisigMember, MultisigPolicy};
     let max = DomainId::try_new("a".repeat(63), "b".repeat(63)).unwrap();
     let world = one_domain(ALICE_ID.clone(), max);
-    assert_eq!(DOMAIN_OWNER_WORK_PER_ROW, 1292);
-    assert_eq!(error(&world, 1291), DomainOwnershipError::WorkLimit);
-    without_allocations(|| CheckedDomainOwnership::capture(&world, 1292)).unwrap();
+    assert_eq!(DOMAIN_OWNER_WORK_PER_ROW, 1288);
+    assert_eq!(error(&world, 1287), DomainOwnershipError::WorkLimit);
+    without_allocations(|| CheckedDomainOwnership::capture(&world, 1288)).unwrap();
     let members = vec![
         MultisigMember::new(ALICE_ID.expect_single_signatory().clone(), 1).unwrap(),
         MultisigMember::new(BOB_ID.expect_single_signatory().clone(), 2).unwrap(),
@@ -294,7 +280,7 @@ fn named_descriptor_and_full_controller_geometry_are_exact_local_work() {
     let world = one_domain(owner, id("live"));
     // A=12+2*(32+4)=84; D=4+9=13. Both images fund every
     // controller/member/scalar byte before equality, not only matching prefixes.
-    let exact = 12 + 8 * (84 + 13);
+    let exact = 8 + 8 * (84 + 13);
     assert_eq!(error(&world, exact - 1), DomainOwnershipError::WorkLimit);
     without_allocations(|| CheckedDomainOwnership::capture(&world, exact)).unwrap();
     assert!(
@@ -311,17 +297,19 @@ fn single_noop_insert_and_empty_absent_images_have_exact_physical_work() {
         } else {
             one_domain(ALICE_ID.clone(), id("live"))
         };
+        // A=34 and D=4+9=13. Each image pays one source and one membership
+        // advance plus both full pair equalities; masks pay 1+26 and 1+47.
         let exact = match kind {
-            0 => 388,
+            0 => 384,
             1 => {
                 let mut rows = world.domains.block();
                 let value = rows.get(&id("live")).unwrap().clone();
                 rows.insert(id("live"), value);
                 rows.commit();
                 let mut owners = world.domains_by_owner.block();
-                owners.insert(ALICE_ID.clone(), BTreeSet::from([id("live")]));
+                owners.insert((ALICE_ID.clone(), id("live")), ());
                 owners.commit();
-                584
+                632
             }
             2 => {
                 world.domains = Storage::from_snapshot_parts(
@@ -329,10 +317,10 @@ fn single_noop_insert_and_empty_absent_images_have_exact_physical_work() {
                     BTreeMap::from([(id("live"), None)]),
                 );
                 world.domains_by_owner = Storage::from_snapshot_parts(
-                    BTreeMap::from([(ALICE_ID.clone(), BTreeSet::from([id("live")]))]),
-                    BTreeMap::from([(ALICE_ID.clone(), None)]),
+                    [((ALICE_ID.clone(), id("live")), ())].into_iter().collect(),
+                    OwnerUndo::from([((ALICE_ID.clone(), id("live")), None)]),
                 );
-                294
+                318
             }
             3 => {
                 world.domains = Storage::from_snapshot_parts(
@@ -340,8 +328,8 @@ fn single_noop_insert_and_empty_absent_images_have_exact_physical_work() {
                     BTreeMap::from([(id("absent"), None)]),
                 );
                 world.domains_by_owner = Storage::from_snapshot_parts(
-                    BTreeMap::new(),
-                    BTreeMap::from([(ALICE_ID.clone(), None)]),
+                    Default::default(),
+                    OwnerUndo::from([((ALICE_ID.clone(), id("live")), None)]),
                 );
                 2
             }
@@ -391,9 +379,9 @@ fn malformed_typed_keys_preserve_exact_membership_without_ord_error_allocation()
     // An empty compact key has zero retained payload. The relation deliberately
     // does not introduce controller admission or key decoding; exact equality
     // remains valid and costs A=2, including its missing tag reference unit.
-    without_allocations(|| CheckedDomainOwnership::capture(&world, 132)).unwrap();
-    assert_eq!(error(&world, 131), DomainOwnershipError::WorkLimit);
-    world.domains_by_owner = Storage::from_iter([(ALICE_ID.clone(), BTreeSet::from([id("live")]))]);
+    without_allocations(|| CheckedDomainOwnership::capture(&world, 128)).unwrap();
+    assert_eq!(error(&world, 127), DomainOwnershipError::WorkLimit);
+    world.domains_by_owner = Storage::from_iter([((ALICE_ID.clone(), id("live")), ())]);
     assert_eq!(
         error(&world, 1_000_000),
         DomainOwnershipError::Corrupt {
@@ -401,8 +389,10 @@ fn malformed_typed_keys_preserve_exact_membership_without_ord_error_allocation()
             mismatch: OwnershipMismatch::MissingDomain,
         }
     );
-    world.domains_by_owner =
-        Storage::from_iter([(malformed, BTreeSet::from([id("live"), id("ghost")]))]);
+    world.domains_by_owner = Storage::from_iter([
+        ((malformed.clone(), id("live")), ()),
+        ((malformed, id("ghost")), ()),
+    ]);
     assert_eq!(
         error(&world, 1_000_000),
         DomainOwnershipError::Corrupt {

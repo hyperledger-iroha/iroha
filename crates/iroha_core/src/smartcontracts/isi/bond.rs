@@ -1196,9 +1196,7 @@ fn issuer_repo_collateral(
         &state_transaction.world.repo_agreements_by_counterparty,
         &state_transaction.world.repo_agreements_by_custodian,
     ] {
-        if let Some(ids) = index.get(issuer) {
-            agreements.extend(ids.iter().cloned());
-        }
+        agreements.extend(crate::state::range_bounds::index_members(index, issuer).cloned());
     }
     let mut reserved = Quantity::zero();
     for id in agreements {

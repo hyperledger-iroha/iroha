@@ -35935,15 +35935,20 @@ fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
         .split_once("// Commit process-wide Torii policy")
         .expect("process-wide publication boundary")
         .0;
-    let fast_guard = app_services
-        .find("if !emergency_fast")
-        .expect("emergency Fast ZK-prover guard");
-    let configure = app_services
+    let compact_services: String = app_services
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    // Emergency Fast returns no prepared configuration; only Strict enters Some.
+    let fast_guard = compact_services
+        .find("letprepared_prover=ifemergency_fast{None}else{Some(")
+        .expect("emergency Fast leaves the ZK prover unconfigured");
+    let configure = compact_services
         .find("crate::zk_prover::prepare_configuration(")
         .expect("ZK-prover configuration");
     assert!(fast_guard < configure);
     assert!(
-        !app_services.contains("crate::zk_prover::start_worker()"),
+        !app_services.contains("crate::zk_prover::start_worker("),
         "the prover must not start while Torii is still being constructed"
     );
 
@@ -43497,7 +43502,7 @@ impl IntoResponse for Error {
                 iroha_logger::debug!(?original, "transaction admission deferred locally");
                 let mut response = utils::respond_with_status_and_format(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    Self::transaction_admission_deferred_envelope(),
+                    &Self::transaction_admission_deferred_envelope(),
                     format,
                 );
                 response.headers_mut().insert(

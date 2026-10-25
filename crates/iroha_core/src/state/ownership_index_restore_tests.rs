@@ -218,8 +218,8 @@ fn ownership_indexes_restore_both_images_and_redundant_touches() {
             .domains_by_owner
             .snapshot()
             .revert_map()
-            .contains_key(&third),
-        "unchanged owner bucket retains the source touch"
+            .contains_key(&(third, domain("untouched"))),
+        "unchanged owner membership retains the source touch"
     );
     assert!(
         recovered
@@ -293,39 +293,6 @@ fn ownership_indexes_follow_committed_replacement_and_second_restore() {
     assert!(second.rwas_by_owner.snapshot().revert_map().is_empty());
     assert!(second.rwas_by_status.snapshot().revert_map().is_empty());
     assert!(second.rwas_by_frozen.snapshot().revert_map().is_empty());
-}
-
-#[test]
-fn grouped_projection_keeps_complete_buckets_and_ignores_absent_records() {
-    let mut source: Storage<u8, u8> = [(1, 7), (2, 7), (3, 9)].into_iter().collect();
-    {
-        let mut block = source.block();
-        block.insert(1, 8);
-        block.insert(3, 9);
-        block.insert(4, 8);
-        block.remove(5);
-        block.commit();
-    }
-    let original = encoded(&source);
-    let projected = grouped(&source.history(), |_, value| Some(*value));
-    assert_eq!(encoded(&source), original);
-    assert_eq!(
-        projected
-            .snapshot()
-            .revert_map()
-            .iter()
-            .map(|(key, value)| (*key, value.clone()))
-            .collect::<BTreeMap<_, _>>(),
-        BTreeMap::from([
-            (7, Some(BTreeSet::from([1, 2]))),
-            (8, None),
-            (9, Some(BTreeSet::from([3]))),
-        ])
-    );
-    let previous = projected.block_and_revert();
-    assert_eq!(previous.get(&7), Some(&BTreeSet::from([1, 2])));
-    assert_eq!(previous.get(&8), None);
-    assert_eq!(previous.get(&9), Some(&BTreeSet::from([3])));
 }
 
 #[test]

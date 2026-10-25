@@ -565,14 +565,16 @@ fn unwitnessed_role_and_parameter_changes_change_the_root() {
 #[test]
 fn derived_index_changes_do_not_create_independent_world_authority() {
     use iroha_model_base::domain::DomainId;
-    use std::collections::BTreeSet;
 
     let world = World::default();
     let mut block = world.block();
     let parent = WorldStateAccumulator::capture(&block).unwrap();
     block.domains_by_owner.insert(
-        iroha_test_samples::ALICE_ID.clone(),
-        BTreeSet::from([DomainId::try_new("derived", "only").unwrap()]),
+        (
+            iroha_test_samples::ALICE_ID.clone(),
+            DomainId::try_new("derived", "only").unwrap(),
+        ),
+        (),
     );
     let current = WorldStateAccumulator::capture(&block).unwrap();
     assert_eq!(current.root(), parent.root());

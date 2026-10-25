@@ -1656,8 +1656,9 @@ mod sorafs_evidence_viewer_startup_tests {
         ));
         assert!(compact_source.contains("producer.reconcile().map_err(|error|{"));
         assert!(
-            compact_source
-                .contains("\"sorafs.storage.evidence_viewer.transparency_producer\",error,)})?;")
+            compact_source.contains(
+                "\"sorafs.storage.evidence_viewer.transparency_producer\",&(error),)})?;"
+            )
         );
         assert!(!compact_source.contains(&providerless_open));
     }

@@ -31,11 +31,20 @@ fn fixture_with_bob_balance(
     definition: AssetDefinitionId,
     bob_balance: Option<Quantity>,
 ) -> (State, AssetId, AssetId) {
+    // Initial accounts precede signed genesis; its policy remains uninitialized.
     let state = State::new_for_testing(
-        World::default(),
+        World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&ALICE_ID),
+            ],
+            [],
+        ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    assert!(state.world.parameters.view().crypto_policy().is_none());
     let mut fees = state.nexus_snapshot().fees;
     fees.base_fee = Quantity::zero();
     fees.per_byte_fee = Quantity::zero();
@@ -59,12 +68,6 @@ fn fixture_with_bob_balance(
     {
         let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
         let mut transaction = setup.transaction_for_callback_testing();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
         Register::domain(Domain::new(domain))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
@@ -151,6 +154,10 @@ fn quantity_fixture_preserves_balances_and_original_authenticated_network_root()
     let view = state.view();
     assert_eq!(view.height(), 1);
     assert_eq!(view.kura().blocks_count(), 1);
+    assert_eq!(
+        view.world.parameters().require_crypto_policy().unwrap(),
+        &crate::sumeragi::test_chain::crypto_fixture_policy(),
+    );
     let parent = view.latest_block_hash().expect("original quantity genesis");
     assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
     assert_eq!(
@@ -3171,11 +3178,20 @@ fn account_removal_without_balance_does_not_invent_a_zero_burn() {
 /// Original setup precedes the authentic signed genesis, including each lifecycle
 /// and derived index. The source under test is a real signed native instruction.
 fn retirement_fixture() -> (State, DomainId, Vec<AssetId>, AssetDefinitionId, AssetId) {
+    // Initial accounts precede signed genesis; its policy remains uninitialized.
     let state = State::new_for_testing(
-        World::default(),
+        World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&ALICE_ID),
+            ],
+            [],
+        ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    assert!(state.world.parameters.view().crypto_policy().is_none());
     let mut fees = state.nexus_snapshot().fees;
     fees.base_fee = Quantity::zero();
     fees.per_byte_fee = Quantity::zero();
@@ -3217,11 +3233,6 @@ fn retirement_fixture() -> (State, DomainId, Vec<AssetId>, AssetDefinitionId, As
     {
         let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
         let mut transaction = setup.transaction_for_callback_testing();
-        for account in [&*ALICE_ID, &*BOB_ID] {
-            Register::account(Account::new(account.clone()))
-                .execute(&ALICE_ID, &mut transaction)
-                .unwrap();
-        }
         for id in [&domain, &other_domain] {
             Register::domain(Domain::new(id.clone()))
                 .execute(&ALICE_ID, &mut transaction)

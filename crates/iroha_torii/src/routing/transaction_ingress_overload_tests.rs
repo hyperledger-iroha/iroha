@@ -82,6 +82,7 @@ mod transaction_ingress_overload_tests {
             ],
             [],
         );
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
         crate::test_utils::bind_fixture_root(
             &mut world,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,

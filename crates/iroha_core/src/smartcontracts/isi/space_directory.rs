@@ -379,7 +379,18 @@ mod tests {
     fn test_state() -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        State::new_for_testing(World::default(), kura, query)
+        let world = World::default();
+        // Component registrations use an explicit policy authored before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install fixture crypto policy");
+        parameters.commit();
+        State::new_for_testing(world, kura, query)
     }
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("Space Directory fixture key generation should succeed")

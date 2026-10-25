@@ -1607,6 +1607,12 @@ mod tests {
     }
     fn state_with_test_domains(kura: &Arc<Kura>) -> Result<State> {
         let world = World::with([], [], []);
+        // Component registrations use an explicit policy authored before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy().into_parameter()?,
+        )?;
+        parameters.commit();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura.clone(), query_handle);
         let asset_definition_id =

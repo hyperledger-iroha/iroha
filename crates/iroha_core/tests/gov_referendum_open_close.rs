@@ -32,6 +32,21 @@ fn referendum_open_and_close_by_height() {
     let account: Account =
         Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);
     let world = World::with([domain], [account], []);
+    // Component account writes require an authored policy before the block snapshot.
+    let mut parameters = world.parameters.block();
+    parameters
+        .set_parameter(
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit fixture signing algorithms")
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        )
+        .expect("install fixture crypto policy");
+    parameters.commit();
     let mut state = State::new_for_testing(world, kura, query_handle);
     let mut governance = state.gov.clone();
     // This lifecycle projection deliberately retains a zero-weight position.

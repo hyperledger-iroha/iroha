@@ -7691,6 +7691,28 @@ mod validation_fee_registry_restore_tests {
         );
         let (world, _) =
             registry_world_with_policy_network(REGISTRY_CANDIDATE_SEED, foreign_policy_network);
+        // Supply initialized structural parameter cuts without granting this
+        // rejected restore fixture native execution authority.
+        {
+            let mut parameters = world.parameters.block();
+            parameters
+                .get_mut()
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("fixture crypto policy parameter"),
+                )
+                .expect("valid fixture crypto policy");
+            parameters.commit();
+        }
+        // An unchanged parameter commit retains the initialized current cut as
+        // its predecessor, matching the fixture's post-genesis history height.
+        world.parameters.block().commit();
+        validate_restored_crypto_policy(
+            &world,
+            usize::try_from(RESTORED_HEIGHT).expect("fixture height fits usize"),
+        )
+        .expect("fixture current and predecessor parameter cuts retain crypto policy");
         let block_hashes: Vec<HashOf<BlockHeader>> = (1..=RESTORED_HEIGHT)
             .map(|height| HashOf::from_untyped_unchecked(Hash::new(height.to_le_bytes())))
             .collect();

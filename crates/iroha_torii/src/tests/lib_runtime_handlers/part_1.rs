@@ -462,12 +462,36 @@ pub fn mk_app_state_for_tests_with_options(
 pub fn mk_app_state_for_tests_with_world(world: World) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(world, None, None, None, None)
 }
+/// Construct an app whose World will be authenticated by its original signed genesis.
+///
+/// Unlike ready admission fixtures, this entrypoint leaves ordinary crypto policy
+/// for genesis to author and rejects an already initialized policy.
+pub fn mk_app_state_for_tests_with_pre_genesis_world(world: World) -> SharedAppState {
+    mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
+        AppFixtureWorld::PreGenesis(world),
+        None,
+        None,
+        None,
+        None,
+        (
+            "chain".parse().expect("test chain id"),
+            crate::signed_query_test_network_id(),
+        ),
+        None,
+    )
+}
+
+enum AppFixtureWorld {
+    Ready(World),
+    PreGenesis(World),
+}
+
 pub fn mk_app_state_for_tests_with_world_and_nexus(
     world: World,
     nexus: iroha_config::parameters::actual::Nexus,
 ) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
-        world,
+        AppFixtureWorld::Ready(world),
         None,
         None,
         None,
@@ -908,7 +932,7 @@ async fn configured_catalog_fixture_binds_initial_geometry_and_explicit_network(
     drop(kura);
 
     let app = mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
-        World::default(),
+        AppFixtureWorld::Ready(World::default()),
         None,
         None,
         None,
@@ -2169,7 +2193,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     network_id: NetworkId,
 ) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
-        world,
+        AppFixtureWorld::Ready(world),
         iso,
         deploy_limit,
         norito_rpc,
@@ -2179,7 +2203,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     )
 }
 fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
-    mut world: World,
+    fixture_world: AppFixtureWorld,
     iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
@@ -2187,6 +2211,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     (chain_id, network_id): (ChainId, NetworkId),
     intended_nexus: Option<iroha_config::parameters::actual::Nexus>,
 ) -> SharedAppState {
+    let (mut world, initialize_crypto_policy) = match fixture_world {
+        AppFixtureWorld::Ready(world) => (world, true),
+        AppFixtureWorld::PreGenesis(world) => (world, false),
+    };
     // These synthetic routing fixtures model a Global root unless their caller explicitly
     // supplied another root (or malformed metadata for a rejection test). An absent root
     // must never gain Global authority in production routing.
@@ -2201,8 +2229,16 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
         );
     }
-    // This shared app fixture models initialized ordinary admission, explicitly.
-    crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
+    // Ready fixtures model initialized ordinary admission. Original signed genesis
+    // fixtures must author their first ordinary crypto policy during genesis itself.
+    if initialize_crypto_policy {
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
+    } else {
+        assert!(
+            world.view().parameters().crypto_policy().is_none(),
+            "pre-genesis app fixture must receive an uninitialized ordinary crypto policy"
+        );
+    }
     // Minimal core state
     let _ = &push;
     let query_handle = LiveQueryStore::start_test();

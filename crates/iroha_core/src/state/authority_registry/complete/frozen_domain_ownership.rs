@@ -1,7 +1,7 @@
-//! Exact domain-owner buckets over the original frozen `StateBlock`.
+//! Exact domain-owner membership rows over the original frozen `StateBlock`.
 //!
 //! The committed and frozen owners share one complete bounded both-image relation.
-//! This retains the existing storage-key/bucket semantics without account existence,
+//! This retains the existing storage-key/membership semantics without account existence,
 //! embedded record-id or execution authority predicates. No fresh State view is needed.
 //! TODO: consume this scoped encoder with every canonical table/cell and authenticated history
 //! in the sole `StatePublication` owner. Whole predecessor coherence, custody and finality remain open.
@@ -15,12 +15,11 @@ use iroha_allocation::AllocationBudget;
 use iroha_data_model::{account::AccountId, domain::Domain};
 use iroha_model_base::domain::DomainId;
 use mv::storage::FrozenStorageImages;
-use std::collections::BTreeSet;
 
 // Only one actual execution owner can supply the rows, index and encoding pool.
 struct Original<'frozen> {
     rows: FrozenStorageImages<'frozen, DomainId, Domain>,
-    index: FrozenStorageImages<'frozen, AccountId, BTreeSet<DomainId>>,
+    index: FrozenStorageImages<'frozen, (AccountId, DomainId), ()>,
     budget: &'frozen AllocationBudget,
 }
 
@@ -45,7 +44,7 @@ impl<'frozen> Original<'frozen> {
     }
 }
 
-/// Encode original canonical domains whose complete original owner buckets were checked.
+/// Encode original canonical domains whose complete original owner rows were checked.
 ///
 /// `None` refuses incomplete, foreign, differently acquired or released sources.
 /// Both original borrows and their State allocation pool survive validation and

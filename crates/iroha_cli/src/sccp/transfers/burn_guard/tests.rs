@@ -145,7 +145,16 @@ fn burn_bls_requires_committed_membership_without_exempting_other_members() {
 
     let capabilities = |algorithms: Vec<Algorithm>| {
         let policy = CryptoAdmissionPolicyV1::new(algorithms).unwrap();
-        norito::json!({"crypto": {"sm": {"allowed_signing": policy.allowed_algorithms().iter().map(|algorithm| algorithm.as_static_str()).collect::<Vec<_>>()}, "curves": {"allowed_curve_ids": policy.allowed_curves().map(|curve| curve.as_u8()).collect::<Vec<_>>()}}})
+        let allowed_signing = policy
+            .allowed_algorithms()
+            .iter()
+            .map(|algorithm| algorithm.as_static_str())
+            .collect::<Vec<_>>();
+        let allowed_curve_ids = policy
+            .allowed_curves()
+            .map(|curve| curve.as_u8())
+            .collect::<Vec<_>>();
+        norito::json!({"crypto": {"sm": {"allowed_signing": allowed_signing}, "curves": {"allowed_curve_ids": allowed_curve_ids}}})
     };
     let ed_permitted = capabilities(vec![Algorithm::Ed25519]);
     let ed = iroha_crypto::KeyPair::from_seed(vec![24; 32], Algorithm::Ed25519);
@@ -190,8 +199,10 @@ fn burn_controller_rejects_noncanonical_policy_and_inconsistent_curve_projection
         .unwrap();
     let ed = CurveId::from_algorithm(Algorithm::Ed25519).as_u8();
     let secp = CurveId::from_algorithm(Algorithm::Secp256k1).as_u8();
+    let oversized_signing = vec!["ed25519"; Algorithm::ALL.len() + 1];
+    let oversized_curves = vec![ed; Algorithm::ALL.len() + 1];
     for invalid in [
-        norito::json!({"crypto": {"sm": {"allowed_signing": vec!["ed25519"; Algorithm::ALL.len() + 1]}, "curves": {"allowed_curve_ids": vec![ed; Algorithm::ALL.len() + 1]}}}),
+        norito::json!({"crypto": {"sm": {"allowed_signing": oversized_signing}, "curves": {"allowed_curve_ids": oversized_curves}}}),
         norito::json!({"crypto": {"sm": {"allowed_signing": ["ed25519", "ed25519"]}, "curves": {"allowed_curve_ids": [ed, ed]}}}),
         norito::json!({"crypto": {"sm": {"allowed_signing": ["secp256k1", "ed25519"]}, "curves": {"allowed_curve_ids": [secp, ed]}}}),
         norito::json!({"crypto": {"sm": {"allowed_signing": ["Ed25519"]}, "curves": {"allowed_curve_ids": [ed]}}}),

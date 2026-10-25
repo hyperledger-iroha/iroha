@@ -371,8 +371,9 @@ fn pending_challenge_blocks_native_multisig_controller_rekey() {
                     spec,
                 )),
             )
-            .map_err(|error| {
-                InstructionExecutionError::InvariantViolation(error.to_string().into())
+            .map_err(|error| match error {
+                iroha_data_model::ValidationFail::InstructionFailed(error) => error,
+                other => InstructionExecutionError::InvariantViolation(format!("{other:?}").into()),
             })?;
             Transfer::asset_quantity(
                 AssetId::new(voting_asset_id, initial_signer.clone()),

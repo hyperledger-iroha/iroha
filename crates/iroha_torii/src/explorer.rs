@@ -1461,14 +1461,11 @@ pub(crate) fn account_counters_from_world(
     visibility: &DataspaceReadVisibility,
 ) -> AccountCounters {
     AccountCounters {
-        domains: world.domains_by_owner().get(id).map_or(0, |domains| {
-            saturating_usize_to_u32(
-                domains
-                    .iter()
-                    .filter(|domain| visibility.allows_domain(world, domain))
-                    .count(),
-            )
-        }),
+        domains: saturating_usize_to_u32(
+            index_members(world.domains_by_owner(), id)
+                .filter(|domain| visibility.allows_domain(world, domain))
+                .count(),
+        ),
         assets: saturating_usize_to_u32(
             world
                 .assets_in_account_iter(id)
@@ -1671,31 +1668,23 @@ pub(crate) fn domains_page_for_filters<'world>(
         ExplorerCursorCollection::Domains,
         filter_digest,
     )?;
-    let domains: Box<dyn Iterator<Item = &'world Domain> + 'world> = if owned_by
-        .is_some_and(|owner| !visibility.allows_account(world, owner))
-    {
-        explorer_iterator(std::iter::empty())?
-    } else if let Some(owner) = owned_by {
-        let domain_ids = world.domains_by_owner().get(owner);
-        let domain_ids: Box<dyn Iterator<Item = &'world DomainId> + 'world> = match domain_ids {
-            Some(domain_ids) => match after {
-                Some(after) => explorer_iterator(domain_ids.range((Excluded(after), Unbounded)))?,
-                None => explorer_iterator(domain_ids.iter())?,
-            },
-            None => explorer_iterator(std::iter::empty())?,
+    let domains: Box<dyn Iterator<Item = &'world Domain> + 'world> =
+        if owned_by.is_some_and(|owner| !visibility.allows_account(world, owner)) {
+            explorer_iterator(std::iter::empty())?
+        } else if let Some(owner) = owned_by {
+            let domain_ids = index_members_after(world.domains_by_owner(), owner, after.as_ref());
+            explorer_iterator(domain_ids.filter_map(|domain_id| world.domains().get(domain_id)))?
+        } else {
+            match after {
+                Some(after) => explorer_iterator(
+                    world
+                        .domains()
+                        .range((Excluded(after), Unbounded))
+                        .map(|(_, domain)| domain),
+                )?,
+                None => explorer_iterator(world.domains_iter())?,
+            }
         };
-        explorer_iterator(domain_ids.filter_map(|domain_id| world.domains().get(domain_id)))?
-    } else {
-        match after {
-            Some(after) => explorer_iterator(
-                world
-                    .domains()
-                    .range((Excluded(after), Unbounded))
-                    .map(|(_, domain)| domain),
-            )?,
-            None => explorer_iterator(world.domains_iter())?,
-        }
-    };
     let scanned = collect_explorer_cursor_page(
         domains,
         limit,

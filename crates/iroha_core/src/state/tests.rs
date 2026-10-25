@@ -466,6 +466,16 @@ macro_rules! dataspace_retirement_nexus {
 macro_rules! asset_index_transaction {
     ($state:ident, $state_block:ident, $stx:ident, $domain_id:ident) => {
         let $state = blank_state();
+        // Component account registration owns an explicit policy before its first snapshot.
+        let mut parameters = $state.world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut $state_block = $state.block(header);
         let mut $stx = $state_block.transaction();
@@ -560,7 +570,14 @@ fn fixture_static_storage_identity(
 
 macro_rules! pipeline_trigger_transaction {
     ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
-        let $state = blank_state();
+        // These fixtures later authenticate genesis, which must author the crypto policy.
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+        assert!(world.parameters.view().crypto_policy().is_none());
+        let $state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
         pipeline_trigger_transaction!(@from_state $state, $block, $state_block, $stx);
     };
     (@from_state $state:ident, $block:ident, $state_block:ident, $stx:ident) => {
@@ -572,9 +589,6 @@ macro_rules! pipeline_trigger_transaction {
         ))
         .execute(&ALICE_ID, &mut $stx)
         .unwrap();
-        Register::account(new_sample_account(&ALICE_ID))
-            .execute(&ALICE_ID, &mut $stx)
-            .unwrap();
     };
 }
 macro_rules! tiered_state_config {
@@ -1363,7 +1377,7 @@ fn test_nexus_fixture_constructor_matches_configured_primary_replay_lineage() {
         complete_static[&LaneId::new(1)]
     );
 }
-state_test! { sync insert_domain_for_testing_replaces_owner_index_without_empty_bucket
+state_test! { sync insert_domain_for_testing_moves_owner_membership_row
     let domain_id = DomainId::try_new("fixture", "universal").expect("valid domain id");
     let mut world = World::new();
     assert!(
@@ -1374,17 +1388,16 @@ state_test! { sync insert_domain_for_testing_replaces_owner_index_without_empty_
             )
             .is_none()
     );
-    assert_eq!(
-        world.domains_by_owner.view().get(&ALICE_ID),
-        Some(&BTreeSet::from([domain_id.clone()]))
-    );
+    let owned = |world: &World, owner: &AccountId| {
+        index_members(&world.domains_by_owner.view(), owner)
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(owned(&world, &*ALICE_ID), BTreeSet::from([domain_id.clone()]));
     let_row! { previous = world .insert_domain_for_testing( domain_id.clone(), Domain::new(domain_id.clone()).build(&BOB_ID), ) .expect("existing fixture domain is replaced") };
     assert_eq!(previous.owned_by(), &*ALICE_ID);
-    assert!(world.domains_by_owner.view().get(&ALICE_ID).is_none());
-    assert_eq!(
-        world.domains_by_owner.view().get(&BOB_ID),
-        Some(&BTreeSet::from([domain_id]))
-    );
+    assert!(owned(&world, &*ALICE_ID).is_empty());
+    assert_eq!(owned(&world, &*BOB_ID), BTreeSet::from([domain_id]));
 }
 state_test! { sync trigger_batch_gas_budget_is_shared_across_items
     assert_eq!(
@@ -5146,6 +5159,16 @@ fn new_sample_account(account_id: &AccountId) -> iroha_data_model::account::NewA
 }
 state_test! { sync account_scope_hierarchy_tracks_dataspaces_and_domains
     let state = blank_state();
+    // Component account registration owns an explicit policy before its first snapshot.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
@@ -5201,6 +5224,16 @@ state_test! { sync account_scope_hierarchy_tracks_dataspaces_and_domains
 }
 state_test! { sync account_scope_directory_tracks_alias_bind_and_unbind
     let state = blank_state();
+    // Component account registration owns an explicit policy before its first snapshot.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
@@ -5637,6 +5670,16 @@ state_test! { sync account_scope_directory_uses_primary_label_materialization_fo
 }
 state_test! { sync account_scope_directory_tracks_manifest_driven_uaid_binding_changes
     let state = blank_state();
+    // Component account registration owns an explicit policy before its first snapshot.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
@@ -5711,6 +5754,16 @@ state_test! { sync trigger_args_from_asset_event_falls_back_to_event_domain_with
     let_row! { asset_definition = AssetDefinitionId::derive_from_components(asset_domain.clone(), "aed".parse().unwrap()) };
     let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
     let state = blank_test_state();
+    // Component account registration owns an explicit policy before its first snapshot.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
@@ -19610,6 +19663,16 @@ state_test! { sync remove_asset_and_metadata_with_total_decrements_definition_to
 }
 state_test! { sync asset_definition_domain_index_tracks_exact_membership
     let state = blank_state();
+    // Component account registration owns an explicit policy before its first snapshot.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -19986,15 +20049,20 @@ state_test! { sync vk_set_hash_deterministic
 state_test! { result time_trigger_failure_retains_declared_projection_in_its_typed_output
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query);
+    // Seed the canonical setup account without authoring policy before signed genesis.
+    let world = World::with(
+        [],
+        [new_sample_account(&ALICE_ID).build(&SAMPLE_GENESIS_ACCOUNT_ID)],
+        [],
+    );
+    assert!(world.parameters.view().crypto_policy().is_none());
+    let state = State::new(world, kura, query);
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
         Register::domain(Domain::new(domain_id.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-        Register::account(new_sample_account(&ALICE_ID))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
         Register::asset_definition(AssetDefinition::numeric(
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -20035,7 +20103,14 @@ state_test! { result time_trigger_failure_retains_declared_projection_in_its_typ
 state_test! { result time_trigger_cannot_synthesize_governance_ballot
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query);
+    // Seed the canonical setup account without authoring policy before signed genesis.
+    let world = World::with(
+        [],
+        [new_sample_account(&ALICE_ID).build(&SAMPLE_GENESIS_ACCOUNT_ID)],
+        [],
+    );
+    assert!(world.parameters.view().crypto_policy().is_none());
+    let state = State::new(world, kura, query);
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let trigger_id: TriggerId = "governance_ballot_time_trigger".parse()?;
@@ -20043,8 +20118,6 @@ state_test! { result time_trigger_cannot_synthesize_governance_ballot
         let mut stx = state_block.transaction();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
         Register::domain(Domain::new(domain_id))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-        Register::account(new_sample_account(&ALICE_ID))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
         let ballot = iroha_data_model::isi::governance::CastZkBallot {
             election_id: "trigger.referendum.v1".to_owned(),
@@ -20080,7 +20153,14 @@ state_test! { result time_trigger_cannot_synthesize_governance_ballot
 state_test! { result time_trigger_same_id_reschedule_keeps_new_repeat_budget
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query);
+    // Seed the canonical setup account without authoring policy before signed genesis.
+    let world = World::with(
+        [],
+        [new_sample_account(&ALICE_ID).build(&SAMPLE_GENESIS_ACCOUNT_ID)],
+        [],
+    );
+    assert!(world.parameters.view().crypto_policy().is_none());
+    let state = State::new(world, kura, query);
     let_row! { block1 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(1).unwrap()); h.creation_time_ms = 0; }) };
     let mut state_block = state.block(block1.as_ref().header());
     let trigger_id: TriggerId = "self_reschedule".parse()?;
@@ -20088,8 +20168,6 @@ state_test! { result time_trigger_same_id_reschedule_keeps_new_repeat_budget
         let mut stx = state_block.transaction();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
         Register::domain(Domain::new(domain_id)).execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-        Register::account(new_sample_account(&ALICE_ID))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
         let_row! { replacement_schedule = Schedule { start_ms: 10_000, period_ms: None, } };
         let_row! { replacement_trigger = Trigger::new( trigger_id.clone(), Action::new( Vec::<InstructionBox>::new(), Repeats::Exactly(1), ALICE_ID.clone(), TimeEventFilter(ExecutionTime::Schedule(replacement_schedule)), ) .expect("trigger action fixture satisfies validation invariants"), ) };
         let_row! { instructions = vec![ InstructionBox::from(Unregister::trigger(trigger_id.clone())), InstructionBox::from(Register::trigger(replacement_trigger)), ] };
@@ -20312,6 +20390,16 @@ state_test! { result time_triggers_due_for_block_detects_precommit_trigger
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
+    // Component account registration owns an explicit policy before its first snapshot.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     assert!(
         !state.time_trigger_clock_progress_required_fast(Duration::ZERO),
         "a state without time triggers must not require idle block production"
@@ -20385,6 +20473,16 @@ state_test! { result time_trigger_clock_progress_requires_a_reachable_schedule
     const PARENT_TIME_MS: u64 = 10_000;
     fn state_with_time_trigger(execution_time: ExecutionTime) -> Result<State> {
         let_row! { state = State::new( World::default(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
+        // Component account registration owns an explicit policy before its first snapshot.
+        let mut parameters = state.world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
         let_row! { header = BlockHeader::new( NonZeroU64::new(1).unwrap(), None, None, PARENT_TIME_MS, 0, ) };
         let mut state_block = state.block(header);
         {
@@ -20638,6 +20736,16 @@ state_test! { sync confidential_digest_reflects_registry_commit
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
+    // Component account registration owns an explicit policy before its first snapshot.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     let header1 = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block1 = state.block(header1);
     {
@@ -25948,6 +26056,16 @@ state_test! { sync block_does_not_advance_sweep_marker_after_partial_release_fai
 }
 state_test! { sync transaction_failure_rolls_back_asset_world_and_trigger_changes
     let state = blank_state();
+    // Component account registration owns an explicit policy before its first snapshot.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -27300,6 +27418,16 @@ state_test! { sync identityless_raw_trigger_rejects_before_event_argument_decode
         },
     };
     let state = blank_state();
+    // Component account registration owns an explicit policy before its first snapshot.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     let trigger_id: TriggerId = "identityless_raw_callback".parse().expect("trigger id");
     let_row! { program = kotodama_lang::compiler::Compiler::new() .compile_source( r"
 seiyaku IdentitylessRawCallback { permission identityless_raw_callback_run;

@@ -8127,11 +8127,7 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             covered.push((concat!("world.", stringify!($field)), Commitment::Derived));
         }};
     }
-    typed_derived!(
-        domains_by_owner,
-        account(b"typed-owner"),
-        BTreeSet::from([domain()])
-    );
+    typed_derived!(domains_by_owner, (account(b"typed-owner"), domain()), ());
     typed_derived!(sccp_destination_pending_generations, 7_u64, ());
     typed_derived!(
         rwas_by_frozen,

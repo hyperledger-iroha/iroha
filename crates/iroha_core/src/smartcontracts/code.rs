@@ -1091,6 +1091,11 @@ struct BorrowedBoundContractRecord<'a> {
     code_bytes: &'a [u8],
 }
 
+/// Borrow the complete bound record of one instance.
+///
+/// Its only fallible steps are artifact-scope checks, all of the artifact named
+/// by the instance's address and code hash; every other gap makes it absent.
+/// [`validate_bound_contract_records_by_subject`] relies on this shape.
 fn borrow_bound_contract_record<'a>(
     state: &'a impl StateReadOnly,
     contract_address: &'a ContractAddress,
@@ -1202,10 +1207,17 @@ pub fn snapshot_bound_contract_records_by_subject(
 /// Validate the ordered registry reads required by an owned contract snapshot.
 ///
 /// Hosts with a live query state resolve called contracts from that state and do
-/// not consume an eager snapshot. This retains the snapshot's setup-time scope
-/// checks and incomplete-read behavior without cloning any deployed bytecode,
-/// manifests, subjects or alias records. Incomplete bindings remain absent just
-/// as they do in [`snapshot_bound_contract_records_by_subject`].
+/// not consume an eager snapshot. This returns the snapshot's setup-time result
+/// without cloning any deployed bytecode, manifests, subjects or alias records.
+/// Incomplete bindings remain absent just as they do in
+/// [`snapshot_bound_contract_records_by_subject`], so they cannot fail it.
+///
+/// Only the artifact-scope checks of [`borrow_bound_contract_record`] can fail,
+/// and all checks of one instance name the same artifact, so its first check
+/// decides it. After an exact check reads a Global root, every remaining check
+/// is admitted. Under a private root only an instance of another dataspace can
+/// fail, and it repeats the exact check. Setup therefore no longer derives a
+/// subject or decodes the root once per deployed contract.
 ///
 /// # Errors
 /// Returns the first scope rejection or original local decode refusal in the
@@ -1213,8 +1225,30 @@ pub fn snapshot_bound_contract_records_by_subject(
 pub fn validate_bound_contract_records_by_subject(
     state: &impl StateReadOnly,
 ) -> Result<(), ExecutionAttemptError<ValidationFail>> {
-    for (contract_address, _) in state.world().contract_instances().iter() {
-        let _ = borrow_bound_contract_record(state, contract_address)?;
+    use iroha_data_model::block::consensus::SumeragiRootScope;
+
+    let world = state.world();
+    // Dataspace of the private root that an earlier exact check admitted.
+    let mut private_root = None;
+    for (contract_address, code_hash) in world.contract_instances().iter() {
+        let Ok(artifact_id) = ContractArtifactId::for_address(contract_address, *code_hash) else {
+            continue;
+        };
+        if private_root == Some(artifact_id.dataspace_id) {
+            continue;
+        }
+        crate::executor::root_scope::ensure_committed_artifact_scope(world, &artifact_id)?;
+        if private_root.is_none() {
+            // The exact check above has just read this immutable root.
+            match crate::sumeragi::lanes::routing::read_routing_root_scope(world) {
+                Ok(Some(SumeragiRootScope::Global)) => return Ok(()),
+                Ok(Some(SumeragiRootScope::Dataspace { dataspace_id, .. })) => {
+                    private_root = Some(dataspace_id);
+                }
+                // A root that cannot be read again keeps every exact check.
+                Ok(None) | Err(_) => {}
+            }
+        }
     }
     Ok(())
 }

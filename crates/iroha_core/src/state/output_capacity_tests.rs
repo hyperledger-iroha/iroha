@@ -356,6 +356,18 @@ fn actual_register_counts_disabled_pipeline_and_time_actions_before_loading() {
     use iroha_data_model::prelude::*;
     use iroha_primitives::json::Json;
     let state = state(2);
+    {
+        let mut parameters = state.world.parameters.block();
+        parameters
+            .get_mut()
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("fixture crypto policy parameter"),
+            )
+            .expect("valid fixture crypto policy");
+        parameters.commit();
+    }
     let mut block = state.block(header());
     let mut tx = block.transaction();
     Register::account(Account::new(ALICE_ID.clone()))
