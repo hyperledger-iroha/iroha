@@ -7,13 +7,13 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 /// <summary>Shared helpers of the Petal Stream tests.</summary>
 internal static class PetalTestSupport
 {
-    private static readonly Lazy<JsonDocument> StreamFixture = new(() => Load("petal_stream_v2.json"));
-    private static readonly Lazy<JsonDocument> CaptureFixture = new(() => Load("petal_captures_v2.json"));
+    private static readonly Lazy<JsonDocument> StreamFixture = new(() => Load("petal_stream_v3.json"));
+    private static readonly Lazy<JsonDocument> CaptureFixture = new(() => Load("petal_captures_v3.json"));
 
-    /// <summary><c>fixtures/petal/petal_stream_v2.json</c>.</summary>
+    /// <summary><c>fixtures/petal/petal_stream_v3.json</c>.</summary>
     public static JsonElement Stream => StreamFixture.Value.RootElement;
 
-    /// <summary><c>fixtures/petal/petal_captures_v2.json</c>.</summary>
+    /// <summary><c>fixtures/petal/petal_captures_v3.json</c>.</summary>
     public static JsonElement Captures => CaptureFixture.Value.RootElement;
 
     /// <summary>Deterministic payload from xorshift32, as the Rust tests build it.</summary>
@@ -29,6 +29,8 @@ internal static class PetalTestSupport
     public static byte[] Hex(JsonElement element, string key) => Convert.FromHexString(element.GetProperty(key).GetString()!);
 
     public static long Number(JsonElement element, string key) => element.GetProperty(key).GetInt64();
+
+    public static string Text(JsonElement element, string key) => element.GetProperty(key).GetString()!;
 
     public static long[] Numbers(JsonElement element, string key) =>
         element.GetProperty(key).EnumerateArray().Select(static value => value.GetInt64()).ToArray();
@@ -47,6 +49,10 @@ internal static class PetalTestSupport
         var fields = HexList(entry, "field_data");
         return [(PetalLane.D, Hex(entry, "d_data")), .. fields.Select(static (data, sector) => (PetalLanes.Field(sector), data))];
     }
+
+    /// <summary>The recorded data of every frame of an entry, turn lanes included (<c>d_data</c>, <c>field_data</c>, <c>turn_data</c>).</summary>
+    public static PetalLaneData LaneData(JsonElement entry) =>
+        new(Hex(entry, "d_data"), HexList(entry, "field_data"), HexList(entry, "turn_data"));
 
     /// <summary>Checks every decoded lane against the recorded data and returns the lane letters.</summary>
     public static string ReadLanes(string name, PetalDecodedFrame frame, (PetalLane Lane, byte[] Data)[] truth)
@@ -83,6 +89,21 @@ internal static class PetalTestSupport
         {
             var field = decoded.Fields[sector];
             Assert.True(field is not null && truth.Fields[sector].AsSpan().SequenceEqual(field.Data), $"{name}: field lane {sector}");
+        }
+    }
+
+    /// <summary>
+    /// Asserts that every turn lane of <paramref name="image"/> under <paramref name="decoded"/> reads
+    /// as <paramref name="truth"/> with nothing corrected.
+    /// </summary>
+    public static void AssertAllTurnLanes(PetalLuma image, PetalDecodedFrame decoded, PetalLaneData truth, string name)
+    {
+        var turns = PetalTurns.ReadTurns(image, decoded);
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            var turn = turns[sector];
+            Assert.True(turn is not null && truth.Turns[sector].AsSpan().SequenceEqual(turn.Data), $"{name}: turn lane {sector}");
+            Assert.Equal(0, turn.Corrected);
         }
     }
 

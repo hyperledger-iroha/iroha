@@ -7,7 +7,8 @@ namespace Hyperledger.Iroha.Petal;
 /// </summary>
 /// <remarks>
 /// Coordinates arrive already scaled to the caller's target size. Shapes are
-/// filled without stroke. Anti-aliasing is up to the backend.
+/// filled without stroke and should be antialiased; petals must be (the turn
+/// reader reads their shapes).
 /// </remarks>
 public interface IPetalCanvas
 {
@@ -26,14 +27,38 @@ public interface IPetalCanvas
     /// <param name="color">Fill colour.</param>
     void FillCircle(double centerX, double centerY, double radius, PetalColor color);
 
-    /// <summary>Fills an ellipse turned by <paramref name="angle"/>.</summary>
+    /// <summary>
+    /// Fills a petal, antialiased: the ellipse of half-length <paramref name="radiusAlong"/> along
+    /// the direction <paramref name="angle"/> and half-width <paramref name="radiusAcross"/>, minus
+    /// its notch, the disc of radius <paramref name="notchRadius"/> centred
+    /// <paramref name="notchDistance"/> from the centre along <paramref name="angle"/>.
+    /// </summary>
+    /// <remarks>
+    /// The notch must be cut out, leaving whatever was drawn under it visible: it tells a petal from
+    /// one turned by half a turn, and the turn reader's templates include it. Fill the ellipse path
+    /// minus the notch circle (for example SkiaSharp <c>SKPath.Op</c> with
+    /// <c>SKPathOp.Difference</c>, WPF <c>CombinedGeometry</c> with
+    /// <c>GeometryCombineMode.Exclude</c>, Win2D <c>CanvasGeometry.CombineWith</c> with
+    /// <c>CanvasGeometryCombine.Exclude</c>), or fill the ellipse under a clip that leaves the
+    /// notch out (Android <c>Canvas.clipOutPath</c>).
+    /// </remarks>
     /// <param name="centerX">Centre x.</param>
     /// <param name="centerY">Centre y.</param>
     /// <param name="radiusAlong">Half-length along the direction <paramref name="angle"/>.</param>
     /// <param name="radiusAcross">Half-width across that direction.</param>
-    /// <param name="angle">Direction of the long axis: radians, clockwise on the screen from 3 o'clock.</param>
+    /// <param name="angle">The petal's axis: radians, clockwise on the screen from 3 o'clock.</param>
+    /// <param name="notchDistance">Distance from the centre to the notch centre, along the axis.</param>
+    /// <param name="notchRadius">Radius of the notch.</param>
     /// <param name="color">Fill colour.</param>
-    void FillEllipse(double centerX, double centerY, double radiusAlong, double radiusAcross, double angle, PetalColor color);
+    void FillPetal(
+        double centerX,
+        double centerY,
+        double radiusAlong,
+        double radiusAcross,
+        double angle,
+        double notchDistance,
+        double notchRadius,
+        PetalColor color);
 
     /// <summary>Intersects the clip region with a circle until the matching <see cref="PopClip"/>.</summary>
     /// <param name="centerX">Centre x.</param>
@@ -89,7 +114,10 @@ public readonly record struct PetalBackdropCell(int Column, int Row, double X, d
 /// <summary>A lit petal of the field.</summary>
 /// <param name="Cell">Field cell index, 0 to 3375.</param>
 /// <param name="Center">Petal centre in canvas units.</param>
-/// <param name="Angle">Outward direction of the petal: radians, clockwise on the screen from 3 o'clock.</param>
+/// <param name="Angle">
+/// The petal's axis: its outward direction plus its turn (<see cref="PetalTurns.TurnAngle"/> of
+/// <see cref="PetalFrameCells.Turns"/>), radians, clockwise on the screen from 3 o'clock.
+/// </param>
 /// <param name="Light">Whether the petal lies inside the <c>天</c> and is drawn in the light colour (pink otherwise).</param>
 public readonly record struct PetalCellShape(int Cell, PetalPoint Center, double Angle, bool Light);
 
@@ -110,15 +138,17 @@ public readonly record struct PetalDotShape(PetalPoint Center, double Radius, in
 /// notches in the background colour); the <see cref="BackdropCells"/> in the backdrop
 /// colour, clipped to the disc of radius <see cref="PetalLayout.BackdropRadius"/> around
 /// the canvas centre; every lit petal in its colour (light inside the <c>天</c>, pink
-/// outside): an ellipse of half-length <see cref="PetalHalfLength"/> along its outward
-/// angle and half-width <see cref="PetalHalfWidth"/>; lit dots in pink. A petal's
-/// cosmetic notch (a disc of radius <see cref="PetalNotchRadius"/> centred
-/// <see cref="PetalNotchDistance"/> outward from the petal centre, which the reference
-/// renderer cuts out) may be omitted; <see cref="Draw"/> omits it.
+/// outside), antialiased: an ellipse of half-length <see cref="PetalHalfLength"/> along
+/// its <see cref="PetalCellShape.Angle"/> (its outward direction plus its turn) and
+/// half-width <see cref="PetalHalfWidth"/>, minus its notch, a disc of radius
+/// <see cref="PetalNotchRadius"/> centred <see cref="PetalNotchDistance"/> along that
+/// angle (<see cref="IPetalCanvas.FillPetal"/>); lit dots in pink. The notch must be
+/// drawn: it tells a petal from one turned by half a turn, and the turn reader's
+/// templates include it.
 /// </para>
 /// <para>
-/// The result matches <see cref="PetalRenderer"/> up to anti-aliasing and the notches,
-/// which decoders tolerate. The finder and backdrop shapes are shared by every list.
+/// The result matches <see cref="PetalRenderer"/> up to anti-aliasing. The finder and
+/// backdrop shapes are shared by every list.
 /// </para>
 /// </remarks>
 public sealed class PetalDrawList
@@ -145,16 +175,16 @@ public sealed class PetalDrawList
     /// <summary>Canvas side in design units.</summary>
     public static double CanvasSize => PetalLayout.Canvas;
 
-    /// <summary>Half the length of a petal along its outward direction (the reference's single-precision value, widened).</summary>
+    /// <summary>Half the length of a petal along its axis (the reference's single-precision value, widened).</summary>
     public static double PetalHalfLength => PetalLayout.PetalHalfLength;
 
     /// <summary>Half the width of a petal.</summary>
     public static double PetalHalfWidth => PetalLayout.PetalHalfWidth;
 
-    /// <summary>Radius of the cosmetic notch at a petal tip.</summary>
+    /// <summary>Radius of the notch at a petal tip.</summary>
     public static double PetalNotchRadius => PetalLayout.PetalNotchRadius;
 
-    /// <summary>Distance from a petal centre to its notch centre, outward.</summary>
+    /// <summary>Distance from a petal centre to its notch centre, along its axis.</summary>
     public static double PetalNotchDistance => PetalLayout.PetalNotchDistance;
 
     /// <summary>Colours of the frame.</summary>
@@ -166,7 +196,7 @@ public sealed class PetalDrawList
     /// <summary>The <c>#</c> cells of the <c>天</c> lattice, row-major; clip them to the backdrop disc.</summary>
     public IReadOnlyList<PetalBackdropCell> BackdropCells => BackdropView;
 
-    /// <summary>Every lit petal, in field cell order.</summary>
+    /// <summary>Every lit petal, in field cell order, turned by its turn.</summary>
     public IReadOnlyList<PetalCellShape> Petals { get; }
 
     /// <summary>Every lit ring dot (gates and set data bits), in flat slot order.</summary>
@@ -186,8 +216,12 @@ public sealed class PetalDrawList
         var at = 0;
         for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
         {
-            if (cells.Petals[cell])
-                petals[at++] = CellShapes[cell];
+            if (!cells.Petals[cell])
+                continue;
+            var shape = CellShapes[cell];
+            petals[at++] = cells.Turns[cell] == 0
+                ? shape
+                : shape with { Angle = shape.Angle + PetalTurns.TurnAngle(cells.Turns[cell]) };
         }
 
         var dots = new List<PetalDotShape>(PetalLayout.TotalSlots);
@@ -232,12 +266,14 @@ public sealed class PetalDrawList
         canvas.PopClip();
         foreach (var petal in petals)
         {
-            canvas.FillEllipse(
+            canvas.FillPetal(
                 X(petal.Center.X),
                 Y(petal.Center.Y),
                 PetalHalfLength * scale,
                 PetalHalfWidth * scale,
                 petal.Angle,
+                PetalNotchDistance * scale,
+                PetalNotchRadius * scale,
                 petal.Light ? palette.Light : palette.Pink);
         }
 

@@ -254,6 +254,7 @@ public sealed class PetalCodecTests
     [Fact]
     public void PetalsStayClearOfTheirNeighboursAndTheRings()
     {
+        // a petal reaches at most its half-length from its centre, whichever way it is turned
         var outer = PetalLayout.BandRadius(PetalLayout.BandCount - 1) + PetalLayout.PetalHalfLength;
         Assert.True(outer + 10.0 < PetalLayout.RingRadii[0] - PetalLayout.DotRadius);
         for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
@@ -268,7 +269,7 @@ public sealed class PetalCodecTests
                     continue;
                 var (ox, oy) = PetalLayout.CellCenter(other);
                 var distance = Math.Sqrt((x - ox) * (x - ox) + (y - oy) * (y - oy));
-                Assert.True(distance > 2.0 * PetalLayout.PetalRadius, $"cells {cell} and {other} are {distance} apart");
+                Assert.True(distance > PetalLayout.PetalHalfLength + PetalLayout.PetalRadius, $"cells {cell} and {other} are {distance} apart");
             }
         }
     }
@@ -332,11 +333,19 @@ public sealed class PetalCodecTests
         double tip = PetalLayout.PetalNotchDistance;
         Assert.False(PetalLayout.PetalLit(tip * Math.Cos(0.3), tip * Math.Sin(0.3), 0.3));
         Assert.False(PetalLayout.PetalLit(0.0, 10.0, 0.0));
-        // half-length 5.2 along the petal, half-width 4.3 across it
-        Assert.True(PetalLayout.PetalLit(0.0, 4.2, 0.0));
-        Assert.False(PetalLayout.PetalLit(0.0, 4.4, 0.0));
-        Assert.True(PetalLayout.PetalLit(-5.1, 0.0, 0.0));
-        Assert.False(PetalLayout.PetalLit(-5.3, 0.0, 0.0));
+        // half-length 6 along the petal, half-width 3.73 across it
+        Assert.True(PetalLayout.PetalLit(0.0, 3.7, 0.0));
+        Assert.False(PetalLayout.PetalLit(0.0, 3.76, 0.0));
+        Assert.True(PetalLayout.PetalLit(-5.9, 0.0, 0.0));
+        Assert.False(PetalLayout.PetalLit(-6.1, 0.0, 0.0));
+        // the notch (radius 1.12, 6.24 out) cuts the tip: what tells a petal from its half turn
+        Assert.True(PetalLayout.PetalLit(5.0, 0.0, 0.0));
+        Assert.False(PetalLayout.PetalLit(5.5, 0.0, 0.0));
+        Assert.True(PetalLayout.PetalLit(-5.5, 0.0, 0.0));
+        // a petal turned by a quarter turn points down the screen
+        Assert.True(PetalLayout.PetalLit(0.0, 5.0, Math.PI / 2.0));
+        Assert.False(PetalLayout.PetalLit(0.0, 5.5, Math.PI / 2.0));
+        Assert.False(PetalLayout.PetalLit(5.0, 0.0, Math.PI / 2.0));
     }
 
     [Fact]
@@ -444,7 +453,18 @@ public sealed class PetalCodecTests
                 Assert.False(cells.Petals[cell]);
         }
 
-        Assert.Equal(cells, PetalFrameCells.FromWords(new PetalLaneData(d, fields)));
+        // without turn codewords every petal is unturned; turned by the four codewords, the carriers turn
+        Assert.All(cells.Turns, static turn => Assert.Equal(0, turn));
+        var turns = Enumerable.Range(0, PetalLayout.Sectors)
+            .Select(static s => PetalTurns.EncodeTurnLane(s, new byte[PetalTurns.TurnDataLength]))
+            .ToArray();
+        var turned = PetalFrameCells.FromWords(new PetalLaneData(d, fields, turns));
+        Assert.Equal(cells.Petals, turned.Petals);
+        Assert.NotEqual(cells, turned);
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+            Assert.Equal(turns[sector], turned.TurnWord(sector));
+        cells.SetTurns(turns);
+        Assert.Equal(turned, cells);
         Assert.Equal(cells, cells.Clone());
         Assert.Equal(cells.GetHashCode(), cells.Clone().GetHashCode());
     }
@@ -522,7 +542,10 @@ public sealed class PetalCodecTests
         Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[31], [field, field, field, field]));
         Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[30], [field, field, field]));
         Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[30], [field, field, field, new byte[104]]));
-        Assert.Throws<ArgumentException>(() => new PetalLaneData(new byte[19], [field]));
+        Assert.Throws<ArgumentException>(() => new PetalLaneData(new byte[19], [field], [field, field, field, field]));
+        Assert.Throws<ArgumentException>(() => new PetalLaneData(new byte[19], [field, field, field, field], [field]));
+        Assert.Throws<ArgumentException>(() => new PetalFrameCells().SetTurns([field, field, field, field]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new PetalFrameCells().TurnWord(4));
         Assert.Throws<ArgumentOutOfRangeException>(() => new PetalFrameCells().FieldWord(4));
     }
 

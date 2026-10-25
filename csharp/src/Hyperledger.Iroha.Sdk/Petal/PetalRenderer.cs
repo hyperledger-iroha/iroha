@@ -76,13 +76,14 @@ public sealed record PetalRenderOptions
 /// </summary>
 /// <remarks>
 /// The picture is black, with four sakura-blossom finders in the canvas corners,
-/// three dotted rings, and inside them a field of petals on concentric bands. A
-/// lit petal whose centre lies inside the <c>天</c> is drawn in the light colour,
+/// three dotted rings, and inside them a field of petals on concentric bands, each
+/// lit petal turned about its centre by its turn (<see cref="PetalFrameCells.Turns"/>).
+/// A lit petal whose centre lies inside the <c>天</c> is drawn in the light colour,
 /// the others in sakura pink, over a faint backdrop of the <c>天</c> itself, so the
 /// character shows through the storm of petals. Each sample is shaded in this
 /// order: finders, ring dots, petals, the backdrop, background. The output matches
 /// the Rust reference renderer pixel for pixel. Platform code may instead draw a
-/// <see cref="PetalDrawList"/> with native 2D APIs, as long as geometry and
+/// <see cref="PetalDrawList"/> with native 2D APIs, as long as geometry, turns and
 /// polarity match.
 /// </remarks>
 public static class PetalRenderer
@@ -213,12 +214,53 @@ public static class PetalRenderer
                     var cell = offsets[band] + (int)(((slot % count) + count) % count);
                     if (!cells.Petals[cell])
                         continue;
-                    if (PetalLayout.PetalLit(x - xs[cell], y - ys[cell], PetalLayout.CellSineTable[cell], PetalLayout.CellCosineTable[cell]))
+                    var (sin, cos) = Axis(cell, cells.Turns[cell]);
+                    if (PetalLayout.PetalLit(x - xs[cell], y - ys[cell], sin, cos))
                         return PetalLayout.CellLightTable[cell] ? palette.Light : palette.Pink;
                 }
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// The sine and cosine of the axis of the petal at <paramref name="cell"/>: its outward
+        /// direction plus the turn of <paramref name="turn"/> (as the reference computes it).
+        /// </summary>
+        private static (double Sin, double Cos) Axis(int cell, byte turn)
+        {
+            if (turn < PetalTurns.TurnPositions)
+            {
+                var at = turn * PetalLayout.FieldCells + cell;
+                return (Axes.Sines[at], Axes.Cosines[at]);
+            }
+
+            var angle = PetalLayout.CellAngleTable[cell] + PetalTurns.TurnAngle(turn);
+            return (Math.Sin(angle), Math.Cos(angle));
+        }
+    }
+
+    /// <summary>
+    /// The sine and cosine of every petal's axis, its outward direction plus turn position
+    /// <c>p</c>, at <c>p · 3376 + cell</c>; built once, on first use.
+    /// </summary>
+    private static class Axes
+    {
+        internal static readonly double[] Sines = new double[PetalTurns.TurnPositions * PetalLayout.FieldCells];
+
+        internal static readonly double[] Cosines = new double[PetalTurns.TurnPositions * PetalLayout.FieldCells];
+
+        static Axes()
+        {
+            for (var position = 0; position < PetalTurns.TurnPositions; position++)
+            {
+                for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
+                {
+                    var angle = PetalLayout.CellAngleTable[cell] + PetalTurns.TurnAngle((byte)position);
+                    Sines[position * PetalLayout.FieldCells + cell] = Math.Sin(angle);
+                    Cosines[position * PetalLayout.FieldCells + cell] = Math.Cos(angle);
+                }
+            }
         }
     }
 }

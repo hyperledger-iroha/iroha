@@ -68,6 +68,8 @@ public sealed record PetalScanLimits
 /// <param name="Inferred">Frames read with one corner finder hidden and inferred (a hint to move a thumb or the phone).</param>
 /// <param name="Merges">Merges of two or more captures of one shown frame.</param>
 /// <param name="MergedLanes">Field lanes recovered by merging captures.</param>
+/// <param name="TurnTries">Turn lanes tried (each at most once per shown frame).</param>
+/// <param name="TurnLanes">Turn lanes read.</param>
 public readonly record struct PetalScanStats(
     uint Frames,
     uint Located,
@@ -77,16 +79,25 @@ public readonly record struct PetalScanStats(
     uint Tracked,
     uint Inferred,
     uint Merges,
-    uint MergedLanes);
+    uint MergedLanes,
+    uint TurnTries,
+    uint TurnLanes);
 
 /// <summary>The result of offering one camera frame.</summary>
 public sealed class PetalScanOutcome
 {
-    internal PetalScanOutcome(PetalDecodeError? error, string lanes, string merged, PetalProgress progress, PetalCompletedPayload? completed)
+    internal PetalScanOutcome(
+        PetalDecodeError? error,
+        string lanes,
+        string merged,
+        string turned,
+        PetalProgress progress,
+        PetalCompletedPayload? completed)
     {
         Error = error;
         Lanes = lanes;
         Merged = merged;
+        Turned = turned;
         Progress = progress;
         Completed = completed;
     }
@@ -109,6 +120,12 @@ public sealed class PetalScanOutcome
     /// as sector digits.
     /// </summary>
     public string Merged { get; }
+
+    /// <summary>
+    /// Turn lanes read from this capture, as the sector digits of the field lanes they ride on
+    /// (see <see cref="PetalTurns"/>).
+    /// </summary>
+    public string Turned { get; }
 
     /// <summary>Receive progress after this frame.</summary>
     public PetalProgress Progress { get; }
@@ -141,6 +158,15 @@ public sealed class PetalScanOutcome
 /// evidence.
 /// </para>
 /// <para>
+/// Every field lane a capture decodes also lets the session read the turn lane on top of it
+/// (<see cref="PetalTurns.ReadTurns"/>). A turn lane is tried once per shown frame: the session
+/// remembers the last <see cref="TurnMemory"/> it tried and does not look at those petals again.
+/// Reading turns costs a slow phone core several times a frame's decode, so after a try that
+/// reads no turn lane (a camera too soft or too shaky for the turns) the session passes over the
+/// next captures that would try one, one more after every such try, at most
+/// <see cref="TurnBackoff"/>, until a try reads a lane again.
+/// </para>
+/// <para>
 /// A half-received stream is forgotten after <see cref="PetalScanLimits.IdleTimeout"/>
 /// without new independent atoms, or <see cref="PetalScanLimits.AbsoluteTimeout"/>
 /// after it started. Instances are not thread-safe; see
@@ -158,7 +184,14 @@ public sealed class PetalScanSession
     /// <summary>Captures held per shown frame; a further capture replaces the oldest.</summary>
     public const int MergeCaptures = 4;
 
+    /// <summary>Turn lanes remembered as tried (the four of each of the last <see cref="MergeWindow"/> shown frames).</summary>
+    public const int TurnMemory = MergeWindow * PetalLayout.Sectors;
+
+    /// <summary>Most captures passed over after tries that read no turn lane.</summary>
+    public const int TurnBackoff = 8;
+
     private readonly List<Held> held = new();
+    private readonly Queue<(PetalLaneHeader Header, int Sector)> tried = new(TurnMemory);
     private readonly PetalStreamAssembler assembler;
     private long? startedMs;
     private long progressMs;
@@ -172,6 +205,10 @@ public sealed class PetalScanSession
     private uint inferred;
     private uint merges;
     private uint mergedLanes;
+    private uint turnTries;
+    private uint turnLanes;
+    private int turnMisses;
+    private int turnWait;
     private PetalDecodedFrame? lastPose;
     private long lastPoseMs;
 
@@ -187,12 +224,16 @@ public sealed class PetalScanSession
     public PetalScanLimits Limits { get; }
 
     /// <summary>Diagnostic counters.</summary>
-    public PetalScanStats Stats => new(frames, located, readable, laneD, fieldLanes, tracked, inferred, merges, mergedLanes);
+    public PetalScanStats Stats =>
+        new(frames, located, readable, laneD, fieldLanes, tracked, inferred, merges, mergedLanes, turnTries, turnLanes);
 
     /// <summary>Current progress.</summary>
     public PetalProgress Progress => assembler.Progress;
 
-    /// <summary>Drops all partial state, the held captures and the pose used for tracking (counters are kept).</summary>
+    /// <summary>
+    /// Drops all partial state, the held captures, the turn lanes remembered as tried, any turn
+    /// back-off and the pose used for tracking (counters are kept).
+    /// </summary>
     public void Reset()
     {
         assembler.Reset();
@@ -200,6 +241,7 @@ public sealed class PetalScanSession
         lastRank = 0;
         lastPose = null;
         held.Clear();
+        ForgetTurns();
     }
 
     /// <summary>Offers one camera luma plane captured at monotonic time <paramref name="nowMilliseconds"/>.</summary>
@@ -225,6 +267,7 @@ public sealed class PetalScanSession
         var result = followed is not null ? PetalDecodeResult.Ok(followed) : PetalDecoder.Decode(image, Limits.Decode);
         var lanes = string.Empty;
         var merged = string.Empty;
+        var turnedLanes = string.Empty;
         if (result.Success)
         {
             if (result.Frame.InferredCorner is not null)
@@ -233,6 +276,7 @@ public sealed class PetalScanSession
             lastPoseMs = nowMilliseconds;
             lanes = Absorb(result.Frame);
             merged = Merge(image, result.Frame);
+            turnedLanes = Turn(image, result.Frame);
         }
 
         if (result.Error is not (PetalDecodeError.NoFinders or PetalDecodeError.UnsupportedImage))
@@ -245,7 +289,7 @@ public sealed class PetalScanSession
         }
 
         lastRank = progress.Rank;
-        return new PetalScanOutcome(result.Error, lanes, merged, progress, assembler.TakeCompleted());
+        return new PetalScanOutcome(result.Error, lanes, merged, turnedLanes, progress, assembler.TakeCompleted());
     }
 
     /// <summary>Counts the lanes of a decoded frame and feeds them to the assembler.</summary>
@@ -265,8 +309,96 @@ public sealed class PetalScanSession
         var previousMeta = assembler.Progress.Meta;
         frame.Feed(assembler);
         if (previousMeta is not null && assembler.Progress.Meta != previousMeta)
+        {
             held.Clear();
+            ForgetTurns();
+        }
+
         return lanes;
+    }
+
+    /// <summary>
+    /// Tries the turn lanes on top of the field lanes this capture decoded, except those already
+    /// tried for their shown frame, and offers the atoms of those it reads; after tries that read
+    /// nothing it passes over the next captures that would try one (see the class remarks).
+    /// </summary>
+    internal string Turn(PetalLuma image, PetalDecodedFrame frame)
+    {
+        Span<bool> skip = stackalloc bool[PetalLayout.Sectors];
+        Span<PetalLaneHeader> headers = stackalloc PetalLaneHeader[PetalLayout.Sectors];
+        var trying = false;
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            skip[sector] = true;
+            if (frame.Fields[sector] is not { Data.Length: >= PetalLanes.LaneHeaderLength } field)
+                continue;
+            headers[sector] = new PetalLaneHeader(field.Data[0], (ushort)((field.Data[1] << 8) | field.Data[2]));
+            skip[sector] = tried.Contains((headers[sector], sector));
+            trying |= !skip[sector];
+        }
+
+        if (!trying)
+            return string.Empty;
+        if (turnWait > 0)
+        {
+            turnWait--;
+            return string.Empty;
+        }
+
+        // a skipped sector is one without a header or one already tried
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            if (skip[sector])
+                continue;
+            if (tried.Count == TurnMemory)
+                tried.Dequeue();
+            tried.Enqueue((headers[sector], sector));
+            turnTries++;
+        }
+
+        var results = PetalTurns.ReadTurns(image, frame, skip);
+        var letters = string.Empty;
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            if (results[sector] is not { } result || PetalTurns.TurnPacket(headers[sector], sector, result.Data) is not { } packet)
+                continue;
+            assembler.PushAtoms(packet);
+            turnLanes++;
+            letters += PetalLanes.Letter(PetalLanes.Field(sector));
+        }
+
+        if (letters.Length == 0)
+        {
+            turnMisses = Math.Min(turnMisses + 1, TurnBackoff);
+            turnWait = turnMisses;
+        }
+        else
+        {
+            turnMisses = 0;
+        }
+
+        return letters;
+    }
+
+    /// <summary>The turn lanes remembered as tried, oldest first (diagnostics and tests).</summary>
+    internal IReadOnlyCollection<(PetalLaneHeader Header, int Sector)> TriedLanes => tried;
+
+    /// <summary>Tries in a row that read no turn lane, at most <see cref="TurnBackoff"/> (diagnostics and tests).</summary>
+    internal int TurnMisses => turnMisses;
+
+    /// <summary>Captures that would try a turn lane still to be passed over (diagnostics and tests).</summary>
+    internal int TurnWait
+    {
+        get => turnWait;
+        set => turnWait = value;
+    }
+
+    /// <summary>Forgets the turn lanes tried and any back-off.</summary>
+    private void ForgetTurns()
+    {
+        tried.Clear();
+        turnMisses = 0;
+        turnWait = 0;
     }
 
     /// <summary>

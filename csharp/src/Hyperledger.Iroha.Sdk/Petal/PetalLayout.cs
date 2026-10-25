@@ -27,7 +27,7 @@ public enum PetalSlotKind
 public readonly record struct PetalSlotRole(PetalSlotKind Kind, int DataBit);
 
 /// <summary>
-/// Normative Petal frame geometry (format 2).
+/// Normative Petal frame geometry (format 3).
 /// </summary>
 /// <remarks>
 /// All coordinates are design units on a square canvas of <see cref="Canvas"/>
@@ -63,24 +63,33 @@ public static class PetalLayout
     /// <summary>Cells in each sector.</summary>
     public const int SectorCells = FieldCells / Sectors;
 
-    /// <summary>Radius of the disc a petal stands in for: decoders sample within it.</summary>
+    /// <summary>
+    /// Radius of the disc a petal stands in for: decoders sample within it, and no other petal,
+    /// however it is turned, reaches into it.
+    /// </summary>
     /// <remarks>
     /// The petal dimensions are single precision, as in the reference; sampling and rendering
     /// widen them exactly to double (4.6 becomes 4.599999904632568).
     /// </remarks>
     public const float PetalRadius = 4.6f;
 
-    /// <summary>Half the length of a drawn petal, along the outward radial direction (single precision).</summary>
-    public const float PetalHalfLength = 5.2f;
+    /// <summary>
+    /// Half the length of a drawn petal, along its axis: the outward radial direction, turned by
+    /// the petal's turn (see <see cref="PetalTurns"/>; single precision).
+    /// </summary>
+    public const float PetalHalfLength = 6.0f;
 
     /// <summary>Half the width of a drawn petal (single precision).</summary>
-    public const float PetalHalfWidth = 4.3f;
+    public const float PetalHalfWidth = 3.73f;
 
-    /// <summary>Radius of the cosmetic notch cut into each petal tip (single precision).</summary>
-    public const float PetalNotchRadius = 1.3f;
+    /// <summary>
+    /// Radius of the notch cut into each petal tip; it tells a petal from one turned by half a
+    /// turn (single precision).
+    /// </summary>
+    public const float PetalNotchRadius = 1.12f;
 
-    /// <summary>Distance from a petal centre to its notch centre, outward (single precision).</summary>
-    public const float PetalNotchDistance = 5.4f;
+    /// <summary>Distance from a petal centre to its notch centre, along its axis (single precision).</summary>
+    public const float PetalNotchDistance = 6.24f;
 
     /// <summary>Number of lattice columns and rows of the <c>天</c> mask.</summary>
     public const int MaskGrid = 20;
@@ -390,12 +399,17 @@ public static class PetalLayout
     /// along <paramref name="angle"/>, is lit.
     /// </summary>
     /// <remarks>
-    /// A petal is an ellipse of half-length <see cref="PetalHalfLength"/> along the outward
-    /// direction and half-width <see cref="PetalHalfWidth"/>, minus the cosmetic notch at its tip.
+    /// A petal is an ellipse of half-length <see cref="PetalHalfLength"/> along
+    /// <paramref name="angle"/> and half-width <see cref="PetalHalfWidth"/>, minus the notch at its
+    /// tip (a disc of radius <see cref="PetalNotchRadius"/> centred <see cref="PetalNotchDistance"/>
+    /// along <paramref name="angle"/>).
     /// </remarks>
     /// <param name="dx">Horizontal offset from the petal centre.</param>
     /// <param name="dy">Vertical offset from the petal centre.</param>
-    /// <param name="angle">Outward direction of the petal (radians, clockwise from 3 o'clock).</param>
+    /// <param name="angle">
+    /// The petal's axis (radians, clockwise from 3 o'clock): its outward direction plus its turn
+    /// (<see cref="PetalTurns.TurnAngle"/>).
+    /// </param>
     /// <returns><see langword="true"/> when the point is inside the petal.</returns>
     public static bool PetalLit(double dx, double dy, double angle) => PetalLit(dx, dy, Math.Sin(angle), Math.Cos(angle));
 

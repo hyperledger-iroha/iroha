@@ -476,14 +476,17 @@ four-validator, hardware or release-qualification evidence.
 in the Sakura-storm look) that moves an opaque byte payload from a screen to a phone.
 The stream carries bytes only; this SDK has no peer-message codec. A KAGEMUSHA
 wallet V1 sender plays one `IPM1` message with its IPM1 kind as the stream `kind`
-([wallet wire §6](../specs/kagemusha_wallet_wire_v1.md)). Frames use format 2
+([wallet wire §6](../specs/kagemusha_wallet_wire_v1.md)). Frames use format 3
 ([Petal Stream spec](../specs/petal_stream.md)): each carries five independent
 Reed–Solomon lanes of fountain-coded atoms — the 3,376 petals of the field, cut
 into four sectors (`F0`–`F3`, `PetalLanes.Field(sector)`), and the ring dots (`D`,
-which carries the stream beacon every fourth frame) — so any readable lane of any
-frame adds progress. Reports name the lanes `D` and `0`–`3`. Petals inside the `天`
-are drawn light and the others pink, over a faint `天`. A payload is released only
-after its CRC-32C matches the beacon.
+which carries the stream beacon every fourth frame) — and on top of every field lane
+a turn lane (`T0`–`T3`, `PetalTurns`): the first 360 lit petals of a sector are
+turned by 0°, 45°, 90° or 135° about their centres, two more bits each, carrying
+four more atoms from the repair range. Any readable lane of any frame adds
+progress. Reports name the lanes `D` and `0`–`3` (a turn lane by the digit of its
+field lane). Petals inside the `天` are drawn light and the others pink, over a
+faint `天`. A payload is released only after its CRC-32C matches the beacon.
 
 ```csharp
 // Sender: draw frames at the default 12 fps through an IPetalCanvas adapter over the
@@ -512,14 +515,29 @@ decoded headers must agree, and recovered lane headers must name that frame.
 recovery separately from individual captures (`LaneD`, `FieldLanes`); reset and
 stream timeouts discard held evidence. `PetalDecoder.FieldEvidence` and
 `MergeFields` expose the same low-level read.
+
+`PetalTurns.ReadTurns` reads the turn lanes of the field lanes a capture decoded:
+it samples every carrier petal in its own outward frame under a smooth correction
+of the pose, fits the blur under which the petals and their lit neighbours explain
+the image, and gives each carrier the turn whose template matches best once its
+neighbours are subtracted; a turn lane passes only when its Reed–Solomon codeword
+decodes and its CRC-32C check matches the header of the field lane it rides on. A
+camera too soft to resolve the petals' shapes reads no turn lane and loses nothing
+else. The session tries each turn lane once per shown frame (`PetalScanOutcome.Turned`,
+`PetalScanStats.TurnTries` and `TurnLanes`) and, after tries that read nothing,
+passes over the next captures that would try one, at most `TurnBackoff` of them.
+`PetalTurns.ObservedTurns` reports every carrier's decided turn for diagnostics.
+`PetalFrameCells.Turns`, `SetTurns` and `TurnWord`, `PetalLaneData.Turns` and the
+draw list's turned, notched petals (`IPetalCanvas.FillPetal`: the ellipse minus its
+notch, antialiased) expose the turns to senders.
 `PetalScanSession`, `PetalStreamAssembler` and `PetalRenderer`/`PetalDrawList`
 expose the lower layers, and `PetalPng` writes inspection images. Memory and
 work are bounded by `PetalDecodeOptions.MaxPixels` (12 MP) and
 `PetalAssemblerLimits` (64 KiB payloads, 512 pending atoms). Encoder output is
-bit-identical to Rust, and the decoder repeats the reference's IEEE double
-operations in the same order. The shared fixtures
-`fixtures/petal/petal_stream_v2.json` and `petal_captures_v2.json` pin both. Run
-the Petal tests through the same built xUnit v3 runner:
+bit-identical to Rust, turn lanes included, and the decoder and the turn reader
+repeat the reference's IEEE double operations in the same order. The shared
+fixtures `fixtures/petal/petal_stream_v3.json` and `petal_captures_v3.json` pin
+both. Run the Petal tests through the same built xUnit v3 runner:
 
 ```bash
 dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net8.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Petal*' -noLogo -noColor

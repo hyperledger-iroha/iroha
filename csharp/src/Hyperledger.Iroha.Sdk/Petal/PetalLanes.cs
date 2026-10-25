@@ -30,14 +30,16 @@ public enum PetalLane
 /// </summary>
 /// <remarks>
 /// <para>
-/// Each lane is exactly one Reed–Solomon codeword, XOR-whitened with a fixed
-/// xorshift32 sequence so the picture is statistically balanced whatever the
-/// payload is:
+/// A frame carries five lanes, and four turn lanes on top of the field lanes (see
+/// <see cref="PetalTurns"/>). Each lane is exactly one Reed–Solomon codeword,
+/// XOR-whitened with a fixed xorshift32 sequence so the picture is statistically
+/// balanced whatever the payload is:
 /// </para>
 /// <list type="table">
 /// <listheader><term>lane</term><description>cells / codeword / data / parity</description></listheader>
 /// <item><term>D</term><description>240 ring slots × 1 bit / 30 B / 19 B / 11 B</description></item>
 /// <item><term>F0–F3</term><description>840 field cells of one sector × 1 bit / 105 B / 83 B / 22 B</description></item>
+/// <item><term>T0–T3</term><description>360 lit petals of one sector × 2 bits / 90 B / 68 B / 22 B</description></item>
 /// </list>
 /// <para>Bit order is most-significant-bit first.</para>
 /// </remarks>
@@ -261,11 +263,12 @@ public static class PetalLanes
 /// </summary>
 public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
 {
-    /// <summary>Creates an all-dark frame: unlit dots and petals.</summary>
+    /// <summary>Creates an all-dark frame: unlit dots and petals, every petal unturned.</summary>
     public PetalFrameCells()
     {
         Dots = new bool[PetalLayout.TotalSlots];
         Petals = new bool[PetalLayout.FieldCells];
+        Turns = new byte[PetalLayout.FieldCells];
     }
 
     /// <summary>Lit state of every ring slot in flat order, gate dots included.</summary>
@@ -274,17 +277,28 @@ public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
     /// <summary>Lit state of every field cell in cell order (spare cells are dark).</summary>
     public bool[] Petals { get; }
 
-    /// <summary>Builds the cells from the transmitted codewords of a frame.</summary>
-    /// <param name="words">The codewords (see <see cref="PetalStreamEncoder.Words"/>).</param>
+    /// <summary>
+    /// Turn position (0–3, see <see cref="PetalTurns.TurnAngle"/>) of every field cell in cell
+    /// order: zero for dark petals and for lit petals that carry no turn bits.
+    /// </summary>
+    public byte[] Turns { get; }
+
+    /// <summary>Builds the cells from the transmitted codewords of a frame, lit and turned.</summary>
+    /// <param name="words">The codewords (see <see cref="PetalStreamEncoder.Words"/>), turn lanes included.</param>
     /// <returns>The frame cells.</returns>
     /// <exception cref="ArgumentException">A codeword has the wrong length.</exception>
     public static PetalFrameCells FromWords(PetalLaneData words)
     {
         ArgumentNullException.ThrowIfNull(words);
-        return FromWords(words.D, words.Fields);
+        var cells = FromWords(words.D, words.Fields);
+        cells.SetTurns(words.Turns);
+        return cells;
     }
 
-    /// <summary>Builds the cells from the transmitted codewords of lane <c>D</c> and the four field lanes.</summary>
+    /// <summary>
+    /// Builds the cells from the transmitted codewords of lane <c>D</c> and the four field lanes,
+    /// with every petal unturned (see <see cref="SetTurns"/>).
+    /// </summary>
     /// <param name="d">Lane <c>D</c> codeword (30 bytes).</param>
     /// <param name="fields">The four field codewords (105 bytes each), sector 0 first.</param>
     /// <returns>The frame cells.</returns>
@@ -321,6 +335,53 @@ public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
         }
 
         return cells;
+    }
+
+    /// <summary>
+    /// Turns the carriers of every sector to show its transmitted turn codeword (see
+    /// <see cref="PetalTurns"/>); a sector with too few lit petals stays unturned.
+    /// </summary>
+    /// <remarks>The turns of every sector's codeword cells are rewritten; set the petals first.</remarks>
+    /// <param name="words">The four turn codewords (90 bytes each), sector 0 first.</param>
+    /// <exception cref="ArgumentException">A codeword has the wrong length or there are not four turn words.</exception>
+    public void SetTurns(IReadOnlyList<byte[]> words)
+    {
+        ArgumentNullException.ThrowIfNull(words);
+        if (words.Count != PetalLayout.Sectors)
+            throw new ArgumentException("A frame has four turn codewords.", nameof(words));
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            if (words[sector] is null || words[sector].Length != PetalTurns.TurnWordLength)
+                throw new ArgumentException("A turn codeword must be 90 bytes.", nameof(words));
+        }
+
+        Span<int> chosen = stackalloc int[PetalTurns.TurnCarriers];
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            var word = words[sector];
+            foreach (var cell in PetalTurns.CarrierOrderTable(sector))
+                Turns[cell] = 0;
+            if (!PetalTurns.TryCarriers(Petals, sector, chosen))
+                continue;
+            for (var index = 0; index < chosen.Length; index++)
+                Turns[chosen[index]] = PetalTurns.CarrierPosition(word, index);
+        }
+    }
+
+    /// <summary>Packs the turns of the carriers of sector <paramref name="sector"/> into its turn codeword.</summary>
+    /// <param name="sector">Sector, 0 to 3.</param>
+    /// <returns>90 bytes, or <see langword="null"/> when the sector has too few lit petals to carry one.</returns>
+    public byte[]? TurnWord(int sector)
+    {
+        if ((uint)sector >= PetalLayout.Sectors)
+            throw new ArgumentOutOfRangeException(nameof(sector));
+        Span<int> chosen = stackalloc int[PetalTurns.TurnCarriers];
+        if (!PetalTurns.TryCarriers(Petals, sector, chosen))
+            return null;
+        var word = new byte[PetalTurns.TurnWordLength];
+        for (var index = 0; index < chosen.Length; index++)
+            word[index / 4] |= (byte)(PetalTurns.TurnLabel(Turns[chosen[index]]) << (6 - 2 * (index % 4)));
+        return word;
     }
 
     /// <summary>Packs the data dots into a lane <c>D</c> codeword.</summary>
@@ -363,13 +424,15 @@ public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
         var copy = new PetalFrameCells();
         Dots.CopyTo(copy.Dots, 0);
         Petals.CopyTo(copy.Petals, 0);
+        Turns.CopyTo(copy.Turns, 0);
         return copy;
     }
 
     /// <inheritdoc />
     public bool Equals(PetalFrameCells? other) => other is not null
         && Dots.AsSpan().SequenceEqual(other.Dots)
-        && Petals.AsSpan().SequenceEqual(other.Petals);
+        && Petals.AsSpan().SequenceEqual(other.Petals)
+        && Turns.AsSpan().SequenceEqual(other.Turns);
 
     /// <inheritdoc />
     public override bool Equals(object? obj) => Equals(obj as PetalFrameCells);
@@ -382,6 +445,7 @@ public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
             hash.Add(dot);
         foreach (var petal in Petals)
             hash.Add(petal);
+        hash.AddBytes(Turns);
         return hash.ToHashCode();
     }
 }

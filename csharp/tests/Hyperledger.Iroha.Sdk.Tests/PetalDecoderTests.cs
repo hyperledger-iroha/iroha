@@ -55,7 +55,13 @@ public sealed class PetalDecoderTests
         var luma = Setup(3);
         var decoded = PetalDecoder.Decode(luma);
         Assert.True(decoded.Success, decoded.Error.ToString());
-        Assert.Equal(SetupEncoder.Cells(3), PetalDecoder.ObservedCells(luma, decoded.Frame));
+        var observed = PetalDecoder.ObservedCells(luma, decoded.Frame);
+        Assert.NotNull(observed);
+        var drawn = SetupEncoder.Cells(3);
+        Assert.Equal(drawn.Dots, observed.Dots);
+        Assert.Equal(drawn.Petals, observed.Petals);
+        // the petals are left unturned
+        Assert.All(observed.Turns, static turn => Assert.Equal(0, turn));
     }
 
     [Fact]
@@ -873,9 +879,71 @@ public sealed class PetalDecoderTests
         Assert.Equal(2, done.Meta.Kind);
         var stats = session.Stats;
         Assert.True(stats.Readable > 0 && stats.LaneD > 0 && stats.FieldLanes > 0);
-        // 5,000 bytes need 313 atoms: a clean camera reads them in 15 or 16 frames
-        Assert.True(stats.Frames <= 17, $"{stats}");
+        Assert.True(stats.TurnLanes > 0, $"{stats}");
+        // 5,000 bytes need 313 atoms: the field lanes and lane D alone carry them in 15 or 16
+        // frames, the turn lanes on top in 9 or 10
+        Assert.True(stats.Frames <= 11, $"{stats}");
         Assert.True(session.Progress.Complete);
+    }
+
+    [Fact]
+    public void ATurnLaneIsReadOncePerShownFrame()
+    {
+        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(3000, 3), 2);
+        var config = Camera(12.0);
+        var session = new PetalScanSession();
+        var shown = Source(encoder, 5);
+        var first = session.Push(PetalCaptureSimulator.Capture(shown, config with { Seed = 1 }), 0);
+        Assert.Equal("D0123", first.Lanes);
+        Assert.Equal("0123", first.Turned);
+        var again = session.Push(PetalCaptureSimulator.Capture(shown, config with { Seed = 2 }), 33);
+        Assert.Equal(("D0123", string.Empty), (again.Lanes, again.Turned));
+        Assert.Equal(4u, session.Stats.TurnLanes);
+        // the next shown frame's turn lanes are new
+        var next = session.Push(PetalCaptureSimulator.Capture(Source(encoder, 6), config with { Seed = 3 }), 83);
+        Assert.Equal("0123", next.Turned);
+        Assert.Equal((8u, 8u), (session.Stats.TurnTries, session.Stats.TurnLanes));
+        Assert.Equal(8, session.TriedLanes.Count);
+        session.Reset();
+        Assert.Empty(session.TriedLanes);
+    }
+
+    [Fact]
+    public void TriesThatReadNothingBackOff()
+    {
+        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(3000, 3), 2);
+        // unturned petals: every field lane reads, no turn lane ever does
+        PetalRgbImage Unturned(ushort frame)
+        {
+            var cells = encoder.Cells(frame);
+            Array.Clear(cells.Turns);
+            return PetalRenderer.Render(cells, new PetalRenderOptions { Size = 512, Supersample = 2 });
+        }
+
+        var config = Camera(12.0);
+        var session = new PetalScanSession();
+        var triedAt = new List<int>();
+        for (ushort frame = 1; frame <= 30; frame++)
+        {
+            var before = session.Stats.TurnTries;
+            var image = PetalCaptureSimulator.Capture(Unturned(frame), config with { Seed = frame });
+            var outcome = session.Push(image, frame * 83L);
+            Assert.True(outcome.Lanes.EndsWith("0123", StringComparison.Ordinal), $"frame {frame}: {outcome.Lanes}");
+            Assert.Equal(string.Empty, outcome.Turned);
+            if (session.Stats.TurnTries > before)
+                triedAt.Add(frame);
+        }
+
+        // after the n-th try that reads nothing, the next min(n, 8) captures that would try are
+        // passed over
+        Assert.Equal([1, 3, 6, 10, 15, 21, 28], triedAt);
+        // a try that reads a lane ends the back-off
+        session.TurnWait = 0;
+        var turned = PetalCaptureSimulator.Capture(Source(encoder, 31), config with { Seed = 31 });
+        Assert.Equal("0123", session.Push(turned, 31 * 83L).Turned);
+        Assert.Equal(0, session.TurnMisses);
+        turned = PetalCaptureSimulator.Capture(Source(encoder, 32), config with { Seed = 32 });
+        Assert.Equal("0123", session.Push(turned, 32 * 83L).Turned);
     }
 
     [Fact]
@@ -994,7 +1062,7 @@ public sealed class PetalDecoderTests
         player.Draw(canvas, TimeSpan.Zero, 512.0);
         var list = player.DrawListAt(TimeSpan.Zero);
         Assert.Equal(1 + list.BackdropCells.Count, canvas.Rectangles);
-        Assert.Equal(list.Petals.Count, canvas.Ellipses);
+        Assert.Equal(list.Petals.Count, canvas.Petals);
         Assert.Equal(4 * 11 + list.Dots.Count, canvas.Circles);
         Assert.Equal(1, canvas.Clips);
         Assert.Equal(0, canvas.OpenClips);
@@ -1054,7 +1122,7 @@ public sealed class PetalDecoderTests
 
         public int Circles { get; private set; }
 
-        public int Ellipses { get; private set; }
+        public int Petals { get; private set; }
 
         public int Clips { get; private set; }
 
@@ -1064,14 +1132,24 @@ public sealed class PetalDecoderTests
 
         public void FillCircle(double centerX, double centerY, double radius, PetalColor color) => Circles++;
 
-        public void FillEllipse(double centerX, double centerY, double radiusAlong, double radiusAcross, double angle, PetalColor color)
+        public void FillPetal(
+            double centerX,
+            double centerY,
+            double radiusAlong,
+            double radiusAcross,
+            double angle,
+            double notchDistance,
+            double notchRadius,
+            PetalColor color)
         {
             // a 512-pixel side is half the canvas
             Assert.True(Math.Abs(radiusAlong - 0.5 * PetalLayout.PetalHalfLength) < 1e-12);
             Assert.True(Math.Abs(radiusAcross - 0.5 * PetalLayout.PetalHalfWidth) < 1e-12);
+            Assert.True(Math.Abs(notchDistance - 0.5 * PetalLayout.PetalNotchDistance) < 1e-12);
+            Assert.True(Math.Abs(notchRadius - 0.5 * PetalLayout.PetalNotchRadius) < 1e-12);
             // petals are drawn after the backdrop's clip is popped
             Assert.Equal(0, OpenClips);
-            Ellipses++;
+            Petals++;
         }
 
         public void PushCircleClip(double centerX, double centerY, double radius)

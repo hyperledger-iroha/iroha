@@ -280,6 +280,13 @@ public sealed class PetalImageTests
             Assert.Equal(PetalLayout.CellLight(petal.Cell), petal.Light);
         }
 
+        // a turned petal's axis is its outward direction plus its turn
+        var turnedCells = new PetalStreamEncoder(PetalTestSupport.Payload(900, 8), 2).Cells(3);
+        var turnedList = PetalDrawList.Create(turnedCells);
+        Assert.Contains(turnedList.Petals, petal => turnedCells.Turns[petal.Cell] != 0);
+        foreach (var petal in turnedList.Petals)
+            Assert.Equal(PetalLayout.CellAngle(petal.Cell) + PetalTurns.TurnAngle(turnedCells.Turns[petal.Cell]), petal.Angle);
+
         Assert.Equal(cells.Dots.Count(static d => d), list.Dots.Count);
         Assert.All(list.Dots, static dot => Assert.Equal(9.0, dot.Radius));
         Assert.All(list.Dots, dot => Assert.True(cells.Dots[PetalLayout.RingOffset(dot.Ring) + dot.Slot]));
@@ -315,9 +322,13 @@ public sealed class PetalImageTests
         }
 
         Assert.True(close >= size * size * 99 / 100, $"only {close} of {size * size} pixels agree");
-        var decoded = PetalDecoder.Decode(vector.ToLuma());
+        var luma = vector.ToLuma();
+        var decoded = PetalDecoder.Decode(luma);
         Assert.True(decoded.Success, decoded.Error.ToString());
         PetalTestSupport.AssertAllLanes(decoded.Frame, encoder.LaneData(frame), "draw list");
+        // the petals are turned and notched as the renderer draws them: the turn lanes read
+        Assert.Contains(cells.Turns, static turn => turn != 0);
+        PetalTestSupport.AssertAllTurnLanes(luma, decoded.Frame, encoder.LaneData(frame), "draw list");
         // scale and offset place the frame anywhere on a larger surface
         var offset = new RasterCanvas(300, 200, 1);
         PetalDrawList.Create(cells).Draw(offset, 0.125, 100.0, 50.0);
@@ -592,15 +603,26 @@ public sealed class PetalImageTests
             Paint(centerX - radius, centerY - radius, centerX + radius, centerY + radius, color,
                 (px, py) => (px - centerX) * (px - centerX) + (py - centerY) * (py - centerY) <= radius * radius);
 
-        public void FillEllipse(double centerX, double centerY, double radiusAlong, double radiusAcross, double angle, PetalColor color)
+        public void FillPetal(
+            double centerX,
+            double centerY,
+            double radiusAlong,
+            double radiusAcross,
+            double angle,
+            double notchDistance,
+            double notchRadius,
+            PetalColor color)
         {
             var (sin, cos) = (Math.Sin(angle), Math.Cos(angle));
             var reach = Math.Max(radiusAlong, radiusAcross);
             Paint(centerX - reach, centerY - reach, centerX + reach, centerY + reach, color, (px, py) =>
             {
                 var (dx, dy) = (px - centerX, py - centerY);
-                var (along, across) = ((dx * cos + dy * sin) / radiusAlong, (-dx * sin + dy * cos) / radiusAcross);
-                return along * along + across * across <= 1.0;
+                var (along, across) = (dx * cos + dy * sin, -dx * sin + dy * cos);
+                var (u, v) = (along / radiusAlong, across / radiusAcross);
+                var tip = along - notchDistance;
+                // the ellipse minus the notch
+                return u * u + v * v <= 1.0 && tip * tip + across * across > notchRadius * notchRadius;
             });
         }
 

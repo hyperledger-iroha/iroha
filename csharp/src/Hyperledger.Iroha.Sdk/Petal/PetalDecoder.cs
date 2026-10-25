@@ -568,7 +568,8 @@ public static class PetalDecoder
     /// <summary>
     /// Builds the cells a decoder believes it saw under <paramref name="frame"/>'s pose, for
     /// diagnostics: every codeword thresholded as the first read of <see cref="Decode"/>
-    /// thresholds it (no local read).
+    /// thresholds it (no local read). The petals are left unturned (see
+    /// <see cref="PetalTurns.ObservedTurns"/>).
     /// </summary>
     /// <remarks>The levels of a corner the frame inferred are extrapolated as in the decoder.</remarks>
     /// <param name="image">The luma plane the frame was decoded from.</param>

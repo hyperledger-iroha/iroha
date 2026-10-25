@@ -5,13 +5,13 @@ using Hyperledger.Iroha.Petal;
 namespace Hyperledger.Iroha.Sdk.Tests;
 
 /// <summary>
-/// Decodes the golden camera captures in <c>fixtures/petal/petal_captures_v2.json</c>:
-/// every conforming decoder must read the lanes named in <c>must_decode</c>, must never
-/// report wrong data for any lane, must report the recorded inferred corner, must follow
-/// each tracking pair from its first frame into its second, must recover the
-/// <c>must_merge</c> field lanes of every merge set from the merge of its captures, must
-/// never let a session offer a lane of a mixed set, and must reject the negatives. A
-/// bit-exact port reproduces every recorded reference result.
+/// Decodes the golden camera captures in <c>fixtures/petal/petal_captures_v3.json</c>:
+/// every conforming decoder must read the lanes named in <c>must_decode</c> and the turn
+/// lanes named in <c>must_turn</c>, must never report wrong data for any lane, must report
+/// the recorded inferred corner, must follow each tracking pair from its first frame into
+/// its second, must recover the <c>must_merge</c> field lanes of every merge set from the
+/// merge of its captures, must never let a session offer a lane of a mixed set, and must
+/// reject the negatives. A bit-exact port reproduces every recorded reference result.
 /// </summary>
 public sealed class PetalCaptureTests(ITestOutputHelper output)
 {
@@ -40,8 +40,8 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
     [Fact]
     public void GoldenCapturesDecodeAsRecorded()
     {
-        Assert.Equal(2, PetalTestSupport.Number(Doc, "fixture_version"));
-        Assert.Equal("petal-captures-v2", Doc.GetProperty("format").GetString());
+        Assert.Equal(3, PetalTestSupport.Number(Doc, "fixture_version"));
+        Assert.Equal("petal-captures-v3", Doc.GetProperty("format").GetString());
         var captures = Doc.GetProperty("captures").EnumerateArray().ToArray();
         Assert.Equal(CaptureNames, captures.Select(static capture => capture.GetProperty("name").GetString()));
         var assembler = new PetalStreamAssembler();
@@ -61,11 +61,15 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
             // a bit-exact port reaches exactly the reference decoder's lanes and inferred corner
             Assert.Equal(capture.GetProperty("reference_decoded").GetString(), read);
             Assert.True(InferredCorner(capture) == decoded.InferredCorner, $"{name}: inferred corner {decoded.InferredCorner}");
+            decoded.Feed(assembler);
+            watch.Restart();
+            var turned = ReadTurnLanes(name, image, decoded, capture, assembler);
+            watch.Stop();
             output.WriteLine(
                 $"{name,-24} {image.Width}x{image.Height} lanes {read,-5} (reference {capture.GetProperty("reference_decoded").GetString()}) " +
+                $"turned {turned,-4} (reference {capture.GetProperty("reference_turned").GetString()}) " +
                 $"rotation {decoded.Rotation} mirrored {decoded.Mirrored} inferred {decoded.InferredCorner?.ToString() ?? "-"} " +
-                $"distortion {decoded.Pose.Distortion} first decode {watch.Elapsed.TotalMilliseconds:F1} ms");
-            decoded.Feed(assembler);
+                $"distortion {decoded.Pose.Distortion} first turn read {watch.Elapsed.TotalMilliseconds:F1} ms");
         }
 
         // captures of different frames of the same stream accumulate in one assembler
@@ -95,8 +99,10 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
             Assert.True(InferredCorner(track) == followed.InferredCorner, $"{name}: inferred corner {followed.InferredCorner}");
             // the orientation is kept from the first frame
             Assert.Equal((first.Frame.Rotation, first.Frame.Mirrored), (followed.Rotation, followed.Mirrored));
+            var turned = ReadTurnLanes(name, to, followed, track, null);
             output.WriteLine(
                 $"{name,-24} tracked lanes {read,-5} (reference {track.GetProperty("reference_tracked").GetString()}) " +
+                $"turned {turned,-4} (reference {track.GetProperty("reference_turned").GetString()}) " +
                 $"inferred {followed.InferredCorner?.ToString() ?? "-"} track {watch.Elapsed.TotalMilliseconds:F1} ms");
         }
     }
@@ -210,11 +216,63 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
                 Assert.Equal(data, decoded);
             }
 
-            // the captures film the `one-pass` stream of the payload
+            // the captures film the `one-pass` stream of the payload, turn lanes included
             var truth = PetalTestSupport.Truth(capture);
             var lanes = encoder.LaneData((ushort)PetalTestSupport.Number(capture, "frame"));
             foreach (var (lane, data) in truth)
                 Assert.Equal(lanes.Lane(lane), data);
+            Assert.Equal(lanes.Turns, PetalTestSupport.HexList(capture, "turn_data"));
+        }
+    }
+
+    [Fact]
+    public void ConcurrentTurnReadsAgreeWithSequentialOnes()
+    {
+        // the reader leases its working memory: reads on several threads at once must decide
+        // exactly what one thread decides
+        var captures = Doc.GetProperty("captures").EnumerateArray().Select(static capture => PetalTestSupport.LumaOf(capture)).ToArray();
+        var frames = captures.Select(static image => PetalDecoder.Decode(image).Frame!).ToArray();
+        var expected = captures.Select((image, i) => Summary(image, frames[i])).ToArray();
+        var actual = new string[3 * captures.Length];
+        Parallel.For(0, actual.Length, new ParallelOptions { MaxDegreeOfParallelism = 4 }, i =>
+            actual[i] = Summary(captures[i % captures.Length], frames[i % captures.Length]));
+        for (var i = 0; i < actual.Length; i++)
+            Assert.Equal(expected[i % captures.Length], actual[i]);
+
+        static string Summary(PetalLuma image, PetalDecodedFrame frame)
+        {
+            var turns = PetalTurns.ReadTurns(image, frame);
+            var observed = PetalTurns.ObservedTurns(image, frame);
+            var carriers = observed is null
+                ? "-"
+                : $"{observed.Blur} {string.Join(",", observed.Carriers.Select(static c => $"{c.Cell}:{c.Position}:{BitConverter.DoubleToInt64Bits(c.Lead):x16}"))}";
+            return $"{string.Join(",", turns.Select(static t => t is null ? "-" : Convert.ToHexString(t.Data)))} {carriers}";
+        }
+    }
+
+    [Fact]
+    public void GoldenTurnReadTiming()
+    {
+        const int runs = 7;
+        foreach (var capture in Doc.GetProperty("captures").EnumerateArray())
+        {
+            var name = capture.GetProperty("name").GetString()!;
+            var image = PetalTestSupport.LumaOf(capture);
+            var frame = PetalDecoder.Decode(image).Frame!;
+            PetalTurns.ReadTurns(image, frame); // warm-up (JIT, tables)
+            var times = new double[runs];
+            for (var run = 0; run < runs; run++)
+            {
+                var watch = Stopwatch.StartNew();
+                PetalTurns.ReadTurns(image, frame);
+                times[run] = watch.Elapsed.TotalMilliseconds;
+            }
+
+            Array.Sort(times);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            PetalTurns.ReadTurns(image, frame);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            output.WriteLine($"turn timing {name,-24} {image.Width}x{image.Height} median {times[runs / 2]:F2} ms min {times[0]:F2} ms, {allocated} bytes allocated");
         }
     }
 
@@ -287,6 +345,41 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
         }
 
         return (PetalDecoder.MergeFields(evidence), merged, session.Stats);
+    }
+
+    /// <summary>
+    /// Reads the turn lanes of a decoded capture (no sector passed over), checks them against the
+    /// recorded data and the requirements, and returns their sector digits; their atoms go to
+    /// <paramref name="assembler"/> when given.
+    /// </summary>
+    private static string ReadTurnLanes(string name, PetalLuma image, PetalDecodedFrame frame, JsonElement entry, PetalStreamAssembler? assembler)
+    {
+        var expected = PetalTestSupport.HexList(entry, "turn_data");
+        var letters = string.Empty;
+        var packets = new List<PetalAtomPacket>();
+        var turns = PetalTurns.ReadTurns(image, frame);
+        for (var sector = 0; sector < turns.Length; sector++)
+        {
+            if (turns[sector] is not { } result)
+                continue;
+            Assert.True(expected[sector].AsSpan().SequenceEqual(result.Data), $"{name}: turn lane {sector} data");
+            var field = frame.Fields[sector];
+            Assert.True(field is not null, $"{name}: a turn lane rides on its field lane");
+            var header = new PetalLaneHeader(field.Data[0], (ushort)((field.Data[1] << 8) | field.Data[2]));
+            packets.Add(PetalTurns.TurnPacket(header, sector, result.Data) ?? throw new InvalidOperationException($"{name}: turn check {sector}"));
+            letters += PetalLanes.Letter(PetalLanes.Field(sector));
+        }
+
+        if (assembler is not null)
+        {
+            foreach (var packet in packets)
+                assembler.PushAtoms(packet);
+        }
+
+        var must = entry.GetProperty("must_turn").GetString()!;
+        Assert.True(must.All(letters.Contains), $"{name}: turned {letters}, must turn {must}");
+        Assert.Equal(entry.GetProperty("reference_turned").GetString(), letters);
+        return letters;
     }
 
     /// <summary>Checks merged field lanes against the recorded data and returns their sector digits.</summary>

@@ -5,7 +5,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 /// <summary>
 /// Conformance against the shared golden vectors in
-/// <c>fixtures/petal/petal_stream_v2.json</c> (every section).
+/// <c>fixtures/petal/petal_stream_v3.json</c> (every section).
 /// </summary>
 public sealed class PetalFixtureTests
 {
@@ -14,8 +14,8 @@ public sealed class PetalFixtureTests
     [Fact]
     public void ConstantsMatch()
     {
-        Assert.Equal(2, PetalTestSupport.Number(Doc, "fixture_version"));
-        Assert.Equal("petal-stream-v2", Doc.GetProperty("format").GetString());
+        Assert.Equal(3, PetalTestSupport.Number(Doc, "fixture_version"));
+        Assert.Equal("petal-stream-v3", Doc.GetProperty("format").GetString());
         var constants = Doc.GetProperty("constants");
         Assert.Equal(PetalLayout.Canvas, constants.GetProperty("canvas").GetDouble());
         Assert.Equal(PetalLanes.AtomLength, PetalTestSupport.Number(constants, "atom_len"));
@@ -29,6 +29,12 @@ public sealed class PetalFixtureTests
         Assert.Equal(PetalLayout.FieldCells, PetalTestSupport.Number(constants, "field_cells"));
         Assert.Equal(PetalStream.BeaconInterval, PetalTestSupport.Number(constants, "beacon_interval"));
         Assert.Equal(PetalStream.FormatVersion, PetalTestSupport.Number(constants, "format_version"));
+        Assert.Equal(PetalTurns.TurnPositions, PetalTestSupport.Number(constants, "turn_positions"));
+        Assert.Equal(PetalTurns.TurnCarriers, PetalTestSupport.Number(constants, "turn_carriers"));
+        Assert.Equal(PetalTurns.TurnWordLength, PetalTestSupport.Number(constants, "turn_word"));
+        Assert.Equal(PetalTurns.TurnParityLength, PetalTestSupport.Number(constants, "turn_parity"));
+        Assert.Equal(PetalTurns.TurnAtoms, PetalTestSupport.Number(constants, "turn_atoms"));
+        Assert.Equal(PetalTurns.TurnIdBase, PetalTestSupport.Number(constants, "turn_id_base"));
     }
 
     [Fact]
@@ -54,6 +60,15 @@ public sealed class PetalFixtureTests
             Assert.Equal(
                 PetalLayout.SectorCellOrder(sector).Select(static c => (long)c),
                 sectors[sector].EnumerateArray().Select(static v => v.GetInt64()));
+        }
+
+        var orders = layout.GetProperty("carrier_orders").EnumerateArray().ToArray();
+        Assert.Equal(PetalLayout.Sectors, orders.Length);
+        for (var sector = 0; sector < orders.Length; sector++)
+        {
+            Assert.Equal(
+                PetalTurns.CarrierOrder(sector).Select(static c => (long)c),
+                orders[sector].EnumerateArray().Select(static v => v.GetInt64()));
         }
 
         Assert.Equal(
@@ -112,7 +127,37 @@ public sealed class PetalFixtureTests
         var whitening = Doc.GetProperty("whitening");
         Assert.Equal(PetalTestSupport.Hex(whitening, "D"), PetalLanes.Whitening(PetalLane.D));
         for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
             Assert.Equal(PetalTestSupport.Hex(whitening, $"F{sector}"), PetalLanes.Whitening(PetalLanes.Field(sector)));
+            Assert.Equal(PetalTestSupport.Hex(whitening, $"T{sector}"), PetalTurns.TurnWhitening(sector));
+        }
+    }
+
+    [Fact]
+    public void TurnIdsAndReaderTemplatesMatch()
+    {
+        var ids = Doc.GetProperty("turn_first_ids");
+        var frames = PetalTestSupport.Numbers(ids, "frames");
+        var sectors = PetalTestSupport.Numbers(ids, "sectors");
+        var expected = PetalTestSupport.Numbers(ids, "ids");
+        Assert.Equal(frames.Length, sectors.Length);
+        Assert.Equal(frames.Length, expected.Length);
+        for (var i = 0; i < frames.Length; i++)
+            Assert.Equal(expected[i], PetalTurns.TurnFirstId((ushort)frames[i], (int)sectors[i]));
+        var reader = Doc.GetProperty("turn_reader");
+        Assert.Equal(PetalTurns.TurnBlurs, reader.GetProperty("blurs").EnumerateArray().Select(static v => v.GetDouble()));
+        var probes = reader.GetProperty("template_probes").EnumerateArray().ToArray();
+        Assert.Equal(6 * PetalTurns.TurnBlurs.Count, probes.Length);
+        foreach (var probe in probes)
+        {
+            double Value(string key) => probe.GetProperty(key).GetDouble();
+            var blur = PetalTurns.TurnBlurs.ToList().FindIndex(b => Math.Abs(b - Value("blur")) < 1e-12);
+            Assert.True(blur >= 0, $"unknown blur {Value("blur")}");
+            var got = PetalTurns.TurnTemplate(blur, Value("along"), Value("across"));
+            Assert.True(
+                Math.Abs(got - Value("value")) < 1e-12,
+                $"blur {Value("blur")} at ({Value("along")}, {Value("across")}): {got:R}, expected {Value("value"):R}");
+        }
     }
 
     [Fact]
@@ -179,41 +224,84 @@ public sealed class PetalFixtureTests
                 Assert.Equal(PetalLayout.Sectors, fieldData.Length);
                 for (var sector = 0; sector < PetalLayout.Sectors; sector++)
                     Assert.True(fieldData[sector].AsSpan().SequenceEqual(lanes.Fields[sector]), $"{name} frame {number} field {sector}");
+                var turnData = PetalTestSupport.HexList(frame, "turn_data");
+                Assert.Equal(PetalLayout.Sectors, turnData.Length);
+                for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                    Assert.True(turnData[sector].AsSpan().SequenceEqual(lanes.Turns[sector]), $"{name} frame {number} turn {sector}");
+                Assert.Equal(PetalTestSupport.LaneData(frame), lanes);
                 var dWord = PetalTestSupport.Hex(frame, "d_word");
                 var fieldWords = PetalTestSupport.HexList(frame, "field_words");
+                var turnWords = PetalTestSupport.HexList(frame, "turn_words");
+                for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                {
+                    Assert.Equal(turnWords[sector], PetalTurns.EncodeTurnLane(sector, turnData[sector]));
+                    var packet = PetalTurns.TurnPacket(new PetalLaneHeader(meta.Tag, number), sector, turnData[sector]);
+                    Assert.True(packet is not null, $"{name} frame {number} turn check {sector}");
+                    Assert.Equal(PetalTurns.TurnFirstId(number, sector), packet.FirstId);
+                }
+
                 Assert.Equal(dWord, PetalLanes.EncodeLane(PetalLane.D, lanes.D));
                 for (var sector = 0; sector < PetalLayout.Sectors; sector++)
                     Assert.Equal(fieldWords[sector], PetalLanes.EncodeLane(PetalLanes.Field(sector), lanes.Fields[sector]));
-                Assert.Equal(new PetalLaneData(dWord, fieldWords), encoder.Words(number));
+                Assert.Equal(new PetalLaneData(dWord, fieldWords, turnWords), encoder.Words(number));
                 var cells = PetalFrameCells.FromWords(dWord, fieldWords);
+                Assert.All(cells.Turns, static turn => Assert.Equal(0, turn));
+                cells.SetTurns(turnWords);
+                Assert.Equal(PetalTestSupport.Text(frame, "turns"), string.Concat(cells.Turns.Select(static t => (char)('0' + t))));
                 Assert.Equal(
                     PetalTestSupport.Numbers(frame, "lit_dots"),
                     Enumerable.Range(0, cells.Dots.Length).Where(i => cells.Dots[i]).Select(static i => (long)i));
                 Assert.Equal(PetalTestSupport.Flags(PetalTestSupport.Hex(frame, "lit_petals_hex")), cells.Petals);
                 Assert.Equal(cells, encoder.Cells(number));
+                Assert.Equal(cells, PetalFrameCells.FromWords(new PetalLaneData(dWord, fieldWords, turnWords)));
                 Assert.Equal(dWord, cells.DWord());
                 for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                {
                     Assert.Equal(fieldWords[sector], cells.FieldWord(sector));
+                    Assert.Equal(turnWords[sector], cells.TurnWord(sector));
+                }
             }
 
-            // push every fixture frame through lane decoding and the assembler
+            // push every fixture frame through lane decoding and the assembler, with and without
+            // the turn lanes: the turn lanes finish the one-pass stream in fewer frames
             if (name == "one-pass")
             {
-                var assembler = new PetalStreamAssembler();
-                foreach (var frame in stream.GetProperty("frames").EnumerateArray())
+                var needed = new int[2];
+                foreach (var withTurns in new[] { false, true })
                 {
-                    Assert.True(PetalLanes.TryDecodeLane(PetalLane.D, PetalTestSupport.Hex(frame, "d_word"), [], out var d));
-                    assembler.PushDLane(PetalStream.ParseDLane(d)!);
-                    var fieldWords = PetalTestSupport.HexList(frame, "field_words");
-                    for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                    var assembler = new PetalStreamAssembler();
+                    foreach (var frame in stream.GetProperty("frames").EnumerateArray())
                     {
-                        var lane = PetalLanes.Field(sector);
-                        Assert.True(PetalLanes.TryDecodeLane(lane, fieldWords[sector], [], out var data));
-                        assembler.PushAtoms(PetalStream.ParseAtomLane(lane, data)!);
+                        needed[withTurns ? 1 : 0]++;
+                        Assert.True(PetalLanes.TryDecodeLane(PetalLane.D, PetalTestSupport.Hex(frame, "d_word"), [], out var d));
+                        assembler.PushDLane(PetalStream.ParseDLane(d)!);
+                        var fieldWords = PetalTestSupport.HexList(frame, "field_words");
+                        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                        {
+                            var lane = PetalLanes.Field(sector);
+                            Assert.True(PetalLanes.TryDecodeLane(lane, fieldWords[sector], [], out var data));
+                            assembler.PushAtoms(PetalStream.ParseAtomLane(lane, data)!);
+                        }
+
+                        if (withTurns)
+                        {
+                            var header = new PetalLaneHeader(meta.Tag, (ushort)PetalTestSupport.Number(frame, "frame"));
+                            var turnWords = PetalTestSupport.HexList(frame, "turn_words");
+                            for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                            {
+                                Assert.True(PetalTurns.TryDecodeTurnLane(sector, turnWords[sector], [], out var data, out _));
+                                assembler.PushAtoms(PetalTurns.TurnPacket(header, sector, data)!);
+                            }
+                        }
+
+                        if (assembler.Progress.Complete)
+                            break;
                     }
+
+                    Assert.Equal(payload, assembler.TakeCompleted()!.ToArray());
                 }
 
-                Assert.Equal(payload, assembler.TakeCompleted()!.ToArray());
+                Assert.True(needed[1] < needed[0], $"frames needed without and with turn lanes: {needed[0]}, {needed[1]}");
             }
         }
     }
@@ -227,12 +315,16 @@ public sealed class PetalFixtureTests
             var encoder = new PetalStreamEncoder(payload, (byte)PetalTestSupport.Number(stream, "kind"));
             var frame = stream.GetProperty("frames").EnumerateArray().Last();
             var number = (ushort)PetalTestSupport.Number(frame, "frame");
+            var name = stream.GetProperty("name").GetString()!;
             var result = PetalDecoder.Decode(PetalTestSupport.RenderLuma(encoder, number, 512, 2));
             Assert.True(result.Success, result.Error.ToString());
-            PetalTestSupport.AssertAllLanes(
-                result.Frame,
-                new PetalLaneData(PetalTestSupport.Hex(frame, "d_data"), PetalTestSupport.HexList(frame, "field_data")),
-                stream.GetProperty("name").GetString()!);
+            PetalTestSupport.AssertAllLanes(result.Frame, PetalTestSupport.LaneData(frame), name);
+            // at 768 px the render resolves the petals' shapes, and the turn lanes read too
+            var image = PetalTestSupport.RenderLuma(encoder, number, 768, 2);
+            result = PetalDecoder.Decode(image);
+            Assert.True(result.Success, result.Error.ToString());
+            PetalTestSupport.AssertAllLanes(result.Frame, PetalTestSupport.LaneData(frame), name);
+            PetalTestSupport.AssertAllTurnLanes(image, result.Frame, PetalTestSupport.LaneData(frame), name);
         }
     }
 }

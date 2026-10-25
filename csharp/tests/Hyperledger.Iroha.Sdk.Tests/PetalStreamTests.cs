@@ -366,10 +366,13 @@ public sealed class PetalStreamTests
         Assert.Equal(512, beacon.Header.Frame);
         Assert.Null(PetalStream.ParseDLane(d.AsSpan(0, 11)));
         Assert.Equal(PetalStream.FormatVersion, d[3]);
-        // the retired format 1 (katakana tiles) is refused
-        var bad = (byte[])d.Clone();
-        bad[3] = 0x10;
-        Assert.Null(PetalStream.ParseDLane(bad));
+        // the retired formats 1 (katakana tiles) and 2 (unturned petals) are refused
+        foreach (var retired in new byte[] { 0x10, 0x20 })
+        {
+            var bad = (byte[])d.Clone();
+            bad[3] = retired;
+            Assert.Null(PetalStream.ParseDLane(bad));
+        }
         var zeroLength = (byte[])d.Clone();
         zeroLength[5] = zeroLength[6] = zeroLength[7] = 0;
         Assert.Null(PetalStream.ParseDLane(zeroLength));

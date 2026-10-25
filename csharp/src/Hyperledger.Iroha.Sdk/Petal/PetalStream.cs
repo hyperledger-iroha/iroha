@@ -160,27 +160,25 @@ public sealed class PetalDLane
     }
 }
 
-/// <summary>The bytes of every lane of one frame: lane data, or transmitted codewords.</summary>
+/// <summary>The bytes of every lane of one frame, turn lanes included: lane data, or transmitted codewords.</summary>
 public sealed class PetalLaneData : IEquatable<PetalLaneData>
 {
     private readonly byte[][] fields;
+    private readonly byte[][] turns;
 
     /// <summary>Creates the bytes of one frame.</summary>
     /// <param name="d">Lane <c>D</c>.</param>
     /// <param name="fields">The four field lanes, sector 0 first.</param>
-    /// <exception cref="ArgumentException">There are not exactly four field lanes.</exception>
-    public PetalLaneData(byte[] d, IReadOnlyList<byte[]> fields)
+    /// <param name="turns">The four turn lanes, sector 0 first.</param>
+    /// <exception cref="ArgumentException">There are not exactly four field lanes and four turn lanes.</exception>
+    public PetalLaneData(byte[] d, IReadOnlyList<byte[]> fields, IReadOnlyList<byte[]> turns)
     {
         ArgumentNullException.ThrowIfNull(d);
-        ArgumentNullException.ThrowIfNull(fields);
-        if (fields.Count != PetalLayout.Sectors)
-            throw new ArgumentException("A frame has four field lanes.", nameof(fields));
-        var copies = new byte[PetalLayout.Sectors][];
-        for (var sector = 0; sector < copies.Length; sector++)
-            copies[sector] = fields[sector] ?? throw new ArgumentNullException(nameof(fields));
         D = d;
-        this.fields = copies;
-        Fields = Array.AsReadOnly(copies);
+        this.fields = Sectors(fields, nameof(fields));
+        this.turns = Sectors(turns, nameof(turns));
+        Fields = Array.AsReadOnly(this.fields);
+        Turns = Array.AsReadOnly(this.turns);
     }
 
     /// <summary>Lane <c>D</c>.</summary>
@@ -188,6 +186,9 @@ public sealed class PetalLaneData : IEquatable<PetalLaneData>
 
     /// <summary>The field lanes, sector 0 first.</summary>
     public IReadOnlyList<byte[]> Fields { get; }
+
+    /// <summary>The turn lanes, sector 0 first (see <see cref="PetalTurns"/>).</summary>
+    public IReadOnlyList<byte[]> Turns { get; }
 
     /// <summary>The bytes of <paramref name="lane"/>.</summary>
     /// <param name="lane">The lane.</param>
@@ -199,9 +200,9 @@ public sealed class PetalLaneData : IEquatable<PetalLaneData>
     {
         if (other is null || !D.AsSpan().SequenceEqual(other.D))
             return false;
-        for (var sector = 0; sector < fields.Length; sector++)
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
         {
-            if (!fields[sector].AsSpan().SequenceEqual(other.fields[sector]))
+            if (!fields[sector].AsSpan().SequenceEqual(other.fields[sector]) || !turns[sector].AsSpan().SequenceEqual(other.turns[sector]))
                 return false;
         }
 
@@ -218,7 +219,20 @@ public sealed class PetalLaneData : IEquatable<PetalLaneData>
         hash.AddBytes(D);
         foreach (var field in fields)
             hash.AddBytes(field);
+        foreach (var turn in turns)
+            hash.AddBytes(turn);
         return hash.ToHashCode();
+    }
+
+    private static byte[][] Sectors(IReadOnlyList<byte[]> lanes, string name)
+    {
+        ArgumentNullException.ThrowIfNull(lanes, name);
+        if (lanes.Count != PetalLayout.Sectors)
+            throw new ArgumentException("A frame has four lanes of each kind, one per sector.", name);
+        var copies = new byte[PetalLayout.Sectors][];
+        for (var sector = 0; sector < copies.Length; sector++)
+            copies[sector] = lanes[sector] ?? throw new ArgumentNullException(name);
+        return copies;
     }
 }
 
@@ -234,20 +248,28 @@ public sealed class PetalLaneData : IEquatable<PetalLaneData>
 /// instead, so a receiver can join at any frame within a fraction of a second.
 /// Atom ids run contiguously over the atoms actually sent (see
 /// <see cref="FirstAtomId"/>). Any single readable lane is useful on its own.
+/// On top of every field lane, the turns of its lit petals carry four more
+/// atoms from the repair range (see <see cref="PetalTurns"/>), so a sharp
+/// camera reads up to 37 atoms (592 bytes) a frame.
 /// </para>
 /// <para>
-/// Lane data layouts (all big-endian): every lane starts with
-/// <c>tag:u8, frame:u16</c> where <c>tag</c> is the low byte of the payload
-/// CRC-32C; the field lanes and non-beacon <c>D</c> continue with 16-byte
-/// atoms; the beacon continues with <c>version:u8, kind:u8, len:u24, crc:u32</c>,
-/// zero padded.
+/// Lane data layouts (all big-endian): every lane but the turn lanes starts
+/// with <c>tag:u8, frame:u16</c> where <c>tag</c> is the low byte of the
+/// payload CRC-32C; the field lanes and non-beacon <c>D</c> continue with
+/// 16-byte atoms; the beacon continues with
+/// <c>version:u8, kind:u8, len:u24, crc:u32</c>, zero padded. A turn lane is
+/// <c>atoms… check:u32</c>, where the check binds the atoms to the header of
+/// the field lane they ride on.
 /// </para>
 /// </remarks>
 public static class PetalStream
 {
-    /// <summary>Version/profile byte of the beacon: format version 2, layout profile 0.</summary>
-    /// <remarks>Any other version is refused, the retired format 1 (<c>0x10</c>) included.</remarks>
-    public const byte FormatVersion = 0x20;
+    /// <summary>Version/profile byte of the beacon: format version 3, layout profile 0.</summary>
+    /// <remarks>
+    /// Any other version is refused, the retired formats 2 (<c>0x20</c>, unturned petals) and
+    /// 1 (<c>0x10</c>, katakana tiles) included.
+    /// </remarks>
+    public const byte FormatVersion = 0x30;
 
     /// <summary>Largest payload a beacon can describe (<c>u24</c>).</summary>
     public const int MaxPayloadLength = (1 << 24) - 1;
